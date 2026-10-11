@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from safe_logging import redact_text
+
 from datetime import datetime, timezone
 from typing import Any
 import json
@@ -327,8 +329,8 @@ class CampaignExecutionService:
                     raise
                 except Exception as exc:
                     raise CampaignExecutionError(
-                        f"{signal.symbol}: fractal last-mile validation failed: {exc}"
-                    ) from exc
+                        f"{signal.symbol}: fractal last-mile validation failed: {redact_text(str(exc))}"
+                    ) from None
 
             self._check_buy_position_capacity(
                 signal.symbol,
@@ -381,7 +383,7 @@ class CampaignExecutionService:
         except Exception as exc:
             # A pre-submit barrier rejection is safe to clear. Any exchange
             # mutation ambiguity remains fail-closed and recoverable by CID.
-            message = str(exc)
+            message = redact_text(str(exc))
             if "ExecutionBarrier blocked" in message:
                 campaign.state = CampaignState.CLOSED
                 campaign.pending_risk_quote = 0.0
@@ -506,7 +508,7 @@ class CampaignExecutionService:
                     except Exception as exc:
                         self.engine.mark_reconcile_required(
                             campaign,
-                            f"partial conditional BUY cancel ambiguous: {exc}",
+                            f"partial conditional BUY cancel ambiguous: {redact_text(str(exc))}",
                         )
                         raise
 
@@ -751,7 +753,7 @@ class CampaignExecutionService:
                 if campaign is not None:
                     self.engine.mark_reconcile_required(
                         campaign,
-                        str(exc),
+                        redact_text(str(exc)),
                     )
                 self.db.state_set(
                     f"position_state:{symbol}",
@@ -760,7 +762,7 @@ class CampaignExecutionService:
                 results.append({
                     "symbol": symbol,
                     "state": "RECONCILE_REQUIRED",
-                    "error": str(exc),
+                    "error": redact_text(str(exc)),
                 })
         return results
 
@@ -913,11 +915,11 @@ class CampaignExecutionService:
                 if row.get("campaign_id"):
                     campaign = self.engine.load_campaign(row["campaign_id"])
                     if campaign is not None:
-                        self.engine.mark_reconcile_required(campaign, str(exc))
+                        self.engine.mark_reconcile_required(campaign, redact_text(str(exc)))
                 results.append({
                     "campaign_id": row.get("campaign_id"),
                     "state": "RECONCILE_REQUIRED",
-                    "error": str(exc),
+                    "error": redact_text(str(exc)),
                 })
         return results
 
@@ -1163,6 +1165,8 @@ class CampaignExecutionService:
             "CANCEL",
             required_context_versions={},
             client_order_id=f"{self.STOP_PREFIX}CANCEL_{uuid.uuid4().hex[:14]}",
+            mutation_kind="CANCEL_ORDER",
+            target_order_id=str(order_id),
             purpose=purpose,
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
@@ -1208,9 +1212,9 @@ class CampaignExecutionService:
                 except Exception:
                     self.engine.mark_reconcile_required(
                         campaign,
-                        f"cannot cancel campaign protection before exit: {exc}",
+                        f"cannot cancel campaign protection before exit: {redact_text(str(exc))}",
                     )
-                    raise CampaignExecutionError(str(exc)) from exc
+                    raise CampaignExecutionError(redact_text(str(exc))) from None
 
         open_orders = self.client.open_orders(symbol)
         unknown_sells = [
@@ -1369,6 +1373,9 @@ class CampaignExecutionService:
             invalidation_level=new_stop,
             quantity=self.client.decimal_format(quantity),
             client_order_id=cid,
+            mutation_kind="CANCEL_REPLACE",
+            target_order_id=str(existing_order_id),
+            replacement_client_order_id=cid,
             purpose="CAMPAIGN_TRAIL",
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,

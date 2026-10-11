@@ -3,6 +3,7 @@ import threading
 import time
 
 from execution_barrier import ExecutionBarrier, OrderIntent
+from db import Database
 from market_context import ContextCache, TFMarketContext, WaveHypothesis
 from wise_men import WiseMenPhase, WiseMenStateMachine
 
@@ -38,15 +39,17 @@ def test_copy_on_write_versions_and_immutable_snapshot():
     assert first.context("BTCUSDT", "1h").version == 1
 
 
-def test_execution_barrier_rejects_stale_context():
+def test_execution_barrier_rejects_stale_context(tmp_path):
     cache = ContextCache()
+    db = Database(str(tmp_path / "stale-context.sqlite3"))
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, db)
     snap = cache.snapshot()
     cache.publish(context())
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "MARKET",
         required_context_versions={"1h": snap.context("BTCUSDT", "1h").version},
+        client_order_id="WILL_TEST_STALE_CONTEXT_001",
     )
     calls = []
     result = barrier.execute(intent, lambda: calls.append("sent"))
@@ -55,10 +58,13 @@ def test_execution_barrier_rejects_stale_context():
     assert "stale context" in result.reason
 
 
-def test_execution_barrier_serializes_publish_and_submit():
+def test_execution_barrier_serializes_publish_and_submit(tmp_path):
     cache = ContextCache()
+    db = Database(str(tmp_path / "serialize-submit.sqlite3"))
+    # This test isolates context serialization; recovery-gate behavior is tested separately.
+    db.state_set("recovery_status", "RECOVERY_COMPLETE")
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, db)
     version = cache.snapshot().context("BTCUSDT", "1h").version
     started = threading.Event()
     published = threading.Event()
@@ -82,6 +88,7 @@ def test_execution_barrier_serializes_publish_and_submit():
         "MARKET",
         {"1h": version},
         permission_interval="1h",
+        client_order_id="WILL_TEST_SERIALIZED_SUBMIT_002",
     )
     result = barrier.execute(intent, submit)
     t.join()

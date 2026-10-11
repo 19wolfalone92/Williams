@@ -6,6 +6,11 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+
+class ExecutionPersistenceError(RuntimeError):
+    """Critical execution state could not be durably recorded; fail closed."""
+
+
 from market_context import ContextCache, MarketStateSnapshot
 from order_state_machine import OrderState, OrderStateMachine
 from order_state_machine import OrderState, OrderStateMachine
@@ -23,8 +28,25 @@ class OrderIntent:
     quantity: str = ""
     quote_order_quantity: str = ""
     client_order_id: str = ""
+    # Exact exchange mutation identity, needed for read-only crash recovery.
+    mutation_kind: str = "ORDER"
+    target_order_id: str = ""
+    target_client_order_id: str = ""
+    target_order_list_id: str = ""
+    target_list_client_order_id: str = ""
+    replacement_client_order_id: str = ""
     purpose: str = "ENTRY"
     permission_interval: str = ""
+
+    def __post_init__(self) -> None:
+        kind = str(self.mutation_kind or "ORDER").upper()
+        if kind == "ORDER":
+            order_type = str(self.order_type or "").upper()
+            if order_type == "OCO":
+                kind = "OCO_CREATE"
+            elif order_type == "CANCEL":
+                kind = "CANCEL_ORDER"
+        object.__setattr__(self, "mutation_kind", kind)
     campaign_id: str = ""
     signal_id: str = ""
     risk_quote: float = 0.0
@@ -71,13 +93,24 @@ class ExecutionBarrier:
     def __init__(self, context_cache: ContextCache, db=None) -> None:
         self.context_cache = context_cache
         self.db = db
+        self._attempted_intents: set[str] = set()
+        self._attempted_client_order_ids: set[str] = set()
 
     def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            try:
-                self.db.save_execution_intent(intent, status, reason)
-            except Exception:
-                pass
+        """Persist safety-critical intent state; never hide a durability failure."""
+        if self.db is None or not hasattr(self.db, "save_execution_intent"):
+            raise RuntimeError("execution_intent_persistence_unavailable")
+        self.db.save_execution_intent(intent, status, reason)
+
+    @staticmethod
+    def _safe_error_reason(prefix: str, exc: BaseException) -> str:
+        # Exception text/body can contain credentials, signatures or headers.
+        return f"{prefix}: {type(exc).__name__}"
+
+    def _existing_intent(self, intent: OrderIntent):
+        if self.db is None or not hasattr(self.db, "find_execution_intent"):
+            raise RuntimeError("execution_intent_lookup_unavailable")
+        return self.db.find_execution_intent(intent.intent_id, intent.client_order_id)
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
@@ -124,6 +157,26 @@ class ExecutionBarrier:
                 return f"context {permission_tf} does not allow SHORT"
 
         if self.db is not None and hasattr(self.db, "state_get"):
+            # A local READY/FLAT position flag is not proof that financial
+            # recovery completed. New Spot BUYs increase exposure and remain
+            # blocked until the durable global gate is explicitly completed.
+            # SELL reductions, cancellation and recovery/protection flows are
+            # not rejected by this entry-only gate.
+            recovery_status = str(
+                self.db.state_get("recovery_status", "RECOVERY_REQUIRED")
+            ).upper()
+            if intent.side.upper() == "BUY":
+                if recovery_status != "RECOVERY_COMPLETE":
+                    return f"global_recovery_gate:{recovery_status}"
+                # A writable status string is not sufficient evidence. The
+                # canonical fill ledger must also have no unapplied financial
+                # effects. Missing/unreadable proof is fail-closed.
+                try:
+                    pending_effects = self.db.pending_exchange_fill_effects()
+                except Exception:
+                    return "global_recovery_gate:financial_ledger_unavailable"
+                if pending_effects:
+                    return "global_recovery_gate:pending_financial_effects"
             state = str(self.db.state_get("position_state", "FLAT"))
             if state == "RECONCILE_REQUIRED":
                 return "RECONCILE_REQUIRED"
@@ -148,12 +201,68 @@ class ExecutionBarrier:
         with self.context_cache.execution_lock:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
-            self._persist(intent, "PENDING")
-            if self.db is not None and hasattr(self.db, "save_execution_event"):
-                try:
-                    self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
-                except Exception:
-                    pass
+            key = str(intent.intent_id)
+            client_key = str(intent.client_order_id or "")
+            if not client_key:
+                return ExecutionResult(intent.intent_id, False, reason="client_order_id_required")
+            if key in self._attempted_intents or client_key in self._attempted_client_order_ids:
+                return ExecutionResult(intent.intent_id, False, reason="duplicate_or_unresolved_intent_requires_reconciliation")
+            try:
+                prior = self._existing_intent(intent)
+            except Exception as exc:
+                return ExecutionResult(intent.intent_id, False, reason=self._safe_error_reason("intent_lookup_failed", exc))
+            if prior:
+                prior_status = str(prior.get("status", "UNKNOWN")).upper()
+                return ExecutionResult(intent.intent_id, False, reason=f"prior_intent_exists:{prior_status}; reconciliation_required")
+            try:
+                if self.db is None or not hasattr(self.db, "unresolved_execution_intents"):
+                    return ExecutionResult(intent.intent_id, False, reason="unresolved_intent_lookup_unavailable")
+                unresolved = self.db.unresolved_execution_intents()
+            except Exception as exc:
+                return ExecutionResult(intent.intent_id, False, reason=self._safe_error_reason("unresolved_intent_lookup_failed", exc))
+            if unresolved:
+                return ExecutionResult(
+                    intent.intent_id,
+                    False,
+                    reason="unresolved_execution_intent_requires_reconciliation",
+                )
+            # This transaction re-checks both clientOrderId uniqueness and the
+            # global unresolved-intent gate under SQLite's write lock.
+            try:
+                if self.db is None or not hasattr(self.db, "claim_execution_intent"):
+                    raise RuntimeError("atomic_execution_intent_claim_unavailable")
+                claimed = self.db.claim_execution_intent(intent)
+                if not claimed:
+                    return ExecutionResult(
+                        intent.intent_id,
+                        False,
+                        reason="duplicate_or_unresolved_intent_requires_reconciliation",
+                    )
+                # Once a durable PENDING claim exists, this intent cannot be
+                # replayed in-process, even if a later status write fails.
+                self._attempted_intents.add(key)
+                self._attempted_client_order_ids.add(client_key)
+            except Exception as exc:
+                reason = self._safe_error_reason("intent_persistence_failed", exc)
+                self._record("ERROR", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
+
+            try:
+                if self.db is None or not hasattr(self.db, "save_execution_event"):
+                    raise RuntimeError("execution_event_persistence_unavailable")
+                self.db.save_execution_event(
+                    intent.intent_id,
+                    "ADMISSION_STARTED",
+                    dict(intent.required_context_versions),
+                )
+            except Exception as exc:
+                    reason = self._safe_error_reason("admission_event_persistence_failed", exc)
+                    self._record("ERROR", "execution_blocked", intent, reason)
+                    try:
+                        self._persist(intent, "BLOCKED", reason)
+                    except Exception:
+                        raise ExecutionPersistenceError("admission_event_and_blocked_state_persistence_failed") from None
+                    return ExecutionResult(intent.intent_id, False, reason=reason)
             snapshot = self.context_cache.snapshot()
             reason = self._validate(intent, snapshot)
             if reason:
@@ -162,7 +271,10 @@ class ExecutionBarrier:
                 except ValueError:
                     order_fsm.state = OrderState.RECONCILE_REQUIRED
                 self._record("WARNING", "execution_blocked", intent, reason)
-                self._persist(intent, "BLOCKED", reason)
+                try:
+                    self._persist(intent, "BLOCKED", reason)
+                except Exception:
+                    raise ExecutionPersistenceError("validation_blocked_state_persistence_failed") from None
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 
             if pre_submit_checks is not None:
@@ -173,13 +285,39 @@ class ExecutionBarrier:
                         order_fsm.transition(OrderState.CANCELED)
                     except ValueError:
                         order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    reason = f"pre_submit_check_failed: {type(exc).__name__}: {exc}"
-                    self._persist(intent, "BLOCKED", reason)
+                    reason = self._safe_error_reason("pre_submit_check_failed", exc)
+                    try:
+                        self._persist(intent, "BLOCKED", reason)
+                    except Exception:
+                        raise ExecutionPersistenceError("pre_submit_check_and_blocked_state_persistence_failed") from None
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
             order_fsm.transition(OrderState.SUBMITTING)
-            order_fsm.transition(OrderState.SUBMITTING)
+            # This durable write-ahead marker separates intents that never
+            # reached the mutation call from intents whose exchange outcome may
+            # be ambiguous after a crash. Failure here MUST prevent submission.
+            try:
+                if self.db is None or not hasattr(self.db, "save_execution_event"):
+                    raise RuntimeError("execution_event_persistence_unavailable")
+                self.db.save_execution_event(
+                    intent.intent_id,
+                    "SUBMIT_ATTEMPT_STARTED",
+                    {
+                        "mutation_kind": intent.mutation_kind,
+                        "symbol": intent.symbol,
+                        "client_order_id": intent.client_order_id,
+                        "target_order_id": intent.target_order_id,
+                        "target_client_order_id": intent.target_client_order_id,
+                        "target_order_list_id": intent.target_order_list_id,
+                        "target_list_client_order_id": intent.target_list_client_order_id,
+                        "replacement_client_order_id": intent.replacement_client_order_id,
+                    },
+                )
+            except Exception as exc:
+                reason = self._safe_error_reason("submit_attempt_event_persistence_failed", exc)
+                self._record("CRITICAL", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
             self._record(
                 "INFO",
                 "execution_admitted",
@@ -195,20 +333,25 @@ class ExecutionBarrier:
                     "client_order_id": intent.client_order_id,
                 },
             )
+            # Once submit is called, this intent/client ID cannot be replayed
+            # in-process. On restart, durable PENDING/AMBIGUOUS must reconcile.
             try:
                 response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
-                order_fsm.state = OrderState.AMBIGUOUS
-                self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
+                safe_reason = self._safe_error_reason("submit_failed_unknown_result", exc)
+                try:
+                    self._persist(intent, "AMBIGUOUS", safe_reason)
+                except Exception:
+                    self._record("CRITICAL", "execution_reconcile_required", intent,
+                                 "Submit outcome unknown and ambiguity state persistence failed")
+                    raise ExecutionPersistenceError("submit_outcome_unknown_and_ambiguous_state_not_persisted") from None
                 self._record(
-                    "ERROR",
-                    "execution_ambiguous",
-                    intent,
-                    "Binance submission failed or timed out; reconciliation required",
-                    {"error": f"{type(exc).__name__}: {exc}"},
+                    "ERROR", "execution_ambiguous", intent,
+                    "Binance submission outcome unknown; reconciliation required",
+                    {"error_type": type(exc).__name__, "client_order_id": intent.client_order_id},
                 )
-                raise
+                raise RuntimeError("submit_outcome_unknown_reconciliation_required") from None
 
             if intent.order_type != "CANCEL":
                 status = str(
@@ -230,41 +373,12 @@ class ExecutionBarrier:
                     and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
                 ):
                     order_fsm.state = OrderState.OPEN
-                else:
-                    order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
-                    self._record(
-                        "ERROR",
-                        "execution_ambiguous",
-                        intent,
-                        "Exchange accepted an operation without authoritative state",
-                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
-                    )
-                    raise RuntimeError(
-                        "ExecutionBarrier: exchange response lacks authoritative order state"
-                    )
-            if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
-                ).upper()
-                if status:
-                    order_fsm.observe_exchange_status(
-                        status,
-                        float(
-                            response.get("executedQty", 0) or 0
-                            if isinstance(response, dict)
-                            else 0
-                        ),
-                    )
                 elif (
-                    isinstance(response, dict)
-                    and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
+                    intent.order_type.upper() == "OCO"
+                    and isinstance(response, dict)
+                    and response.get("orderListId") is not None
+                    and isinstance(response.get("orderReports"), list)
+                    and len(response.get("orderReports")) >= 2
                 ):
                     order_fsm.state = OrderState.OPEN
                 else:
@@ -284,12 +398,19 @@ class ExecutionBarrier:
                     raise RuntimeError(
                         "ExecutionBarrier: exchange response lacks authoritative order state"
                     )
-            self._persist(intent, "SUBMITTED")
+            try:
+                self._persist(intent, "SUBMITTED")
+            except Exception:
+                self._record("CRITICAL", "execution_reconcile_required", intent,
+                             "Exchange response received but local submitted state persistence failed")
+                raise ExecutionPersistenceError("exchange_response_received_local_state_persistence_failed") from None
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
                 except Exception:
-                    pass
+                    self._record("CRITICAL", "execution_reconcile_required", intent,
+                                 "Exchange response received but submitted event persistence failed")
+                    raise ExecutionPersistenceError("submitted_event_persistence_failed_reconciliation_required") from None
             self._record("INFO", "execution_submitted", intent, "Binance accepted request", {
                 "intent_id": intent.intent_id,
             })

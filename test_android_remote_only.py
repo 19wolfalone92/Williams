@@ -18,15 +18,23 @@ def test_android_has_autonomous_runtime():
     assert service.exists()
 
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    contract = _read(ANDROID / "java/com/williamsbot/BackendUrlContract.kt")
     assert "TradingForegroundService" in main
-    assert "https://" in main
+    # URL validation is intentionally centralized in BackendUrlContract.
+    # Assert the call site and the tested HTTPS policy rather than relying on
+    # an HTTPS literal remaining duplicated in the Activity source.
+    assert "BackendUrlContract.isSecureRemoteUrl" in main
+    assert "https" in contract.lower()
 
 
 def test_android_local_runtime_does_not_require_remote_https():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    contract = _read(ANDROID / "java/com/williamsbot/BackendUrlContract.kt")
     network = _read(ANDROID / "res/xml/network_security_config.xml")
     assert "http://127.0.0.1:18080" in main
-    assert "https://" in main
+    assert "BackendUrlContract.isLocalRuntimeUrl" in main
+    assert "BackendUrlContract.isSecureRemoteUrl" in main
+    assert "https" in contract.lower()
     assert "127.0.0.1" in network
     assert 'cleartextTrafficPermitted="true"' in network
 

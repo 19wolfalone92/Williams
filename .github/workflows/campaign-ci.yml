@@ -1,4 +1,5 @@
 name: Williams Campaign CI
+# Task 006 recovery acceptance v3: re-run campaign and Android checks for all final recovery regressions.
 
 on:
   push:
@@ -68,6 +69,12 @@ jobs:
             tests/test_quant_models.py \
             test_preflight_gate.py \
             test_execution_architecture.py \
+            test_execution_barrier_durability.py \
+            test_execution_barrier_double_failure.py \
+            test_execution_recovery.py \
+            test_financial_integrity.py \
+            test_binance_error_redaction.py \
+            test_diagnostics_secret_redaction.py \
             test_integration_bindings.py \
             test_testnet_release_gate.py \
             test_campaign_engine.py \
@@ -88,7 +95,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
-          gradle-version: "8.14.5"
+          gradle-version: "8.14.6"
           validate-wrappers: false
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew

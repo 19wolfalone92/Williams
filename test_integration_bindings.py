@@ -4,9 +4,34 @@ import os
 import threading
 import time
 
+class _OfflineBarrierResult:
+    def __init__(self, response):
+        self.accepted = True
+        self.response = response
+        self.reason = ""
+
+
+class _OfflineExecutionBarrier:
+    """Unit-test-only barrier for fake exchange fixtures; never used in production."""
+    def execute(self, intent, submit, *, pre_submit_checks=None):
+        if pre_submit_checks is not None:
+            pre_submit_checks(None)
+        return _OfflineBarrierResult(submit())
+
+
 @pytest.fixture(autouse=True)
 def _legacy_campaign_mode(monkeypatch):
     monkeypatch.setenv("CAMPAIGN_ENGINE", "false")
+    # Legacy lifecycle tests use fake clients and explicitly mock the final
+    # execution barrier. Separate tests exercise the real barrier contracts.
+    original_init = MultiPositionTrader.__init__
+
+    def init_with_offline_barrier(self, *args, **kwargs):
+        if kwargs.get("execution_barrier") is None:
+            kwargs["execution_barrier"] = _OfflineExecutionBarrier()
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(MultiPositionTrader, "__init__", init_with_offline_barrier)
 
 
 
@@ -99,6 +124,24 @@ class FakeBinance:
             "cummulativeQuoteQty": str(float(self.entry_qty) * 100),
             "transactTime": 1000,
         }
+
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        # Synthetic authoritative history for offline lifecycle tests only.
+        order = self.get_order(symbol, order_id=order_id)
+        qty = float(order.get("executedQty", 0) or 0)
+        quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+        if qty <= 0:
+            return []
+        return [{
+            "id": str(order.get("orderId", order_id)),
+            "orderId": order.get("orderId", order_id),
+            "symbol": symbol,
+            "price": str(quote / qty),
+            "qty": str(qty),
+            "quoteQty": str(quote),
+            "commission": "0",
+            "commissionAsset": "USDT",
+        }]
 
     def exchange_info(self, symbol):
         return _filters()
@@ -600,8 +643,10 @@ def test_execution_accumulator_removes_base_asset_commission_from_managed_qty():
             "cummulativeQuoteQty": "100",
             "fills": [
                 {
+                    "tradeId": "integration-btc-fee-1",
                     "price": "100",
                     "qty": "1.0",
+                    "quoteQty": "100",
                     "commission": "0.001",
                     "commissionAsset": "BTC",
                 }
@@ -623,10 +668,14 @@ def test_execution_accumulator_keeps_quote_commission_as_quote_fee():
             "symbol": "BTCUSDT",
             "side": "BUY",
             "status": "FILLED",
+            "executedQty": "1.0",
+            "cummulativeQuoteQty": "100",
             "fills": [
                 {
+                    "tradeId": "integration-usdt-fee-1",
                     "price": "100",
                     "qty": "1.0",
+                    "quoteQty": "100",
                     "commission": "0.1",
                     "commissionAsset": "USDT",
                 }

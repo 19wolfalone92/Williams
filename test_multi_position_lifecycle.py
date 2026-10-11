@@ -2,9 +2,34 @@ import pytest
 import os
 from pathlib import Path
 
+class _OfflineBarrierResult:
+    def __init__(self, response):
+        self.accepted = True
+        self.response = response
+        self.reason = ""
+
+
+class _OfflineExecutionBarrier:
+    """Unit-test-only barrier for fake exchange fixtures; never used in production."""
+    def execute(self, intent, submit, *, pre_submit_checks=None):
+        if pre_submit_checks is not None:
+            pre_submit_checks(None)
+        return _OfflineBarrierResult(submit())
+
+
 @pytest.fixture(autouse=True)
 def _legacy_campaign_mode(monkeypatch):
     monkeypatch.setenv("CAMPAIGN_ENGINE", "false")
+    # Legacy lifecycle tests use fake clients and explicitly mock the final
+    # execution barrier. Separate tests exercise the real barrier contracts.
+    original_init = MultiPositionTrader.__init__
+
+    def init_with_offline_barrier(self, *args, **kwargs):
+        if kwargs.get("execution_barrier") is None:
+            kwargs["execution_barrier"] = _OfflineExecutionBarrier()
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(MultiPositionTrader, "__init__", init_with_offline_barrier)
 
 
 
@@ -96,6 +121,23 @@ class FakeClient:
             ):
                 return order
         raise RuntimeError("order not found")
+
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        order = self.get_order(symbol, order_id=order_id)
+        qty = float(order.get("executedQty", 0) or 0)
+        quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+        if qty <= 0:
+            return []
+        return [{
+            "id": str(order.get("orderId", order_id)),
+            "orderId": order.get("orderId", order_id),
+            "symbol": symbol,
+            "price": str(quote / qty),
+            "qty": str(qty),
+            "quoteQty": str(quote),
+            "commission": "0",
+            "commissionAsset": "USDT",
+        }]
 
     def order(self, symbol, *args, **kwargs):
         raise AssertionError("unexpected new order in lifecycle recovery test")
@@ -501,6 +543,26 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
                 },
                 self.manual_order or {},
             ]
+
+        def my_trades(self, symbol, order_id=None, limit=1000):
+            # Explicit offline exchange trade history for both sides of the
+            # partial exit; order status/aggregate totals alone are not fills.
+            order_id = str(order_id)
+            if order_id == "manual-1":
+                return [{
+                    "id": "manual-trade-1", "orderId": "manual-1",
+                    "symbol": symbol, "price": "100", "qty": "0.6",
+                    "quoteQty": "60", "commission": "0",
+                    "commissionAsset": "USDT",
+                }]
+            if order_id == "buy-1":
+                return [{
+                    "id": "entry-trade-1", "orderId": "buy-1",
+                    "symbol": symbol, "price": "100", "qty": "1.0",
+                    "quoteQty": "100", "commission": "0",
+                    "commissionAsset": "USDT",
+                }]
+            return []
 
         def book_ticker(self, symbol=None):
             return {"symbol": symbol or "BTCUSDT", "bidPrice": "100", "askPrice": "100"}

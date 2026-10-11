@@ -1,0 +1,322 @@
+"""Financial integrity regressions: strict fills, durable identity and idempotence."""
+from __future__ import annotations
+
+import threading
+import sqlite3
+from decimal import Decimal
+
+import pytest
+
+from db import Database
+from execution_accumulator import ExecutionDataIncomplete, accumulate_fills, accumulate_order
+
+
+def fill(**overrides):
+    row = {
+        "tradeId": 17, "orderId": 901, "price": "100.0", "qty": "0.4",
+        "commission": "0.001", "commissionAsset": "BTC",
+    }
+    row.update(overrides)
+    return row
+
+
+def order_payload(fills):
+    qty = sum(float(row["qty"]) for row in fills)
+    quote = sum(float(row["qty"]) * float(row["price"]) for row in fills)
+    return {
+        "orderId": 901, "symbol": "BTCUSDT", "status": "FILLED",
+        "executedQty": str(qty), "cummulativeQuoteQty": str(quote),
+        "fills": fills,
+    }
+
+
+def test_complete_fill_with_base_commission_is_accounted_once():
+    summary = accumulate_order(order_payload([fill()]), base_asset="BTC")
+    assert summary.financials_complete
+    assert summary.executed_qty == Decimal("0.4")
+    assert summary.quote_qty == Decimal("40.0")
+    assert summary.commission_base == Decimal("0.001")
+    assert summary.net_base_qty == Decimal("0.399")
+    assert summary.trade_ids == ("17",)
+
+
+def test_confirmed_zero_commission_requires_explicit_asset():
+    summary = accumulate_fills(
+        [fill(commission="0", commissionAsset="USDT")], base_asset="BTC"
+    )
+    assert summary.financials_complete
+    assert summary.fee_quote == Decimal("0")
+
+
+@pytest.mark.parametrize("changes,reason", [
+    ({"commission": None}, "fill_missing_commission"),
+    ({"commissionAsset": ""}, "fill_missing_commission_asset"),
+    ({"qty": "NaN"}, "fill_invalid_qty"),
+    ({"price": "-1"}, "fill_invalid_price"),
+    ({"commission": "-0.1"}, "fill_invalid_commission"),
+    ({"tradeId": None}, "fill_0_missing_trade_id"),
+])
+def test_incomplete_or_invalid_fill_fails_closed(changes, reason):
+    with pytest.raises(ExecutionDataIncomplete, match=reason):
+        accumulate_fills([fill(**changes)], base_asset="BTC")
+
+
+def test_unknown_third_asset_fee_requires_verified_conversion():
+    row = fill(commission="0.02", commissionAsset="BNB")
+    with pytest.raises(ExecutionDataIncomplete, match="unvalued_commission_asset"):
+        accumulate_fills([row], base_asset="BTC")
+    summary = accumulate_fills(
+        [row], base_asset="BTC", asset_quote_values={"BNB": "300"}
+    )
+    assert summary.fee_quote_equivalent == 6
+
+
+def test_duplicate_or_conflicting_trade_id_is_not_silently_counted():
+    with pytest.raises(ExecutionDataIncomplete, match="duplicate_trade_id"):
+        accumulate_fills([fill(), fill()], base_asset="BTC")
+    with pytest.raises(ExecutionDataIncomplete, match="conflicting_duplicate_trade_id"):
+        accumulate_fills([fill(), fill(qty="0.5")], base_asset="BTC")
+
+
+def test_order_aggregate_must_match_per_trade_history():
+    payload = order_payload([fill()])
+    payload["executedQty"] = "0.5"
+    with pytest.raises(ExecutionDataIncomplete, match="order_fill_totals_mismatch"):
+        accumulate_order(payload, base_asset="BTC")
+
+
+def ledger_fill(**overrides):
+    row = {
+        "exchange": "BINANCE", "account_id": "test-account",
+        "trade_id": "17", "campaign_id": "campaign-1",
+        "order_id": "901", "symbol": "BTCUSDT", "side": "BUY",
+        "quantity": "0.4", "price": "100", "quote_quantity": "40",
+        "commission": "0.001", "commission_asset": "BTC",
+    }
+    row.update(overrides)
+    return row
+
+
+@pytest.mark.parametrize("changes,error", [
+    ({"commission": None}, "exchange_fill_commission_unknown"),
+    ({"commission": ""}, "exchange_fill_commission_unknown"),
+    ({"commission_asset": ""}, "exchange_fill_commission_asset_unknown"),
+    ({"commission": "NaN"}, "exchange_fill_commission_invalid"),
+    ({"quantity": "Infinity"}, "exchange_fill_quantity_invalid"),
+    ({"quote_quantity": "0"}, "exchange_fill_quote_quantity_invalid"),
+])
+def test_database_rejects_unknown_or_invalid_fee_rows(tmp_path, changes, error):
+    db = Database(str(tmp_path / "invalid-fill.sqlite3"))
+    row = ledger_fill(**changes)
+    with pytest.raises(ValueError, match=error):
+        db.save_campaign_fill(row)
+    assert db.conn.execute("SELECT COUNT(*) FROM campaign_fills").fetchone()[0] == 0
+    assert db.state_get("recovery_status") == "RECOVERY_REQUIRED"
+
+
+def test_campaign_fill_identity_is_database_unique_and_idempotent(tmp_path):
+    db = Database(str(tmp_path / "fills.sqlite3"))
+    assert db.save_campaign_fill(ledger_fill()) is True
+    assert db.save_campaign_fill(ledger_fill()) is False
+    rows = db.conn.execute(
+        "SELECT COUNT(*),SUM(quantity),SUM(commission_amount) FROM campaign_fills "
+        "WHERE trade_id='17'"
+    ).fetchone()
+    assert rows[0] == 1
+    assert rows[1] == pytest.approx(0.4)
+    assert rows[2] == pytest.approx(0.001)
+
+
+def test_conflicting_existing_trade_id_preserves_record_and_blocks_recovery(tmp_path):
+    db = Database(str(tmp_path / "fill-conflict.sqlite3"))
+    db.save_campaign_fill(ledger_fill())
+    with pytest.raises(RuntimeError, match="conflicting_duplicate_trade_id"):
+        db.save_campaign_fill(ledger_fill(quantity="0.5", quote_quantity="50"))
+    assert db.conn.execute(
+        "SELECT COUNT(*) FROM campaign_fills WHERE trade_id='17'"
+    ).fetchone()[0] == 1
+    assert db.state_get("recovery_status") == "RECOVERY_REQUIRED"
+    assert db.conn.execute(
+        "SELECT COUNT(*) FROM execution_events WHERE event='CONFLICTING_DUPLICATE_TRADE_ID'"
+    ).fetchone()[0] == 1
+
+
+def test_two_database_instances_racing_same_fill_do_not_duplicate(tmp_path):
+    path = str(tmp_path / "fill-race.sqlite3")
+    first, second = Database(path), Database(path)
+    barrier = threading.Barrier(2)
+    results, errors = [], []
+
+    def worker(db):
+        try:
+            barrier.wait(timeout=5)
+            results.append(db.save_campaign_fill(ledger_fill()))
+        except Exception as exc:  # surfaced below, no silent worker failures
+            errors.append(type(exc).__name__)
+
+    a = threading.Thread(target=worker, args=(first,))
+    b = threading.Thread(target=worker, args=(second,))
+    a.start(); b.start(); a.join(timeout=10); b.join(timeout=10)
+    assert not a.is_alive() and not b.is_alive()
+    assert errors == []
+    assert sorted(results) == [False, True]
+    assert first.conn.execute(
+        "SELECT COUNT(*) FROM campaign_fills WHERE trade_id='17'"
+    ).fetchone()[0] == 1
+
+
+def test_global_recovery_gate_blocks_buy_but_does_not_block_sell(tmp_path):
+    from execution_barrier import ExecutionBarrier, OrderIntent
+    from market_context import ContextCache
+
+    db = Database(str(tmp_path / "global-gate.sqlite3"))
+    gate = ExecutionBarrier(ContextCache(), db)
+    buy = OrderIntent.new("BTCUSDT", "BUY", "MARKET", {}, purpose="CAMPAIGN_ENTRY")
+    sell = OrderIntent.new("BTCUSDT", "SELL", "MARKET", {}, purpose="CAMPAIGN_EMERGENCY_EXIT")
+    # Assert the persisted gate contract directly without reaching exchange submit.
+    assert db.state_get("recovery_status") == "RECOVERY_REQUIRED"
+    assert gate._validate(buy, object()) == "global_recovery_gate:RECOVERY_REQUIRED"
+    assert gate._validate(sell, object()) == ""
+
+def test_unknown_commission_asset_blocks_even_when_reported_fee_is_zero():
+    row = fill(commission="0", commissionAsset="BNB")
+    with pytest.raises(ExecutionDataIncomplete, match="unvalued_commission_asset"):
+        accumulate_fills([row], base_asset="BTC")
+
+def test_canonical_fill_ledger_preserves_decimal_text_and_stays_pending(tmp_path):
+    db = Database(str(tmp_path / "decimal-ledger.sqlite3"))
+    row = ledger_fill(
+        quantity="0.123456789123456789",
+        price="123.456789123456789",
+        quote_quantity="15.241578750190521",
+        commission="0.000000000000000123",
+    )
+    assert db.save_campaign_fill(row) is True
+    stored = db.conn.execute(
+        """SELECT quantity_decimal,price_decimal,quote_quantity_decimal,
+                  commission_decimal,effect_state
+           FROM exchange_fill_ledger
+           WHERE exchange='BINANCE' AND account_id='test-account'
+             AND symbol='BTCUSDT' AND trade_id='17'"""
+    ).fetchone()
+    assert tuple(stored) == (
+        "0.123456789123456789",
+        "123.456789123456789",
+        "15.241578750190521",
+        "0.000000000000000123",
+        "PENDING",
+    )
+
+
+@pytest.mark.parametrize("field", ["quantity", "price", "quote_quantity", "commission"])
+def test_canonical_fill_ledger_rejects_binary_float_inputs(tmp_path, field):
+    db = Database(str(tmp_path / f"float-{field}.sqlite3"))
+    row = ledger_fill()
+    row[field] = 0.1
+    with pytest.raises(ValueError, match=f"exchange_fill_{field}_invalid"):
+        db.save_campaign_fill(row)
+    assert db.conn.execute("SELECT COUNT(*) FROM exchange_fill_ledger").fetchone()[0] == 0
+
+
+def test_projection_write_failure_rolls_back_canonical_fill(tmp_path):
+    db = Database(str(tmp_path / "projection-failure.sqlite3"))
+    db.conn.execute(
+        """CREATE TRIGGER reject_campaign_fill BEFORE INSERT ON campaign_fills
+           BEGIN SELECT RAISE(ABORT, 'injected projection failure'); END"""
+    )
+    db.conn.commit()
+    with pytest.raises(Exception, match="injected projection failure"):
+        db.save_campaign_fill(ledger_fill())
+    assert db.conn.execute("SELECT COUNT(*) FROM exchange_fill_ledger").fetchone()[0] == 0
+    assert db.conn.execute("SELECT COUNT(*) FROM campaign_fills").fetchone()[0] == 0
+
+def test_legacy_real_only_fill_migration_preserves_row_and_latches_recovery(tmp_path):
+    path = str(tmp_path / "legacy-v8.sqlite3")
+    db = Database(path)
+    db.conn.execute(
+        """INSERT INTO campaign_fills(
+            campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
+            commission_asset,raw_json
+        ) VALUES('legacy-campaign','old-order','BTCUSDT','BUY',0.123456789,100,12.3456789,
+                 'USDT','{}')"""
+    )
+    db.conn.commit()
+    db.conn.close()
+
+    reopened = Database(path)
+    assert reopened.conn.execute("SELECT COUNT(*) FROM campaign_fills").fetchone()[0] == 1
+    assert reopened.state_get("recovery_status") == "RECOVERY_REQUIRED"
+    import json
+    migration = json.loads(reopened.state_get("legacy_fill_decimal_migration"))
+    assert migration == {"status": "BLOCKED", "unverified_rows": 1}
+
+
+def test_canonical_fill_stays_recovery_blocking_until_effect_is_applied(tmp_path):
+    db = Database(str(tmp_path / "pending-effect.sqlite3"))
+    assert db.save_campaign_fill(ledger_fill()) is True
+    pending = db.pending_exchange_fill_effects()
+    assert len(pending) == 1
+    assert pending[0]["trade_id"] == "17"
+    assert pending[0]["effect_state"] == "PENDING"
+
+def test_entry_barrier_rejects_pending_financial_effect_even_if_status_is_manually_complete(tmp_path):
+    from execution_barrier import ExecutionBarrier, OrderIntent
+    from market_context import ContextCache
+
+    db = Database(str(tmp_path / "pending-effect-gate.sqlite3"))
+    db.save_campaign_fill(ledger_fill())
+    db.state_set("recovery_status", "RECOVERY_COMPLETE")
+    gate = ExecutionBarrier(ContextCache(), db)
+    buy = OrderIntent.new("BTCUSDT", "BUY", "MARKET", {}, purpose="CAMPAIGN_ENTRY")
+    assert gate._validate(buy, object()) == "global_recovery_gate:pending_financial_effects"
+
+@pytest.mark.parametrize("schema_version", [6, 7, 8])
+def test_populated_supported_legacy_schema_migration_is_loss_preserving_and_blocked(
+    tmp_path, schema_version
+):
+    path = str(tmp_path / f"populated-v{schema_version}.sqlite3")
+    legacy = sqlite3.connect(path)
+    legacy.executescript(
+        """
+        CREATE TABLE bot_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE campaign_fills(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id TEXT NOT NULL,
+            order_id TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            quantity REAL NOT NULL,
+            price REAL NOT NULL,
+            quote_quantity REAL DEFAULT 0,
+            fee_quote REAL DEFAULT 0,
+            commission_base REAL DEFAULT 0,
+            commission_asset TEXT,
+            raw_json TEXT
+        );
+        """
+    )
+    legacy.execute(
+        "INSERT INTO bot_state(key,value) VALUES('schema_version',?)",
+        (str(schema_version),),
+    )
+    legacy.execute(
+        """INSERT INTO campaign_fills(
+            campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
+            fee_quote,commission_base,commission_asset,raw_json
+        ) VALUES('legacy','old-order','BTCUSDT','BUY',0.123456789123,123.456789,15.2415,
+                 0.0001,0,'USDT','{}')"""
+    )
+    legacy.commit()
+    legacy.close()
+
+    migrated = Database(path)
+    assert migrated.state_get("schema_version") == "9"
+    assert migrated.conn.execute("SELECT COUNT(*) FROM campaign_fills").fetchone()[0] == 1
+    assert migrated.state_get("recovery_status") == "RECOVERY_REQUIRED"
+    import json
+    diagnostic = json.loads(migrated.state_get("legacy_fill_decimal_migration"))
+    assert diagnostic["status"] == "BLOCKED"
+    assert diagnostic["unverified_rows"] == 1
+    assert migrated.conn.execute("SELECT COUNT(*) FROM exchange_fill_ledger").fetchone()[0] == 0
+

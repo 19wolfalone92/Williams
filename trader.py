@@ -20,6 +20,7 @@ from l2_slippage import L2SlippageGuard
 from equity_breaker import EquityCircuitBreaker
 from wise_men import WiseMenStateMachine
 
+from safe_logging import redact_text
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 log = logging.getLogger('williams-v4')
@@ -986,13 +987,14 @@ class Trader:
                 self.db.log_event(
                     'WARNING', 'execution_fill_lookup_failed',
                     'Could not refresh authoritative fills; using order accumulator',
-                    {'orderId': order_id, 'error': f'{type(exc).__name__}: {exc}'},
+                    {'orderId': order_id, 'error': f'{type(exc).__name__}: {redact_text(str(exc))}'},
                 )
         if fills:
             order['fills'] = fills
-            summary = accumulate_fills(fills)
-        else:
-            summary = accumulate_order(order)
+        # Validate per-trade history against the exchange order aggregates even
+        # when myTrades returned rows. A non-empty fill list is not sufficient
+        # if it is incomplete or belongs to a different execution total.
+        summary = accumulate_order(order)
         return order, summary
 
     def market_buy(self, quote):
@@ -1200,6 +1202,7 @@ class Trader:
             self.refresh_execution_context(self.symbol)
             snap = self.context_cache.snapshot()
             required_versions = {tf: snap.context(self.symbol, tf).version for tf in self.config.structural_timeframes}
+            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
             intent = OrderIntent.new(
                 self.symbol,
                 'SELL',
@@ -1207,8 +1210,8 @@ class Trader:
                 required_context_versions=required_versions,
                 purpose='EXIT',
                 quantity=self.client.decimal_format(actual_qty),
+                client_order_id=cid,
             )
-            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
             self._set_state('EXIT_PENDING')
             result = self.execution_barrier.execute(
                 intent,

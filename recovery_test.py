@@ -45,6 +45,29 @@ class FakeClient:
         self.orders=[]; self.open_ocos=[]; self.next_order_id=1000; self.next_list_id=5000; self.created_oco_count=0
     def account(self):return {'balances':[{'asset':'USDT','free':str(self.quote),'locked':'0'},{'asset':'BTC','free':str(self.base_free),'locked':str(self.base_locked)}]}
     def all_orders(self,symbol,limit=1000):return list(self.orders)
+    def my_trades(self,symbol,order_id=None,limit=1000):
+        # Offline exchange authority: return a per-trade record only for an
+        # actually executed order, with explicit fee fields and stable identity.
+        rows=[row for row in self.orders if str(row.get('symbol','')).upper()==str(symbol).upper()
+              and (order_id is None or str(row.get('orderId'))==str(order_id))
+              and float(row.get('executedQty',0) or 0)>0]
+        result=[]
+        for row in rows:
+            qty=Decimal(str(row['executedQty']))
+            quote=Decimal(str(row.get('cummulativeQuoteQty',0)))
+            if qty<=0 or quote<=0:
+                continue
+            result.append({
+                'id':f"{row.get('orderId')}-trade-1",
+                'orderId':row.get('orderId'),
+                'symbol':symbol,
+                'price':str(quote/qty),
+                'qty':str(qty),
+                'quoteQty':str(quote),
+                'commission':'0',
+                'commissionAsset':'USDT',
+            })
+        return result[:limit]
     def open_order_lists(self,symbol=None):return list(self.open_ocos)
     def book_ticker(self,symbol):return {'bidPrice':str(self.price-0.02),'askPrice':str(self.price+0.02)}
     def create_oco_sell(self,symbol,quantity,take_profit_price,stop_price,stop_limit_price,list_client_order_id=None):

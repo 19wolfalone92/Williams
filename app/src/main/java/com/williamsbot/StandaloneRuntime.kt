@@ -25,8 +25,13 @@ import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.ArrayDeque
 import java.util.Calendar
+import java.util.Base64
+import java.security.SecureRandom
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -38,18 +43,62 @@ import kotlin.math.ceil
 
 object StandaloneRuntime {
     @SuppressLint("StaticFieldLeak")
-    private var server: StandaloneServer? = null
+    @Volatile private var server: StandaloneServer? = null
 
+    @Synchronized
     fun start(context: Context) {
-        if (server == null) {
-            server =
-                StandaloneServer(
-                    context.applicationContext
-                )
-            server!!.start()
+        val current = server
+        if (current?.isListeningOnLoopback == true) return
+
+        // Do not retain a half-started server after a failed bind/accept-loop
+        // startup. A later launch must be able to construct a clean listener.
+        if (current != null) current.stop()
+        val candidate = StandaloneServer(context.applicationContext)
+        try {
+            candidate.start()
+            check(candidate.isListeningOnLoopback) {
+                "Local API listener did not become active on loopback"
+            }
+            server = candidate
+        } catch (failure: Throwable) {
+            candidate.stop()
+            throw failure
         }
     }
 
+    /**
+     * Per-install capability for the loopback HTTP bridge. Stored in the same
+     * Keystore-encrypted preferences used by the native engine, never logged
+     * or exposed by diagnostics.
+     */
+    @Synchronized
+    fun localApiToken(context: Context): String {
+        val secure = EncryptedSharedPreferences.create(
+            context.applicationContext,
+            "williams_native_secure",
+            MasterKey.Builder(context.applicationContext)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build(),
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+        val existing = secure.getString("local_api_token", null)
+        if (!existing.isNullOrBlank()) return existing
+
+        val random = ByteArray(32)
+        SecureRandom().nextBytes(random)
+        val generated = Base64.getUrlEncoder().withoutPadding().encodeToString(random)
+        val committed = secure.edit().putString("local_api_token", generated).commit()
+        check(committed) { "Could not persist local API authorization token" }
+        val saved = secure.getString("local_api_token", null)
+        check(saved == generated) { "Local API authorization token read-back failed" }
+        return saved
+    }
+
+    fun isListeningOnLoopback(): Boolean =
+        server?.isListeningOnLoopback == true
+
+    @Synchronized
     fun autostart(context: Context) {
         start(context)
         server?.autostart()
@@ -71,14 +120,17 @@ object StandaloneRuntime {
         return server!!.status(fast = fast)
     }
 
+    @Synchronized
     fun startTrading() {
         server?.startTrading()
     }
 
+    @Synchronized
     fun stopTrading() {
         server?.stopTrading()
     }
 
+    @Synchronized
     fun stop() {
         server?.stop()
         server = null
@@ -255,42 +307,85 @@ private class StandaloneServer(private val context: Context) {
         }
     )
 
-    private var socket: ServerSocket? = null
+    @Volatile private var socket: ServerSocket? = null
+    @Volatile private var acceptThread: Thread? = null
+    @Volatile private var stopped = false
+    private val clientExecutor = ThreadPoolExecutor(
+        2,
+        4,
+        60L,
+        TimeUnit.SECONDS,
+        LinkedBlockingQueue<Runnable>(32),
+        { runnable -> Thread(runnable, "williams-local-api-client").apply { isDaemon = true } },
+        ThreadPoolExecutor.AbortPolicy()
+    )
     private var engine: NativeEngine? = null
 
-    fun start() {
-        if (socket != null) return
+    val isListeningOnLoopback: Boolean
+        get() {
+            val active = socket ?: return false
+            return active.isBound &&
+                !active.isClosed &&
+                active.localPort == port &&
+                active.inetAddress.isLoopbackAddress &&
+                acceptThread?.isAlive == true
+        }
 
-        socket = ServerSocket(
+    @Synchronized
+    fun start() {
+        check(!stopped) { "Standalone server instance has been stopped" }
+        if (isListeningOnLoopback) return
+        runCatching { socket?.close() }
+        val listeningSocket = ServerSocket(
             port,
             32,
             InetAddress.getByName("127.0.0.1")
         )
+        socket = listeningSocket
 
-        Thread {
-            while (true) {
-                try {
-                    val c = socket?.accept() ?: break
-                    Thread { handle(c) }.start()
+        val listener = Thread({
+            while (!listeningSocket.isClosed) {
+                val connection = try {
+                    listeningSocket.accept()
                 } catch (_: Exception) {
                     break
                 }
+                try {
+                    connection.soTimeout = 5_000
+                    clientExecutor.execute { handle(connection) }
+                } catch (_: RejectedExecutionException) {
+                    runCatching { connection.close() }
+                } catch (_: Exception) {
+                    runCatching { connection.close() }
+                }
             }
-        }.apply {
+        }, "williams-local-api-accept").apply {
             isDaemon = true
-            start()
+        }
+        acceptThread = listener
+        listener.start()
+        check(isListeningOnLoopback) {
+            "Local API accept loop failed to start"
         }
     }
 
+    @Synchronized
     fun stop() {
-        try {
-            socket?.close()
-        } catch (_: Exception) {
-        }
+        if (stopped) return
+        stopped = true
+        runCatching { socket?.close() }
         socket = null
-        engine?.stop()
+        acceptThread?.interrupt()
+        acceptThread = null
+        clientExecutor.shutdownNow()
+        // Dispose every engine-owned thread/queue as well as its trading loop.
+        // Without this, recreating the local server can leave multiple REST
+        // probes and scan/indicator workers alive in the same Android process.
+        runCatching { engine?.shutdown() }
+        engine = null
     }
 
+    @Synchronized
     fun autostart() {
         if (
             prefs.getBoolean("auto_run", false)
@@ -299,26 +394,33 @@ private class StandaloneServer(private val context: Context) {
         }
     }
 
+    @Synchronized
     fun configureCredentials(apiKey: String, apiSecret: String): JSONObject =
         e().configure(apiKey, apiSecret)
 
+    @Synchronized
     fun clearCredentials(): JSONObject = e().clear()
 
+    @Synchronized
     fun status(fast: Boolean = false): JSONObject = e().status(fast = fast)
 
+    @Synchronized
     fun startTrading() {
         e().start()
     }
 
+    @Synchronized
     fun stopTrading() {
         e().stop()
     }
 
+    @Synchronized
     private fun e(): NativeEngine {
+        check(!stopped) { "Standalone runtime server is stopped" }
         if (engine == null) {
             engine = NativeEngine(context, prefs, client)
         }
-        return engine!!
+        return checkNotNull(engine)
     }
 
     private fun handle(s: Socket) {
@@ -339,22 +441,56 @@ private class StandaloneServer(private val context: Context) {
                 val target = parts[1]
 
                 var length = 0
+                var authorizationHeader: String? = null
                 while (true) {
                     val line = reader.readLine() ?: return
                     if (line.isEmpty()) break
 
                     val header = line.split(":", limit = 2)
-                    if (
-                        header.size == 2 &&
-                        header[0].equals("Content-Length", ignoreCase = true)
-                    ) {
-                        length = header[1].trim().toIntOrNull() ?: 0
+                    if (header.size == 2) {
+                        when {
+                            header[0].equals("Content-Length", ignoreCase = true) -> {
+                                length = header[1].trim().toIntOrNull()
+                                    ?: error("Invalid Content-Length")
+                                require(length in 0..1_048_576) { "Request body too large" }
+                            }
+                            header[0].equals("Authorization", ignoreCase = true) -> {
+                                authorizationHeader = header[1].trim()
+                            }
+                        }
                     }
                 }
 
+                if (!LocalApiAuthorization.isAuthorized(
+                        StandaloneRuntime.localApiToken(context),
+                        authorizationHeader
+                    )
+                ) {
+                    val bytes = JSONObject()
+                        .put("error", "unauthorized")
+                        .toString()
+                        .toByteArray(StandardCharsets.UTF_8)
+                    val output = s.getOutputStream()
+                    output.write(
+                        (
+                            "HTTP/1.1 401 Unauthorized\r\n" +
+                                "Content-Type: application/json; charset=utf-8\r\n" +
+                                "Cache-Control: no-store\r\n" +
+                                "Content-Length: " + bytes.size + "\r\n" +
+                                "Connection: close\r\n\r\n"
+                            ).toByteArray(StandardCharsets.UTF_8)
+                    )
+                    output.write(bytes)
+                    output.flush()
+                    return
+                }
+
                 val chars = CharArray(length)
-                if (length > 0) {
-                    reader.read(chars)
+                var offset = 0
+                while (offset < length) {
+                    val read = reader.read(chars, offset, length - offset)
+                    if (read < 0) error("Truncated request body")
+                    offset += read
                 }
 
                 val body = route(method, target, String(chars))
@@ -526,6 +662,7 @@ private class NativeEngine(
     private val http: OkHttpClient
 ) {
     private val baseUrl = "https://testnet.binance.vision"
+    private val userStreamEndpoint = "wss://ws-api.testnet.binance.vision/ws-api/v3"
     private val historyStore = MarketHistoryStore(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
@@ -570,7 +707,7 @@ private class NativeEngine(
     private val livePrices = java.util.concurrent.ConcurrentHashMap<String, Double>()
     private val tradeFlow = java.util.concurrent.ConcurrentHashMap<String, ArrayDeque<TradeFlowSample>>()
     private val lastUserEventTimeByType = java.util.concurrent.ConcurrentHashMap<String, Long>()
-    private var marketSocket: WebSocket? = null
+    @Volatile private var marketSocket: WebSocket? = null
     private val orderBookCache = OrderBookCache()
     @Volatile private var marketSocketConnected = false
     @Volatile private var marketSocketLastEventMs = 0L
@@ -631,6 +768,10 @@ private class NativeEngine(
     @Volatile private var lastServerTimeSyncMs = 0L
     @Volatile private var lastOrder: JSONObject? = null
     @Volatile private var reconcileRequired = false
+    // No Android-side proof currently covers authoritative fills, fee valuation,
+    // balance/position, risk ledger and actual protection as one recovery unit.
+    // Keep entries closed until such a proof producer is implemented and verified.
+    @Volatile private var globalFinancialRecoveryComplete = false
     @Volatile private var killLatched = false
     @Volatile private var userStreamConnected = false
     @Volatile private var userStreamSyncRequired = true
@@ -644,6 +785,7 @@ private class NativeEngine(
     @Volatile private var restLastTickerPrice = 0.0
     @Volatile private var restProbeRunning = false
     private var restProbeThread: Thread? = null
+    @Volatile private var disposed = false
     @Volatile private var lastRestReconcileMs = 0L
     @Volatile private var runtimeGeneration = 0L
     @Volatile private var lastSelfHealMs = 0L
@@ -661,7 +803,7 @@ private class NativeEngine(
 
     private val userStream = BinanceUserDataStream(
         http = http,
-        endpoint = "wss://ws-api.testnet.binance.vision/ws-api/v3",
+        endpoint = userStreamEndpoint,
         apiKeyProvider = { key() },
         apiSecretProvider = { secret() },
         timestampProvider = { signedTimestamp() },
@@ -697,6 +839,9 @@ private class NativeEngine(
     )
 
     init {
+        // Persisted pause intent survives process recreation and must be
+        // honored before the scanner/worker can admit new entries.
+        paused = prefs.getBoolean("paused", false)
         loadPersistedState()
         startRestDataProbe()
         restoreExecutionAccumulators()
@@ -763,18 +908,35 @@ private class NativeEngine(
     }
 
     private fun marketDataFresh(maxAgeMs: Long = 30_000L): Boolean =
-        restMarketReady &&
-            restLastSuccessMs > 0L &&
-            System.currentTimeMillis() - restLastSuccessMs <= maxAgeMs
+        RuntimeFreshnessContract.isFresh(
+            available = restMarketReady,
+            lastSuccessAtMs = restLastSuccessMs,
+            nowMs = System.currentTimeMillis(),
+            maxAgeMs = maxAgeMs
+        )
+
+    private fun marketWebSocketFresh(maxAgeMs: Long = 60_000L): Boolean =
+        RuntimeFreshnessContract.isFresh(
+            available = marketSocketConnected,
+            lastSuccessAtMs = marketSocketLastEventMs,
+            nowMs = System.currentTimeMillis(),
+            maxAgeMs = maxAgeMs
+        )
 
     private fun executionReady(): Boolean =
         running &&
             !paused &&
-            !reconcileRequired &&
+            GlobalRecoveryGateContract.entryAllowed(
+                globalFinancialRecoveryComplete,
+                reconcileRequired
+            ) &&
             !killLatched &&
             marketDataFresh() &&
+            marketWebSocketFresh() &&
             restAccountReady &&
             historyReady &&
+            userStreamConnected &&
+            !userStreamSyncRequired &&
             stateMachine.executionAllowed() &&
             !equityCircuitBreaker.isTripped()
 
@@ -783,10 +945,15 @@ private class NativeEngine(
             if (!running) add("runtime_not_running")
             if (paused) add("paused")
             if (reconcileRequired) add("reconcile_required")
+            if (!globalFinancialRecoveryComplete) add("global_financial_recovery_incomplete")
             if (killLatched) add("kill_switch_latched")
             if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
+            if (!marketSocketConnected) add("market_websocket_disconnected")
+            else if (!marketWebSocketFresh()) add("market_websocket_stale")
             if (!restAccountReady) add("rest_account_not_ready")
             if (!historyReady) add("history_not_ready")
+            if (!userStreamConnected) add("user_stream_disconnected")
+            if (userStreamSyncRequired) add("user_stream_sync_required")
             if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
             if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
         }
@@ -851,19 +1018,30 @@ private class NativeEngine(
             }
         }
 
-        prefs.edit()
-            .putString("positions_json", pos.toString())
-            .putString("pending_entries_json", pending.toString())
-            .apply()
+        val positionsJson = pos.toString()
+        val pendingEntriesJson = pending.toString()
+        val committed = prefs.edit()
+            .putString("positions_json", positionsJson)
+            .putString("pending_entries_json", pendingEntriesJson)
+            .commit()
+        val verified = committed &&
+            prefs.getString("positions_json", null) == positionsJson &&
+            prefs.getString("pending_entries_json", null) == pendingEntriesJson
+        if (!verified) {
+            setReconcileRequired("durable positions/pending-entry state write failed")
+            throw IllegalStateException(
+                "Trading state persistence could not be verified; execution blocked"
+            )
+        }
     }
 
     private fun loadPersistedState() {
+        var persistedStateReadError: String? = null
+
         synchronized(positions) {
             positions.clear()
             runCatching {
-                val array = JSONArray(
-                    prefs.getString("positions_json", "[]")
-                )
+                val array = JSONArray(prefs.getString("positions_json", "[]"))
                 for (i in 0 until array.length()) {
                     val item = array.getJSONObject(i)
                     val symbol = item.optString("symbol").uppercase()
@@ -875,14 +1053,10 @@ private class NativeEngine(
                         stop = item.optDouble("stop", 0.0),
                         take = item.optDouble("take", 0.0),
                         riskPct = item.optDouble("risk_pct", 0.0),
-                        ocoListClientId = item.optString(
-                            "oco_list_client_id"
-                        ),
+                        ocoListClientId = item.optString("oco_list_client_id"),
                         ocoListId = item.optString("oco_list_id"),
                         entryOrderId = item.optString("entry_order_id"),
-                        entryClientOrderId = item.optString(
-                            "entry_client_order_id"
-                        ),
+                        entryClientOrderId = item.optString("entry_client_order_id"),
                         openedAt = item.optLong("opened_at", 0L),
                         campaignId = item.optString("campaign_id", ""),
                         signalId = item.optString("signal_id", ""),
@@ -893,32 +1067,24 @@ private class NativeEngine(
                         protectiveOrderId = item.optString("protective_order_id", "")
                     )
                 }
+            }.onFailure {
+                persistedStateReadError = "positions_json: " + it.javaClass.simpleName
             }
         }
 
         synchronized(pendingEntries) {
             pendingEntries.clear()
             runCatching {
-                val array = JSONArray(
-                    prefs.getString("pending_entries_json", "[]")
-                )
+                val array = JSONArray(prefs.getString("pending_entries_json", "[]"))
                 for (i in 0 until array.length()) {
                     val item = array.getJSONObject(i)
                     val symbol = item.optString("symbol").uppercase()
                     if (symbol.isBlank()) continue
                     pendingEntries[symbol] = PendingEntry(
                         symbol = symbol,
-                        clientOrderId = item.optString(
-                            "client_order_id"
-                        ),
-                        notional = item.optDouble(
-                            "notional",
-                            0.0
-                        ),
-                        stopDistance = item.optDouble(
-                            "stop_distance",
-                            0.02
-                        ),
+                        clientOrderId = item.optString("client_order_id"),
+                        notional = item.optDouble("notional", 0.0),
+                        stopDistance = item.optDouble("stop_distance", 0.02),
                         triggerPrice = item.optDouble("trigger_price", 0.0),
                         protectivePrice = item.optDouble("protective_price", 0.0),
                         riskReservedPct = item.optDouble("risk_reserved_pct", 0.0),
@@ -928,13 +1094,51 @@ private class NativeEngine(
                         signalType = item.optString("signal_type", "REVERSAL")
                     )
                 }
+            }.onFailure {
+                val reason = "pending_entries_json: " + it.javaClass.simpleName
+                persistedStateReadError = listOfNotNull(persistedStateReadError, reason)
+                    .joinToString("; ")
             }
         }
 
-        reconcileRequired =
-            prefs.getBoolean("reconcile_required", false)
-        killLatched =
-            prefs.getBoolean("kill_latched", false)
+        reconcileRequired = prefs.getBoolean("reconcile_required", false)
+        // Deliberately ignore any stale affirmative flag from a prior runtime:
+        // there is not yet an end-to-end financial recovery proof to validate.
+        globalFinancialRecoveryComplete = false
+        val globalGatePersisted = runCatching {
+            prefs.edit().putBoolean("global_financial_recovery_complete", false).commit() &&
+                !prefs.getBoolean("global_financial_recovery_complete", true)
+        }.getOrDefault(false)
+        if (!globalGatePersisted) {
+            reconcileRequired = true
+            runCatching { prefs.edit().putBoolean("reconcile_required", true).commit() }
+        }
+        killLatched = prefs.getBoolean("kill_latched", false)
+
+        if (persistedStateReadError != null) {
+            reconcileRequired = true
+            stateMachine.force(
+                TradingState.RECONCILE_REQUIRED,
+                "persisted runtime state could not be decoded"
+            )
+            val latchPersisted = runCatching {
+                prefs.edit()
+                    .putBoolean("reconcile_required", true)
+                    .putBoolean("auto_run", false)
+                    .commit() &&
+                    prefs.getBoolean("reconcile_required", false) &&
+                    !prefs.getBoolean("auto_run", true)
+            }.getOrDefault(false)
+            lastError = "PERSISTED_STATE_CORRUPT: " + persistedStateReadError +
+                if (latchPersisted) "" else "; durable fail-closed latch could not be verified"
+            if (!latchPersisted) {
+                killLatched = true
+                stateMachine.force(
+                    TradingState.KILL_SWITCH_LATCHED,
+                    "persisted state unreadable and safety latch persistence failed"
+                )
+            }
+        }
     }
 
     private fun setReconcileRequired(reason: String) {
@@ -943,18 +1147,34 @@ private class NativeEngine(
             TradingState.RECONCILE_REQUIRED,
             reason
         )
-        prefs.edit()
-            .putBoolean("reconcile_required", true)
-            .apply()
-        lastError = "RECONCILE_REQUIRED: " + reason
+        val persisted = runCatching {
+            prefs.edit().putBoolean("reconcile_required", true).commit() &&
+                prefs.getBoolean("reconcile_required", false)
+        }.getOrDefault(false)
+        lastError = if (persisted) {
+            "RECONCILE_REQUIRED: " + reason
+        } else {
+            "RECONCILE_REQUIRED: " + reason +
+                "; durable reconciliation latch could not be verified"
+        }
         stop()
     }
 
     private fun clearReconcileRequired() {
+        val cleared = runCatching {
+            prefs.edit().putBoolean("reconcile_required", false).commit() &&
+                !prefs.getBoolean("reconcile_required", true)
+        }.getOrDefault(false)
+        if (!cleared) {
+            reconcileRequired = true
+            stateMachine.force(
+                TradingState.RECONCILE_REQUIRED,
+                "reconciliation latch clear could not be durably verified"
+            )
+            lastError = "RECONCILE_REQUIRED: reconciliation state persistence failed"
+            throw IllegalStateException(lastError)
+        }
         reconcileRequired = false
-        prefs.edit()
-            .putBoolean("reconcile_required", false)
-            .apply()
         if (!killLatched && pendingEntries.isEmpty() && positions.isEmpty()) {
             stateMachine.force(
                 TradingState.READY_FLAT,
@@ -1033,6 +1253,7 @@ private class NativeEngine(
     fun configure(j: JSONObject): JSONObject =
         configure(j.optString("api_key"), j.optString("api_secret"))
 
+    @Synchronized
     fun configure(apiKey: String, apiSecret: String): JSONObject {
         val newKey = apiKey.trim()
         val newSecret = apiSecret.trim()
@@ -1061,12 +1282,19 @@ private class NativeEngine(
 
         val oldKey = key()
         val oldSecret = secret()
-        prefs.edit()
-            .putString("api_key", newKey)
-            .putString("api_secret", newSecret)
-            .apply()
-
         return try {
+            val credentialsCommitted = prefs.edit()
+                .putString("api_key", newKey)
+                .putString("api_secret", newSecret)
+                .commit()
+            require(
+                credentialsCommitted &&
+                    key() == newKey &&
+                    secret() == newSecret
+            ) {
+                "Binance credentials persistence/read-back verification failed"
+            }
+
             val account = signedAccount()
             require(account.optString("accountType", "SPOT").equals("SPOT", true)) {
                 "Configured Binance account is not Spot"
@@ -1080,11 +1308,18 @@ private class NativeEngine(
                 .put("validation", "PASS")
                 .put("read_back_verified", key() == newKey && secret() == newSecret)
         } catch (x: Exception) {
-            prefs.edit()
+            val rollbackCommitted = prefs.edit()
                 .putString("api_key", oldKey)
                 .putString("api_secret", oldSecret)
-                .apply()
+                .commit()
             restAccountReady = false
+            if (!rollbackCommitted || key() != oldKey || secret() != oldSecret) {
+                setReconcileRequired("credential rollback persistence failed")
+                throw IllegalStateException(
+                    "Credential persistence/rollback failed; execution remains blocked",
+                    x
+                )
+            }
             throw IllegalStateException(
                 "Binance credentials validation failed: " +
                     (x.message ?: x.javaClass.simpleName),
@@ -1093,6 +1328,7 @@ private class NativeEngine(
         }
     }
 
+    @Synchronized
     fun clear(): JSONObject {
         if (
             positions.isNotEmpty() ||
@@ -1104,13 +1340,16 @@ private class NativeEngine(
         }
 
         stop()
-        prefs.edit()
+        val cleared = prefs.edit()
             .remove("api_key")
             .remove("api_secret")
             .remove("positions_json")
             .remove("pending_entries_json")
             .putBoolean("auto_run", false)
-            .apply()
+            .commit()
+        require(cleared && key().isBlank() && secret().isBlank()) {
+            "Credential deletion persistence/read-back verification failed"
+        }
 
         candidates = JSONArray()
         primaryCandles = emptyList()
@@ -1127,6 +1366,7 @@ private class NativeEngine(
             .put("cleared", true)
     }
 
+    @Synchronized
     fun start(): JSONObject {
         if (killLatched) {
             error("KILL_SWITCH_LATCHED: recover and reset kill switch before START")
@@ -1147,9 +1387,12 @@ private class NativeEngine(
         }
 
         val generation = ++runtimeGeneration
-        prefs.edit()
+        val autoRunPersisted = prefs.edit()
             .putBoolean("auto_run", true)
-            .apply()
+            .commit()
+        require(autoRunPersisted && prefs.getBoolean("auto_run", false)) {
+            "Could not durably persist autonomous runtime intent; START blocked"
+        }
 
         stateMachine.force(TradingState.INITIALIZING, "bot start")
         userStreamSyncRequired = true
@@ -1189,7 +1432,9 @@ private class NativeEngine(
         }
 
         running = true
-        paused = false
+        // Do not silently resume after a process death if the operator had
+        // explicitly paused execution before the process was recreated.
+        paused = prefs.getBoolean("paused", false)
         warmCoreHistoryAsync(generation)
         startMarketDataStream()
         userStream.start()
@@ -1262,6 +1507,25 @@ private class NativeEngine(
             .put("interval_seconds", 10)
     }
 
+    @Synchronized
+    fun shutdown() {
+        if (disposed) return
+        disposed = true
+        // stop() first invalidates the generation and closes both exchange
+        // streams; then tear down device-local daemon workers.
+        runCatching { stop() }
+        restProbeRunning = false
+        restProbeThread?.interrupt()
+        restProbeThread = null
+        activeHistoryTasks.forEach { it.cancel(true) }
+        activeHistoryTasks.clear()
+        executionExecutor.shutdownNow()
+        scanExecutor.shutdownNow()
+        historyBackfillExecutor.shutdownNow()
+        indicatorExecutor.shutdownNow()
+    }
+
+    @Synchronized
     fun stop(): JSONObject {
         ++runtimeGeneration
         running = false
@@ -1271,9 +1535,10 @@ private class NativeEngine(
         marketSocketConnected = false
         userStream.stop()
         userStreamConnected = false
-        prefs.edit()
+        val stopIntentPersisted = prefs.edit()
             .putBoolean("auto_run", false)
-            .apply()
+            .putBoolean("paused", false)
+            .commit()
         worker?.interrupt()
         worker = null
         scanning = false
@@ -1285,7 +1550,35 @@ private class NativeEngine(
         activeHistoryTasks.forEach { it.cancel(true) }
         activeHistoryTasks.clear()
 
-        return JSONObject().put("stopped", true).put("state", "STOPPED")
+        val stopIntentVerified = stopIntentPersisted &&
+            !prefs.getBoolean("auto_run", true) &&
+            !prefs.getBoolean("paused", true)
+        if (!stopIntentVerified) {
+            // Current-process execution stays off even if durable stop could not
+            // be verified. Latch the kill switch and surface the persistence error.
+            killLatched = true
+            stateMachine.force(
+                TradingState.KILL_SWITCH_LATCHED,
+                "stop intent persistence could not be verified"
+            )
+            runCatching {
+                prefs.edit()
+                    .putBoolean("kill_latched", true)
+                    .putBoolean("auto_run", false)
+                    .commit()
+            }
+            lastError = "STOP_PERSISTENCE_FAILED: auto_run/paused read-back unverified"
+            return JSONObject()
+                .put("stopped", true)
+                .put("state", "KILL_SWITCH_LATCHED")
+                .put("persistence_verified", false)
+                .put("error", lastError)
+        }
+
+        return JSONObject()
+            .put("stopped", true)
+            .put("state", "STOPPED")
+            .put("persistence_verified", true)
     }
 
     @Synchronized
@@ -1295,10 +1588,23 @@ private class NativeEngine(
             TradingState.KILL_SWITCH_LATCHED,
             "kill switch requested"
         )
-        prefs.edit()
-            .putBoolean("kill_latched", true)
-            .putBoolean("auto_run", false)
-            .apply()
+        val killLatchPersisted = runCatching {
+            prefs.edit()
+                .putBoolean("kill_latched", true)
+                .putBoolean("auto_run", false)
+                .putBoolean("paused", true)
+                .commit() &&
+                prefs.getBoolean("kill_latched", false) &&
+                !prefs.getBoolean("auto_run", true) &&
+                prefs.getBoolean("paused", false)
+        }.getOrDefault(false)
+        if (!killLatchPersisted) {
+            reconcileRequired = true
+            runCatching {
+                prefs.edit().putBoolean("reconcile_required", true).commit()
+            }
+            lastError = "KILL_SWITCH_PERSISTENCE_FAILED: latch read-back unverified"
+        }
 
         running = false
         paused = true
@@ -1341,26 +1647,29 @@ private class NativeEngine(
 
         val failedSymbols = errors.map { it.substringBefore(":") }.toSet()
         val forcedState =
-            if (errors.isEmpty() && recoveryOk) {
+            if (errors.isEmpty() && recoveryOk && killLatchPersisted) {
                 stateName()
             } else {
                 reconcileRequired = true
-                prefs.edit()
-                    .putBoolean("reconcile_required", true)
-                    .apply()
+                runCatching {
+                    prefs.edit().putBoolean("reconcile_required", true).commit()
+                }
                 "RECONCILE_REQUIRED"
             }
 
-        lastError =
-            if (errors.isEmpty() && recoveryOk) {
-                "KILL_SWITCH executed; trading remains latched OFF"
-            } else {
+        lastError = when {
+            !killLatchPersisted ->
+                "KILL_SWITCH executed but latch persistence could not be verified"
+            errors.isNotEmpty() || !recoveryOk ->
                 "KILL_SWITCH completed with reconciliation warnings"
-            }
+            else ->
+                "KILL_SWITCH executed; trading remains latched OFF"
+        }
 
         return JSONObject()
             .put("killed", true)
             .put("latched", true)
+            .put("latch_persistence_verified", killLatchPersisted)
             .put("state", forcedState)
             .put(
                 "closed_symbols",
@@ -1369,6 +1678,7 @@ private class NativeEngine(
             .put("errors", JSONArray(errors))
     }
 
+    @Synchronized
     fun resetKillSwitch(): JSONObject {
         require(!running) {
             "Stop the bot before resetting the kill switch."
@@ -1377,32 +1687,155 @@ private class NativeEngine(
         require(!reconcileRequired) {
             "Reconciliation is still required."
         }
+        val resetPersisted = prefs.edit().putBoolean("kill_latched", false).commit()
+        require(resetPersisted && !prefs.getBoolean("kill_latched", true)) {
+            "Kill switch remains latched: reset persistence/read-back failed"
+        }
         killLatched = false
         stateMachine.force(
             TradingState.READY_FLAT,
             "kill switch reset"
         )
-        prefs.edit()
-            .putBoolean("kill_latched", false)
-            .apply()
         lastError = null
         return JSONObject()
             .put("reset", true)
             .put("state", stateName())
     }
 
+    @Synchronized
     fun pause(): JSONObject {
+        require(running) { "Runtime is not running; PAUSE has no active worker to pause" }
         paused = true
-        return JSONObject().put("paused", true)
+        val committed = prefs.edit().putBoolean("paused", true).commit()
+        val verified = committed && prefs.getBoolean("paused", false)
+        if (!verified) {
+            // A pause that cannot survive process death is unsafe to report as
+            // durable. Block this process and try to persist the kill latch.
+            killLatched = true
+            stateMachine.force(
+                TradingState.KILL_SWITCH_LATCHED,
+                "pause intent persistence could not be verified"
+            )
+            runCatching {
+                prefs.edit()
+                    .putBoolean("kill_latched", true)
+                    .putBoolean("auto_run", false)
+                    .commit()
+            }
+            lastError = "PAUSE_PERSISTENCE_FAILED: pause read-back unverified"
+            return JSONObject()
+                .put("paused", true)
+                .put("persistence_verified", false)
+                .put("error", lastError)
+        }
+        return JSONObject()
+            .put("paused", true)
+            .put("persistence_verified", true)
     }
 
+    @Synchronized
     fun resume(): JSONObject {
+        require(running) {
+            "Runtime is not running; START and exchange recovery are required before RESUME"
+        }
+        require(paused) { "Runtime is not paused" }
+        require(!killLatched) { "KILL_SWITCH_LATCHED blocks RESUME" }
+        require(!reconcileRequired) { "RECONCILE_REQUIRED blocks RESUME" }
+        require(key().isNotBlank() && secret().isNotBlank()) {
+            "Binance Testnet credentials are not configured"
+        }
+
+        try {
+            recoverPendingEntries()
+            reconcilePositionsWithExchange()
+            auditManagedOpenOrders()
+            val account = signedAccount()
+            val balances = account.optJSONArray("balances")
+                ?: error("Binance account response has no balances")
+            restAccountReady = account.has("balances")
+            var foundUsdt = false
+            for (i in 0 until balances.length()) {
+                val row = balances.optJSONObject(i) ?: continue
+                if (row.optString("asset") == "USDT") {
+                    liveUsdtBalance = row.optString("free").toDoubleOrNull() ?: 0.0
+                    foundUsdt = true
+                    break
+                }
+            }
+            if (!foundUsdt) error("Binance account has no USDT balance row")
+            if (reconcileRequired) error("Exchange reconciliation left a safety blocker")
+            require(synchronized(pendingEntries) { pendingEntries.isEmpty() }) {
+                "Pending entries remain unresolved after recovery"
+            }
+        } catch (failure: Exception) {
+            setReconcileRequired(
+                "resume preflight/reconciliation failed: " +
+                    failure.javaClass.simpleName
+            )
+            throw IllegalStateException(
+                "RESUME blocked; exchange reconciliation required",
+                failure
+            )
+        }
+
+        val blockers = buildList {
+            if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
+            if (!marketSocketConnected) add("market_websocket_disconnected")
+            else if (!marketWebSocketFresh()) add("market_websocket_stale")
+            if (!restAccountReady) add("rest_account_not_ready")
+            if (!historyReady) add("history_not_ready")
+            if (!userStreamConnected) add("user_stream_disconnected")
+            if (userStreamSyncRequired) add("user_stream_sync_required")
+            if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
+        }
+        require(blockers.isEmpty()) {
+            "RESUME blocked by runtime preflight: " + blockers.joinToString(",")
+        }
+
+        val restoredPositions = positionList()
+        if (restoredPositions.isEmpty()) {
+            stateMachine.force(TradingState.READY_FLAT, "resume preflight passed")
+        } else {
+            val allProtected = restoredPositions.all {
+                it.ocoListId.isNotBlank() ||
+                    it.ocoListClientId.isNotBlank() ||
+                    it.protectiveOrderId.isNotBlank()
+            }
+            require(allProtected) {
+                "RESUME blocked: an open position has no verified protection"
+            }
+            stateMachine.force(TradingState.PROTECTED, "resume protection reconciled")
+        }
+
+        val pauseCleared = prefs.edit().putBoolean("paused", false).commit()
+        require(pauseCleared && !prefs.getBoolean("paused", true)) {
+            "RESUME blocked: could not durably clear pause state"
+        }
         paused = false
-        return JSONObject().put("resumed", true)
+        return JSONObject()
+            .put("resumed", true)
+            .put("persistence_verified", true)
+            .put("execution_enabled", executionReady())
+            .put("execution_blockers", JSONArray(executionBlockers()))
     }
 
     @Synchronized
     fun recover(): JSONObject {
+        // A restart/recovery attempt invalidates prior entry permission first.
+        // The current implementation cannot prove the complete financial ledger.
+        globalFinancialRecoveryComplete = false
+        val gatePersisted = runCatching {
+            prefs.edit().putBoolean("global_financial_recovery_complete", false).commit() &&
+                !prefs.getBoolean("global_financial_recovery_complete", true)
+        }.getOrDefault(false)
+        if (!gatePersisted) {
+            setReconcileRequired("global financial recovery gate persistence failed")
+            return JSONObject()
+                .put("recovered", false)
+                .put("state", "RECONCILE_REQUIRED")
+                .put("execution_enabled", false)
+                .put("error", "GLOBAL_RECOVERY_GATE_PERSISTENCE_FAILED")
+        }
         require(
             key().isNotBlank() &&
                 secret().isNotBlank()
@@ -1411,17 +1844,19 @@ private class NativeEngine(
         }
 
         return try {
-            clearReconcileRequired()
             recoverPendingEntries()
             reconcilePositionsWithExchange()
+            auditManagedOpenOrders()
+            clearReconcileRequired()
 
             JSONObject()
-                .put("recovered", !reconcileRequired)
+                .put("recovered", false)
+                .put("recovery_gate_status", "BLOCKED")
+                .put("global_financial_recovery_complete", false)
+                .put("reason", "global financial ledger/fee/balance/risk/protection proof is not implemented")
                 .put("state", stateName())
-                .put(
-                    "execution_enabled",
-                    !reconcileRequired
-                )
+                .put("execution_enabled", executionReady())
+                .put("execution_blockers", JSONArray(executionBlockers()))
                 .put(
                     "open_positions",
                     positionList().size
@@ -1659,10 +2094,19 @@ private class NativeEngine(
     @Synchronized
     private fun startMarketDataStream() {
         if (marketSocket != null) return
+        // A previous socket's last message must never satisfy the new socket's
+        // freshness gate during reconnect.
+        marketSocketConnected = false
+        marketSocketLastEventMs = 0L
         val request = Request.Builder().url(wsStreamUrl()).build()
         marketSocket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (marketSocket !== webSocket) {
+                    webSocket.close(1000, "superseded_market_socket")
+                    return
+                }
                 marketSocketConnected = true
+                marketSocketLastEventMs = 0L
                 lastError = null
                 Thread {
                     warmOrderBookSnapshots()
@@ -1681,11 +2125,13 @@ private class NativeEngine(
                     }
                 }.apply {
                     isDaemon = true
+                    name = "williams-market-ws-rotation"
                     start()
                 }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (marketSocket !== webSocket) return
                 marketSocketLastEventMs = System.currentTimeMillis()
                 runCatching { consumeMarketStream(JSONObject(text)) }
                     .onFailure { lastError = "WS market: " + (it.message ?: it.javaClass.simpleName) }
@@ -1694,29 +2140,51 @@ private class NativeEngine(
                     val data = JSONObject(text).optJSONObject("data")
                     if (data?.optString("e") == "serverShutdown") {
                         marketSocketConnected = false
+                        marketSocketLastEventMs = 0L
                         webSocket.close(1000, "serverShutdown")
                     }
                 }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                marketSocketConnected = false
+                if (marketSocket === webSocket) {
+                    marketSocketConnected = false
+                    marketSocketLastEventMs = 0L
+                }
                 webSocket.close(code, reason)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (marketSocket !== webSocket) return
                 marketSocketConnected = false
+                marketSocketLastEventMs = 0L
                 marketSocket = null
-                if (running) Thread { Thread.sleep(1500); if (running) startMarketDataStream() }.start()
+                scheduleMarketSocketReconnect(delayMs = 1_500L)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (marketSocket !== webSocket) return
                 marketSocketConnected = false
+                marketSocketLastEventMs = 0L
                 marketSocket = null
-                lastError = "WS market: " + (t.message ?: t.javaClass.simpleName)
-                if (running) Thread { Thread.sleep(2500); if (running) startMarketDataStream() }.start()
+                lastError = "WS market: " + t.javaClass.simpleName
+                scheduleMarketSocketReconnect(delayMs = 2_500L)
             }
         })
+    }
+
+    private fun scheduleMarketSocketReconnect(delayMs: Long) {
+        if (!running) return
+        Thread({
+            try {
+                Thread.sleep(delayMs)
+                if (running && marketSocket == null) startMarketDataStream()
+            } catch (_: InterruptedException) {
+            }
+        }, "williams-market-ws-reconnect").apply {
+            isDaemon = true
+            start()
+        }
     }
 
     private fun consumeMarketStream(envelope: JSONObject) {
@@ -2465,7 +2933,7 @@ private class NativeEngine(
             reconcileRequired ||
             killLatched ||
             !historyReady ||
-            !restMarketReady
+            !marketDataFresh()
         ) {
             scannerState = when {
                 !running -> "STOPPED"
@@ -2473,7 +2941,7 @@ private class NativeEngine(
                 reconcileRequired -> "BLOCKED_RECONCILE"
                 killLatched -> "BLOCKED_KILL"
                 !historyReady -> "WAITING_FOR_HISTORY"
-                !restMarketReady -> "WAITING_FOR_REST"
+                !marketDataFresh() -> "WAITING_FOR_REST"
                 else -> "WAITING"
             }
             return
@@ -2574,6 +3042,23 @@ private class NativeEngine(
         }
     }
 
+    private fun campaignMutationEnvironmentReady(): Boolean =
+        running &&
+            !paused &&
+            GlobalRecoveryGateContract.entryAllowed(
+                globalFinancialRecoveryComplete,
+                reconcileRequired
+            ) &&
+            !killLatched &&
+            marketDataFresh() &&
+            marketSocketConnected &&
+            marketWebSocketFresh() &&
+            restAccountReady &&
+            historyReady &&
+            userStreamConnected &&
+            !userStreamSyncRequired &&
+            !equityCircuitBreaker.isTripped()
+
     private fun withCampaignMutation(
         symbol: String,
         purpose: String,
@@ -2582,22 +3067,84 @@ private class NativeEngine(
         if (!running) error("Runtime is not running")
         if (paused) error("Runtime is paused")
         if (reconcileRequired) error("RECONCILE_REQUIRED")
+        if (purpose == "CAMPAIGN_ENTRY" || purpose == "CAMPAIGN_ADD_ON") {
+            require(
+                GlobalRecoveryGateContract.entryAllowed(
+                    globalFinancialRecoveryComplete,
+                    reconcileRequired
+                )
+            ) {
+                "GLOBAL_FINANCIAL_RECOVERY_INCOMPLETE: new exposure blocked"
+            }
+        }
         if (killLatched) error("KILL_SWITCH_LATCHED")
         require(executionGate.tryReserve(symbol)) {
             "Campaign execution already reserved for " + symbol
         }
-        prefs.edit()
-            .putString("execution_gate_symbol", symbol)
-            .putString("execution_gate_purpose", purpose)
-            .apply()
+
         return try {
+            // Entry/add-on signals may be admitted during a valid scan and then
+            // wait in the executor queue. Recheck every data/account/stream gate
+            // immediately before the exchange mutation, but keep protection,
+            // trailing and exit operations available for risk reduction.
+            if (purpose == "CAMPAIGN_ENTRY" || purpose == "CAMPAIGN_ADD_ON") {
+                require(campaignMutationEnvironmentReady()) {
+                    "CAMPAIGN_MUTATION_BLOCKED: live runtime preflight degraded before " +
+                        purpose + "; no exchange mutation sent"
+                }
+                val expectedStates = if (purpose == "CAMPAIGN_ENTRY") {
+                    setOf(TradingState.ENTRY_PENDING)
+                } else {
+                    setOf(TradingState.PROTECTED, TradingState.ENTRY_PENDING)
+                }
+                require(stateMachine.state in expectedStates) {
+                    "CAMPAIGN_MUTATION_BLOCKED: FSM state " + stateMachine.state.name +
+                        " does not admit " + purpose
+                }
+                require(synchronized(pendingEntries) { pendingEntries.containsKey(symbol) }) {
+                    "CAMPAIGN_MUTATION_BLOCKED: durable pending entry is missing for " +
+                        symbol
+                }
+            }
+
+            // The durable write-ahead gate must be verified before any exchange
+            // mutation. An Android process death after this commit will leave a
+            // reconciliation marker instead of replaying an ambiguous request.
+            val intentPersisted = runCatching {
+                prefs.edit()
+                    .putString("execution_gate_symbol", symbol)
+                    .putString("execution_gate_purpose", purpose)
+                    .commit() &&
+                    prefs.getString("execution_gate_symbol", null) == symbol &&
+                    prefs.getString("execution_gate_purpose", null) == purpose
+            }.getOrDefault(false)
+            if (!intentPersisted) {
+                setReconcileRequired(
+                    "execution mutation write-ahead intent could not be durably verified: " +
+                        symbol + "/" + purpose
+                )
+                error("EXECUTION_INTENT_PERSISTENCE_FAILED: exchange mutation not sent")
+            }
+
             block()
         } finally {
             executionGate.release(symbol)
-            prefs.edit()
-                .remove("execution_gate_symbol")
-                .remove("execution_gate_purpose")
-                .apply()
+            val gateCleared = runCatching {
+                prefs.edit()
+                    .remove("execution_gate_symbol")
+                    .remove("execution_gate_purpose")
+                    .commit() &&
+                    (prefs.getString("execution_gate_symbol", null).isNullOrBlank()) &&
+                    (prefs.getString("execution_gate_purpose", null).isNullOrBlank())
+            }.getOrDefault(false)
+            if (!gateCleared) {
+                // A mutation may already have reached Binance. Never report the
+                // local gate as clean if its durable cleanup cannot be verified.
+                setReconcileRequired(
+                    "execution mutation gate cleanup could not be durably verified: " +
+                        symbol + "/" + purpose
+                )
+            }
         }
     }
 
@@ -2608,6 +3155,10 @@ private class NativeEngine(
 
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
+        // Recheck the full runtime gate immediately before creating durable
+        // entry intent. A scan can finish after market/account/stream state
+        // has degraded, so the scan-start gate alone is insufficient.
+        if (!executionReady()) return
         if (reconcileRequired || paused || killLatched) return
         if (positionList().any { it.symbol == candidate.symbol }) return
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
@@ -2827,12 +3378,21 @@ private class NativeEngine(
         savePersistedState()
     }
 
-    private fun currentCampaignPrice(symbol: String): Double =
-        livePrices[symbol]
-            ?: JSONObject(
-                getBody("/api/v3/ticker/price?symbol=" + symbol)
-            ).optString("price").toDoubleOrNull()
-            ?: 0.0
+    private fun currentCampaignPrice(symbol: String): Double {
+        // Cached prices are only trusted while the full five-symbol REST probe
+        // remains fresh. Otherwise read a fresh Testnet ticker instead of
+        // letting a previously cached value drive an entry/trailing decision.
+        if (marketDataFresh()) {
+            livePrices[symbol]?.takeIf { it.isFinite() && it > 0.0 }?.let { return it }
+        }
+        val price = JSONObject(
+            getBody("/api/v3/ticker/price?symbol=" + symbol)
+        ).optString("price").toDoubleOrNull() ?: 0.0
+        if (price.isFinite() && price > 0.0) {
+            livePrices[symbol] = price
+        }
+        return price
+    }
 
     private fun campaignExitMarket(position: PositionState, reason: String) {
         val symbol = position.symbol
@@ -3478,6 +4038,9 @@ private class NativeEngine(
         position: PositionState
     ) {
         if (!campaignEngineEnabled || position.campaignId.isBlank()) return
+        // Campaign add-ons are new risk and need the same gate as initial
+        // entries, even when their signal came from a previously valid scan.
+        if (!executionReady()) return
 
         val latestSignalTime =
             position.signalId.substringAfterLast(':').toLongOrNull()
@@ -7659,8 +8222,21 @@ private class NativeEngine(
         }
     }
 
-    private fun scannerSnapshot(): JSONObject =
-        JSONObject()
+    private fun scannerSnapshot(): JSONObject {
+        val now = System.currentTimeMillis()
+        val scanAgeMs = RuntimeFreshnessContract.ageMs(lastScanAt, now)
+        val candidateSnapshotFresh = marketDataFresh() &&
+            marketWebSocketFresh() &&
+            RuntimeFreshnessContract.isScanSnapshotFresh(
+                state = scannerState,
+                lastScanAtMs = lastScanAt,
+                nowMs = now,
+                maxAgeMs = 60_000L,
+                error = scannerError
+            )
+        val visibleCandidates = if (candidateSnapshotFresh) candidates else JSONArray()
+
+        return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
             .put("cached", true)
             .put("scanning", scanning)
@@ -7672,19 +8248,22 @@ private class NativeEngine(
             .put("last_progress_at", scanLastProgressAt)
             .put("last_error", lastError ?: JSONObject.NULL)
             .put("last_scan_at", lastScanAt)
+            .put("last_scan_age_ms", scanAgeMs ?: JSONObject.NULL)
+            .put("candidate_snapshot_fresh", candidateSnapshotFresh)
             .put("last_scan_duration_ms", lastScanDurationMs)
             .put("symbols_scanned", lastSymbolsScanned)
             .put("scan_universe", scannerUniverseLabel)
             .put("deep_wave_targets", waveTopN)
-            .put("candidates", candidates)
+            .put("candidates", visibleCandidates)
             .put(
                 "best_candidate",
-                if (candidates.length() > 0) {
-                    candidates.getJSONObject(0)
+                if (visibleCandidates.length() > 0) {
+                    visibleCandidates.getJSONObject(0)
                 } else {
-                    JSONObject().put("symbol", primarySymbol)
+                    JSONObject.NULL
                 }
             )
+    }
 
     fun scanner(refresh: Boolean): JSONObject {
         if (refresh) {
@@ -7705,21 +8284,17 @@ private class NativeEngine(
             }
         }
 
-        var balance: Double? = liveUsdtBalance.takeIf { it > 0.0 }
+        val marketFresh = marketDataFresh()
+        var balance: Double? = liveUsdtBalance.takeIf { it > 0.0 && restAccountReady }
         var livePnl = 0.0
         var livePnlPct = 0.0
 
-        positionList().forEach { position ->
-            val mark = (
-                livePrices[position.symbol]
-                    ?: if (position.symbol == primarySymbol) {
-                        primaryCandles.lastOrNull()?.c
-                    } else {
-                        null
-                    }
-                ) ?: 0.0
-            if (mark > 0.0) {
-                livePnl += (mark - position.entry) * position.qty
+        if (marketFresh) {
+            positionList().forEach { position ->
+                val mark = livePrices[position.symbol] ?: 0.0
+                if (mark > 0.0) {
+                    livePnl += (mark - position.entry) * position.qty
+                }
             }
         }
         val totalEntryNotional =
@@ -7730,8 +8305,9 @@ private class NativeEngine(
 
         if (!fast && key().isNotBlank() && secret().isNotBlank() && !restAccountReady) {
             runCatching {
-                val balances =
-                    signedAccount().getJSONArray("balances")
+                val account = signedAccount()
+                val balances = account.getJSONArray("balances")
+                restAccountReady = account.has("balances")
                 for (i in 0 until balances.length()) {
                     val item = balances.getJSONObject(i)
                     if (item.optString("asset") == "USDT") {
@@ -7757,7 +8333,20 @@ private class NativeEngine(
             .put("testnet", true)
             .put("running", running)
             .put("paused", paused)
-            .put("recovered", true)
+            .put(
+                "recovered",
+                !reconcileRequired &&
+                    !killLatched &&
+                    stateMachine.state !in setOf(
+                        TradingState.INITIALIZING,
+                        TradingState.SYNC_REQUIRED,
+                        TradingState.RECONCILE_REQUIRED
+                    ) &&
+                    (running || (
+                        positionList().isEmpty() &&
+                            synchronized(pendingEntries) { pendingEntries.isEmpty() }
+                    ))
+            )
             .put("state", stateName())
             .put("execution_enabled", executionReady())
             .put(
@@ -7782,13 +8371,13 @@ private class NativeEngine(
             )
             .put(
                 "price",
-                livePrices[primarySymbol]
-                    ?: primaryCandles.lastOrNull()?.c
-                    ?: JSONObject.NULL
+                if (marketFresh) livePrices[primarySymbol] ?: JSONObject.NULL
+                else JSONObject.NULL
             )
             .put(
                 "quote_balance",
-                balance ?: JSONObject.NULL
+                if (restAccountReady) balance ?: JSONObject.NULL
+                else JSONObject.NULL
             )
             .put(
                 "position",
@@ -7823,8 +8412,8 @@ private class NativeEngine(
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
-            .put("pnl", if (positionList().isEmpty()) JSONObject.NULL else livePnl)
-            .put("pnl_pct", if (positionList().isEmpty()) JSONObject.NULL else livePnlPct)
+            .put("pnl", if (positionList().isEmpty() || !marketFresh) JSONObject.NULL else livePnl)
+            .put("pnl_pct", if (positionList().isEmpty() || !marketFresh) JSONObject.NULL else livePnlPct)
             .put(
                 "take_profit_price",
                 if (campaignEngineEnabled) JSONObject.NULL
@@ -7853,7 +8442,7 @@ private class NativeEngine(
             .put("fsm_state", stateMachine.state.name)
             .put("kill_switch_latched", killLatched)
             .put("live_prices", JSONObject().apply {
-                livePrices.forEach { (symbol, price) -> put(symbol, price) }
+                if (marketFresh) livePrices.forEach { (symbol, price) -> put(symbol, price) }
             })
             .put("rate_limits", rateGuard.snapshot())
             .put("history", historyStore.status(coreSymbols, analysisFrames))
@@ -7870,9 +8459,17 @@ private class NativeEngine(
             .put("rest_market_ready", restMarketReady)
             .put("rest_account_ready", restAccountReady)
             .put("rest_last_success_ms", restLastSuccessMs)
+            .put("rest_last_success_age_ms", if (restLastSuccessMs > 0L) (System.currentTimeMillis() - restLastSuccessMs).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("market_data_fresh", marketDataFresh())
+            .put("market_data_freshness_limit_ms", 30_000L)
+            .put("market_ws_last_event_age_ms", if (marketSocketLastEventMs > 0L) (System.currentTimeMillis() - marketSocketLastEventMs).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("scan_age_ms", if (lastScanAt > 0L) (System.currentTimeMillis() - lastScanAt).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("local_api_listening", StandaloneRuntime.isListeningOnLoopback())
+            .put("local_api_auth_required", true)
+            .put("execution_blockers", JSONArray(executionBlockers()))
             .put("rest_last_latency_ms", restLastLatencyMs)
             .put("rest_last_error", restLastError ?: JSONObject.NULL)
-            .put("rest_ticker_price", if (restLastTickerPrice > 0.0) restLastTickerPrice else JSONObject.NULL)
+            .put("rest_ticker_price", if (restLastTickerPrice > 0.0 && marketDataFresh()) restLastTickerPrice else JSONObject.NULL)
     }
 
     fun historyStatus(): JSONObject =
@@ -8001,12 +8598,14 @@ private class NativeEngine(
                     .put("symbol", symbol)
                     .put(
                         "price",
-                        livePrices[symbol] ?: priceMap[symbol] ?: JSONObject.NULL
+                        priceMap[symbol] ?: JSONObject.NULL
                     )
             )
         }
         return JSONObject()
             .put("symbols", JSONArray(coreSymbols))
+            .put("fresh", priceMap.size == coreSymbols.size)
+            .put("as_of", System.currentTimeMillis())
             .put("pairs", pairs)
     }
 
@@ -8015,18 +8614,24 @@ private class NativeEngine(
         val statusJson = status()
         val positions = JSONArray()
         val sourcePositions = statusJson.optJSONArray("positions") ?: JSONArray()
+        val marketFresh = statusJson.optBoolean("market_data_fresh", false)
         var totalPositionValue = 0.0
+        var allPositionValuesKnown = marketFresh
         for (i in 0 until sourcePositions.length()) {
             val p = sourcePositions.optJSONObject(i) ?: continue
             val symbol = p.optString("symbol", "")
             val qty = p.optDouble("qty", 0.0)
             val entry = p.optDouble("entry", p.optDouble("avg_entry_price", 0.0))
-            val current = statusJson.optJSONObject("live_prices")
-                ?.optDouble(symbol, 0.0)
-                ?.takeIf { it > 0.0 }
-                ?: entry
-            val value = qty * current
-            totalPositionValue += value
+            val current = if (marketFresh) {
+                statusJson.optJSONObject("live_prices")
+                    ?.optDouble(symbol, 0.0)
+                    ?.takeIf { it > 0.0 }
+            } else {
+                null
+            }
+            val value = current?.times(qty)
+            if (value != null) totalPositionValue += value
+            else allPositionValuesKnown = false
             positions.put(
                 JSONObject()
                     .put("symbol", symbol)
@@ -8035,21 +8640,24 @@ private class NativeEngine(
                     .put("stop_loss", p.optDouble("stop", 0.0))
                     .put("take_profit", p.optDouble("take", 0.0))
                     .put("risk_pct", p.optDouble("risk_pct", 0.0))
-                    .put("current_price", current)
-                    .put("position_value_usdt", value)
+                    .put("current_price", current ?: JSONObject.NULL)
+                    .put("position_value_usdt", value ?: JSONObject.NULL)
                     .put("allocation_pct", 0.0)
-                    .put("unrealized_pnl_usdt", (current - entry) * qty)
-                    .put("unrealized_pnl_pct", if (entry > 0.0) (current - entry) / entry else 0.0)
+                    .put("unrealized_pnl_usdt", if (current != null) (current - entry) * qty else JSONObject.NULL)
+                    .put("unrealized_pnl_pct", if (current != null && entry > 0.0) (current - entry) / entry else JSONObject.NULL)
                     .put("oco_list_id", p.optString("oco_list_id", ""))
                     .put("oco_list_client_id", p.optString("oco_list_client_id", ""))
             )
         }
 
         val assets = JSONArray()
+        var accountFresh = statusJson.optBoolean("rest_account_ready", false)
         var totalEquity = statusJson.optDouble("quote_balance", 0.0)
         if (configured) {
             runCatching {
-                val balances = signedAccount().getJSONArray("balances")
+                val account = signedAccount()
+                val balances = account.getJSONArray("balances")
+                accountFresh = true
                 for (i in 0 until balances.length()) {
                     val b = balances.getJSONObject(i)
                     val free = b.optString("free").toDoubleOrNull() ?: 0.0
@@ -8071,17 +8679,22 @@ private class NativeEngine(
                             .put("allocation_pct", 0.0)
                     )
                 }
+            }.onFailure {
+                accountFresh = false
             }
         }
 
         val freeEquity = statusJson.optDouble("quote_balance", totalEquity)
+        val valuationKnown = accountFresh && allPositionValuesKnown
         return JSONObject()
             .put("configured", configured)
-            .put("total_equity_usdt", totalEquity + totalPositionValue)
-            .put("free_equity_usdt", freeEquity)
-            .put("locked_equity_usdt", 0.0)
-            .put("realized_pnl_usdt", 0.0)
-            .put("unrealized_pnl_usdt", statusJson.optDouble("pnl", 0.0))
+            .put("market_data_fresh", marketFresh)
+            .put("account_data_fresh", accountFresh)
+            .put("total_equity_usdt", if (valuationKnown) totalEquity + totalPositionValue else JSONObject.NULL)
+            .put("free_equity_usdt", if (accountFresh) freeEquity else JSONObject.NULL)
+            .put("locked_equity_usdt", JSONObject.NULL)
+            .put("realized_pnl_usdt", JSONObject.NULL)
+            .put("unrealized_pnl_usdt", if (marketFresh && !statusJson.isNull("pnl")) statusJson.optDouble("pnl") else JSONObject.NULL)
             .put("assets", assets)
             .put("positions", positions)
     }
@@ -8119,19 +8732,54 @@ private class NativeEngine(
                     .put("detail", detail)
             )
         }
-        test("version_consistency", "runtime", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
-        test("testnet_enabled", "binance", true, "FAIL", "Standalone runtime uses Binance Spot Testnet")
-        test("local_api_loopback", "runtime", 18080 == 18080, "FAIL", "127.0.0.1:18080")
+        val versionIsWellFormed = BuildConfig.VERSION_NAME.matches(
+            Regex("""\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?""")
+        )
+        val testnetEndpointsValid =
+            baseUrl == "https://testnet.binance.vision" &&
+                userStreamEndpoint == "wss://ws-api.testnet.binance.vision/ws-api/v3" &&
+                wsStreamUrl().startsWith("wss://stream.testnet.binance.vision/")
+        val apiToken = runCatching { StandaloneRuntime.localApiToken(context) }.getOrNull()
+        test("version_consistency", "runtime", versionIsWellFormed, "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
+        test("testnet_enabled", "binance", testnetEndpointsValid, "FAIL", "rest_endpoint=" + baseUrl + "; user_ws_testnet=" + userStreamEndpoint.contains("testnet.binance.vision"))
+        test("local_api_loopback", "runtime", StandaloneRuntime.isListeningOnLoopback(), "FAIL", "listener_active=" + StandaloneRuntime.isListeningOnLoopback() + "; address=127.0.0.1:18080")
+        test("local_api_auth", "security", apiToken != null && LocalApiAuthorization.isAuthorized(apiToken, "Bearer " + apiToken), "FAIL", "per_install_token_present=" + !apiToken.isNullOrBlank() + "; bearer_required=true")
         test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(","))
         test("runtime_lifecycle", "runtime", running == (worker?.isAlive == true), "FAIL", "running=" + running + "; worker_alive=" + (worker?.isAlive == true))
         test("history_lifecycle", "database", historyReady || historyState in setOf("IDLE","LOADING","WAITING_RETRY","STOPPED"), "FAIL", "state=" + historyState + "; active_tasks=" + activeHistoryTasks.size)
         test("credentials_state", "binance", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
-        test("rest_market_data", "binance", restMarketReady, "FAIL", if (restMarketReady) "Ticker REST OK; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market failed: " + (restLastError ?: "pending"))
+        val restAgeMs = if (restLastSuccessMs > 0L) {
+            (System.currentTimeMillis() - restLastSuccessMs).coerceAtLeast(0L)
+        } else {
+            Long.MAX_VALUE
+        }
+        test("rest_market_data", "binance", marketDataFresh(), "FAIL", if (marketDataFresh()) "Ticker REST fresh; age_ms=" + restAgeMs + "; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market stale/unavailable; age_ms=" + (if (restAgeMs == Long.MAX_VALUE) "unknown" else restAgeMs.toString()) + "; error=" + (restLastError ?: "pending"))
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT=" + liveUsdtBalance else "Account REST failed: " + (restLastError ?: "pending"))
-        test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market stream connected" else "Market stream disconnected; REST fallback active")
+        val marketWsAgeMs = RuntimeFreshnessContract.ageMs(
+            marketSocketLastEventMs,
+            System.currentTimeMillis()
+        )
+        test(
+            "market_websocket",
+            "websocket",
+            marketWebSocketFresh(),
+            "WARN",
+            if (marketWebSocketFresh()) {
+                "Market stream connected and fresh; age_ms=" + marketWsAgeMs
+            } else {
+                "Market stream disconnected/stale; age_ms=" +
+                    (marketWsAgeMs?.toString() ?: "unknown") +
+                    "; entries are blocked"
+            }
+        )
         test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream degraded; REST reconciliation active")
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
-        test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
+        val scanAgeMs = if (lastScanAt > 0L) {
+            (System.currentTimeMillis() - lastScanAt).coerceAtLeast(0L)
+        } else {
+            Long.MAX_VALUE
+        }
+        test("scanner_state", "scanner", (scannerState == "READY" || (scannerState == "RUNNING" && scanning)) && scanAgeMs <= 60_000L, "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; scan_age_ms=" + (if (scanAgeMs == Long.MAX_VALUE) "unknown" else scanAgeMs.toString()) + "; last_progress_ms=" + scanLastProgressAt)
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
         test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.005 && maxTotalRiskPct <= 0.01, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct)
         test("self_heal_contract", "runtime", true, "FAIL", "safe_only=true; endpoint=/api/v1/control/self-heal")

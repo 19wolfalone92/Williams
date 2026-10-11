@@ -1,12 +1,17 @@
 import os
-import json, sqlite3
+import json, sqlite3, math
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
+from safe_logging import redact_text, redact_value
+
+
+_FILL_CONFLICT = object()
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 9
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -28,7 +33,10 @@ class Database:
 
         self._transaction_active = True
         try:
-            self.conn.execute('BEGIN')
+            # Acquire the SQLite write reservation before reading or writing
+            # recovery/ledger state. This serializes independent processes, not
+            # merely threads sharing this Database instance.
+            self.conn.execute('BEGIN IMMEDIATE')
             yield self
             self.conn.commit()
         except Exception:
@@ -133,7 +141,13 @@ class Database:
             invalidation_level REAL,
             status TEXT NOT NULL,
             reason TEXT,
-            client_order_id TEXT
+            client_order_id TEXT,
+            mutation_kind TEXT NOT NULL DEFAULT 'ORDER',
+            target_order_id TEXT,
+            target_client_order_id TEXT,
+            target_order_list_id TEXT,
+            target_list_client_order_id TEXT,
+            replacement_client_order_id TEXT
         );
         CREATE TABLE IF NOT EXISTS execution_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -232,6 +246,29 @@ class Database:
             commission_asset TEXT,
             raw_json TEXT
         );
+        -- Canonical exchange execution evidence. Decimal fields are text;
+        -- campaign_fills is a legacy/reporting projection only.
+        CREATE TABLE IF NOT EXISTS exchange_fill_ledger(
+            exchange TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            trade_id TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            intent_id TEXT NOT NULL DEFAULT '',
+            campaign_id TEXT NOT NULL DEFAULT '',
+            side TEXT NOT NULL,
+            quantity_decimal TEXT NOT NULL,
+            price_decimal TEXT NOT NULL,
+            quote_quantity_decimal TEXT NOT NULL,
+            commission_decimal TEXT NOT NULL,
+            commission_asset TEXT NOT NULL,
+            effect_state TEXT NOT NULL DEFAULT 'PENDING',
+            raw_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(exchange,account_id,symbol,trade_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_exchange_fill_effect_state
+            ON exchange_fill_ledger(effect_state);
         CREATE TABLE IF NOT EXISTS campaign_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_id TEXT NOT NULL,
@@ -261,9 +298,76 @@ class Database:
             ON campaign_events(campaign_id, id);
         ''')
         self._migrate_trade_columns()
+        self._migrate_execution_intent_columns()
+        self._migrate_campaign_fill_identity()
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
+
+    def _migrate_campaign_fill_identity(self):
+        """Add a DB-enforced exchange fill identity without deleting legacy rows.
+
+        Existing rows remain LEGACY_UNVERIFIED because their exchange trade IDs
+        cannot safely be inferred from lossy aggregate columns. The partial
+        unique index applies only to rows with an explicit exchange trade ID.
+        """
+        columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(campaign_fills)").fetchall()
+        }
+        additions = {
+            "exchange": "TEXT NOT NULL DEFAULT 'BINANCE'",
+            "account_id": "TEXT NOT NULL DEFAULT 'default'",
+            "trade_id": "TEXT",
+            "commission_amount": "REAL",
+            "financial_state": "TEXT NOT NULL DEFAULT 'LEGACY_UNVERIFIED'",
+        }
+        for name, declaration in additions.items():
+            if name not in columns:
+                self.conn.execute(
+                    f"ALTER TABLE campaign_fills ADD COLUMN {name} {declaration}"
+                )
+
+        # Do not silently choose a winner if a previous partial migration left
+        # duplicate exchange identities. Preserve rows and set a durable gate.
+        duplicate = self.conn.execute(
+            """SELECT exchange,account_id,symbol,trade_id,COUNT(*) AS n
+               FROM campaign_fills WHERE trade_id IS NOT NULL
+               GROUP BY exchange,account_id,symbol,trade_id HAVING COUNT(*) > 1
+               LIMIT 1"""
+        ).fetchone()
+        if duplicate:
+            self.state_set("recovery_status", "RECOVERY_REQUIRED")
+            self.state_set("campaign_fill_identity_conflict", json.dumps(dict(duplicate)))
+            self.conn.commit()
+            raise RuntimeError("campaign_fill_identity_migration_conflict")
+        self.conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_fill_exchange_trade
+               ON campaign_fills(exchange,account_id,symbol,trade_id)
+               WHERE trade_id IS NOT NULL"""
+        )
+        # Preserve all pre-ledger rows. Rows without a matching canonical
+        # decimal ledger cannot be promoted from lossy REAL projections by
+        # guesswork; they force an explicit recovery/migration review.
+        legacy_unverified = self.conn.execute(
+            """SELECT COUNT(*) FROM campaign_fills cf
+               WHERE cf.trade_id IS NULL
+                  OR NOT EXISTS (
+                    SELECT 1 FROM exchange_fill_ledger l
+                    WHERE l.exchange=cf.exchange AND l.account_id=cf.account_id
+                      AND l.symbol=cf.symbol AND l.trade_id=cf.trade_id
+                  )"""
+        ).fetchone()[0]
+        if legacy_unverified:
+            self.state_set("recovery_status", "RECOVERY_REQUIRED")
+            self.state_set(
+                "legacy_fill_decimal_migration",
+                json.dumps({"status": "BLOCKED", "unverified_rows": int(legacy_unverified)}),
+            )
+        # A legacy database without prior recovery metadata must not implicitly
+        # become entry-admissible merely because the schema migration succeeded.
+        if self.state_get("recovery_status") is None:
+            self.state_set("recovery_status", "RECOVERY_REQUIRED")
 
     def _migrate_trade_columns(self):
         columns = {
@@ -284,6 +388,23 @@ class Database:
                     f'ALTER TABLE trades ADD COLUMN {name} {sql_type}'
                 )
 
+    def _migrate_execution_intent_columns(self):
+        columns = {
+            row['name']
+            for row in self.conn.execute('PRAGMA table_info(execution_intents)').fetchall()
+        }
+        additions = {
+            'mutation_kind': "TEXT NOT NULL DEFAULT 'ORDER'",
+            'target_order_id': 'TEXT',
+            'target_client_order_id': 'TEXT',
+            'target_order_list_id': 'TEXT',
+            'target_list_client_order_id': 'TEXT',
+            'replacement_client_order_id': 'TEXT',
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                self.conn.execute(f'ALTER TABLE execution_intents ADD COLUMN {name} {sql_type}')
+
     def state_get(self, key, default=None):
         r = self.conn.execute(
             'SELECT value FROM bot_state WHERE key=?',
@@ -295,7 +416,7 @@ class Database:
         self.conn.execute(
             'INSERT INTO bot_state(key,value) VALUES(?,?) '
             'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-            (key, str(value))
+            (key, redact_text(str(value)))
         )
         if not self._transaction_active:
             self.conn.commit()
@@ -309,7 +430,7 @@ class Database:
         """
         cur = self.conn.execute(
             'INSERT OR IGNORE INTO bot_state(key,value) VALUES(?,?)',
-            (str(key), str(value)),
+            (str(key), redact_text(str(value))),
         )
         if not self._transaction_active:
             self.conn.commit()
@@ -323,12 +444,82 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    def find_execution_intent(self, intent_id, client_order_id=''):
+        """Find an existing intent before admitting any repeated mutation."""
+        if client_order_id:
+            row = self.conn.execute(
+                "SELECT * FROM execution_intents WHERE intent_id=? OR client_order_id=? "
+                "ORDER BY CASE WHEN intent_id=? THEN 0 ELSE 1 END LIMIT 1",
+                (str(intent_id), str(client_order_id), str(intent_id)),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT * FROM execution_intents WHERE intent_id=? LIMIT 1",
+                (str(intent_id),),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def unresolved_execution_intents(self):
+        """Return intents whose exchange outcome/recovery state is not resolved."""
+        rows = self.conn.execute(
+            """SELECT i.* FROM execution_intents i
+               WHERE i.status IN ('PENDING','AMBIGUOUS','SUBMITTING','RECONCILE_REQUIRED')
+                  OR (
+                    i.status='SUBMITTED'
+                    AND NOT EXISTS (
+                      SELECT 1 FROM execution_events e
+                      WHERE e.intent_id=i.intent_id AND e.event='BINANCE_SUBMITTED'
+                    )
+                  )
+               ORDER BY i.created_at"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def pending_exchange_fill_effects(self, limit=1000):
+        """Return canonical fills whose dependent financial effect is unresolved."""
+        rows = self.conn.execute(
+            """SELECT exchange,account_id,symbol,trade_id,order_id,intent_id,
+                      campaign_id,quantity_decimal,price_decimal,
+                      quote_quantity_decimal,commission_decimal,commission_asset,
+                      effect_state
+               FROM exchange_fill_ledger
+               WHERE effect_state != 'APPLIED'
+               ORDER BY created_at,exchange,account_id,symbol,trade_id
+               LIMIT ?""",
+            (max(1, min(int(limit), 10000)),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def claim_execution_intent(self, intent) -> bool:
+        """Atomically reserve one intent/client ID and serialize cross-process admissions."""
+        if self._transaction_active:
+            raise RuntimeError("execution_intent_claim_requires_outermost_transaction")
+        self.conn.execute("BEGIN IMMEDIATE")
+        self._transaction_active = True
+        try:
+            if self.find_execution_intent(intent.intent_id, intent.client_order_id):
+                self.conn.rollback()
+                return False
+            if self.unresolved_execution_intents():
+                self.conn.rollback()
+                return False
+            self.save_execution_intent(intent, "PENDING")
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+        finally:
+            self._transaction_active = False
+
     def save_execution_intent(self, intent, status, reason=''):
         self.conn.execute(
             '''INSERT OR REPLACE INTO execution_intents(
                 intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id,
+                mutation_kind,target_order_id,target_client_order_id,target_order_list_id,
+                target_list_client_order_id,replacement_client_order_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (
                 intent.intent_id,
                 intent.symbol,
@@ -339,17 +530,45 @@ class Database:
                 intent.hypothesis_id,
                 float(intent.invalidation_level or 0.0),
                 status,
-                reason,
+                redact_text(reason),
                 getattr(intent, 'client_order_id', ''),
+                getattr(intent, 'mutation_kind', 'ORDER'),
+                getattr(intent, 'target_order_id', ''),
+                getattr(intent, 'target_client_order_id', ''),
+                getattr(intent, 'target_order_list_id', ''),
+                getattr(intent, 'target_list_client_order_id', ''),
+                getattr(intent, 'replacement_client_order_id', ''),
             ),
         )
         if not self._transaction_active:
             self.conn.commit()
 
+    def resolve_execution_intent(self, intent_id, status, evidence):
+        """Atomically resolve an intent with authoritative exchange evidence."""
+        if status != 'RECONCILED' or not isinstance(evidence, dict):
+            raise ValueError('execution_intent_resolution_requires_exchange_evidence')
+        if not self._transaction_active:
+            with self.transaction():
+                return self.resolve_execution_intent(intent_id, status, evidence)
+        row = self.conn.execute(
+            'SELECT status FROM execution_intents WHERE intent_id=?',
+            (str(intent_id),),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError('execution_intent_not_found')
+        current = str(row['status']).upper()
+        if current not in {'PENDING', 'AMBIGUOUS', 'SUBMITTING', 'RECONCILE_REQUIRED', 'SUBMITTED'}:
+            raise RuntimeError('execution_intent_not_in_resolvable_state')
+        self.conn.execute(
+            "UPDATE execution_intents SET status='RECONCILED', reason=? WHERE intent_id=?",
+            ('authoritative_exchange_state_persisted', str(intent_id)),
+        )
+        self.save_execution_event(str(intent_id), 'EXCHANGE_RECONCILED', evidence)
+
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
             'INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)',
-            (intent_id, event, json.dumps(payload, default=str) if payload is not None else None),
+            (intent_id, event, json.dumps(redact_value(payload), default=str) if payload is not None else None),
         )
         if not self._transaction_active:
             self.conn.commit()
@@ -360,8 +579,8 @@ class Database:
             (
                 level,
                 event,
-                message,
-                json.dumps(raw, default=str) if raw is not None else None
+                redact_text(message),
+                json.dumps(redact_value(raw), default=str) if raw is not None else None
             )
         )
         if not self._transaction_active:
@@ -387,6 +606,7 @@ class Database:
 
     def save_wave_state(self, symbol, side, payload):
         """Persist the selected wave hypothesis/state independently of trade rows."""
+        payload = redact_value(payload)
         self.conn.execute(
             """INSERT INTO wave_state(symbol,side,phase,state_json,updated_at)
                VALUES(?,?,?,?,?)
@@ -413,6 +633,7 @@ class Database:
             return None
 
     def save_order(self, data):
+        data = redact_value(data)
         oid = (
             str(data.get('orderId'))
             if data.get('orderId') is not None
@@ -514,6 +735,7 @@ class Database:
         return dict(r) if r else None
 
     def save_trade(self, **kwargs):
+        kwargs = {key: redact_value(value) for key, value in kwargs.items()}
         now = datetime.now(timezone.utc).isoformat()
         kwargs.setdefault('updated_at', now)
         cols = ','.join(kwargs)
@@ -860,7 +1082,7 @@ class Database:
     # ------------------------------------------------------------------
 
     def save_campaign(self, campaign):
-        data = campaign.to_dict() if hasattr(campaign, "to_dict") else dict(campaign)
+        data = redact_value(campaign.to_dict() if hasattr(campaign, "to_dict") else dict(campaign))
         self.conn.execute(
             """INSERT INTO campaigns(
                 campaign_id,updated_at,symbol,side,execution_timeframe,state,
@@ -952,7 +1174,7 @@ class Database:
         return [dict(r) for r in rows]
 
     def save_campaign_order(self, record):
-        data=record.to_dict() if hasattr(record,"to_dict") else dict(record)
+        data=redact_value(record.to_dict() if hasattr(record,"to_dict") else dict(record))
         self.conn.execute(
             """INSERT INTO campaign_orders(
                 campaign_id,signal_id,symbol,side,purpose,order_type,order_id,order_list_id,
@@ -970,30 +1192,171 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
-    def save_campaign_fill(self, fill):
-        data=fill if isinstance(fill,dict) else dict(fill)
+    @staticmethod
+    def _canonical_decimal(value, field, *, positive=False, nonnegative=False):
+        """Validate an exchange decimal without accepting a binary float."""
+        if isinstance(value, (float, bool)) or value is None:
+            raise ValueError(f"exchange_fill_{field}_invalid")
+        text = str(value).strip()
+        if not text:
+            raise ValueError(f"exchange_fill_{field}_invalid")
+        try:
+            number = Decimal(text)
+        except (InvalidOperation, ValueError, TypeError):
+            raise ValueError(f"exchange_fill_{field}_invalid") from None
+        if not number.is_finite():
+            raise ValueError(f"exchange_fill_{field}_invalid")
+        if positive and number <= 0:
+            raise ValueError(f"exchange_fill_{field}_invalid")
+        if nonnegative and number < 0:
+            raise ValueError(f"exchange_fill_{field}_invalid")
+        canonical = format(number, "f")
+        if "." in canonical:
+            canonical = canonical.rstrip("0").rstrip(".")
+        if canonical in ("", "-0"):
+            canonical = "0"
+        return number, canonical
+
+    def save_campaign_fill(self, fill, _defer_conflict=False):
+        """Persist exact exchange evidence and a compatibility projection atomically.
+
+        exchange_fill_ledger is the canonical decimal-string evidence. Each
+        inserted row remains PENDING until a separately proven financial-effect
+        applier commits dependent position/campaign/risk changes. A ledger row
+        alone never proves that its financial effect has been applied.
+        """
+        data = redact_value(fill if isinstance(fill, dict) else dict(fill))
+        trade_id = data.get("trade_id", data.get("tradeId"))
+        symbol = str(data.get("symbol", "")).upper().strip()
+        exchange = str(data.get("exchange", "BINANCE")).upper().strip()
+        account_id = str(data.get("account_id", "default")).strip()
+        if not trade_id or not symbol or not exchange or not account_id:
+            raise ValueError("exchange_fill_identity_required")
+        identity = (exchange, account_id, symbol, str(trade_id))
+
+        commission_key = (
+            "commission" if "commission" in data
+            else "fee_amount" if "fee_amount" in data else None
+        )
+        if (
+            commission_key is None or data.get(commission_key) is None
+            or str(data.get(commission_key)).strip() == ""
+        ):
+            raise ValueError("exchange_fill_commission_unknown")
+        commission_asset = data.get("commission_asset", data.get("commissionAsset"))
+        if commission_asset is None or not str(commission_asset).strip():
+            raise ValueError("exchange_fill_commission_asset_unknown")
+
+        quantity_dec, quantity_text = self._canonical_decimal(
+            data.get("quantity", data.get("qty")), "quantity", positive=True
+        )
+        price_dec, price_text = self._canonical_decimal(
+            data.get("price"), "price", positive=True
+        )
+        quote_dec, quote_text = self._canonical_decimal(
+            data.get("quote_quantity", data.get("quoteQty")),
+            "quote_quantity", positive=True,
+        )
+        commission_dec, commission_text = self._canonical_decimal(
+            data[commission_key], "commission", nonnegative=True
+        )
+        order_id = str(data.get("order_id", data.get("orderId", ""))).strip()
+        side = str(data.get("side", "")).upper().strip()
+        if not order_id or side not in {"BUY", "SELL"}:
+            raise ValueError("exchange_fill_order_identity_required")
+        commission_asset = str(commission_asset).upper().strip()
+        campaign_id = str(data.get("campaign_id", ""))
+        intent_id = str(data.get("intent_id", ""))
+        payload = json.dumps(data, default=str, sort_keys=True)
+
+        if not self._transaction_active:
+            with self.transaction():
+                result = self.save_campaign_fill(data, _defer_conflict=True)
+            if result is _FILL_CONFLICT:
+                raise RuntimeError("conflicting_duplicate_trade_id")
+            return result
+
+        prior = self.conn.execute(
+            """SELECT campaign_id,order_id,side,quantity_decimal,price_decimal,
+                      quote_quantity_decimal,commission_asset,commission_decimal,intent_id
+               FROM exchange_fill_ledger
+               WHERE exchange=? AND account_id=? AND symbol=? AND trade_id=?""",
+            identity,
+        ).fetchone()
+        if prior:
+            expected = (
+                campaign_id, order_id, side, quantity_text, price_text,
+                quote_text, commission_asset, commission_text, intent_id,
+            )
+            actual = tuple(prior[k] for k in (
+                "campaign_id", "order_id", "side", "quantity_decimal",
+                "price_decimal", "quote_quantity_decimal", "commission_asset",
+                "commission_decimal", "intent_id",
+            ))
+            if actual != expected:
+                self.state_set("recovery_status", "RECOVERY_REQUIRED")
+                self.save_execution_event(
+                    intent_id or "fill-ledger", "CONFLICTING_DUPLICATE_TRADE_ID",
+                    {"exchange": exchange, "account_id": account_id,
+                     "symbol": symbol, "trade_id": str(trade_id)},
+                )
+                if _defer_conflict:
+                    return _FILL_CONFLICT
+                raise RuntimeError("conflicting_duplicate_trade_id")
+            return False
+
+        # Existing REAL-only rows cannot be promoted to canonical evidence
+        # without explicit reconciliation. Preserve them and fail closed.
+        legacy = self.conn.execute(
+            """SELECT id FROM campaign_fills
+               WHERE exchange=? AND account_id=? AND symbol=? AND trade_id=? LIMIT 1""",
+            identity,
+        ).fetchone()
+        if legacy:
+            self.state_set("recovery_status", "RECOVERY_REQUIRED")
+            self.save_execution_event(
+                intent_id or "fill-ledger", "LEGACY_FILL_REQUIRES_DECIMAL_RECONCILIATION",
+                {"exchange": exchange, "account_id": account_id,
+                 "symbol": symbol, "trade_id": str(trade_id)},
+            )
+            raise RuntimeError("legacy_fill_missing_canonical_ledger")
+
+        self.conn.execute(
+            """INSERT INTO exchange_fill_ledger(
+                exchange,account_id,symbol,trade_id,order_id,intent_id,campaign_id,
+                side,quantity_decimal,price_decimal,quote_quantity_decimal,
+                commission_decimal,commission_asset,effect_state,raw_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',?)""",
+            (
+                exchange, account_id, symbol, str(trade_id), order_id, intent_id,
+                campaign_id, side, quantity_text, price_text, quote_text,
+                commission_text, commission_asset, payload,
+            ),
+        )
+        # Compatibility/reporting projection only. If this insert fails, the
+        # enclosing transaction rolls back the canonical ledger insert too.
         self.conn.execute(
             """INSERT INTO campaign_fills(
                 campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
-                fee_quote,commission_base,commission_asset,raw_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                fee_quote,commission_base,commission_asset,raw_json,
+                exchange,account_id,trade_id,commission_amount,financial_state
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                data.get("campaign_id",""),data.get("order_id"),data.get("symbol",""),
-                data.get("side",""),float(data.get("quantity",0) or 0),float(data.get("price",0) or 0),
-                float(data.get("quote_quantity",0) or 0),float(data.get("fee_quote",0) or 0),
-                float(data.get("commission_base",0) or 0),data.get("commission_asset",""),
-                json.dumps(data,default=str),
+                campaign_id, order_id, symbol, side,
+                float(quantity_dec), float(price_dec), float(quote_dec),
+                float(data.get("fee_quote", 0) or 0),
+                float(data.get("commission_base", 0) or 0), commission_asset, payload,
+                exchange, account_id, str(trade_id), float(commission_dec), "PENDING_EFFECT",
             ),
         )
-        if not self._transaction_active:
-            self.conn.commit()
+        return True
 
     def log_campaign_event(self, campaign_id, event, *, level="INFO", signal_id=None, order_id=None, reason="", payload=None):
         self.conn.execute(
             """INSERT INTO campaign_events(campaign_id,event,level,signal_id,order_id,reason,payload_json)
                VALUES(?,?,?,?,?,?,?)""",
-            (str(campaign_id),str(event),str(level),signal_id,order_id,str(reason),
-             json.dumps(payload,default=str,sort_keys=True) if payload is not None else None),
+            (str(campaign_id),str(event),str(level),signal_id,order_id,redact_text(str(reason)),
+             json.dumps(redact_value(payload),default=str,sort_keys=True) if payload is not None else None),
         )
         if not self._transaction_active:
             self.conn.commit()

@@ -1,9 +1,34 @@
 import pytest
 import uuid
 
+class _OfflineBarrierResult:
+    def __init__(self, response):
+        self.accepted = True
+        self.response = response
+        self.reason = ""
+
+
+class _OfflineExecutionBarrier:
+    """Unit-test-only barrier for fake exchange fixtures; never used in production."""
+    def execute(self, intent, submit, *, pre_submit_checks=None):
+        if pre_submit_checks is not None:
+            pre_submit_checks(None)
+        return _OfflineBarrierResult(submit())
+
+
 @pytest.fixture(autouse=True)
 def _legacy_campaign_mode(monkeypatch):
     monkeypatch.setenv("CAMPAIGN_ENGINE", "false")
+    # Legacy lifecycle tests use fake clients and explicitly mock the final
+    # execution barrier. Separate tests exercise the real barrier contracts.
+    original_init = MultiPositionTrader.__init__
+
+    def init_with_offline_barrier(self, *args, **kwargs):
+        if kwargs.get("execution_barrier") is None:
+            kwargs["execution_barrier"] = _OfflineExecutionBarrier()
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(MultiPositionTrader, "__init__", init_with_offline_barrier)
 
 
 
@@ -84,13 +109,33 @@ class FakeClient:
                 return row
         raise AssertionError("order not found")
 
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        order = self.get_order(symbol, order_id=order_id)
+        qty = float(order.get("executedQty", 0) or 0)
+        quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+        if qty <= 0:
+            return []
+        return [{
+            "id": str(order.get("orderId", order_id)),
+            "orderId": order.get("orderId", order_id),
+            "symbol": symbol,
+            "price": str(quote / qty),
+            "qty": str(qty),
+            "quoteQty": str(quote),
+            "commission": "0",
+            "commissionAsset": "USDT",
+        }]
+
     def order_safe(self, symbol, side, type_, *, quote_order_qty=None, quantity=None, new_client_order_id=None, **kwargs):
         assert side == "BUY"
         self.buy_calls += 1
         self.order_counter += 1
         order_id = str(self.order_counter)
-        quote = float(quote_order_qty or 0)
-        qty = quote / 100.0
+        requested_quote = float(quote_order_qty or 0)
+        qty = float(f"{requested_quote / 100.0:.6f}")
+        # The mock exchange must report internally consistent authoritative
+        # executed quantity and quote totals after quantity-step rounding.
+        quote = float(f"{qty * 100.0:.6f}")
         base = symbol.replace("USDT", "")
         self.balances["USDT"] = self.balances.get("USDT", 0.0) - quote
         self.balances[base] = self.balances.get(base, 0.0) + qty
@@ -103,7 +148,7 @@ class FakeClient:
             "status": "FILLED",
             "executedQty": f"{qty:.6f}",
             "cummulativeQuoteQty": f"{quote:.6f}",
-            "fills": [{"price": "100.0", "qty": f"{qty:.6f}", "commission": "0", "commissionAsset": "USDT"}],
+            "fills": [{"tradeId": self.order_counter, "price": "100.0", "qty": f"{qty:.6f}", "quoteQty": f"{quote:.6f}", "commission": "0", "commissionAsset": "USDT"}],
         }
         self.orders[order_id] = row
         return row

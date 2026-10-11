@@ -18,9 +18,11 @@ from feature_store import FeatureStore
 from binance_client import BinanceSpotClient
 from digital_williams_core import DigitalWilliamsCore
 from diagnostics import DiagnosticManager
+from safe_logging import redact_text, redact_value, register_sensitive_value
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
+register_sensitive_value(API_TOKEN)
 VERSION = '4.25.0'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
@@ -163,7 +165,7 @@ class ControlState:
                         'Live Spot API key must allow reading + Spot trading and have withdrawals disabled.'
                     )
         except Exception as exc:
-            raise RuntimeError(f'Binance credential validation failed: {exc}') from exc
+            raise RuntimeError(redact_text(f'Binance credential validation failed: {exc}')) from None
 
         with self.lock:
             if self.running and (
@@ -242,7 +244,7 @@ class ControlState:
                     try:
                         t.process()
                     except Exception as e:
-                        self.last_error = f'{type(e).__name__}: {e}'
+                        self.last_error = redact_text(f'{type(e).__name__}: {e}')
                         incident = self.diagnostics.classify("trading_loop", e)
                         try:
                             incident = self.diagnostics.run_safe_heal(
@@ -338,7 +340,7 @@ class ControlState:
             open_trades = list(multi.open_trades())
         except Exception as exc:
             open_trades = []
-            errors.append("open_trades: " + str(exc))
+            errors.append(redact_text("open_trades: " + str(exc)))
 
         for trade in open_trades:
             symbol = str(trade.get("symbol", "")).upper()
@@ -348,7 +350,7 @@ class ControlState:
                 result = multi.manual_sell(symbol)
                 closed.append({"symbol": symbol, "result": result})
             except Exception as exc:
-                errors.append(f"{symbol}: {exc}")
+                errors.append(redact_text(f"{symbol}: {exc}"))
 
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=3)
@@ -481,7 +483,7 @@ def _scanner_worker():
     except Exception as exc:
         with scanner_lock:
             scanner_cache["last_error"] = (
-                f"{type(exc).__name__}: {exc}"
+                redact_text(f"{type(exc).__name__}: {exc}")
             )
 
     finally:
@@ -498,7 +500,7 @@ def _scanner_watchdog():
                 _start_scanner_background()
         except Exception as exc:
             with scanner_lock:
-                scanner_cache["last_error"] = f"watchdog: {type(exc).__name__}: {exc}"
+                scanner_cache["last_error"] = redact_text(f"watchdog: {type(exc).__name__}: {exc}")
 
 
 def _start_scanner_background(force=False):
@@ -536,12 +538,12 @@ def _runtime_supervisor():
                     latched = str(t.db.state_get('kill_switch_latched', 'false')).lower() == 'true'
                     unresolved = bool(state.ensure_multi().unresolved_symbols())
                 except Exception as exc:
-                    state.last_error = f'supervisor probe: {type(exc).__name__}: {exc}'
+                    state.last_error = redact_text(f'supervisor probe: {type(exc).__name__}: {exc}')
                     continue
                 if not latched and not unresolved:
                     state.start()
         except Exception as exc:
-            state.last_error = f'supervisor: {type(exc).__name__}: {exc}'
+            state.last_error = redact_text(f'supervisor: {type(exc).__name__}: {exc}')
 
 
 def _heartbeat_loop():
@@ -571,7 +573,7 @@ def _heartbeat_loop():
             try:
                 state.ensure_trader().db.log_event(
                     'ERROR', 'heartbeat_error',
-                    f'{type(exc).__name__}: {exc}'
+                    redact_text(f'{type(exc).__name__}: {exc}')
                 )
             except Exception:
                 pass
@@ -753,7 +755,7 @@ def configure(payload: CredentialPayload):
             payload.testnet,
         )
     except RuntimeError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, redact_text(str(e))) from None
     return {
         'configured': True,
         'testnet': payload.testnet,
@@ -773,8 +775,8 @@ def clear_binance_config():
     except Exception as exc:
         raise HTTPException(
             503,
-            'Cannot verify Spot account state before credential removal: ' + str(exc),
-        )
+            redact_text('Cannot verify Spot account state before credential removal: ' + str(exc)),
+        ) from None
     if managed_positions or exchange_orders:
         raise HTTPException(
             409,
@@ -914,14 +916,14 @@ def status():
             )
         except Exception as exc:
             state.last_error = (
-                f'position-status: {exc}'
+                redact_text(f'position-status: {exc}')
             )
 
     balance = None
     try:
         balance = t.available_quote()
     except Exception as exc:
-        state.last_error = f'status-balance: {exc}'
+        state.last_error = redact_text(f'status-balance: {exc}')
 
     total_pnl = sum(
         float(item['unrealized_pnl'] or 0.0)
@@ -1118,7 +1120,7 @@ def portfolio():
                 'oco_list_client_id': raw.get('exit_order_list_client_id'),
             })
         except Exception as exc:
-            state.last_error = f'portfolio-position: {exc}'
+            state.last_error = redact_text(f'portfolio-position: {exc}')
     unrealized_pnl_usdt = sum(float(p.get('unrealized_pnl_usdt') or 0.0) for p in positions)
     realized_pnl_usdt = 0.0
     try:
@@ -1332,7 +1334,7 @@ def manual_sell(symbol: str):
     multi = state.ensure_multi()
     result = multi.manual_sell(symbol)
     if not result.get('sold') and result.get('state') == 'RECONCILE_REQUIRED':
-        raise HTTPException(409, result.get('error', 'Position requires reconciliation'))
+        raise HTTPException(409, redact_text(result.get('error', 'Position requires reconciliation')))
     return result
 
 

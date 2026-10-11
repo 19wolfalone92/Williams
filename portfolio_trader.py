@@ -3,6 +3,7 @@ import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
 
+from safe_logging import redact_text
 from portfolio_controller import PortfolioController
 from db import Database
 from equity_breaker import EquityCircuitBreaker
@@ -12,6 +13,7 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
+from execution_barrier import OrderIntent
 
 
 POSITION_STATES = {
@@ -105,6 +107,43 @@ class MultiPositionTrader:
             self.db,
             self.campaign_execution,
         )
+
+    def _submit_order(self, symbol, side, order_type, purpose, client_order_id, submit,
+                      *, quantity="", quote_order_quantity="", pre_submit_checks=None,
+                      mutation_kind="ORDER", target_order_id="", target_client_order_id="",
+                      target_order_list_id="", target_list_client_order_id="",
+                      replacement_client_order_id=""):
+        """Route every legacy portfolio order mutation through the canonical barrier."""
+        if self.execution_barrier is None:
+            raise CampaignExecutionError(
+                "Portfolio order mutation blocked: canonical ExecutionBarrier is unavailable"
+            )
+        intent = OrderIntent.new(
+            str(symbol).upper(),
+            str(side).upper(),
+            str(order_type).upper(),
+            required_context_versions={},
+            purpose=str(purpose),
+            client_order_id=str(client_order_id),
+            mutation_kind=str(mutation_kind or "ORDER"),
+            target_order_id=str(target_order_id or ""),
+            target_client_order_id=str(target_client_order_id or ""),
+            target_order_list_id=str(target_order_list_id or ""),
+            target_list_client_order_id=str(target_list_client_order_id or ""),
+            replacement_client_order_id=str(replacement_client_order_id or ""),
+            quantity=str(quantity or ""),
+            quote_order_quantity=str(quote_order_quantity or ""),
+        )
+        result = self.execution_barrier.execute(
+            intent,
+            submit,
+            pre_submit_checks=pre_submit_checks,
+        )
+        if not result.accepted:
+            raise CampaignExecutionError(
+                f"ExecutionBarrier blocked {purpose}: {result.reason}"
+            )
+        return result.response
 
     # ------------------------------------------------------------------
     # Durable state
@@ -204,6 +243,16 @@ class MultiPositionTrader:
         Williams BUY with remaining quantity.
         """
         repaired = []
+        # An unresolved durable execution intent is a global fail-closed
+        # condition. A clean open-orders snapshot alone must not erase its
+        # per-symbol recovery barrier; the intent resolver must first reconcile
+        # the exact mutation identity and persist the terminal evidence.
+        unresolved_intents = self.db.unresolved_execution_intents()
+        intent_blocked_symbols = {
+            str(row.get("symbol", "")).upper()
+            for row in unresolved_intents
+            if str(row.get("symbol", "")).strip()
+        }
 
         symbols = {
             str(symbol).upper()
@@ -228,6 +277,8 @@ class MultiPositionTrader:
 
         for symbol in sorted(symbols):
             if self.state(symbol) != "RECONCILE_REQUIRED":
+                continue
+            if symbol in intent_blocked_symbols:
                 continue
             if self.db.open_trade(symbol) is not None:
                 continue
@@ -255,7 +306,7 @@ class MultiPositionTrader:
                 self.db.log_event(
                     "ERROR",
                     "stale_reconcile_check_failed",
-                    str(exc),
+                    redact_text(str(exc)),
                     {"symbol": symbol},
                 )
 
@@ -647,60 +698,85 @@ class MultiPositionTrader:
             btc = float(self.client.ticker_price("BTCUSDT")["price"])
             return cross * btc
         except Exception as exc:
-            raise RuntimeError(f"{asset}: cannot value Binance commission in USDT") from exc
+            raise RuntimeError(f"{asset}: cannot value Binance commission in USDT") from None
 
     def _authoritative_execution(self, symbol, order):
+        """Return only a complete, exchange-backed fill/fee summary.
+
+        Order-level executedQty is not a substitute for per-trade commission
+        evidence. Any unavailable/incomplete trade history is a hard blocker.
+        """
         payload = dict(order or {})
         fills = list(payload.get("fills") or [])
         order_id = payload.get("orderId")
-        if not fills and order_id is not None and hasattr(self.client, "my_trades"):
+        inline_has_trade_identity = bool(fills) and all(
+            isinstance(row, dict)
+            and row.get("tradeId", row.get("id")) is not None
+            and str(row.get("tradeId", row.get("id"))).strip() != ""
+            for row in fills
+        )
+        # Binance order-response fills commonly omit trade IDs. They are useful
+        # for display but cannot form the durable idempotency key; prefer the
+        # authoritative per-order myTrades history in that case.
+        if order_id is not None and hasattr(self.client, "my_trades") and not inline_has_trade_identity:
             try:
                 rows = self.client.my_trades(symbol, order_id=order_id, limit=1000)
                 fills = [
                     {
-                        "price": row.get("price", "0"),
-                        "qty": row.get("qty", row.get("executedQty", "0")),
-                        "commission": row.get("commission", "0"),
-                        "commissionAsset": row.get("commissionAsset", ""),
+                        "tradeId": row.get("id", row.get("tradeId")),
+                        "orderId": row.get("orderId", order_id),
+                        "symbol": row.get("symbol", symbol),
+                        "price": row.get("price"),
+                        "qty": row.get("qty"),
+                        "quoteQty": row.get("quoteQty"),
+                        "commission": row.get("commission"),
+                        "commissionAsset": row.get("commissionAsset"),
                     }
                     for row in (rows or [])
                 ]
-                if fills:
-                    payload["fills"] = fills
+                payload["fills"] = fills
             except Exception as exc:
                 self.db.log_event(
                     "WARNING",
                     "fill_commission_lookup_failed",
-                    f"{symbol}: myTrades lookup unavailable; using order-level fill data",
-                    {"order_id": order_id, "error": str(exc)},
+                    f"{symbol}: authoritative myTrades lookup unavailable",
+                    {"order_id": order_id, "error_type": type(exc).__name__},
                 )
-        base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
-        summary = accumulate_order(payload, base_asset=base_asset)
-        extra_fee_quote = Decimal("0")
-        known_assets = {"USDT", "USDC", "FDUSD", "BUSD", base_asset}
-        for fill in payload.get("fills") or []:
-            commission = Decimal(str(fill.get("commission", "0") or "0"))
-            asset = str(fill.get("commissionAsset", "")).upper()
-            if commission <= 0 or asset in known_assets:
-                continue
-            price = float(fill.get("price", "0") or 0.0)
-            extra_fee_quote += commission * Decimal(str(
-                self._fee_quote_for_asset(asset, base_asset, trade_price=price)
-            ))
-        if extra_fee_quote <= 0:
-            return summary
-        return ExecutionSummary(
-            summary.executed_qty,
-            summary.quote_qty,
-            summary.avg_price,
-            summary.fee_quote,
-            summary.commission_base,
-            summary.fee_quote_equivalent + extra_fee_quote,
-        )
+                raise RuntimeError(f"{symbol}: authoritative fill history unavailable") from None
 
-    # ------------------------------------------------------------------
-    # Protection
-    # ------------------------------------------------------------------
+        # Every row must belong to the exact exchange order and instrument. A
+        # filtered query is not sufficient evidence if the response contradicts it.
+        for row in fills:
+            if row.get("orderId") is not None and str(row.get("orderId")) != str(order_id):
+                raise RuntimeError(f"{symbol}: fill order identity mismatch")
+            if row.get("symbol") is not None and str(row.get("symbol")).upper() != str(symbol).upper():
+                raise RuntimeError(f"{symbol}: fill symbol identity mismatch")
+
+        base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
+        if not fills and Decimal(str(payload.get("executedQty", "0") or "0")) > 0:
+            raise RuntimeError(f"{symbol}: executed order has no authoritative per-trade fills")
+
+        # Value third-asset commissions only with a successfully fetched conversion.
+        fee_quote_values = {}
+        for fill in fills:
+            asset = str(fill.get("commissionAsset") or "").upper()
+            if not asset or asset in {"USDT", "USDC", "FDUSD", "BUSD", base_asset}:
+                continue
+            commission = Decimal(str(fill.get("commission"))) if fill.get("commission") is not None else None
+            if commission is None or not commission.is_finite() or commission < 0:
+                raise RuntimeError(f"{symbol}: commission data incomplete")
+            if commission > 0:
+                price = float(fill.get("price", 0) or 0)
+                fee_quote_values[asset] = Decimal(str(
+                    self._fee_quote_for_asset(asset, base_asset, trade_price=price)
+                ))
+
+        summary = accumulate_order(
+            payload, base_asset=base_asset, asset_quote_values=fee_quote_values
+        )
+        if not summary.financials_complete:
+            raise RuntimeError(f"{symbol}: financial reconciliation incomplete")
+        return summary
 
     def _emergency_market_sell(self, symbol, qty, trade_id, reason):
         """Close a just-filled/unprotected Spot position if protection is already breached."""
@@ -719,12 +795,18 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
-            symbol,
-            "SELL",
-            "MARKET",
+        sell = self._submit_order(
+            symbol, "SELL", "MARKET", "CAMPAIGN_EXIT",
+            client_id,
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
             quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+            mutation_kind="EMERGENCY_EXIT",
         )
         self.db.save_order(sell)
 
@@ -835,6 +917,21 @@ class MultiPositionTrader:
             "state": state,
         }
 
+    def _check_algo_capacity(self, symbol, additional=1):
+        filters = self._filters(symbol)
+        open_orders = self.client.open_orders(symbol)
+        max_orders = int((filters.get("MAX_NUM_ORDERS") or {}).get("maxNumOrders", 10**9))
+        max_algo = int((filters.get("MAX_NUM_ALGO_ORDERS") or {}).get("maxNumAlgoOrders", 10**9))
+        if len(open_orders) + int(additional) > max_orders:
+            raise RuntimeError(f"{symbol}: MAX_NUM_ORDERS would be exceeded")
+        algo_open = sum(
+            1 for row in open_orders
+            if str(row.get("type", "")).upper()
+            in {"STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
+        )
+        if algo_open + int(additional) > max_algo:
+            raise RuntimeError(f"{symbol}: MAX_NUM_ALGO_ORDERS would be exceeded")
+
     def _create_oco(
         self,
         symbol,
@@ -933,13 +1030,18 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
-            symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+        result = self._submit_order(
+            symbol, "SELL", "OCO", "CAMPAIGN_PROTECTION", client_id,
+            lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
+            quantity=self.client.decimal_format(qty),
+            pre_submit_checks=lambda _snapshot: self._check_algo_capacity(symbol, 2),
         )
 
         for leg in result.get("orderReports", []):
@@ -1085,7 +1187,7 @@ class MultiPositionTrader:
                 self.db.log_event(
                     "ERROR",
                     "multi_position_pending_entry_error",
-                    str(exc),
+                    redact_text(str(exc)),
                     {
                         "symbol": symbol,
                         "clientOrderId": client_id,
@@ -1095,7 +1197,7 @@ class MultiPositionTrader:
                     {
                         "symbol": symbol,
                         "state": "RECONCILE_REQUIRED",
-                        "error": str(exc),
+                        "error": redact_text(str(exc)),
                     }
                 )
         return results
@@ -1551,7 +1653,7 @@ class MultiPositionTrader:
                 self.db.log_event(
                     "ERROR",
                     "multi_position_reconcile_required",
-                    str(exc),
+                    redact_text(str(exc)),
                     {
                         "symbol": symbol,
                         "trade_id": trade["id"],
@@ -1562,7 +1664,7 @@ class MultiPositionTrader:
                         "trade_id": trade["id"],
                         "symbol": symbol,
                         "state": "RECONCILE_REQUIRED",
-                        "error": str(exc),
+                        "error": redact_text(str(exc)),
                     }
                 )
 
@@ -1570,13 +1672,38 @@ class MultiPositionTrader:
 
     def recover(self):
         """Startup/full recovery. Campaign mode never routes through legacy OCO recovery."""
+        # Persist the entry barrier before any recovery I/O. Intent-level
+        # RECONCILED is not global recovery completion; this implementation
+        # deliberately does not clear the gate until financial/position/
+        # protection evidence is complete.
+        self.db.state_set("recovery_status", "RECOVERY_REQUIRED")
+        # Resolve durable mutation intents by exact exchange identities before
+        # any campaign/trade recovery can consider new execution. Resolver is
+        # read-only; missing evidence preserves the global fail-closed barrier.
+        from execution_recovery import ExecutionRecoveryResolver
+        execution_recovery = ExecutionRecoveryResolver(self.db, self.client).resolve_pending()
+        unresolved_intents = self.db.unresolved_execution_intents()
+        for intent in unresolved_intents:
+            symbol = str(intent.get("symbol", "")).upper()
+            if symbol:
+                try:
+                    self.set_state(symbol, "RECONCILE_REQUIRED")
+                except Exception:
+                    self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+        if unresolved_intents:
+            self.db.state_set("position_state", "RECONCILE_REQUIRED")
         if self.campaign_engine_enabled:
             pending = self.campaign_execution.reconcile_pending_entries()
             active = self.campaign_execution.reconcile_active_campaigns()
             repaired = self._repair_stale_reconcile_states()
             unresolved = self.unresolved_symbols()
             pending_keys = self._pending_entries()
-            ok = not unresolved and not pending_keys
+            unresolved_intents = self.db.unresolved_execution_intents()
+            pending_fill_effects = self.db.pending_exchange_fill_effects()
+            ok = (
+                not unresolved and not pending_keys and not unresolved_intents
+                and not pending_fill_effects
+            )
             canonical_state = self._sync_legacy_state()
             results = pending + active
             results.extend(
@@ -1592,6 +1719,9 @@ class MultiPositionTrader:
                     "open_campaigns": len(self.db.open_campaigns()),
                     "unresolved_symbols": unresolved,
                     "pending_entries": [x[0] for x in pending_keys],
+                    "unresolved_execution_intents": len(unresolved_intents),
+                    "pending_fill_effects": len(pending_fill_effects),
+                    "execution_recovery": execution_recovery,
                 },
             )
             return {
@@ -1601,13 +1731,21 @@ class MultiPositionTrader:
                 "open_campaigns": len(self.db.open_campaigns()),
                 "unresolved_symbols": unresolved,
                 "state": canonical_state,
+                "execution_recovery": execution_recovery,
+                "unresolved_execution_intents": len(unresolved_intents),
+                "pending_fill_effects": len(pending_fill_effects),
             }
 
         results = self.reconcile_open_positions()
         repaired = self._repair_stale_reconcile_states()
         unresolved = self.unresolved_symbols()
         pending = self._pending_entries()
-        ok = not unresolved and not pending
+        unresolved_intents = self.db.unresolved_execution_intents()
+        pending_fill_effects = self.db.pending_exchange_fill_effects()
+        ok = (
+            not unresolved and not pending and not unresolved_intents
+            and not pending_fill_effects
+        )
         canonical_state = self._sync_legacy_state()
         results.extend(
             {"symbol": symbol, "state": "FLAT", "stale_reconcile_cleared": True}
@@ -1621,6 +1759,9 @@ class MultiPositionTrader:
                 "open_positions": len(self.open_trades()),
                 "unresolved_symbols": unresolved,
                 "pending_entries": [x[0] for x in self._pending_entries()],
+                "unresolved_execution_intents": len(unresolved_intents),
+                "pending_fill_effects": len(pending_fill_effects),
+                "execution_recovery": execution_recovery,
             },
         )
         return {
@@ -1628,6 +1769,9 @@ class MultiPositionTrader:
             "results": results,
             "open_positions": len(self.open_trades()),
             "unresolved_symbols": unresolved,
+            "execution_recovery": execution_recovery,
+            "unresolved_execution_intents": len(unresolved_intents),
+            "pending_fill_effects": len(pending_fill_effects),
         }
 
     # ------------------------------------------------------------------
@@ -1655,10 +1799,19 @@ class MultiPositionTrader:
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
                 if cancel is not None:
-                    if list_id:
-                        cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                    cancel_intent_id = f"{self.EMERGENCY_PREFIX}CANCEL_{uuid.uuid4().hex[:12]}"
+                    self._submit_order(
+                        symbol, "SELL", "CANCEL", "CAMPAIGN_PROTECTION_CANCEL",
+                        cancel_intent_id,
+                        lambda: cancel(
+                            symbol,
+                            order_list_id=list_id if list_id else None,
+                            list_client_order_id=list_client if not list_id else None,
+                        ),
+                        mutation_kind="CANCEL_OCO",
+                        target_order_list_id=list_id,
+                        target_list_client_order_id=list_client,
+                    )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1675,12 +1828,17 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
-                symbol,
-                "SELL",
-                "MARKET",
+            manual_client_id = f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}"
+            sell = self._submit_order(
+                symbol, "SELL", "MARKET", "CAMPAIGN_EXIT", manual_client_id,
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=manual_client_id,
+                ),
                 quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
             )
             self.db.save_order(sell)
 
@@ -1755,8 +1913,8 @@ class MultiPositionTrader:
                 self.set_state(symbol, "RECONCILE_REQUIRED")
                 raise RuntimeError(
                     f"{symbol}: manual SELL partially filled; residual "
-                    f"{residual_qty:.12g} requires reconciliation: {exc}"
-                ) from exc
+                    f"{residual_qty:.12g} requires reconciliation: {redact_text(str(exc))}"
+                ) from None
 
             self.db.log_event(
                 "WARNING",
@@ -1785,7 +1943,7 @@ class MultiPositionTrader:
             self.db.log_event(
                 "ERROR",
                 "manual_position_sell_error",
-                str(exc),
+                redact_text(str(exc)),
                 {
                     "symbol": symbol,
                     "trade_id": trade["id"],
@@ -1796,7 +1954,7 @@ class MultiPositionTrader:
                 "symbol": symbol,
                 "trade_id": trade["id"],
                 "state": "RECONCILE_REQUIRED",
-                "error": str(exc),
+                "error": redact_text(str(exc)),
             }
 
     # ------------------------------------------------------------------
@@ -2010,7 +2168,7 @@ class MultiPositionTrader:
                     self.db.log_event(
                         "WARNING",
                         "campaign_add_on_not_armed",
-                        str(exc),
+                        redact_text(str(exc)),
                         {"symbol": symbol, "signal_id": signal.signal_id},
                     )
                     results.append(
@@ -2018,7 +2176,7 @@ class MultiPositionTrader:
                             "symbol": symbol,
                             "campaign": True,
                             "action": "WAIT_ADD_ON",
-                            "error": str(exc),
+                            "error": redact_text(str(exc)),
                         }
                     )
                 continue
@@ -2054,7 +2212,7 @@ class MultiPositionTrader:
                 self.db.log_event(
                     "WARNING",
                     "campaign_entry_not_armed",
-                    str(exc),
+                    redact_text(str(exc)),
                     {"symbol": symbol, "signal_id": signal.signal_id},
                 )
                 results.append(
@@ -2062,14 +2220,14 @@ class MultiPositionTrader:
                         "symbol": symbol,
                         "campaign": True,
                         "action": "WAIT",
-                        "error": str(exc),
+                        "error": redact_text(str(exc)),
                     }
                 )
             except Exception as exc:
                 self.db.log_event(
                     "ERROR",
                     "campaign_entry_error",
-                    str(exc),
+                    redact_text(str(exc)),
                     {"symbol": symbol, "signal_id": signal.signal_id},
                 )
                 self.set_state(symbol, "RECONCILE_REQUIRED")
@@ -2078,7 +2236,7 @@ class MultiPositionTrader:
                         "symbol": symbol,
                         "campaign": True,
                         "action": "RECONCILE_REQUIRED",
-                        "error": str(exc),
+                        "error": redact_text(str(exc)),
                     }
                 )
         return results
@@ -2214,12 +2372,19 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
-                    symbol,
-                    "BUY",
-                    "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                order = self._submit_order(
+                    symbol, "BUY", "MARKET", "CAMPAIGN_ENTRY", client_id,
+                    lambda: self.client.order_safe(
+                        symbol,
+                        "BUY",
+                        "MARKET",
+                        quote_order_qty=self.client.decimal_format(quote),
+                        new_client_order_id=client_id,
+                    ),
+                    quote_order_quantity=self.client.decimal_format(quote),
+                    pre_submit_checks=lambda _snapshot: self.l2_guard.check_buy_quote(
+                        self.client, symbol, float(quote)
+                    ),
                 )
                 self.db.save_order(order)
 
@@ -2320,7 +2485,7 @@ class MultiPositionTrader:
                 self.db.log_event(
                     "ERROR",
                     "multi_position_entry_error",
-                    str(exc),
+                    redact_text(str(exc)),
                     {
                         "symbol": symbol,
                         "clientOrderId": client_id,
@@ -2329,7 +2494,7 @@ class MultiPositionTrader:
                 results.append(
                     {
                         "symbol": symbol,
-                        "error": str(exc),
+                        "error": redact_text(str(exc)),
                         "reconcile_required": True,
                     }
                 )
