@@ -101,6 +101,14 @@ class CampaignExecutionService:
         if len(rows) >= 1000:
             raise CampaignExecutionError("myTrades page limit reached; fill history is incomplete")
         executed = Decimal(str(order.get("executedQty", "0") or "0"))
+        info = self.client.exchange_info(str(order["symbol"]).upper())
+        symbol_row = self._symbols_rows(info).get(str(order["symbol"]).upper())
+        if symbol_row is None:
+            raise CampaignExecutionError("exchangeInfo lacks the fill symbol; accounting blocked")
+        base_asset = str(symbol_row.get("baseAsset", "")).upper()
+        quote_asset = str(symbol_row.get("quoteAsset", "")).upper()
+        if not base_asset or not quote_asset:
+            raise CampaignExecutionError("exchangeInfo lacks base/quote assets; accounting blocked")
         total_qty = Decimal("0")
         normalized = []
         seen = set()
@@ -163,6 +171,8 @@ class CampaignExecutionService:
                 "commission": str(raw.get("commission", "0") or "0"),
                 "commission_asset": str(raw.get("commissionAsset", "") or ""),
                 "raw": raw,
+                "base_asset": base_asset,
+                "quote_asset": quote_asset,
             }
             self.db.apply_execution_fill(
                 fill,
@@ -190,8 +200,11 @@ class CampaignExecutionService:
         price = Decimal(str(fill["price"]))
         commission = Decimal(str(fill.get("commission") or "0"))
         commission_asset = str(fill.get("commission_asset") or "")
+        base_asset = str(fill.get("base_asset") or "").upper()
+        quote_asset = str(fill.get("quote_asset") or "").upper()
         fee_quote, base_fee_qty = self._fee_in_quote(
-            symbol, commission, commission_asset, price
+            symbol, commission, commission_asset, price,
+            base_asset=base_asset, quote_asset=quote_asset,
         )
         net_qty = qty - base_fee_qty
         if qty <= 0 or price <= 0 or net_qty <= 0:
