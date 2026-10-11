@@ -467,3 +467,123 @@ No existing full fault-injection matrix was demonstrated by the checked CI runs.
 
 **BLOCKED — NOT ACCEPTED.**  
 The exact-SHA CI results are green, but the essential production ledger integration, atomic effect application, downstream Decimal integrity, full global recovery proof, independent OS-process tests, fault-injection matrix, Android mutation-spy/physical-device evidence and Spot Testnet read-only evidence are not established. No entry gate may be opened on the strength of the current evidence. Keep PR #46 Draft and do not merge.
+
+
+---
+
+# WILLIAMS BOT 2.1 — TASK 006.8 Re-audit
+
+**Disposition: BLOCKED — NOT ACCEPTED**  
+**Verified pre-report HEAD:** `220b3da21bf809f80c1b3d02177e0358300ceaff`  
+**Base/main SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**PR:** #46, open Draft, unmerged. No Mainnet order execution or Spot Testnet mutation was performed.
+
+## 1. Git and exact-SHA CI recheck
+
+The current branch and PR were re-read before this audit. The branch points to the PR head above; base remains `main` at `04da5f9c09572e99ff310be3a1908179165e528c`. The PR is still Draft and unmerged. `main` was not modified.
+
+The following runs are associated with the exact pre-report HEAD `220b3da21bf809f80c1b3d02177e0358300ceaff` and all completed successfully:
+
+| Workflow | Run ID | Conclusion | Jobs |
+|---|---:|---|---|
+| Python backend tests | 38118768316 | CI-PROVEN: SUCCESS | `backend-test` |
+| Williams Campaign CI | 38118768306 | CI-PROVEN: SUCCESS | `Android build and static checks`, `Python tests` |
+| Build Android APK | 38118768318 | CI-PROVEN: SUCCESS | `Build APKs` |
+
+Runs:  
+- https://github.com/19wolfalone92/Williams/actions/runs/38118768316  
+- https://github.com/19wolfalone92/Williams/actions/runs/38118768306  
+- https://github.com/19wolfalone92/Williams/actions/runs/38118768318  
+
+These are exact-SHA CI successes for the pre-report HEAD only. The report update below creates a new commit; these runs must not be represented as CI evidence for that new commit. Even the exact-SHA successes do not prove missing accounting behavior.
+
+## 2. Production fill source-to-sink findings
+
+### Python Spot paths
+
+| Source/path | Current observed behavior | Ledger/effect result | Status |
+|---|---|---|---|
+| `portfolio_trader.py::_authoritative_execution` | Validates inline fills or fetches per-order `my_trades`; requires a complete order summary and commission data for the summary calculation | The inspected method returns `accumulate_order(...)`; no call to `db.save_campaign_fill` is present in this method. Downstream callers update legacy trade/campaign state separately. | CODE-CONFIRMED path; canonical ingestion NOT VERIFIED |
+| `trader.py::_authoritative_execution` | Fetches `my_trades` only when the order payload has no inline fills; validates via `accumulate_order` | No canonical fill write in the inspected method. On lookup exception it logs a warning and proceeds to the accumulator, so the exact completeness guarantee needs further call-path proof. | CODE-CONFIRMED path; canonical ingestion NOT VERIFIED |
+| `campaign_execution.py::reconcile_pending_entries` | Loads pending client-ID orders; reads order-level `executedQty` and `cummulativeQuoteQty`; fallback history aggregation multiplies `float(price) * float(qty)` and suppresses lookup exceptions | No canonical ledger ingestion was observed in this recovery block. Campaign transitions and fill recording are performed separately. | CODE-CONFIRMED path; Decimal and atomic application BLOCKED |
+| Emergency SELL in `portfolio_trader.py` | Submits through the existing execution barrier, confirms FILLED, calls `_authoritative_execution`, then computes quantity/quote/fees using float projections and updates trade/state separately | No canonical per-fill ingestion/applier was demonstrated for this path. A partial exit leaves `RECONCILE_REQUIRED`, which is fail-closed but not a substitute for exact ledger application. | CODE-CONFIRMED path; financial effect NOT VERIFIED |
+| `db.py::save_campaign_fill` | Validates identity and decimal inputs, checks duplicate payload, writes canonical row as `PENDING`, then writes legacy compatibility projection in the same transaction | Isolated persistence API exists, but no production call sites were observed in the inspected Python execution/recovery methods. Compatibility projection casts exact values to float/REAL. | CODE-CONFIRMED isolated writer; production integration BLOCKED |
+| `execution_barrier.py` | Blocks BUY when recovery status is not complete or pending/unavailable canonical ledger checks cannot be satisfied | A protective gate is present; it does not ingest fills, apply their financial effects, or prove global recovery. | CODE-CONFIRMED gate; recovery proof NOT VERIFIED |
+
+### Android path
+
+The previous TASK 006.7 audit identified `TradingAuditStore.recordUserEvent` as an execution-report audit sink, not a proven canonical financial ledger/effect applier. The available evidence still does not establish a complete Android production path that shares the backend fill identity contract and atomically applies financial projections. Android event storage must not be treated as equivalent to canonical financial accounting.
+
+**Inventory completeness:** the paths above cover the named high-risk execution and recovery methods that were inspected. This is not a claim that every indirect callback, API client, worker and legacy mutation sink has been exhaustively enumerated or exercised. A complete mutation-sink graph remains an acceptance deliverable.
+
+## 3. Financial effect and transaction boundary
+
+**CODE-CONFIRMED**
+- The canonical Python ledger uses the key `(exchange, account_id, symbol, trade_id)` and exact decimal text fields.
+- New ledger rows start `PENDING`; matching duplicate payloads do not insert another ledger row; conflicting payloads trigger reconciliation-required behavior.
+- Ledger insert and compatibility `campaign_fills` insert are enclosed by the writer's SQLite transaction.
+
+**BLOCKED**
+- No integrated production effect applier was found that consumes `PENDING`, verifies the fill/effect identity, updates all local financial projections, and transitions to `APPLIED` in the same transaction.
+- No proof was found that position quantity, campaign state, commission amount/asset, PnL, risk reservation and protection state are atomically updated as a single local effect.
+- Protection on Binance is an external side effect and cannot be made atomic with SQLite; it needs a durable intent plus explicit exchange reconciliation before the global gate can open.
+- No production reader/writer graph demonstrates that every legacy path is prevented from independently applying an effect.
+
+Therefore **do not add a partial ledger call to one path and leave other paths active**. That would create competing sources of truth and could falsely suggest global exactly-once accounting. The safe result of this audit is to retain the current fail-closed gate and leave the production integration blocker explicit.
+
+## 4. Decimal Integrity / commission uncertainty
+
+**CODE-CONFIRMED**
+- The canonical ledger API rejects binary float inputs for canonical decimal fields and rejects absent commission amount or commission asset.
+- Existing financial projections remain mixed-type; inspected code in campaign recovery uses float arithmetic, and the emergency SELL path converts execution values and fee projections to float.
+
+**BLOCKED**
+- The canonical writer still writes compatibility projection values as Python float / SQLite REAL.
+- The inspected campaign-recovery fallback suppresses history-query exceptions and uses float multiplication for quote reconstruction.
+- Full cross-platform Python/SQLite/Kotlin exact-decimal parity vectors are not demonstrated.
+- End-to-end handling of unknown commission is not proven for every legacy and Android path. The canonical writer's rejection alone does not repair callers that bypass it or substitute zero elsewhere.
+
+No claim is made that legacy REAL values can be converted losslessly without authoritative exchange evidence.
+
+## 5. Crash recovery, concurrency and migrations
+
+| Requirement | Result | Evidence |
+|---|---|---|
+| Replay missing fills from authoritative history | NOT VERIFIED | No end-to-end replay test shown that routes recovered fills through a canonical ingestion contract |
+| Effect applier crash/restart | BLOCKED | Production effect applier not found |
+| Crash at every financial projection boundary | NOT VERIFIED | No complete fault-injection matrix run recorded |
+| Independent OS processes applying same fill | NOT VERIFIED | No verified independent-process test evidence |
+| SQLite BUSY/LOCKED and commit failure behavior | NOT VERIFIED end-to-end | Transaction helper exists, but no full effect transaction to exercise |
+| Unknown commission preserved across all paths | BLOCKED | Mixed legacy/Android paths remain |
+| Populated v6/v7/v8 migration safety and rollback | NOT VERIFIED | Prior tests preserve legacy rows and block unresolved data, but complete migration/recovery proof is not established |
+| Android physical process-death recovery | NOT VERIFIED | No physical-device evidence |
+| Spot Testnet read-only reconciliation | NOT VERIFIED | Not run; no Testnet mutation was performed |
+
+## 6. TASK 006.8 acceptance matrix
+
+| Criterion group | Status | Reason |
+|---|---|---|
+| A — Complete production fill inventory | BLOCKED | High-risk paths inspected; exhaustive indirect-path/mutation-sink proof remains |
+| B — One ingestion contract for every source | BLOCKED | Existing writer has no demonstrated production integration across all paths |
+| C — Atomic financial effect applier | BLOCKED | No integrated applier found |
+| D — Projections/global reconciliation | BLOCKED | No complete evidence covering fills, fees, balances, positions, campaigns, PnL, risk and protection |
+| E — Decimal/unknown fee integrity | BLOCKED | Float/REAL/Double paths remain; no cross-platform golden-vector proof |
+| F — Full crash/fault injection | NOT VERIFIED | Full project matrix not demonstrated |
+| G — Independent OS-process safety | NOT VERIFIED | No verified OS-process test evidence |
+| H — Android production/process-death recovery | NOT VERIFIED | JVM/CI evidence does not prove physical process death or full mutation-sink coverage |
+| I — v6/v7/v8 migration preservation | NOT VERIFIED | Complete populated DB + restart + rollback/recovery proof missing |
+| J — CI on a single final SHA | PENDING after this report commit | The listed runs passed on pre-report SHA only; rerun/check all required workflows on the new head |
+
+## 7. Next implementation order
+
+1. Finish a call-graph and mutation-sink inventory, including emergency/recovery SELL, partial exits, OCO paths, user-stream callbacks, history backfill, background workers and Android sinks.
+2. Define one canonical fill contract that can represent exact source data, commission certainty, order identity and stable trade identity. Reject incomplete or conflicting data and persist a recovery latch on failure.
+3. Design the effect transaction against the actual schema and data owners first. Include all same-SQLite projections and the effect state in one transaction; model external protection as a durable separately reconciled obligation.
+4. Route all authoritative sources through the same ingestion/effect protocol and disable or gate any legacy path that could mutate the same financial projection independently.
+5. Build the original project fault-injection matrix and independent OS-process tests against the integrated applier, not isolated helpers.
+6. Verify populated migration copies, cross-platform decimal vectors, Android mutation spy and physical process-death recovery.
+7. Run required workflows again on one final SHA. Run Spot Testnet read-only reconciliation only after local P0 checks pass and only after the selected workflow is proven non-mutating.
+
+## Final TASK 006.8 disposition
+
+**BLOCKED — NOT ACCEPTED.** The exact-SHA CI runs listed above passed on the pre-report head, but production fill ingestion, atomic effect application, full Decimal Integrity, global reconciliation, cross-process exactly-once, complete fault injection, Android physical recovery and migration safety remain unproven. Keep PR #46 Draft/unmerged. No Mainnet execution or Spot Testnet mutation is permitted; new entries remain blocked while financial state is unresolved.
