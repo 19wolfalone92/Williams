@@ -176,3 +176,9 @@ def test_global_recovery_gate_blocks_buy_but_does_not_block_sell(tmp_path):
     assert db.state_get("recovery_status") == "RECOVERY_REQUIRED"
     assert gate._validate(buy, object()) == "global_recovery_gate:RECOVERY_REQUIRED"
     assert gate._validate(sell, object()) == ""
+
+def test_unknown_commission_asset_blocks_even_when_reported_fee_is_zero():
+    row = fill(commission="0", commissionAsset="BNB")
+    with pytest.raises(ExecutionDataIncomplete, match="unvalued_commission_asset"):
+        accumulate_fills([row], base_asset="BTC")
+
