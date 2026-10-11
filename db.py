@@ -487,7 +487,7 @@ class Database:
                     allowed_scoped_protection = (
                         key == scoped_lock_key
                         and str(lock_payload.get("state", "")).upper() == "PROTECTION_PENDING"
-                        and purpose == "CAMPAIGN_PROTECTION"
+                        and purpose in {"CAMPAIGN_PROTECTION", "CAMPAIGN_ENTRY_CANCEL"}
                     )
                     if not allowed_scoped_protection:
                         return {"claimed": False, "reason": "EXECUTION_LOCKED", "existing": lock_payload or lock["value"]}
@@ -500,7 +500,7 @@ class Database:
             ).fetchall()
             if unresolved_rows:
                 protection_repair_only = (
-                    purpose == "CAMPAIGN_PROTECTION"
+                    purpose in {"CAMPAIGN_PROTECTION", "CAMPAIGN_ENTRY_CANCEL"}
                     and all(str(row["status"]).upper() == "PROTECTION_PENDING" for row in unresolved_rows)
                 )
                 if not protection_repair_only:
@@ -569,7 +569,7 @@ class Database:
                         key == scope_lock_key
                         and str(lock_payload.get("state", "")).upper() == "PROTECTION_PENDING"
                     )
-                    if not (is_scoped_protection_lock and purpose == "CAMPAIGN_PROTECTION"):
+                    if not (is_scoped_protection_lock and purpose in {"CAMPAIGN_PROTECTION", "CAMPAIGN_ENTRY_CANCEL"}):
                         return {"ready": False, "reason": "EXECUTION_LOCKED", "detail": lock["value"]}
             legacy_unresolved = self.conn.execute(
                 """SELECT intent_id,status FROM execution_intents
@@ -589,7 +589,7 @@ class Database:
             ).fetchall()
             if unresolved_rows:
                 protection_repair_only = (
-                    purpose == "CAMPAIGN_PROTECTION"
+                    purpose in {"CAMPAIGN_PROTECTION", "CAMPAIGN_ENTRY_CANCEL"}
                     and all(str(row["status"]).upper() == "PROTECTION_PENDING" for row in unresolved_rows)
                 )
                 if not protection_repair_only:
