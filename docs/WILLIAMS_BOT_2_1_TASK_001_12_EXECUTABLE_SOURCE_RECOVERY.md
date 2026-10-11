@@ -140,4 +140,4 @@ Android runtime and Futures must be audited separately. Python CI does not estab
 
 **Decision: PASS — EXECUTABLE BASELINE VERIFIED.** The original source and validation SHA match, remote execution is evidenced by exact-SHA completed runs and retrievable logs, and the key current Spot financial write paths are mapped sufficiently to define the minimum implementation slice. This decision opens the gate to prepare TASK 001.13; it does not approve current financial correctness or production trading.
 
-**Report commit SHA:** to be filled after this document is committed. The report commit itself is documentation-only and is not represented as the tested baseline SHA.
+**Report commit identity:** recorded in Git commit metadata for this documentation-only change; the final report commit SHA is provided in the task result. It is distinct from the tested baseline SHA and is not represented as a validation run.
