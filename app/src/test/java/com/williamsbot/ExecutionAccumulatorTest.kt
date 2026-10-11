@@ -28,8 +28,6 @@ class ExecutionAccumulatorTest {
         assertEquals(1, s.fills)
         assertEquals("0.1", s.feeUsdt.toPlainString())
     }
-}
-
 
     @Test
     fun duplicateTradeIdWithDifferentEventTimeIsStillOneFill() {
@@ -91,3 +89,4 @@ class ExecutionAccumulatorTest {
         assertEquals(1, btc.fills)
         assertEquals(1, eth.fills)
     }
+}

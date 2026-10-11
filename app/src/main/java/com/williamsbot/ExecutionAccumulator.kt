@@ -110,15 +110,9 @@ class ExecutionAccumulator {
                     state.feeUsdt = state.feeUsdt.add(commission.multiply(price))
                 else -> {
                     state.feeKnown = false
-                    // This optional value is diagnostic only; an exit/current price
-                    // does not establish historical third-asset fee valuation.
-                    if (exitPriceForUnknownFee != null &&
-                        exitPriceForUnknownFee > BigDecimal.ZERO
-                    ) {
-                        state.feeUsdt = state.feeUsdt.add(
-                            commission.multiply(exitPriceForUnknownFee)
-                        )
-                    }
+                    // Preserve the original third-asset commission in the event
+                    // ledger. An exit/current price is not historical conversion
+                    // evidence; feeUsdt stays unresolved and feeKnown stays false.
                 }
             }
         }
