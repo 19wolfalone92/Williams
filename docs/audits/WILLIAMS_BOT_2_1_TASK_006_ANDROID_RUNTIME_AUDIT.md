@@ -238,3 +238,21 @@ All CI results must be re-fetched for one final branch SHA after code changes. N
 6. Re-run every required workflow after the fixes and record the same final source SHA, run IDs and conclusions. Physical Android process-death and Binance Spot Testnet remain **NOT VERIFIED** until actually performed.
 
 **Decision for TASK 006.5:** BLOCKED — NOT ACCEPTED. No Mainnet use, real trades, PR merge, or `main` changes.
+
+
+### TASK 006.5 implementation update — 2026-10-11
+
+After the audit above, the following narrow corrections were committed on the same task branch:
+
+- `trader.py`: the authoritative execution helper now routes inline or `myTrades` fills through `accumulate_order()`, ensuring per-trade totals are checked against the exchange order's executed quantity and cumulative quote quantity instead of accepting a non-empty fill list by itself.
+- `execution_accumulator.py`: an unknown/unvalued commission asset now blocks even when the reported commission amount is zero. A zero numeric fee does not establish that an unknown asset is correctly classified.
+- `test_financial_integrity.py`: added a regression for zero commission with an unknown asset.
+- `test_integration_bindings.py`: accumulator fixtures now include authoritative trade IDs and order totals.
+- `test_multi_position_execution.py`: the synthetic exchange response now keeps rounded executed quantity, cumulative quote amount, and fill-level quote quantity consistent.
+- `test_multi_position_lifecycle.py`: partial manual-exit fixture provides explicit synthetic trade history rather than relying on aggregate order status.
+- `recovery_test.py`: offline recovery client now exposes per-order synthetic trade history with stable identities and explicit fee fields.
+- This report was extended with the verified 006.5 blockers and path inventory.
+
+**Latest source head before the report refresh:** `18071fdee99c792a7c5752b85f284b8f070e1948`. The current source head must be re-read after this report commit. Workflow runs for the latest code commits were still queued or cancelled due to subsequent pushes at the time of this update; therefore the five earlier failures are known evidence, and no post-fix green result is claimed. The 006.5 acceptance status remains **BLOCKED — NOT ACCEPTED** until the exact final head's required workflows complete successfully and the global financial-recovery proof is implemented.
+
+No production gate was bypassed and no Mainnet/live trading was used.
