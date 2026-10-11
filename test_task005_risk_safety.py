@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import multiprocessing
+import hashlib
 from datetime import datetime as RealDatetime, timezone
 from dataclasses import replace
 from decimal import Decimal
@@ -612,8 +613,8 @@ def test_independent_processes_cannot_both_claim_emergency_sell_submit_permissio
 
 
 
-def _prepare_emergency_sink_intent(db):
-    intent = _emergency_intent_fixture()
+def _prepare_emergency_sink_intent(db, **overrides):
+    intent = _emergency_intent_fixture(**overrides)
     db.claim_emergency_sell_intent(intent)
     db.transition_emergency_sell_intent(intent["operation_id"], "SUBMITTING")
     return intent
@@ -636,7 +637,9 @@ def test_emergency_sell_rest_sink_consumes_durable_permit_exactly_once():
 
     db = Database(":memory:")
     try:
-        intent = _prepare_emergency_sink_intent(db)
+        intent = _prepare_emergency_sink_intent(
+            db, account_scope=hashlib.sha256(b"fake-api-key").hexdigest()[:24]
+        )
         client = BinanceSpotClient("fake-api-key", "fake-api-secret", testnet=True)
         client.emergency_sell_authorizer = db.authorize_emergency_sell_mutation
         calls = []
