@@ -1,0 +1,2009 @@
+##[group]Run python full_safety_audit.py
+2026-10-11T09:43:29.3058099Z [36;1mpython full_safety_audit.py[0m
+2026-10-11T09:43:29.3094100Z shell: /usr/bin/bash -e {0}
+2026-10-11T09:43:29.3094477Z env:
+2026-10-11T09:43:29.3094804Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-11T09:43:29.3095265Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-11T09:43:29.3095769Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-11T09:43:29.3096157Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-11T09:43:29.3096551Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-11T09:43:29.3096973Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-11T09:43:29.3097302Z ##[endgroup]
+2026-10-11T09:43:29.7437678Z 
+2026-10-11T09:43:29.7438893Z ==========================================================================================
+2026-10-11T09:43:29.7440356Z WILLIAMS FULL STATIC SAFETY AUDIT
+2026-10-11T09:43:29.7441438Z ==========================================================================================
+2026-10-11T09:43:29.7442421Z ROOT: /home/runner/work/Williams/Williams
+2026-10-11T09:43:29.7443143Z Python files: 119
+2026-10-11T09:43:29.7443767Z All files: 233
+2026-10-11T09:43:29.7444202Z 
+2026-10-11T09:43:29.7444982Z ==========================================================================================
+2026-10-11T09:43:29.7445777Z 1. PYTHON SYNTAX
+2026-10-11T09:43:29.7446142Z ==========================================================================================
+2026-10-11T09:43:29.7446864Z [PASS] All Python files parse successfully
+2026-10-11T09:43:29.7447067Z 
+2026-10-11T09:43:29.7447286Z ==========================================================================================
+2026-10-11T09:43:29.7447646Z 2. EXCHANGE / ORDER CALL AUDIT
+2026-10-11T09:43:29.7448055Z ==========================================================================================
+2026-10-11T09:43:29.7448448Z trader.py:775: self.place_oco(
+2026-10-11T09:43:29.7448784Z trader.py:1016: def market_buy(self, quote):
+2026-10-11T09:43:29.7449320Z trader.py:1091: lambda: self.client.order(
+2026-10-11T09:43:29.7449736Z trader.py:1167: def place_oco(self, qty, entry_price, trade_id=None):
+2026-10-11T09:43:29.7450189Z trader.py:1386: order, qty, entry = self.market_buy(quote)
+2026-10-11T09:43:29.7450582Z trader.py:1408: self.place_oco(
+2026-10-11T09:43:29.7451002Z full_safety_audit.py:241: # Entry execution is performed by market_buy().
+2026-10-11T09:43:29.7451669Z full_safety_audit.py:243: # Exit execution is handled by native OCO via place_oco().
+2026-10-11T09:43:29.7452163Z full_safety_audit.py:270: body.find(".order("),
+2026-10-11T09:43:29.7452551Z safe_smoke_test.py:226: t.market_buy(10)
+2026-10-11T09:43:29.7452912Z campaign_execution.py:1175: lambda: self.client.cancel_order(
+2026-10-11T09:43:29.7453454Z apply_autoscan_integration.py:235: - DRY_RUN never reaches market_buy();
+2026-10-11T09:43:29.7453951Z apply_autoscan_integration.py:569: order, qty, entry = self.market_buy(quote)
+2026-10-11T09:43:29.7454440Z apply_autoscan_integration.py:591: self.place_oco(
+2026-10-11T09:43:29.7454874Z apply_autoscan_integration.py:705: order, qty, entry = self.market_buy(quote)
+2026-10-11T09:43:29.7455291Z apply_autoscan_integration.py:727: self.place_oco(
+2026-10-11T09:43:29.7455758Z apply_autoscan_integration.py:787: "self.market_buy(quote)",
+2026-10-11T09:43:29.7456162Z apply_autoscan_integration.py:788: "self.place_oco(",
+2026-10-11T09:43:29.7456631Z test_chaos_hardening.py:38: client.order("BTCUSDT", "BUY", "MARKET", quote_order_qty="25")
+2026-10-11T09:43:29.7457167Z test_chaos_hardening.py:75: client.order("BTCUSDT", "BUY", "MARKET", quote_order_qty="25")
+2026-10-11T09:43:29.7457704Z recovery_oco_failure_test.py:113: order,qty,entry=t.market_buy(100)
+2026-10-11T09:43:29.7458222Z recovery_oco_failure_test.py:125: t.place_oco(qty,entry,trade_id=tid)
+2026-10-11T09:43:29.7459132Z test_execution_barrier_fail_closed.py:211: client.order("BTCUSDT", "BUY", "MARKET", quantity="0.001", new_client_order_id="CID_DIRECT")
+2026-10-11T09:43:29.7459819Z test_execution_barrier_fail_closed.py:443: client.order(
+2026-10-11T09:43:29.7460276Z test_execution_barrier_fail_closed.py:451: return client.cancel_order(
+2026-10-11T09:43:29.7460896Z mock_exchange.py:125: def market_buy(self, symbol, quote_order_qty=None, quantity=None, client_order_id=None):
+2026-10-11T09:43:29.7461519Z mock_exchange.py:137: def market_sell(self, symbol, quantity, client_order_id=None):
+2026-10-11T09:43:29.7462096Z mock_exchange.py:167: return self.market_buy(
+2026-10-11T09:43:29.7462506Z mock_exchange.py:173: return self.market_sell(
+2026-10-11T09:43:29.7462936Z mock_exchange.py:249: self.cancel_order(symbol, order_id=cancel_order_id)
+2026-10-11T09:43:29.7464149Z recovery_test.py:73: c=FakeClient();t=new_trader(os.path.join(d,'x.sqlite3'),c);seed(t,c);t.place_oco(1,100);mark_exit(c,price);r=new_trader(os.path.join(d,'x.sqlite3'),c);r.recover_state();assert r.db.open_trade() is None;assert abs(float(r.db.conn.execute('select exit_price from trades').fetchone()[0])-price)<1e-9
+2026-10-11T09:43:29.7465763Z recovery_test.py:81: c=FakeClient();t=new_trader(os.path.join(d,'x.sqlite3'),c);seed(t,c);t.place_oco(1,100);r=new_trader(os.path.join(d,'x.sqlite3'),c);r.recover_state();assert r.db.open_trade() is not None;assert c.created_oco_count==1
+2026-10-11T09:43:29.7467088Z recovery_test.py:107: c=FakeClient();t=new_trader(os.path.join(d,'x.sqlite3'),c);seed(t,c);trade=t.db.open_trade();res,_,_=t.place_oco(1,100,trade_id=trade['id']);row=t.db.open_trade();assert str(row['exit_order_list_id'])==str(res['orderListId'])
+2026-10-11T09:43:29.7468016Z test_buy_safety.py:45: t.market_buy(100.0)
+2026-10-11T09:43:29.7468387Z test_buy_safety.py:54: t.market_buy(100.0)
+2026-10-11T09:43:29.7468720Z test_buy_safety.py:65: t.market_buy(100.0)
+2026-10-11T09:43:29.7469178Z test_four_echelons.py:110: client.order("BTCUSDT", "BUY", "MARKET", quote_order_qty="25")
+2026-10-11T09:43:29.7469648Z binance_client.py:372: result = self.order(
+2026-10-11T09:43:29.7470034Z test_binance_secret_redaction.py:94: mainnet_client.order(
+2026-10-11T09:43:29.7470539Z tests/test_quant_layer.py:131: order = exchange.market_buy("BTCUSDT", quote_order_qty=100)
+2026-10-11T09:43:29.7471100Z tests/test_quant_layer.py:135: exchange.market_buy("BTCUSDT", quote_order_qty=100)
+2026-10-11T09:43:29.7471683Z tests/test_quant_layer.py:147: partial = exchange.market_sell("BTCUSDT", quantity=0.1)
+2026-10-11T09:43:29.7471996Z 
+2026-10-11T09:43:29.7472150Z ==========================================================================================
+2026-10-11T09:43:29.7472545Z 3. ALL Trader() CONSTRUCTIONS
+2026-10-11T09:43:29.7473163Z ==========================================================================================
+2026-10-11T09:43:29.7473565Z run_bot.py:2: if __name__=='__main__': Trader().run()
+2026-10-11T09:43:29.7473929Z trader.py:1452: if __name__=='__main__':Trader().run()
+2026-10-11T09:43:29.7474317Z server.py:203: self.trader = Trader(
+2026-10-11T09:43:29.7474709Z full_safety_audit.py:116: section("3. ALL Trader() CONSTRUCTIONS")
+2026-10-11T09:43:29.7475077Z safe_smoke_test.py:195: t = trader.Trader(
+2026-10-11T09:43:29.7475480Z test_selected_symbol_prepare.py:27: trader = Trader(testnet=True)
+2026-10-11T09:43:29.7475922Z recovery_oco_failure_test.py:96: t=Trader(testnet=True)
+2026-10-11T09:43:29.7476342Z recovery_oco_failure_test.py:133: t2=Trader(testnet=True)
+2026-10-11T09:43:29.7476734Z audit_scanner_trader.py:284: "Trader(" in server
+2026-10-11T09:43:29.7477146Z test_scanner_trader_dry_run.py:27: trader = Trader(testnet=True)
+2026-10-11T09:43:29.7477391Z 
+2026-10-11T09:43:29.7477561Z ==========================================================================================
+2026-10-11T09:43:29.7477906Z 4. DATABASE / SQLITE USAGES
+2026-10-11T09:43:29.7478268Z ==========================================================================================
+2026-10-11T09:43:29.7478899Z fix_test_isolation.py:18: """self.db=Database(os.getenv('DB_PATH','data/trader.sqlite3'))""",
+2026-10-11T09:43:29.7479360Z fix_test_isolation.py:19: """self.db=Database(
+2026-10-11T09:43:29.7479797Z test_campaign_execution.py:90: db = Database(os.path.join(d, "campaign.sqlite3"))
+2026-10-11T09:43:29.7480318Z test_campaign_execution.py:112: db = Database(os.path.join(d, "campaign.sqlite3"))
+2026-10-11T09:43:29.7480870Z test_campaign_execution.py:142: db = Database(os.path.join(d, "campaign.sqlite3"))
+2026-10-11T09:43:29.7481355Z test_campaign_execution.py:163: db = Database(os.path.join(d, "campaign.sqlite3"))
+2026-10-11T09:43:29.7482201Z test_campaign_execution.py:173: db2 = Database(os.path.join(d, "campaign.sqlite3"))
+2026-10-11T09:43:29.7482705Z test_campaign_execution.py:183: db = Database(os.path.join(d, "campaign.sqlite3"))
+2026-10-11T09:43:29.7483286Z test_multi_position_lifecycle.py:183: db = Database(os.environ["WILLIAMS_DB_PATH"])
+2026-10-11T09:43:29.7484029Z test_multi_position_lifecycle.py:307: db = Database(os.environ["WILLIAMS_DB_PATH"])
+2026-10-11T09:43:29.7484813Z test_multi_position_lifecycle.py:351: db = Database(os.environ["WILLIAMS_DB_PATH"])
+2026-10-11T09:43:29.7485764Z test_multi_position_lifecycle.py:389: db = Database(os.environ["WILLIAMS_DB_PATH"])
+2026-10-11T09:43:29.7486260Z test_multi_position_lifecycle.py:413: db = Database(os.environ["WILLIAMS_DB_PATH"])
+2026-10-11T09:43:29.7486856Z test_multi_position_lifecycle.py:511: db = Database(str(tmp_path / "manual-partial.sqlite3"))
+2026-10-11T09:43:29.7487429Z test_multi_position_lifecycle.py:580: db = Database(str(tmp_path / "emergency-partial.sqlite3"))
+2026-10-11T09:43:29.7487889Z feature_store.py:145: self._conn = sqlite3.connect(
+2026-10-11T09:43:29.7488307Z trader.py:42: self.db=Database(
+2026-10-11T09:43:29.7489199Z ws_hub.py:12: self.symbol=os.getenv('SYMBOL','BTCUSDT').upper(); self.interval=os.getenv('INTERVAL','1h'); self.testnet=os.getenv('TESTNET','true').lower()=='true'; self.api_key=os.getenv('BINANCE_API_KEY',''); self.api_secret=os.getenv('BINANCE_API_SECRET',''); self.db=Database(
+2026-10-11T09:43:29.7490185Z db.py:14: self.conn = sqlite3.connect(path, check_same_thread=False, timeout=20)
+2026-10-11T09:43:29.7490639Z full_safety_audit.py:136: or "sqlite3.connect" in line
+2026-10-11T09:43:29.7491017Z full_safety_audit.py:439: con = sqlite3.connect(db)
+2026-10-11T09:43:29.7491446Z safe_smoke_test.py:16: con = sqlite3.connect(path)
+2026-10-11T09:43:29.7492175Z test_trade_journal.py:7: db=Database(str(tmp_path/"t.sqlite3"))
+2026-10-11T09:43:29.7492572Z test_atomic_real_db.py:19: db = Database(path)
+2026-10-11T09:43:29.7493012Z test_execution_architecture.py:56: db = Database(str(tmp_path / "state.sqlite3"))
+2026-10-11T09:43:29.7493569Z test_multi_position_execution.py:161: db=Database(str(tmp_path / "market-lot.sqlite3")),
+2026-10-11T09:43:29.7494089Z test_multi_position_execution.py:182: db = Database(str(tmp_path / "trades.sqlite3"))
+2026-10-11T09:43:29.7494635Z test_integration_bindings.py:213: db = Database(str(tmp_path / "partial-entry.sqlite3"))
+2026-10-11T09:43:29.7495159Z test_integration_bindings.py:237: db = Database(str(tmp_path / "partial-oco.sqlite3"))
+2026-10-11T09:43:29.7495708Z test_integration_bindings.py:283: db = Database(str(tmp_path / "dedupe.sqlite3"))
+2026-10-11T09:43:29.7496234Z test_integration_bindings.py:354: db = Database(str(tmp_path / "active-oco.sqlite3"))
+2026-10-11T09:43:29.7496765Z test_integration_bindings.py:431: db = Database(str(tmp_path / "active-partial-oco.sqlite3"))
+2026-10-11T09:43:29.7624362Z recovery_test.py:59: t=Trader.__new__(Trader);t.symbol='BTCUSDT';t.interval='1h';t.position_fraction=.25;t.stop_pct=.02;t.target_pct=.04;t.poll_seconds=1;t.risk_per_trade_pct=.01;t.max_daily_loss_pct=.03;t.max_trades_day=5;t.max_consecutive_losses=3;t.cooldown_minutes=30;t.min_risk_reward=1.5;t.atr_period=14;t.max_atr_pct=.08;t.max_spread_pct=.0015;t.require_htf_confirmation=False;t.htf_interval='4h';t.db=Database(path);t.client=c;t.config=type('_Config',(),{'structural_timeframes':('1d','4h','1h','15m')})();t.context_cache=_FakeContextCache();t.execution_barrier=_FakeExecutionBarrier();t.equity_breaker=_FakeEquityBreaker();t.refresh_execution_context=lambda symbol:_FakeSnapshot();t.db.state_set('active_symbol','BTCUSDT');t.db.state_set('foreign_base_balance:BTCUSDT',0.0);t.filters={'LOT_SIZE':{'minQty':'0.001','stepSize':'0.001'},'PRICE_FILTER':{'tickSize':'0.01'},'MIN_NOTIONAL':{'minNotional':'10'}};t.symbol_rules=SymbolRules(symbol='BTCUSDT',base_asset='BTC',quote_asset='USDT',min_qty=Decimal('0.001'),max_qty=Decimal('1000'),step_size=Decimal('0.001'),min_price=Decimal('0.01'),max_price=Decimal('1000000'),tick_size=Decimal('0.01'),min_notional=Decimal('10'));t.base_asset='BTC';t.quote_asset='USDT';t.recovered=False;t.notify=lambda m:None;return t
+2026-10-11T09:43:29.7627906Z test_campaign_engine.py:41: db = Database(os.path.join(d, "w.sqlite3"))
+2026-10-11T09:43:29.7628411Z test_campaign_engine.py:70: db = Database(os.path.join(d, "w.sqlite3"))
+2026-10-11T09:43:29.7628900Z test_campaign_engine.py:92: db = Database(os.path.join(d, "w.sqlite3"))
+2026-10-11T09:43:29.7629320Z portfolio_trader.py:48: self.db = db or Database()
+2026-10-11T09:43:29.7629826Z test_db_isolation.py:15: # Make sure tests using the normal Database() constructor
+2026-10-11T09:43:29.7630322Z test_db_isolation.py:36: db = Database(str(tmp_path / "claim.sqlite3"))
+2026-10-11T09:43:29.7630582Z 
+2026-10-11T09:43:29.7630766Z ==========================================================================================
+2026-10-11T09:43:29.7631161Z 5. DATABASE ENVIRONMENT PATHS
+2026-10-11T09:43:29.7631594Z ==========================================================================================
+2026-10-11T09:43:29.7632257Z fix_test_isolation.py:13: # 1. Trader должен уважать WILLIAMS_DB_PATH
+2026-10-11T09:43:29.7632751Z fix_test_isolation.py:18: """self.db=Database(os.getenv('DB_PATH','data/trader.sqlite3'))""",
+2026-10-11T09:43:29.7633307Z fix_test_isolation.py:20: os.getenv('WILLIAMS_DB_PATH')
+2026-10-11T09:43:29.7633683Z fix_test_isolation.py:21: or os.getenv('DB_PATH')
+2026-10-11T09:43:29.7634074Z fix_test_isolation.py:22: or 'data/trader.sqlite3'
+2026-10-11T09:43:29.7634496Z Williams_FULL_AUDIT.txt:244: ./data/local_test/trader.sqlite3
+2026-10-11T09:43:29.7634965Z Williams_FULL_AUDIT.txt:245: ./data/local_test/trader.sqlite3-shm
+2026-10-11T09:43:29.7635439Z Williams_FULL_AUDIT.txt:246: ./data/local_test/trader.sqlite3-wal
+2026-10-11T09:43:29.7635901Z Williams_FULL_AUDIT.txt:247: ./data/local_test/trader.sqlite3.before_recovery_fix
+2026-10-11T09:43:29.7636443Z Williams_FULL_AUDIT.txt:248: ./data/local_test/trader.sqlite3.http_recovery_test
+2026-10-11T09:43:29.7636991Z Williams_FULL_AUDIT.txt:258: ./data/test_backups/trader.sqlite3.before_clean_install_20261004_082910
+2026-10-11T09:43:29.7637571Z Williams_FULL_AUDIT.txt:259: ./data/test_backups/trader.sqlite3.before_full_test_20261004_044331
+2026-10-11T09:43:29.7638188Z Williams_FULL_AUDIT.txt:260: ./data/test_backups/trader.sqlite3.before_full_test_20261004_044331-shm
+2026-10-11T09:43:29.7638801Z Williams_FULL_AUDIT.txt:261: ./data/test_backups/trader.sqlite3.before_full_test_20261004_044331-wal
+2026-10-11T09:43:29.7639414Z Williams_FULL_AUDIT.txt:262: ./data/test_backups/trader.sqlite3.before_full_test_20261004_045152
+2026-10-11T09:43:29.7640000Z Williams_FULL_AUDIT.txt:263: ./data/test_backups/trader.sqlite3.before_full_test_20261004_045152-shm
+2026-10-11T09:43:29.7640634Z Williams_FULL_AUDIT.txt:264: ./data/test_backups/trader.sqlite3.before_full_test_20261004_045152-wal
+2026-10-11T09:43:29.7641204Z Williams_FULL_AUDIT.txt:265: ./data/test_backups/trader.sqlite3.before_restore_20261004_042900
+2026-10-11T09:43:29.7642043Z Williams_FULL_AUDIT.txt:266: ./data/test_backups/trader.sqlite3.before_restore_20261004_042900-shm
+2026-10-11T09:43:29.7642692Z Williams_FULL_AUDIT.txt:267: ./data/test_backups/trader.sqlite3.before_restore_20261004_042900-wal
+2026-10-11T09:43:29.7643285Z Williams_FULL_AUDIT.txt:268: ./data/test_backups/trader.sqlite3.before_test_isolation_20261004_042712
+2026-10-11T09:43:29.7644006Z Williams_FULL_AUDIT.txt:269: ./data/test_backups/trader.sqlite3.before_test_isolation_20261004_042712-shm
+2026-10-11T09:43:29.7644620Z Williams_FULL_AUDIT.txt:270: ./data/test_backups/trader.sqlite3.before_test_isolation_20261004_042712-wal
+2026-10-11T09:43:29.7645253Z Williams_FULL_AUDIT.txt:271: ./data/test_backups/trader.sqlite3.before_test_suite_fix_20261004_043233
+2026-10-11T09:43:29.7645858Z Williams_FULL_AUDIT.txt:272: ./data/test_backups/trader.sqlite3.before_test_suite_fix_20261004_043233-shm
+2026-10-11T09:43:29.7646463Z Williams_FULL_AUDIT.txt:273: ./data/test_backups/trader.sqlite3.before_test_suite_fix_20261004_043233-wal
+2026-10-11T09:43:29.7647145Z Williams_FULL_AUDIT.txt:274: ./data/test_backups/trader.sqlite3.before_wrong_restore_20261004_043303
+2026-10-11T09:43:29.7647734Z Williams_FULL_AUDIT.txt:275: ./data/test_backups/trader.sqlite3.before_wrong_restore_20261004_043303-shm
+2026-10-11T09:43:29.7648344Z Williams_FULL_AUDIT.txt:276: ./data/test_backups/trader.sqlite3.before_wrong_restore_20261004_043303-wal
+2026-10-11T09:43:29.7648986Z Williams_FULL_AUDIT.txt:277: ./data/test_backups/trader.sqlite3.contaminated_before_clean_20261004_082723
+2026-10-11T09:43:29.7649596Z Williams_FULL_AUDIT.txt:281: ./data/test_tmp/trader.sqlite3.clean_20261004_082723
+2026-10-11T09:43:29.7650048Z Williams_FULL_AUDIT.txt:284: ./data/trader.sqlite3
+2026-10-11T09:43:29.7650453Z Williams_FULL_AUDIT.txt:2118: 29	            os.getenv('WILLIAMS_DB_PATH')
+2026-10-11T09:43:29.7650941Z Williams_FULL_AUDIT.txt:2119: 30	            or os.getenv('DB_PATH')
+2026-10-11T09:43:29.7651377Z Williams_FULL_AUDIT.txt:2120: 31	            or 'data/trader.sqlite3'
+2026-10-11T09:43:29.7652485Z Williams_FULL_AUDIT.txt:2162: 73	        self.db.log_event('INFO','startup','Trader initialized',{'symbol':self.symbol,'interval':self.interval,'testnet':self.client.testnet}); self.ensure_foreign_base_balance_baseline(); self.recover_state()
+2026-10-11T09:43:29.7653437Z Williams_FULL_AUDIT.txt:2344: 255	        key = f'foreign_base_balance:{self.symbol}'
+2026-10-11T09:43:29.7653990Z Williams_FULL_AUDIT.txt:2348: 259	        # older databases/tests used the global foreign_base_balance key.
+2026-10-11T09:43:29.7654554Z Williams_FULL_AUDIT.txt:2358: 269	            legacy = self.db.state_get('foreign_base_balance')
+2026-10-11T09:43:29.7655128Z Williams_FULL_AUDIT.txt:2368: 279	                self.db.state_delete('foreign_base_balance')
+2026-10-11T09:43:29.7655701Z Williams_FULL_AUDIT.txt:2372: 283	                f'foreign_base_balance baseline is not initialized for {self.symbol}'
+2026-10-11T09:43:29.7656330Z Williams_FULL_AUDIT.txt:2377: 288	    def ensure_foreign_base_balance_baseline(self, total_balance=None):
+2026-10-11T09:43:29.7656874Z Williams_FULL_AUDIT.txt:2378: 289	        key = f'foreign_base_balance:{self.symbol}'
+2026-10-11T09:43:29.7657440Z Williams_FULL_AUDIT.txt:2388: 299	        legacy = self.db.state_get('foreign_base_balance')
+2026-10-11T09:43:29.7657968Z Williams_FULL_AUDIT.txt:2398: 309	            self.db.state_delete('foreign_base_balance')
+2026-10-11T09:43:29.7658539Z Williams_FULL_AUDIT.txt:2408: 319	            self.db.state_set(f'foreign_base_balance:{self.symbol}', float(total_balance))
+2026-10-11T09:43:29.7659725Z Williams_FULL_AUDIT.txt:2418: 329	            'Cannot initialize foreign_base_balance while a managed position or unresolved entry exists'
+2026-10-11T09:43:29.7660339Z Williams_FULL_AUDIT.txt:2519: 430	        baseline_key=f'foreign_base_balance:{self.symbol}'
+2026-10-11T09:43:29.7660907Z Williams_FULL_AUDIT.txt:2541: 452	                self.ensure_foreign_base_balance_baseline(position_qty)
+2026-10-11T09:43:29.7661478Z Williams_FULL_AUDIT.txt:2895: 806	        self.ensure_foreign_base_balance_baseline()
+2026-10-11T09:43:29.7662037Z Williams_FULL_AUDIT.txt:3567: 13	            os.getenv('WILLIAMS_DB_PATH')
+2026-10-11T09:43:29.7662479Z Williams_FULL_AUDIT.txt:3568: 14	            or os.getenv('DB_PATH')
+2026-10-11T09:43:29.7662899Z Williams_FULL_AUDIT.txt:3569: 15	            or 'data/trader.sqlite3'
+2026-10-11T09:43:29.7663554Z Williams_FULL_AUDIT.txt:4064: 10	        path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
+2026-10-11T09:43:29.7664521Z Williams_FULL_AUDIT.txt:5239: ./trader.py:73:        self.db.log_event('INFO','startup','Trader initialized',{'symbol':self.symbol,'interval':self.interval,'testnet':self.client.testnet}); self.ensure_foreign_base_balance_baseline(); self.recover_state()
+2026-10-11T09:43:29.7665588Z Williams_FULL_AUDIT.txt:5455: ./trader.py:329:            'Cannot initialize foreign_base_balance while a managed position or unresolved entry exists'
+2026-10-11T09:43:29.7666332Z Williams_FULL_AUDIT.txt:5497: ./trader.py:452:                self.ensure_foreign_base_balance_baseline(position_qty)
+2026-10-11T09:43:29.7668517Z Williams_FULL_AUDIT.txt:5605: ./recovery_test.py:24:    t=Trader.__new__(Trader);t.symbol='BTCUSDT';t.interval='1h';t.position_fraction=.25;t.stop_pct=.02;t.target_pct=.04;t.poll_seconds=1;t.risk_per_trade_pct=.01;t.max_daily_loss_pct=.03;t.max_trades_day=5;t.max_consecutive_losses=3;t.cooldown_minutes=30;t.min_risk_reward=1.5;t.atr_period=14;t.max_atr_pct=.08;t.max_spread_pct=.0015;t.require_htf_confirmation=False;t.htf_interval='4h';t.db=Database(path);t.client=c;t.db.state_set('active_symbol','BTCUSDT');t.db.state_set('foreign_base_balance:BTCUSDT',0.0);t.filters={'LOT_SIZE':{'minQty':'0.001','stepSize':'0.001'},'PRICE_FILTER':{'tickSize':'0.01'},'MIN_NOTIONAL':{'minNotional':'10'}};t.base_asset='BTC';t.quote_asset='USDT';t.recovered=False;t.notify=lambda m:None;return t
+2026-10-11T09:43:29.7671193Z Williams_FULL_AUDIT.txt:5611: ./recovery_test.py:50:        c=FakeClient(base_free=2);t=new_trader(os.path.join(d,'x.sqlite3'),c);t.db.state_set('foreign_base_balance:BTCUSDT',2.0);t.recover_state();assert t.db.open_trade() is None;assert t.state()=='FLAT';assert c.created_oco_count==0
+2026-10-11T09:43:29.7672265Z test_multi_position_lifecycle.py:182: os.environ["WILLIAMS_DB_PATH"] = str(tmp_path / "multi.sqlite3")
+2026-10-11T09:43:29.7672894Z test_multi_position_lifecycle.py:183: db = Database(os.environ["WILLIAMS_DB_PATH"])
+2026-10-11T09:43:29.7673453Z test_multi_position_lifecycle.py:306: os.environ["WILLIAMS_DB_PATH"] = str(tmp_path / "restore.sqlite3")
+2026-10-11T09:43:29.7674051Z test_multi_position_lifecycle.py:307: db = Database(os.environ["WILLIAMS_DB_PATH"])
+2026-10-11T09:43:29.7674599Z test_multi_position_lifecycle.py:350: os.environ["WILLIAMS_DB_PATH"] = str(tmp_path / "pending.sqlite3")
+2026-10-11T09:43:29.7675195Z test_multi_position_lifecycle.py:351: db = Database(os.environ["WILLIAMS_DB_PATH"])
+2026-10-11T09:43:29.7675767Z test_multi_position_lifecycle.py:388: os.environ["WILLIAMS_DB_PATH"] = str(tmp_path / "stale_reconcile.sqlite3")
+2026-10-11T09:43:29.7676339Z test_multi_position_lifecycle.py:389: db = Database(os.environ["WILLIAMS_DB_PATH"])
+2026-10-11T09:43:29.7676978Z test_multi_position_lifecycle.py:412: os.environ["WILLIAMS_DB_PATH"] = str(tmp_path / "unresolved_reconcile.sqlite3")
+2026-10-11T09:43:29.7972990Z test_multi_position_lifecycle.py:413: db = Database(os.environ["WILLIAMS_DB_PATH"])
+2026-10-11T09:43:29.7973784Z docker-compose.yml:11: WILLIAMS_DB_PATH: /app/data/trader.sqlite3
+2026-10-11T09:43:29.7974258Z trader.py:43: os.getenv('WILLIAMS_DB_PATH')
+2026-10-11T09:43:29.7974748Z trader.py:44: or os.getenv('DB_PATH')
+2026-10-11T09:43:29.7975078Z trader.py:45: or 'data/trader.sqlite3'
+2026-10-11T09:43:29.7975458Z trader.py:262: self.ensure_foreign_base_balance_baseline()
+2026-10-11T09:43:29.7975907Z trader.py:502: key = f'foreign_base_balance:{self.symbol}'
+2026-10-11T09:43:29.7976356Z trader.py:506: # older databases/tests used the global foreign_base_balance key.
+2026-10-11T09:43:29.7976888Z trader.py:516: legacy = self.db.state_get('foreign_base_balance')
+2026-10-11T09:43:29.7977321Z trader.py:526: self.db.state_delete('foreign_base_balance')
+2026-10-11T09:43:29.7977834Z trader.py:530: f'foreign_base_balance baseline is not initialized for {self.symbol}'
+2026-10-11T09:43:29.7978404Z trader.py:535: def ensure_foreign_base_balance_baseline(self, total_balance=None):
+2026-10-11T09:43:29.7979116Z trader.py:536: key = f'foreign_base_balance:{self.symbol}'
+2026-10-11T09:43:29.7979554Z trader.py:546: legacy = self.db.state_get('foreign_base_balance')
+2026-10-11T09:43:29.7979986Z trader.py:556: self.db.state_delete('foreign_base_balance')
+2026-10-11T09:43:29.7980479Z trader.py:566: self.db.state_set(f'foreign_base_balance:{self.symbol}', float(total_balance))
+2026-10-11T09:43:29.7981078Z trader.py:576: 'Cannot initialize foreign_base_balance while a managed position or unresolved entry exists'
+2026-10-11T09:43:29.7981894Z trader.py:677: baseline_key=f'foreign_base_balance:{self.symbol}'
+2026-10-11T09:43:29.7982431Z trader.py:735: self.ensure_foreign_base_balance_baseline(position_qty)
+2026-10-11T09:43:29.7982895Z trader.py:878: if os.getenv("WILLIAMS_TEST_DB") and not hasattr(self.client, "klines"):
+2026-10-11T09:43:29.7983476Z trader.py:1085: if not (os.getenv("WILLIAMS_TEST_DB") and not hasattr(self.client, "book_ticker")):
+2026-10-11T09:43:29.7983969Z ws_hub.py:13: os.getenv('WILLIAMS_DB_PATH')
+2026-10-11T09:43:29.7984337Z ws_hub.py:14: or os.getenv('DB_PATH')
+2026-10-11T09:43:29.7984725Z ws_hub.py:15: or 'data/trader.sqlite3'
+2026-10-11T09:43:29.7985563Z db.py:12: path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
+2026-10-11T09:43:29.7986031Z full_safety_audit.py:146: "WILLIAMS_DB_PATH",
+2026-10-11T09:43:29.7986396Z full_safety_audit.py:147: "WILLIAMS_TEST_DB",
+2026-10-11T09:43:29.7986743Z full_safety_audit.py:148: "DB_PATH",
+2026-10-11T09:43:29.7987090Z full_safety_audit.py:149: "trader.sqlite3",
+2026-10-11T09:43:29.7987436Z full_safety_audit.py:150: "foreign_base_balance",
+2026-10-11T09:43:29.7987819Z full_safety_audit.py:343: r"foreign_base_balance\s*=",
+2026-10-11T09:43:29.7988247Z full_safety_audit.py:344: r"state_set\(['\"]foreign_base_balance",
+2026-10-11T09:43:29.7988719Z full_safety_audit.py:345: r"state_get\(['\"]foreign_base_balance",
+2026-10-11T09:43:29.7989161Z full_safety_audit.py:346: r"active_symbol.*foreign_base_balance",
+2026-10-11T09:43:29.7989592Z full_safety_audit.py:427: db = ROOT / "data" / "trader.sqlite3"
+2026-10-11T09:43:29.7990059Z test_atomic_switch_db_failure.py:13: os.environ["WILLIAMS_DB_PATH"] = db_path
+2026-10-11T09:43:29.7990573Z test_atomic_switch_db_failure.py:15: os.environ["WILLIAMS_TEST_DB"] = db_path
+2026-10-11T09:43:29.7991057Z safe_smoke_test.py:11: PROD_DB = PROJECT / "data" / "trader.sqlite3"
+2026-10-11T09:43:29.7991668Z safe_smoke_test.py:12: CLEAN_DB = PROJECT / "data" / "test_tmp" / "trader.sqlite3.clean_20261004_082723"
+2026-10-11T09:43:29.7992216Z safe_smoke_test.py:176: test_db = Path(tmp) / "trader.sqlite3"
+2026-10-11T09:43:29.7992671Z safe_smoke_test.py:180: os.environ["WILLIAMS_DB_PATH"] = str(test_db)
+2026-10-11T09:43:29.7993080Z safe_smoke_test.py:181: os.environ["DB_PATH"] = str(test_db)
+2026-10-11T09:43:29.7993563Z apply_autoscan_integration.py:183: "self.db.state_delete('foreign_base_balance')",
+2026-10-11T09:43:29.7994107Z apply_autoscan_integration.py:348: self.ensure_foreign_base_balance_baseline()
+2026-10-11T09:43:29.7994625Z test_selected_symbol_prepare.py:13: os.environ["WILLIAMS_TEST_DB"] = _test_db_path
+2026-10-11T09:43:29.7995141Z test_selected_symbol_prepare.py:14: os.environ["WILLIAMS_DB_PATH"] = _test_db_path
+2026-10-11T09:43:29.7995669Z test_selected_symbol_prepare.py:102: trader.ensure_foreign_base_balance_baseline()
+2026-10-11T09:43:29.7996183Z recovery_oco_failure_test.py:11: os.environ["WILLIAMS_TEST_DB"] = _test_db_path
+2026-10-11T09:43:29.7996665Z recovery_oco_failure_test.py:12: os.environ["WILLIAMS_DB_PATH"] = _test_db_path
+2026-10-11T09:43:29.7997121Z recovery_oco_failure_test.py:105: t.foreign_base_balance=0
+2026-10-11T09:43:29.7997627Z recovery_oco_failure_test.py:110: t.db.state_set("foreign_base_balance:BTCUSDT", 0.0)
+2026-10-11T09:43:29.7998219Z audit_scanner_trader.py:201: "foreign_base_balance" in trader
+2026-10-11T09:43:29.7998672Z audit_scanner_trader.py:355: "foreign_base_balance:{self.symbol}" in trader
+2026-10-11T09:43:29.7999246Z audit_scanner_trader.py:356: and "foreign_base_balance:{self.symbol}" in trader.replace(" ", "")
+2026-10-11T09:43:29.7999825Z test_integration_bindings.py:294: old = os.environ.get("WILLIAMS_DB_PATH")
+2026-10-11T09:43:29.8000346Z test_integration_bindings.py:295: os.environ["WILLIAMS_DB_PATH"] = str(tmp_path / "ws.sqlite3")
+2026-10-11T09:43:29.8000876Z test_integration_bindings.py:323: os.environ.pop("WILLIAMS_DB_PATH", None)
+2026-10-11T09:43:29.8001386Z test_integration_bindings.py:325: os.environ["WILLIAMS_DB_PATH"] = old
+2026-10-11T09:43:29.8004754Z recovery_test.py:59: t=Trader.__new__(Trader);t.symbol='BTCUSDT';t.interval='1h';t.position_fraction=.25;t.stop_pct=.02;t.target_pct=.04;t.poll_seconds=1;t.risk_per_trade_pct=.01;t.max_daily_loss_pct=.03;t.max_trades_day=5;t.max_consecutive_losses=3;t.cooldown_minutes=30;t.min_risk_reward=1.5;t.atr_period=14;t.max_atr_pct=.08;t.max_spread_pct=.0015;t.require_htf_confirmation=False;t.htf_interval='4h';t.db=Database(path);t.client=c;t.config=type('_Config',(),{'structural_timeframes':('1d','4h','1h','15m')})();t.context_cache=_FakeContextCache();t.execution_barrier=_FakeExecutionBarrier();t.equity_breaker=_FakeEquityBreaker();t.refresh_execution_context=lambda symbol:_FakeSnapshot();t.db.state_set('active_symbol','BTCUSDT');t.db.state_set('foreign_base_balance:BTCUSDT',0.0);t.filters={'LOT_SIZE':{'minQty':'0.001','stepSize':'0.001'},'PRICE_FILTER':{'tickSize':'0.01'},'MIN_NOTIONAL':{'minNotional':'10'}};t.symbol_rules=SymbolRules(symbol='BTCUSDT',base_asset='BTC',quote_asset='USDT',min_qty=Decimal('0.001'),max_qty=Decimal('1000'),step_size=Decimal('0.001'),min_price=Decimal('0.01'),max_price=Decimal('1000000'),tick_size=Decimal('0.01'),min_notional=Decimal('10'));t.base_asset='BTC';t.quote_asset='USDT';t.recovered=False;t.notify=lambda m:None;return t
+2026-10-11T09:43:29.8008773Z recovery_test.py:85: c=FakeClient(base_free=2);t=new_trader(os.path.join(d,'x.sqlite3'),c);t.db.state_set('foreign_base_balance:BTCUSDT',2.0);t.recover_state();assert t.db.open_trade() is None;assert t.state()=='FLAT';assert c.created_oco_count==0
+2026-10-11T09:43:29.8009671Z recovery_test.py:117: t.db.state_delete('foreign_base_balance:BTCUSDT')
+2026-10-11T09:43:29.8010154Z recovery_test.py:119: assert t.db.state_get('foreign_base_balance:BTCUSDT') is None
+2026-10-11T09:43:29.8010655Z recovery_test.py:123: baseline=t.db.state_get('foreign_base_balance:BTCUSDT')
+2026-10-11T09:43:29.8011144Z recovery_test.py:137: t.db.state_delete('foreign_base_balance:BTCUSDT')
+2026-10-11T09:43:29.8011731Z recovery_test.py:160: assert abs(float(t.db.state_get('foreign_base_balance:BTCUSDT')))<1e-9
+2026-10-11T09:43:29.8012263Z test_scanner_trader_dry_run.py:13: os.environ["WILLIAMS_TEST_DB"] = _test_db_path
+2026-10-11T09:43:29.8012754Z test_scanner_trader_dry_run.py:14: os.environ["WILLIAMS_DB_PATH"] = _test_db_path
+2026-10-11T09:43:29.8013289Z test_atomic_switch_rollback.py:16: os.environ["WILLIAMS_DB_PATH"] = db_path
+2026-10-11T09:43:29.8013766Z test_atomic_switch_rollback.py:18: os.environ["WILLIAMS_TEST_DB"] = db_path
+2026-10-11T09:43:29.8014273Z test_db_guard.py:20: PRODUCTION_DB = (PROJECT_ROOT / "data" / "trader.sqlite3").resolve()
+2026-10-11T09:43:29.8014737Z test_db_guard.py:25: os.getenv("WILLIAMS_DB_PATH")
+2026-10-11T09:43:29.8015119Z test_db_guard.py:26: or os.getenv("DB_PATH")
+2026-10-11T09:43:29.8015577Z test_db_guard.py:36: Tests must provide WILLIAMS_DB_PATH or DB_PATH pointing somewhere other
+2026-10-11T09:43:29.8016038Z test_db_guard.py:37: than data/trader.sqlite3.
+2026-10-11T09:43:29.8016433Z test_db_guard.py:49: "Set WILLIAMS_DB_PATH to an isolated test database."
+2026-10-11T09:43:29.8016913Z test_db_isolation.py:7: REAL_DB = ROOT / "data" / "trader.sqlite3"
+2026-10-11T09:43:29.8017365Z test_db_isolation.py:17: os.environ["WILLIAMS_DB_PATH"] = str(p)
+2026-10-11T09:43:29.8017776Z patch_test_db_isolation.py:32: if "WILLIAMS_TEST_DB" not in s:
+2026-10-11T09:43:29.8018252Z patch_test_db_isolation.py:33: marker = "os.environ[\"WILLIAMS_TEST_DB\"]"
+2026-10-11T09:43:29.8018705Z patch_test_db_isolation.py:41: os.environ["WILLIAMS_TEST_DB"] = _test_db_path
+2026-10-11T09:43:29.8019261Z patch_test_db_isolation.py:42: os.environ["WILLIAMS_DB_PATH"] = _test_db_path
+2026-10-11T09:43:29.8019728Z deploy/install_no_domain.sh:60: DB_PATH=data/trader.sqlite3
+2026-10-11T09:43:29.8020464Z deploy/backup_vps.sh:9: docker compose "${COMPOSE[@]}" exec -T williams sh -c 'tar czf - -C /app/data trader.sqlite3 2>/dev/null || true' > "backups/williams-data-$STAMP.tgz"
+2026-10-11T09:43:29.8021109Z deploy/install_vps.sh:54: DB_PATH=data/trader.sqlite3
+2026-10-11T09:43:29.8021349Z 
+2026-10-11T09:43:29.8021479Z ==========================================================================================
+2026-10-11T09:43:29.8022211Z 6. DRY_RUN / LIVE SAFETY
+2026-10-11T09:43:29.8022532Z ==========================================================================================
+2026-10-11T09:43:29.8022948Z test_campaign_execution.py:66: "environment": "TESTNET",
+2026-10-11T09:43:29.8023334Z test_campaign_execution.py:76: client.testnet = True
+2026-10-11T09:43:29.8023851Z test_campaign_execution.py:77: client.base_url = "https://testnet.binance.vision"
+2026-10-11T09:43:29.8024384Z test_multi_position_lifecycle.py:16: testnet = True
+2026-10-11T09:43:29.8024766Z test_multi_position_lifecycle.py:595: trader.dry_run = False
+2026-10-11T09:43:29.8025189Z test_scanner_risk_simulation.py:43: testnet=True,
+2026-10-11T09:43:29.8025529Z trading_config.py:103: dry_run: bool = True
+2026-10-11T09:43:29.8025899Z trading_config.py:149: dry_run=_bool(source, "DRY_RUN", True),
+2026-10-11T09:43:29.8026354Z trading_config.py:150: allow_live=_bool(source, "ALLOW_LIVE", False),
+2026-10-11T09:43:29.8026879Z trader.py:32: def __init__(self, api_key=None, api_secret=None, testnet=None, context_cache=None):
+2026-10-11T09:43:29.8098228Z trader.py:51: self.client=BinanceSpotClient(api_key if api_key is not None else os.getenv('BINANCE_API_KEY',''), api_secret if api_secret is not None else os.getenv('BINANCE_API_SECRET',''), testnet=(os.getenv('TESTNET','true').lower()=='true') if testnet is None else testnet)
+2026-10-11T09:43:29.8099284Z trader.py:59: self.dry_run = os.getenv(
+2026-10-11T09:43:29.8099648Z trader.py:60: 'DRY_RUN', 'true'
+2026-10-11T09:43:29.8100097Z trader.py:115: if not self.client.testnet and os.getenv('ALLOW_LIVE','false').lower() != 'true':
+2026-10-11T09:43:29.8100730Z trader.py:117: 'LIVE trading is disabled. Set TESTNET=true or explicitly ALLOW_LIVE=true.'
+2026-10-11T09:43:29.8101179Z trader.py:171: 'testnet': self.client.testnet,
+2026-10-11T09:43:29.8101686Z trader.py:182: f'TESTNET={self.client.testnet}\\n'
+2026-10-11T09:43:29.8102238Z trader.py:194: if not self.client.testnet and os.getenv('ALLOW_LIVE','false').lower()!='true':
+2026-10-11T09:43:29.8102841Z trader.py:196: 'LIVE trading is disabled. Set TESTNET=true or explicitly ALLOW_LIVE=true.'
+2026-10-11T09:43:29.8103400Z trader.py:213: # P0: blocking Spot safety gate.  ALLOW_LIVE is never sufficient by itself.
+2026-10-11T09:43:29.8103843Z trader.py:258: 'testnet': self.client.testnet,
+2026-10-11T09:43:29.8104240Z trader.py:294: f'TESTNET={self.client.testnet}\n'
+2026-10-11T09:43:29.8104650Z trader.py:1017: if self.dry_run:
+2026-10-11T09:43:29.8105066Z trader.py:1019: 'BUY blocked: DRY_RUN=true. No live order execution is permitted.'
+2026-10-11T09:43:29.8105603Z trader.py:1021: if not self.client.testnet and os.getenv('ALLOW_LIVE', 'false').lower() != 'true':
+2026-10-11T09:43:29.8106187Z trader.py:1022: raise RuntimeError('BUY blocked: LIVE trading requires ALLOW_LIVE=true.')
+2026-10-11T09:43:29.8106851Z trader.py:1025: if (not self.client.testnet) and (self.preflight_report is None or not self.preflight_report.get('ready')):
+2026-10-11T09:43:29.8107368Z trader.py:1378: if self.dry_run:
+2026-10-11T09:43:29.8107732Z trader.py:1380: 'DRY_RUN legacy mode: would BUY %s quote=%.8f',
+2026-10-11T09:43:29.8108769Z ws_hub.py:12: self.symbol=os.getenv('SYMBOL','BTCUSDT').upper(); self.interval=os.getenv('INTERVAL','1h'); self.testnet=os.getenv('TESTNET','true').lower()=='true'; self.api_key=os.getenv('BINANCE_API_KEY',''); self.api_secret=os.getenv('BINANCE_API_SECRET',''); self.db=Database(
+2026-10-11T09:43:29.8110797Z ws_hub.py:16: ); self.client=BinanceSpotClient(self.api_key,self.api_secret,self.testnet); self.clients=set(); self.lock=threading.RLock(); self.stop_event=threading.Event(); self.threads=[]; self.price=None; self.candles=[]; self.position=None; self.orders=[]; self.tp=None; self.sl=None; self.balance=None; self.base_asset=None; self.quote_asset=None; self.last_error=None; self.market_connected=False; self.user_connected=False; self._market_ws=None; self._user_ws=None; self.user_subscription_id=None; self.started=False
+2026-10-11T09:43:29.8112451Z ws_hub.py:25: def configure_credentials(self,key,secret,testnet=True):
+2026-10-11T09:43:29.8112833Z ws_hub.py:29: self.testnet=bool(testnet)
+2026-10-11T09:43:29.8113180Z ws_hub.py:39: self.testnet
+2026-10-11T09:43:29.8113479Z ws_hub.py:77: 'testnet':self.testnet,
+2026-10-11T09:43:29.8114309Z ws_hub.py:249: base='wss://stream.testnet.binance.vision' if self.testnet else 'wss://stream.binance.com:9443';s=self.symbol.lower();return f'{base}/stream?streams={s}@aggTrade/{s}@kline_{self.interval}'
+2026-10-11T09:43:29.8115131Z ws_hub.py:366: 'wss://ws-api.testnet.binance.vision/ws-api/v3'
+2026-10-11T09:43:29.8115492Z ws_hub.py:367: if self.testnet
+2026-10-11T09:43:29.8115863Z ws_hub.py:672: 'testnet':self.testnet,
+2026-10-11T09:43:29.8116281Z test_binance_json_shapes.py:8: return BinanceSpotClient("key", "secret", testnet=True)
+2026-10-11T09:43:29.8116762Z server.py:116: testnet: bool = True
+2026-10-11T09:43:29.8117069Z server.py:130: self.testnet = True
+2026-10-11T09:43:29.8117428Z server.py:137: self.testnet = stored['testnet']
+2026-10-11T09:43:29.8117817Z server.py:139: def configure(self, key, secret, testnet=True):
+2026-10-11T09:43:29.8118191Z server.py:142: testnet = bool(testnet)
+2026-10-11T09:43:29.8118636Z server.py:149: candidate = BinanceSpotClient(key, secret, testnet=testnet)
+2026-10-11T09:43:29.8119029Z server.py:155: if not testnet:
+2026-10-11T09:43:29.8119324Z server.py:172: or testnet != self.testnet
+2026-10-11T09:43:29.8119655Z server.py:180: and testnet == self.testnet
+2026-10-11T09:43:29.8120016Z server.py:185: self.testnet = testnet
+2026-10-11T09:43:29.8120351Z server.py:191: self.testnet,
+2026-10-11T09:43:29.8120640Z server.py:196: self.testnet,
+2026-10-11T09:43:29.8121061Z server.py:198: mtf_service.configure_credentials(self.api_key, self.api_secret, self.testnet)
+2026-10-11T09:43:29.8121608Z server.py:206: testnet=self.testnet,
+2026-10-11T09:43:29.8121950Z server.py:567: f'testnet={t.client.testnet}\\n'
+2026-10-11T09:43:29.8122302Z server.py:607: state.testnet,
+2026-10-11T09:43:29.8122737Z server.py:609: mtf_service.configure_credentials(state.api_key, state.api_secret, state.testnet)
+2026-10-11T09:43:29.8123243Z server.py:719: 'testnet': t.client.testnet,
+2026-10-11T09:43:29.8123565Z server.py:753: payload.testnet,
+2026-10-11T09:43:29.8123880Z server.py:759: 'testnet': payload.testnet,
+2026-10-11T09:43:29.8124237Z server.py:979: 'testnet': t.client.testnet,
+2026-10-11T09:43:29.8124612Z server.py:1131: 'testnet': bool(t.client.testnet),
+2026-10-11T09:43:29.8124979Z server.py:1494: 'testnet': t.client.testnet,
+2026-10-11T09:43:29.8125328Z full_safety_audit.py:164: # 6. DRY_RUN / LIVE safety
+2026-10-11T09:43:29.8125714Z full_safety_audit.py:166: section("6. DRY_RUN / LIVE SAFETY")
+2026-10-11T09:43:29.8126135Z full_safety_audit.py:169: "DRY_RUN",
+2026-10-11T09:43:29.8126441Z full_safety_audit.py:170: "dry_run",
+2026-10-11T09:43:29.8126766Z full_safety_audit.py:171: "ALLOW_LIVE",
+2026-10-11T09:43:29.8127072Z full_safety_audit.py:172: "TESTNET",
+2026-10-11T09:43:29.8127425Z full_safety_audit.py:173: "testnet",
+2026-10-11T09:43:29.8127788Z full_safety_audit.py:232: # 9. Static DRY_RUN gate inspection
+2026-10-11T09:43:29.8128202Z full_safety_audit.py:266: dry_pos = body.find("self.dry_run")
+2026-10-11T09:43:29.8128662Z full_safety_audit.py:276: print("  dry_run position:", dry_pos)
+2026-10-11T09:43:29.8129127Z full_safety_audit.py:282: f"{method}: exchange order appears before DRY_RUN gate"
+2026-10-11T09:43:29.8129702Z full_safety_audit.py:285: finding("PASS", f"{method}: DRY_RUN precedes exchange order")
+2026-10-11T09:43:29.8130322Z full_safety_audit.py:510: "PASS" if '"testnet.binance.vision"' in native and 'api.binance.com' not in native else "WARN",
+2026-10-11T09:43:29.8130859Z test_signal_conditions.py:39: testnet=True,
+2026-10-11T09:43:29.8131263Z test_signal_conditions.py:46: print("BINANCE SPOT TESTNET")
+2026-10-11T09:43:29.8131827Z safe_smoke_test.py:40: def __init__(self, api_key="", api_secret="", testnet=True, **kwargs):
+2026-10-11T09:43:29.8132302Z safe_smoke_test.py:41: self.testnet = True
+2026-10-11T09:43:29.8132655Z safe_smoke_test.py:182: os.environ["TESTNET"] = "true"
+2026-10-11T09:43:29.8133015Z safe_smoke_test.py:183: os.environ["DRY_RUN"] = "true"
+2026-10-11T09:43:29.8133432Z safe_smoke_test.py:185: os.environ["ALLOW_LIVE"] = "false"
+2026-10-11T09:43:29.8133814Z safe_smoke_test.py:198: testnet=True,
+2026-10-11T09:43:29.8134154Z safe_smoke_test.py:203: assert t.dry_run is True
+2026-10-11T09:43:29.8134525Z safe_smoke_test.py:231: assert "DRY_RUN=true" in str(e)
+2026-10-11T09:43:29.8134942Z safe_smoke_test.py:234: "[PASS] DRY_RUN blocked BUY "
+2026-10-11T09:43:29.8135405Z apply_autoscan_integration.py:80: self.dry_run = os.getenv(
+2026-10-11T09:43:29.8135798Z apply_autoscan_integration.py:81: 'DRY_RUN', 'true'
+2026-10-11T09:43:29.8136192Z apply_autoscan_integration.py:115: self.dry_run = os.getenv(
+2026-10-11T09:43:29.8136580Z apply_autoscan_integration.py:116: 'DRY_RUN', 'true'
+2026-10-11T09:43:29.8137023Z apply_autoscan_integration.py:235: - DRY_RUN never reaches market_buy();
+2026-10-11T09:43:29.8137466Z apply_autoscan_integration.py:535: if self.dry_run:
+2026-10-11T09:43:29.8137889Z apply_autoscan_integration.py:537: 'DRY_RUN: would BUY %s quote=%.8f score=%.2f',
+2026-10-11T09:43:29.8138360Z apply_autoscan_integration.py:545: 'dry_run_entry',
+2026-10-11T09:43:29.8138793Z apply_autoscan_integration.py:566: # setup() still blocks LIVE unless ALLOW_LIVE=true.
+2026-10-11T09:43:29.8139253Z apply_autoscan_integration.py:697: if self.dry_run:
+2026-10-11T09:43:29.8139690Z apply_autoscan_integration.py:699: 'DRY_RUN legacy mode: would BUY %s quote=%.8f',
+2026-10-11T09:43:29.8140139Z apply_autoscan_integration.py:779: "self.dry_run",
+2026-10-11T09:43:29.8140517Z apply_autoscan_integration.py:784: "DRY_RUN",
+2026-10-11T09:43:29.8140883Z apply_autoscan_integration.py:829: print("  DRY_RUN=true")
+2026-10-11T09:43:29.8141354Z apply_autoscan_integration.py:830: print("  LIVE orders: blocked by DRY_RUN")
+2026-10-11T09:43:29.8142110Z test_live_scanner.py:17: testnet=True,
+2026-10-11T09:43:29.8142444Z test_live_scanner.py:24: print("BINANCE SPOT TESTNET")
+2026-10-11T09:43:29.8142857Z test_production_architecture.py:86: testnet = True
+2026-10-11T09:43:29.8143319Z test_production_architecture.py:87: base_url = "https://testnet.binance.vision"
+2026-10-11T09:43:29.8143860Z test_production_architecture.py:93: "environment": "TESTNET",
+2026-10-11T09:43:29.8144284Z test_selected_symbol_prepare.py:23: print("BINANCE SPOT TESTNET")
+2026-10-11T09:43:29.8144704Z test_selected_symbol_prepare.py:27: trader = Trader(testnet=True)
+2026-10-11T09:43:29.8145149Z recovery_oco_failure_test.py:20: testnet=True
+2026-10-11T09:43:29.8145582Z recovery_oco_failure_test.py:21: base_url = "https://testnet.binance.vision"
+2026-10-11T09:43:29.8146047Z recovery_oco_failure_test.py:63: "environment": "TESTNET",
+2026-10-11T09:43:29.8146429Z recovery_oco_failure_test.py:96: t=Trader(testnet=True)
+2026-10-11T09:43:29.8146826Z recovery_oco_failure_test.py:98: t.dry_run=False
+2026-10-11T09:43:29.8147209Z recovery_oco_failure_test.py:133: t2=Trader(testnet=True)
+2026-10-11T09:43:29.8147596Z recovery_oco_failure_test.py:135: t2.dry_run=False
+2026-10-11T09:43:29.8148046Z execution_barrier.py:113: or getattr(self.exchange_client, "testnet", None) is not True
+2026-10-11T09:43:29.8148679Z execution_barrier.py:114: or getattr(self.exchange_client, "base_url", None) != "https://testnet.binance.vision"
+2026-10-11T09:43:29.8149386Z execution_barrier.py:116: return "execution_client_not_pinned_to_spot_testnet"
+2026-10-11T09:43:29.8149943Z execution_barrier.py:135: if report.get("environment") != "TESTNET" or report.get("product") != "SPOT":
+2026-10-11T09:43:29.8150584Z preflight_gate.py:216: environment="TESTNET" if getattr(self.client, "testnet", None) is True else "LIVE"
+2026-10-11T09:43:29.8151182Z preflight_gate.py:217: if getattr(self.client, "testnet", None) is False else "UNKNOWN"
+2026-10-11T09:43:29.8151946Z preflight_gate.py:223: if report.environment != "TESTNET" or getattr(self.client, "base_url", None) != "https://testnet.binance.vision":
+2026-10-11T09:43:29.8152717Z preflight_gate.py:226: report.passed("environment", host="https://testnet.binance.vision", product="SPOT")
+2026-10-11T09:43:29.8153314Z test_binance_market_data.py:5: client = BinanceSpotClient("k", "s", testnet=True)
+2026-10-11T09:43:29.8153856Z test_binance_market_data.py:25: def test_legacy_history_endpoint_follows_testnet_switch(monkeypatch):
+2026-10-11T09:43:29.8154408Z test_binance_market_data.py:28: monkeypatch.setenv("TESTNET", "false")
+2026-10-11T09:43:29.8154946Z test_binance_market_data.py:35: monkeypatch.setenv("TESTNET", "true")
+2026-10-11T09:43:29.8155458Z test_binance_market_data.py:37: assert reloaded.BASE_URL == "https://testnet.binance.vision"
+2026-10-11T09:43:29.8155944Z test_multi_position_execution.py:15: testnet = True
+2026-10-11T09:43:29.8174984Z test_multi_position_execution.py:178: monkeypatch.setenv("DRY_RUN", "false")
+2026-10-11T09:43:29.8175842Z market_scanner.py:189: "true" if os.getenv("DRY_RUN", "true").lower() == "true" else "false",
+2026-10-11T09:43:29.8176343Z test_execution_barrier_fail_closed.py:81: "environment": "TESTNET",
+2026-10-11T09:43:29.8176759Z test_execution_barrier_fail_closed.py:99: testnet = True
+2026-10-11T09:43:29.8177269Z test_execution_barrier_fail_closed.py:100: base_url = "https://testnet.binance.vision"
+2026-10-11T09:43:29.8177871Z test_execution_barrier_fail_closed.py:200: client = BinanceSpotClient("test-key", "test-secret", testnet=True)
+2026-10-11T09:43:29.8178409Z test_execution_barrier_fail_closed.py:333: testnet = False
+2026-10-11T09:43:29.8178966Z test_execution_barrier_fail_closed.py:346: assert result.reason == "execution_client_not_pinned_to_spot_testnet"
+2026-10-11T09:43:29.8179626Z test_execution_barrier_fail_closed.py:423: client = BinanceSpotClient("test-key", "test-secret", testnet=True)
+2026-10-11T09:43:29.8180102Z mock_exchange.py:11: self.testnet = True
+2026-10-11T09:43:29.8180768Z recovery_test.py:44: self.api_key='TEST'; self.api_secret='TEST'; self.testnet=True; self.price=price; self.quote=quote; self.base_free=base_free; self.base_locked=base_locked
+2026-10-11T09:43:29.8181435Z test_scanner_diagnostics.py:18: print(" BINANCE SPOT TESTNET")
+2026-10-11T09:43:29.8182079Z test_scanner_diagnostics.py:28: if os.getenv("TESTNET", "true").lower() != "true":
+2026-10-11T09:43:29.8182804Z test_scanner_diagnostics.py:29: raise RuntimeError("ОПАСНО: TESTNET=false")
+2026-10-11T09:43:29.8183265Z test_scanner_diagnostics.py:34: testnet=True,
+2026-10-11T09:43:29.8183661Z test_scanner_trader_dry_run.py:23: print("BINANCE SPOT TESTNET")
+2026-10-11T09:43:29.8184141Z test_scanner_trader_dry_run.py:27: trader = Trader(testnet=True)
+2026-10-11T09:43:29.8184550Z test_preflight_gate.py:65: testnet = True
+2026-10-11T09:43:29.8184946Z test_preflight_gate.py:66: base_url = "https://testnet.binance.vision"
+2026-10-11T09:43:29.8185470Z test_preflight_gate.py:110: def test_testnet_preflight_keeps_unknown_runtime_proofs_blocked():
+2026-10-11T09:43:29.8186014Z test_preflight_gate.py:125: def test_testnet_preflight_blocks_withdrawals():
+2026-10-11T09:43:29.8186491Z test_preflight_gate.py:137: def test_testnet_preflight_blocks_foreign_order():
+2026-10-11T09:43:29.8186925Z test_buy_safety.py:9: testnet = False
+2026-10-11T09:43:29.8187237Z test_buy_safety.py:24: testnet = True
+2026-10-11T09:43:29.8187680Z test_buy_safety.py:27: raise AssertionError("order() must never be called in DRY_RUN")
+2026-10-11T09:43:29.8188108Z test_buy_safety.py:32: t.dry_run = False
+2026-10-11T09:43:29.8188539Z test_buy_safety.py:41: monkeypatch.setenv("ALLOW_LIVE", "false")
+2026-10-11T09:43:29.8189028Z test_buy_safety.py:44: with pytest.raises(RuntimeError, match="ALLOW_LIVE=true"):
+2026-10-11T09:43:29.8189534Z test_buy_safety.py:48: def test_dry_run_blocks_before_db_mutation(monkeypatch):
+2026-10-11T09:43:29.8190006Z test_buy_safety.py:49: monkeypatch.setenv("ALLOW_LIVE", "false")
+2026-10-11T09:43:29.8190373Z test_buy_safety.py:51: t.dry_run = True
+2026-10-11T09:43:29.8190822Z test_buy_safety.py:53: with pytest.raises(RuntimeError, match="DRY_RUN=true"):
+2026-10-11T09:43:29.8191255Z test_buy_safety.py:58: monkeypatch.setenv("ALLOW_LIVE", "false")
+2026-10-11T09:43:29.8191671Z test_buy_safety.py:60: t.dry_run = False
+2026-10-11T09:43:29.8192293Z test_connection.py:7: c=BinanceSpotClient(os.getenv('BINANCE_API_KEY',''),os.getenv('BINANCE_API_SECRET',''),testnet=os.getenv('TESTNET','true').lower()=='true')
+2026-10-11T09:43:29.8193257Z test_connection.py:8: c.sync_time();print('PING:',c.ping());print('TESTNET:',c.testnet);print('SYMBOL:',os.getenv('SYMBOL','BTCUSDT'));print('TICKER:',c.ticker_price(os.getenv('SYMBOL','BTCUSDT')))
+2026-10-11T09:43:29.8194058Z portfolio_trader.py:76: self.dry_run = (
+2026-10-11T09:43:29.8194445Z portfolio_trader.py:77: os.getenv("DRY_RUN", "true").lower() == "true"
+2026-10-11T09:43:29.8194883Z portfolio_trader.py:742: if self.dry_run:
+2026-10-11T09:43:29.8195321Z portfolio_trader.py:744: f"{symbol}: emergency exit required ({reason}) but DRY_RUN=true"
+2026-10-11T09:43:29.8195755Z portfolio_trader.py:2157: if self.dry_run:
+2026-10-11T09:43:29.8196110Z portfolio_trader.py:2171: if self.dry_run:
+2026-10-11T09:43:29.8196460Z portfolio_trader.py:2176: "dry_run": True,
+2026-10-11T09:43:29.8196899Z ci_release_gate.py:26: "binance_client.py", "preflight_gate.py", "test_testnet_release_gate.py",
+2026-10-11T09:43:29.8197429Z ci_release_gate.py:32: "TESTNET=true", "ALLOW_LIVE=false", "MAX_OPEN_POSITIONS=5",
+2026-10-11T09:43:29.8197938Z ci_release_gate.py:89: "test_native_runtime_uses_binance_spot_testnet",
+2026-10-11T09:43:29.8198401Z ci_release_gate.py:94: testnet = read("test_testnet_release_gate.py")
+2026-10-11T09:43:29.8198883Z ci_release_gate.py:95: must(testnet, "if not live_e2e_enabled():", "testnet release gate")
+2026-10-11T09:43:29.8199393Z ci_release_gate.py:96: must(testnet, "Binance Spot Testnet", "testnet release gate")
+2026-10-11T09:43:29.8199940Z ci_release_gate.py:108: testnet_ci = read(".github/workflows/testnet-readonly.yml")
+2026-10-11T09:43:29.8200458Z ci_release_gate.py:109: must(testnet_ci, "python3 ci_release_gate.py", "testnet workflow")
+2026-10-11T09:43:29.8201045Z ci_release_gate.py:110: must(testnet_ci, 'ALLOW_LIVE: "false"', "testnet workflow")
+2026-10-11T09:43:29.8201608Z ci_release_gate.py:111: must(testnet_ci, 'TESTNET: "true"', "testnet workflow")
+2026-10-11T09:43:29.8202174Z ci_release_gate.py:112: must(testnet_ci, "test_testnet_release_gate.py --read-only", "testnet workflow")
+2026-10-11T09:43:29.8202766Z test_testnet_release_gate.py:24: mode: str  # OFFLINE, TESTNET_READ_ONLY, TESTNET_TRADE
+2026-10-11T09:43:29.8203368Z test_testnet_release_gate.py:30: GateStep("P03", "auth", "API key and secret are accepted by Binance", "TESTNET_READ_ONLY"),
+2026-10-11T09:43:29.8204112Z test_testnet_release_gate.py:31: GateStep("P04", "auth", "Request signature/timestamp/recvWindow are valid", "TESTNET_READ_ONLY"),
+2026-10-11T09:43:29.8204796Z test_testnet_release_gate.py:32: GateStep("P05", "auth", "Spot account is reachable and is not locked", "TESTNET_READ_ONLY"),
+2026-10-11T09:43:29.8205500Z test_testnet_release_gate.py:33: GateStep("P06", "market", "exchangeInfo and symbol status are valid", "TESTNET_READ_ONLY"),
+2026-10-11T09:43:29.8206241Z test_testnet_release_gate.py:35: GateStep("P08", "market", "Market data is fresh and internally consistent", "TESTNET_READ_ONLY"),
+2026-10-11T09:43:29.8206982Z test_testnet_release_gate.py:36: GateStep("P09", "scanner", "Scanner starts and heartbeat/age telemetry updates", "TESTNET_READ_ONLY"),
+2026-10-11T09:43:29.8207778Z test_testnet_release_gate.py:44: GateStep("P17", "execution", "BUY is submitted once and its Binance order ID is durable", "TESTNET_TRADE"),
+2026-10-11T09:43:29.8208523Z test_testnet_release_gate.py:45: GateStep("P18", "execution", "Actual fills determine quantity and VWAP", "TESTNET_TRADE"),
+2026-10-11T09:43:29.8209249Z test_testnet_release_gate.py:46: GateStep("P19", "protection", "Native OCO is created and verified on Binance", "TESTNET_TRADE"),
+2026-10-11T09:43:29.8209969Z test_testnet_release_gate.py:53: GateStep("P26", "recovery", "DB state equals authoritative Binance state after restart", "TESTNET_TRADE"),
+2026-10-11T09:43:29.8210796Z test_testnet_release_gate.py:54: GateStep("P27", "android", "APK receives scanner/Binance/WebSocket state from backend", "TESTNET_READ_ONLY"),
+2026-10-11T09:43:29.8211634Z test_testnet_release_gate.py:56: GateStep("P29", "portfolio", "Portfolio balances/positions/orders agree with Binance", "TESTNET_READ_ONLY"),
+2026-10-11T09:43:29.8212451Z test_testnet_release_gate.py:57: GateStep("P30", "release", "Final state is CLEAN/PASS and only then Testnet trading is considered enabled", "TESTNET_TRADE"),
+2026-10-11T09:43:29.8213239Z test_testnet_release_gate.py:62: return os.getenv("WILLIAMS_TESTNET_E2E", "").strip() == "1"
+2026-10-11T09:43:29.8213808Z test_testnet_release_gate.py:68: "Live Testnet execution is disabled. Set WILLIAMS_TESTNET_E2E=1 explicitly."
+2026-10-11T09:43:29.8214413Z test_testnet_release_gate.py:70: if os.getenv("TESTNET", "true").strip().lower() != "true":
+2026-10-11T09:43:29.8215017Z test_testnet_release_gate.py:71: raise RuntimeError("Release Gate refuses to run: TESTNET must be true.")
+2026-10-11T09:43:29.8215634Z test_testnet_release_gate.py:78: def run_testnet_read_only(symbol: str = "BTCUSDT") -> dict:
+2026-10-11T09:43:29.8216081Z test_testnet_release_gate.py:84: testnet=True,
+2026-10-11T09:43:29.8216519Z test_testnet_release_gate.py:86: if client.base_url != "https://testnet.binance.vision":
+2026-10-11T09:43:29.8217044Z test_testnet_release_gate.py:107: "TESTNET_READ_ONLY",
+2026-10-11T09:43:29.8217412Z test_testnet_release_gate.py:108: "TESTNET_TRADE",
+2026-10-11T09:43:29.8217871Z test_testnet_release_gate.py:125: def test_testnet_client_uses_testnet_endpoint():
+2026-10-11T09:43:29.8218411Z test_testnet_release_gate.py:126: testnet = BinanceSpotClient("k", "s", testnet=True)
+2026-10-11T09:43:29.8218928Z test_testnet_release_gate.py:127: live = BinanceSpotClient("k", "s", testnet=False)
+2026-10-11T09:43:29.8219467Z test_testnet_release_gate.py:128: assert testnet.base_url == "https://testnet.binance.vision"
+2026-10-11T09:43:29.8220027Z test_testnet_release_gate.py:133: monkeypatch.delenv("WILLIAMS_TESTNET_E2E", raising=False)
+2026-10-11T09:43:29.8220643Z test_testnet_release_gate.py:139: monkeypatch.delenv("WILLIAMS_TESTNET_E2E", raising=False)
+2026-10-11T09:43:29.8221153Z test_testnet_release_gate.py:140: monkeypatch.delenv("TESTNET", raising=False)
+2026-10-11T09:43:29.8221836Z test_testnet_release_gate.py:165: result = run_testnet_read_only(os.getenv("TESTNET_SYMBOL", "BTCUSDT"))
+2026-10-11T09:43:29.8222481Z test_testnet_release_gate.py:166: print("TESTNET READ-ONLY GATE: PASS")
+2026-10-11T09:43:29.8222947Z test_android_remote_only.py:40: def test_native_runtime_uses_binance_spot_testnet():
+2026-10-11T09:43:29.8223505Z test_android_remote_only.py:43: assert "https://testnet.binance.vision" in runtime
+2026-10-11T09:43:29.8224026Z test_android_remote_only.py:44: assert "wss://stream.testnet.binance.vision" in runtime
+2026-10-11T09:43:29.8224634Z test_android_remote_only.py:46: assert "wss://ws-api.testnet.binance.vision/ws-api/v3" in runtime
+2026-10-11T09:43:29.8225185Z test_android_remote_only.py:80: def test_spot_testnet_endpoints_and_no_futures_execution():
+2026-10-11T09:43:29.8225692Z test_android_remote_only.py:84: assert "https://testnet.binance.vision" in client
+2026-10-11T09:43:29.8226249Z test_android_remote_only.py:85: assert "testnet.binance.vision" in data
+2026-10-11T09:43:29.8226728Z test_android_remote_only.py:86: assert "wss://stream.testnet.binance.vision" in ws
+2026-10-11T09:43:31.6395874Z test_android_remote_only.py:87: assert "wss://ws-api.testnet.binance.vision/ws-api/v3" in ws
+2026-10-11T09:43:31.6396969Z execution_permit.py:33: if getattr(client, "testnet", None) is not True:
+2026-10-11T09:43:31.6398016Z execution_permit.py:35: if getattr(client, "base_url", None) != "https://testnet.binance.vision":
+2026-10-11T09:43:31.6398862Z test_four_echelons.py:147: def test_echelon3_testnet_suite_is_explicitly_gated():
+2026-10-11T09:43:31.6399735Z test_four_echelons.py:148: enabled = os.getenv("WILLIAMS_RUN_TESTNET", "false").lower() == "true"
+2026-10-11T09:43:31.6400645Z test_four_echelons.py:150: pytest.skip("Live Binance Testnet integration requires WILLIAMS_RUN_TESTNET=true and credentials")
+2026-10-11T09:43:31.6401386Z test_four_echelons.py:155: def test_echelon3_testnet_order_filters_have_decimal_safe_types():
+2026-10-11T09:43:31.6402174Z test_preflight_fail_closed.py:10: testnet = True
+2026-10-11T09:43:31.6402854Z test_preflight_fail_closed.py:11: base_url = "https://testnet.binance.vision"
+2026-10-11T09:43:31.6404025Z test_preflight_fail_closed.py:21: raise RuntimeError("https://testnet.invalid/path?signature=DO_NOT_LEAK&secret=DO_NOT_LEAK")
+2026-10-11T09:43:31.6404636Z test_preflight_fail_closed.py:105: client.testnet = False
+2026-10-11T09:43:31.6405087Z mtf_context_service.py:32: os.getenv("TESTNET", "true").lower() == "true",
+2026-10-11T09:43:31.6405646Z mtf_context_service.py:49: def configure_credentials(self, key: str, secret: str, testnet: bool = True) -> None:
+2026-10-11T09:43:31.6406348Z mtf_context_service.py:51: self.client = BinanceSpotClient(key.strip(), secret.strip(), bool(testnet))
+2026-10-11T09:43:31.6407049Z mtf_context_service.py:260: base = "wss://stream.testnet.binance.vision" if self.client.testnet else "wss://stream.binance.com:9443"
+2026-10-11T09:43:31.6407654Z patch_test_db_isolation.py:5: "test_scanner_trader_dry_run.py",
+2026-10-11T09:43:31.6408056Z test_live_portfolio_scan.py:23: testnet=True,
+2026-10-11T09:43:31.6408470Z test_live_portfolio_scan.py:55: print(" BINANCE SPOT TESTNET")
+2026-10-11T09:43:31.6409010Z credentials_store.py:51: def save(self, api_key: str, api_secret: str, testnet: bool) -> None:
+2026-10-11T09:43:31.6409478Z credentials_store.py:55: "testnet": bool(testnet),
+2026-10-11T09:43:31.6409935Z credentials_store.py:83: "testnet": bool(data.get("testnet", True)),
+2026-10-11T09:43:31.6410460Z binance_client.py:15: def __init__(self, api_key, api_secret, testnet=True, recv_window=5000, timeout=20):
+2026-10-11T09:43:31.6411487Z binance_client.py:16: self.api_key=api_key; self.api_secret=api_secret; self.testnet=bool(testnet)
+2026-10-11T09:43:31.6412442Z binance_client.py:17: self.base_url='https://testnet.binance.vision' if self.testnet else 'https://api.binance.com'
+2026-10-11T09:43:31.6413029Z portfolio_controller.py:160: def dry_run(self, has_open_position=False):
+2026-10-11T09:43:31.6413502Z test_portfolio_integration.py:28: print("BINANCE SPOT TESTNET")
+2026-10-11T09:43:31.6413899Z test_portfolio_integration.py:35: testnet=True,
+2026-10-11T09:43:31.6414471Z data.py:4: # endpoint follows the same TESTNET switch as the trading client so a live
+2026-10-11T09:43:31.6414920Z data.py:7: 'https://testnet.binance.vision'
+2026-10-11T09:43:31.6415298Z data.py:8: if os.getenv('TESTNET', 'true').lower() == 'true'
+2026-10-11T09:43:31.6415821Z test_binance_secret_redaction.py:41: client = BinanceSpotClient("fake-key", "fake-secret", testnet=True)
+2026-10-11T09:43:31.6416462Z test_binance_secret_redaction.py:64: client = BinanceSpotClient("fake-key", "fake-secret", testnet=True)
+2026-10-11T09:43:31.6417087Z test_binance_secret_redaction.py:77: def test_spot_testnet_permit_cannot_authorize_mainnet_client():
+2026-10-11T09:43:31.6417727Z test_binance_secret_redaction.py:78: testnet_client = BinanceSpotClient("fake-key", "fake-secret", testnet=True)
+2026-10-11T09:43:31.6418391Z test_binance_secret_redaction.py:79: mainnet_client = BinanceSpotClient("fake-key", "fake-secret", testnet=False)
+2026-10-11T09:43:31.6419076Z test_binance_secret_redaction.py:87: testnet_session = NoNetworkSession()
+2026-10-11T09:43:31.6419578Z test_binance_secret_redaction.py:89: testnet_client.session = testnet_session
+2026-10-11T09:43:31.6420205Z test_binance_secret_redaction.py:92: with _mutation_permit(testnet_client, admission_token=_BARRIER_ADMISSION_TOKEN):
+2026-10-11T09:43:31.6420779Z test_binance_secret_redaction.py:99: assert not testnet_session.called
+2026-10-11T09:43:31.6421033Z 
+2026-10-11T09:43:31.6421198Z ==========================================================================================
+2026-10-11T09:43:31.6421791Z 7. CRITICAL TRADER METHODS
+2026-10-11T09:43:31.6422175Z ==========================================================================================
+2026-10-11T09:43:31.6422529Z market_buy:
+2026-10-11T09:43:31.6422779Z   trader.py:1016
+2026-10-11T09:43:31.6423031Z   mock_exchange.py:125
+2026-10-11T09:43:31.6423355Z place_oco:
+2026-10-11T09:43:31.6423617Z   trader.py:1167
+2026-10-11T09:43:31.6423881Z switch_symbol:
+2026-10-11T09:43:31.6424133Z   trader.py:299
+2026-10-11T09:43:31.6424433Z recover_state:
+2026-10-11T09:43:31.6424783Z   trader.py:658
+2026-10-11T09:43:31.6425037Z _auto_scan_process:
+2026-10-11T09:43:31.6425311Z   trader.py:1262
+2026-10-11T09:43:31.6425591Z process:
+2026-10-11T09:43:31.6425834Z   trader.py:1301
+2026-10-11T09:43:31.6426110Z setup:
+2026-10-11T09:43:31.6426354Z   trader.py:189
+2026-10-11T09:43:31.6426512Z 
+2026-10-11T09:43:31.6426694Z ==========================================================================================
+2026-10-11T09:43:31.6427053Z 8. DUPLICATE CRITICAL METHOD DEFINITIONS
+2026-10-11T09:43:31.6427403Z ==========================================================================================
+2026-10-11T09:43:31.6427877Z [WARN] market_buy defined 2 times: [('trader.py', 1016), ('mock_exchange.py', 125)]
+2026-10-11T09:43:31.6428306Z [PASS] place_oco: single definition
+2026-10-11T09:43:31.6428650Z [PASS] switch_symbol: single definition
+2026-10-11T09:43:31.6428967Z [PASS] recover_state: single definition
+2026-10-11T09:43:31.6429295Z [PASS] _auto_scan_process: single definition
+2026-10-11T09:43:31.6429844Z [PASS] process: single definition
+2026-10-11T09:43:31.6430135Z [PASS] setup: single definition
+2026-10-11T09:43:31.6430347Z 
+2026-10-11T09:43:31.6430484Z ==========================================================================================
+2026-10-11T09:43:31.6430862Z 9. MARKET_BUY / MARKET_SELL SAFETY GATE
+2026-10-11T09:43:31.6431224Z ==========================================================================================
+2026-10-11T09:43:31.6431709Z market_buy:
+2026-10-11T09:43:31.6432016Z   dry_run position: 40
+2026-10-11T09:43:31.6432364Z   order position:   1000000000
+2026-10-11T09:43:31.6432680Z [PASS] market_buy: DRY_RUN precedes exchange order
+2026-10-11T09:43:31.6433130Z [PASS] exit: native Binance OCO via portfolio_trader wrapper + Binance client
+2026-10-11T09:43:31.6433416Z 
+2026-10-11T09:43:31.6433550Z ==========================================================================================
+2026-10-11T09:43:31.6433934Z 10. DANGEROUS EXECUTION PRIMITIVES
+2026-10-11T09:43:31.6434276Z ==========================================================================================
+2026-10-11T09:43:31.6434513Z 
+2026-10-11T09:43:31.6434646Z ==========================================================================================
+2026-10-11T09:43:31.6435062Z 11. LEGACY / SUSPICIOUS PATTERN SEARCH
+2026-10-11T09:43:31.6435393Z ==========================================================================================
+2026-10-11T09:43:31.6435834Z test_multi_position_lifecycle.py:359: "clientOrderId": "WILLV4_ENTRY_PENDING_SOL",
+2026-10-11T09:43:31.6436311Z test_multi_position_lifecycle.py:367: "WILLV4_ENTRY_PENDING_SOL",
+2026-10-11T09:43:31.6436753Z test_multi_position_lifecycle.py:371: "ENTRY_PENDING",
+2026-10-11T09:43:31.6437271Z test_multi_position_lifecycle.py:381: assert trade["entry_client_order_id"] == "WILLV4_ENTRY_PENDING_SOL"
+2026-10-11T09:43:31.6437928Z test_multi_position_lifecycle.py:394: db.state_set("position_state", "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.6438546Z test_multi_position_lifecycle.py:395: db.state_set("position_state:BTCUSDT", "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.6439117Z test_multi_position_lifecycle.py:444: db.state_set("position_state:SOLUSDT", "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.6439686Z test_multi_position_lifecycle.py:450: assert multi.state("SOLUSDT") == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.6440267Z test_multi_position_lifecycle.py:451: assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.6440839Z test_multi_position_lifecycle.py:599: assert result["state"] == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.6441371Z test_multi_position_lifecycle.py:604: assert trader.state("BTCUSDT") == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.6442051Z trading_config.py:89: max_open_positions: int = 5
+2026-10-11T09:43:31.6442542Z trading_config.py:114: # AUTO_SCAN_SYMBOLS remains a backwards-compatible override.
+2026-10-11T09:43:31.6443050Z trading_config.py:115: if str(source.get("AUTO_SCAN_SYMBOLS", "")).strip():
+2026-10-11T09:43:31.6443580Z trading_config.py:116: symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
+2026-10-11T09:43:31.6444023Z trading_config.py:138: max_open_positions=max_positions,
+2026-10-11T09:43:31.6444525Z trader.py:27: STATES = {'FLAT','ENTRY_PENDING','OPEN','EXIT_PENDING','RECONCILE_REQUIRED'}
+2026-10-11T09:43:31.6444955Z trader.py:56: 'AUTO_SCAN_ENABLED', 'true'
+2026-10-11T09:43:31.6445340Z trader.py:65: raw_symbols = os.getenv('AUTO_SCAN_SYMBOLS', '').strip()
+2026-10-11T09:43:31.6445841Z trader.py:82: self.max_open_positions = max(0, int(self.config.max_open_positions))
+2026-10-11T09:43:31.6446319Z trader.py:95: max_open_positions=self.max_open_positions,
+2026-10-11T09:43:31.6446694Z trader.py:129: max_open_positions=0,
+2026-10-11T09:43:31.6447049Z trader.py:172: 'max_open_positions': self.max_open_positions,
+2026-10-11T09:43:31.6447492Z trader.py:217: max_open_positions=self.max_open_positions,
+2026-10-11T09:43:31.6447861Z trader.py:284: if self.state() == 'RECONCILE_REQUIRED':
+2026-10-11T09:43:31.6448279Z trader.py:299: def switch_symbol(self, symbol):
+2026-10-11T09:43:31.6448662Z trader.py:516: legacy = self.db.state_get('foreign_base_balance')
+2026-10-11T09:43:31.6449117Z trader.py:546: legacy = self.db.state_get('foreign_base_balance')
+2026-10-11T09:43:31.6449620Z trader.py:565: if open_trade is None and not entry_intent and self.state() in {'FLAT','RECONCILE_REQUIRED'}:
+2026-10-11T09:43:31.6450110Z trader.py:620: self._set_state('RECONCILE_REQUIRED')
+2026-10-11T09:43:31.6450606Z trader.py:628: f'[RECOVERY] FILLED BUY below minQty -> RECONCILE_REQUIRED: '
+2026-10-11T09:43:31.6451008Z trader.py:648: self._set_state('EXIT_PENDING')
+2026-10-11T09:43:31.6451373Z trader.py:703: self._set_state('RECONCILE_REQUIRED')
+2026-10-11T09:43:31.6451807Z trader.py:738: self._set_state('RECONCILE_REQUIRED')
+2026-10-11T09:43:31.6452935Z trader.py:769: self._set_state('RECONCILE_REQUIRED'); self.notify(f'RECOVERY BLOCKED\nExpected Williams {expected_qty:.8f} {self.base_asset}; actual Williams balance {bot_position_qty:.8f}. Total account balance={position_qty:.8f}; foreign baseline={position_qty-bot_position_qty:.8f}. Manual reconciliation required.'); self.recovered=True; return
+2026-10-11T09:43:31.6454071Z trader.py:773: self._set_state('EXIT_PENDING')
+2026-10-11T09:43:31.6454426Z trader.py:781: self._set_state('RECONCILE_REQUIRED')
+2026-10-11T09:43:31.6454886Z trader.py:795: print('[RECOVERY] OCO recreation failed -> RECONCILE_REQUIRED:', e)
+2026-10-11T09:43:31.6455364Z trader.py:796: if self.state() != 'RECONCILE_REQUIRED':
+2026-10-11T09:43:31.6455742Z trader.py:802: if self.state()=='ENTRY_PENDING':
+2026-10-11T09:43:31.7019093Z trader.py:803: self._set_state('RECONCILE_REQUIRED')
+2026-10-11T09:43:31.7019885Z trader.py:805: elif self.state()=='RECONCILE_REQUIRED':
+2026-10-11T09:43:31.7020506Z trader.py:831: if self.state()=='RECONCILE_REQUIRED': return False,'RECONCILE_REQUIRED'
+2026-10-11T09:43:31.7021185Z trader.py:1073: self._set_state('ENTRY_PENDING')
+2026-10-11T09:43:31.7022114Z trader.py:1076: if self.state() not in {'FLAT', 'ENTRY_PENDING'}:
+2026-10-11T09:43:31.7022655Z trader.py:1078: if self.state() == 'ENTRY_PENDING' and self.db.state_get('entry_client_order_id') != cid:
+2026-10-11T09:43:31.7023198Z trader.py:1103: self._set_state('RECONCILE_REQUIRED')
+2026-10-11T09:43:31.7023565Z trader.py:1117: self._set_state('RECONCILE_REQUIRED')
+2026-10-11T09:43:31.7023997Z trader.py:1128: self._set_state('RECONCILE_REQUIRED')
+2026-10-11T09:43:31.7024354Z trader.py:1143: self._set_state('RECONCILE_REQUIRED')
+2026-10-11T09:43:31.7024710Z trader.py:1153: if self.state() != 'RECONCILE_REQUIRED':
+2026-10-11T09:43:31.7025149Z trader.py:1232: self._set_state('EXIT_PENDING')
+2026-10-11T09:43:31.7025505Z trader.py:1255: self._set_state('RECONCILE_REQUIRED')
+2026-10-11T09:43:31.7025884Z trader.py:1316: # AUTO_SCAN_ENABLED=false.
+2026-10-11T09:43:31.7026297Z db.py:1004: "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT','RECONCILE_REQUIRED')"
+2026-10-11T09:43:31.7026943Z db.py:1011: "FROM campaigns WHERE state IN ('SIGNAL_DETECTED','ENTRY_ARMING','ENTRY_PENDING','ADD_ON_ARMING','ADD_ON_PENDING')"
+2026-10-11T09:43:31.7027592Z server.py:379: "state": "RECONCILE_REQUIRED" if errors else "FLAT",
+2026-10-11T09:43:31.7028031Z server.py:665: if legacy_state == 'RECONCILE_REQUIRED' and active_symbol:
+2026-10-11T09:43:31.7028605Z server.py:673: return 'RECONCILE_REQUIRED', sorted(unresolved_symbols), sorted(pending_symbols)
+2026-10-11T09:43:31.7029097Z server.py:714: 'max_open_positions': multi.max_open_positions,
+2026-10-11T09:43:31.7029819Z server.py:997: 'max_open_positions': multi.max_open_positions,
+2026-10-11T09:43:31.7030213Z server.py:1035: 'max_open_positions_locked': False,
+2026-10-11T09:43:31.7030687Z server.py:1334: if not result.get('sold') and result.get('state') == 'RECONCILE_REQUIRED':
+2026-10-11T09:43:31.7031177Z server.py:1500: 'max_open_positions': multi.max_open_positions,
+2026-10-11T09:43:31.7031679Z full_safety_audit.py:191: "switch_symbol": [],
+2026-10-11T09:43:31.7032131Z full_safety_audit.py:346: r"active_symbol.*foreign_base_balance",
+2026-10-11T09:43:31.7032556Z full_safety_audit.py:347: r"switch_symbol",
+2026-10-11T09:43:31.7032907Z full_safety_audit.py:348: r"AUTO_SCAN_ENABLED",
+2026-10-11T09:43:31.7033279Z full_safety_audit.py:349: r"AUTO_SCAN_SYMBOLS",
+2026-10-11T09:43:31.7033627Z full_safety_audit.py:350: r"max_open_positions",
+2026-10-11T09:43:31.7034027Z full_safety_audit.py:351: r"RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7034363Z full_safety_audit.py:352: r"ENTRY_PENDING",
+2026-10-11T09:43:31.7034695Z full_safety_audit.py:353: r"EXIT_PENDING",
+2026-10-11T09:43:31.7035186Z full_safety_audit.py:514: "FAIL" if 'max_open_positions_locked", true' in native else "PASS",
+2026-10-11T09:43:31.7035676Z test_atomic_switch_db_failure.py:113: t.switch_symbol("ETHUSDT")
+2026-10-11T09:43:31.7036196Z test_atomic_switch_db_failure.py:117: raise AssertionError("switch_symbol unexpectedly succeeded")
+2026-10-11T09:43:31.7036698Z test_atomic_switch_db_failure.py:145: t.switch_symbol("ETHUSDT")
+2026-10-11T09:43:31.7037249Z test_atomic_switch_db_failure.py:149: raise AssertionError("switch_symbol unexpectedly succeeded")
+2026-10-11T09:43:31.7037758Z safe_smoke_test.py:184: os.environ["AUTO_SCAN_ENABLED"] = "true"
+2026-10-11T09:43:31.7038161Z safe_smoke_test.py:205: assert t.max_open_positions == 1
+2026-10-11T09:43:31.7038572Z safe_smoke_test.py:213: t.switch_symbol("ETHUSDT")
+2026-10-11T09:43:31.7038984Z safe_smoke_test.py:260: # One event is expected from switch_symbol().
+2026-10-11T09:43:31.7039398Z safe_smoke_test.py:266: print("[PASS] no ENTRY_PENDING")
+2026-10-11T09:43:31.7039876Z campaign_execution.py:274: # IMPORTANT: persist ENTRY_PENDING before touching Binance. A fast
+2026-10-11T09:43:31.7040356Z campaign_execution.py:453: "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7040750Z campaign_execution.py:457: "state": "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7041157Z campaign_execution.py:496: "state": "ENTRY_PENDING",
+2026-10-11T09:43:31.7041892Z campaign_execution.py:606: if campaign.state == CampaignState.ENTRY_PENDING:
+2026-10-11T09:43:31.7042404Z campaign_execution.py:617: CampaignState.ENTRY_PENDING,
+2026-10-11T09:43:31.7042754Z campaign_execution.py:745: "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7043155Z campaign_execution.py:750: "state": "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7043550Z campaign_execution.py:761: "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7043969Z campaign_execution.py:765: "state": "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7044350Z campaign_execution.py:789: CampaignState.ENTRY_PENDING,
+2026-10-11T09:43:31.7044816Z campaign_execution.py:821: self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7045457Z campaign_execution.py:829: self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7046011Z campaign_execution.py:854: self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7046615Z campaign_execution.py:922: "state": "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7047130Z campaign_execution.py:1320: campaign.transition(CampaignState.EXIT_PENDING, reason=reason)
+2026-10-11T09:43:31.7047793Z campaign_execution.py:1349: campaign.state = CampaignState.RECONCILE_REQUIRED
+2026-10-11T09:43:31.7048398Z campaign_execution.py:1350: self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7048877Z apply_autoscan_integration.py:77: 'AUTO_SCAN_ENABLED', 'true'
+2026-10-11T09:43:31.7049324Z apply_autoscan_integration.py:85: 'AUTO_SCAN_SYMBOLS',
+2026-10-11T09:43:31.7049757Z apply_autoscan_integration.py:98: 'AUTO_SCAN_SYMBOLS must contain at least one symbol'
+2026-10-11T09:43:31.7050264Z apply_autoscan_integration.py:102: self.max_open_positions = 1
+2026-10-11T09:43:31.7050715Z apply_autoscan_integration.py:112: 'AUTO_SCAN_ENABLED', 'true'
+2026-10-11T09:43:31.7051140Z apply_autoscan_integration.py:120: 'AUTO_SCAN_SYMBOLS',
+2026-10-11T09:43:31.7051838Z apply_autoscan_integration.py:132: 'AUTO_SCAN_SYMBOLS must contain at least one symbol'
+2026-10-11T09:43:31.7052334Z apply_autoscan_integration.py:135: self.max_open_positions = 1
+2026-10-11T09:43:31.7052839Z apply_autoscan_integration.py:166: "self._set_state('EXIT_PENDING')",
+2026-10-11T09:43:31.7053308Z apply_autoscan_integration.py:168: "self._set_state('RECONCILE_REQUIRED')",
+2026-10-11T09:43:31.7053783Z apply_autoscan_integration.py:230: - RECONCILE_REQUIRED blocks all entries;
+2026-10-11T09:43:31.7054286Z apply_autoscan_integration.py:259: if self.max_open_positions != 1:
+2026-10-11T09:43:31.7054778Z apply_autoscan_integration.py:324: self.switch_symbol(selected_symbol)
+2026-10-11T09:43:31.7055299Z apply_autoscan_integration.py:368: # switch_symbol/recovery required REST requests.
+2026-10-11T09:43:31.7055772Z apply_autoscan_integration.py:635: # AUTO_SCAN_ENABLED=false.
+2026-10-11T09:43:31.7056188Z apply_autoscan_integration.py:828: print("  AUTO_SCAN_ENABLED=true")
+2026-10-11T09:43:31.7056698Z order_state_machine.py:19: RECONCILE_REQUIRED = "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7057227Z order_state_machine.py:23: OrderState.NEW: {OrderState.ADMISSION, OrderState.RECONCILE_REQUIRED},
+2026-10-11T09:43:31.7057945Z order_state_machine.py:24: OrderState.ADMISSION: {OrderState.SUBMITTING, OrderState.CANCELED, OrderState.RECONCILE_REQUIRED},
+2026-10-11T09:43:31.7058565Z order_state_machine.py:28: OrderState.RECONCILE_REQUIRED,
+2026-10-11T09:43:31.7058968Z order_state_machine.py:33: OrderState.RECONCILE_REQUIRED,
+2026-10-11T09:43:31.7059375Z order_state_machine.py:38: OrderState.RECONCILE_REQUIRED,
+2026-10-11T09:43:31.7059793Z order_state_machine.py:44: OrderState.RECONCILE_REQUIRED,
+2026-10-11T09:43:31.7060282Z order_state_machine.py:49: OrderState.AMBIGUOUS: {OrderState.RECONCILE_REQUIRED},
+2026-10-11T09:43:31.7060757Z order_state_machine.py:50: OrderState.RECONCILE_REQUIRED: set(),
+2026-10-11T09:43:31.7061195Z order_state_machine.py:85: self.state = OrderState.RECONCILE_REQUIRED
+2026-10-11T09:43:31.7061877Z order_state_machine.py:95: self.state = OrderState.RECONCILE_REQUIRED
+2026-10-11T09:43:31.7062407Z order_state_machine.py:105: OrderState.RECONCILE_REQUIRED,
+2026-10-11T09:43:31.7062911Z test_selected_symbol_prepare.py:74: result = trader.switch_symbol(selected_symbol)
+2026-10-11T09:43:31.7063399Z test_selected_symbol_prepare.py:113: "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7063915Z test_selected_symbol_prepare.py:122: "Preparation resulted in RECONCILE_REQUIRED. "
+2026-10-11T09:43:31.7064422Z recovery_oco_failure_test.py:105: t.foreign_base_balance=0
+2026-10-11T09:43:31.7064888Z recovery_oco_failure_test.py:110: t.db.state_set("foreign_base_balance:BTCUSDT", 0.0)
+2026-10-11T09:43:31.7065413Z recovery_oco_failure_test.py:116: assert t.state()=="ENTRY_PENDING"
+2026-10-11T09:43:31.7065926Z recovery_oco_failure_test.py:129: assert t.state()=="RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7066450Z recovery_oco_failure_test.py:130: print("[PASS] state = RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7066992Z recovery_oco_failure_test.py:152: assert state == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7067544Z execution_barrier.py:104: self.db.state_set("position_state", "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7068218Z execution_barrier.py:106: self.db.state_set(f"campaign_state:{intent.campaign_id}", "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7068762Z execution_barrier.py:194: if state == "RECONCILE_REQUIRED":
+2026-10-11T09:43:31.7069244Z execution_barrier.py:195: return "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7069656Z execution_barrier.py:202: if campaign_state == "RECONCILE_REQUIRED":
+2026-10-11T09:43:31.7070138Z execution_barrier.py:243: order_fsm.state = OrderState.RECONCILE_REQUIRED
+2026-10-11T09:43:31.7070620Z execution_barrier.py:263: order_fsm.state = OrderState.RECONCILE_REQUIRED
+2026-10-11T09:43:31.7071108Z execution_barrier.py:332: order_fsm.state = OrderState.RECONCILE_REQUIRED
+2026-10-11T09:43:31.7071808Z audit_scanner_trader.py:129: "Trader has ENTRY_PENDING protection",
+2026-10-11T09:43:31.7072247Z audit_scanner_trader.py:130: "ENTRY_PENDING" in trader
+2026-10-11T09:43:31.7072683Z audit_scanner_trader.py:134: "Trader has RECONCILE_REQUIRED protection",
+2026-10-11T09:43:31.7073179Z audit_scanner_trader.py:135: "RECONCILE_REQUIRED" in trader
+2026-10-11T09:43:31.7073586Z audit_scanner_trader.py:185: "ENTRY_PENDING recovery exists",
+2026-10-11T09:43:31.7074097Z audit_scanner_trader.py:186: "ENTRY_PENDING" in trader and "recover_state" in trader
+2026-10-11T09:43:31.7074604Z audit_scanner_trader.py:190: "RECONCILE_REQUIRED state exists",
+2026-10-11T09:43:31.7075030Z audit_scanner_trader.py:191: "RECONCILE_REQUIRED" in trader
+2026-10-11T09:43:31.7075473Z audit_scanner_trader.py:206: "RECONCILE_REQUIRED" in trader and "FLAT" in trader
+2026-10-11T09:43:31.7075954Z audit_scanner_trader.py:224: "ENTRY_PENDING exists before/around BUY handling",
+2026-10-11T09:43:31.7076524Z audit_scanner_trader.py:225: "ENTRY_PENDING" in trader and "market_buy" in trader
+2026-10-11T09:43:31.7077081Z audit_scanner_trader.py:386: # Controlled symbol switching must be performed through switch_symbol()
+2026-10-11T09:43:31.7077656Z audit_scanner_trader.py:389: "def switch_symbol(self, symbol)" in trader
+2026-10-11T09:43:31.7496166Z audit_scanner_trader.py:390: and "self.switch_symbol(selected_symbol)" in trader
+2026-10-11T09:43:31.7497005Z preflight_gate.py:49: def __init__(self, client, *, symbols=None, max_open_positions=0, max_offset_ms=None):
+2026-10-11T09:43:31.7497557Z preflight_gate.py:52: self.max_open_positions = int(max_open_positions)
+2026-10-11T09:43:31.7498195Z portfolio_scanner.py:118: def allocate(self, open_risk_quote=0.0, open_positions=0, max_open_positions=None):
+2026-10-11T09:43:31.7498844Z campaign_engine.py:251: campaign.transition(CampaignState.ENTRY_PENDING, reason="conditional entry admitted")
+2026-10-11T09:43:31.7499418Z campaign_engine.py:306: if campaign.state != CampaignState.ENTRY_PENDING:
+2026-10-11T09:43:31.7499956Z campaign_engine.py:478: CampaignEventType.RECONCILE_REQUIRED.value,
+2026-10-11T09:43:31.7500434Z digital_williams_core.py:107: "ambiguity": "RECONCILE_REQUIRED; no blind replay",
+2026-10-11T09:43:31.7501175Z test_portfolio_controller.py:54: controller.max_open_positions = 1
+2026-10-11T09:43:31.7501905Z test_dynamic_scanner.py:57: monkeypatch.delenv("AUTO_SCAN_SYMBOLS", raising=False)
+2026-10-11T09:43:31.7502513Z test_integration_bindings.py:224: db.state_set("position_state:BTCUSDT", "ENTRY_PENDING")
+2026-10-11T09:43:31.7503046Z test_integration_bindings.py:288: db.state_set("position_state:BTCUSDT", "ENTRY_PENDING")
+2026-10-11T09:43:31.7503594Z test_execution_barrier_fail_closed.py:195: assert db.states["position_state"] == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7504256Z test_execution_barrier_fail_closed.py:239: assert db.states["position_state"] == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7504836Z test_execution_barrier_fail_closed.py:258: assert db.states["position_state"] == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7505467Z test_execution_barrier_fail_closed.py:462: assert db.states["position_state"] == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7506114Z test_execution_barrier_fail_closed.py:511: assert trader.db.states["position_state:BTCUSDT"] == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7506855Z test_execution_barrier_fail_closed.py:557: assert trader.db.states["position_state:BTCUSDT"] == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7510137Z recovery_test.py:59: t=Trader.__new__(Trader);t.symbol='BTCUSDT';t.interval='1h';t.position_fraction=.25;t.stop_pct=.02;t.target_pct=.04;t.poll_seconds=1;t.risk_per_trade_pct=.01;t.max_daily_loss_pct=.03;t.max_trades_day=5;t.max_consecutive_losses=3;t.cooldown_minutes=30;t.min_risk_reward=1.5;t.atr_period=14;t.max_atr_pct=.08;t.max_spread_pct=.0015;t.require_htf_confirmation=False;t.htf_interval='4h';t.db=Database(path);t.client=c;t.config=type('_Config',(),{'structural_timeframes':('1d','4h','1h','15m')})();t.context_cache=_FakeContextCache();t.execution_barrier=_FakeExecutionBarrier();t.equity_breaker=_FakeEquityBreaker();t.refresh_execution_context=lambda symbol:_FakeSnapshot();t.db.state_set('active_symbol','BTCUSDT');t.db.state_set('foreign_base_balance:BTCUSDT',0.0);t.filters={'LOT_SIZE':{'minQty':'0.001','stepSize':'0.001'},'PRICE_FILTER':{'tickSize':'0.01'},'MIN_NOTIONAL':{'minNotional':'10'}};t.symbol_rules=SymbolRules(symbol='BTCUSDT',base_asset='BTC',quote_asset='USDT',min_qty=Decimal('0.001'),max_qty=Decimal('1000'),step_size=Decimal('0.001'),min_price=Decimal('0.01'),max_price=Decimal('1000000'),tick_size=Decimal('0.01'),min_notional=Decimal('10'));t.base_asset='BTC';t.quote_asset='USDT';t.recovered=False;t.notify=lambda m:None;return t
+2026-10-11T09:43:31.7514440Z recovery_test.py:85: c=FakeClient(base_free=2);t=new_trader(os.path.join(d,'x.sqlite3'),c);t.db.state_set('foreign_base_balance:BTCUSDT',2.0);t.recover_state();assert t.db.open_trade() is None;assert t.state()=='FLAT';assert c.created_oco_count==0
+2026-10-11T09:43:31.7515611Z recovery_test.py:89: c=FakeClient();t=new_trader(os.path.join(d,'x.sqlite3'),c);seed(t,c);c.base_free=1.2;t.recover_state();assert t.state()=='RECONCILE_REQUIRED';assert c.created_oco_count==0
+2026-10-11T09:43:31.7516575Z recovery_test.py:93: c=FakeClient();t=new_trader(os.path.join(d,'x.sqlite3'),c);t._set_state('RECONCILE_REQUIRED');called=[];t.recover_state=lambda: called.append('recovered')
+2026-10-11T09:43:31.7517337Z recovery_test.py:95: t.process();assert called==['recovered'];assert t.state()=='RECONCILE_REQUIRED'
+2026-10-11T09:43:31.7518251Z recovery_test.py:99: c=FakeClient();t=new_trader(os.path.join(d,'x.sqlite3'),c);t.db.state_set('entry_client_order_id','WILLV4_ENTRY_unknown');t._set_state('ENTRY_PENDING');t.recover_state();assert t.state()=='RECONCILE_REQUIRED'
+2026-10-11T09:43:31.7520243Z recovery_test.py:103: c=FakeClient(base_free=1);t=new_trader(os.path.join(d,'x.sqlite3'),c);c.orders.append({'symbol':'BTCUSDT','side':'BUY','type':'MARKET','orderId':77,'clientOrderId':'WILLV4_ENTRY_timeout','status':'FILLED','price':'100','origQty':'1','executedQty':'1','cummulativeQuoteQty':'100','transactTime':5000,'time':5000});t.db.state_set('entry_client_order_id','WILLV4_ENTRY_timeout');t._set_state('ENTRY_PENDING');t.recover_state();assert t.db.open_trade() is not None;assert t.state()=='OPEN'
+2026-10-11T09:43:31.7522431Z recovery_test.py:119: assert t.db.state_get('foreign_base_balance:BTCUSDT') is None
+2026-10-11T09:43:31.7523211Z recovery_test.py:123: baseline=t.db.state_get('foreign_base_balance:BTCUSDT')
+2026-10-11T09:43:31.7523995Z recovery_test.py:160: assert abs(float(t.db.state_get('foreign_base_balance:BTCUSDT')))<1e-9
+2026-10-11T09:43:31.7524806Z recovery_test.py:177: ('excess BTC enters RECONCILE_REQUIRED',scenario_excess_balance_blocks),
+2026-10-11T09:43:31.7525380Z recovery_test.py:178: ('RECONCILE_REQUIRED blocks new entry',scenario_state_machine_blocks_entry),
+2026-10-11T09:43:31.7525913Z test_scanner_trader_dry_run.py:90: result = trader.switch_symbol(candidate.symbol)
+2026-10-11T09:43:31.7526415Z test_preflight_gate.py:114: max_open_positions=1,
+2026-10-11T09:43:31.7526815Z campaign_model.py:38: ENTRY_PENDING = "ENTRY_PENDING"
+2026-10-11T09:43:31.7527196Z campaign_model.py:48: EXIT_PENDING = "EXIT_PENDING"
+2026-10-11T09:43:31.7527600Z campaign_model.py:50: RECONCILE_REQUIRED = "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7528206Z campaign_model.py:102: RECONCILE_REQUIRED = "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7528682Z campaign_model.py:267: self.state = CampaignState.RECONCILE_REQUIRED
+2026-10-11T09:43:31.7529125Z campaign_model.py:284: if nxt == CampaignState.RECONCILE_REQUIRED:
+2026-10-11T09:43:31.7529555Z campaign_model.py:291: CampaignState.ENTRY_PENDING,
+2026-10-11T09:43:31.7529962Z campaign_model.py:295: CampaignState.ENTRY_PENDING,
+2026-10-11T09:43:31.7530335Z campaign_model.py:298: CampaignState.ENTRY_PENDING: {
+2026-10-11T09:43:31.7530730Z campaign_model.py:305: CampaignState.ENTRY_PENDING,
+2026-10-11T09:43:31.7531087Z campaign_model.py:345: CampaignState.EXIT_PENDING,
+2026-10-11T09:43:31.7531494Z campaign_model.py:348: CampaignState.EXIT_PENDING: {
+2026-10-11T09:43:31.7532170Z campaign_model.py:354: CampaignState.RECONCILE_REQUIRED: {
+2026-10-11T09:43:31.7532553Z campaign_model.py:358: CampaignState.EXIT_PENDING,
+2026-10-11T09:43:31.7533035Z test_multi_position_trader.py:18: t.set_state("ETHUSDT", "ENTRY_PENDING")
+2026-10-11T09:43:31.7533504Z test_multi_position_trader.py:20: assert t.state("ETHUSDT") == "ENTRY_PENDING"
+2026-10-11T09:43:31.7533984Z campaign_order_fsm.py:20: ENTRY_PENDING = "ENTRY_PENDING"
+2026-10-11T09:43:31.7534375Z campaign_order_fsm.py:30: EXIT_PENDING = "EXIT_PENDING"
+2026-10-11T09:43:31.7535252Z campaign_order_fsm.py:68: CampaignOrderState.ENTRY_PENDING,
+2026-10-11T09:43:31.7535670Z campaign_order_fsm.py:72: CampaignOrderState.ENTRY_PENDING,
+2026-10-11T09:43:31.7536080Z campaign_order_fsm.py:76: CampaignOrderState.ENTRY_PENDING: {
+2026-10-11T09:43:31.7536517Z campaign_order_fsm.py:86: CampaignOrderState.EXIT_PENDING,
+2026-10-11T09:43:31.7536959Z campaign_order_fsm.py:92: CampaignOrderState.EXIT_PENDING,
+2026-10-11T09:43:31.7537395Z campaign_order_fsm.py:99: CampaignOrderState.EXIT_PENDING,
+2026-10-11T09:43:31.7537800Z campaign_order_fsm.py:106: CampaignOrderState.EXIT_PENDING,
+2026-10-11T09:43:31.7538240Z campaign_order_fsm.py:112: CampaignOrderState.EXIT_PENDING,
+2026-10-11T09:43:31.7538648Z campaign_order_fsm.py:118: CampaignOrderState.EXIT_PENDING,
+2026-10-11T09:43:31.7539055Z campaign_order_fsm.py:125: CampaignOrderState.EXIT_PENDING,
+2026-10-11T09:43:31.7539492Z campaign_order_fsm.py:129: CampaignOrderState.EXIT_PENDING,
+2026-10-11T09:43:31.7539919Z campaign_order_fsm.py:134: CampaignOrderState.EXIT_PENDING,
+2026-10-11T09:43:31.7540341Z campaign_order_fsm.py:138: CampaignOrderState.EXIT_PENDING: {
+2026-10-11T09:43:31.7540761Z campaign_order_fsm.py:146: CampaignOrderState.EXIT_PENDING,
+2026-10-11T09:43:31.7541296Z test_campaign_engine.py:47: assert db.get_campaign(campaign.campaign_id)["state"] == CampaignState.ENTRY_PENDING
+2026-10-11T09:43:31.7542040Z test_buy_safety.py:34: t.max_open_positions = 1
+2026-10-11T09:43:31.7542381Z portfolio_trader.py:20: "ENTRY_PENDING",
+2026-10-11T09:43:31.7542708Z portfolio_trader.py:22: "EXIT_PENDING",
+2026-10-11T09:43:31.7543127Z portfolio_trader.py:23: "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7543618Z portfolio_trader.py:35: ENTRY_PENDING -> OPEN/EXIT_PENDING -> OPEN -> FLAT
+2026-10-11T09:43:31.7544093Z portfolio_trader.py:36: -> RECONCILE_REQUIRED on ambiguity
+2026-10-11T09:43:31.7544543Z portfolio_trader.py:52: raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "ALL").strip()
+2026-10-11T09:43:31.7545032Z portfolio_trader.py:58: self.max_open_positions = max(
+2026-10-11T09:43:31.7545442Z portfolio_trader.py:118: self.set_state(symbol, "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7545893Z portfolio_trader.py:138: self.set_state(symbol, "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7546401Z portfolio_trader.py:159: return state if state in POSITION_STATES else "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7546904Z portfolio_trader.py:174: canonical = "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7547389Z portfolio_trader.py:233: position_state:<symbol>=RECONCILE_REQUIRED left in SQLite could never
+2026-10-11T09:43:31.7547899Z portfolio_trader.py:265: if self.state(symbol) != "RECONCILE_REQUIRED":
+2026-10-11T09:43:31.7548482Z portfolio_trader.py:317: if str(row["value"]).upper() == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7548951Z portfolio_trader.py:831: self.set_state(symbol, "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7549361Z portfolio_trader.py:846: state = "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7549790Z portfolio_trader.py:849: self.set_state(symbol, "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7550249Z portfolio_trader.py:850: state = "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7810196Z portfolio_trader.py:972: self.set_state(symbol, "EXIT_PENDING")
+2026-10-11T09:43:31.7811181Z portfolio_trader.py:1065: self.set_state(symbol, "ENTRY_PENDING")
+2026-10-11T09:43:31.7811965Z portfolio_trader.py:1122: "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7812709Z portfolio_trader.py:1136: "state": "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7813272Z portfolio_trader.py:1588: "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7813900Z portfolio_trader.py:1603: "state": "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7814587Z portfolio_trader.py:1801: self.set_state(symbol, "EXIT_PENDING")
+2026-10-11T09:43:31.7815254Z portfolio_trader.py:1805: self.set_state(symbol, "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7816012Z portfolio_trader.py:1834: self.set_state(symbol, "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7816663Z portfolio_trader.py:1848: "state": "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7817362Z portfolio_trader.py:2078: if self.max_open_positions > 0 and open_count >= self.max_open_positions:
+2026-10-11T09:43:31.7818139Z portfolio_trader.py:2125: self.set_state(symbol, "RECONCILE_REQUIRED")
+2026-10-11T09:43:31.7818748Z portfolio_trader.py:2130: "action": "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7819398Z portfolio_trader.py:2145: if self.state(symbol) == "RECONCILE_REQUIRED":
+2026-10-11T09:43:31.7820187Z portfolio_trader.py:2149: if self.max_open_positions > 0 and len(self.open_trades()) >= self.max_open_positions:
+2026-10-11T09:43:31.7820727Z portfolio_trader.py:2238: "ENTRY_PENDING",
+2026-10-11T09:43:31.7821118Z portfolio_trader.py:2253: self.set_state(symbol, "ENTRY_PENDING")
+2026-10-11T09:43:31.7821506Z portfolio_trader.py:2375: "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7822320Z portfolio_trader.py:2451: "reason": "ENTRY_PENDING: durable entry intent requires recovery",
+2026-10-11T09:43:31.7822901Z portfolio_trader.py:2454: if self.max_open_positions > 0 and len(open_trades) >= self.max_open_positions:
+2026-10-11T09:43:31.7823478Z portfolio_trader.py:2461: "reason": f"MAX_OPEN_POSITIONS={self.max_open_positions}",
+2026-10-11T09:43:31.7824001Z ci_release_gate.py:33: "AUTO_SCAN_SYMBOLS=", "SCAN_ALL_USDT=true", "SCAN_MAX_SYMBOLS=0",
+2026-10-11T09:43:31.7824550Z ci_release_gate.py:39: must(cfg, "max_open_positions: int = 5", "trading_config.py")
+2026-10-11T09:43:31.7825102Z ci_release_gate.py:56: must(trader, "os.getenv('AUTO_SCAN_SYMBOLS', '').strip()", "trader.py")
+2026-10-11T09:43:31.7825680Z ci_release_gate.py:78: must(runtime, 'prefs.getInt("max_open_positions", 5)', "StandaloneRuntime.kt")
+2026-10-11T09:43:31.7826433Z test_atomic_switch_rollback.py:145: t.switch_symbol("ETHUSDT")
+2026-10-11T09:43:31.7826931Z test_atomic_switch_rollback.py:149: raise AssertionError("switch_symbol unexpectedly succeeded")
+2026-10-11T09:43:31.7827433Z test_atomic_switch_rollback.py:171: t.switch_symbol("ETHUSDT")
+2026-10-11T09:43:31.7827963Z test_atomic_switch_rollback.py:175: raise AssertionError("switch_symbol unexpectedly succeeded")
+2026-10-11T09:43:31.7828503Z test_atomic_switch_rollback.py:193: result = t.switch_symbol("ETHUSDT")
+2026-10-11T09:43:31.7829045Z test_testnet_release_gate.py:94: max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "0")),
+2026-10-11T09:43:31.7829601Z test_android_remote_only.py:47: assert 'prefs.getInt("max_open_positions", 5)' in runtime
+2026-10-11T09:43:31.7830219Z test_android_remote_only.py:68: assert "'max_open_positions': multi.max_open_positions" in server
+2026-10-11T09:43:31.7830704Z test_four_echelons.py:81: db.state = "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7831116Z test_four_echelons.py:94: assert result.reason == "RECONCILE_REQUIRED"
+2026-10-11T09:43:31.7831728Z test_four_echelons.py:170: # max_open_positions=1 rule.
+2026-10-11T09:43:31.7832278Z campaign_monitor.py:132: return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": "invalid current price"}
+2026-10-11T09:43:31.7832836Z campaign_monitor.py:281: CampaignState.ENTRY_PENDING,
+2026-10-11T09:43:31.7833215Z campaign_monitor.py:295: "state": "RECONCILE_REQUIRED",
+2026-10-11T09:43:31.7833751Z portfolio_controller.py:23: self.max_open_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
+2026-10-11T09:43:31.7834261Z portfolio_controller.py:92: self.max_open_positions > 0
+2026-10-11T09:43:31.7834722Z portfolio_controller.py:93: and open_positions >= self.max_open_positions
+2026-10-11T09:43:31.7835229Z portfolio_controller.py:111: max(0, self.max_open_positions - int(open_positions))
+2026-10-11T09:43:31.7835728Z portfolio_controller.py:112: if self.max_open_positions > 0
+2026-10-11T09:43:31.7835958Z 
+2026-10-11T09:43:31.7836135Z ==========================================================================================
+2026-10-11T09:43:31.7836497Z 12. GITHUB ACTIONS
+2026-10-11T09:43:31.7836817Z ==========================================================================================
+2026-10-11T09:43:31.7837069Z 
+2026-10-11T09:43:31.7837243Z --- .github/workflows/campaign-ci.yml ---
+2026-10-11T09:43:31.7837571Z name: Williams Campaign CI
+2026-10-11T09:43:31.7837738Z 
+2026-10-11T09:43:31.7837847Z on:
+2026-10-11T09:43:31.7838125Z   push:
+2026-10-11T09:43:31.7838376Z     branches: ["**"]
+2026-10-11T09:43:31.7838669Z   pull_request:
+2026-10-11T09:43:31.7838927Z     branches: ["**"]
+2026-10-11T09:43:31.7839237Z   workflow_dispatch:
+2026-10-11T09:43:31.7839369Z 
+2026-10-11T09:43:31.7839498Z permissions:
+2026-10-11T09:43:31.7839754Z   contents: read
+2026-10-11T09:43:31.7839947Z 
+2026-10-11T09:43:31.7840045Z concurrency:
+2026-10-11T09:43:31.7840347Z   group: williams-ci-${{ github.ref }}
+2026-10-11T09:43:31.7840673Z   cancel-in-progress: true
+2026-10-11T09:43:31.7840858Z 
+2026-10-11T09:43:31.7840977Z jobs:
+2026-10-11T09:43:31.7841199Z   python:
+2026-10-11T09:43:31.7841498Z     name: Python tests
+2026-10-11T09:43:31.7841853Z     runs-on: ubuntu-latest
+2026-10-11T09:43:31.7842142Z     steps:
+2026-10-11T09:43:31.7842408Z       - name: Checkout
+2026-10-11T09:43:31.7842722Z         uses: actions/checkout@v4
+2026-10-11T09:43:31.7843028Z       - name: Set up Python
+2026-10-11T09:43:31.7843325Z         uses: actions/setup-python@v5
+2026-10-11T09:43:31.7843642Z         with:
+2026-10-11T09:43:31.7843955Z           python-version: "3.12"
+2026-10-11T09:43:31.7844243Z           cache: pip
+2026-10-11T09:43:31.7844529Z       - name: Install dependencies
+2026-10-11T09:43:31.7844863Z         run: python -m pip install -r requirements.txt
+2026-10-11T09:43:31.7845250Z       - name: Compile Python sources
+2026-10-11T09:43:31.7845585Z         run: python -m compileall -q .
+2026-10-11T09:43:31.7845897Z       - name: Full static safety audit
+2026-10-11T09:43:31.7846289Z         run: python full_safety_audit.py
+2026-10-11T09:43:31.7846663Z       - name: Run deterministic safety and campaign tests
+2026-10-11T09:43:31.7847041Z         run: |
+2026-10-11T09:43:31.7847301Z           set -o pipefail
+2026-10-11T09:43:31.7847604Z           python -m pytest -q \
+2026-10-11T09:43:31.7847960Z             test_production_architecture.py \
+2026-10-11T09:43:31.7848292Z             test_execution_barrier_fail_closed.py \
+2026-10-11T09:43:31.7848682Z             test_binance_secret_redaction.py \
+2026-10-11T09:43:31.7849006Z             test_android_remote_only.py \
+2026-10-11T09:43:31.7849370Z             test_l2_slippage.py \
+2026-10-11T09:43:31.7849668Z             test_hypothesis_engine.py \
+2026-10-11T09:43:31.7849958Z             test_market_scanner.py \
+2026-10-11T09:43:31.7850300Z             test_wave_engine.py \
+2026-10-11T09:43:31.7850628Z             test_dynamic_scanner.py \
+2026-10-11T09:43:31.7850950Z             test_portfolio_controller.py \
+2026-10-11T09:43:31.7851265Z             test_multi_position_risk.py \
+2026-10-11T09:43:31.7851725Z             test_multi_position_execution.py \
+2026-10-11T09:43:31.7852110Z             test_portfolio_scanner.py \
+2026-10-11T09:43:31.7852424Z             test_portfolio_scanner_atr.py \
+2026-10-11T09:43:31.7852745Z             test_risk_engine.py \
+2026-10-11T09:43:31.7853042Z             test_strategy_diagnostics.py \
+2026-10-11T09:43:31.7853407Z             test_db_guard.py \
+2026-10-11T09:43:31.7853710Z             test_db_isolation.py \
+2026-10-11T09:43:31.7854008Z             test_atomic_real_db.py \
+2026-10-11T09:43:31.7854330Z             test_atomic_switch_db_failure.py \
+2026-10-11T09:43:31.7854686Z             test_atomic_switch_rollback.py \
+2026-10-11T09:43:31.7855020Z             test_buy_safety.py \
+2026-10-11T09:43:31.7855336Z             test_williams_book_alignment.py \
+2026-10-11T09:43:31.7855651Z             test_book_wave_safety.py \
+2026-10-11T09:43:31.7855993Z             test_trade_journal.py \
+2026-10-11T09:43:31.7856325Z             test_multi_position_lifecycle.py \
+2026-10-11T09:43:31.7856649Z             recovery_test.py \
+2026-10-11T09:43:31.7856953Z             recovery_oco_failure_test.py \
+2026-10-11T09:43:31.7857280Z             test_chaos_hardening.py \
+2026-10-11T09:43:31.7857608Z             test_wave_safety_fields.py \
+2026-10-11T09:43:31.7857940Z             test_binance_market_data.py \
+2026-10-11T09:43:31.7858294Z             test_binance_json_shapes.py \
+2026-10-11T09:43:31.7858596Z             tests/test_quant_layer.py \
+2026-10-11T09:43:31.7858890Z             tests/test_quant_models.py \
+2026-10-11T09:43:31.7859222Z             test_preflight_gate.py \
+2026-10-11T09:43:31.7859585Z             test_preflight_fail_closed.py \
+2026-10-11T09:43:31.7859914Z             test_runtime_freshness.py \
+2026-10-11T09:43:31.7860225Z             test_execution_architecture.py \
+2026-10-11T09:43:31.7860528Z             test_integration_bindings.py \
+2026-10-11T09:43:31.7860893Z             test_testnet_release_gate.py \
+2026-10-11T09:43:31.7861222Z             test_campaign_engine.py \
+2026-10-11T09:43:31.7861625Z             test_campaign_execution.py \
+2026-10-11T09:43:31.7862164Z             2>&1 | tee campaign-pytest-output.txt
+2026-10-11T09:43:31.7862395Z 
+2026-10-11T09:43:31.7862525Z   android:
+2026-10-11T09:43:31.7862813Z     name: Android build and static checks
+2026-10-11T09:43:31.7863121Z     runs-on: ubuntu-latest
+2026-10-11T09:43:31.7863407Z     steps:
+2026-10-11T09:43:31.7863688Z       - name: Checkout
+2026-10-11T09:43:31.7864102Z         uses: actions/checkout@v4
+2026-10-11T09:43:31.7864419Z       - name: Set up JDK
+2026-10-11T09:43:31.7864700Z         uses: actions/setup-java@v6
+2026-10-11T09:43:31.7865048Z         with:
+2026-10-11T09:43:31.7865305Z           distribution: temurin
+2026-10-11T09:43:31.7865612Z           java-version: "17"
+2026-10-11T09:43:31.7865920Z       - name: Set up Gradle
+2026-10-11T09:43:31.7866249Z         uses: gradle/actions/setup-gradle@v5
+2026-10-11T09:43:31.7866559Z         with:
+2026-10-11T09:43:31.7866911Z           gradle-version: "8.14.6"
+2026-10-11T09:43:31.7867251Z           validate-wrappers: false
+2026-10-11T09:43:31.7867591Z       - name: Make Gradle wrapper executable
+2026-10-11T09:43:31.7867905Z         run: chmod +x ./gradlew
+2026-10-11T09:43:31.7868230Z       - name: Build debug APK and run unit tests
+2026-10-11T09:43:31.7868717Z         run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+2026-10-11T09:43:31.7869252Z       - name: Upload debug APK
+2026-10-11T09:43:31.7869555Z         uses: actions/upload-artifact@v4
+2026-10-11T09:43:31.7869855Z         with:
+2026-10-11T09:43:31.7870120Z           name: williams-debug-apk
+2026-10-11T09:43:31.7870461Z           path: app/build/outputs/apk/debug/*.apk
+2026-10-11T09:43:31.7870834Z           if-no-files-found: error
+2026-10-11T09:43:31.7871134Z       - name: Upload lint report
+2026-10-11T09:43:31.7871431Z         uses: actions/upload-artifact@v4
+2026-10-11T09:43:31.7871842Z         with:
+2026-10-11T09:43:31.7872102Z           name: williams-lint-report
+2026-10-11T09:43:31.7872542Z           path: app/build/reports/lint-results-debug.*
+2026-10-11T09:43:31.7872881Z           if-no-files-found: warn
+2026-10-11T09:43:31.7873058Z 
+2026-10-11T09:43:31.7873323Z [PASS] .github/workflows/campaign-ci.yml contains Android assemble step
+2026-10-11T09:43:31.7873586Z 
+2026-10-11T09:43:31.7873757Z --- .github/workflows/testnet-readonly.yml ---
+2026-10-11T09:43:31.7874183Z name: Binance Spot Testnet read-only gate
+2026-10-11T09:43:31.7874425Z 
+2026-10-11T09:43:31.7874543Z on:
+2026-10-11T09:43:31.7874829Z   workflow_dispatch:
+2026-10-11T09:43:31.7875111Z     inputs:
+2026-10-11T09:43:31.7875351Z       symbol:
+2026-10-11T09:43:31.7875731Z         description: "Spot USDT symbol for authenticated preflight"
+2026-10-11T09:43:31.7876101Z         required: true
+2026-10-11T09:43:31.7876371Z         default: "BTCUSDT"
+2026-10-11T09:43:31.7876654Z         type: string
+2026-10-11T09:43:31.7876820Z 
+2026-10-11T09:43:31.7876974Z permissions:
+2026-10-11T09:43:31.7877236Z   contents: read
+2026-10-11T09:43:31.7877406Z 
+2026-10-11T09:43:31.7877504Z jobs:
+2026-10-11T09:43:31.7877753Z   testnet-read-only:
+2026-10-11T09:43:31.7878086Z     name: Binance Spot Testnet preflight
+2026-10-11T09:43:31.7878424Z     runs-on: ubuntu-24.04
+2026-10-11T09:43:31.7878703Z     timeout-minutes: 10
+2026-10-11T09:43:31.7878978Z     env:
+2026-10-11T09:43:31.7879241Z       TESTNET: "true"
+2026-10-11T09:43:31.7879540Z       ALLOW_LIVE: "false"
+2026-10-11T09:43:31.7879835Z       WILLIAMS_TESTNET_E2E: "1"
+2026-10-11T09:43:31.7880180Z       BINANCE_API_KEY: ${{ secrets.WILLIAMS_TESTNET_API_KEY }}
+2026-10-11T09:43:31.7880630Z       BINANCE_API_SECRET: ${{ secrets.WILLIAMS_TESTNET_API_SECRET }}
+2026-10-11T09:43:31.7880988Z       PYTHONUNBUFFERED: "1"
+2026-10-11T09:43:31.7881289Z     steps:
+2026-10-11T09:43:31.7881619Z       - name: Checkout
+2026-10-11T09:43:31.7881944Z         uses: actions/checkout@v5
+2026-10-11T09:43:31.7882230Z         with:
+2026-10-11T09:43:31.7882476Z           fetch-depth: 1
+2026-10-11T09:43:31.7882687Z 
+2026-10-11T09:43:31.7882791Z       - name: Set up Python
+2026-10-11T09:43:31.7883136Z         uses: actions/setup-python@v6
+2026-10-11T09:43:31.7883533Z         with:
+2026-10-11T09:43:31.7883793Z           python-version: "3.13"
+2026-10-11T09:43:31.7883991Z 
+2026-10-11T09:43:31.7884122Z       - name: Install runtime dependencies
+2026-10-11T09:43:31.7884519Z         run: python -m pip install -r requirements.txt
+2026-10-11T09:43:31.7884722Z 
+2026-10-11T09:43:31.7884886Z       - name: Validate repository release contract
+2026-10-11T09:43:31.7885237Z         run: python3 ci_release_gate.py
+2026-10-11T09:43:31.7885441Z 
+2026-10-11T09:43:31.7885615Z       - name: Validate secret presence without printing values
+2026-10-11T09:43:31.7886019Z         run: |
+2026-10-11T09:43:31.7886277Z           set -euo pipefail
+2026-10-11T09:43:31.7886927Z           test -n "${BINANCE_API_KEY}" || { echo "::error::WILLIAMS_TESTNET_API_KEY is not configured."; exit 1; }
+2026-10-11T09:43:31.7887611Z           test -n "${BINANCE_API_SECRET}" || { echo "::error::WILLIAMS_TESTNET_API_SECRET is not configured."; exit 1; }
+2026-10-11T09:43:31.7887956Z 
+2026-10-11T09:43:31.7888129Z       - name: Run authenticated Spot Testnet read-only gate
+2026-10-11T09:43:31.7888589Z         run: python test_testnet_release_gate.py --read-only
+2026-10-11T09:43:31.7888971Z         env:
+2026-10-11T09:43:31.7889270Z           TESTNET_SYMBOL: ${{ inputs.symbol }}
+2026-10-11T09:43:31.7889457Z 
+2026-10-11T09:43:31.7889497Z 
+2026-10-11T09:43:31.7889618Z --- .github/workflows/python-ci.yml ---
+2026-10-11T09:43:31.7889924Z name: Python backend tests
+2026-10-11T09:43:31.7890161Z 
+2026-10-11T09:43:31.7890290Z on:
+2026-10-11T09:43:31.7890536Z   push:
+2026-10-11T09:43:31.7890809Z     branches: [main, master]
+2026-10-11T09:43:31.7891093Z     paths:
+2026-10-11T09:43:31.7891410Z       - "*.py"
+2026-10-11T09:43:31.7891754Z       - "tests/**"
+2026-10-11T09:43:31.7892030Z       - "requirements.txt"
+2026-10-11T09:43:31.7892338Z       - ".github/workflows/**"
+2026-10-11T09:43:31.7892725Z   pull_request:
+2026-10-11T09:43:31.7893000Z     paths:
+2026-10-11T09:43:31.7893263Z       - "*.py"
+2026-10-11T09:43:31.7893526Z       - "tests/**"
+2026-10-11T09:43:31.7893853Z       - "requirements.txt"
+2026-10-11T09:43:31.7894164Z       - ".github/workflows/**"
+2026-10-11T09:43:31.7894455Z   workflow_dispatch:
+2026-10-11T09:43:31.7894647Z 
+2026-10-11T09:43:31.7894749Z concurrency:
+2026-10-11T09:43:31.7895064Z   # Each commit validates its exact source tree.
+2026-10-11T09:43:31.7895488Z   group: backend-ci-${{ github.ref }}-${{ github.sha }}
+2026-10-11T09:43:31.7895861Z   cancel-in-progress: true
+2026-10-11T09:43:31.7896035Z 
+2026-10-11T09:43:31.7896144Z jobs:
+2026-10-11T09:43:31.7896443Z   backend-test:
+2026-10-11T09:43:31.7896697Z     runs-on: ubuntu-latest
+2026-10-11T09:43:31.7897010Z     timeout-minutes: 30
+2026-10-11T09:43:31.7897308Z     steps:
+2026-10-11T09:43:31.7897610Z       - name: Checkout
+2026-10-11T09:43:31.7897900Z         uses: actions/checkout@v4
+2026-10-11T09:43:31.7898068Z 
+2026-10-11T09:43:31.7898199Z       - name: Set up Python
+2026-10-11T09:43:31.7898524Z         uses: actions/setup-python@v5
+2026-10-11T09:43:31.7898895Z         with:
+2026-10-11T09:43:31.7899216Z           python-version: "3.13"
+2026-10-11T09:43:31.7899533Z           cache: pip
+2026-10-11T09:43:31.7899713Z 
+2026-10-11T09:43:31.7899831Z       - name: Install dependencies
+2026-10-11T09:43:31.7900307Z         run: python -m pip install -r requirements.txt pytest
+2026-10-11T09:43:31.7900546Z 
+2026-10-11T09:43:31.7900710Z       - name: Run release contract gate
+2026-10-11T09:43:31.7901066Z         run: python3 ci_release_gate.py
+2026-10-11T09:43:31.7901287Z 
+2026-10-11T09:43:31.7901451Z       - name: Compile production Python
+2026-10-11T09:43:31.7902040Z         run: |
+2026-10-11T09:43:31.7903856Z           python -m py_compile             strategy.py data.py risk_engine.py db.py binance_client.py binance_rules.py preflight_gate.py             market_scanner.py wave_engine.py portfolio_scanner.py             portfolio_controller.py trader.py server.py ws_hub.py trading_config.py market_context.py execution_barrier.py wise_men.py l2_slippage.py equity_breaker.py mtf_context_service.py hypothesis_engine.py execution_accumulator.py             feature_store.py ai_shadow.py cpcv_backtester.py stress_suite.py mock_exchange.py quant_models.py shap_explain.py derivatives_features.py shadow_execution.py quant_ml_pipeline.py
+2026-10-11T09:43:31.7905631Z 
+2026-10-11T09:43:31.7905782Z       - name: Run full static safety audit
+2026-10-11T09:43:31.7906170Z         run: python full_safety_audit.py
+2026-10-11T09:43:31.7906399Z 
+2026-10-11T09:43:31.7906524Z       - name: Run safe offline tests
+2026-10-11T09:43:31.7906905Z         run: |
+2026-10-11T09:43:31.7907222Z           set -o pipefail
+2026-10-11T09:43:31.7907530Z           python -m pytest -q \
+2026-10-11T09:43:31.7907910Z             test_production_architecture.py \
+2026-10-11T09:43:31.7908386Z             test_android_remote_only.py \
+2026-10-11T09:43:31.7908772Z             test_l2_slippage.py \
+2026-10-11T09:43:31.7909144Z             test_hypothesis_engine.py \
+2026-10-11T09:43:31.7909464Z             test_market_scanner.py \
+2026-10-11T09:43:31.7909860Z             test_wave_engine.py \
+2026-10-11T09:43:31.7910197Z             test_dynamic_scanner.py \
+2026-10-11T09:43:31.7910576Z             test_portfolio_controller.py \
+2026-10-11T09:43:31.7910926Z             test_multi_position_risk.py \
+2026-10-11T09:43:31.7911323Z             test_multi_position_execution.py \
+2026-10-11T09:43:31.7911814Z             test_portfolio_scanner.py \
+2026-10-11T09:43:31.7912166Z             test_portfolio_scanner_atr.py \
+2026-10-11T09:43:31.7912551Z             test_risk_engine.py \
+2026-10-11T09:43:31.7912919Z             test_strategy_diagnostics.py \
+2026-10-11T09:43:31.7913256Z             test_db_guard.py \
+2026-10-11T09:43:31.7913594Z             test_db_isolation.py \
+2026-10-11T09:43:31.7913933Z             test_atomic_real_db.py \
+2026-10-11T09:43:31.7914425Z             test_atomic_switch_db_failure.py \
+2026-10-11T09:43:31.7914792Z             test_atomic_switch_rollback.py \
+2026-10-11T09:43:31.7915142Z             test_buy_safety.py \
+2026-10-11T09:43:31.7915493Z             test_williams_book_alignment.py \
+2026-10-11T09:43:31.7915921Z             test_book_wave_safety.py \
+2026-10-11T09:43:31.7916291Z             test_trade_journal.py \
+2026-10-11T09:43:31.7916637Z             test_multi_position_lifecycle.py \
+2026-10-11T09:43:31.7916983Z             recovery_test.py \
+2026-10-11T09:43:31.7917361Z             recovery_oco_failure_test.py \
+2026-10-11T09:43:31.7917710Z             test_chaos_hardening.py \
+2026-10-11T09:43:31.7918078Z             test_wave_safety_fields.py \
+2026-10-11T09:43:31.7918422Z             test_binance_market_data.py \
+2026-10-11T09:43:31.7918822Z             test_binance_json_shapes.py \
+2026-10-11T09:43:31.7919168Z             tests/test_quant_layer.py \
+2026-10-11T09:43:31.7919570Z             tests/test_quant_models.py \
+2026-10-11T09:43:31.7919941Z             test_preflight_gate.py \
+2026-10-11T09:43:31.7920330Z             test_execution_architecture.py \
+2026-10-11T09:43:31.7920709Z             test_integration_bindings.py \
+2026-10-11T09:43:31.7921078Z             test_testnet_release_gate.py \
+2026-10-11T09:43:31.7921410Z             2>&1 | tee pytest-output.txt
+2026-10-11T09:43:31.7921744Z 
+2026-10-11T09:43:31.7921910Z       - name: Upload pytest diagnostics
+2026-10-11T09:43:31.7922247Z         if: always()
+2026-10-11T09:43:31.7922577Z         uses: actions/upload-artifact@v4
+2026-10-11T09:43:31.7922965Z         with:
+2026-10-11T09:43:31.7923259Z           name: python-pytest-report
+2026-10-11T09:43:31.7923618Z           path: pytest-output.txt
+2026-10-11T09:43:31.7923954Z           if-no-files-found: warn
+2026-10-11T09:43:31.7924332Z           retention-days: 7
+2026-10-11T09:43:31.7924523Z 
+2026-10-11T09:43:31.7924528Z 
+2026-10-11T09:43:31.7924701Z --- .github/workflows/android-apk.yml ---
+2026-10-11T09:43:31.7925051Z name: Build Android APK
+2026-10-11T09:43:31.7925265Z 
+2026-10-11T09:43:31.7925366Z on:
+2026-10-11T09:43:31.7925653Z   push:
+2026-10-11T09:43:31.7925963Z     branches: [main, master]
+2026-10-11T09:43:31.7926371Z     paths:
+2026-10-11T09:43:31.7926642Z       - 'app/**'
+2026-10-11T09:43:31.7926985Z       - '*.gradle.kts'
+2026-10-11T09:43:31.7927276Z       - 'gradle.properties'
+2026-10-11T09:43:31.7927641Z       - 'gradle/**'
+2026-10-11T09:43:31.7927944Z       - 'settings.gradle.kts'
+2026-10-11T09:43:31.7928332Z       - '.github/workflows/**'
+2026-10-11T09:43:31.7928643Z   pull_request:
+2026-10-11T09:43:31.7928908Z     paths:
+2026-10-11T09:43:31.7929226Z       - 'app/**'
+2026-10-11T09:43:31.7929510Z       - '*.gradle.kts'
+2026-10-11T09:43:31.7929867Z       - 'gradle.properties'
+2026-10-11T09:43:31.7930175Z       - 'gradle/**'
+2026-10-11T09:43:31.7930455Z       - 'settings.gradle.kts'
+2026-10-11T09:43:31.7930830Z       - '.github/workflows/**'
+2026-10-11T09:43:31.7931250Z   workflow_dispatch:
+2026-10-11T09:43:31.7931473Z 
+2026-10-11T09:43:31.7931779Z permissions:
+2026-10-11T09:43:31.7932068Z   contents: read
+2026-10-11T09:43:31.7932247Z 
+2026-10-11T09:43:31.7932419Z concurrency:
+2026-10-11T09:43:31.7932869Z   # Each commit validates its exact source tree; never cancel a different commit's APK build.
+2026-10-11T09:43:31.7933455Z   group: android-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
+2026-10-11T09:43:31.7933912Z   cancel-in-progress: true
+2026-10-11T09:43:31.7934118Z 
+2026-10-11T09:43:31.7934259Z env:
+2026-10-11T09:43:31.7934565Z   GRADLE_VERSION: '8.14.5'
+2026-10-11T09:43:31.7934976Z   # CI validation intentionally runs against the exact current main tree.
+2026-10-11T09:43:31.7935423Z   ANDROID_PLATFORM: 'platforms;android-36'
+2026-10-11T09:43:31.7935845Z   ANDROID_BUILD_TOOLS: 'build-tools;36.0.0'
+2026-10-11T09:43:31.7936045Z 
+2026-10-11T09:43:31.7936188Z jobs:
+2026-10-11T09:43:31.7936471Z   build-apk:
+2026-10-11T09:43:31.7936769Z     name: Build APKs
+2026-10-11T09:43:31.7937088Z     runs-on: ubuntu-24.04
+2026-10-11T09:43:31.7937494Z     timeout-minutes: 30
+2026-10-11T09:43:31.7937691Z 
+2026-10-11T09:43:31.7937819Z     steps:
+2026-10-11T09:43:31.7938097Z       - name: Checkout
+2026-10-11T09:43:31.7938462Z         uses: actions/checkout@v5
+2026-10-11T09:43:31.7938759Z         with:
+2026-10-11T09:43:31.7939072Z           fetch-depth: 1
+2026-10-11T09:43:31.7939404Z       - name: Set up JDK 17
+2026-10-11T09:43:31.7939946Z         uses: actions/setup-java@v6
+2026-10-11T09:43:31.7940271Z         with:
+2026-10-11T09:43:31.7940544Z           distribution: temurin
+2026-10-11T09:43:31.7940894Z           java-version: '17'
+2026-10-11T09:43:31.7941259Z           cache: gradle
+2026-10-11T09:43:31.7941915Z       - name: Set up Android SDK
+2026-10-11T09:43:31.7942274Z         uses: android-actions/setup-android@v4
+2026-10-11T09:43:31.7942626Z       - name: Install Android SDK packages
+2026-10-11T09:43:31.7943046Z         run: |
+2026-10-11T09:43:31.7943379Z           yes | sdkmanager --licenses >/dev/null || true
+2026-10-11T09:43:31.7943828Z           sdkmanager "${ANDROID_PLATFORM}" "${ANDROID_BUILD_TOOLS}"
+2026-10-11T09:43:31.7944229Z       - name: Set up Gradle
+2026-10-11T09:43:31.7944598Z         uses: gradle/actions/setup-gradle@v5
+2026-10-11T09:43:31.7944967Z         with:
+2026-10-11T09:43:31.7945267Z           gradle-version: ${{ env.GRADLE_VERSION }}
+2026-10-11T09:43:31.7945648Z           validate-wrappers: false
+2026-10-11T09:43:31.7946036Z       - name: Restore persistent debug signing key
+2026-10-11T09:43:31.7946389Z         env:
+2026-10-11T09:43:31.7946775Z           DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
+2026-10-11T09:43:31.7947169Z         run: |
+2026-10-11T09:43:31.7947503Z           set -euo pipefail
+2026-10-11T09:43:31.7947841Z           if [ -z "${DEBUG_KEYSTORE_B64:-}" ]; then
+2026-10-11T09:43:31.7948374Z             echo "::error::WILLIAMS_DEBUG_KEYSTORE_B64 GitHub Secret is not configured."
+2026-10-11T09:43:31.7948913Z             exit 1
+2026-10-11T09:43:31.7949187Z           fi
+2026-10-11T09:43:31.7949504Z           mkdir -p build
+2026-10-11T09:43:31.7949879Z           printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > build/williams-debug.p12
+2026-10-11T09:43:31.7950368Z           chmod 600 build/williams-debug.p12
+2026-10-11T09:43:31.7950701Z       - name: Validate debug signing configuration
+2026-10-11T09:43:31.7951002Z         env:
+2026-10-11T09:43:31.7951389Z           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
+2026-10-11T09:43:31.7951995Z           WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
+2026-10-11T09:43:31.7952413Z         run: |
+2026-10-11T09:43:31.7952671Z           set -euo pipefail
+2026-10-11T09:43:31.7952954Z           test -s build/williams-debug.p12
+2026-10-11T09:43:31.7953408Z       # Release gate is the single pre-build contract check for every APK commit.
+2026-10-11T09:43:31.7953818Z       - name: Run release contract gate
+2026-10-11T09:43:31.7954229Z         run: python3 ci_release_gate.py
+2026-10-11T09:43:31.7954544Z       - name: Validate quant Python sources
+2026-10-11T09:43:31.7954881Z         run: |
+2026-10-11T09:43:31.7955142Z           set -euo pipefail
+2026-10-11T09:43:31.7955851Z           python3 -m py_compile feature_store.py ai_shadow.py cpcv_backtester.py stress_suite.py mock_exchange.py quant_models.py shap_explain.py derivatives_features.py shadow_execution.py quant_ml_pipeline.py
+2026-10-11T09:43:31.7956636Z       - name: Quant integration marker
+2026-10-11T09:43:31.7956933Z         run: |
+2026-10-11T09:43:31.7957186Z           set -euo pipefail
+2026-10-11T09:43:31.7957924Z           for f in feature_store.py ai_shadow.py cpcv_backtester.py stress_suite.py mock_exchange.py quant_models.py shap_explain.py derivatives_features.py shadow_execution.py quant_ml_pipeline.py; do test -f "$f"; done
+2026-10-11T09:43:31.7958703Z       - name: Run required Android lint
+2026-10-11T09:43:31.7959075Z         run: gradle --no-daemon :app:lintDebug --stacktrace
+2026-10-11T09:43:31.7959317Z 
+2026-10-11T09:43:31.7959483Z       - name: Run Android unit tests
+2026-10-11T09:43:31.7959767Z         run: |
+2026-10-11T09:43:31.7960047Z           set +e
+2026-10-11T09:43:31.7960451Z           gradle --no-daemon :app:testDebugUnitTest --stacktrace 2>&1 | tee android-unit-tests.log
+2026-10-11T09:43:31.7960925Z           rc=${PIPESTATUS[0]}
+2026-10-11T09:43:31.7961202Z           set -e
+2026-10-11T09:43:31.7961516Z           exit "$rc"
+2026-10-11T09:43:31.7961895Z       - name: Upload Android unit-test diagnostics
+2026-10-11T09:43:31.7962214Z         if: always()
+2026-10-11T09:43:31.7962517Z         uses: actions/upload-artifact@v7
+2026-10-11T09:43:31.7962848Z         with:
+2026-10-11T09:43:31.7963218Z           name: williams-android-unit-test-diagnostics-${{ github.run_number }}
+2026-10-11T09:43:31.7963635Z           path: |
+2026-10-11T09:43:31.7963889Z             android-unit-tests.log
+2026-10-11T09:43:31.7964290Z             app/build/test-results/testDebugUnitTest/**/*.xml
+2026-10-11T09:43:31.7964680Z             app/build/reports/tests/testDebugUnitTest/**
+2026-10-11T09:43:31.7965043Z           if-no-files-found: ignore
+2026-10-11T09:43:31.7965402Z           retention-days: 7
+2026-10-11T09:43:31.7965685Z       - name: Build debug APK
+2026-10-11T09:43:31.7965972Z         env:
+2026-10-11T09:43:31.7966340Z           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
+2026-10-11T09:43:31.7966887Z           WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
+2026-10-11T09:43:31.7967289Z         run: |
+2026-10-11T09:43:31.7967534Z           set +e
+2026-10-11T09:43:31.7967903Z           gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-debug.log
+2026-10-11T09:43:31.7968332Z           rc=${PIPESTATUS[0]}
+2026-10-11T09:43:31.7968655Z           set -e
+2026-10-11T09:43:31.7968902Z           exit "$rc"
+2026-10-11T09:43:31.7969173Z       - name: Upload debug build log
+2026-10-11T09:43:31.7969705Z         if: always()
+2026-10-11T09:43:31.7969969Z         uses: actions/upload-artifact@v7
+2026-10-11T09:43:31.7970311Z         with:
+2026-10-11T09:43:31.7970618Z           name: williams-debug-build-log-${{ github.run_number }}
+2026-10-11T09:43:31.7971020Z           path: build-debug.log
+2026-10-11T09:43:31.7971315Z           if-no-files-found: ignore
+2026-10-11T09:43:31.7971662Z           retention-days: 3
+2026-10-11T09:43:31.7972001Z       - name: Build release APK
+2026-10-11T09:43:31.7972379Z         run: gradle --no-daemon :app:assembleRelease --stacktrace
+2026-10-11T09:43:31.7972758Z       - name: Verify APK files
+2026-10-11T09:43:31.7973034Z         run: |
+2026-10-11T09:43:31.7973271Z           set -euo pipefail
+2026-10-11T09:43:31.7973692Z           DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
+2026-10-11T09:43:31.7974138Z           RELEASE_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+2026-10-11T09:43:31.7974554Z           test -f "$DEBUG_APK"
+2026-10-11T09:43:31.7974950Z           test -f "$RELEASE_APK"
+2026-10-11T09:43:31.7975313Z       - name: Inspect APK metadata
+2026-10-11T09:43:31.7975612Z         run: |
+2026-10-11T09:43:31.7975869Z           set -euo pipefail
+2026-10-11T09:43:31.7976466Z           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
+2026-10-11T09:43:31.7977406Z           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/release/app-release-unsigned.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
+2026-10-11T09:43:31.7978059Z       - name: Verify persistent debug keystore
+2026-10-11T09:43:31.7978378Z         run: |
+2026-10-11T09:43:31.7978650Z           set -euo pipefail
+2026-10-11T09:43:31.7978991Z           test -s build/williams-debug.p12
+2026-10-11T09:43:31.7979353Z       - name: Verify persistent debug APK signature
+2026-10-11T09:43:31.7979720Z         env:
+2026-10-11T09:43:31.7980165Z           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
+2026-10-11T09:43:31.7980642Z         run: |
+2026-10-11T09:43:31.7980938Z           set -euo pipefail
+2026-10-11T09:43:31.7981305Z           APK="app/build/outputs/apk/debug/app-debug.apk"
+2026-10-11T09:43:31.7981892Z           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+2026-10-11T09:43:31.7982288Z           KEYTOOL="$JAVA_HOME/bin/keytool"
+2026-10-11T09:43:31.7983079Z           KEYSTORE_SHA="$("$KEYTOOL" -list -v -keystore build/williams-debug.p12 -storetype PKCS12 -storepass "$WILLIAMS_DEBUG_KEYSTORE_PASSWORD" -alias williams-debug | awk -F': ' '/SHA256:/{print $2; exit}')"
+2026-10-11T09:43:31.7984134Z           APK_SHA="$("$APKSIGNER" verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print $2; exit}')"
+2026-10-11T09:43:31.7984705Z           test -n "$KEYSTORE_SHA"
+2026-10-11T09:43:31.7985049Z           test -n "$APK_SHA"
+2026-10-11T09:43:31.7985602Z           test "$(printf '%s' "$KEYSTORE_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$APK_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+2026-10-11T09:43:31.7986217Z           "$APKSIGNER" verify --verbose "$APK"
+2026-10-11T09:43:31.7986587Z       - name: Generate SHA-256 checksums
+2026-10-11T09:43:31.7986935Z         run: |
+2026-10-11T09:43:31.7987241Z           set -euo pipefail
+2026-10-11T09:43:31.7987805Z           sha256sum app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/app-debug.apk.sha256
+2026-10-11T09:43:31.7988679Z           sha256sum app/build/outputs/apk/release/app-release-unsigned.apk > app/build/outputs/apk/release/app-release-unsigned.apk.sha256
+2026-10-11T09:43:31.7989406Z           cat app/build/outputs/apk/debug/app-debug.apk.sha256
+2026-10-11T09:43:31.7989931Z           cat app/build/outputs/apk/release/app-release-unsigned.apk.sha256
+2026-10-11T09:43:31.7990429Z       - name: Upload installable debug APK
+2026-10-11T09:43:31.7990804Z         uses: actions/upload-artifact@v7
+2026-10-11T09:43:31.7991149Z         with:
+2026-10-11T09:43:31.7991680Z           name: williams-bot-debug-apk-${{ github.run_number }}
+2026-10-11T09:43:31.7992028Z           path: |
+2026-10-11T09:43:31.7992350Z             app/build/outputs/apk/debug/app-debug.apk
+2026-10-11T09:43:31.7992721Z             app/build/outputs/apk/debug/app-debug.apk.sha256
+2026-10-11T09:43:31.7993135Z           if-no-files-found: error
+2026-10-11T09:43:31.7993480Z           retention-days: 14
+2026-10-11T09:43:31.7993781Z       - name: Upload release APK
+2026-10-11T09:43:31.7994137Z         uses: actions/upload-artifact@v7
+2026-10-11T09:43:31.7994493Z         with:
+2026-10-11T09:43:31.7994893Z           name: williams-bot-release-unsigned-${{ github.run_number }}
+2026-10-11T09:43:31.7995307Z           path: |
+2026-10-11T09:43:31.7995632Z             app/build/outputs/apk/release/app-release-unsigned.apk
+2026-10-11T09:43:31.7996157Z             app/build/outputs/apk/release/app-release-unsigned.apk.sha256
+2026-10-11T09:43:31.7996566Z           if-no-files-found: error
+2026-10-11T09:43:31.7996957Z           retention-days: 14
+2026-10-11T09:43:31.7997243Z       - name: Build summary
+2026-10-11T09:43:31.7997545Z         run: |
+2026-10-11T09:43:31.7997805Z           {
+2026-10-11T09:43:31.7998069Z             echo '## Android build complete'
+2026-10-11T09:43:31.7998413Z             echo ''
+2026-10-11T09:43:31.7998768Z             echo "Version code: ${{ github.run_number }}"
+2026-10-11T09:43:31.7999118Z             echo ''
+2026-10-11T09:43:31.7999414Z             echo '### APKs'
+2026-10-11T09:43:31.7999750Z             echo '- Installable debug APK: `app-debug.apk`'
+2026-10-11T09:43:31.8000236Z             echo '- Release APK: `app-release-unsigned.apk`'
+2026-10-11T09:43:31.8000618Z           } >> "$GITHUB_STEP_SUMMARY"
+2026-10-11T09:43:31.8136346Z 
+2026-10-11T09:43:31.8137455Z [PASS] .github/workflows/android-apk.yml contains Android assemble step
+2026-10-11T09:43:31.8137925Z 
+2026-10-11T09:43:31.8138179Z ==========================================================================================
+2026-10-11T09:43:31.8138783Z 13. ANDROID / BACKEND INTEGRATION
+2026-10-11T09:43:31.8139276Z ==========================================================================================
+2026-10-11T09:43:31.8139511Z 
+2026-10-11T09:43:31.8139744Z --- app/src/main/java/com/williamsbot/MainActivity.kt ---
+2026-10-11T09:43:31.8140415Z 382: get() = securePrefs.getString("backend_url", "http://127.0.0.1:18080")
+2026-10-11T09:43:31.8140962Z 393: normalized.startsWith("http://127.0.0.1:18080") ||
+2026-10-11T09:43:31.8141512Z 394: normalized.startsWith("http://localhost:18080")
+2026-10-11T09:43:31.8142239Z 395: if (!normalized.startsWith("https://") && !localRuntime) {
+2026-10-11T09:43:31.8142854Z 417: backendUrl.startsWith("http://127.0.0.1:18080") ||
+2026-10-11T09:43:31.8143466Z 418: backendUrl.startsWith("http://localhost:18080")
+2026-10-11T09:43:31.8144104Z 419: require(localRuntime || backendUrl.startsWith("https://")) {
+2026-10-11T09:43:31.8144799Z 1795: HealthRow("Market WebSocket", status.marketWsConnected)
+2026-10-11T09:43:31.8145167Z 
+2026-10-11T09:43:31.8145493Z --- app/src/main/java/com/williamsbot/PositionsWidgetProvider.kt ---
+2026-10-11T09:43:31.8146258Z 40: require(baseUrl.startsWith("https://")) { "HTTPS Backend URL is not configured" }
+2026-10-11T09:43:31.8146736Z 
+2026-10-11T09:43:31.8147018Z --- app/src/main/java/com/williamsbot/StandaloneRuntime.kt ---
+2026-10-11T09:43:31.8147590Z 10: import okhttp3.WebSocket
+2026-10-11T09:43:31.8148029Z 11: import okhttp3.WebSocketListener
+2026-10-11T09:43:31.8148503Z 267: InetAddress.getByName("127.0.0.1")
+2026-10-11T09:43:31.8149123Z 528: private val baseUrl = "https://testnet.binance.vision"
+2026-10-11T09:43:31.8149825Z 566: // Market WebSocket callbacks must stay lightweight. Indicator/Williams
+2026-10-11T09:43:31.8150534Z 567: // calculations are deliberately moved off the OkHttp WebSocket callback
+2026-10-11T09:43:31.8151121Z 576: private var marketSocket: WebSocket? = null
+2026-10-11T09:43:31.8151975Z 667: endpoint = "wss://ws-api.testnet.binance.vision/ws-api/v3",
+2026-10-11T09:43:31.8152752Z 1541: spotTestnet = baseUrl == "https://testnet.binance.vision",
+2026-10-11T09:43:31.8153371Z 1705: "wss://stream.testnet.binance.vision/stream?streams=" +
+2026-10-11T09:43:31.8154070Z 1720: marketSocket = http.newWebSocket(request, object : WebSocketListener() {
+2026-10-11T09:43:31.8154550Z 1721: override fun onOpen(webSocket: WebSocket, response: Response) {
+2026-10-11T09:43:31.8154986Z 1745: override fun onMessage(webSocket: WebSocket, text: String) {
+2026-10-11T09:43:31.8155506Z 1759: override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+2026-10-11T09:43:31.8156032Z 1764: override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+2026-10-11T09:43:31.8156550Z 1770: override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+2026-10-11T09:43:31.8157045Z 1911: // Only cache maintenance happens on the WebSocket callback thread.
+2026-10-11T09:43:31.8157725Z 2517: // Scanner requires REST market data + history only. WebSockets are
+2026-10-11T09:43:31.8158208Z 5615: // WebSockets are accelerators. REST + exchange-side OCO remain the
+2026-10-11T09:43:31.8158701Z 8181: test("local_api_loopback", "runtime", 18080 == 18080, "FAIL", "127.0.0.1:18080")
+2026-10-11T09:43:31.8159173Z 8253: .put("device_local_api", "http://127.0.0.1:18080")
+2026-10-11T09:43:31.8159420Z 
+2026-10-11T09:43:31.8159622Z --- app/src/main/java/com/williamsbot/BackupManager.kt ---
+2026-10-11T09:43:31.8160045Z 115: require(backendUrl.startsWith("https://")) {
+2026-10-11T09:43:31.8160292Z 
+2026-10-11T09:43:31.8160475Z --- app/src/main/java/com/williamsbot/BinanceUserDataStream.kt ---
+2026-10-11T09:43:31.8160876Z 6: import okhttp3.WebSocket
+2026-10-11T09:43:31.8161207Z 7: import okhttp3.WebSocketListener
+2026-10-11T09:43:31.8161833Z 17: * Binance Spot user-data stream using the current signed WebSocket API
+2026-10-11T09:43:31.8162409Z 29: @Volatile private var socket: WebSocket? = null
+2026-10-11T09:43:31.8163010Z 74: socket = http.newWebSocket(
+2026-10-11T09:43:31.8163313Z 76: object : WebSocketListener() {
+2026-10-11T09:43:31.8163723Z 78: webSocket: WebSocket,
+2026-10-11T09:43:31.8164002Z 85: webSocket: WebSocket,
+2026-10-11T09:43:31.8164350Z 140: webSocket: WebSocket,
+2026-10-11T09:43:31.8164625Z 153: webSocket: WebSocket,
+2026-10-11T09:43:31.8164945Z 167: // Binance WebSocket connections have a maximum lifetime;
+2026-10-11T09:43:31.8165327Z 194: socket: WebSocket,
+2026-10-11T09:43:31.8165500Z 
+2026-10-11T09:43:31.8165698Z ==========================================================================================
+2026-10-11T09:43:31.8166061Z 14. PRODUCTION DATABASE
+2026-10-11T09:43:31.8166370Z ==========================================================================================
+2026-10-11T09:43:31.8166835Z [PASS] Production DB absent on clean CI runner (expected; no production DB is committed)
+2026-10-11T09:43:31.8167188Z 
+2026-10-11T09:43:31.8167358Z ==========================================================================================
+2026-10-11T09:43:31.8167756Z 15. TRADING CORE REGRESSION INVARIANTS
+2026-10-11T09:43:31.8168115Z ==========================================================================================
+2026-10-11T09:43:31.8168523Z [PASS] Trading APK free of LunaScreen
+2026-10-11T09:43:31.8168855Z [PASS] Trading APK free of AiForgeClient
+2026-10-11T09:43:31.8169190Z [PASS] Trading APK free of AI_FORGE
+2026-10-11T09:43:31.8169520Z [PASS] Trading APK free of AI Forge
+2026-10-11T09:43:31.8169926Z [WARN] Could not prove Android multi-position default from source
+2026-10-11T09:43:31.8170324Z [PASS] Android uses current Spot OCO endpoint
+2026-10-11T09:43:31.8170695Z [PASS] Android uses signed User Data Stream subscription
+2026-10-11T09:43:31.8171091Z [PASS] Binance credentials use encrypted Android storage
+2026-10-11T09:43:31.8171528Z [WARN] Android trading REST base is pinned to Spot Testnet
+2026-10-11T09:43:31.8172245Z [PASS] Android status does not advertise fixed max-position lock
+2026-10-11T09:43:31.8172657Z [PASS] Python Binance client tracks 10s order-rate window
+2026-10-11T09:43:31.8173084Z [PASS] Python client learns dynamic Binance rate limits
+2026-10-11T09:43:31.8173508Z [PASS] Ambiguous order outcome requires clientOrderId reconciliation
+2026-10-11T09:43:31.8173898Z [PASS] L2 cache invalidates state on sequence gaps
+2026-10-11T09:43:31.8174327Z [PASS] User-stream out-of-order events are rejected before mutation
+2026-10-11T09:43:31.8174597Z 
+2026-10-11T09:43:31.8174769Z ==========================================================================================
+2026-10-11T09:43:31.8175115Z 15. GIT STATUS
+2026-10-11T09:43:31.8175420Z ==========================================================================================
+2026-10-11T09:43:31.8175664Z 
+2026-10-11T09:43:31.8175829Z ==========================================================================================
+2026-10-11T09:43:31.8176175Z FINAL AUDIT RESULT
+2026-10-11T09:43:31.8176468Z ==========================================================================================
+2026-10-11T09:43:31.8176906Z FAILURES : 0
+2026-10-11T09:43:31.8177187Z WARNINGS : 3
+2026-10-11T09:43:31.8177311Z 
+2026-10-11T09:43:31.8177464Z AUDIT RESULT: NO STATIC SAFETY FAILURES
+2026-10-11T09:43:31.8177837Z Warnings require review, but no automatic changes were made.
+2026-10-11T09:43:31.8236526Z ##[group]Run set -o pipefail
+2026-10-11T09:43:31.8236988Z [36;1mset -o pipefail[0m
+2026-10-11T09:43:31.8237289Z [36;1mpython -m pytest -q \[0m
+2026-10-11T09:43:31.8237632Z [36;1m  test_production_architecture.py \[0m
+2026-10-11T09:43:31.8237981Z [36;1m  test_execution_barrier_fail_closed.py \[0m
+2026-10-11T09:43:31.8238373Z [36;1m  test_binance_secret_redaction.py \[0m
+2026-10-11T09:43:31.8238706Z [36;1m  test_android_remote_only.py \[0m
+2026-10-11T09:43:31.8239030Z [36;1m  test_l2_slippage.py \[0m
+2026-10-11T09:43:31.8239366Z [36;1m  test_hypothesis_engine.py \[0m
+2026-10-11T09:43:31.8239707Z [36;1m  test_market_scanner.py \[0m
+2026-10-11T09:43:31.8240023Z [36;1m  test_wave_engine.py \[0m
+2026-10-11T09:43:31.8240346Z [36;1m  test_dynamic_scanner.py \[0m
+2026-10-11T09:43:31.8240727Z [36;1m  test_portfolio_controller.py \[0m
+2026-10-11T09:43:31.8241101Z [36;1m  test_multi_position_risk.py \[0m
+2026-10-11T09:43:31.8241852Z [36;1m  test_multi_position_execution.py \[0m
+2026-10-11T09:43:31.8360817Z [36;1m  test_portfolio_scanner.py \[0m
+2026-10-11T09:43:31.8361077Z [36;1m  test_portfolio_scanner_atr.py \[0m
+2026-10-11T09:43:31.8361316Z [36;1m  test_risk_engine.py \[0m
+2026-10-11T09:43:31.8361694Z [36;1m  test_strategy_diagnostics.py \[0m
+2026-10-11T09:43:31.8361957Z [36;1m  test_db_guard.py \[0m
+2026-10-11T09:43:31.8362173Z [36;1m  test_db_isolation.py \[0m
+2026-10-11T09:43:31.8362390Z [36;1m  test_atomic_real_db.py \[0m
+2026-10-11T09:43:31.8362650Z [36;1m  test_atomic_switch_db_failure.py \[0m
+2026-10-11T09:43:31.8362918Z [36;1m  test_atomic_switch_rollback.py \[0m
+2026-10-11T09:43:31.8363152Z [36;1m  test_buy_safety.py \[0m
+2026-10-11T09:43:31.8363383Z [36;1m  test_williams_book_alignment.py \[0m
+2026-10-11T09:43:31.8363633Z [36;1m  test_book_wave_safety.py \[0m
+2026-10-11T09:43:31.8363864Z [36;1m  test_trade_journal.py \[0m
+2026-10-11T09:43:31.8364095Z [36;1m  test_multi_position_lifecycle.py \[0m
+2026-10-11T09:43:31.8364331Z [36;1m  recovery_test.py \[0m
+2026-10-11T09:43:31.8364542Z [36;1m  recovery_oco_failure_test.py \[0m
+2026-10-11T09:43:31.8364773Z [36;1m  test_chaos_hardening.py \[0m
+2026-10-11T09:43:31.8364994Z [36;1m  test_wave_safety_fields.py \[0m
+2026-10-11T09:43:31.8365220Z [36;1m  test_binance_market_data.py \[0m
+2026-10-11T09:43:31.8365453Z [36;1m  test_binance_json_shapes.py \[0m
+2026-10-11T09:43:31.8365682Z [36;1m  tests/test_quant_layer.py \[0m
+2026-10-11T09:43:31.8365907Z [36;1m  tests/test_quant_models.py \[0m
+2026-10-11T09:43:31.8366127Z [36;1m  test_preflight_gate.py \[0m
+2026-10-11T09:43:31.8366363Z [36;1m  test_preflight_fail_closed.py \[0m
+2026-10-11T09:43:31.8366609Z [36;1m  test_runtime_freshness.py \[0m
+2026-10-11T09:43:31.8366848Z [36;1m  test_execution_architecture.py \[0m
+2026-10-11T09:43:31.8367097Z [36;1m  test_integration_bindings.py \[0m
+2026-10-11T09:43:31.8367331Z [36;1m  test_testnet_release_gate.py \[0m
+2026-10-11T09:43:31.8367571Z [36;1m  test_campaign_engine.py \[0m
+2026-10-11T09:43:31.8367791Z [36;1m  test_campaign_execution.py \[0m
+2026-10-11T09:43:31.8368040Z [36;1m  2>&1 | tee campaign-pytest-output.txt[0m
+2026-10-11T09:43:31.8404462Z shell: /usr/bin/bash -e {0}
+2026-10-11T09:43:31.8404706Z env:
+2026-10-11T09:43:31.8404954Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-11T09:43:31.8405327Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-11T09:43:31.8405700Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-11T09:43:31.8406027Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-11T09:43:31.8406348Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-11T09:43:31.8406661Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-11T09:43:31.8406949Z ##[endgroup]
+2026-10-11T09:43:36.1808824Z ..F........................F............................................ [ 29%]
+2026-10-11T09:43:38.1412483Z ..........F...............................FF.....................F...... [ 59%]
+2026-10-11T09:43:38.2804405Z ................FFF..F..........................F....................... [ 89%]
+2026-10-11T09:43:38.7143363Z .........................                                                [100%]
+2026-10-11T09:43:38.7143996Z =================================== FAILURES ===================================
+2026-10-11T09:43:38.7144537Z _____________ test_execution_barrier_serializes_publish_and_submit _____________
+2026-10-11T09:43:38.7144915Z 
+2026-10-11T09:43:38.7145121Z     def test_execution_barrier_serializes_publish_and_submit():
+2026-10-11T09:43:38.7145571Z         cache = ContextCache()
+2026-10-11T09:43:38.7145894Z         cache.publish(context())
+2026-10-11T09:43:38.7146580Z         barrier = ExecutionBarrier(cache, ExecutionDB(), preflight_provider=ready_preflight, exchange_client=FakeSpotClient())
+2026-10-11T09:43:38.7147562Z         version = cache.snapshot().context("BTCUSDT", "1h").version
+2026-10-11T09:43:38.7148015Z         started = threading.Event()
+2026-10-11T09:43:38.7148366Z         published = threading.Event()
+2026-10-11T09:43:38.7148703Z     
+2026-10-11T09:43:38.7148877Z         def submit():
+2026-10-11T09:43:38.7149087Z             started.set()
+2026-10-11T09:43:38.7149300Z             time.sleep(0.05)
+2026-10-11T09:43:38.7149638Z             assert cache.snapshot().context("BTCUSDT", "1h").version == version
+2026-10-11T09:43:38.7150224Z             return {"status": "FILLED"}
+2026-10-11T09:43:38.7150456Z     
+2026-10-11T09:43:38.7150630Z         def publish():
+2026-10-11T09:43:38.7150834Z             started.wait(1)
+2026-10-11T09:43:38.7151094Z             cache.publish(context())
+2026-10-11T09:43:38.7151327Z             published.set()
+2026-10-11T09:43:38.7151528Z     
+2026-10-11T09:43:38.7151859Z         t = threading.Thread(target=publish)
+2026-10-11T09:43:38.7152206Z         t.start()
+2026-10-11T09:43:38.7152468Z         intent = OrderIntent.new(
+2026-10-11T09:43:38.7152795Z             "BTCUSDT",
+2026-10-11T09:43:38.7153063Z             "BUY",
+2026-10-11T09:43:38.7153301Z             "MARKET",
+2026-10-11T09:43:38.7153552Z             {"1h": version},
+2026-10-11T09:43:38.7153857Z             permission_interval="1h",
+2026-10-11T09:43:38.7154198Z             client_order_id="TEST_ENTRY_SERIAL",
+2026-10-11T09:43:38.7154592Z         )
+2026-10-11T09:43:38.7154869Z         result = barrier.execute(intent, submit, pre_submit_checks=lambda _snapshot: None)
+2026-10-11T09:43:38.7155206Z         t.join()
+2026-10-11T09:43:38.7155393Z >       assert result.accepted
+2026-10-11T09:43:38.7155609Z E       AssertionError: assert False
+2026-10-11T09:43:38.7156179Z E        +  where False = ExecutionResult(intent_id='f35cab02fd5a48afba199f05dd200a98', accepted=False, response=None, reason='trusted_preflight_service_missing_or_invalid').accepted
+2026-10-11T09:43:38.7156678Z 
+2026-10-11T09:43:38.7156810Z test_production_architecture.py:153: AssertionError
+2026-10-11T09:43:38.7157189Z __ test_legacy_portfolio_mutation_wrapper_requires_barrier_and_blocks_submit ___
+2026-10-11T09:43:38.7157451Z 
+2026-10-11T09:43:38.7157635Z     def test_legacy_portfolio_mutation_wrapper_requires_barrier_and_blocks_submit():
+2026-10-11T09:43:38.7157990Z         from types import SimpleNamespace
+2026-10-11T09:43:38.7158278Z         from portfolio_trader import MultiPositionTrader
+2026-10-11T09:43:38.7158529Z     
+2026-10-11T09:43:38.7158760Z         trader = MultiPositionTrader.__new__(MultiPositionTrader)
+2026-10-11T09:43:38.7159061Z         trader.execution_barrier = None
+2026-10-11T09:43:38.7159295Z         calls = []
+2026-10-11T09:43:38.7159598Z         with pytest.raises(RuntimeError, match="canonical ExecutionBarrier unavailable"):
+2026-10-11T09:43:38.7159992Z >           trader._execute_mutation(
+2026-10-11T09:43:38.7160254Z                 "BTCUSDT", "SELL", "MARKET", "CID_LEGACY",
+2026-10-11T09:43:38.7160563Z                 lambda: calls.append("submit"), "EMERGENCY_EXIT",
+2026-10-11T09:43:38.7160830Z             )
+2026-10-11T09:43:38.7160931Z 
+2026-10-11T09:43:38.7161147Z test_execution_barrier_fail_closed.py:473: 
+2026-10-11T09:43:38.7161439Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-11T09:43:38.7161873Z portfolio_trader.py:118: in _execute_mutation
+2026-10-11T09:43:38.7162153Z     self.set_state(symbol, "RECONCILE_REQUIRED")
+2026-10-11T09:43:38.7162438Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-11T09:43:38.7162631Z 
+2026-10-11T09:43:38.7162800Z self = <portfolio_trader.MultiPositionTrader object at 0x7f8bbe3958b0>
+2026-10-11T09:43:38.7163154Z symbol = 'BTCUSDT', state = 'RECONCILE_REQUIRED'
+2026-10-11T09:43:38.7163318Z 
+2026-10-11T09:43:38.7163424Z     def set_state(self, symbol, state):
+2026-10-11T09:43:38.7163671Z         if state not in POSITION_STATES:
+2026-10-11T09:43:38.7164027Z             raise ValueError(f"invalid position state: {state}")
+2026-10-11T09:43:38.7164315Z >       self.db.state_set(
+2026-10-11T09:43:38.7164517Z         ^^^^^^^
+2026-10-11T09:43:38.7164712Z             self._state_key(symbol),
+2026-10-11T09:43:38.7164929Z             state,
+2026-10-11T09:43:38.7165114Z         )
+2026-10-11T09:43:38.7165369Z E       AttributeError: 'MultiPositionTrader' object has no attribute 'db'
+2026-10-11T09:43:38.7165606Z 
+2026-10-11T09:43:38.7165709Z portfolio_trader.py:164: AttributeError
+2026-10-11T09:43:38.7166029Z ___________ test_multi_position_execution_creates_independent_trades ___________
+2026-10-11T09:43:38.7166273Z 
+2026-10-11T09:43:38.7166477Z tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_multi_position_execution_0')
+2026-10-11T09:43:38.7166926Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f8bbe39de80>
+2026-10-11T09:43:38.7167173Z 
+2026-10-11T09:43:38.7167367Z     def test_multi_position_execution_creates_independent_trades(tmp_path, monkeypatch):
+2026-10-11T09:43:38.7167760Z         monkeypatch.setenv("MAX_OPEN_POSITIONS", "0")
+2026-10-11T09:43:38.7168056Z         monkeypatch.setenv("MAX_TOTAL_RISK_PCT", "0.01")
+2026-10-11T09:43:38.7168372Z         monkeypatch.setenv("MAX_RISK_PER_TRADE_PCT", "0.005")
+2026-10-11T09:43:38.7168690Z         monkeypatch.setenv("MAX_L2_SLIPPAGE_PCT", "0.0015")
+2026-10-11T09:43:38.7168990Z         monkeypatch.setenv("DRY_RUN", "false")
+2026-10-11T09:43:38.7169277Z         monkeypatch.setenv("MIN_NOTIONAL_BUFFER_PCT", "0")
+2026-10-11T09:43:38.7169532Z     
+2026-10-11T09:43:38.7169711Z         client = FakeClient()
+2026-10-11T09:43:38.7169967Z         db = Database(str(tmp_path / "trades.sqlite3"))
+2026-10-11T09:43:38.7170322Z         trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT", "ETHUSDT"])
+2026-10-11T09:43:38.7170742Z         # Exercise the production allocation path, including fee and slippage
+2026-10-11T09:43:38.7171120Z         # buffers, so the test protects the real aggregate-risk contract.
+2026-10-11T09:43:38.7171413Z     
+2026-10-11T09:43:38.7171738Z         result = trader.execute([Selection("BTCUSDT"), Selection("ETHUSDT")])
+2026-10-11T09:43:38.7172041Z     
+2026-10-11T09:43:38.7172222Z >       assert len(result) == 2
+2026-10-11T09:43:38.7172461Z E       AssertionError: assert 1 == 2
+2026-10-11T09:43:38.7172961Z E        +  where 1 = len([{'symbol': 'BTCUSDT', 'error': 'Portfolio mutation blocked: canonical ExecutionBarrier unavailable', 'reconcile_required': True}])
+2026-10-11T09:43:38.7173369Z 
+2026-10-11T09:43:38.7173499Z test_multi_position_execution.py:189: AssertionError
+2026-10-11T09:43:38.7173861Z __________ test_partial_manual_sell_keeps_residual_position_protected __________
+2026-10-11T09:43:38.7174114Z 
+2026-10-11T09:43:38.7174324Z tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_partial_manual_sell_keeps0')
+2026-10-11T09:43:38.7174590Z 
+2026-10-11T09:43:38.7174782Z     def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
+2026-10-11T09:43:38.7175145Z         class ManualPartialClient(FakeClient):
+2026-10-11T09:43:38.7175404Z             def __init__(self):
+2026-10-11T09:43:38.7175627Z                 super().__init__()
+2026-10-11T09:43:38.7175930Z                 self.cancelled = False
+2026-10-11T09:43:38.7176170Z                 self.manual_order = None
+2026-10-11T09:43:38.7176391Z     
+2026-10-11T09:43:38.7176571Z             def account(self):
+2026-10-11T09:43:38.7176784Z                 return {
+2026-10-11T09:43:38.7176991Z                     "balances": [
+2026-10-11T09:43:38.7177244Z                         {"asset": "USDT", "free": "9400", "locked": "0"},
+2026-10-11T09:43:38.7177557Z                         {"asset": "BTC", "free": "0.4", "locked": "0"},
+2026-10-11T09:43:38.7177817Z                     ],
+2026-10-11T09:43:38.7178004Z                 }
+2026-10-11T09:43:38.7178179Z     
+2026-10-11T09:43:38.7178451Z             def cancel_oco(self, symbol, order_list_id=None, list_client_order_id=None):
+2026-10-11T09:43:38.7178784Z                 self.cancelled = True
+2026-10-11T09:43:38.7179142Z                 return {"orderListId": order_list_id or 10}
+2026-10-11T09:43:38.7179393Z     
+2026-10-11T09:43:38.7179714Z             def order_safe(self, symbol, side, type_, *, quantity=None, new_client_order_id=None, **kwargs):
+2026-10-11T09:43:38.7180121Z                 assert side == "SELL"
+2026-10-11T09:43:38.7180352Z                 assert type_ == "MARKET"
+2026-10-11T09:43:38.7180586Z                 self.manual_order = {
+2026-10-11T09:43:38.7180819Z                     "symbol": symbol,
+2026-10-11T09:43:38.7181041Z                     "side": "SELL",
+2026-10-11T09:43:38.7181264Z                     "type": "MARKET",
+2026-10-11T09:43:38.7181491Z                     "orderId": "manual-1",
+2026-10-11T09:43:38.7182063Z                     "clientOrderId": new_client_order_id,
+2026-10-11T09:43:38.7182329Z                     "status": "FILLED",
+2026-10-11T09:43:38.7182561Z                     "executedQty": "0.6",
+2026-10-11T09:43:38.7182815Z                     "cummulativeQuoteQty": "60",
+2026-10-11T09:43:38.7183058Z                 }
+2026-10-11T09:43:38.7183257Z                 return self.manual_order
+2026-10-11T09:43:38.7183480Z     
+2026-10-11T09:43:38.7183681Z             def all_orders(self, symbol, limit=1000):
+2026-10-11T09:43:38.7183938Z                 return [
+2026-10-11T09:43:38.7184135Z                     {
+2026-10-11T09:43:38.7184340Z                         "symbol": "BTCUSDT",
+2026-10-11T09:43:38.7184575Z                         "side": "BUY",
+2026-10-11T09:43:38.7184801Z                         "type": "MARKET",
+2026-10-11T09:43:38.7185045Z                         "orderId": "buy-1",
+2026-10-11T09:43:38.7185308Z                         "clientOrderId": "WILLV4_ENTRY_TEST",
+2026-10-11T09:43:38.7185636Z                         "status": "FILLED",
+2026-10-11T09:43:38.7185876Z                         "executedQty": "1.0",
+2026-10-11T09:43:38.7186129Z                         "cummulativeQuoteQty": "100",
+2026-10-11T09:43:38.7186387Z                         "time": 1000,
+2026-10-11T09:43:38.7186601Z                     },
+2026-10-11T09:43:38.7186809Z                     self.manual_order or {},
+2026-10-11T09:43:38.7187037Z                 ]
+2026-10-11T09:43:38.7187234Z     
+2026-10-11T09:43:38.7187455Z             def book_ticker(self, symbol=None):
+2026-10-11T09:43:38.7187837Z                 return {"symbol": symbol or "BTCUSDT", "bidPrice": "100", "askPrice": "100"}
+2026-10-11T09:43:38.7188212Z     
+2026-10-11T09:43:38.7188412Z             def ticker_price(self, symbol):
+2026-10-11T09:43:38.7188728Z                 return {"symbol": symbol, "price": "100"}
+2026-10-11T09:43:38.7189012Z     
+2026-10-11T09:43:38.7189264Z         db = Database(str(tmp_path / "manual-partial.sqlite3"))
+2026-10-11T09:43:38.7189598Z         client = ManualPartialClient()
+2026-10-11T09:43:38.7189870Z         trade_id = add_trade(
+2026-10-11T09:43:38.7190102Z             db,
+2026-10-11T09:43:38.7190314Z             symbol="BTCUSDT",
+2026-10-11T09:43:38.7190559Z             entry_price=100,
+2026-10-11T09:43:38.7190803Z             quantity=1.0,
+2026-10-11T09:43:38.7191037Z             entry_order_id="buy-1",
+2026-10-11T09:43:38.7191407Z             entry_client_order_id="WILLV4_ENTRY_TEST",
+2026-10-11T09:43:38.7191839Z             exit_order_list_id="10",
+2026-10-11T09:43:38.7192149Z             exit_order_list_client_id="WILLV4_OCO_TEST",
+2026-10-11T09:43:38.7192442Z             stop_price=98,
+2026-10-11T09:43:38.7192693Z             take_profit_price=104,
+2026-10-11T09:43:38.7192946Z             risk_pct=0.5,
+2026-10-11T09:43:38.7193162Z         )
+2026-10-11T09:43:38.7193415Z         db.state_set("position_state:BTCUSDT", "OPEN")
+2026-10-11T09:43:38.7193799Z         trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+2026-10-11T09:43:38.7194165Z         result = trader.manual_sell("BTCUSDT")
+2026-10-11T09:43:38.7194425Z     
+2026-10-11T09:43:38.7194632Z >       assert result["sold"] is True
+2026-10-11T09:43:38.7194892Z E       assert False is True
+2026-10-11T09:43:38.7195114Z 
+2026-10-11T09:43:38.7195249Z test_multi_position_lifecycle.py:530: AssertionError
+2026-10-11T09:43:38.7195712Z ____________ test_partial_emergency_sell_never_closes_trade_as_flat ____________
+2026-10-11T09:43:38.7196004Z 
+2026-10-11T09:43:38.7196247Z tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_partial_emergency_sell_ne0')
+2026-10-11T09:43:38.7196574Z 
+2026-10-11T09:43:38.7196784Z     def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
+2026-10-11T09:43:38.7197229Z         class EmergencyPartialClient(FakeClient):
+2026-10-11T09:43:38.7197534Z             def account(self):
+2026-10-11T09:43:38.7197780Z                 return {
+2026-10-11T09:43:38.7198012Z                     "balances": [
+2026-10-11T09:43:38.7198315Z                         {"asset": "USDT", "free": "9400", "locked": "0"},
+2026-10-11T09:43:38.7198673Z                         {"asset": "BTC", "free": "0.4", "locked": "0"},
+2026-10-11T09:43:38.7198964Z                     ],
+2026-10-11T09:43:38.7199175Z                 }
+2026-10-11T09:43:38.7199368Z     
+2026-10-11T09:43:38.7199723Z             def order_safe(self, symbol, side, type_, *, quantity=None, new_client_order_id=None, **kwargs):
+2026-10-11T09:43:38.7200145Z                 assert side == "SELL"
+2026-10-11T09:43:38.7200408Z                 assert type_ == "MARKET"
+2026-10-11T09:43:38.7200656Z                 return {
+2026-10-11T09:43:38.7200889Z                     "symbol": symbol,
+2026-10-11T09:43:38.7201140Z                     "side": "SELL",
+2026-10-11T09:43:38.7201391Z                     "type": "MARKET",
+2026-10-11T09:43:38.7201742Z                     "orderId": "emergency-1",
+2026-10-11T09:43:38.7202035Z                     "clientOrderId": new_client_order_id,
+2026-10-11T09:43:38.7202327Z                     "status": "FILLED",
+2026-10-11T09:43:38.7202580Z                     "executedQty": "0.6",
+2026-10-11T09:43:38.7202850Z                     "cummulativeQuoteQty": "60",
+2026-10-11T09:43:38.7203105Z                 }
+2026-10-11T09:43:38.7203309Z     
+2026-10-11T09:43:38.7203588Z             def get_order(self, symbol, order_id=None, orig_client_order_id=None):
+2026-10-11T09:43:38.7203938Z                 return {
+2026-10-11T09:43:38.7204159Z                     "symbol": symbol,
+2026-10-11T09:43:38.7204409Z                     "side": "SELL",
+2026-10-11T09:43:38.7204645Z                     "type": "MARKET",
+2026-10-11T09:43:38.7204894Z                     "orderId": "emergency-1",
+2026-10-11T09:43:38.7205234Z                     "clientOrderId": orig_client_order_id or "WILLV4_EMERGENCY_TEST",
+2026-10-11T09:43:38.7205596Z                     "status": "FILLED",
+2026-10-11T09:43:38.7205844Z                     "executedQty": "0.6",
+2026-10-11T09:43:38.7206111Z                     "cummulativeQuoteQty": "60",
+2026-10-11T09:43:38.7206363Z                 }
+2026-10-11T09:43:38.7206559Z     
+2026-10-11T09:43:38.7206813Z         db = Database(str(tmp_path / "emergency-partial.sqlite3"))
+2026-10-11T09:43:38.7207148Z         client = EmergencyPartialClient()
+2026-10-11T09:43:38.7207410Z         trade_id = add_trade(
+2026-10-11T09:43:38.7207640Z             db,
+2026-10-11T09:43:38.7207842Z             symbol="BTCUSDT",
+2026-10-11T09:43:38.7208138Z             entry_price=100,
+2026-10-11T09:43:38.7208371Z             quantity=1.0,
+2026-10-11T09:43:38.7208607Z             entry_order_id="buy-1",
+2026-10-11T09:43:38.7208879Z             entry_client_order_id="WILLV4_ENTRY_TEST",
+2026-10-11T09:43:38.7209156Z             stop_price=98,
+2026-10-11T09:43:38.7209387Z             take_profit_price=104,
+2026-10-11T09:43:38.7209630Z             risk_pct=0.5,
+2026-10-11T09:43:38.7209851Z         )
+2026-10-11T09:43:38.7210077Z         db.state_set("position_state:BTCUSDT", "OPEN")
+2026-10-11T09:43:38.7210434Z         trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+2026-10-11T09:43:38.7210778Z         trader.dry_run = False
+2026-10-11T09:43:38.7211130Z >       result = trader._emergency_market_sell("BTCUSDT", 1.0, trade_id, "TEST_PARTIAL")
+2026-10-11T09:43:38.7211698Z                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-10-11T09:43:38.7211930Z 
+2026-10-11T09:43:38.7212047Z test_multi_position_lifecycle.py:596: 
+2026-10-11T09:43:38.7212352Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-11T09:43:38.7212691Z portfolio_trader.py:757: in _emergency_market_sell
+2026-10-11T09:43:38.7212996Z     sell = self._execute_mutation(
+2026-10-11T09:43:38.7213283Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-11T09:43:38.7213508Z 
+2026-10-11T09:43:38.7213693Z self = <portfolio_trader.MultiPositionTrader object at 0x7f8bad082630>
+2026-10-11T09:43:38.7214096Z symbol = 'BTCUSDT', side = 'SELL', order_type = 'MARKET'
+2026-10-11T09:43:38.7214441Z client_order_id = 'WILLV4_EMERGENCY_1fb7a3641802478a'
+2026-10-11T09:43:38.7214923Z submit = <function MultiPositionTrader._emergency_market_sell.<locals>.<lambda> at 0x7f8bace8f2e0>
+2026-10-11T09:43:38.7215411Z purpose = 'EMERGENCY_EXIT', pre_submit_checks = None
+2026-10-11T09:43:38.7215616Z 
+2026-10-11T09:43:38.7215922Z     def _execute_mutation(self, symbol, side, order_type, client_order_id, submit, purpose, pre_submit_checks=None):
+2026-10-11T09:43:38.7216457Z         """Route legacy portfolio mutations through the canonical barrier.
+2026-10-11T09:43:38.7216793Z     
+2026-10-11T09:43:38.7217078Z         Purposes are explicitly campaign-scoped so the barrier knows these
+2026-10-11T09:43:38.7217522Z         operations are not signal-entry admissions. This helper is not an
+2026-10-11T09:43:38.7217972Z         emergency bypass: missing preflight/reconciliation evidence blocks them.
+2026-10-11T09:43:38.7218330Z         """
+2026-10-11T09:43:38.7218558Z         if str(purpose).upper() == "EMERGENCY_EXIT":
+2026-10-11T09:43:38.7218875Z             self.set_state(symbol, "RECONCILE_REQUIRED")
+2026-10-11T09:43:38.7219166Z >           raise RuntimeError(
+2026-10-11T09:43:38.7219555Z                 "Emergency exit blocked: dedicated emergency execution contract is not implemented"
+2026-10-11T09:43:38.7219953Z             )
+2026-10-11T09:43:38.7220321Z E           RuntimeError: Emergency exit blocked: dedicated emergency execution contract is not implemented
+2026-10-11T09:43:38.7220660Z 
+2026-10-11T09:43:38.7220765Z portfolio_trader.py:119: RuntimeError
+2026-10-11T09:43:38.7221130Z __________ test_signed_post_retries_once_only_for_timestamp_rejection __________
+2026-10-11T09:43:38.7221389Z 
+2026-10-11T09:43:38.7221660Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f8bad032a80>
+2026-10-11T09:43:38.7222175Z 
+2026-10-11T09:43:38.7222371Z     def test_signed_post_retries_once_only_for_timestamp_rejection(monkeypatch):
+2026-10-11T09:43:38.7222751Z         client = make_client()
+2026-10-11T09:43:38.7222996Z         calls = []
+2026-10-11T09:43:38.7223192Z     
+2026-10-11T09:43:38.7223384Z         class FakeResponse:
+2026-10-11T09:43:38.7223647Z             def __init__(self, status_code, payload):
+2026-10-11T09:43:38.7223962Z                 self.status_code = status_code
+2026-10-11T09:43:38.7224241Z                 self._payload = payload
+2026-10-11T09:43:38.7224502Z                 self.headers = {}
+2026-10-11T09:43:38.7224796Z     
+2026-10-11T09:43:38.7224987Z             def json(self):
+2026-10-11T09:43:38.7225216Z                 return self._payload
+2026-10-11T09:43:38.7225448Z     
+2026-10-11T09:43:38.7225626Z             @property
+2026-10-11T09:43:38.7225847Z             def text(self):
+2026-10-11T09:43:38.7226082Z                 return str(self._payload)
+2026-10-11T09:43:38.7226323Z     
+2026-10-11T09:43:38.7226504Z         responses = [
+2026-10-11T09:43:38.7226871Z             FakeResponse(400, {"code": -1021, "msg": "Timestamp for this request is outside recvWindow."}),
+2026-10-11T09:43:38.7227289Z             FakeResponse(200, {"ok": True}),
+2026-10-11T09:43:38.7227539Z         ]
+2026-10-11T09:43:38.7227716Z     
+2026-10-11T09:43:38.7227911Z         def fake_request(*args, **kwargs):
+2026-10-11T09:43:38.7228247Z             calls.append((args, kwargs))
+2026-10-11T09:43:38.7228509Z             return responses.pop(0)
+2026-10-11T09:43:38.7228742Z     
+2026-10-11T09:43:38.7229010Z         monkeypatch.setattr(client.session, "request", fake_request)
+2026-10-11T09:43:38.7229490Z         monkeypatch.setattr(client, "sync_time", lambda: setattr(client, "time_offset_ms", 123))
+2026-10-11T09:43:38.7229860Z     
+2026-10-11T09:43:38.7230139Z         with _mutation_permit(client, admission_token=_BARRIER_ADMISSION_TOKEN):
+2026-10-11T09:43:38.7230489Z >           result = client._request(
+2026-10-11T09:43:38.7230744Z                 "POST",
+2026-10-11T09:43:38.7230964Z                 "/api/v3/order",
+2026-10-11T09:43:38.7231184Z                 {"symbol": "BTCUSDT"},
+2026-10-11T09:43:38.7231401Z                 signed=True,
+2026-10-11T09:43:38.7231673Z             )
+2026-10-11T09:43:38.7231778Z 
+2026-10-11T09:43:38.7231878Z test_binance_json_shapes.py:105: 
+2026-10-11T09:43:38.7232140Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-11T09:43:38.7232435Z binance_client.py:60: in _request
+2026-10-11T09:43:38.7232680Z     require_mutation_permit(self)
+2026-10-11T09:43:38.7232954Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-11T09:43:38.7233159Z 
+2026-10-11T09:43:38.7233325Z client = <binance_client.BinanceSpotClient object at 0x7f8bad0329f0>
+2026-10-11T09:43:38.7233569Z 
+2026-10-11T09:43:38.7233670Z     def require_mutation_permit(client):
+2026-10-11T09:43:38.7233935Z         state = _mutation_client.get()
+2026-10-11T09:43:38.7234247Z         if client is None or state is None or state.client is not client:
+2026-10-11T09:43:38.7234725Z             raise RuntimeError("Binance order mutation blocked: matching ExecutionBarrier permit required")
+2026-10-11T09:43:38.7235176Z         if getattr(client, "testnet", None) is not True:
+2026-10-11T09:43:38.7235585Z             raise RuntimeError("Binance order mutation blocked: Spot Testnet client required")
+2026-10-11T09:43:38.7236076Z         if getattr(client, "base_url", None) != "https://testnet.binance.vision":
+2026-10-11T09:43:38.7236525Z             raise RuntimeError("Binance order mutation blocked: non-Testnet endpoint")
+2026-10-11T09:43:38.7236885Z         if state.consumed:
+2026-10-11T09:43:38.7237264Z >           raise RuntimeError("Binance order mutation blocked: one mutation per ExecutionBarrier permit")
+2026-10-11T09:43:38.7237800Z E           RuntimeError: Binance order mutation blocked: one mutation per ExecutionBarrier permit
+2026-10-11T09:43:38.7238105Z 
+2026-10-11T09:43:38.7238204Z execution_permit.py:38: RuntimeError
+2026-10-11T09:43:38.7238554Z _________ test_testnet_preflight_keeps_unknown_runtime_proofs_blocked __________
+2026-10-11T09:43:38.7238807Z 
+2026-10-11T09:43:38.7238975Z     def test_testnet_preflight_keeps_unknown_runtime_proofs_blocked():
+2026-10-11T09:43:38.7239314Z         report = PreflightCheckService(
+2026-10-11T09:43:38.7239562Z             FakeClient(),
+2026-10-11T09:43:38.7239797Z             symbols=["BTCUSDT"],
+2026-10-11T09:43:38.7240036Z             max_open_positions=1,
+2026-10-11T09:43:38.7240265Z         ).verify_all()
+2026-10-11T09:43:38.7240540Z         assert report["ready"] is False
+2026-10-11T09:43:38.7240927Z         assert report["checks"]["environment"] == "PASS"
+2026-10-11T09:43:38.7241254Z >       assert report["checks"]["api_restrictions"] == "PASS"
+2026-10-11T09:43:38.7241641Z E       AssertionError: assert 'UNKNOWN' == 'PASS'
+2026-10-11T09:43:38.7241910Z E         
+2026-10-11T09:43:38.7242107Z E         - PASS
+2026-10-11T09:43:38.7242303Z E         + UNKNOWN
+2026-10-11T09:43:38.7242422Z 
+2026-10-11T09:43:38.7242531Z test_preflight_gate.py:118: AssertionError
+2026-10-11T09:43:38.7242874Z __________________ test_testnet_preflight_blocks_withdrawals ___________________
+2026-10-11T09:43:38.7243127Z 
+2026-10-11T09:43:38.7243258Z     def test_testnet_preflight_blocks_withdrawals():
+2026-10-11T09:43:38.7243546Z         client = FakeClient()
+2026-10-11T09:43:38.7243861Z         client.api_restrictions = lambda: {
+2026-10-11T09:43:38.7244132Z             "enableReading": True,
+2026-10-11T09:43:38.7244416Z             "enableSpotAndMarginTrading": True,
+2026-10-11T09:43:38.7244704Z             "enableWithdrawals": True,
+2026-10-11T09:43:38.7244950Z         }
+2026-10-11T09:43:38.7245242Z         report = PreflightCheckService(client, symbols=["BTCUSDT"]).verify_all()
+2026-10-11T09:43:38.7245606Z         assert report["ready"] is False
+2026-10-11T09:43:38.7245908Z >       assert report["checks"]["api_restrictions"] == "FAIL"
+2026-10-11T09:43:38.7246232Z E       AssertionError: assert 'UNKNOWN' == 'FAIL'
+2026-10-11T09:43:38.7246500Z E         
+2026-10-11T09:43:38.7246698Z E         - FAIL
+2026-10-11T09:43:38.7246907Z E         + UNKNOWN
+2026-10-11T09:43:38.7247021Z 
+2026-10-11T09:43:38.7247118Z test_preflight_gate.py:134: AssertionError
+2026-10-11T09:43:38.7247440Z _________________ test_testnet_preflight_blocks_foreign_order __________________
+2026-10-11T09:43:38.7247675Z 
+2026-10-11T09:43:38.7247800Z     def test_testnet_preflight_blocks_foreign_order():
+2026-10-11T09:43:38.7248061Z         client = FakeClient()
+2026-10-11T09:43:38.7248330Z         client.open_orders = lambda: [{"clientOrderId": "FOREIGN"}]
+2026-10-11T09:43:38.7248701Z         report = PreflightCheckService(client, symbols=["BTCUSDT"]).verify_all()
+2026-10-11T09:43:38.7249026Z         assert report["ready"] is False
+2026-10-11T09:43:38.7249289Z >       assert report["checks"]["open_orders"] == "FAIL"
+2026-10-11T09:43:38.7249570Z E       AssertionError: assert 'UNKNOWN' == 'FAIL'
+2026-10-11T09:43:38.7249813Z E         
+2026-10-11T09:43:38.7249993Z E         - FAIL
+2026-10-11T09:43:38.7250178Z E         + UNKNOWN
+2026-10-11T09:43:38.7250294Z 
+2026-10-11T09:43:38.7250392Z test_preflight_gate.py:142: AssertionError
+2026-10-11T09:43:38.7250723Z ______ test_known_orders_cannot_be_marked_reconciled_by_boolean_override _______
+2026-10-11T09:43:38.7251010Z 
+2026-10-11T09:43:38.7251184Z     def test_known_orders_cannot_be_marked_reconciled_by_boolean_override():
+2026-10-11T09:43:38.7251497Z         client = FakeClient()
+2026-10-11T09:43:38.7251848Z         client.open_orders = lambda: [{"clientOrderId": "WILLV4_ENTRY_123"}]
+2026-10-11T09:43:38.7252251Z         report = PreflightCheckService(client, symbols=["BTCUSDT"]).verify_all(
+2026-10-11T09:43:38.7252585Z             allow_reconciled_orders=True
+2026-10-11T09:43:38.7252808Z         )
+2026-10-11T09:43:38.7726812Z >       assert report["checks"]["open_orders"] == "FAIL"
+2026-10-11T09:43:38.7727404Z E       AssertionError: assert 'UNKNOWN' == 'FAIL'
+2026-10-11T09:43:38.7727808Z E         
+2026-10-11T09:43:38.7728103Z E         - FAIL
+2026-10-11T09:43:38.7728402Z E         + UNKNOWN
+2026-10-11T09:43:38.7728577Z 
+2026-10-11T09:43:38.7728752Z test_preflight_gate.py:169: AssertionError
+2026-10-11T09:43:38.7729297Z ____________________ test_future_timestamp_remains_unknown _____________________
+2026-10-11T09:43:38.7729701Z 
+2026-10-11T09:43:38.7729900Z     def test_future_timestamp_remains_unknown():
+2026-10-11T09:43:38.7730338Z         result = evaluate_freshness(
+2026-10-11T09:43:38.7730765Z             "balances", evidence("balances", at=100_001),
+2026-10-11T09:43:38.7731393Z             now_ms=100_000,
+2026-10-11T09:43:38.7731858Z         )
+2026-10-11T09:43:38.7732159Z         assert result.status == "UNKNOWN"
+2026-10-11T09:43:38.7732462Z >       assert result.reason == "measurement_clock_skew"
+2026-10-11T09:43:38.7732865Z E       AssertionError: assert 'measurement_...amp_in_future' == 'measurement_clock_skew'
+2026-10-11T09:43:38.7733237Z E         
+2026-10-11T09:43:38.7733449Z E         - measurement_clock_skew
+2026-10-11T09:43:38.7733704Z E         + measurement_timestamp_in_future
+2026-10-11T09:43:38.7733873Z 
+2026-10-11T09:43:38.7733990Z test_runtime_freshness.py:54: AssertionError
+2026-10-11T09:43:38.7734301Z =============================== warnings summary ===============================
+2026-10-11T09:43:38.7734781Z test_integration_bindings.py::test_market_klines_uses_requested_symbol_and_interval
+2026-10-11T09:43:38.7735350Z   /home/runner/work/Williams/Williams/server.py:580: DeprecationWarning: 
+2026-10-11T09:43:38.7735779Z           on_event is deprecated, use lifespan event handlers instead.
+2026-10-11T09:43:38.7736088Z   
+2026-10-11T09:43:38.7736297Z           Read more about it in the
+2026-10-11T09:43:38.7736703Z           [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+2026-10-11T09:43:38.7737090Z           
+2026-10-11T09:43:38.7737298Z     @app.on_event('startup')
+2026-10-11T09:43:38.7737457Z 
+2026-10-11T09:43:38.7737671Z test_integration_bindings.py::test_market_klines_uses_requested_symbol_and_interval
+2026-10-11T09:43:38.7738151Z test_integration_bindings.py::test_market_klines_uses_requested_symbol_and_interval
+2026-10-11T09:43:38.7738761Z   /opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/fastapi/applications.py:4745: DeprecationWarning: 
+2026-10-11T09:43:38.7739322Z           on_event is deprecated, use lifespan event handlers instead.
+2026-10-11T09:43:38.7739635Z   
+2026-10-11T09:43:38.7739832Z           Read more about it in the
+2026-10-11T09:43:38.7740210Z           [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+2026-10-11T09:43:38.7740590Z           
+2026-10-11T09:43:38.7740864Z     return self.router.on_event(event_type)  # ty: ignore[deprecated]
+2026-10-11T09:43:38.7741098Z 
+2026-10-11T09:43:38.7741311Z test_integration_bindings.py::test_market_klines_uses_requested_symbol_and_interval
+2026-10-11T09:43:38.7741859Z   /home/runner/work/Williams/Williams/server.py:622: DeprecationWarning: 
+2026-10-11T09:43:38.7742272Z           on_event is deprecated, use lifespan event handlers instead.
+2026-10-11T09:43:38.7742569Z   
+2026-10-11T09:43:38.7742758Z           Read more about it in the
+2026-10-11T09:43:38.7743127Z           [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+2026-10-11T09:43:38.7743507Z           
+2026-10-11T09:43:38.7743721Z     @app.on_event('shutdown')
+2026-10-11T09:43:38.7743866Z 
+2026-10-11T09:43:38.7744063Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2026-10-11T09:43:38.7744457Z =========================== short test summary info ============================
+2026-10-11T09:43:38.7745001Z FAILED test_production_architecture.py::test_execution_barrier_serializes_publish_and_submit - AssertionError: assert False
+2026-10-11T09:43:38.7745841Z  +  where False = ExecutionResult(intent_id='f35cab02fd5a48afba199f05dd200a98', accepted=False, response=None, reason='trusted_preflight_service_missing_or_invalid').accepted
+2026-10-11T09:43:38.7746845Z FAILED test_execution_barrier_fail_closed.py::test_legacy_portfolio_mutation_wrapper_requires_barrier_and_blocks_submit - AttributeError: 'MultiPositionTrader' object has no attribute 'db'
+2026-10-11T09:43:38.7747735Z FAILED test_multi_position_execution.py::test_multi_position_execution_creates_independent_trades - AssertionError: assert 1 == 2
+2026-10-11T09:43:38.7748504Z  +  where 1 = len([{'symbol': 'BTCUSDT', 'error': 'Portfolio mutation blocked: canonical ExecutionBarrier unavailable', 'reconcile_required': True}])
+2026-10-11T09:43:38.7749302Z FAILED test_multi_position_lifecycle.py::test_partial_manual_sell_keeps_residual_position_protected - assert False is True
+2026-10-11T09:43:38.7750186Z FAILED test_multi_position_lifecycle.py::test_partial_emergency_sell_never_closes_trade_as_flat - RuntimeError: Emergency exit blocked: dedicated emergency execution contract is not implemented
+2026-10-11T09:43:38.7751235Z FAILED test_binance_json_shapes.py::test_signed_post_retries_once_only_for_timestamp_rejection - RuntimeError: Binance order mutation blocked: one mutation per ExecutionBarrier permit
+2026-10-11T09:43:38.7752196Z FAILED test_preflight_gate.py::test_testnet_preflight_keeps_unknown_runtime_proofs_blocked - AssertionError: assert 'UNKNOWN' == 'PASS'
+2026-10-11T09:43:38.7752701Z   
+2026-10-11T09:43:38.7752882Z   - PASS
+2026-10-11T09:43:38.7753133Z   + UNKNOWN
+2026-10-11T09:43:38.7753530Z FAILED test_preflight_gate.py::test_testnet_preflight_blocks_withdrawals - AssertionError: assert 'UNKNOWN' == 'FAIL'
+2026-10-11T09:43:38.7753974Z   
+2026-10-11T09:43:38.7754148Z   - FAIL
+2026-10-11T09:43:38.7754324Z   + UNKNOWN
+2026-10-11T09:43:38.7754724Z FAILED test_preflight_gate.py::test_testnet_preflight_blocks_foreign_order - AssertionError: assert 'UNKNOWN' == 'FAIL'
+2026-10-11T09:43:38.7755161Z   
+2026-10-11T09:43:38.7755337Z   - FAIL
+2026-10-11T09:43:38.7755513Z   + UNKNOWN
+2026-10-11T09:43:38.7755960Z FAILED test_preflight_gate.py::test_known_orders_cannot_be_marked_reconciled_by_boolean_override - AssertionError: assert 'UNKNOWN' == 'FAIL'
+2026-10-11T09:43:38.7756455Z   
+2026-10-11T09:43:38.7756632Z   - FAIL
+2026-10-11T09:43:38.7756804Z   + UNKNOWN
+2026-10-11T09:43:38.7757303Z FAILED test_runtime_freshness.py::test_future_timestamp_remains_unknown - AssertionError: assert 'measurement_...amp_in_future' == 'measurement_clock_skew'
+2026-10-11T09:43:38.7757838Z   
+2026-10-11T09:43:38.7758033Z   - measurement_clock_skew
+2026-10-11T09:43:38.7758270Z   + measurement_timestamp_in_future
+2026-10-11T09:43:38.7758529Z 11 failed, 230 passed, 4 warnings in 6.40s
+2026-10-11T09:43:38.8879996Z ##[error]Process completed with exit code 1.
+2026-10-11T09:43:38.9000863Z Post job cleanup.
+2026-10-11T09:43:38.9712399Z [command]/usr/bin/git version
+2026-10-11T09:43:38.9749940Z git version 2.55.0
+2026-10-11T09:43:38.9782222Z Temporarily overriding HOME='/home/runner/work/_temp/ea0a72c6-70f7-4539-bc4a-341f80d1986f' before making global git config changes
+2026-10-11T09:43:38.9783335Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-11T09:43:38.9792747Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Williams/Williams
+2026-10-11T09:43:38.9817360Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-11T09:43:38.9845896Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-11T09:43:39.0030786Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-11T09:43:39.0053158Z http.https://github.com/.extraheader
+2026-10-11T09:43:39.0055914Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-10-11T09:43:39.0081185Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-11T09:43:39.0269174Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-11T09:43:39.0295140Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-11T09:43:39.0589773Z Cleaning up orphan processes
+2026-10-11T09:43:39.0799656Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-python@v5. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
