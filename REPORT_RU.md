@@ -8,8 +8,8 @@
 PR: [#47 — OPEN / DRAFT / NOT MERGED](https://github.com/19wolfalone92/Williams/pull/47)  
 Исходный проверенный snapshot для кода: `cb0a5b1046502d92dfcc8eb1038a9ee4fe995fbc`  
 Base/main SHA на момент проверки: `04da5f9c09572e99ff310be3a1908179165e528c`  
-HEAD ветки после добавления документов TASK 001.2: `337ca4c36463c0f68e8e641a8f08cf69ddc8f87a`  
-Parent текущего HEAD: `72c4710aec838279cc1651f99349a66c903a395c`
+HEAD до финального обновления отчёта: `337ca4c36463c0f68e8e641a8f08cf69ddc8f87a`  
+Parent этого pre-report snapshot: `72c4710aec838279cc1651f99349a66c903a395c`. Финальный commit отчёта фиксируется GitHub PR head/commit metadata после записи; не смешивать commit SHA и blob SHA.
 
 ## 1. Краткое решение
 
@@ -116,7 +116,7 @@ All five supporting documents are committed to the existing branch. Their blob S
 3. [EXECUTION_PATH_INVENTORY.md](https://github.com/19wolfalone92/Williams/blob/audit/williams-2.1-task-001-architecture/docs/EXECUTION_PATH_INVENTORY.md) — blob SHA `8898eb80da12e44c691439103b030149fd246c1a`. Lists Spot order/cancel/cancel-replace/OCO/bulk cancel and Android mutation surfaces with required gates.
 4. [INTEGRATION_CONTRACT_MATRIX.md](https://github.com/19wolfalone92/Williams/blob/audit/williams-2.1-task-001-architecture/docs/INTEGRATION_CONTRACT_MATRIX.md) — blob SHA `6c16a6627728839e8ab479bd996f19bba25f9d7b`. Maps TASK 002–008 provenance, context, signal, risk, identity, ledger, recovery, Android and Testnet contracts.
 5. [P0_BLOCKER_REGISTER.md](https://github.com/19wolfalone92/Williams/blob/audit/williams-2.1-task-001-architecture/docs/P0_BLOCKER_REGISTER.md) — blob SHA `36a02d9cc0a557502a59925aa4bff9b1386ae906`. Tracks 14 P0 blockers and P1/P2 follow-up.
-6. [REPORT_RU.md](https://github.com/19wolfalone92/Williams/blob/audit/williams-2.1-task-001-architecture/REPORT_RU.md) — this report, to be pinned to the commit produced by this update.
+6. [REPORT_RU.md](https://github.com/19wolfalone92/Williams/blob/audit/williams-2.1-task-001-architecture/REPORT_RU.md) — основной итоговый отчёт TASK 001.2; актуальный commit определяется по PR head, blob SHA — по GitHub Contents API.
 
 Existing evidence documents reviewed include:
 - `docs/WILLIAMS_BOT_2_1_TASK_001_ARCHITECTURE_AUDIT.md` — blob SHA `6617c75b55e4afae1dc47ca047db66821fcd96ed`.
