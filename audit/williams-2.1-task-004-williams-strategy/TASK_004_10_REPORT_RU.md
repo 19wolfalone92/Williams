@@ -6,7 +6,9 @@
 **Branch:** `audit/williams-2.1-task-004-williams-strategy`  
 **PR:** #49 — OPEN, Draft, not merged  
 **Base/main SHA observed:** `04da5f9c09572e99ff310be3a1908179165e528c`  
-**HEAD SHA rechecked for this report update:** `e8a741a8799dcd13b467557dfb6cbe0f5ffc9ad7`  
+**Production code audited:** `e8a741a8799dcd13b467557dfb6cbe0f5ffc9ad7`  
+**Current branch HEAD after this report-only commit:** `f9f411587cfb3c04bbe05fc8038c729bf1c8b9ad`  
+The latter commit changes only this report; it does not contain implementation changes and has no CI runs. The three listed CI runs belong to the audited code SHA above, not to the report-only HEAD.  
 **Scope of this report:** live GitHub baseline, targeted source inspection, CI evidence and explicit blockers. This report does not claim implementation or exhaustive mutation-sink closure.
 
 ## 1. Baseline recheck
