@@ -767,8 +767,15 @@ private class NativeEngine(
             restLastSuccessMs > 0L &&
             System.currentTimeMillis() - restLastSuccessMs <= maxAgeMs
 
+    // P0 TASK 009.4: Android mutations still lack the verified durable
+    // intent/account-identity/recovery contract implemented for Python Spot.
+    // Keep autonomous execution unavailable until that independent contour is
+    // fully audited and its crash/restart tests pass.
+    private val androidDurableMutationContractVerified = false
+
     private fun executionReady(): Boolean =
-        running &&
+        androidDurableMutationContractVerified &&
+            running &&
             !paused &&
             !reconcileRequired &&
             !killLatched &&
@@ -780,6 +787,9 @@ private class NativeEngine(
 
     private fun executionBlockers(): List<String> =
         buildList {
+            if (!androidDurableMutationContractVerified) {
+                add("TASK0094_ANDROID_DURABLE_MUTATION_CONTRACT_UNVERIFIED")
+            }
             if (!running) add("runtime_not_running")
             if (paused) add("paused")
             if (reconcileRequired) add("reconcile_required")
@@ -1128,6 +1138,19 @@ private class NativeEngine(
     }
 
     fun start(): JSONObject {
+        if (!androidDurableMutationContractVerified) {
+            prefs.edit()
+                .putBoolean("auto_run", false)
+                .putString(
+                    "execution_contract_blocker",
+                    "TASK0094_ANDROID_DURABLE_MUTATION_CONTRACT_UNVERIFIED"
+                )
+                .commit()
+            return JSONObject()
+                .put("started", false)
+                .put("execution_enabled", false)
+                .put("reason", "TASK0094_ANDROID_DURABLE_MUTATION_CONTRACT_UNVERIFIED")
+        }
         if (killLatched) {
             error("KILL_SWITCH_LATCHED: recover and reset kill switch before START")
         }
