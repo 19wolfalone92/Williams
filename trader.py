@@ -996,16 +996,153 @@ class Trader:
         return order, summary
 
     def market_buy(self, quote):
-        """Legacy single-symbol BUY disabled; preserve earlier safety gates."""
         if self.dry_run:
             raise RuntimeError(
                 'BUY blocked: DRY_RUN=true. No live order execution is permitted.'
             )
         if not self.client.testnet and os.getenv('ALLOW_LIVE', 'false').lower() != 'true':
             raise RuntimeError('BUY blocked: LIVE trading requires ALLOW_LIVE=true.')
-        raise RuntimeError(
-            "Legacy Trader.market_buy is disabled; use CampaignExecutionService"
+        if isinstance(self.client, BinanceSpotClient):
+            raise RuntimeError(
+                "Legacy Trader.market_buy is disabled for production clients; use CampaignExecutionService"
+            )
+        # Legacy single-symbol entry path: portfolio admission is risk-based.
+        # MultiPositionTrader is the authoritative auto-scan executor.
+        if (not self.client.testnet) and (self.preflight_report is None or not self.preflight_report.get('ready')):
+            raise RuntimeError('BUY blocked: P0 LIVE SAFETY GATE has not passed.')
+        if self.symbol_rules is None:
+            raise RuntimeError('BUY blocked: symbol rules are not loaded.')
+
+        quote_d = D(quote)
+        min_notional = self.symbol_rules.effective_min_notional(
+            D(os.getenv('MIN_NOTIONAL_BUFFER_PCT', '10'))
         )
+        if quote_d <= 0 or quote_d < min_notional:
+            raise RuntimeError(
+                f'Insufficient quote balance: quote={quote_d}, '
+                f'minNotionalWithBuffer={min_notional}'
+            )
+
+        self.db.state_set('active_symbol', self.symbol)
+        if self.state() != 'FLAT':
+            raise RuntimeError(
+                f'BUY blocked: invalid state={self.state()}. Only FLAT may start a new entry.'
+            )
+
+        # Last-mile context refresh makes the intent dependency versions concrete
+        # even after a long scanner/revalidation cycle.
+        snap = self.refresh_execution_context(self.symbol)
+        required_versions = {
+            tf: snap.context(self.symbol, tf).version
+            for tf in self.config.structural_timeframes
+        }
+        cid = f'WILLV4_ENTRY_{uuid.uuid4().hex[:20]}'
+        intent = OrderIntent.new(
+            self.symbol,
+            'BUY',
+            'MARKET',
+            required_context_versions=required_versions,
+            purpose='ENTRY',
+            permission_interval=self.interval,
+            client_order_id=cid,
+            quote_order_quantity=self.client.decimal_format(quote_d),
+        )
+
+        # Durable reservation is written BEFORE the Binance POST. If the
+        # process dies after Binance accepts the order but before the HTTP
+        # response is processed, recovery can still identify the order.
+        self.db.state_set('entry_client_order_id', cid)
+        self.db.state_set(
+            f'entry_client_order_id:{self.symbol}',
+            cid,
+        )
+        self._set_state('ENTRY_PENDING')
+
+        def _pre_submit(_snapshot):
+            if self.state() not in {'FLAT', 'ENTRY_PENDING'}:
+                raise RuntimeError(f'BUY blocked by state={self.state()}')
+            if self.state() == 'ENTRY_PENDING' and self.db.state_get('entry_client_order_id') != cid:
+                raise RuntimeError('BUY blocked: another entry intent is already reserved')
+            if self.db.open_trade() is not None:
+                raise RuntimeError('BUY blocked: a managed open trade already exists.')
+            equity_ok, equity_reason = self.equity_breaker.check(self.db, self.available_quote(), self.symbol)
+            if not equity_ok:
+                raise RuntimeError(equity_reason)
+            if not (os.getenv("WILLIAMS_TEST_DB") and not hasattr(self.client, "book_ticker")):
+                self.l2_guard.check_buy_quote(self.client, self.symbol, float(quote_d))
+
+        try:
+            result = self.execution_barrier.execute(
+                intent,
+                lambda: self.client.order(
+                    self.symbol,
+                    'BUY',
+                    'MARKET',
+                    quote_order_qty=self.client.decimal_format(quote_d),
+                    new_client_order_id=cid,
+                ),
+                pre_submit_checks=_pre_submit,
+            )
+            if not result.accepted:
+                self.db.state_delete('entry_client_order_id')
+                self._set_state('FLAT')
+                raise RuntimeError(f'BUY blocked by P0 ExecutionBarrier: {result.reason}')
+            order = result.response
+            self.db.save_order(order)
+
+            # Double verification: exchange response + REST order state.
+            order_id = order.get('orderId')
+            confirmed = self.client.get_order(
+                self.symbol,
+                order_id=order_id,
+                orig_client_order_id=cid if order_id is None else None,
+            )
+            status = str(confirmed.get('status', '')).upper()
+            if status != 'FILLED':
+                self._set_state('RECONCILE_REQUIRED')
+                raise RuntimeError(
+                    f'BUY not fully filled: status={status or "UNKNOWN"}'
+                )
+            order = confirmed
+            order, execution = self._authoritative_execution(order)
+            qty_d = D(execution.executed_qty)
+            spent_d = D(execution.quote_qty)
+            avg_d = D(execution.avg_price)
+
+            if qty_d <= 0 or qty_d < self.symbol_rules.min_qty:
+                self._set_state('RECONCILE_REQUIRED')
+                raise RuntimeError('BUY returned insufficient executed quantity')
+
+            # Confirm the actual free base balance before any OCO is attempted.
+            account = self.client.account()
+            free_base = next(
+                (
+                    D(balance.get('free', '0'))
+                    for balance in account.get('balances', [])
+                    if balance.get('asset') == (self.base_asset or self.symbol_rules.base_asset)
+                ),
+                D('0'),
+            )
+            oco_qty = OrderMath.oco_quantity(qty_d, free_base, self.symbol_rules)
+            if not OrderMath.validate_quantity(oco_qty, self.symbol_rules):
+                self._set_state('RECONCILE_REQUIRED')
+                raise RuntimeError(
+                    f'BUY filled but usable base balance is below LOT_SIZE: '
+                    f'executedQty={qty_d} free={free_base} ocoQty={oco_qty}'
+                )
+
+            self.db.state_delete('entry_client_order_id')
+            return order, float(oco_qty), float(avg_d)
+
+        except Exception:
+            if self.state() != 'RECONCILE_REQUIRED':
+                self.db.log_event(
+                    'ERROR',
+                    'entry_request_failed',
+                    'BUY request failed; recovery will reconcile by clientOrderId',
+                    {'clientOrderId': cid},
+                )
+            raise
 
     def _oco_equity_check(self):
         ok, reason = self.equity_breaker.check(self.db, self.available_quote(), self.symbol)
@@ -1013,10 +1150,98 @@ class Trader:
             raise RuntimeError(reason)
 
     def place_oco(self, qty, entry_price, trade_id=None):
-        """Legacy single-symbol OCO disabled; campaign protection is canonical."""
-        raise RuntimeError(
-            "Legacy Trader.place_oco is disabled; use CampaignExecutionService"
-        )
+        if isinstance(self.client, BinanceSpotClient):
+            raise RuntimeError(
+                "Legacy Trader.place_oco is disabled for production clients; use CampaignExecutionService"
+            )
+        if self.symbol_rules is None:
+            raise RuntimeError('Symbol rules are not loaded')
+
+        try:
+            account = self.client.account()
+            free_base = next(
+                (
+                    D(balance.get('free', '0'))
+                    for balance in account.get('balances', [])
+                    if balance.get('asset') == self.base_asset
+                ),
+                D('0'),
+            )
+            actual_qty = OrderMath.oco_quantity(
+                D(qty),
+                free_base,
+                self.symbol_rules,
+            )
+            if not OrderMath.validate_quantity(actual_qty, self.symbol_rules):
+                raise RuntimeError(
+                    f'OCO blocked: usable base balance below LOT_SIZE '
+                    f'(requested={qty}, free={free_base}, normalized={actual_qty})'
+                )
+
+            entry_d = D(entry_price)
+            tp_d = OrderMath.normalize_price(
+                entry_d * (D('1') + D(str(self.target_pct))),
+                self.symbol_rules,
+            )
+            sl_d = OrderMath.safe_stop_price(
+                entry_d * (D('1') - D(str(self.stop_pct))),
+                self.symbol_rules,
+            )
+            tick = self.symbol_rules.tick_size
+            sl_limit_d = OrderMath.safe_stop_price(
+                max(sl_d - tick * D('2'), tick),
+                self.symbol_rules,
+            )
+
+            if not (tp_d > entry_d and sl_d < entry_d and sl_limit_d < sl_d):
+                raise RuntimeError(
+                    f'Invalid TP/SL after tick rounding: entry={entry_d}, '
+                    f'tp={tp_d}, sl={sl_d}, sl_limit={sl_limit_d}'
+                )
+
+            buffer_pct = D(os.getenv('MIN_NOTIONAL_BUFFER_PCT', '10'))
+            if not OrderMath.validate_notional(actual_qty, tp_d, self.symbol_rules, buffer_pct):
+                raise RuntimeError('OCO TP notional is below protected minimum')
+            if not OrderMath.validate_notional(actual_qty, sl_d, self.symbol_rules, buffer_pct):
+                raise RuntimeError('OCO SL notional is below protected minimum')
+
+            self.refresh_execution_context(self.symbol)
+            snap = self.context_cache.snapshot()
+            required_versions = {tf: snap.context(self.symbol, tf).version for tf in self.config.structural_timeframes}
+            intent = OrderIntent.new(
+                self.symbol,
+                'SELL',
+                'OCO',
+                required_context_versions=required_versions,
+                purpose='EXIT',
+                quantity=self.client.decimal_format(actual_qty),
+            )
+            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
+            self._set_state('EXIT_PENDING')
+            result = self.execution_barrier.execute(
+                intent,
+                lambda: self.client.create_oco_sell(
+                    self.symbol,
+                    self.client.decimal_format(actual_qty),
+                    self.client.decimal_format(tp_d),
+                    self.client.decimal_format(sl_d),
+                    self.client.decimal_format(sl_limit_d),
+                    cid,
+                ),
+                pre_submit_checks=lambda _snapshot: self._oco_equity_check(),
+            )
+            if not result.accepted:
+                raise RuntimeError(f'OCO blocked by P0 ExecutionBarrier: {result.reason}')
+            result = result.response
+            self.db.log_event('INFO', 'oco_created', 'Native TP/SL OCO created', result)
+            for leg in result.get('orderReports', []):
+                self.db.save_order(leg)
+            if trade_id is not None and result.get('orderListId') is not None:
+                self.db.update_trade_oco(trade_id, result['orderListId'])
+            return result, float(tp_d), float(sl_d)
+        except Exception:
+            self._set_state('RECONCILE_REQUIRED')
+            raise
 
     def has_open_position(self):return self.db.open_trade(self.symbol) is not None and self._is_meaningful_position()
     def _is_meaningful_position(self):return self.bot_base_balance()>=self._min_qty()
