@@ -271,6 +271,28 @@ class Database:
         );
         CREATE INDEX IF NOT EXISTS idx_exchange_fill_order
             ON exchange_fill_ledger(symbol, order_id);
+        CREATE TABLE IF NOT EXISTS financial_effect_journal(
+            venue TEXT NOT NULL,
+            market_type TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            exchange_trade_id TEXT NOT NULL,
+            exchange_order_id TEXT NOT NULL,
+            effect_type TEXT NOT NULL,
+            effect_status TEXT NOT NULL,
+            quantity_text TEXT NOT NULL,
+            price_text TEXT NOT NULL,
+            quote_quantity_text TEXT,
+            commission_amount_text TEXT,
+            commission_asset TEXT,
+            fee_state TEXT NOT NULL,
+            contract_version INTEGER NOT NULL DEFAULT 1,
+            raw_json TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(venue, market_type, symbol, exchange_trade_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_financial_effect_recovery
+            ON financial_effect_journal(effect_status, last_seen_at);
         CREATE TABLE IF NOT EXISTS campaign_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_id TEXT NOT NULL,
@@ -1178,6 +1200,59 @@ class Database:
                     (symbol, str(trade_id)))
             elif (existing_commission, existing_asset) != (incoming_commission, incoming_asset):
                 raise RuntimeError("exchange trade identity collision: commission fields differ")
+
+            # Durable observation journal. This is deliberately NOT marked
+            # APPLIED: downstream position/Campaign/risk projections have not
+            # yet been proven to share this transaction. Unknown fees remain
+            # reconciliation-blocking rather than being interpreted as zero.
+            effect_status = "READY_TO_APPLY" if state == "CONFIRMED" else "RECONCILE_REQUIRED"
+            self.conn.execute(
+                """INSERT OR IGNORE INTO financial_effect_journal(
+                    venue,market_type,symbol,exchange_trade_id,exchange_order_id,
+                    effect_type,effect_status,quantity_text,price_text,
+                    quote_quantity_text,commission_amount_text,commission_asset,
+                    fee_state,contract_version,raw_json
+                ) VALUES('BINANCE','SPOT',?,?,?,?,?,?,?,?,?,?,?,1,?)""",
+                (symbol, str(trade_id), str(order_id), "SPOT_FILL", effect_status,
+                 qty, price, quote_qty, commission, asset, state, payload),
+            )
+            effect = self.conn.execute(
+                """SELECT exchange_order_id,quantity_text,price_text,
+                          quote_quantity_text,commission_amount_text,commission_asset,
+                          fee_state
+                   FROM financial_effect_journal
+                   WHERE venue='BINANCE' AND market_type='SPOT'
+                     AND symbol=? AND exchange_trade_id=?""",
+                (symbol, str(trade_id)),
+            ).fetchone()
+            if not effect:
+                raise RuntimeError("financial effect journal could not be read back")
+            effect_core = tuple(effect[k] for k in (
+                "exchange_order_id","quantity_text","price_text",
+                "quote_quantity_text","commission_amount_text","commission_asset",
+                "fee_state"))
+            expected_effect_core = (str(order_id), qty, price, quote_qty,
+                                    commission, asset, state)
+            if effect_core != expected_effect_core:
+                self.conn.execute(
+                    """UPDATE financial_effect_journal
+                       SET effect_status='RECONCILE_REQUIRED',
+                           last_seen_at=CURRENT_TIMESTAMP
+                       WHERE venue='BINANCE' AND market_type='SPOT'
+                         AND symbol=? AND exchange_trade_id=?""",
+                    (symbol, str(trade_id)),
+                )
+                self.state_set("financial_recovery_state", "RECONCILE_REQUIRED")
+                self.state_set("financial_recovery_reason",
+                               "canonical fill identity conflicts with journal facts")
+                raise RuntimeError("financial effect journal identity conflict")
+            self.conn.execute(
+                """UPDATE financial_effect_journal
+                   SET last_seen_at=CURRENT_TIMESTAMP
+                   WHERE venue='BINANCE' AND market_type='SPOT'
+                     AND symbol=? AND exchange_trade_id=?""",
+                (symbol, str(trade_id)),
+            )
         return {"inserted": bool(inserted), "financial_state": state,
                 "symbol": symbol, "exchange_trade_id": str(trade_id)}
 
