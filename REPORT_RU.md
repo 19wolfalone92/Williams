@@ -1,152 +1,161 @@
-# WILLIAMS BOT 2.1 — TASK 001
-## Architecture & Integration Control — отчёт аудита
+# WILLIAMS BOT 2.1 — TASK 001.1
+## Architecture Report Correction & Integration Matrix Alignment
 
-**Статус: BLOCKED — NOT ACCEPTED AS PASS**
+**Статус: BLOCKED — NOT ACCEPTED AS PASS**  
+Дата: 2026-10-11  
+Репозиторий: 19wolfalone92/Williams  
+Целевая ветка: audit/williams-2.1-task-001-architecture  
+Предыдущий commit: c893be3358052774175f5ad3c23c731b50c699a0
 
-Дата: 2026-10-11. Репозиторий: 19wolfalone92/Williams. Целевая ветка: audit/williams-2.1-task-001-architecture.
+## 1. Baseline и происхождение доказательств
 
-## 1. Baseline и provenance
+GitHub Branch Search подтвердил наличие веток audit/williams-2.1-task-001-architecture и main. GitHub Commit API подтвердил существование commit c893be3358052774175f5ad3c23c731b50c699a0; это документационный commit, добавивший REPORT_RU.md.
 
-| Проверка | Результат | Основание |
+Для этого commit GitHub workflow endpoint вернул:
+- Python backend tests — completed / success, run 38142304441, run number 2452.
+- Williams Campaign CI — completed / success, run 38142304453, run number 4517.
+- Build Android APK — in_progress, run 38142304455, run number 2111 на момент snapshot; финальный conclusion не подтверждён.
+
+Успешные workflow не доказывают архитектурную безопасность, device readiness или полный end-to-end Testnet сценарий.
+
+| Baseline item | Status | Finding |
 |---|---|---|
-| Ветка существует | PASS | GitHub branch lookup подтвердил имя ветки |
-| Точный commit HEAD | BLOCKED | Полученный branch lookup не вернул SHA вершины |
-| Чистота рабочего дерева | BLOCKED | GitHub Contents API не показывает локальный git status |
-| Воспроизводимый baseline | BLOCKED | Clean checkout и полный запуск тестов на одном SHA в этой проверке не выполнены |
-| main/merge | Не изменялись в рамках этого действия | Читались файлы; отчёт записывается только в целевую audit-ветку |
-| Физический Android/Testnet | BLOCKED | Нет свежего device run, APK provenance и связанного exchange evidence |
+| Target branch exists | PASS | Подтверждено GitHub Branch Search |
+| Exact target HEAD SHA after previous commit | BLOCKED | Branch Search возвращает имя ветки, не commit SHA |
+| Exact main HEAD SHA | BLOCKED | Search results не связывают найденный commit с ref main |
+| Target base SHA | BLOCKED | Нет достоверной PR/base metadata |
+| Local working-tree cleanliness | NOT CHECKED | Локального checkout нет; git status не заявляется |
+| Reproducible full baseline | BLOCKED | Не выполнены clean checkout и полный прогон на подтверждённом HEAD |
+| Android build result | IN PROGRESS in returned snapshot | Итог workflow не был доступен |
 
-SHA из прежних сообщений не принимаются за доказательство текущего HEAD. Для закрытия нужны полный HEAD/base SHA, git status --porcelain, git rev-parse HEAD, git diff --check и логи тестов с тем же checkout.
+SHA commit нельзя смешивать с Git blob SHA файла. Для закрытия baseline нужны branch ref → commit SHA, base SHA/PR metadata и CI runs, привязанные к проверяемому SHA. Чистота дерева проверяется только внутри соответствующего checkout.
 
-## 2. Карта компонентов, подтверждённая просмотренным кодом
+## 2. Фактическая архитектурная карта и границы доказанного
 
 ```text
-Market Data:
-  BinanceSpotClient / data.py / ws_hub.py
-       ↓
+Market Data: BinanceSpotClient / REST / WS
+        ↓
 market_context.py / mtf_context_service.py / hypothesis_engine.py
-       ↓
-ContextCache (versioned market-context snapshots)
-       ↓
+        ↓ versioned context
 strategy.py / Trader.process()
-       ↓
-MultiPositionTrader / campaign services / risk & preflight gates
-       ↓
-OrderIntent
-       ↓
+        ↓ candidate / signal
+MultiPositionTrader / campaign services / risk and preflight gates
+        ↓ OrderIntent
 ExecutionBarrier.execute()
-       ↓
-BinanceSpotClient → Binance Spot REST / Testnet
+        ↓ durable intent / validation / serialization
+BinanceSpotClient → Binance Spot / Testnet
+        ↓ orders, fills, balances: exchange is authoritative
+Recovery / reconciliation → local projection
+        ↓
+Database / SQLite: orders, trades, campaigns, campaign_signals,
+execution_intents, execution_events, cancel_replace_operations
 
-Persistence:
-  Database / SQLite:
-  bot_state, orders, trades, campaigns, campaign_signals,
-  execution_intents, execution_events, cancel_replace_operations
-
-Android:
-  Dashboard/API client → server.py control/status API
-  Backend code creates ControlState, Trader, scanner, MTF services,
-  database and Binance stream/control components.
+Android Dashboard / API client ⇄ server.py control/status API
+server.py → ControlState / Trader / scanner / MTF / DB / Binance components
 ```
 
-Это подтверждает наличие backend-owned execution path в проверенных файлах. Это НЕ доказывает, что установленный APK соответствует этому исходнику или что Android NativeEngine автономно исполняет ордера. Архитектурные режимы backend-owned и phone-native execution нельзя считать эквивалентными без явного выбора единственного execution authority и device evidence.
+Эта карта отражает обнаруженные компоненты и предполагаемые интерфейсы по ранее просмотренным файлам. Она не доказывает полноту call graph. Не инвентаризированы все mutating REST endpoints, все campaign/financial writers и все переходы от Android до execution boundary.
 
-## 3. Критические мутации и владельцы
+В backend-коде виден backend-owned execution path. Соответствие установленного APK исходникам и самостоятельное исполнение ордеров Android NativeEngine не доказаны. До TASK 006 требуется выбрать и подтвердить единственный execution authority. Два независимых writers одного Binance account без fencing запрещены.
 
-| Состояние | Кандидат-владелец по коду | Открытый риск |
-|---|---|---|
-| Order admission | ExecutionBarrier | Не доказано, что все mutating Binance REST calls проходят через него |
-| Exchange order/fill/balance facts | Binance; локальная БД — проекция | Неизвестный результат запроса требует reconcile, а не слепого повтора |
-| Signals/context | strategy.py, market_context.py, ContextCache | Signal должен оставаться намерением, не побочным ордерным эффектом |
-| Campaign/position | MultiPositionTrader + campaign services + SQLite | Coexist legacy trade/position state и campaign tables; единственный writer не доказан |
-| Fees/PnL/financial ledger | Database + execution accumulation paths | Exactly-once и атомарность всех writers не доказаны |
-| Kill switch | ControlState.kill() + SQLite latch + close path | Код ставит latch перед закрытием; гонки и частичный выход требуют тестов |
-| Market data | REST/WS + context services | Gap/stale data должны блокировать входы до восстановления |
-| Android UI | Dashboard/API client | Не должен быть параллельным владельцем order/campaign/financial state |
+## 3. Согласованная матрица TASK 001–009
 
-Обязательные ownership rules:
-1. Binance — источник истины по ордерам, fills, балансам и открытым ордерам.
-2. ExecutionBarrier — единственная точка локального admission ордера, но не источник истины об исполнении.
-3. Назначить один canonical campaign/position writer после инвентаризации всех mutation call sites.
-4. Один canonical financial application service должен атомарно применить каждый уникальный fill, fees, PnL и количество позиции.
-5. Если execution authority — backend, Android остаётся read/control client. Два независимых execution writers на один аккаунт без fencing запрещены.
-
-## 4. Контракты восьми рабочих направлений
-
-| Задача | Контракт и критерий блокировки |
-|---|---|
-| TASK 002 — Baseline/Android provenance | Trusted checkout, base/head SHA, APK SHA, installed package/version и device logs. Неизвестный APK provenance блокирует readiness. |
-| TASK 003 — Execution Safety | Полный order mutation call graph. Любой неучтённый прямой mutation path блокирует входы. |
-| TASK 004 — State Machine | Версионированная таблица переходов order/campaign/position. UNKNOWN, конфликт или неполная транзакция → RECONCILE_REQUIRED. |
-| TASK 005 — Entry Engine | Immutable PendingSignal/SignalSpec; signal не размещает ордер напрямую. Нет контекста/подтверждения/структурной отмены — no entry. |
-| TASK 006 — Momentum/Market Context | Синхронизированные свечи, версии TF, валидные данные. Stale/gap/unconfirmed data — no entry. |
-| TASK 007 — Risk/Financial | Equity, fees, filters, structural invalidation, open/pending risk; атомарный reservation и exactly-once fill application. |
-| TASK 008 — Data & Execution | Stable client IDs, submit/reconcile/cancel/replace/protection. UNKNOWN/partial/orphan protection → reconcile, no blind retry. |
-| TASK 009 — Backtest | Versioned data/rules, fees/slippage, deterministic replay, no look-ahead. Иначе результат недействителен. |
-| TASK 010 — Integration & QA | Evidence records TASK 002–009 с точными SHA и логами; любой P0 BLOCKED/FAIL → release BLOCKED. |
-
-Стандарт evidence record: task_id, status, repository, branch, commit_sha, base_sha, file/blob SHAs, test command, run URL/log SHA-256, environment, result, blockers, reviewer. Отсутствующие результаты не подменять предположениями.
-
-## 5. UNKNOWN, restart, duplicate delivery, partial execution
-
-| Сценарий | Требуемое поведение | Текущее доказательство |
-|---|---|---|
-| Timeout/UNKNOWN после POST | Сохранить clientOrderId/intent, запросить exchange order/trade history, не повторять POST вслепую | Barrier документирует no-blind-retry; все пути отправки ещё не инвентаризированы |
-| Перезапуск | Recover → reconcile exchange facts → validate → разрешить входы | Trader имеет recovery/preflight path; crash-injection run не выполнен здесь |
-| Повторный fill/user event | Уникальный fill identity и атомарный exactly-once apply | Все writers и уникальные ключи не проверены исчерпывающе |
-| Partial fill | Учесть executedQty, quote, fees; защитить подтверждённый остаток; не считать FLAT раньше exchange evidence | Accumulator/campaign components существуют; полный OCO/partial matrix не доказан |
-| Cancel/replace | Сохранить обе стороны операции и reconcile старый/новый ордер | SQLite schema содержит cancel_replace_operations; таблица не доказывает корректность алгоритма |
-| WS gap / stale data | Инвалидировать контекст, восстановить через REST, блокировать новые входы | Компоненты существуют; реальный recovery run не подтверждён |
-| Kill во время выхода | Latch до close; ошибки/остаток → reconcile-required | В server.py latch выставляется до закрытия; гонки и частичный выход требуют тестов |
-
-## 6. Матрица требований / реализации / тестов
-
-| Требование | Кодовый индикатор | Что видно | Что нужно для PASS |
+| Task | Направление | Обязательный результат | Статус по доступным доказательствам |
 |---|---|---|---|
-| Общая execution boundary | execution_barrier.py, MultiPositionTrader._submit_via_execution_barrier | Wrapper блокирует отправку без barrier; валидирует context | Полный AST/call graph всех REST mutation calls |
-| Durable intent | execution_intents / execution_events в db.py | Схема и persistence hook присутствуют | Crash tests между persist, POST и response |
-| Order FSM | order_state_machine.py | Barrier импортирует FSM | Все переходы, invalid transition, duplicate/restart tests |
-| Campaign ownership | campaigns/campaign_signals + campaign services | Схема и сервисы присутствуют | Единственный writer, транзакционные границы и replay tests |
-| Exactly-once finance | execution_accumulator.py + DB | Финансовые компоненты присутствуют | Уникальный fill ID, Decimal end-to-end, атомарность и crash tests |
-| Context freshness | ExecutionBarrier._validate | Проверяет version, age, permission timeframe | Интеграционный тест реального producer/consumer и race |
-| Android | Kotlin source / server.py | Backend control/status path существует | APK SHA, endpoint config, device logs, authority proof |
-| Spot Testnet | Binance client / credential checks | Есть Spot/Testnet abstraction | Связанный с SHA полный order/fill/cancel/recovery test |
-| Backtest | backtester.py / run_backtest.py — область TASK 009 | В этой проверке не запускался | Детерминированный replay, fees/slippage, anti-lookahead |
+| 001 | Architecture & Integration Control | Карта, ownership, контракты, evidence matrix, blockers | BLOCKED — текущий отчёт |
+| 002 | Trusted Baseline, Version Contract & Release Gate | Trusted HEAD/base, version contract, воспроизводимый baseline | BLOCKED — обнаружены ветки, принятого evidence bundle нет |
+| 003 | Execution Safety & Durable Mutation Intent | Полная mutation inventory, единый execution boundary, durable intent, UNKNOWN safety | BLOCKED — отсутствие обходов не доказано |
+| 004 | Williams Strategy Source-to-Code Verification | Source-to-code traceability, deterministic signal contract, no look-ahead | BLOCKED — наличие ветки не означает принятия аудита |
+| 005 | Risk Engine & Position Sizing | Risk contract, sizing/invalidation, fees/filters/exposure tests | BLOCKED — нет принятого evidence bundle |
+| 006 | Android Autonomous Runtime & Device Evidence | APK ↔ source SHA, installed version, device logs, autonomy/recovery proof | BLOCKED — физическое устройство и provenance не подтверждены |
+| 007 | Recovery, Reconciliation & Financial Ledger | Single financial writer, exactly-once fill application, restart/reconcile tests | BLOCKED — атомарность не доказана |
+| 008 | Binance Spot Testnet, Market Data & End-to-End Integration | Полный Spot Testnet lifecycle и recovery evidence | BLOCKED — полного принятого lifecycle evidence нет |
+| 009 | Global Integration, Cross-Branch Verification & Final Readiness Gate | Совместимость веток, интеграционные тесты, final readiness decision | BLOCKED / NOT VERIFIED — ветка с таким именем не найдена в branch search |
 
-## 7. Точные SHA просмотренных файлов
+TASK 009 — общий integration gate, не отдельный модуль стратегии. PASS невозможен до сбора TASK 002–008 evidence с точными SHA.
 
-Ниже SHA Git blob, не commit SHA:
+## 4. Реестр обнаруженных веток
 
-| Файл | Blob SHA |
-|---|---|
-| server.py | f7d93c014975949a7172323801f0fb485013895e |
-| execution_barrier.py | c0e7cf4eea424d037b273e6150fa2d3d0ea93b40 |
-| portfolio_trader.py | 5c38ed933edf17e0a9d3376363c50786a94a737d |
-| db.py | 129645290a074d7958ac75a4128de455754db13e |
-| trader.py | b2d9287a10da7d803c8ce14912c24745453033d7 |
-| test_production_architecture.py | 867ab7979b63c0528984aa82d76365a932824bcc |
-| full_safety_audit.py | 96a8347219c175631d0b733880e8f9efef555beb |
+Branch Search предоставил имена, но не HEAD SHA, PR, CI или changed-file list. Поэтому эти поля честно отмечены как неизвестные.
 
-## 8. Открытые блокеры
+| Task | Branch | HEAD SHA | PR / CI / changed files | Status |
+|---|---|---|---|---|
+| 001 | audit/williams-2.1-task-001-architecture | Не получен | PR не подтверждён; CI snapshot для предыдущего commit см. выше | BLOCKED |
+| 002 | audit/williams-2.1-task-002-16-device-evidence | Не получен | Не получены | IN PROGRESS — NOT APPROVED |
+| 002 | audit/williams-2.1-task-002-release-contract | Не получен | Не получены | IN PROGRESS — NOT APPROVED |
+| 003 | audit/williams-2.1-task-003-execution-safety | Не получен | Не получены | IN PROGRESS — NOT APPROVED |
+| 004 | audit/williams-2.1-task-004-williams-strategy | Не получен | Не получены | IN PROGRESS — NOT APPROVED |
+| 005 | audit/williams-2.1-task-005-risk-management | Не получен | Не получены | IN PROGRESS — NOT APPROVED |
+| 006 | audit/williams-2.1-task-006-android-runtime | Не получен | Не получены | IN PROGRESS — NOT APPROVED |
+| 007 | audit/williams-2.1-task-007-recovery | Не получен | Не получены | IN PROGRESS — NOT APPROVED |
+| Extra branch, relationship unverified | fix/task-007-risk-management | Не получен | Не получены | BLOCKED |
+| 008 | audit/williams-2.1-task-008-spot-testnet | Не получен | Не получены | IN PROGRESS — NOT APPROVED |
+| 009 | Branch with agreed name not found | N/A | PR/evidence not confirmed; absence not proven | BLOCKED |
 
-**P0**
-1. Не получен точный HEAD/base SHA и clean-tree baseline.
-2. Не завершён inventory всех Binance mutation call sites, включая cancel/replace, OCO, protection, emergency и manual paths.
-3. Не доказаны единственный campaign/position writer и canonical financial fill writer; legacy и campaign state coexist.
-4. Нет воспроизводимых crash/restart/duplicate/partial-fill/cancel-replace результатов, привязанных к проверенному SHA.
-5. Нет физического Android evidence bundle и APK provenance; phone-native и backend-owned execution не доказаны как один выбранный режим.
-6. Нет завершённых evidence records TASK 002–008 в этом отчёте.
+Наличие ветки не означает завершения задачи. Отсутствие ветки в поиске не доказывает отсутствие PR или реализации в другом месте.
 
-**P1**
-7. Не доказано, что market-data gaps блокируют входы до reconciliation.
-8. Не доказана атомарность Decimal/fees/PnL/executed quantity с exactly-once fill application.
-9. Не выполнен полный reproducible backtest/anti-lookahead audit.
-10. Не проведён полный Spot Testnet lifecycle run на исходниках и конфигурации, связанных с APK.
+## 5. Матрица требование → реализация → тест → доказательство
 
-## 9. Решение
+| Требование | Наблюдаемый индикатор | Обязательный тест | Доказательство для PASS | Status |
+|---|---|---|---|---|
+| Все order mutations инвентаризированы | ExecutionBarrier, Binance client, cancel/protection paths | AST/call graph place/cancel/replace/OCO/stop/emergency/manual | Полный inventory с файлами/строками и тестами обходов | BLOCKED |
+| Нет обходов ExecutionBarrier | Barrier и legacy wrapper | Каждый mutation path без barrier должен fail closed | CI artifact на точном SHA | BLOCKED |
+| Один Campaign/Position writer | Campaign services и legacy trade/position state | Writer inventory, concurrency/race tests | Назначенный owner и transaction boundaries | BLOCKED |
+| Exactly-once fills | Execution accumulator / DB schema | Duplicate fill, replay, crash around ledger commit | Unique exchange fill identity + atomic transaction + logs | BLOCKED |
+| UNKNOWN / timeout | Durable intent / order FSM | Timeout before/after exchange acceptance | Reconciliation without blind retry | BLOCKED |
+| Restart/reconciliation | Recovery/preflight paths | Crash/restart для pending/partial/filled/cancel-pending | Сравнение exchange snapshot и local state | BLOCKED |
+| Market-data integrity | REST/WS/context services | WS gap, stale candle, duplicate/out-of-order events | Entry blocked until data resync | BLOCKED |
+| APK source provenance | Android build workflow | Reproducible build + installed package inspection | Source SHA, APK SHA-256, artifact, device package/version | BLOCKED |
+| Autonomous Android runtime | NativeEngine/runtime components | Device offline/backend unavailable/restart tests | Physical-device logs и execution-authority proof | BLOCKED |
+| Spot Testnet lifecycle | Binance Spot client / order barrier | Submit → partial/full fill → cancel/exit → restart/reconcile | Testnet IDs, timestamps, config hash and logs; no Mainnet | BLOCKED |
+| Cross-branch compatibility | TASK 002–008 branches | Integrated build/tests on candidate SHA | Branch/base/head map and CI artifacts | BLOCKED |
+| Backtest anti-lookahead | TASK 009 integration scope | Deterministic replay, closed-bar/fractal timing, fees/slippage | Dataset/config/code hashes and output | BLOCKED |
+| Final readiness | TASK 009 gate | All P0/P1 gates | Evidence index tied to one integration SHA | BLOCKED |
 
-**TASK 001: BLOCKED — NOT ACCEPTED AS PASS.**
+## 6. Критические сценарии
 
-В коде видны versioned market context, ExecutionBarrier, durable intent/cancel-replace schema, recovery/preflight components и backend-managed execution path. Это не доказывает отсутствие обходных путей, единственность writers, exactly-once финансовое применение или готовность Android/Testnet к автономной торговле.
+1. UNKNOWN/timeout: persist intent and stable client order ID; exchange lookup/reconciliation; no blind POST retry.
+2. Restart: Recover → reconcile orders/trades/balances → validate ledger/campaign/position → only then allow new entries.
+3. Duplicate fill/event: unique exchange fill identity; replay must not apply financial effects twice.
+4. Partial fill: quantities, fees and PnL applied atomically; protection matches confirmed executed quantity; remainder stays explicit.
+5. Cancel/replace: preserve both order outcomes; unknown outcome of either side requires reconciliation.
+6. WS gap/stale data: invalidate context, REST resync, block entries until continuity is confirmed.
+7. Kill switch: durable latch before close; partial/error cannot mark FLAT without exchange proof.
+8. Cross-branch drift: evidence records and CI must name exact SHA; CI on a different SHA is not transferable.
 
-Для закрытия нужны точный branch HEAD/base SHA; clean checkout и воспроизводимый baseline; результаты TASK 002–008 с SHA и логами; полный mutation call graph; назначенные единственные owners campaign/position/financial state; интеграционные тесты UNKNOWN/restart/duplicate/partial/cancel-replace; APK/device/Testnet evidence. До закрытия P0 блокеров новые реальные ордера не разрешать.
+## 7. Блокеры и следующий шаг
+
+### P0
+- **P0-1 Baseline refs unknown:** получить branch ref → commit SHA, main HEAD, target HEAD, base SHA и PR metadata.
+- **P0-2 Mutation paths unknown:** TASK 003 строит AST/call graph для всех mutating Binance endpoints и доказывает отсутствие обходов.
+- **P0-3 Competing writers possible:** TASK 007 инвентаризирует всех writers, назначает одного owner и проверяет transaction boundaries/races.
+- **P0-4 Fault scenarios unproven:** TASK 003/007/008 добавляют UNKNOWN/restart/duplicate/partial/cancel-replace fault injection и логи на конкретном SHA.
+- **P0-5 APK/device provenance absent:** TASK 006 reproducible build, APK SHA-256, installed version, device logs и recovery test.
+- **P0-6 Spot Testnet lifecycle absent:** TASK 008 выполняет только Testnet lifecycle и сохраняет exchange IDs/config hash/logs.
+- **P0-7 Cross-branch compatibility absent:** TASK 009 строит evidence index branch/base/head и запускает integration CI на candidate SHA.
+
+### P1
+- **P1-1 Market-data recovery unproven:** TASK 008 проверяет WS disconnect/reconnect/REST resync и запрет входа.
+- **P1-2 APK workflow unresolved:** повторно запросить итог run 38142304455 и проверить checked-out SHA.
+- **P1-3 Backtest evidence absent:** TASK 009 deterministic replay с dataset/config/output hashes.
+- **P1-4 PR/changed-file inventory absent:** получить PR details, head/base SHA, changed files, reviews и CI checks по каждой ветке.
+
+### P2
+- **P2-1 No unified evidence index:** TASK 009 добавляет machine-readable index с task, status, commit/base SHA, test command, log hash, environment, blockers и reviewer.
+- **P2-2 Acceptance ownership incomplete:** TASK 001 добавляет owner/reviewer и evidence link к каждой строке матрицы.
+
+## 8. Точные SHA и проверки документации
+
+- Previous commit SHA: c893be3358052774175f5ad3c23c731b50c699a0 — подтверждён GitHub Commit API.
+- Previous REPORT_RU.md blob SHA: 8758cab80844ba2c99fcecd8525b848115c03a7c — это SHA файла, не commit.
+- Current target branch HEAD: не подтверждён через доступный branch lookup.
+- main HEAD: не подтверждён.
+- Target base SHA: не подтверждён.
+- Изменения исходников в TASK 001.1 не выполнялись намеренно; задание ограничено REPORT_RU.md.
+- Diff/doc checks и CI на новом коммите не выполнялись в локальном checkout. Нельзя заявлять, что они пройдены.
+
+## 9. Итог
+
+**TASK 001.1: BLOCKED — NOT ACCEPTED AS PASS.** Матрица исправлена в соответствии с согласованными TASK 001–009; известные ветки и CI snapshot перечислены, отсутствующие данные не выдуманы, а критические блокеры и следующие действия сохранены. PASS невозможен, пока не подтверждены target/main/base SHA, PR inventory, HEAD/CI по всем рабочим веткам и cross-branch evidence.
+
+Торговая готовность остаётся **NOT APPROVED**. Не использовать Binance Mainnet и не разрешать новые реальные ордера на основании этого отчёта.
