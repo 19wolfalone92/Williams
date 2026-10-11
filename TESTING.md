@@ -1,27 +1,36 @@
 # Python test and smoke-test guide
 
-## Offline test suite
+## Default offline test suite
 
-Run the regular test suite from the repository root:
+From the repository root, run:
 
 ```bash
 python -m pytest -q --tb=short
 ```
 
-The repository's three operational smoke scripts are deliberately excluded from
-automatic pytest collection:
+The default pytest discovery is limited to `tests/`, which contains the offline
+unit and API-contract tests. The repository root also contains many files named
+`test_*.py` that are executable integration/operational scripts, not uniformly
+offline pytest modules. Some make network requests or depend on local runtime
+database artifacts, so they are not safe to run implicitly during collection.
 
-- `safe_smoke_test.py` validates local runtime SQLite files and expected local
-  database state. It requires the local database artifacts that are not stored
-  in Git.
-- `test_scanner_trader_dry_run.py` reads the Spot Testnet account and market
-  data, then runs the scanner in a no-order flow.
-- `test_selected_symbol_prepare.py` reads Spot Testnet account and market data
-  and validates symbol preparation/recovery.
+The Python CI workflow separately invokes an explicit allowlist of offline
+root-level tests.
 
-These files contain top-level executable code rather than pytest test functions.
-Importing them during collection therefore runs environment-dependent checks.
-Run a smoke script explicitly only when its prerequisites are configured.
+## Operational smoke scripts
+
+Run these explicitly, and only after their prerequisites are configured:
+
+- `python safe_smoke_test.py` validates local runtime SQLite files and expected
+  local database state. It requires local database artifacts that are not
+  stored in Git.
+- `python test_scanner_trader_dry_run.py` reads the Spot Testnet account and
+  market data, then runs the scanner in a no-order flow.
+- `python test_selected_symbol_prepare.py` reads Spot Testnet account and
+  market data and validates symbol preparation/recovery.
+
+These scripts contain top-level executable code rather than pytest test
+functions. Do not run them automatically in an offline test suite.
 
 ## Testnet credentials
 
