@@ -28,3 +28,21 @@ Evidence: raw CI logs under `baseline-logs/`; source files read at the same SHA.
 ## No fixes in this task
 
 This matrix records findings and proposed next steps only. It does not authorize changing production code, weakening assertions, or merging a fix.
+
+
+## TASK 008.3 review addendum
+
+Review is based on source and tests at the current target branch (which differs from baseline only by report/log commits according to comparison). No source correction has been made.
+
+- F0082-001: immediate test/contract mismatch is now confirmed: the test passes legacy preflight_provider callback, while ExecutionBarrier requires a concrete PreflightCheckService bound to the exact exchange client. Keep fail-closed behavior; correct test composition only after validating a fully ready fake service.
+- F0082-002: the failing fixture uses MultiPositionTrader.__new__ and omits db, while normal constructor creates/assigns Database. This confirms the fixture bypasses the constructor invariant, but does not justify adding a fake production field.
+- F0082-003: the test constructs MultiPositionTrader without execution_barrier; mutation wrapper deliberately blocks when no canonical barrier exists. Composition-root wiring still needs tracing.
+- F0082-004 remains UNKNOWN pending complete method/trace analysis of partial fill, OCO protection and persistence.
+- F0082-005 is a confirmed implementation gap: emergency exit deliberately blocks and marks RECONCILE_REQUIRED. Keep it blocked until a separately approved contract exists.
+- F0082-006 confirms a test/permit contract conflict: a one-use mutation permit is reused across attempts. Do not relax permit reuse; design a fresh admission for definitive -1021 rejection and reconcile any ambiguous outcome.
+- F0082-007 through F0082-010: missing approved time-offset budget is a confirmed early-return prerequisite issue. No approved numeric budget was found; do not invent one. Tests that exercise downstream checks require an approved explicit fixture value plus separate missing-budget negatives.
+- F0082-011: reason-code mismatch remains unresolved; both implementation and test preserve UNKNOWN. Canonical reason-code contract needs approval.
+
+Detailed correction plan and per-failure ledger: ../task-008.3/CORRECTION_PLAN.md. Regression status: ../task-008.3/REGRESSION_RESULTS.md. Safety invariants: ../task-008.3/SAFETY_INVARIANT_MATRIX.md.
+
+TASK 008.3 status: BLOCKED. No code changes, no post-correction tests, no new result SHA. Historical CI evidence is baseline-only.
