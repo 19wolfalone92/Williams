@@ -391,6 +391,10 @@ class CampaignExecutionService:
             raise CampaignExecutionError("fill's campaign is missing from durable storage")
         symbol = str(fill["symbol"]).upper()
         order_id = str(fill["order_id"])
+        entry_fee_before = Decimal(str(campaign.tags.get("entry_fee_quote", 0) or 0))
+        unallocated_fee_before = Decimal(str(
+            campaign.tags.get("entry_fee_unallocated_quote", entry_fee_before) or 0
+        ))
         qty = Decimal(str(fill["quantity"]))
         price = Decimal(str(fill["price"]))
         commission = Decimal(str(fill.get("commission") or "0"))
@@ -480,9 +484,6 @@ class CampaignExecutionService:
                     (old_qty * old_entry + net_qty * price) / new_qty
                 )
                 campaign.position_qty = float(new_qty)
-                campaign.tags["entry_fee_quote"] = float(
-                    Decimal(str(campaign.tags.get("entry_fee_quote", 0) or 0)) + fee_quote
-                )
                 self.db.save_campaign(campaign)
             else:
                 raise CampaignExecutionError(
@@ -501,7 +502,15 @@ class CampaignExecutionService:
                 commission_asset, json.dumps(fill.get("raw", fill), default=str, sort_keys=True),
             ),
         )
-        trade = self.db.open_trade(symbol)
+        existing_trade_id = int(campaign.tags.get("trade_id") or 0)
+        if existing_trade_id:
+            trade_row = self.db.conn.execute(
+                "SELECT * FROM trades WHERE id=? AND exit_time IS NULL",
+                (existing_trade_id,),
+            ).fetchone()
+            trade = dict(trade_row) if trade_row else None
+        else:
+            trade = self.db.open_trade(symbol)
         if trade is None:
             order_time_ms = int(
                 fill.get("raw", {}).get("time", order.get("transactTime", order.get("time", 0))) or 0
@@ -510,7 +519,7 @@ class CampaignExecutionService:
                 datetime.fromtimestamp(order_time_ms / 1000, tz=timezone.utc).isoformat()
                 if order_time_ms > 0 else datetime.now(timezone.utc).isoformat()
             )
-            self.db.save_trade(
+            new_trade_id = self.db.save_trade(
                 entry_time=entry_time,
                 symbol=symbol,
                 side="LONG",
@@ -524,7 +533,9 @@ class CampaignExecutionService:
                 fees=float(fee_quote),
                 pnl=0.0,
             )
+            campaign.tags["trade_id"] = int(new_trade_id)
         else:
+            campaign.tags["trade_id"] = int(trade["id"])
             old_trade_qty = Decimal(str(trade.get("quantity") or "0"))
             old_trade_price = Decimal(str(trade.get("entry_price") or "0"))
             total_trade_qty = old_trade_qty + net_qty
@@ -540,6 +551,9 @@ class CampaignExecutionService:
                     datetime.now(timezone.utc).isoformat(), int(trade["id"]),
                 ),
             )
+        campaign.tags["entry_fee_quote"] = float(entry_fee_before + fee_quote)
+        campaign.tags["entry_fee_unallocated_quote"] = float(unallocated_fee_before + fee_quote)
+        self.db.save_campaign(campaign)
 
     @staticmethod
     def _symbols_rows(info: dict[str, Any]) -> dict[str, dict]:
