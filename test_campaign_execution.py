@@ -1,4 +1,5 @@
 import os
+import hashlib
 import tempfile
 from datetime import datetime, timezone
 
@@ -47,6 +48,10 @@ def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101
 
 
 def service(db, client):
+    # Offline MockExchange identity must be explicitly approved in this test.
+    os.environ["WILLIAMS_EXPECTED_API_KEY_SHA256"] = hashlib.sha256(
+        str(client.api_key).encode("utf-8")
+    ).hexdigest()
     barrier = ExecutionBarrier(FakeCache(), db)
     return CampaignExecutionService(client, db, barrier)
 
