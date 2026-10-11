@@ -1124,6 +1124,47 @@ class Database:
             self.conn.commit()
 
     def record_exchange_fill(self, symbol, trade):
+        """Persist a fill observation and durably latch identity conflicts.
+
+        The inner transaction is rolled back when immutable exchange facts
+        conflict. The reconciliation latch is deliberately committed in a
+        separate transaction after that rollback so it cannot be rolled back
+        together with the rejected fill mutation.
+        """
+        try:
+            return self._record_exchange_fill_transactional(symbol, trade)
+        except RuntimeError as exc:
+            message = str(exc)
+            if "identity collision" not in message and "journal identity conflict" not in message:
+                raise
+            normalized_symbol = str(symbol or "").upper()
+            trade_id = trade.get("id") if isinstance(trade, dict) else None
+            try:
+                with self.transaction():
+                    self.state_set("financial_recovery_state", "RECONCILE_REQUIRED")
+                    self.state_set(
+                        "financial_recovery_reason",
+                        "authoritative fill identity/content conflict",
+                    )
+                    self.state_set("position_state", "RECONCILE_REQUIRED")
+                    if normalized_symbol:
+                        self.state_set(f"position_state:{normalized_symbol}", "RECONCILE_REQUIRED")
+                    if normalized_symbol and trade_id not in (None, ""):
+                        self.conn.execute(
+                            """UPDATE financial_effect_journal
+                               SET effect_status='RECONCILE_REQUIRED',
+                                   last_seen_at=CURRENT_TIMESTAMP
+                               WHERE venue='BINANCE' AND market_type='SPOT'
+                                 AND symbol=? AND exchange_trade_id=?""",
+                            (normalized_symbol, str(trade_id)),
+                        )
+            except Exception as latch_exc:
+                raise RuntimeError(
+                    "fill identity conflict detected and durable recovery latch failed"
+                ) from latch_exc
+            raise
+
+    def _record_exchange_fill_transactional(self, symbol, trade):
         """Persist one Binance Spot trade idempotently using exact decimal strings.
 
         Trade identity is (symbol, exchange trade id), never the local intent id.
