@@ -108,6 +108,19 @@ class FakeClient:
             ),
             None,
         )
+        if order is None:
+            order = next(
+                (
+                    row for row in self.all_orders(symbol)
+                    if str(row.get("orderId")) == str(order_id)
+                ),
+                None,
+            )
+        if order is None:
+            try:
+                order = self.get_order(symbol, order_id=order_id)
+            except Exception:
+                order = None
         if not order or str(order.get("executedQty", "0")) in {"", "0", "0.0"}:
             return []
         quantity = str(order.get("executedQty"))
