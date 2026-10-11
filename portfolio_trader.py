@@ -12,7 +12,6 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
-from execution_account_identity import verify_execution_account_identity
 
 
 POSITION_STATES = {
