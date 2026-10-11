@@ -182,3 +182,50 @@ def test_unknown_commission_asset_blocks_even_when_reported_fee_is_zero():
     with pytest.raises(ExecutionDataIncomplete, match="unvalued_commission_asset"):
         accumulate_fills([row], base_asset="BTC")
 
+def test_canonical_fill_ledger_preserves_decimal_text_and_stays_pending(tmp_path):
+    db = Database(str(tmp_path / "decimal-ledger.sqlite3"))
+    row = ledger_fill(
+        quantity="0.123456789123456789",
+        price="123.456789123456789",
+        quote_quantity="15.241578750190521",
+        commission="0.000000000000000123",
+    )
+    assert db.save_campaign_fill(row) is True
+    stored = db.conn.execute(
+        """SELECT quantity_decimal,price_decimal,quote_quantity_decimal,
+                  commission_decimal,effect_state
+           FROM exchange_fill_ledger
+           WHERE exchange='BINANCE' AND account_id='test-account'
+             AND symbol='BTCUSDT' AND trade_id='17'"""
+    ).fetchone()
+    assert tuple(stored) == (
+        "0.123456789123456789",
+        "123.456789123456789",
+        "15.241578750190521",
+        "0.000000000000000123",
+        "PENDING",
+    )
+
+
+@pytest.mark.parametrize("field", ["quantity", "price", "quote_quantity", "commission"])
+def test_canonical_fill_ledger_rejects_binary_float_inputs(tmp_path, field):
+    db = Database(str(tmp_path / f"float-{field}.sqlite3"))
+    row = ledger_fill()
+    row[field] = 0.1
+    with pytest.raises(ValueError, match=f"exchange_fill_{field}_invalid"):
+        db.save_campaign_fill(row)
+    assert db.conn.execute("SELECT COUNT(*) FROM exchange_fill_ledger").fetchone()[0] == 0
+
+
+def test_projection_write_failure_rolls_back_canonical_fill(tmp_path):
+    db = Database(str(tmp_path / "projection-failure.sqlite3"))
+    db.conn.execute(
+        """CREATE TRIGGER reject_campaign_fill BEFORE INSERT ON campaign_fills
+           BEGIN SELECT RAISE(ABORT, 'injected projection failure'); END"""
+    )
+    db.conn.commit()
+    with pytest.raises(Exception, match="injected projection failure"):
+        db.save_campaign_fill(ledger_fill())
+    assert db.conn.execute("SELECT COUNT(*) FROM exchange_fill_ledger").fetchone()[0] == 0
+    assert db.conn.execute("SELECT COUNT(*) FROM campaign_fills").fetchone()[0] == 0
+
