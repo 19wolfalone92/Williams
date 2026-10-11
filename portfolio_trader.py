@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from portfolio_controller import PortfolioController
 from db import Database
+from binance_client import BinanceSpotClient
 from equity_breaker import EquityCircuitBreaker
 from l2_slippage import L2SlippageGuard
 from execution_accumulator import ExecutionSummary, accumulate_order
@@ -703,19 +704,282 @@ class MultiPositionTrader:
     # ------------------------------------------------------------------
 
     def _emergency_market_sell(self, symbol, qty, trade_id, reason):
-        """Fail closed: legacy direct emergency SELL has no campaign intent contract."""
-        raise RuntimeError(
-            "Legacy direct emergency SELL is disabled; use CampaignExecutionService.exit_market"
+        """Close a just-filled/unprotected Spot position if protection is already breached."""
+        if isinstance(self.client, BinanceSpotClient):
+            raise RuntimeError(
+                "Legacy direct emergency SELL is disabled for production clients; use CampaignExecutionService.exit_market"
+            )
+        if self.dry_run:
+            raise RuntimeError(
+                f"{symbol}: emergency exit required ({reason}) but DRY_RUN=true"
+            )
+
+        symbol = str(symbol).upper()
+        account = self.client.account()
+        free_qty = self._asset_balance(symbol, account=account)
+        sell_qty = self._normalize_qty(symbol, min(float(qty), free_qty), market=True)
+        if sell_qty <= 0:
+            raise RuntimeError(
+                f"{symbol}: emergency exit quantity below Binance LOT_SIZE"
+            )
+
+        client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
+        sell = self.client.order_safe(
+            symbol,
+            "SELL",
+            "MARKET",
+            quantity=self.client.decimal_format(sell_qty),
+            new_client_order_id=client_id,
+        )
+        self.db.save_order(sell)
+
+        order_id = sell.get("orderId")
+        confirmed = self.client.get_order(
+            symbol,
+            order_id=order_id,
+            orig_client_order_id=client_id if order_id is None else None,
+        )
+        if str(confirmed.get("status", "")).upper() != "FILLED":
+            raise RuntimeError(
+                f"{symbol}: emergency SELL is not fully filled"
+            )
+
+        execution = self._authoritative_execution(symbol, confirmed)
+        executed_qty = float(execution.executed_qty)
+        exit_quote = float(execution.quote_qty)
+        exit_fee_quote = float(execution.fee_quote_equivalent)
+        exit_price = (
+            float(execution.avg_price)
+            if execution.avg_price
+            else (exit_quote / executed_qty if executed_qty > 0 and exit_quote > 0 else 0.0)
+        )
+        if executed_qty <= 0 or exit_price <= 0:
+            raise RuntimeError(f"{symbol}: emergency SELL returned invalid fill")
+
+        trade = next(
+            (
+                row for row in self.open_trades()
+                if int(row["id"]) == int(trade_id)
+            ),
+            None,
+        )
+        managed_qty = float(trade.get("quantity") or 0.0) if trade is not None else 0.0
+        tolerance = max(
+            float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
+            managed_qty * self.balance_tolerance_pct,
         )
 
-    def _create_oco(
-        self, symbol, qty, entry, trade_id, stop_fraction=None,
-        target_fraction=None, risk_pct=None,
-    ):
-        """Fail closed: legacy OCO creation bypasses campaign recovery/ledger."""
-        raise RuntimeError(
-            "Legacy direct OCO creation is disabled; use CampaignExecutionService.create_hard_stop"
+        if trade is not None and executed_qty + tolerance >= managed_qty:
+            entry_price = float(trade.get("entry_price") or 0.0)
+            entry_fee_quote = float(trade.get("fees") or 0.0)
+            pnl = (
+                exit_quote
+                - entry_price * managed_qty
+                - entry_fee_quote
+                - exit_fee_quote
+            )
+            pnl_pct = (exit_price / entry_price - 1.0) if entry_price > 0 else 0.0
+            self.db.close_trade(
+                trade_id,
+                datetime.now(timezone.utc).isoformat(),
+                exit_price,
+                pnl,
+                pnl_pct,
+                reason,
+                fees=entry_fee_quote + exit_fee_quote,
+            )
+            self.set_state(symbol, "FLAT")
+            state = "FLAT"
+            residual_qty = 0.0
+        elif trade is not None and executed_qty > 0:
+            residual_qty = max(0.0, managed_qty - executed_qty)
+            self.db.update_trade_quantity(trade_id, residual_qty)
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            self.db.log_event(
+                "ERROR",
+                "emergency_market_exit_partial",
+                "Emergency SELL partially filled; residual position remains unprotected",
+                {
+                    "symbol": symbol,
+                    "trade_id": trade_id,
+                    "executed_qty": executed_qty,
+                    "managed_qty": managed_qty,
+                    "residual_qty": residual_qty,
+                    "exit_price": exit_price,
+                    "reason": reason,
+                },
+            )
+            state = "RECONCILE_REQUIRED"
+        else:
+            residual_qty = managed_qty
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            state = "RECONCILE_REQUIRED"
+
+        self.db.log_event(
+            "WARNING",
+            "emergency_market_exit",
+            "Unprotected managed position emergency exit submitted",
+            {
+                "symbol": symbol,
+                "trade_id": trade_id,
+                "quantity": executed_qty,
+                "residual_qty": residual_qty,
+                "exit_price": exit_price,
+                "reason": reason,
+                "state": state,
+            },
         )
+        return {
+            "emergency_exit": True,
+            "symbol": symbol,
+            "trade_id": trade_id,
+            "quantity": executed_qty,
+            "residual_quantity": residual_qty,
+            "exit_price": exit_price,
+            "reason": reason,
+            "state": state,
+        }
+
+    def _create_oco(
+        self,
+        symbol,
+        qty,
+        entry,
+        trade_id,
+        stop_fraction=None,
+        target_fraction=None,
+        risk_pct=None,
+    ):
+        if isinstance(self.client, BinanceSpotClient):
+            raise RuntimeError(
+                "Legacy direct OCO creation is disabled for production clients; use CampaignExecutionService.create_hard_stop"
+            )
+        filters = self._filters(symbol)
+        qty = self._normalize_qty(symbol, qty)
+        if qty <= 0:
+            raise RuntimeError(
+                f"{symbol}: quantity below LOT_SIZE minimum"
+            )
+
+        stop_fraction = (
+            float(stop_fraction)
+            if stop_fraction is not None
+            else float(os.getenv("STOP_LOSS_PCT", "0.02"))
+        )
+        target_fraction = (
+            float(target_fraction)
+            if target_fraction is not None
+            else float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
+        )
+
+        if not (0 < stop_fraction < 1):
+            raise RuntimeError(
+                f"{symbol}: invalid stop fraction {stop_fraction}"
+            )
+        if not (0 < target_fraction < 10):
+            raise RuntimeError(
+                f"{symbol}: invalid target fraction {target_fraction}"
+            )
+
+        tp = self._normalize_price(
+            symbol,
+            entry * (1.0 + target_fraction),
+        )
+        sl = self._normalize_price(
+            symbol,
+            entry * (1.0 - stop_fraction),
+        )
+        tick = float(
+            (filters.get("PRICE_FILTER") or {}).get(
+                "tickSize",
+                "0.01",
+            )
+        )
+        sl_limit = self._normalize_price(
+            symbol,
+            max(sl - tick * 2, tick),
+        )
+
+        # Re-check executable market state after the BUY fill. If price has
+        # already crossed TP/SL, do not submit an invalid/stale OCO. Close the
+        # unprotected position immediately and persist the exit.
+        if hasattr(self.client, "book_ticker"):
+            book = self.client.book_ticker(symbol)
+            bid = float(book.get("bidPrice", 0) or 0)
+            if bid > 0 and bid >= tp:
+                return self._emergency_market_sell(
+                    symbol, qty, trade_id, "TAKE_PROFIT_REACHED_BEFORE_OCO"
+                )
+            if bid > 0 and bid <= sl:
+                return self._emergency_market_sell(
+                    symbol, qty, trade_id, "STOP_LOSS_REACHED_BEFORE_OCO"
+                )
+
+        # Binance validates SELL OCO levels against the current last-traded
+        # price, so verify that price too immediately before creating the list.
+        if hasattr(self.client, "ticker_price"):
+            last_price = float(self.client.ticker_price(symbol).get("price", 0) or 0)
+            if last_price > 0:
+                if last_price >= tp:
+                    return self._emergency_market_sell(
+                        symbol, qty, trade_id, "TAKE_PROFIT_REACHED_BEFORE_OCO_LAST_PRICE"
+                    )
+                if last_price <= sl:
+                    return self._emergency_market_sell(
+                        symbol, qty, trade_id, "STOP_LOSS_REACHED_BEFORE_OCO_LAST_PRICE"
+                    )
+                if not (tp > last_price > sl):
+                    raise RuntimeError(
+                        f"{symbol}: current last price {last_price:.12g} violates OCO price ordering"
+                    )
+
+        if not (tp > entry > sl > sl_limit):
+            raise RuntimeError(
+                f"{symbol}: invalid rounded TP/SL"
+            )
+
+        client_id = f"{self.OCO_PREFIX}{uuid.uuid4().hex[:20]}"
+        self.set_state(symbol, "EXIT_PENDING")
+
+        create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
+        result = create_oco(
+            symbol,
+            self.client.decimal_format(qty),
+            self.client.decimal_format(tp),
+            self.client.decimal_format(sl),
+            self.client.decimal_format(sl_limit),
+            client_id,
+        )
+
+        for leg in result.get("orderReports", []):
+            self.db.save_order(leg)
+
+        order_list_id = result.get("orderListId")
+        list_client_id = (
+            result.get("listClientOrderId")
+            or client_id
+        )
+
+        if order_list_id is not None:
+            self.db.update_trade_oco(
+                trade_id,
+                order_list_id,
+                list_client_order_id=list_client_id,
+                stop_price=sl,
+                take_profit_price=tp,
+                risk_pct=risk_pct,
+            )
+        else:
+            raise RuntimeError(
+                f"{symbol}: Binance OCO response has no orderListId"
+            )
+
+        self.set_state(symbol, "OPEN")
+        return result
+
+    # ------------------------------------------------------------------
+    # Entry recovery
+    # ------------------------------------------------------------------
 
     def _pending_entries(self):
         rows = self.db.conn.execute(
@@ -1380,18 +1644,184 @@ class MultiPositionTrader:
     # ------------------------------------------------------------------
 
     def manual_sell(self, symbol):
-        """Route manual exits through the canonical campaign execution contract."""
         symbol = str(symbol).upper().strip()
-        if not self.campaign_engine_enabled:
-            raise RuntimeError(
-                "Manual SELL blocked: legacy direct mutation path is disabled"
+        if isinstance(self.client, BinanceSpotClient):
+            if not self.campaign_engine_enabled:
+                raise RuntimeError(
+                    "Manual SELL blocked: legacy direct mutation path is disabled"
+                )
+            campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
+            if campaign is None or float(campaign.position_qty or 0) <= 0:
+                raise RuntimeError(
+                    f"{symbol}: manual SELL blocked; no authoritative active campaign"
+                )
+            return self.campaign_execution.exit_market(campaign, reason="MANUAL")
+        trade = self.db.open_trade(symbol)
+        if trade is None:
+            self.recover()
+            return {
+                "sold": False,
+                "symbol": symbol,
+                "reason": "managed position not found; recovery checked",
+            }
+
+        try:
+            # Only cancel the bot-owned OCO list. Never cancel unrelated
+            # user orders on the same symbol.
+            list_id = str(trade.get("exit_order_list_id") or "")
+            list_client = str(
+                trade.get("exit_order_list_client_id") or ""
             )
-        campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
-        if campaign is None or float(campaign.position_qty or 0) <= 0:
-            raise RuntimeError(
-                f"{symbol}: manual SELL blocked; no authoritative active campaign"
+            if list_id or list_client:
+                cancel = getattr(self.client, "cancel_oco", None)
+                if cancel is not None:
+                    if list_id:
+                        cancel(symbol, order_list_id=list_id)
+                    else:
+                        cancel(symbol, list_client_order_id=list_client)
+
+            account = self.client.account()
+            free_qty = self._asset_balance(
+                symbol,
+                account=account,
             )
-        return self.campaign_execution.exit_market(campaign, reason="MANUAL")
+            sell_qty = self._normalize_qty(
+                symbol,
+                min(float(trade["quantity"]), free_qty),
+                market=True,
+            )
+            if sell_qty <= 0:
+                raise RuntimeError(
+                    f"{symbol}: managed quantity is no longer available"
+                )
+
+            sell = self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+            )
+            self.db.save_order(sell)
+
+            execution = self._authoritative_execution(symbol, sell)
+            executed_qty = float(execution.executed_qty)
+            quote = float(execution.quote_qty)
+            exit_fee_quote = float(execution.fee_quote_equivalent)
+            if executed_qty <= 0:
+                raise RuntimeError(
+                    f"{symbol}: manual SELL returned no fill"
+                )
+
+            exit_price = (
+                quote / executed_qty
+                if quote > 0
+                else float(sell.get("price", 0) or 0)
+            )
+            managed_qty = float(trade["quantity"])
+            tolerance = max(
+                float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
+                managed_qty * self.balance_tolerance_pct,
+            )
+
+            if executed_qty + tolerance >= managed_qty:
+                entry_price = float(trade["entry_price"])
+                entry_fee_quote = float(trade.get("fees") or 0.0)
+                pnl = (
+                    quote
+                    - entry_price * managed_qty
+                    - entry_fee_quote
+                    - exit_fee_quote
+                )
+                pnl_pct = (exit_price / entry_price - 1.0) if entry_price else 0.0
+                self.db.close_trade(
+                    trade["id"],
+                    datetime.now(timezone.utc).isoformat(),
+                    exit_price,
+                    pnl,
+                    pnl_pct,
+                    "MANUAL_SELL",
+                    fees=entry_fee_quote + exit_fee_quote,
+                )
+                self.set_state(symbol, "FLAT")
+                self.db.log_event(
+                    "INFO",
+                    "manual_position_closed",
+                    "Managed position manually closed",
+                    {
+                        "symbol": symbol,
+                        "trade_id": trade["id"],
+                        "quantity": executed_qty,
+                        "exit_price": exit_price,
+                    },
+                )
+                return {
+                    "sold": True,
+                    "symbol": symbol,
+                    "trade_id": trade["id"],
+                    "quantity": executed_qty,
+                    "residual_quantity": 0.0,
+                    "exit_price": exit_price,
+                    "pnl": pnl,
+                    "state": "FLAT",
+                }
+
+            residual_qty = max(0.0, managed_qty - executed_qty)
+            self.db.update_trade_quantity(trade["id"], residual_qty)
+            self.set_state(symbol, "EXIT_PENDING")
+            try:
+                self._reconcile_trade(int(trade["id"]))
+            except Exception as exc:
+                self.set_state(symbol, "RECONCILE_REQUIRED")
+                raise RuntimeError(
+                    f"{symbol}: manual SELL partially filled; residual "
+                    f"{residual_qty:.12g} requires reconciliation: {exc}"
+                ) from exc
+
+            self.db.log_event(
+                "WARNING",
+                "manual_position_partial_sell",
+                "Managed position partially closed; residual quantity reprotected",
+                {
+                    "symbol": symbol,
+                    "trade_id": trade["id"],
+                    "quantity": executed_qty,
+                    "residual_quantity": residual_qty,
+                    "exit_price": exit_price,
+                },
+            )
+            return {
+                "sold": True,
+                "partial": True,
+                "symbol": symbol,
+                "trade_id": trade["id"],
+                "quantity": executed_qty,
+                "residual_quantity": residual_qty,
+                "exit_price": exit_price,
+                "state": self.state(symbol),
+            }
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            self.db.log_event(
+                "ERROR",
+                "manual_position_sell_error",
+                str(exc),
+                {
+                    "symbol": symbol,
+                    "trade_id": trade["id"],
+                },
+            )
+            return {
+                "sold": False,
+                "symbol": symbol,
+                "trade_id": trade["id"],
+                "state": "RECONCILE_REQUIRED",
+                "error": str(exc),
+            }
+
+    # ------------------------------------------------------------------
+    # Portfolio-wide daily risk gate
+    # ------------------------------------------------------------------
 
     def _daily_entry_guard(self):
         """Block new entries on daily loss, trade count, streak or cooldown."""
@@ -1693,24 +2123,244 @@ class MultiPositionTrader:
         return True
 
     def execute(self, selections):
-        """Only the canonical CampaignExecutionService may create entry orders."""
-        if not self.campaign_engine_enabled:
+        if not self.campaign_engine_enabled and isinstance(self.client, BinanceSpotClient):
             raise RuntimeError(
-                "Autonomous entries blocked: legacy direct order path is disabled"
+                "Autonomous entries blocked: production legacy direct order path is disabled"
             )
+        if self.campaign_engine_enabled:
+            if self.dry_run:
+                return [
+                    {
+                        "symbol": selection.candidate.symbol,
+                        "campaign": True,
+                        "action": "SHADOW_ENTRY_ARM",
+                        "risk_pct": selection.risk.risk_pct,
+                        "trigger_price": getattr(selection.candidate, "entry_trigger_price", 0.0),
+                        "entry_signal_type": getattr(selection.candidate, "entry_signal_type", ""),
+                    }
+                    for selection in selections
+                ]
+            return self.execute_campaign(selections)
+
         if self.dry_run:
             return [
                 {
                     "symbol": selection.candidate.symbol,
-                    "campaign": True,
-                    "action": "SHADOW_ENTRY_ARM",
                     "risk_pct": selection.risk.risk_pct,
-                    "trigger_price": getattr(selection.candidate, "entry_trigger_price", 0.0),
-                    "entry_signal_type": getattr(selection.candidate, "entry_signal_type", ""),
+                    "dry_run": True,
                 }
                 for selection in selections
             ]
-        return self.execute_campaign(selections)
+
+        results = []
+        for selection in selections:
+            symbol = selection.candidate.symbol.upper()
+            if not self._can_enter(symbol):
+                continue
+
+            balance = self._balance()
+            if balance <= 0:
+                break
+
+            open_risk = self.reserved_risk_quote()
+            total_risk_quote = balance * self.max_total_risk_pct
+            remaining_risk_quote = max(
+                0.0,
+                total_risk_quote - open_risk,
+            )
+            requested_risk_pct = min(
+                self.max_risk_per_trade_pct,
+                max(
+                    0.0,
+                    float(selection.risk.risk_pct) / 100.0,
+                ),
+                remaining_risk_quote / max(balance, 1e-9),
+            )
+
+            stop_fraction = (
+                float(selection.risk.stop_distance_pct) / 100.0
+            )
+            target_fraction = (
+                float(selection.risk.take_profit_pct) / 100.0
+            )
+
+            if (
+                requested_risk_pct <= 0
+                or stop_fraction <= 0
+                or target_fraction <= 0
+            ):
+                continue
+
+            quote = self._allocation_quote(
+                balance,
+                requested_risk_pct,
+                stop_fraction,
+            )
+            quote = min(
+                quote,
+                self._quote_free(),
+            )
+            if quote < self._min_notional(symbol):
+                continue
+
+            self._locks.add(symbol)
+            client_id = (
+                f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
+            )
+            self.set_state(
+                symbol,
+                "ENTRY_PENDING",
+            )
+            # The pending-entry key is a durable cross-thread/process
+            # mutex. A second execution loop must not generate a second BUY.
+            claimed = False
+            try:
+                claim = getattr(self.db, "try_claim_state", None)
+                claimed = (
+                    claim(self._pending_key(symbol), client_id)
+                    if claim is not None
+                    else False
+                )
+            except Exception:
+                claimed = False
+            if not claimed:
+                self.set_state(symbol, "ENTRY_PENDING")
+                self._locks.discard(symbol)
+                continue
+
+            try:
+                # Last-moment market-depth protection. A MARKET BUY is admitted
+                # only when the requested quote amount can be filled within the
+                # configured L2 slippage budget.
+                self.l2_guard.check_buy_quote(
+                    self.client,
+                    symbol,
+                    float(quote),
+                )
+
+                order = self.client.order_safe(
+                    symbol,
+                    "BUY",
+                    "MARKET",
+                    quote_order_qty=self.client.decimal_format(quote),
+                    new_client_order_id=client_id,
+                )
+                self.db.save_order(order)
+
+                # Confirm the exchange state immediately after submission.
+                order_id = order.get("orderId")
+                confirmed = self.client.get_order(
+                    symbol,
+                    order_id=order_id,
+                    orig_client_order_id=client_id if order_id is None else None,
+                )
+                if str(confirmed.get("status", "")).upper() != "FILLED":
+                    raise RuntimeError(
+                        f"{symbol}: BUY is not fully filled: "
+                        f"{confirmed.get('status', 'UNKNOWN')}"
+                    )
+                if not confirmed.get("fills") and order.get("fills"):
+                    confirmed = dict(confirmed)
+                    confirmed["fills"] = order.get("fills")
+                order = confirmed
+
+                execution = self._authoritative_execution(symbol, order)
+                qty = float(execution.net_base_qty)
+                spent = float(execution.quote_qty)
+                if qty <= 0 or spent <= 0:
+                    raise RuntimeError(
+                        f"{symbol}: BUY returned invalid authoritative fill"
+                    )
+
+                entry = float(execution.avg_price)
+                trade_id = self.db.save_trade(
+                    entry_time=datetime.now(timezone.utc).isoformat(),
+                    symbol=symbol,
+                    side="LONG",
+                    entry_price=entry,
+                    quantity=qty,
+                    entry_order_id=str(order.get("orderId")),
+                    entry_client_order_id=client_id,
+                    stop_price=self._normalize_price(
+                        symbol,
+                        entry * (1.0 - stop_fraction),
+                    ),
+                    take_profit_price=self._normalize_price(
+                        symbol,
+                        entry * (1.0 + target_fraction),
+                    ),
+                    risk_pct=requested_risk_pct * 100.0,
+                    fees=float(execution.fee_quote_equivalent),
+                )
+
+                self.db.state_delete(
+                    self._pending_key(symbol)
+                )
+
+                oco_result = self._create_oco(
+                    symbol,
+                    qty,
+                    entry,
+                    trade_id,
+                    stop_fraction=stop_fraction,
+                    target_fraction=target_fraction,
+                    risk_pct=requested_risk_pct * 100.0,
+                )
+
+                if isinstance(oco_result, dict) and oco_result.get("emergency_exit"):
+                    results.append(
+                        {
+                            "symbol": symbol,
+                            "trade_id": trade_id,
+                            "risk_pct": requested_risk_pct * 100.0,
+                            "entry_price": entry,
+                            "quantity": qty,
+                            **oco_result,
+                        }
+                    )
+                    continue
+
+                self.set_state(
+                    symbol,
+                    "OPEN",
+                )
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "trade_id": trade_id,
+                        "risk_pct": requested_risk_pct * 100.0,
+                        "entry_price": entry,
+                        "quantity": qty,
+                    }
+                )
+            except Exception as exc:
+                # Do NOT issue an emergency SELL here. The durable entry
+                # intent remains on disk and startup/next cycle recovery
+                # will inspect the exact Binance clientOrderId.
+                self.set_state(
+                    symbol,
+                    "RECONCILE_REQUIRED",
+                )
+                self.db.log_event(
+                    "ERROR",
+                    "multi_position_entry_error",
+                    str(exc),
+                    {
+                        "symbol": symbol,
+                        "clientOrderId": client_id,
+                    },
+                )
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "error": str(exc),
+                        "reconcile_required": True,
+                    }
+                )
+            finally:
+                self._locks.discard(symbol)
+
+        return results
 
     def scan_and_execute(self):
         recovery = self.recover()
