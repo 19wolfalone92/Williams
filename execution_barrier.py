@@ -184,6 +184,29 @@ class ExecutionBarrier:
         global_state = str(self.db.state_get("position_state", "UNKNOWN") or "UNKNOWN").upper()
         if global_state in {"UNKNOWN", "RECONCILE_REQUIRED"}:
             return global_state
+        # A recorded fill is not yet a completed financial effect. Until the
+        # canonical journal explicitly proves APPLIED with confirmed fee
+        # evidence, new exposure must remain blocked. This intentionally keeps
+        # the gate closed while no production applier has reconciled projections.
+        conn = getattr(self.db, "conn", None)
+        if conn is not None:
+            try:
+                pending_effect = conn.execute(
+                    """SELECT symbol, exchange_trade_id, effect_status, fee_state
+                       FROM financial_effect_journal
+                       WHERE effect_status != 'APPLIED' OR fee_state != 'CONFIRMED'
+                       LIMIT 1"""
+                ).fetchone()
+            except Exception as exc:
+                return f"cannot inspect financial effect journal: {type(exc).__name__}"
+            if pending_effect is not None:
+                get = (lambda key, index: pending_effect[key]) if hasattr(pending_effect, "keys") else (lambda key, index: pending_effect[index])
+                return (
+                    "RECONCILE_REQUIRED: unapplied financial effect "
+                    f"{get('symbol', 0)}:{get('exchange_trade_id', 1)} "
+                    f"status={get('effect_status', 2)} fee_state={get('fee_state', 3)}"
+                )
+
         # A durable PENDING/AMBIGUOUS intent from a prior process may survive
         # even when writing the portfolio state failed. Never admit a new
         # mutation while any other unresolved intent remains.
