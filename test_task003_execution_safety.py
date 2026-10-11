@@ -1093,3 +1093,10 @@ def test_unknown_fee_first_delivery_and_duplicate_are_distinguished(tmp_path):
     assert first["duplicate"] is False
     assert duplicate["duplicate"] is True
     assert calls == []
+
+
+def test_decimal_canonicalization_does_not_round_high_precision_values(tmp_path):
+    db = Database(str(tmp_path / "high-precision.sqlite3"))
+    quantity = "0.1234567890123456789012345678901234567890"
+    canonical = db._canonical_decimal(quantity, "quantity")
+    assert canonical == "0.123456789012345678901234567890123456789"
