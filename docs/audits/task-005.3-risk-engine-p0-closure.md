@@ -96,11 +96,11 @@ The run metadata from GitHub's Actions API records PR head `e7afee404920abef6891
 | Workflow | Run | Job | PR head / tested checkout | Result | Evidence |
 |---|---:|---|---|---|---|
 | Python backend tests | [38115006581](https://github.com/19wolfalone92/Williams/actions/runs/38115006581) | backend-test, job 114398048523 | head `e7afee...`; checkout merge `be82e7467a27f0797d0f312c60a4da7170a975cf` | FAILURE; 1 failed, 150 passed | [full job log](https://github.com/19wolfalone92/Williams/actions/runs/38115006581) |
-| Williams Campaign CI | [38115006603](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) | Python tests, job 114398092299 | head `e7afee...`; merge checkout SHA must be confirmed from that job log | FAILURE; 1 failed, 167 passed | [full job log](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) |
-| Williams Campaign CI | [38115006603](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) | Android build and static checks, job 114398092238 | head `e7afee...`; merge checkout SHA must be confirmed from that job log | SUCCESS | job steps show unit tests, lint and debug APK completed |
-| Build Android APK | [38115006580](https://github.com/19wolfalone92/Williams/actions/runs/38115006580) | Build APKs, job 114398048576 | head `e7afee...`; checkout merge SHA NOT VERIFIED | SUCCESS | job steps show Android unit tests, lint, debug/release APK and artifact checks completed |
+| Williams Campaign CI | [38115006603](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) | Python tests, job 114398092299 | head `e7afee...`; checkout merge `be82e7467a27f0797d0f312c60a4da7170a975cf` | FAILURE; 1 failed, 167 passed | [full job log](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) |
+| Williams Campaign CI | [38115006603](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) | Android build and static checks, job 114398092238 | head `e7afee...`; checkout merge `be82e7467a27f0797d0f312c60a4da7170a975cf` | SUCCESS | job steps show unit tests, lint and debug APK completed |
+| Build Android APK | [38115006580](https://github.com/19wolfalone92/Williams/actions/runs/38115006580) | Build APKs, job 114398048576 | head `e7afee...`; checkout merge `be82e7467a27f0797d0f312c60a4da7170a975cf` | SUCCESS | job steps show Android unit tests, lint, debug/release APK and artifact checks completed |
 
-These are historical results for the `e7afee...` PR event, with the backend job demonstrably testing merge tree `be82...`; they are not evidence for the newer commits in TASK 005.5. Exact checkout SHAs for every other job must be read from each checkout log. Exact-SHA CI on the eventual final HEAD remains **NOT VERIFIED**.
+These are historical results for the `e7afee...` PR event, with the backend job demonstrably testing merge tree `be82...`; they are not evidence for the newer commits in TASK 005.5. All three run logs now explicitly show checkout of merge ref `be82e7467a27f0797d0f312c60a4da7170a975cf`. Exact-SHA CI on the eventual final HEAD remains **NOT VERIFIED**.
 
 ## B. Python failure — established root cause for the currently failing test
 
