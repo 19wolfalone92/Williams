@@ -1137,6 +1137,86 @@ class CampaignExecutionService:
             client_id = str(row["value"])
             campaign = None
             try:
+                durable_intent = self.db.conn.execute(
+                    "SELECT intent_id,status FROM execution_intents WHERE client_order_id=?",
+                    (client_id,),
+                ).fetchone()
+                if durable_intent is not None:
+                    # Current-format orders are owned by ExecutionRecoveryCoordinator.
+                    # Do not reapply aggregate executedQty or place another hard stop
+                    # from this legacy adoption loop.
+                    order = self.client.get_order(
+                        symbol,
+                        orig_client_order_id=client_id,
+                    )
+                    self.db.save_order(order)
+                    campaign = self._find_campaign_by_pending_client_id(client_id)
+                    if campaign is None:
+                        self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                        results.append({
+                            "symbol": symbol,
+                            "state": "RECONCILE_REQUIRED",
+                            "reason": "durable execution intent has no persisted campaign",
+                        })
+                        continue
+                    live_status = str(order.get("status", "")).upper()
+                    executed_now = Decimal(str(order.get("executedQty", "0") or "0"))
+                    if live_status in {"NEW", "PENDING_NEW"} and executed_now <= 0:
+                        results.append({
+                            "symbol": symbol,
+                            "campaign_id": campaign.campaign_id,
+                            "state": "ENTRY_PENDING",
+                            "order_status": live_status,
+                        })
+                        continue
+                    if float(campaign.position_qty or 0) <= 0:
+                        if live_status in {"CANCELED", "EXPIRED", "REJECTED"} and executed_now <= 0:
+                            self.db.state_delete(f"entry_client_order_id:{symbol}")
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": "CLOSED",
+                                "reason": f"unfilled entry is {live_status}",
+                            })
+                            continue
+                        raise CampaignExecutionError(
+                            "exchange reports a triggered/fill state but campaign position is not reconciled"
+                        )
+                    protective_id = str(campaign.tags.get("protective_order_id", "") or "")
+                    if not protective_id:
+                        raise CampaignExecutionError("durable campaign has no linked protective order")
+                    protective = self.client.get_order(symbol, order_id=int(protective_id))
+                    protective_status = str(protective.get("status", "")).upper()
+                    protective_qty = Decimal(str(protective.get("origQty", "0") or "0"))
+                    campaign_qty = Decimal(str(campaign.position_qty))
+                    stop_price = Decimal(str(
+                        campaign.current_stop_price or campaign.initial_stop_price or 0
+                    ))
+                    exchange_stop = Decimal(str(protective.get("stopPrice", "0") or "0"))
+                    if (
+                        protective_status != "NEW"
+                        or protective_qty + Decimal("0.000000000001") < campaign_qty
+                        or stop_price <= 0
+                        or abs(exchange_stop - stop_price) > max(Decimal("0.00000001"), stop_price * Decimal("0.00000001"))
+                    ):
+                        raise CampaignExecutionError(
+                            "live protective order does not verifiably cover the persisted campaign quantity/stop"
+                        )
+                    self.db.state_delete(f"entry_client_order_id:{symbol}")
+                    self.db.state_set(f"position_state:{symbol}", "OPEN")
+                    campaign.health = "GREEN"
+                    campaign.reconciliation_state = "CLEAN"
+                    campaign.next_action = "MONITOR_CAMPAIGN"
+                    self.db.save_campaign(campaign)
+                    results.append({
+                        "symbol": symbol,
+                        "campaign_id": campaign.campaign_id,
+                        "state": "OPEN",
+                        "execution_intent_id": str(durable_intent["intent_id"]),
+                        "protective_order_id": protective_id,
+                    })
+                    continue
+
                 order = self.client.get_order(
                     symbol,
                     orig_client_order_id=client_id,
