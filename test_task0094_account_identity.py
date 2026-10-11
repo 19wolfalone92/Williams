@@ -35,7 +35,7 @@ class SignedAccountClient:
 
 
 def test_account_identity_pins_only_after_authenticated_account_response(tmp_path, monkeypatch):
-    monkeypatch.delenv("WILLIAMS_EXPECTED_API_KEY_SHA256", raising=False)
+    monkeypatch.setenv("WILLIAMS_EXPECTED_API_KEY_SHA256", hashlib.sha256(b"test-key-A").hexdigest())
     db = Database(str(tmp_path / "identity.sqlite"))
     client = SignedAccountClient()
     result = verify_execution_account_identity(client, db, execution_scope="spot", account_scope="spot-a")
@@ -49,16 +49,17 @@ def test_account_identity_pins_only_after_authenticated_account_response(tmp_pat
 
 
 def test_changed_api_key_is_blocked_even_when_account_scope_is_unchanged(tmp_path, monkeypatch):
-    monkeypatch.delenv("WILLIAMS_EXPECTED_API_KEY_SHA256", raising=False)
+    monkeypatch.setenv("WILLIAMS_EXPECTED_API_KEY_SHA256", hashlib.sha256(b"key-A").hexdigest())
     db = Database(str(tmp_path / "identity.sqlite"))
     verify_execution_account_identity(SignedAccountClient("key-A"), db, account_scope="same-label")
+    monkeypatch.setenv("WILLIAMS_EXPECTED_API_KEY_SHA256", hashlib.sha256(b"key-B").hexdigest())
     with pytest.raises(AccountIdentityBlocked, match="credential identity changed"):
         verify_execution_account_identity(SignedAccountClient("key-B"), db, account_scope="same-label")
     db.conn.close()
 
 
 def test_changed_testnet_live_domain_is_blocked(tmp_path, monkeypatch):
-    monkeypatch.delenv("WILLIAMS_EXPECTED_API_KEY_SHA256", raising=False)
+    monkeypatch.setenv("WILLIAMS_EXPECTED_API_KEY_SHA256", hashlib.sha256(b"test-key-A").hexdigest())
     db = Database(str(tmp_path / "identity.sqlite"))
     verify_execution_account_identity(SignedAccountClient("key-A", testnet=True), db, account_scope="same-label")
     with pytest.raises(AccountIdentityBlocked, match="Testnet/live execution domain changed"):
@@ -67,7 +68,7 @@ def test_changed_testnet_live_domain_is_blocked(tmp_path, monkeypatch):
 
 
 def test_changed_exchange_uid_is_blocked(tmp_path, monkeypatch):
-    monkeypatch.delenv("WILLIAMS_EXPECTED_API_KEY_SHA256", raising=False)
+    monkeypatch.setenv("WILLIAMS_EXPECTED_API_KEY_SHA256", hashlib.sha256(b"test-key-A").hexdigest())
     db = Database(str(tmp_path / "identity.sqlite"))
     verify_execution_account_identity(SignedAccountClient(), db, account_scope="same-label")
     changed = SignedAccountClient(account={
