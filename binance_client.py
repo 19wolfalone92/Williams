@@ -24,6 +24,9 @@ class BinanceSpotClient:
         self.order_limit_10s=50
         self.order_limit_1m=1200
         self.rate_limit_pause_until=0.0
+        # Installed by the durable emergency-execution owner. None means
+        # emergency SELL mutation is denied at the REST boundary.
+        self.emergency_sell_authorizer = None
     def _request(self, method, path, params=None, signed=False):
         """
         Execute a Binance REST request.
@@ -34,6 +37,50 @@ class BinanceSpotClient:
         Callers must reconcile by order/clientOrderId before taking another action.
         """
         method = method.upper()
+        request_params = dict(params or {})
+        cid = str(
+            request_params.get("newClientOrderId")
+            or request_params.get("origClientOrderId")
+            or ""
+        ).strip()
+        is_emergency_id = cid.startswith("WILLV4_EMERGENCY_")
+        is_emergency_new_sell = (
+            method == "POST"
+            and path == "/api/v3/order"
+            and str(request_params.get("side", "")).upper() == "SELL"
+            and str(request_params.get("type", "")).upper() == "MARKET"
+            and str(request_params.get("newClientOrderId", "")).startswith("WILLV4_EMERGENCY_")
+        )
+        if is_emergency_id and method in {"POST", "DELETE"}:
+            if not is_emergency_new_sell:
+                raise BinanceAPIError(
+                    "Emergency order mutation blocked: unsupported mutation contract",
+                    unknown_execution=False,
+                )
+            authorizer = self.emergency_sell_authorizer
+            if not callable(authorizer):
+                raise BinanceAPIError(
+                    "Emergency SELL blocked at REST sink: durable intent authorizer unavailable",
+                    unknown_execution=False,
+                )
+            account_scope = hashlib.sha256(self.api_key.encode("utf-8")).hexdigest()[:24]
+            environment = "BINANCE_SPOT_TESTNET" if self.testnet else "BINANCE_SPOT_MAINNET"
+            try:
+                operation_id = authorizer(
+                    symbol=str(request_params.get("symbol", "")).upper(),
+                    quantity=request_params.get("quantity"),
+                    client_order_id=cid,
+                    environment=environment,
+                    account_scope=account_scope,
+                )
+                if not operation_id:
+                    raise RuntimeError("authorizer returned no operation identity")
+            except Exception as exc:
+                raise BinanceAPIError(
+                    "Emergency SELL blocked at REST sink: durable one-shot permit not proven",
+                    unknown_execution=False,
+                ) from exc
+
         # Non-GET requests are never retried for transport/5xx errors because
         # the matching engine may have accepted the order. A signed -1021
         # timestamp rejection is safe to retry once after time synchronization.
