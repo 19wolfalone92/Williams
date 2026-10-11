@@ -73,11 +73,9 @@ class ExecutionBarrier:
         self.db = db
 
     def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
+        """Persist safety-critical order state; failures must reach the caller."""
         if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            try:
-                self.db.save_execution_intent(intent, status, reason)
-            except Exception:
-                pass
+            self.db.save_execution_intent(intent, status, reason)
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
@@ -148,7 +146,18 @@ class ExecutionBarrier:
         with self.context_cache.execution_lock:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
-            self._persist(intent, "PENDING")
+            try:
+                self._persist(intent, "PENDING")
+            except Exception as exc:
+                # Fail closed: no exchange call is allowed until durable intent
+                # admission succeeds. There is no exchange mutation to reconcile.
+                reason = f"execution_intent_persistence_failed: {type(exc).__name__}: {exc}"
+                try:
+                    order_fsm.transition(OrderState.CANCELED)
+                except ValueError:
+                    order_fsm.state = OrderState.REJECTED
+                self._record("ERROR", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
@@ -284,7 +293,30 @@ class ExecutionBarrier:
                     raise RuntimeError(
                         "ExecutionBarrier: exchange response lacks authoritative order state"
                     )
-            self._persist(intent, "SUBMITTED")
+            try:
+                self._persist(intent, "SUBMITTED")
+            except Exception as exc:
+                # The exchange may have accepted/mutated the order. Never retry
+                # submit here; preserve the ambiguity for reconciliation.
+                order_fsm.state = OrderState.RECONCILE_REQUIRED
+                reason = (
+                    "post_submit_persistence_failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                try:
+                    self._persist(intent, "AMBIGUOUS", reason)
+                except Exception:
+                    pass
+                self._record(
+                    "ERROR",
+                    "execution_reconcile_required",
+                    intent,
+                    reason,
+                    {"response_received": True},
+                )
+                return ExecutionResult(
+                    intent.intent_id, False, response=response, reason=reason
+                )
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
