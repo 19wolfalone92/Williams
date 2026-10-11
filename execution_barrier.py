@@ -93,6 +93,21 @@ class ExecutionBarrier:
                 f"cannot persist execution intent {intent.intent_id} status={status}; mutation blocked"
             ) from exc
 
+    def _persist_exchange_result(self, intent: OrderIntent, response: Any) -> None:
+        writer = getattr(self.db, "save_execution_event", None) if self.db is not None else None
+        if not callable(writer):
+            raise ExecutionOutcomeUnknown(
+                f"exchange may have applied intent {intent.intent_id}; "
+                "durable exchange-result writer is unavailable; reconciliation is mandatory"
+            )
+        try:
+            writer(intent.intent_id, "BINANCE_RESULT", response)
+        except Exception as exc:
+            raise ExecutionOutcomeUnknown(
+                f"exchange may have applied intent {intent.intent_id}; "
+                "exchange response could not be durably recorded; reconciliation is mandatory"
+            ) from exc
+
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
             try:
@@ -221,6 +236,8 @@ class ExecutionBarrier:
                     {"error": f"{type(exc).__name__}: {exc}"},
                 )
                 raise
+
+            self._persist_exchange_result(intent, response)
 
             if intent.order_type != "CANCEL":
                 status = str(
