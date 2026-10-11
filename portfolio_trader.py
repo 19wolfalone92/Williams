@@ -12,6 +12,7 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
+from execution_account_identity import verify_execution_account_identity
 
 
 POSITION_STATES = {
@@ -703,7 +704,10 @@ class MultiPositionTrader:
     # ------------------------------------------------------------------
 
     def _emergency_market_sell(self, symbol, qty, trade_id, reason):
-        """Close a just-filled/unprotected Spot position if protection is already breached."""
+        """Legacy direct emergency SELL is disabled; campaign recovery owns exits."""
+        raise RuntimeError(
+            "Legacy direct emergency SELL is disabled; use CampaignExecutionService.exit_market"
+        )
         if self.dry_run:
             raise RuntimeError(
                 f"{symbol}: emergency exit required ({reason}) but DRY_RUN=true"
@@ -845,6 +849,9 @@ class MultiPositionTrader:
         target_fraction=None,
         risk_pct=None,
     ):
+        raise RuntimeError(
+            "Legacy direct OCO creation is disabled; use CampaignExecutionService.create_hard_stop"
+        )
         filters = self._filters(symbol)
         qty = self._normalize_qty(symbol, qty)
         if qty <= 0:
@@ -1636,6 +1643,19 @@ class MultiPositionTrader:
 
     def manual_sell(self, symbol):
         symbol = str(symbol).upper().strip()
+        # Route manual exits through the same durable campaign intent, fill
+        # ledger and protection-recovery contract. Legacy trade-only positions
+        # are not mutated because their ownership/protection cannot be proven.
+        if not self.campaign_engine_enabled:
+            raise RuntimeError(
+                "Manual SELL blocked: legacy direct mutation path is disabled"
+            )
+        campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
+        if campaign is None or float(campaign.position_qty or 0) <= 0:
+            raise RuntimeError(
+                f"{symbol}: manual SELL blocked; no authoritative active campaign"
+            )
+        return self.campaign_execution.exit_market(campaign, reason="MANUAL")
         trade = self.db.open_trade(symbol)
         if trade is None:
             self.recover()
@@ -2103,6 +2123,10 @@ class MultiPositionTrader:
         return True
 
     def execute(self, selections):
+        if not self.campaign_engine_enabled:
+            raise RuntimeError(
+                "Autonomous entries blocked: legacy direct order path is disabled"
+            )
         if self.campaign_engine_enabled:
             if self.dry_run:
                 return [
