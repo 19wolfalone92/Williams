@@ -6,41 +6,195 @@ from datetime import datetime, timezone
 from contextlib import contextmanager
 
 
+class _LockedSQLiteCursor:
+    """Serialize cursor operations with Database transactions on a shared connection."""
+
+    def __init__(self, cursor, lock):
+        self._cursor = cursor
+        self._lock = lock
+
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            self._cursor.execute(*args, **kwargs)
+        return self
+
+    def executemany(self, *args, **kwargs):
+        with self._lock:
+            self._cursor.executemany(*args, **kwargs)
+        return self
+
+    def executescript(self, *args, **kwargs):
+        with self._lock:
+            self._cursor.executescript(*args, **kwargs)
+        return self
+
+    def fetchone(self):
+        with self._lock:
+            return self._cursor.fetchone()
+
+    def fetchmany(self, *args, **kwargs):
+        with self._lock:
+            return self._cursor.fetchmany(*args, **kwargs)
+
+    def fetchall(self):
+        with self._lock:
+            return self._cursor.fetchall()
+
+    def close(self):
+        with self._lock:
+            return self._cursor.close()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        with self._lock:
+            return next(self._cursor)
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+class _LockedSQLiteConnection:
+    """Connection facade: all SQL/cursor operations share the transaction RLock."""
+
+    def __init__(self, connection, lock):
+        object.__setattr__(self, "_connection", connection)
+        object.__setattr__(self, "_lock", lock)
+
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            cursor = self._connection.execute(*args, **kwargs)
+        return _LockedSQLiteCursor(cursor, self._lock)
+
+    def executemany(self, *args, **kwargs):
+        with self._lock:
+            cursor = self._connection.executemany(*args, **kwargs)
+        return _LockedSQLiteCursor(cursor, self._lock)
+
+    def executescript(self, *args, **kwargs):
+        with self._lock:
+            cursor = self._connection.executescript(*args, **kwargs)
+        return _LockedSQLiteCursor(cursor, self._lock)
+
+    def cursor(self, *args, **kwargs):
+        with self._lock:
+            cursor = self._connection.cursor(*args, **kwargs)
+        return _LockedSQLiteCursor(cursor, self._lock)
+
+    def commit(self):
+        with self._lock:
+            return self._connection.commit()
+
+    def rollback(self):
+        with self._lock:
+            return self._connection.rollback()
+
+    def close(self):
+        with self._lock:
+            return self._connection.close()
+
+    def __enter__(self):
+        self._lock.acquire()
+        try:
+            self._connection.__enter__()
+        except BaseException:
+            self._lock.release()
+            raise
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return self._connection.__exit__(exc_type, exc_value, traceback)
+        finally:
+            self._lock.release()
+
+    def __getattr__(self, name):
+        with self._lock:
+            return getattr(self._connection, name)
+
+    def __setattr__(self, name, value):
+        if name in {"_connection", "_lock"}:
+            object.__setattr__(self, name, value)
+        else:
+            with self._lock:
+                setattr(self._connection, name, value)
+
+
 class Database:
     SCHEMA_VERSION = 8
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(path, check_same_thread=False, timeout=20)
+        self._transaction_lock = threading.RLock()
+        self._transaction_active = False
+        self._transaction_owner = None
+        self._transaction_depth = 0
+        self._savepoint_counter = 0
+        raw_conn = sqlite3.connect(
+            path, check_same_thread=False, timeout=20, isolation_level=None
+        )
+        self.conn = _LockedSQLiteConnection(raw_conn, self._transaction_lock)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA busy_timeout=20000')
         self.conn.execute('PRAGMA journal_mode=WAL')
-        # Durable intent/ledger commits must survive process and OS interruption.\n        self.conn.execute('PRAGMA synchronous=FULL')
-        self._transaction_active = False
-        self._transaction_lock = threading.RLock()
+        # Durable intent/ledger commits must survive process and OS interruption.
+        self.conn.execute('PRAGMA synchronous=FULL')
         self.init()
 
     @contextmanager
     def transaction(self):
-        """Serialize multi-step state/risk writes in-process and across SQLite connections."""
+        """Own an explicit SQLite write transaction; nested calls use savepoints.
+
+        The shared connection facade takes the same re-entrant lock for every SQL
+        and cursor operation. Autocommit mode prevents a standalone helper write
+        from leaving an implicit transaction that a later BEGIN could inherit.
+        BEGIN IMMEDIATE still serializes writers across independent connections
+        and processes.
+        """
         with self._transaction_lock:
-            if self._transaction_active:
-                yield self
+            owner = threading.get_ident()
+            if self._transaction_owner == owner:
+                self._savepoint_counter += 1
+                savepoint = f"db_nested_{self._savepoint_counter}"
+                self.conn.execute(f"SAVEPOINT {savepoint}")
+                self._transaction_depth += 1
+                try:
+                    yield self
+                except BaseException:
+                    try:
+                        self.conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    finally:
+                        self.conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    raise
+                else:
+                    self.conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                finally:
+                    self._transaction_depth -= 1
                 return
 
+            # Never adopt or roll back a transaction whose owner is unknown.
+            if self.conn.in_transaction:
+                raise RuntimeError(
+                    "SQLite connection has an unowned active transaction; mutation blocked"
+                )
+
+            self._transaction_owner = owner
+            self._transaction_depth = 1
             self._transaction_active = True
             try:
-                # BEGIN IMMEDIATE takes the SQLite write reservation before the
-                # caller reads portfolio capacity, preventing read-check-write races.
-                self.conn.execute('BEGIN IMMEDIATE')
+                self.conn.execute("BEGIN IMMEDIATE")
                 yield self
                 self.conn.commit()
-            except Exception:
-                self.conn.rollback()
+            except BaseException:
+                if self.conn.in_transaction:
+                    self.conn.rollback()
                 raise
             finally:
                 self._transaction_active = False
+                self._transaction_depth = 0
+                self._transaction_owner = None
 
     def init(self):
         self.conn.executescript('''
