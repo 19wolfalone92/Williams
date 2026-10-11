@@ -205,3 +205,8 @@ Repository history contains commit `1d2fcba4d76b3380576a46f05caa0acdf8bc01c4` ti
 ### Acceptance status
 
 **Still BLOCKED.** Source fixes and test files are present, but the requested unittest commands, Python HTTP tests, Android unit tests, and actual Android socket-level tests have not been run in this environment. Current CI failed before relevant tests. Android bearer-auth parity and application-level retry/idempotency remain unresolved. Keep PR #64 Draft; no merge.
+
+
+### Final status of Campaign CI #4964
+
+A later poll confirmed [Williams Campaign CI #4964](https://github.com/19wolfalone92/Williams/actions/runs/38174616744) finished with Python tests **PASS** and Android build/static checks **FAIL** at `:app:lintDebug`. Lint's first error is `gradle/wrapper/gradle-wrapper.properties:3: A newer version of Gradle than 8.14.5 is available: 8.14.6 [AndroidGradlePluginVersion]`. The Android unit-test step was not reached. This is separate from the release-gate version mismatch in Python backend tests #2645 and Build Android APK #2270. No Gradle or CI file was changed.
