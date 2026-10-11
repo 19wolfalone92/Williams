@@ -19,7 +19,6 @@ from execution_accumulator import accumulate_order, accumulate_fills
 from l2_slippage import L2SlippageGuard
 from equity_breaker import EquityCircuitBreaker
 from wise_men import WiseMenStateMachine
-from execution_account_identity import verify_execution_account_identity
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
