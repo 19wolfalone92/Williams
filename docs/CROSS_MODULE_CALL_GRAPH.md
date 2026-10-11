@@ -47,7 +47,7 @@ strategy.py / Trader.process()
 
 | Edge | Producer → consumer | Contract visible in source | Failure requirement | Evidence / status |
 |---|---|---|---|---|
-| Market data → context | Binance adapters → `mtf_context_service.py` / `ContextCache` | Symbol, interval, candle close timestamp, versioned context | Unknown interval/time, stale context or data gap must block new entry | `mtf_context_service.py` branch blob SHA `<see current fetched ref>`; exact live gap-recovery proof unresolved |
+| Market data → context | Binance adapters → `mtf_context_service.py` / `ContextCache` | Symbol, interval, candle close timestamp, versioned context | Unknown interval/time, stale context or data gap must block new entry | `mtf_context_service.py` branch blob SHA `ac38e50ec7ea125047ce7e39d8de3c0ee711aada`; exact live gap-recovery proof unresolved |
 | Context → strategy | `ContextCache` → `Trader` / strategy | Context snapshot and version | Missing/inconsistent context must not be interpreted as permission | Existing audit describes shared-cache injection; integration regression exists, but runtime trace not executed here |
 | Strategy → pending signal | `strategy.py`, Williams core → `SignalSpec` / `PendingSignal` | Candidate/signal identity, side, invalidation, context/hypothesis versions | Signal is not an order; incomplete or stale proof blocks | Observed modules; full source-to-signal parity is TASK 004 |
 | Signal → campaign | `MultiPositionTrader.execute_campaign` → `CampaignEngine` / `CampaignExecutionService` | Campaign ID, signal ID, symbol, risk proposal, intent purpose | Unknown symbol state or absent campaign/signal identity blocks | Described in `docs/WILLIAMS_BOT_2_1_TASK_001_ARCHITECTURE_AUDIT.md`; source path partially reviewed |
