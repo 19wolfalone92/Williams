@@ -12,9 +12,10 @@ os.environ["WILLIAMS_DB_PATH"] = _test_db_path
 assert_test_db_safe()
 
 from trader import Trader
+from binance_client import BinanceSpotClient
 from binance_rules import SymbolRules
 
-class FakeClient:
+class FakeClient(BinanceSpotClient):
     testnet=True
     def __init__(self):
         self.order_calls = 0
