@@ -7,6 +7,8 @@ on:
       - "*.py"
       - "tests/**"
       - "requirements.txt"
+      - "pytest.ini"
+      - "TESTING.md"
       - ".github/workflows/**"
   pull_request:
     paths:
