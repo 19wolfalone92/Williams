@@ -65,7 +65,7 @@ def test_crash_after_intent_persistence_blocks_restart_before_submit(tmp_path):
     db = Database(path)
     item = intent()
     assert db.claim_execution_intent(item)["claimed"]
-    db.close()
+    db.conn.close()
     restarted = Database(path)
     gate = restarted.execution_readiness()
     assert gate["ready"] is False
