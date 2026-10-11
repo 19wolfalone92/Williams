@@ -1,4 +1,6 @@
 import math
+import hashlib
+import json
 import os
 import uuid
 from decimal import Decimal
@@ -752,30 +754,149 @@ class MultiPositionTrader:
     # ------------------------------------------------------------------
 
     def _emergency_market_sell(self, symbol, qty, trade_id, reason):
-        """Close a just-filled/unprotected Spot position if protection is already breached."""
+        """Close an unprotected Spot position with a durable, stable intent.
+
+        Any state at/after SUBMITTING is never resubmitted by this method.
+        Unknown POST outcomes are left for explicit authoritative reconciliation.
+        """
         if self.dry_run:
             raise RuntimeError(
                 f"{symbol}: emergency exit required ({reason}) but DRY_RUN=true"
             )
 
         symbol = str(symbol).upper()
+        trade_id_text = str(trade_id)
+        reason_text = str(reason or "").strip()
+        if not symbol or not trade_id_text or not reason_text:
+            raise RuntimeError("emergency SELL requires symbol, trade_id and stable reason")
+
+        # Account scope is a one-way fingerprint of the configured API key. The
+        # secret and raw key are never written to SQLite or event logs.
+        api_key = str(getattr(self.client, "api_key", "") or "")
+        if not api_key:
+            raise RuntimeError("emergency SELL blocked: account identity is unavailable")
+        account_scope = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:24]
+        environment = "BINANCE_SPOT_TESTNET" if bool(getattr(self.client, "testnet", False)) else "BINANCE_SPOT_MAINNET"
+        identity_payload = {
+            "contract": "WILLIAMS_EMERGENCY_SELL_IDENTITY_V1",
+            "environment": environment,
+            "account_scope": account_scope,
+            "symbol": symbol,
+            "trade_id": trade_id_text,
+            # One emergency exit episode per managed trade. A different reason
+            # for the same trade is a parameter conflict, not a new SELL.
+            "operation_type": "EMERGENCY_MARKET_SELL",
+        }
+        operation_id = hashlib.sha256(
+            json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        # Binance Spot newClientOrderId permits at most 36 characters. Keep a
+        # stable, unique-looking prefix and 18 hex chars derived from operation_id.
+        client_id = f"{self.EMERGENCY_PREFIX}{operation_id[:18]}"
+        if len(client_id) > 36 or not all(ch.isalnum() or ch in "._:-/" for ch in client_id):
+            raise RuntimeError("emergency SELL clientOrderId violates exchange contract")
+
         account = self.client.account()
         free_qty = self._asset_balance(symbol, account=account)
-        sell_qty = self._normalize_qty(symbol, min(float(qty), free_qty), market=True)
-        if sell_qty <= 0:
+        try:
+            requested = Decimal(str(qty))
+            free = Decimal(str(free_qty))
+        except Exception as exc:
+            raise RuntimeError("emergency SELL quantity/balance is invalid") from exc
+        if not requested.is_finite() or not free.is_finite() or requested <= 0 or free < 0:
+            raise RuntimeError("emergency SELL quantity/balance is not finite and positive")
+        # Existing normalizer enforces the market lot grid. The durable intent
+        # stores the exact normalized decimal string, not a binary float value.
+        normalized = self._normalize_qty(symbol, min(float(requested), float(free)), market=True)
+        sell_qty = Decimal(str(normalized))
+        if not sell_qty.is_finite() or sell_qty <= 0:
+            raise RuntimeError(f"{symbol}: emergency exit quantity below Binance LOT_SIZE")
+        quantity_text = format(sell_qty, "f")
+        parameters = {
+            **identity_payload,
+            "reason": reason_text,
+            "requested_qty": quantity_text,
+        }
+        parameters_hash = hashlib.sha256(
+            json.dumps(parameters, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        intent = {
+            "operation_id": operation_id,
+            "identity_version": 1,
+            "environment": environment,
+            "account_scope": account_scope,
+            "symbol": symbol,
+            "trade_id": trade_id_text,
+            "operation_type": "EMERGENCY_MARKET_SELL",
+            "reason": reason_text,
+            "requested_qty": quantity_text,
+            "parameters_hash": parameters_hash,
+            "client_order_id": client_id,
+        }
+        try:
+            claimed = self.db.claim_emergency_sell_intent(intent)
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
             raise RuntimeError(
-                f"{symbol}: emergency exit quantity below Binance LOT_SIZE"
+                f"{symbol}: emergency SELL durable intent could not be proven; mutation blocked"
+            ) from exc
+
+        intent_status = str(claimed.get("status", ""))
+        if intent_status != "PREPARED":
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(
+                f"{symbol}: emergency SELL operation already exists in state {intent_status}; "
+                "reconcile by its stable clientOrderId; never resubmit"
             )
 
-        client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
-            symbol,
-            "SELL",
-            "MARKET",
-            quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
-        )
-        self.db.save_order(sell)
+        # This commit is the last gate before the external mutation. A crash
+        # after SUBMITTING is conservatively UNKNOWN even if the socket write
+        # had not started; recovery must query Binance, not resend.
+        try:
+            self.db.transition_emergency_sell_intent(operation_id, "SUBMITTING")
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError("emergency SELL SUBMITTING commit failed; mutation blocked") from exc
+
+        try:
+            sell = self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=quantity_text,
+                new_client_order_id=client_id,
+            )
+        except Exception as exc:
+            try:
+                self.db.transition_emergency_sell_intent(
+                    operation_id, "RECONCILE_REQUIRED", last_error=f"{type(exc).__name__}: {exc}"
+                )
+            finally:
+                self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(
+                f"{symbol}: emergency SELL outcome UNKNOWN; reconcile {client_id}; no retry permitted"
+            ) from exc
+
+        # Record the response as evidence only. It does not by itself prove fills
+        # or financial effects, which are reconciled below from authoritative data.
+        try:
+            self.db.save_order(sell)
+            self.db.transition_emergency_sell_intent(
+                operation_id, "SUBMITTED",
+                exchange_order_id=sell.get("orderId"),
+                exchange_status=sell.get("status"),
+            )
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            try:
+                self.db.transition_emergency_sell_intent(
+                    operation_id, "RECONCILE_REQUIRED", last_error=f"response persistence failed: {exc}"
+                )
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"{symbol}: emergency SELL response persistence uncertain; reconcile {client_id}"
+            ) from exc
 
         order_id = sell.get("orderId")
         confirmed = self.client.get_order(
@@ -888,6 +1009,18 @@ class MultiPositionTrader:
             residual_qty = managed_qty
             self.set_state(symbol, "RECONCILE_REQUIRED")
             state = "RECONCILE_REQUIRED"
+
+        try:
+            self.db.transition_emergency_sell_intent(
+                operation_id, "APPLIED",
+                exchange_order_id=order_id,
+                exchange_status=status,
+            )
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(
+                f"{symbol}: local financial update completed but intent finalization failed; recovery required"
+            ) from exc
 
         self.db.log_event(
             "WARNING",
