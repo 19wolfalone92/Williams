@@ -57,15 +57,24 @@ class CampaignExecutionService:
             )
         return outcomes
 
-    def _fee_in_quote(self, symbol: str, commission: Decimal, asset: str, price: Decimal) -> tuple[Decimal, Decimal]:
+    def _fee_in_quote(
+        self,
+        symbol: str,
+        commission: Decimal,
+        asset: str,
+        price: Decimal,
+        *,
+        base_asset: str,
+        quote_asset: str,
+    ) -> tuple[Decimal, Decimal]:
+        # Network reads are deliberately forbidden inside apply_execution_fill's
+        # SQLite transaction; validated asset metadata is passed in with the fill.
         if commission < 0 or price <= 0:
             raise CampaignExecutionError("invalid commission/price from exchange trade")
-        info = self.client.exchange_info(symbol)
-        row = self._symbols_rows(info).get(symbol.upper())
-        if row is None:
-            raise CampaignExecutionError("cannot verify quote/base assets for commission")
-        base_asset = str(row.get("baseAsset", "")).upper()
-        quote_asset = str(row.get("quoteAsset", "")).upper()
+        base_asset = str(base_asset or "").upper()
+        quote_asset = str(quote_asset or "").upper()
+        if not base_asset or not quote_asset:
+            raise CampaignExecutionError("base/quote asset metadata missing during fill accounting")
         asset = str(asset or "").upper()
         if commission == 0:
             return Decimal("0"), Decimal("0")
