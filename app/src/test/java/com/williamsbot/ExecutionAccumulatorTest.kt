@@ -64,6 +64,19 @@ class ExecutionAccumulatorTest {
     }
 
     @Test
+    fun thirdAssetFeeDoesNotUseExitPriceAsHistoricalValuation() {
+        val a = ExecutionAccumulator()
+        val snapshot = a.acceptFill(
+            "16", "BTCUSDT", "103", 100,
+            BigDecimal("0.01"), BigDecimal("100"),
+            BigDecimal("0.001"), "BNB",
+            exitPriceForUnknownFee = BigDecimal("900")
+        )!!
+        assertFalse(snapshot.feeKnown)
+        assertEquals("0", snapshot.feeUsdt.toPlainString())
+    }
+
+    @Test
     fun invalidFillDoesNotIncreasePositionAccounting() {
         val a = ExecutionAccumulator()
         val snapshot = a.acceptFill(

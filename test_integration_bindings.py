@@ -87,6 +87,30 @@ class FakeBinance:
             )
         return rows
 
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        # Test-only authoritative trade history; zero commission is explicit.
+        rows = []
+        for order in self.all_orders(symbol, limit=1000):
+            if order_id is not None and str(order.get("orderId")) != str(order_id):
+                continue
+            qty = float(order.get("executedQty", 0) or 0)
+            quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+            if qty <= 0 or quote <= 0:
+                continue
+            rows.append({
+                "id": f"test-trade-{order.get('orderId')}",
+                "orderId": order.get("orderId"),
+                "symbol": symbol.upper(),
+                "isBuyer": str(order.get("side", "")).upper() == "BUY",
+                "qty": str(qty),
+                "price": str(quote / qty),
+                "quoteQty": str(quote),
+                "commission": "0",
+                "commissionAsset": "USDT",
+                "time": int(order.get("time", order.get("transactTime", 1)) or 1),
+            })
+        return rows[-limit:]
+
     def get_order(self, symbol, orig_client_order_id=None, **kwargs):
         return {
             "symbol": "BTCUSDT",
