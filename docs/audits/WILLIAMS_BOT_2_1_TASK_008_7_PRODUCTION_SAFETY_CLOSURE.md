@@ -216,3 +216,114 @@ Current verification:
 - P0-A, P0-B, P0-C, P0-D and read-only Testnet criteria remain BLOCKED/UNKNOWN as detailed above.
 
 The report itself is documentation, not a substitute for the missing production integration or executed tests.
+
+
+## 14. TASK 008.8 continuation — production integration and closure audit
+
+**Audit result: BLOCKED / NOT ACCEPTED.** This continuation does not claim production freshness integration, recovery closure, mutation-path completeness, executed tests, or CI success.
+
+### 14.1 Actual GitHub state at continuation
+
+- Existing branch: `audit/williams-2.1-task-008-spot-testnet`.
+- Actual branch HEAD resolved from the branch ref: `328a1346522657f67bb7cc09185a35544438e5d8`.
+- Requested last-reported SHA matches this HEAD.
+- Base: `d7634adc1f6a1d25ef334294a4903f7c9134e06b`.
+- Comparison: 40 commits ahead, 0 behind.
+- Exact-head PR search returned no matching PR. No PR was created.
+- Combined commit status returned an empty status list. The available workflow-run connector returned no runs and only supports PR-triggered runs; this does not prove that no other workflow runs exist. CI remains UNKNOWN.
+- No repository test runner or workflow dispatch capability was available in this execution path. Tests were not run here; no test is marked PASS.
+- No branch reset, force-push, merge, Mainnet access, or exchange mutation was performed.
+
+### 14.2 Source-to-Preflight evidence trace
+
+| Component | Source measurement found | Timestamp / clock domain | Generation | Path into mandatory Preflight | UNKNOWN behavior / finding |
+|---|---|---|---|---|---|
+| Binance REST reachability | Synchronous client ping in `preflight_gate.py` | Request-time result; no durable observation record | No producer generation bound | Basic reachability check only; `runtime_freshness.py` is not wired as a complete producer evidence set | Cannot prove age between checks; other missing required checks keep readiness false |
+| Server time | `client.sync_time()` and `serverTime` in `preflight_gate.py` | Binance wall clock compared with local wall clock offset | No process/session generation | Legacy offset check, not a complete `FreshnessEvidence` handoff | Missing/unapproved offset budget blocks; approval provenance is not present |
+| Account / balances | Authenticated account response | Request response time not captured as trusted evidence | No account snapshot generation | Basic shape/checks; no freshness evidence passed to validator | Account response alone does not prove balance age or reservation consistency |
+| H1 closed candle | Binance kline paths and local candle data | Candle close timestamp exists in some context data; source-observation timestamp not consistently bound | Context version exists; not bound to a Preflight evidence generation | No proven closed-H1 producer-to-Preflight evidence path | UNKNOWN; cannot authorize a new entry |
+| Market WebSocket | `ws_hub.py` tracks `market_last_message_at`, connection and reconnect counters | Existing field uses process wall-clock time; not a compatible monotonic observation record | Reconnect count exists but is not proven as a generation contract | Not consumed as trusted mandatory freshness evidence | Missing/disconnected/old message must block; integration proof absent |
+| User Data Stream | `ws_hub.py` tracks last event, connection and reconnect state | Process timestamp; no full event-age evidence contract | Reconnect count/subscription fields exist, but no verified generation handoff | Not wired to mandatory Preflight evidence | UNKNOWN; account/order state cannot be presumed current |
+| Scanner | No trusted completed-cycle producer was found in the reviewed evidence | No verified last-success clock | None proven | No verified path | Missing heartbeat must block; remains UNKNOWN |
+| Market Context | `market_context.py`: snapshot generation, creation time and context candle-close times | `created_at_ms` is wall-clock; no monotonic session evidence proven at Preflight | Snapshot generation and per-context version exist | `ExecutionBarrier` checks declared context versions for an intent, but this is not the full runtime freshness set | Context version mismatch blocks that intent; global source freshness remains unproven |
+| SQLite integrity / critical persistence | `db.py`: SQLite WAL, synchronous=NORMAL, intent/event methods | DB timestamps include SQLite wall-clock defaults; no integrity-probe observation timestamp consumed by Preflight | Schema version exists; runtime/database generation binding not proven | No mandatory integrity evidence is passed to Preflight | Missing integrity/critical-write proof must block; integration absent |
+| Open orders / fills | Preflight reads open orders and classifies known/unknown client IDs; other exchange/local order and fill paths exist | Exchange response time and local reconciliation completion time are not bound in one evidence object | No completed reconciliation generation consumed by Preflight | Open-order check only; not equivalent to complete financial reconciliation | Unknown orders fail and reconciliation-required blocks; completeness of order/fill/position reconciliation remains unproven |
+| Position / campaign / protection | Local campaign and position state plus exchange order reads | Local DB timestamps and exchange response times are not tied to one consistent observation | Campaign/context versions exist but no reconciliation epoch proven | No full state snapshot passed as mandatory freshness evidence | Unknown/mismatched protection or position must block new entries; end-to-end proof absent |
+| Recovery / reconciliation | Recovery and reconciliation code paths exist | No single trusted last-completed timestamp with same-session monotonic age proven | No durable completed-recovery generation consumed by Preflight | `requires_reconciliation` and required checks fail closed in the gate | UNKNOWN/recovery incomplete blocks new entries; safe risk-reduction has no separate fully proven admissibility contract |
+| Android runtime | Android code and runtime diagnostics exist | No verified backend-consumable source timestamp and clock domain | No verified heartbeat generation consumed by Preflight | No proven Python Preflight integration | UNKNOWN whenever Android is part of the selected execution mode |
+
+The validator in `runtime_freshness.py` has no approved default budgets (`DEFAULT_MAX_AGE_MS = {}`) and supports optional same-session monotonic age checking. That is a useful validation primitive, **not production integration**. The mandatory Preflight implementation does not demonstrate that real producer-bound evidence for every required component is supplied and evaluated. The `checked_at_ms` generated by `PreflightReport.as_dict()` timestamps report serialization, not the underlying source measurements. The ExecutionBarrier's report-age check therefore cannot replace component freshness validation.
+
+### 14.3 Freshness budget approval
+
+No authoritative policy/source in the reviewed branch was found that approves operational freshness budgets for REST, account/balances, H1 closed candles, market/user streams, scanner heartbeat, context, SQLite integrity, reconciliation, or Android runtime. Do not infer approval from test constants, environment variable presence, the report timestamp, or `ExecutionBarrier.max_preflight_age_ms`.
+
+| Budget | Approved value / units | Provenance | Status |
+|---|---|---|---|
+| REST response freshness | Not established | No approved policy source found | BLOCKED |
+| Server clock offset | Configurable `LIVE_MAX_TIME_OFFSET_MS`; approval/source not established | Environment/configuration only | BLOCKED unless policy is independently approved |
+| Account/balance freshness | Not established | No approved policy source found | BLOCKED |
+| Closed H1 candle age | Not established | No approved policy source found | BLOCKED |
+| Market/user WebSocket event age | Not established | No approved policy source found | BLOCKED |
+| Scanner heartbeat | Not established | No verified heartbeat producer/policy | BLOCKED |
+| Market Context age/generation | Not established | Context generation exists, approved age budget does not | BLOCKED |
+| SQLite integrity / reconciliation age | Not established | No approved policy source found | BLOCKED |
+| Android heartbeat | Not established | No verified contract/policy | BLOCKED |
+
+A missing, malformed, cross-session, cross-generation, negative-age, future, or contradictory measurement must remain UNKNOWN/BLOCKED. A process restart invalidates prior process-local monotonic evidence unless a fresh measurement is produced in the new session.
+
+### 14.4 ExecutionBarrier source-to-sink findings
+
+| Route / operation | Observed control | Mutation sink proof | Current result |
+|---|---|---|---|
+| Initial entry | `ExecutionBarrier.execute()`, durable intent/event attempts, context checks, Preflight, stable client order ID claim, one-use mutation permit | The reviewed barrier calls a supplied `submit()` callback under the permit; repository-wide exhaustive sink inventory and direct-network bypass exclusion are not proven | PARTIAL / BLOCKED |
+| Add-on / campaign order | Campaign and portfolio wrappers can route through barrier | Every add-on and recovery callback is not proven to be mutation-free except for one intended sink | BLOCKED |
+| Duplicate intent / client order ID | Durable claim via `try_claim_state` and stable client ID requirement | Database cross-process atomicity and all recovery re-entry paths not proven by executed tests | NOT VERIFIED |
+| Timeout / unknown exchange response | Barrier marks ambiguous/reconciliation-required and does not itself blindly retry | Every upstream retry wrapper and all mutation call sites are not exhaustively traced | PARTIAL / BLOCKED |
+| Cancel / replace | Must use a valid permit and same Testnet client; permit is consumed before mutation | Full cancel/replace call graph and multi-call callback behavior not proven | BLOCKED |
+| Protection recovery / OCO | Existing order/protection paths are present | No complete durable protection-state reconciliation and no full sink trace proved | BLOCKED |
+| Close / reduction | `portfolio_trader.py` refuses `EMERGENCY_EXIT` without a dedicated contract; other mutation routes require barrier | No approved separate risk-reduction admission contract or safe quantity proof established | BLOCKED |
+
+A key semantic hazard was found in `execution_barrier.py`: the current generic direction mapping treats every `SELL` as `short` for entry-context permission checks. Spot SELL reduction/exit must not be modeled as opening a short, and ordinary Spot SELL cannot establish a Futures short position. The correct fix requires explicit execution-purpose/position semantics and dedicated tests; this continuation does not weaken the gate or introduce a speculative workaround.
+
+The permit is a process-level guard for code using the client wrapper, not by itself proof that every network mutation in the repository passes through it. Exhaustive direct HTTP/client calls, callbacks, retries and recovery sinks still need static inventory plus sink-interception tests.
+
+### 14.5 Spot SELL, recovery, concurrency, secrets, and mode status
+
+- **Spot SELL safety:** BLOCKED. Available balance, reserved quantity, open SELL quantity, partial fills, base-asset commissions, exchange filters, campaign/position identity and idempotent close are not proven as one atomic admissibility contract.
+- **22-scenario recovery matrix:** all 22 cases remain NOT RUN in this continuation. Existing matrix remains the required baseline; no scenario is upgraded to PASS without automated execution and financial assertions.
+- **SQLite concurrency:** NOT RUN. WAL and an in-process lock do not prove cross-connection/process exactly-once financial effects, atomic risk reservation, fee deduplication or crash recovery.
+- **Synthetic-secret audit:** NOT COMPLETE. Source/config/test/report files were sampled, but no complete repository-wide scan, workflow/log audit or synthetic-marker redaction test was executed. No real secrets were requested or printed.
+- **Execution modes:** Spot LONG PARTIAL/NOT VERIFIED end-to-end; Spot reduction/exit BLOCKED; Spot SHORT is not supported by ordinary Spot SELL; Futures Demo/Testnet LONG and SHORT UNKNOWN/NOT VERIFIED; unknown mode must fail closed.
+- **Read-only Spot Testnet:** NOT VERIFIED; no network request was made.
+
+### 14.6 Verification on the current branch head
+
+| Check | Result |
+|---|---|
+| Branch HEAD / baseline compare | Verified: `328a1346522657f67bb7cc09185a35544438e5d8`; 40 ahead / 0 behind |
+| Matching PR search | No matching PR found by available search |
+| Combined status checks | Empty response; UNKNOWN, not PASS |
+| Workflow runs / failed or incomplete job logs | No runs returned by available PR-only workflow-run connector; complete run/job inventory unavailable |
+| Python tests / freshness tests / Preflight tests | NOT RUN |
+| ExecutionBarrier / mutation-sink tests | NOT RUN |
+| All 22 recovery scenarios | NOT RUN |
+| SQLite concurrency suite | NOT RUN |
+| Android build / lint / unit tests | UNKNOWN / NOT RUN |
+| Synthetic-secret redaction suite | NOT RUN |
+| Read-only Spot Testnet | NOT VERIFIED |
+
+### 14.7 Required closure work
+
+1. Add a trusted evidence provider to the real producers and inject its immutable evidence snapshot into mandatory Preflight; bind wall-clock timestamp, monotonic session, component generation and source identity.
+2. Establish approved freshness budgets from an explicit reviewed policy contract before enabling any corresponding entry gate.
+3. Separate Spot entry, Spot reduction/exit, cancellation, protection recovery, and Futures order semantics; correct the SELL/SHORT conflation without creating a bypass.
+4. Complete repository-wide mutation sink inventory and prove every mutation sink rejects calls without a valid one-use permit; prove the callback cannot perform multiple mutations with one permit.
+5. Implement and run sink-interception tests that assert no network mutation occurs for every blocked case.
+6. Run the existing complete 22-case recovery matrix with exchange/local/financial assertions.
+7. Run independent-connection and process-level SQLite race/restart tests.
+8. Complete synthetic-secret scans and redaction tests over all available repository channels.
+9. Retrieve or trigger all applicable CI workflows and collect job logs tied to the same final SHA.
+10. Only after P0 closure, prove read-only Spot Testnet access technically and run read-only requests.
+
+**TASK 008.8 final status: BLOCKED / NOT ACCEPTED.** No new production integration or test pass is claimed by this addendum.
