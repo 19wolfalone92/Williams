@@ -427,3 +427,81 @@ SQLite concurrency and crash recovery remain NOT RUN. No evidence is available f
 - [ ] Read-only Spot Testnet checked after local closure, or marked NOT VERIFIED.
 
 **Final status: BLOCKED — NOT ACCEPTED.** This section records the inspected evidence and outstanding work; it is not a substitute for production implementation, automated test results, or CI evidence.
+
+
+## 16. TASK 008.10 — Initial state revalidation and P0 execution boundary
+
+**Decision: BLOCKED — NOT ACCEPTED.** This is a bounded continuation audit, not a claim that TASK 008.10 implementation or acceptance is complete. No production code or tests were changed in this pass because the available GitHub connector exposes repository reads and file/commit writes but no local checkout/test runner and no workflow-dispatch operation. Writing unexecuted safety code into the execution path would not satisfy the task's exact-SHA verification requirement.
+
+### 16.1 Revalidated GitHub state
+
+- Repository: `19wolfalone92/Williams`.
+- Existing branch lookup confirms `audit/williams-2.1-task-008-spot-testnet` exists.
+- Base SHA: `d7634adc1f6a1d25ef334294a4903f7c9134e06b`.
+- Comparison of base against the branch ref: **42 ahead / 0 behind**; merge base equals the requested base.
+- The previously reported commit `23e10fbee2bc6da3ec0f6f96c5ce5d4c82a9a8a5` exists and is the TASK 008.9 report-only commit. The available branch-search result provides the branch name but not its resolved HEAD SHA; therefore this pass does **not** falsely assert that the branch still points to that exact commit.
+- PR search for `head:audit/williams-2.1-task-008-spot-testnet` returned no matches. No PR was created.
+- Combined status query for `23e10fbee2bc6da3ec0f6f96c5ce5d4c82a9a8a5` returned an empty status list.
+- Workflow-run lookup for that SHA returned no runs. The connector is limited to PR-triggered runs, so this does not prove that no push-triggered workflow ran.
+- `.github/workflows/campaign-ci.yml` has `push`, `pull_request`, and `workflow_dispatch` triggers. It defines Python safety/campaign tests and an Android job running `:app:testDebugUnitTest :app:lintDebug :app:assembleDebug`. The workflow definition is not evidence that any job executed.
+- Exact current branch HEAD, current-head status, all workflow run IDs/jobs/logs, and the tested SHA of each job remain **UNKNOWN** through the available responses.
+
+### 16.2 Code-path assessment from the branch sources
+
+| Area | Evidence found | TASK 008.10 assessment |
+|---|---|---|
+| Freshness contract | `runtime_freshness.py` declares `DEFAULT_MAX_AGE_MS = {}`; evidence includes source, wall timestamp, validity, generation and optional monotonic session metadata | No approved budgets. Missing budget cannot be promoted to fresh. |
+| Preflight | `preflight_gate.py` performs direct exchange checks and has required check names; report serialization assigns `checked_at_ms` | A report timestamp is not a producer measurement timestamp. A complete immutable set of producer-bound measurements is not proven integrated. |
+| Entry barrier | `execution_barrier.py` requires concrete `PreflightCheckService`, same-client identity, Spot Testnet endpoint, required checks PASS, non-reconciliation state, durable intent and stable client order ID | Fail-closed controls exist, but source freshness/generation evidence and every production mutation sink are not proven end-to-end. |
+| Permit | `execution_permit.py` supplies a barrier admission token and one-use permit | This is not by itself proof against every direct/legacy/background network mutation path. |
+| SELL semantics | `OrderIntent` includes generic `purpose`; barrier's local direction expression maps SELL to `short`, although the strategy-context direction check is applied to `purpose == ENTRY` | The purpose model remains too generic to prove a universal Spot reduction/close contract. No code change is asserted here. |
+| WebSocket/context/scanner | `ws_hub.py` tracks connection/message/reconnect state; `market_context.py` has context generations; no verified complete scanner-cycle producer-to-Preflight evidence path was established | Stale, disconnected, incomplete, or mismatched source state must remain UNKNOWN/BLOCKED. |
+| Financial ledger | `db.py` and trading code contain SQLite persistence and execution/recovery paths | Exactly-once fill/fee application, canonical Decimal ledger, and crash-atomic financial effects are not established by the source presence alone. |
+| Recovery matrix | Prior report preserves 22 scenarios | All 22 remain NOT RUN / NOT VERIFIED until their full financial assertions actually execute. |
+
+### 16.3 Budget and evidence decisions
+
+No reviewed source of approved per-component freshness budgets was found in the evidence examined. No TTL, heartbeat period, clock-offset policy, or financial threshold is introduced by this pass.
+
+Until approved policy and real producer integration exist, new entries dependent on REST/account/balances, closed H1 candle, WebSocket/User Data Stream, completed scanner cycle, exchange metadata/filters, open orders, fills/fees, positions/campaigns, risk reservations, protection, SQLite integrity, or completed reconciliation must be blocked whenever their evidence is absent, stale, contradictory, from an incompatible generation/session, or cannot be evaluated against an approved contract.
+
+The report's `checked_at_ms` must not be substituted for source timestamps. A process-local monotonic timestamp must not be compared across sessions. A candle is eligible only after closure is established from authoritative market data. Unknown fee is not zero. A network timeout after a possible mutation is an unresolved order requiring reconciliation, not permission to retry.
+
+### 16.4 Spot SELL and financial closure
+
+**Spot SELL remains BLOCKED for production authorization.** No common tested contract has been demonstrated that combines all of: authoritative free base quantity, base-asset fee effects, locked balance, outstanding SELL reservations, partial fills, applicable lot/notional filters, unresolved intents, stable idempotency, campaign identity, residual-position protection, and post-mutation reconciliation. The existing generic `purpose` field does not prove these invariants for all callers.
+
+No ordinary Spot SELL may be interpreted as opening a Futures SHORT. No position may be marked FLAT solely because a SELL request returned or a local status changed. A lost/ambiguous response requires authoritative order/fill/fee reconciliation before any retry or release of risk/protection.
+
+Canonical ledger Decimal integrity is **NOT VERIFIED**: the required repository-wide writer/reader/migration/recovery audit and tests proving no float/SQLite REAL dependency were not run.
+
+### 16.5 Required test and CI evidence
+
+| Required evidence | Current result |
+|---|---|
+| Targeted Preflight/freshness tests | NOT RUN in this pass |
+| Mutation-spy tests for every sink | NOT RUN / incomplete inventory |
+| All 22 recovery cases with financial assertions | NOT RUN / NOT VERIFIED |
+| Two independent SQLite connections | NOT RUN |
+| Independent OS-process recovery race | NOT RUN |
+| Decimal/fee/net-quantity assertions | NOT RUN / NOT VERIFIED |
+| Repository/history/fixture/report secret scan and redaction tests | NOT RUN / NOT COMPLETE |
+| Read-only Binance Spot Testnet | NOT RUN; no live request made |
+| Python full suite / Campaign CI | UNKNOWN; no verified run ID/logs for current branch head |
+| Android unit tests, lint, APK build | UNKNOWN; workflow definition only |
+| All jobs tied to one final SHA | NOT VERIFIED |
+
+No credentials were read or emitted, no Testnet order mutation was attempted, and Binance Mainnet was not used.
+
+### 16.6 Closure blockers and next action
+
+1. Obtain an exact current branch-head SHA and full workflow/run/job inventory, including push-triggered runs and the actual SHA checked out by each job.
+2. Identify an approved freshness policy source before enabling age-based admission; wire real source producers to a single trusted Preflight evidence snapshot with timestamps, generation/session binding and explicit failure reasons.
+3. Inventory every network mutation sink, including Python, background/recovery, legacy and Android paths; use runtime spies to prove blocked cases cause zero mutation calls.
+4. Implement a dedicated Spot reduction/close contract backed by exchange-authoritative balances, reservations, fills/fees, filters and protection state; do not conflate Spot SELL with Futures SHORT.
+5. Prove atomic/idempotent Decimal financial effects and execute the existing 22-case recovery matrix, two-connection SQLite tests, and independent-process tests.
+6. Complete the synthetic-secret audit over all accessible repository and CI channels.
+7. Run Python and Android workflows on one final SHA and preserve real run IDs, jobs, tested SHAs, exit results and logs.
+8. Only after local P0 closure, perform strictly read-only Spot Testnet checks if the required environment is available.
+
+**TASK 008.10 status: BLOCKED — NOT ACCEPTED.** This addendum records current evidence and non-evidence; it is not a code fix or a substitute for test execution. No acceptance criterion is promoted to PASS.
