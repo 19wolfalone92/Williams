@@ -85,9 +85,11 @@ def verify_execution_account_identity(
             account_type=account_type,
             testnet=bool(getattr(client, "testnet", False)),
         )
+    except AccountIdentityBlocked:
+        raise
+    except PermissionError as exc:
+        raise AccountIdentityBlocked(str(exc)) from exc
     except Exception as exc:
-        if isinstance(exc, AccountIdentityBlocked):
-            raise
         raise AccountIdentityBlocked(
             f"durable Binance account binding failed: {type(exc).__name__}"
         ) from exc
