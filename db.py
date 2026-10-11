@@ -1540,9 +1540,13 @@ class Database:
             raise ValueError(f"{field_name} must be finite")
         if number == 0:
             return "0"
-        # Decimal-equivalent exchange payloads must share one canonical form
-        # (e.g. "0.0100" and "0.01") without introducing binary float math.
-        return format(number.normalize(), "f")
+        # Avoid Decimal.normalize(): it obeys the active precision context and
+        # can round a valid high-precision exchange value. Strip only fractional
+        # trailing zeros from the fixed-point representation instead.
+        text = format(number, "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text or "0"
 
     def apply_financial_fill_effect(self, fill, projection_writer):
         """Atomically deduplicate a fill and apply same-database projections once.
