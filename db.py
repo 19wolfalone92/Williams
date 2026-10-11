@@ -387,27 +387,80 @@ class Database:
             self.conn.commit()
 
     def save_execution_intent(self, intent, status, reason=''):
-        self.conn.execute(
-            '''INSERT OR REPLACE INTO execution_intents(
-                intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
-            (
-                intent.intent_id,
-                intent.symbol,
-                intent.side,
-                intent.order_type,
-                intent.purpose,
-                json.dumps(dict(intent.required_context_versions), sort_keys=True),
-                intent.hypothesis_id,
-                float(intent.invalidation_level or 0.0),
-                status,
-                reason,
-                getattr(intent, 'client_order_id', ''),
-            ),
+        """Persist intent state without ever replacing immutable operation identity.
+
+        The intent ID identifies one immutable semantic request. Only lifecycle
+        fields (status/reason) may change for an existing identical intent.
+        A conflicting payload is a hard failure before any network mutation.
+        """
+        immutable = (
+            str(intent.symbol),
+            str(intent.side),
+            str(intent.order_type),
+            str(intent.purpose),
+            json.dumps(dict(intent.required_context_versions), sort_keys=True, separators=(',', ':')),
+            str(intent.hypothesis_id or ''),
+            float(intent.invalidation_level or 0.0),
+            str(getattr(intent, 'client_order_id', '') or ''),
         )
-        if not self._transaction_active:
-            self.conn.commit()
+        owns_transaction = not self._transaction_active
+        if owns_transaction:
+            self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = self.conn.execute(
+                '''SELECT symbol,side,order_type,purpose,
+                          required_context_versions_json,hypothesis_id,
+                          invalidation_level,client_order_id
+                   FROM execution_intents WHERE intent_id=?''',
+                (str(intent.intent_id),),
+            ).fetchone()
+            if existing is None:
+                self.conn.execute(
+                    '''INSERT INTO execution_intents(
+                        intent_id,symbol,side,order_type,purpose,
+                        required_context_versions_json,hypothesis_id,invalidation_level,
+                        status,reason,client_order_id
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                    (
+                        str(intent.intent_id), immutable[0], immutable[1], immutable[2],
+                        immutable[3], immutable[4], immutable[5], immutable[6],
+                        str(status), str(reason or ''), immutable[7],
+                    ),
+                )
+            else:
+                stored = (
+                    str(existing['symbol']),
+                    str(existing['side']),
+                    str(existing['order_type']),
+                    str(existing['purpose']),
+                    json.dumps(json.loads(existing['required_context_versions_json']),
+                               sort_keys=True, separators=(',', ':')),
+                    str(existing['hypothesis_id'] or ''),
+                    float(existing['invalidation_level'] or 0.0),
+                    str(existing['client_order_id'] or ''),
+                )
+                if stored != immutable:
+                    raise ValueError(
+                        "execution intent identity conflict: intent_id already exists "
+                        "with a different immutable payload"
+                    )
+                self.conn.execute(
+                    '''UPDATE execution_intents SET status=?, reason=?
+                       WHERE intent_id=?''',
+                    (str(status), str(reason or ''), str(intent.intent_id)),
+                )
+            if owns_transaction:
+                self.conn.commit()
+        except Exception:
+            if owns_transaction:
+                try:
+                    self.conn.rollback()
+                except sqlite3.Error:
+                    # Commit outcome can be ambiguous on storage failure. The
+                    # caller must stop before network mutation and reconcile
+                    # durable state on restart; never assume the row is absent.
+                    pass
+            raise
 
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
