@@ -847,3 +847,48 @@ def test_financial_effect_journal_scopes_trade_identity_by_venue_market_and_symb
         ("BTCUSDT", "42"), ("ETHUSDT", "42")
     ]
     db.conn.close()
+
+
+def test_fill_identity_conflict_durably_latches_recovery_after_rejected_transaction(tmp_path):
+    db = ready_db(tmp_path)
+    original = {
+        "id": "901", "orderId": "7001", "symbol": "BTCUSDT",
+        "qty": "0.10", "price": "100.00", "quoteQty": "10.00",
+        "commission": "0.001", "commissionAsset": "BTC",
+    }
+    db.record_exchange_fill("BTCUSDT", original)
+
+    conflicting = dict(original, qty="0.11", quoteQty="11.00")
+    with pytest.raises(RuntimeError, match="identity collision"):
+        db.record_exchange_fill("BTCUSDT", conflicting)
+
+    # The rejected payload must not replace canonical fill facts.
+    ledger = db.conn.execute(
+        """SELECT quantity_text, price_text, quote_quantity_text
+           FROM exchange_fill_ledger WHERE symbol='BTCUSDT' AND exchange_trade_id='901'"""
+    ).fetchone()
+    assert tuple(ledger) == ("0.10", "100.00", "10.00")
+
+    # The conflict diagnostic is committed after the failed fill transaction
+    # rolled back; it must survive a new Database connection/process.
+    effect = db.conn.execute(
+        """SELECT effect_status FROM financial_effect_journal
+           WHERE venue='BINANCE' AND market_type='SPOT'
+             AND symbol='BTCUSDT' AND exchange_trade_id='901'"""
+    ).fetchone()
+    assert effect["effect_status"] == "RECONCILE_REQUIRED"
+    assert db.state_get("financial_recovery_state") == "RECONCILE_REQUIRED"
+    assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+    assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+
+    db_path = tmp_path / "recovery-regression.sqlite3"
+    db.conn.close()
+    reopened = Database(str(db_path))
+    assert reopened.state_get("financial_recovery_state") == "RECONCILE_REQUIRED"
+    assert reopened.state_get("position_state") == "RECONCILE_REQUIRED"
+    reopened_effect = reopened.conn.execute(
+        """SELECT effect_status FROM financial_effect_journal
+           WHERE venue='BINANCE' AND market_type='SPOT'
+             AND symbol='BTCUSDT' AND exchange_trade_id='901'"""
+    ).fetchone()
+    assert reopened_effect["effect_status"] == "RECONCILE_REQUIRED"
