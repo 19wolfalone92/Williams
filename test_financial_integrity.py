@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import sqlite3
 from decimal import Decimal
 
 import pytest
@@ -268,4 +269,54 @@ def test_entry_barrier_rejects_pending_financial_effect_even_if_status_is_manual
     gate = ExecutionBarrier(ContextCache(), db)
     buy = OrderIntent.new("BTCUSDT", "BUY", "MARKET", {}, purpose="CAMPAIGN_ENTRY")
     assert gate._validate(buy, object()) == "global_recovery_gate:pending_financial_effects"
+
+@pytest.mark.parametrize("schema_version", [6, 7, 8])
+def test_populated_supported_legacy_schema_migration_is_loss_preserving_and_blocked(
+    tmp_path, schema_version
+):
+    path = str(tmp_path / f"populated-v{schema_version}.sqlite3")
+    legacy = sqlite3.connect(path)
+    legacy.executescript(
+        """
+        CREATE TABLE bot_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE campaign_fills(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id TEXT NOT NULL,
+            order_id TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            quantity REAL NOT NULL,
+            price REAL NOT NULL,
+            quote_quantity REAL DEFAULT 0,
+            fee_quote REAL DEFAULT 0,
+            commission_base REAL DEFAULT 0,
+            commission_asset TEXT,
+            raw_json TEXT
+        );
+        """
+    )
+    legacy.execute(
+        "INSERT INTO bot_state(key,value) VALUES('schema_version',?)",
+        (str(schema_version),),
+    )
+    legacy.execute(
+        """INSERT INTO campaign_fills(
+            campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
+            fee_quote,commission_base,commission_asset,raw_json
+        ) VALUES('legacy','old-order','BTCUSDT','BUY',0.123456789123,123.456789,15.2415,
+                 0.0001,0,'USDT','{}')"""
+    )
+    legacy.commit()
+    legacy.close()
+
+    migrated = Database(path)
+    assert migrated.state_get("schema_version") == "9"
+    assert migrated.conn.execute("SELECT COUNT(*) FROM campaign_fills").fetchone()[0] == 1
+    assert migrated.state_get("recovery_status") == "RECOVERY_REQUIRED"
+    import json
+    diagnostic = json.loads(migrated.state_get("legacy_fill_decimal_migration"))
+    assert diagnostic["status"] == "BLOCKED"
+    assert diagnostic["unverified_rows"] == 1
+    assert migrated.conn.execute("SELECT COUNT(*) FROM exchange_fill_ledger").fetchone()[0] == 0
 
