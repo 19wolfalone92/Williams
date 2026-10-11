@@ -51,3 +51,13 @@ The earlier inspected job logs checked out PR merge ref `c24e28defc38e19baf20c77
 | Duplicate submission/fill handling | Same-client-ID barrier and atomic fill-deduplication tests included; no exactly-once claim |
 
 These are actual remote test results and source assertions inspected. No local execution is claimed. Exact-required-SHA execution remains an exit criterion.
+
+## Follow-up CI check (2026-10-11)
+
+Latest PR-triggered runs were inspected after the evidence package was committed:
+- Mutation registry run `38164010385`, job `114542670323`: `python -m py_compile mutation_registry_gate.py test_mutation_registry_gate.py` exit 0; `python -m pytest -q test_mutation_registry_gate.py` — 14 passed in 0.05s; `python mutation_registry_gate.py` exit 0 with `PASS WITH BOUNDED MODEL`.
+- Python backend run `38164010382`, job `114542670292`: 148 passed, 4 warnings in 4.75s.
+- Campaign CI run `38164010377`, job `114542704330`: `python -m pytest -q` — 208 passed, 4 warnings in 6.52s; included the campaign, barrier, atomic persistence, recovery, account identity and mutation containment tests.
+- Android build runs `38164010386` and job `114542704611` were still in progress at last check.
+
+These are actual remote log results. They are PR-triggered merge-checkout runs; the available logs do not establish that they executed on exact source SHA `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`. Local tests were not run. Exact-SHA execution remains outstanding.
