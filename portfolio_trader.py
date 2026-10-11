@@ -947,7 +947,21 @@ class MultiPositionTrader:
                 f"{symbol}: emergency SELL status {status or 'UNKNOWN'} is non-terminal; reconciliation required"
             )
 
-        execution = self._authoritative_execution(symbol, confirmed)
+        try:
+            execution = self._authoritative_execution(symbol, confirmed)
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            try:
+                self.db.transition_emergency_sell_intent(
+                    operation_id, "RECONCILE_REQUIRED",
+                    exchange_order_id=order_id, exchange_status=status,
+                    last_error=f"authoritative fills/fees unresolved: {type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"{symbol}: emergency SELL fills/fees remain UNKNOWN; reconciliation required"
+            ) from exc
         executed_qty = float(execution.executed_qty)
         exit_quote = float(execution.quote_qty)
         exit_fee_quote = float(execution.fee_quote_equivalent)
