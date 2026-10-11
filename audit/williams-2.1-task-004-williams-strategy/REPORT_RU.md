@@ -577,3 +577,104 @@ The new tests exercise genuine independent spawned OS processes against one temp
 - Futures: NOT VERIFIED.
 
 No Mainnet access or live trade was used. No merge was performed. TASK 004.8 remains IN PROGRESS — NOT APPROVED until the above P0 evidence exists on one final SHA.
+
+
+---
+
+# TASK 004.9 — Canonical Signal Identity / Durable Mutation Boundary (baseline checkpoint)
+
+**Checkpoint date:** 2026-10-11  
+**Baseline HEAD:** `5a217774cd00e21d83a1c7274c16eef5e468ebda`  
+**Base/main SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Branch:** `audit/williams-2.1-task-004-williams-strategy`  
+**PR:** [#49](https://github.com/19wolfalone92/Williams/pull/49), OPEN / Draft / not merged.  
+**Task status:** **BLOCKED — NOT ACCEPTED**. This section records re-verified baseline evidence; it does not claim implementation of the full TASK 004.9 contract.
+
+## A. Re-check of repository and CI
+
+The current PR head was re-read from GitHub and is still `5a217774cd00e21d83a1c7274c16eef5e468ebda`; PR base is still `04da5f9c09572e99ff310be3a1908179165e528c`. The PR is OPEN and Draft. No merge was performed; `main` was not changed by this audit.
+
+| Workflow | Run | SHA checked | Final conclusion | Evidence |
+|---|---:|---|---|---|
+| Python backend tests | [38119669631](https://github.com/19wolfalone92/Williams/actions/runs/38119669631) | `5a217774cd00e21d83a1c7274c16eef5e468ebda` | **CI-PROVEN: SUCCESS** | Final run and required `backend-test` job completed successfully |
+| Williams Campaign CI | [38119669643](https://github.com/19wolfalone92/Williams/actions/runs/38119669643) | `5a217774cd00e21d83a1c7274c16eef5e468ebda` | **CI-PROVEN: SUCCESS** | Both `Python tests` and `Android build and static checks` completed successfully |
+| Build Android APK | [38119669661](https://github.com/19wolfalone92/Williams/actions/runs/38119669661) | `5a217774cd00e21d83a1c7274c16eef5e468ebda` | **CI-PROVEN: SUCCESS** | `Build APKs` completed successfully |
+| Additional Campaign CI push run | [38119666885](https://github.com/19wolfalone92/Williams/actions/runs/38119666885) | `5a217774cd00e21d83a1c7274c16eef5e468ebda` | **CI-PROVEN: SUCCESS** | Push-triggered run also completed successfully |
+
+These are results for the stated baseline SHA only. They do not apply to any later commit. These workflows do **not** prove all TASK 004.9 acceptance criteria: in particular, they do not establish a shared versioned Python/Kotlin identity contract, universal sink gating, full fault injection, or exchange-observed recovery.
+
+## B. Source audit: signal identity
+
+### Python — CODE-CONFIRMED
+- `campaign_model.py::SignalSpec.new` constructs `signal_id` as `SYMBOL:timeframe:signal_type:signal_bar_time_ms`.
+- The ID does not include side, operation role, strategy-contract version, identity-schema version, market type, or a configuration identity.
+- `SignalSpec.to_dict()` serializes the full dataclass via `asdict`; that payload is a separate representation and is not itself a documented cross-platform canonical serialization.
+- `db.py::Database.claim_signal_once` uses a persistent unique key and compares canonical payloads, but the claim API accepts a caller-provided ID and payload; it does not establish that either platform computed them from the same versioned contract.
+
+### Android — CODE-CONFIRMED
+- `StandaloneRuntime.kt::campaignSignalId` constructs an ID from uppercased symbol, lowercased frame, signal type and bar timestamp.
+- `TradingAuditStore.kt::claimSignalOnce` persists a `signal_id` and caller-provided canonical payload; it is currently used for campaign entry/add-on paths.
+- `BuildConfig.VERSION_NAME` is application/build metadata and is not a governed strategy version. It must not be substituted for a strategy contract version.
+- There is no demonstrated shared canonical fixture consumed by both the Python tests and Android tests that proves byte-identical canonical payloads and IDs.
+
+### Contract decision remains BLOCKED
+Do **not** silently pick a strategy version or config fingerprint. The repository evidence reviewed here does not establish a separately governed strategy-version source or a complete rule for which configuration changes alter decision identity. Until these are explicitly defined, the system cannot claim a complete canonical identity contract. Any new identity implementation must preserve old persisted claims and must not turn an app upgrade into a new executable opportunity.
+
+## C. Android mutation-sink inventory — source-confirmed call sites, gate coverage NOT VERIFIED
+
+A fresh scan of `app/src/main/java/com/williamsbot/StandaloneRuntime.kt` found these mutation families. This is a source inventory, not proof that every indirect caller is enumerated or protected.
+
+| Source location / method family | Mutation | Current evidence | TASK 004.9 status |
+|---|---|---|---|
+| `submitCampaignEntry` path around line 2824 | Conditional campaign BUY | Caller calls `claimCampaignSignalOnce` before `signedPost` | **CODE-CONFIRMED caller claim only; sink permit NOT VERIFIED** |
+| Add-on path around line 3860 | Conditional add-on BUY | Caller calls `claimCampaignSignalOnce` before `signedPost` | **CODE-CONFIRMED caller claim only; sink permit NOT VERIFIED** |
+| `createCampaignStop` around line 2876 | Stop creation | Calls `signedPost` inside `withCampaignMutation` | **BLOCKED: no demonstrated durable operation permit enforced at common sink** |
+| `signedCancelReplace` around lines 2918, 3330 | Cancel-replace / protection replacement | Common helper delegates to `signedPost("/api/v3/order/cancelReplace", ...)` | **BLOCKED: ambiguous outcome recovery and common durable permit not proven** |
+| Exit path around line 2995 | Campaign market SELL | Calls `signedPost` inside campaign mutation wrapper | **BLOCKED: caller wrapper is not proof of durable intent at sink** |
+| Pending-entry cancellation around lines 1345, 3151, 3237 | Cancel pending order | Calls `signedDelete("/api/v3/order", ...)` | **BLOCKED: per-operation durable cancellation intent and UNKNOWN recovery not proven** |
+| Emergency campaign SELL around line 3517 | Emergency market SELL | Calls `signedPost` after protection failure | **BLOCKED: stable durable emergency operation ID not proven** |
+| OCO cancellation around lines 4329, 4336, 6501, 6507 | Cancel OCO list | Calls `signedDelete("/api/v3/orderList", ...)` | **BLOCKED: common durable permit and cancel-result reconciliation not proven** |
+| Emergency SELL around line 4399 and fallback around line 6272 | Emergency/legacy SELL | Direct `signedPost` call sites | **BLOCKED: independent paths lack sink-level proof** |
+| Legacy/direct BUY around line 6055 | Market BUY | Direct `signedPost` call | **BLOCKED: durable operation intent and common gate not proven** |
+| OCO creation around line 6393 | OCO create | Direct `signedPost("/api/v3/orderList/oco", ...)` | **BLOCKED: stable OCO intent and UNKNOWN recovery not proven** |
+| Regular/manual SELL around line 6561 | Market SELL | Direct `signedPost` call | **BLOCKED: durable operation intent and common gate not proven** |
+| Shared helpers around lines 1554, 5340–5375, 6629 | Signed HTTP mutation boundary | `signedPost`, `signedDelete`, and cancel-replace delegate to `signedRequest` | **P0 BLOCKER: the shared boundary does not yet demonstrate mandatory verification of a durable, operation-bound permit for every mutation** |
+
+The `withCampaignMutation` wrapper is not accepted as a durable-intent gate unless the common mutation boundary independently verifies a persisted permit bound to operation identity, method, endpoint and canonical parameters. The current source scan did not find mutation-spy evidence proving that direct/legacy callers cannot bypass such a permit.
+
+## D. Durable intent, UNKNOWN POST, exits and financial effects
+
+| Requirement | Evidence at baseline | Status |
+|---|---|---|
+| Durable intent before every BUY/SELL/OCO/cancel/cancel-replace mutation | Existing campaign signal claim covers only some entry/add-on call paths; no universal operation-intent gate proven | **BLOCKED** |
+| Stable operation identity distinct from signal identity | Several paths generate client IDs using runtime time values; complete recovery-stable operation identity not established | **BLOCKED** |
+| UNKNOWN POST recovery from authoritative exchange state | Source review does not prove every mutation category reconciles orders, trades/fills, residual balances and protection before retry | **BLOCKED** |
+| Cancel-replace/OCO replacement recovery | Non-atomic multi-request windows remain; complete crash-state matrix not proven | **BLOCKED** |
+| Partial fills, commissions and exactly-once financial effects | Not proven by signal-claim tests; signal idempotency is a different identity layer from fill/effect idempotency | **BLOCKED** |
+| Common runtime mutation-spy covering all sinks | No evidence of complete sink-by-sink mutation-spy matrix | **NOT VERIFIED** |
+| Binance Mainnet / live mutations / Spot Testnet mutation | Not performed | **NOT VERIFIED / PROHIBITED by task constraints** |
+| Physical Android behavior and real exchange-observed recovery | Not performed in this source/CI checkpoint | **NOT VERIFIED** |
+
+## E. SQLite claim tests — limited evidence only
+
+At this baseline, `test_signal_claim_processes.py` contains process-based claim tests, including eight spawned processes competing for one signal, a conflicting payload case, and a real SQLite write-lock contention case. These are valuable regressions but do not establish the full TASK 004.9 fault matrix. Commit-failure and post-commit read-back-failure injection, process termination at every transaction boundary, schema-migration races, and Android SQLite fault injection are not proven by the cited CI summary alone. A test being present is not itself a pass; only the completed workflow result above proves that the workflow's configured tests passed.
+
+## F. Causal replay and shared fixtures
+
+The existing Campaign CI has Python and Android test stages, but no evidence in this checkpoint proves that a single shared identity fixture file is consumed by both runtimes for all required version, normalization, time-equivalence, missing-field, unknown-version, and legacy-claim cases. Full cross-platform identity golden proof and the requested causal replay matrix remain **NOT VERIFIED**.
+
+## G. P0 acceptance blockers
+
+1. Define an explicit, independently governed strategy version source and a documented rule for configuration identity; do not use app version as strategy version.
+2. Implement one versioned canonical signal identity contract and migration/compatibility behavior for persisted legacy claims.
+3. Add common golden fixtures consumed by both Python and Android tests, and demonstrate identical canonical payload and ID.
+4. Put a durable operation-intent permit at the actual shared mutation boundary and prove no direct/legacy client bypass.
+5. Give each BUY, SELL, emergency SELL, OCO create/cancel/replace, pending cancellation and cancel-replace a stable durable operation ID and pre-mutation intent.
+6. Add runtime mutation-spy coverage for every enumerated sink and negative cases (missing/failed/conflicting intent, UNKNOWN prior result, recovery latch).
+7. Add honest SQLite commit/read-back fault injection and cross-process crash-recovery tests; keep unsupported failure simulations marked NOT VERIFIED.
+8. Prove endpoint-specific UNKNOWN POST recovery for orders, OCO and cancel-replace without blind retry.
+9. Prove partial-fill, commission and exactly-once financial-effect recovery separately from signal claims.
+10. Complete causal replay and confirm all required CI workflows on the eventual final SHA.
+11. Keep PR #49 Draft and do not merge. No Mainnet or Spot Testnet mutation is authorized.
+
+**Acceptance remains: BLOCKED — NOT ACCEPTED.** The baseline workflows passed on `5a217774cd00e21d83a1c7274c16eef5e468ebda`, but the mandatory safety architecture and cross-platform proof criteria above remain unresolved.
