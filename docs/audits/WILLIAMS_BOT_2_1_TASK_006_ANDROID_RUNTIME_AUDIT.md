@@ -181,3 +181,60 @@ These changes are included in the final validation candidate; results from SHA `
 ### Validation policy
 
 All CI results must be re-fetched for one final branch SHA after code changes. No Mainnet calls, live orders, or PR merge are permitted. Keep PR #46 open as Draft and keep new-entry admission blocked until the remaining proof obligations are closed.
+
+
+---
+
+## TASK 006.5 — Global Recovery Gate, Financial Reconciliation & CI Closure
+**Audit snapshot:** 2026-10-11  
+**Acceptance:** BLOCKED — NOT ACCEPTED  
+**Source branch HEAD checked:** `35f299c86d9faf757ecaabc558757598b8d80f91`  
+**PR:** #46, open Draft, base `main` at `04da5f9c09572e99ff310be3a1908179165e528c`.
+
+### Verified repository and CI facts
+
+- The PR head is still `35f299c86d9faf757ecaabc558757598b8d80f91`; PR #46 is open, Draft, not merged. No branch or PR was created by this audit.
+- TASK 006.4 edits are present: strict `execution_accumulator.py`, SQLite `BEGIN IMMEDIATE`, `campaign_fills` exchange/account/symbol/trade ID uniqueness, conflict latching, entry-only barrier check, and offline fill-history fixtures.
+- Exact-head workflow runs associated with this candidate:
+  - Python backend tests run **38091128215**: **FAILURE**; step `Run safe offline tests` failed. The job summary is **204 passed, 5 failed, 4 warnings**.
+  - Williams Campaign CI run **38091128205**: **FAILURE**; Python job **215 passed, 5 failed, 4 warnings**; Android build/static-check job **SUCCESS**.
+  - Build Android APK run **38091128238**: **SUCCESS**.
+- Workflow links: [Python backend tests](https://github.com/19wolfalone92/Williams/actions/runs/38091128215), [Williams Campaign CI](https://github.com/19wolfalone92/Williams/actions/runs/38091128205), [Build Android APK](https://github.com/19wolfalone92/Williams/actions/runs/38091128238). These are the runs fetched for source head `35f299c86d9faf757ecaabc558757598b8d80f91`; job logs show GitHub checked out the PR merge ref, so the final acceptance check must re-confirm the associated PR head SHA and all required workflow conclusions together.
+
+### Confirmed blockers from source and test evidence
+
+1. **Global completion proof is incomplete.** `MultiPositionTrader.recover()` durably sets `recovery_status=RECOVERY_REQUIRED`, invokes the read-only intent resolver, and checks unresolved symbols/pending entries/intents. It does not establish a global proof covering all fills, fee valuation, balances, positions/campaigns, risk reservations and actual protective coverage before transitioning to `RECOVERY_COMPLETE`. This is safely fail-closed but not an operationally complete recovery contract.
+2. **Intent-level resolution remains narrower than financial recovery.** `ExecutionRecoveryResolver.resolve_pending()` writes order snapshots and resolves intent state in a transaction; its output concerns mutation-intent/exchange-order evidence. It does not itself prove fill-history completeness or downstream financial effects. An intent marked `RECONCILED` must not be used as global completion evidence.
+3. **Exactly-once ledger integration is not yet proven end-to-end.** `db.py::save_campaign_fill` uses SQLite rows and identity checks, but stores key financial columns as SQLite `REAL` and parses them through Python `float`. The existing unique index and transaction are useful safeguards, not proof of exact Decimal preservation or atomic application to fill ledger + position + campaign + risk reservation.
+4. **Fill-history authority is incomplete across existing paths.** `accumulate_order()` correctly rejects executed totals without authoritative per-trade fills, but production callers and historical recovery paths still require proof that every fill is persisted and financially applied exactly once. A terminal order status is insufficient.
+5. **CI has real failures, not just pending results.** Failures reported on this candidate include:
+   - `test_multi_position_execution.py::test_multi_position_execution_creates_independent_trades` — one symbol was marked `order_fill_totals_mismatch`, so only one of two positions was created.
+   - `test_multi_position_lifecycle.py::test_partial_manual_sell_keeps_residual_position_protected` — expected partial-sell lifecycle did not complete.
+   - `recovery_test.py::test_recovery_suite` — legacy synthetic executed order lacks authoritative fill history and is rejected.
+   - two `test_integration_bindings.py` accumulator tests fail because their synthetic fill rows omit required `tradeId`.
+   These must be corrected by making fixtures faithfully model authoritative exchange responses, or by fixing a production defect if the data is already authoritative. Do not weaken fail-closed assertions.
+6. **Balance/position/protection reconciliation is not globally closed.** The current recovery return path is based on unresolved symbols, pending entries and intents. It does not provide a single durable proof object demonstrating reconciled account balances, fill-derived inventory, campaign PnL, risk reservation, and actual OCO/stop coverage including partially filled legs.
+7. **Android global-gate parity is not proven.** Android source contains a native execution gate/runtime, but this audit has not demonstrated that all Android entry paths consume a durable, equivalent global recovery completion contract across process death. Physical process-death remains NOT VERIFIED.
+8. **Cross-process recovery and controlled Testnet remain unverified.** `BEGIN IMMEDIATE` improves write serialization; it is not itself a test of two independent recovery processes, crash points, fill effect atomicity, protection races, or restart closure. Spot Testnet was not exercised.
+
+### Entry/exit path inventory — evidence status
+
+| Production path | Current observed guard/path | Remaining proof gap |
+|---|---|---|
+| `MultiPositionTrader.execute()` → `execute_campaign()` or legacy selection path | Campaign path submits through `CampaignExecutionService._submit()` → `ExecutionBarrier.execute()`; legacy orders use `_submit_order()` → barrier. | Need path-by-path test showing blocked global recovery prevents every entry, including lower-level/direct invocation. |
+| `CampaignExecutionService.arm_initial_entry()` | Requires the canonical barrier; entry order mutation is submitted through `_submit()`. | Gate relies on persisted `recovery_status`; no completed global proof producer exists yet. |
+| `Trader.market_buy` / OCO and other mutation paths | Prior static inventory identifies barrier-wrapped submission helpers and durable intent resolver. | Static inventory alone does not prove no unlisted direct caller or all crash interleavings. |
+| `ExecutionRecoveryResolver.resolve_pending()` | Read-only exact-identity order/list reconciliation; no blind retry. | Resolves individual intents only; not a global financial-recovery proof. |
+| Android `StandaloneRuntime` / native execution gate | Runtime readiness checks and durable-state mechanisms exist. | Need explicit Android entry-call inventory, process-death test, and parity with global financial gate. |
+| Emergency/manual SELL, cancellation, protection repair | Designed to route through barrier with entry-only global check; UNKNOWN mutation outcomes remain unresolved. | Need tests proving safe reduction/protection remain possible without bypassing order-state, idempotency and barrier checks. |
+
+### Required next corrections
+
+1. Implement one durable global recovery contract and only allow entry admission after all required order, fill, fee, balance, position/campaign, risk and protection checks have completed. Keep any unknown stage blocked.
+2. Replace float-based financial persistence/calculation on the fill-ledger path with validated decimal-string/Decimal handling and a migration strategy that preserves legacy rows and blocks unverified identities.
+3. Make fill-ledger insertion and financial-effect application atomic/idempotent across the campaign/position/risk state; conflicting identity must durably latch recovery before surfacing the error.
+4. Fix the five observed test failures using authoritative synthetic trade history and order-specific fixture lookups; retain rejection of missing trade IDs and missing fills.
+5. Add the requested independent-process recovery/crash tests and verify every Python and Android entry path against the same durable gate.
+6. Re-run every required workflow after the fixes and record the same final source SHA, run IDs and conclusions. Physical Android process-death and Binance Spot Testnet remain **NOT VERIFIED** until actually performed.
+
+**Decision for TASK 006.5:** BLOCKED — NOT ACCEPTED. No Mainnet use, real trades, PR merge, or `main` changes.
