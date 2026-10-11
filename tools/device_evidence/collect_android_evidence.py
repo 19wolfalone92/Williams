@@ -26,9 +26,9 @@ EXPECTED_APK_SHA256 = "4823d5a414afa3343be65e4bdb15c030ad86d29ffb487bcda3378fe27
 # Conservative redaction: redact values, not just labels. If a secret may remain,
 # the report is marked BLOCKED and raw logs are not copied into the public package.
 SECRET_PATTERNS = [
-    re.compile(r"(?i)(api[_-]?key|api[_-]?secret|access[_-]?token|refresh[_-]?token|authorization|signature|password|passwd)\s*([=:])\s*([^\s,;]+)"),
-    re.compile(r"(?i)(Bearer\s+)[A-Za-z0-9._~+/-]+=*"),
-    re.compile(r"(?i)(X-MBX-APIKEY\s*:\s*)[^\s]+"),
+    re.compile(r"(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*"),
+    re.compile(r"(?i)X-MBX-APIKEY\\s*:\\s*[^\\s]+"),
+    re.compile(r"(?i)(api[_-]?key|api[_-]?secret|access[_-]?token|refresh[_-]?token|authorization|signature|password|passwd)\\s*([=:])\\s*([^\\s,;]+)"),
 ]
 POTENTIAL_SECRET = re.compile(r"(?i)(api[_-]?key|api[_-]?secret|access[_-]?token|refresh[_-]?token|authorization|signature|password|passwd|bearer\s|x-mbx-apikey)")
 
