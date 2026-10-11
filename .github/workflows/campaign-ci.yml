@@ -75,6 +75,7 @@ jobs:
             test_task0091_execution_barrier_fail_closed.py \
             test_task0092_atomic_execution_persistence.py \
             test_task0093_exchange_backed_recovery.py \
+            test_task0094_account_identity.py \
             2>&1 | tee campaign-pytest-output.txt
 
   android:
