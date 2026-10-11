@@ -1,16 +1,18 @@
 import os
 import json, sqlite3
+import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
         Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self._db_lock = threading.RLock()
         self.conn = sqlite3.connect(path, check_same_thread=False, timeout=20)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA busy_timeout=20000')
@@ -21,21 +23,22 @@ class Database:
 
     @contextmanager
     def transaction(self):
-        """Atomic transaction for multi-step DB operations."""
-        if self._transaction_active:
-            yield self
-            return
-
-        self._transaction_active = True
-        try:
-            self.conn.execute('BEGIN')
-            yield self
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
-        finally:
-            self._transaction_active = False
+        """Serialize a critical SQLite transaction and acquire the write lock up front."""
+        with self._db_lock:
+            if self._transaction_active:
+                # Nested calls participate in the outer transaction.
+                yield self
+                return
+            self._transaction_active = True
+            try:
+                self.conn.execute('BEGIN IMMEDIATE')
+                yield self
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            finally:
+                self._transaction_active = False
 
     def init(self):
         self.conn.executescript('''
@@ -142,6 +145,27 @@ class Database:
             event TEXT NOT NULL,
             payload_json TEXT
         );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_intents_client_order_id
+            ON execution_intents(client_order_id)
+            WHERE client_order_id IS NOT NULL AND client_order_id <> '';
+        CREATE TABLE IF NOT EXISTS execution_fills(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            exchange TEXT NOT NULL,
+            account_scope TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            trade_id TEXT NOT NULL,
+            order_id TEXT,
+            intent_id TEXT,
+            quantity TEXT NOT NULL,
+            price TEXT NOT NULL,
+            commission TEXT,
+            commission_asset TEXT,
+            raw_json TEXT NOT NULL,
+            applied_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(exchange, account_scope, symbol, trade_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_execution_fills_order
+            ON execution_fills(exchange, account_scope, symbol, order_id);
         CREATE TABLE IF NOT EXISTS campaigns(
             campaign_id TEXT PRIMARY KEY,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -324,27 +348,23 @@ class Database:
             self.conn.commit()
 
     def save_execution_intent(self, intent, status, reason=''):
-        self.conn.execute(
-            '''INSERT OR REPLACE INTO execution_intents(
-                intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+        """Update status only; intent identity is inserted once by claim_execution_intent."""
+        cur = self.conn.execute(
+            '''UPDATE execution_intents
+               SET status=?, reason=?
+               WHERE intent_id=? AND symbol=? AND side=? AND order_type=?
+                 AND purpose=? AND client_order_id IS ?''',
             (
-                intent.intent_id,
-                intent.symbol,
-                intent.side,
-                intent.order_type,
-                intent.purpose,
-                json.dumps(dict(intent.required_context_versions), sort_keys=True),
-                intent.hypothesis_id,
-                float(intent.invalidation_level or 0.0),
-                status,
-                reason,
-                getattr(intent, 'client_order_id', ''),
+                str(status), str(reason or ""), str(intent.intent_id),
+                str(intent.symbol), str(intent.side), str(intent.order_type),
+                str(intent.purpose),
+                (str(getattr(intent, "client_order_id", "")) or None),
             ),
         )
-        if not self._transaction_active:
-            self.conn.commit()
+        if cur.rowcount != 1:
+            raise RuntimeError(
+                f"execution intent identity missing or changed: {intent.intent_id}"
+            )
 
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
@@ -353,6 +373,197 @@ class Database:
         )
         if not self._transaction_active:
             self.conn.commit()
+
+    @staticmethod
+    def _execution_lock_key(scope):
+        return "execution_lock:" + str(scope or "spot").strip().lower()
+
+    def claim_execution_intent(self, intent, scope="spot"):
+        """Atomically claim one immutable intent; conflicts never authorize submit."""
+        client_order_id = str(getattr(intent, "client_order_id", "") or "") or None
+        with self.transaction():
+            key = self._execution_lock_key(scope)
+            lock = self.conn.execute(
+                "SELECT value FROM bot_state WHERE key=?", (key,)
+            ).fetchone()
+            if lock:
+                return {"claimed": False, "reason": "EXECUTION_LOCKED", "existing": json.loads(lock["value"])}
+            unresolved = self.conn.execute(
+                """SELECT intent_id,status FROM execution_intents
+                   WHERE status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                   LIMIT 1"""
+            ).fetchone()
+            if unresolved:
+                return {"claimed": False, "reason": "UNRESOLVED_INTENT", "existing": dict(unresolved)}
+            try:
+                self.conn.execute(
+                    """INSERT INTO execution_intents(
+                        intent_id,symbol,side,order_type,purpose,
+                        required_context_versions_json,hypothesis_id,invalidation_level,
+                        status,reason,client_order_id
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        str(intent.intent_id), str(intent.symbol), str(intent.side),
+                        str(intent.order_type), str(intent.purpose),
+                        json.dumps(dict(intent.required_context_versions), sort_keys=True),
+                        str(getattr(intent, "hypothesis_id", "") or ""),
+                        float(getattr(intent, "invalidation_level", 0.0) or 0.0),
+                        "PENDING", "", client_order_id,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                by_id = self.conn.execute(
+                    "SELECT intent_id,status,client_order_id FROM execution_intents WHERE intent_id=?",
+                    (str(intent.intent_id),),
+                ).fetchone()
+                if by_id is None and client_order_id:
+                    by_id = self.conn.execute(
+                        "SELECT intent_id,status,client_order_id FROM execution_intents WHERE client_order_id=?",
+                        (client_order_id,),
+                    ).fetchone()
+                return {
+                    "claimed": False,
+                    "reason": "IDENTITY_CONFLICT",
+                    "existing": dict(by_id) if by_id else None,
+                }
+            self.conn.execute(
+                "INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)",
+                (str(intent.intent_id), "INTENT_CLAIMED", json.dumps({"scope": scope})),
+            )
+            return {"claimed": True, "reason": "", "existing": None}
+
+    def execution_readiness(self, scope="spot"):
+        """Fail closed if a durable lock or any unresolved submission exists."""
+        try:
+            key = self._execution_lock_key(scope)
+            lock = self.conn.execute(
+                "SELECT value FROM bot_state WHERE key=?", (key,)
+            ).fetchone()
+            if lock:
+                return {"ready": False, "reason": "EXECUTION_LOCKED", "detail": lock["value"]}
+            unresolved = self.conn.execute(
+                """SELECT intent_id,status FROM execution_intents
+                   WHERE status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                   LIMIT 1"""
+            ).fetchone()
+            if unresolved:
+                return {"ready": False, "reason": "UNRESOLVED_INTENT", "detail": dict(unresolved)}
+            return {"ready": True, "reason": "", "detail": None}
+        except Exception as exc:
+            return {"ready": False, "reason": "READINESS_CHECK_FAILED", "detail": repr(exc)}
+
+    def list_unresolved_execution_intents(self):
+        rows = self.conn.execute(
+            """SELECT * FROM execution_intents
+               WHERE status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+               ORDER BY created_at,intent_id"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_execution_unknown(self, intent, reason, scope="spot"):
+        """Persist UNKNOWN and its scope lock atomically; failure leaves SUBMITTING unresolved."""
+        key = self._execution_lock_key(scope)
+        payload = json.dumps({
+            "scope": str(scope), "intent_id": str(intent.intent_id),
+            "reason": str(reason), "state": "UNKNOWN",
+        }, sort_keys=True)
+        with self.transaction():
+            cur = self.conn.execute(
+                "UPDATE execution_intents SET status='UNKNOWN',reason=? WHERE intent_id=?",
+                (str(reason), str(intent.intent_id)),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError(f"cannot lock unknown intent: {intent.intent_id}")
+            self.conn.execute(
+                """INSERT INTO bot_state(key,value) VALUES(?,?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (key, payload),
+            )
+            self.conn.execute(
+                "INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)",
+                (str(intent.intent_id), "UNKNOWN_LOCKED", payload),
+            )
+
+    def save_execution_result(self, intent, response):
+        """Atomically persist the exchange response and its known-result status."""
+        payload = json.dumps(response, default=str, sort_keys=True)
+        with self.transaction():
+            cur = self.conn.execute(
+                "INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)",
+                (str(intent.intent_id), "BINANCE_RESULT", payload),
+            )
+            updated = self.conn.execute(
+                "UPDATE execution_intents SET status='SUBMITTED',reason='' WHERE intent_id=? AND status='SUBMITTING'",
+                (str(intent.intent_id),),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError(f"intent not SUBMITTING while recording exchange result: {intent.intent_id}")
+            return int(cur.lastrowid)
+
+    def resolve_execution_intent(self, intent_id, status, exchange_state, evidence_id, scope="spot"):
+        """Clear a scope lock only after an explicit authoritative reconciliation record."""
+        allowed = {"OPEN", "PARTIALLY_FILLED", "FILLED", "CANCELED", "EXPIRED", "REJECTED", "NOT_SENT_CONFIRMED"}
+        status = str(status).upper()
+        if status not in allowed or not str(exchange_state or "").strip() or not str(evidence_id or "").strip():
+            raise ValueError("authoritative exchange_state and evidence_id are required")
+        key = self._execution_lock_key(scope)
+        with self.transaction():
+            cur = self.conn.execute(
+                "UPDATE execution_intents SET status=?,reason=? WHERE intent_id=? AND status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')",
+                (status, "reconciled:" + str(evidence_id), str(intent_id)),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError(f"intent is not unresolved: {intent_id}")
+            self.conn.execute(
+                "INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)",
+                (str(intent_id), "RECONCILED", json.dumps({
+                    "status": status, "exchange_state": exchange_state,
+                    "evidence_id": str(evidence_id), "scope": str(scope),
+                }, sort_keys=True)),
+            )
+            remaining = self.conn.execute(
+                """SELECT 1 FROM execution_intents
+                   WHERE status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                   LIMIT 1"""
+            ).fetchone()
+            if not remaining:
+                self.conn.execute("DELETE FROM bot_state WHERE key=?", (key,))
+            return not bool(remaining)
+
+    def apply_execution_fill(self, fill, apply_effects):
+        """Deduplicate and apply DB-only financial effects in one SQLite transaction.
+
+        The callback must use this Database connection only; external side effects
+        are forbidden because SQLite cannot roll them back.
+        """
+        data = dict(fill)
+        required = ("exchange", "account_scope", "symbol", "trade_id", "quantity", "price")
+        if any(data.get(k) in (None, "") for k in required):
+            raise ValueError("fill requires exchange, account_scope, symbol, trade_id, quantity and price")
+        identity = (
+            str(data["exchange"]).upper(), str(data["account_scope"]),
+            str(data["symbol"]).upper(), str(data["trade_id"]),
+        )
+        with self.transaction():
+            try:
+                self.conn.execute(
+                    """INSERT INTO execution_fills(
+                        exchange,account_scope,symbol,trade_id,order_id,intent_id,
+                        quantity,price,commission,commission_asset,raw_json
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        identity[0], identity[1], identity[2], identity[3],
+                        str(data.get("order_id") or ""), str(data.get("intent_id") or ""),
+                        str(data["quantity"]), str(data["price"]),
+                        str(data.get("commission") or ""),
+                        str(data.get("commission_asset") or ""),
+                        json.dumps(data, default=str, sort_keys=True),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                return False
+            apply_effects(self, data)
+            return True
 
     def log_event(self, level, event, message, raw=None):
         self.conn.execute(
@@ -1071,3 +1282,20 @@ class Database:
             (str(symbol).upper(),)
         ).fetchone()
         return r['exit_time'] if r else None
+
+
+# Serialize every public Database method on a shared connection. The reentrant
+# lock permits nested database calls while preventing another thread from
+# interleaving writes into an active transaction on the same sqlite3 connection.
+def _serialized_database_method(method):
+    def wrapped(self, *args, **kwargs):
+        with self._db_lock:
+            return method(self, *args, **kwargs)
+    wrapped.__name__ = method.__name__
+    wrapped.__doc__ = method.__doc__
+    wrapped.__qualname__ = method.__qualname__
+    return wrapped
+
+for _database_method_name, _database_method in list(Database.__dict__.items()):
+    if callable(_database_method) and not _database_method_name.startswith("_") and _database_method_name != "transaction":
+        setattr(Database, _database_method_name, _serialized_database_method(_database_method))
