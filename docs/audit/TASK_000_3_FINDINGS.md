@@ -57,3 +57,12 @@ The public wrapper definitions for `cancel_open_orders`, `create_oco_sell`, `cre
 Current PR metadata reports head `6a6e47c798e4a2cc6e2d2a5245911a22788170fe`, and newer PR-triggered registry, backend, campaign and APK workflows are green. They do not close the findings: the audit target is still immutable source `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`, and the inspected backend/campaign job logs explicitly checked out merge ref `c24e28defc38e19baf20c777a069e80b87c7aecf`, not the source commit by itself.
 
 **Status remains BLOCKED. Do not merge PR #51.**
+
+
+## Follow-up verification — current PR head 2518a69 (2026-10-11)
+
+PR #51 remains open and Draft, with head `2518a69f96a41f74a18445017c666855b420b4f1`; no merge occurred. The latest observed Mutation Registry, backend and Campaign Python CI jobs passed on merge checkout `e5bf8466760c4583e272d339036f59a4dfae03ef` (merge of PR head `2518a69f96a41f74a18445017c666855b420b4f1` into base `04da5f9c09572e99ff310be3a1908179165e528c`). The logs therefore do not prove isolated execution of immutable required source `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`.
+
+No new source evidence closes P1-1: conservative ambiguity classification and reconciliation-required state are present, but durable recovery of both old and replacement order legs remains unproven. No new source evidence closes P1-2: full interprocedural caller reachability for OCO, cancel-all, aliases, callbacks and dynamic dispatch remains incomplete. The Android jobs were still in progress at the last observation.
+
+**Disposition unchanged: BLOCKED — PYTHON PRODUCTION PATH INVENTORY INCOMPLETE. Do not merge PR #51.**
