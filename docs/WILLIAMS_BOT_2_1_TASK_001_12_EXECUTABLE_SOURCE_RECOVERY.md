@@ -1,14 +1,14 @@
 # WILLIAMS BOT 2.1 — TASK 001.12
 ## Executable Source Recovery, Reproducible Baseline & Financial Implementation Gate
 
-**Result: PASS — EXECUTABLE BASELINE VERIFIED**  
+**Result: BLOCKED — SOURCE OR BASELINE UNVERIFIED (financial implementation gate remains blocked)**  
 **Audit date:** 2026-10-11 (UTC)  
 **SOURCE_SHA:** `d064c814c2fdaa52470cfb7d18a0270cb9b4b910`  
 **VALIDATION_SHA:** `d064c814c2fdaa52470cfb7d18a0270cb9b4b910`  
 **main SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
 **PR:** #47, `audit/williams-2.1-task-001-architecture` → `main`
 
-This PASS means a reproducible remote executable baseline was verified at the exact source SHA. It does **not** mean the unified FinancialEffectApplier exists, the current financial model is atomic, or the bot is approved for live trading.
+The exact-SHA remote executable baseline checks below are verified. However, TASK 001.12 acceptance also requires a sufficiently closed production financial call graph and an unambiguous writer boundary. The current evidence still identifies legacy writers and does not prove their complete reachability/closure or establish that no bypass writer can apply a duplicate financial effect. Under the task's mandatory BLOCKED rule for unresolved production writers, the overall task is **BLOCKED**, despite green baseline CI. This does **not** mean the baseline CI failed.
 
 ## 1. Source checkpoint and repository integrity
 
@@ -98,7 +98,7 @@ These remain P0 requirements for TASK 001.13. The baseline is executable; the fi
 
 ## 4. Financial contract and minimum vertical slice for TASK 001.13
 
-The next implementation task must use the actual `CampaignExecutionService` Spot fill path above as the first vertical slice, after rechecking the branch SHA and caller graph. Do not create an isolated class without wiring it into that call path.
+Once the remaining gate is passed, the implementation task should use the actual `CampaignExecutionService` Spot fill path above as the first vertical slice, after rechecking the branch SHA and proving caller/writer closure. Do not create an isolated class without wiring it into that call path.
 
 Required contract decisions:
 
@@ -138,6 +138,6 @@ Android runtime and Futures must be audited separately. Python CI does not estab
 - Binance trading mutations: **NONE**.
 - Report is committed to the existing PR branch only.
 
-**Decision: PASS — EXECUTABLE BASELINE VERIFIED.** The original source and validation SHA match, remote execution is evidenced by exact-SHA completed runs and retrievable logs, and the key current Spot financial write paths are mapped sufficiently to define the minimum implementation slice. This decision opens the gate to prepare TASK 001.13; it does not approve current financial correctness or production trading.
+**Decision: BLOCKED — SOURCE OR BASELINE UNVERIFIED (financial call-graph closure incomplete).** The source SHA and executable CI baseline are verified. But the task's acceptance rule explicitly requires the production financial writer state to be unambiguous. The mapped paths are a partial, source-supported call graph; complete reachability and closure of all competing writers, plus a verified schema/transaction-boundary inventory across every reachable writer, remain unproven. Do not treat this report as authorization to implement the applier against an assumed single path. The next allowed action is to obtain a complete checkout or equivalent exact-SHA source-tree inventory and finish caller/writer closure; do not alter production financial algorithms until that gate is passed.
 
-**Report commit identity:** recorded in Git commit metadata for this documentation-only change; the final report commit SHA is provided in the task result. It is distinct from the tested baseline SHA and is not represented as a validation run.
+**Current branch/PR HEAD when this report revision was written:** `8c58d29852e5cc3bf90e0b6cba3ea04e9f1a73fe`. The final report commit SHA is provided in the task result. This documentation-only commit is distinct from the tested baseline SHA and is not represented as a validation run.
