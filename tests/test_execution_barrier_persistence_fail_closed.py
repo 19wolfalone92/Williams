@@ -53,22 +53,24 @@ def test_pending_persistence_failure_blocks_submit():
     assert db.saved_statuses == ["PENDING"]
 
 
-def test_missing_db_preserves_optional_persistence_mode():
+def test_missing_db_blocks_submission_without_claiming_durable_persistence():
     submit = Mock(return_value={"status": "NEW", "executedQty": "0"})
     result = ExecutionBarrier(ContextCache(), None).execute(campaign_intent(), submit)
 
-    assert result.accepted is True
-    submit.assert_called_once()
+    assert result.accepted is False
+    assert "durable execution-intent persistence is unavailable" in result.reason
+    submit.assert_not_called()
 
 
-def test_db_without_save_method_preserves_legacy_mode():
+def test_db_without_save_method_blocks_submission_without_claiming_durable_persistence():
     submit = Mock(return_value={"status": "NEW", "executedQty": "0"})
     result = ExecutionBarrier(ContextCache(), DBWithoutIntentPersistence()).execute(
         campaign_intent(), submit
     )
 
-    assert result.accepted is True
-    submit.assert_called_once()
+    assert result.accepted is False
+    assert "save_execution_intent is missing" in result.reason
+    submit.assert_not_called()
 
 
 def test_post_submit_persistence_failure_requires_reconciliation_without_retry():
@@ -113,6 +115,22 @@ def test_exchange_submission_exception_is_not_retried():
         pass
     else:
         raise AssertionError("exchange timeout must be propagated")
+
+    submit.assert_called_once()
+    assert db.saved_statuses == ["PENDING", "AMBIGUOUS"]
+
+
+def test_timeout_with_ambiguous_persistence_failure_reports_mandatory_reconciliation():
+    db = FailingIntentDB({"AMBIGUOUS"})
+    submit = Mock(side_effect=TimeoutError("exchange response timed out"))
+
+    try:
+        ExecutionBarrier(ContextCache(), db).execute(campaign_intent(), submit)
+    except RuntimeError as exc:
+        assert "durable reconciliation state could not be saved" in str(exc)
+        assert "mandatory before any retry" in str(exc)
+    else:
+        raise AssertionError("failed ambiguity persistence must be explicit")
 
     submit.assert_called_once()
     assert db.saved_statuses == ["PENDING", "AMBIGUOUS"]
