@@ -283,8 +283,15 @@ internal fun parseApiQuery(target: String): Map<String, String> {
 
 internal fun apiErrorStatus(error: Throwable): Int = when (error) {
     is ApiHttpException -> error.statusCode
-    is org.json.JSONException, is IllegalArgumentException -> 400
+    is org.json.JSONException -> 400
     else -> 500
+}
+
+internal fun apiTradesLimit(params: Map<String, String>): Int {
+    val raw = params["limit"] ?: return 50
+    val parsed = raw.toIntOrNull()
+        ?: throw ApiHttpException(422, "limit must be an integer")
+    return parsed.coerceIn(1, 200)
 }
 
 internal fun apiReasonPhrase(status: Int): String = when (status) {
@@ -499,11 +506,7 @@ private class StandaloneServer(private val context: Context) {
                 x.portfolio().toString()
 
             method == "GET" && path == "/api/v1/trades" -> {
-                val rawLimit = params["limit"]
-                val limit = rawLimit?.toIntOrNull()
-                    ?: if (rawLimit == null) 50 else
-                        throw ApiHttpException(422, "limit must be an integer")
-                x.trades(limit.coerceIn(1, 200)).toString()
+                x.trades(apiTradesLimit(params)).toString()
             }
 
             method == "GET" && path == "/api/v1/trade-stats" ->
