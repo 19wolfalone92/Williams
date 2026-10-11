@@ -100,7 +100,7 @@ class ApiRouteContractTests(unittest.TestCase):
             match = re.search(
                 r"@app\.(?:get|post|delete)\s*\(\s*['\"]"
                 + re.escape(path)
-                + r"['\"](.*?)\)\s*def\s+",
+                + r"['\"]((?:(?!@app\.).*?))\)\s*def\s+",
                 PYTHON_SOURCE,
                 re.IGNORECASE | re.DOTALL,
             )
