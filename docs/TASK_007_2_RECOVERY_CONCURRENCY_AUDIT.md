@@ -207,3 +207,173 @@ Target status remains **READY FOR READ-ONLY TESTNET VERIFICATION**, not live-tra
 - A broader static sweep was run against the 85 production Python/Kotlin source files in the branch tree. It found the low-level signed order-changing adapter calls in `binance_client.py`, mutation call sites in `campaign_execution.py`, `portfolio_trader.py`, and `trader.py`, and Android signed mutation call sites in `StandaloneRuntime.kt` routed through `durableMutation`. The `requests.post` in `telegram_bot.py` is a Telegram notification request, not a Binance order mutation. This static sweep strengthens the inventory but **does not prove complete indirect reachability**; the report deliberately retains P0-A as open until the call graph and runtime reachability are exhaustively verified.
 - Testnet gate remains **NOT MET**: the independent-process coverage currently proves atomic same-symbol intent claiming, but does not cover every required concurrent recovery/cancel-vs-fill scenario; the complete order/protection/OCO/exit fault matrix, full financial reconciliation, and Android process-kill ledger tests remain unverified.
 - Decision remains **IN PROGRESS — NOT APPROVED**. Read-only Binance Testnet was not attempted because the required local gates are still open. No Binance Mainnet request or order-changing exchange request was made.
+
+
+---
+
+## 14. TASK 007.2 — Financial writer / call-graph refresh (2026-10-11)
+
+### 14.1 Exact source revision and provenance boundary
+
+This refresh audits source content at **implementation SHA `b5d285f978a491f8eff8c09dce815a0f6d1e6afb`**, not the later documentation commit that contains this addendum.
+
+| Item | Evidence / result |
+|---|---|
+| Repository | `https://github.com/19wolfalone92/Williams` |
+| Target ref | `refs/heads/audit/williams-2.1-task-007-recovery` |
+| Target HEAD observed before this documentation update | `b5d285f978a491f8eff8c09dce815a0f6d1e6afb` |
+| HEAD parent | `c436742dd05ece72ec91f3d6196f582d965e0c11` |
+| Commit message | `docs(audit): record TASK 007.15 financial writer blockers` |
+| Main comparison baseline | `04da5f9c09572e99ff310be3a1908179165e528c` |
+| GitHub compare result | 137 commits ahead, 0 behind, status `ahead` |
+| Commit signature | GitHub API reports `verified=false`, reason `unsigned` |
+| Local checkout / working-tree status | NOT AVAILABLE to this audit execution |
+| `git bundle verify` / `git fsck --full` | NOT RUN: no local Git bundle/checkout was available |
+| SHA-256 of source bundle | NOT AVAILABLE: no bundle was obtained |
+| Trusted origin proof | NOT ESTABLISHED by GitHub API metadata alone |
+
+The GitHub branch ref endpoint returned `b5d285f978a491f8eff8c09dce815a0f6d1e6afb` before this documentation update. The commit metadata and recursive tree were retrieved from GitHub API. This establishes which remote commit was inspected, but it does **not** establish signed provenance or local repository integrity. The report does not claim a clean working tree, bundle verification, or `git fsck` success.
+
+### 14.2 Source tree and exact file evidence
+
+The recursive Git tree for `b5d285f978a491f8eff8c09dce815a0f6d1e6afb` was not truncated and contained 264 entries. These relevant file blob SHAs were retrieved at that revision:
+
+| File | Blob SHA | Audit use |
+|---|---|---|
+| `db.py` | `c33987f48310c71b939fdfe6264588447f5b160a` | SQLite schema, transaction helper, fill/trade/campaign writers |
+| `execution_accumulator.py` | `c71233be0f0f11921106fb57eb456efae27127e4` | Decimal aggregation of quantity, quote and commissions |
+| `portfolio_trader.py` | `c38f25deeb8871ec2357e57f0e7bf6caa8d3d119` | Multi-position execution, trade/position recovery and reconciliation |
+| `campaign_execution.py` | `3c6a8f5d88d928f36c4c732c18b67f10cf59b024` | Campaign order execution, recovered orders and exit lifecycle |
+| `campaign_engine.py` | `52fe7fcab22e56589b69210f644e5347ec63bb94` | In-memory campaign transitions and fill projections |
+| `campaign_model.py` | `f30ec324c3f33167d73b6c21f36151832bb285c8` | Campaign domain state and transition validation |
+| `trader.py` | `7499efb7b28ecb717eab75753b661c9962456578` | Legacy single-symbol execution and recovery |
+| `execution_barrier.py` | `0a9502586b234bb159fca746194d9f21a741af41` | Durable order-intent mutation barrier |
+| `trade_journal.py` | `0e7f13ae3c57b8304428735d9af202dfe6f7bcd1` | Entry/exit journal writers |
+| `docs/WILLIAMS_BOT_2_1_TASK_007_15_CANONICAL_FILL_FINANCIAL_WRITER_AUDIT.md` | `64c63d1dec66cf0f9b6049007a7e80818e1419c4` | Existing canonical-fill/multiple-writer audit |
+
+GitHub file views used for source inspection:
+- `https://github.com/19wolfalone92/Williams/blob/b5d285f978a491f8eff8c09dce815a0f6d1e6afb/db.py`
+- `https://github.com/19wolfalone92/Williams/blob/b5d285f978a491f8eff8c09dce815a0f6d1e6afb/execution_accumulator.py`
+- `https://github.com/19wolfalone92/Williams/blob/b5d285f978a491f8eff8c09dce815a0f6d1e6afb/portfolio_trader.py`
+- `https://github.com/19wolfalone92/Williams/blob/b5d285f978a491f8eff8c09dce815a0f6d1e6afb/campaign_execution.py`
+- `https://github.com/19wolfalone92/Williams/blob/b5d285f978a491f8eff8c09dce815a0f6d1e6afb/campaign_engine.py`
+- `https://github.com/19wolfalone92/Williams/blob/b5d285f978a491f8eff8c09dce815a0f6d1e6afb/trader.py`
+- `https://github.com/19wolfalone92/Williams/blob/b5d285f978a491f8eff8c09dce815a0f6d1e6afb/campaign_model.py`
+- `https://github.com/19wolfalone92/Williams/blob/b5d285f978a491f8eff8c09dce815a0f6d1e6afb/execution_barrier.py`
+
+### 14.3 Financial writer inventory — confirmed direct sinks
+
+Line numbers below refer to the source blobs listed above, not to this report.
+
+| Writer ID | File/function and source lines | Direct effect | Boundary / idempotency evidence | Status |
+|---|---|---|---|---|
+| FW-DB-01 | `db.py::state_set` L418–425 | `bot_state` UPSERT; may persist recovery and position gates | Commits when called outside `transaction()`; callers can persist individual keys separately | CONFIRMED WRITER; global multi-key atomicity NOT VERIFIED |
+| FW-DB-02 | `db.py::state_delete` L443–448 | Deletes state key | Own commit outside transaction | CONFIRMED WRITER |
+| FW-DB-03 | `db.py::save_execution_intent` L490–515 | Inserts durable execution intent | Direct commit; unique identities checked elsewhere; not the fill-effect transaction | CONFIRMED WRITER |
+| FW-DB-04 | `db.py::save_order` L583–636 | Updates/inserts legacy order rows | Order/client identity lookup; commit per method outside transaction | CONFIRMED WRITER |
+| FW-DB-05 | `db.py::save_trade` L681–690 | Inserts legacy trade/position/PnL/fee row | Independent commit outside transaction | CONFIRMED FINANCIAL WRITER |
+| FW-DB-06 | `db.py::update_trade_oco` L693–722 | Updates protective order identifiers/state | Independent commit outside transaction | CONFIRMED STATE WRITER |
+| FW-DB-07 | `db.py::update_trade_quantity` L724–735 | Updates position quantity | Independent commit outside transaction | CONFIRMED FINANCIAL WRITER |
+| FW-DB-08 | `db.py::close_trade` L737–767 | Updates exit price/time, PnL, PnL%, fees and close state | Independent commit outside transaction | CONFIRMED FINANCIAL WRITER |
+| FW-DB-09 | `db.py::save_trade_journal` L769–832 | Writes trade journal/diagnostics | Independent commit outside transaction | CONFIRMED JOURNAL WRITER |
+| FW-DB-10 | `db.py::save_campaign` L1027–1069 | Campaign quantity, average entry, realized/unrealized PnL, risk/capital reserves and lifecycle | UPSERT; float conversion; own commit outside transaction | CONFIRMED FINANCIAL PROJECTION WRITER |
+| FW-DB-11 | `db.py::save_campaign_signal` L1081–1105 and `set_campaign_signal_state` L1107–1110 | Signal lifecycle rows | `INSERT OR REPLACE` / UPDATE and independent commit | CONFIRMED STATE WRITER |
+| FW-DB-12 | `db.py::save_campaign_order` L1119–1179 | Campaign order identity/status/price/quantity/risk/capital reservation | Lookup then UPDATE/INSERT; commits independently unless wrapped | CONFIRMED STATE/RESERVATION WRITER |
+| FW-DB-13 | `db.py::save_campaign_fill` L1182–1233 | Fill row, trade identity, quantity, price, quote and commission fields | Requires symbol and ID; lookup compares existing financial tuple via float; insert is protected by unique partial index on `(symbol, exchange_trade_id)`; own commit outside wrapper | JOURNAL DEDUPE CONFIRMED; FULL EFFECT EXACTLY-ONCE NOT PROVEN |
+| FW-DB-14 | `db.py::log_campaign_event` L1236–1244 | Campaign event journal | Independent commit outside transaction | CONFIRMED JOURNAL WRITER |
+| FW-CE-01 | `campaign_engine.py::record_add_on_fill` L320 onward | In-memory campaign position/VWAP/addition/risk fields and persistence calls | Campaign and event writes are not proven to share one outer transaction | MULTIPLE EFFECT PATH; ATOMICITY NOT VERIFIED |
+| FW-CE-02 | `campaign_engine.py::record_initial_fill` L362 onward | Initial position quantity/VWAP and campaign state | Calls through campaign persistence; no shared canonical effect claim proven | MULTIPLE EFFECT PATH; ATOMICITY NOT VERIFIED |
+| FW-CEX-01 | `campaign_execution.py::persist_recovered_campaign_order` L471 onward; legacy trade UPDATE at L663–677 | Recovered order/trade projection | Direct SQL UPDATE followed by explicit commit at L677 | CONFIRMED RECOVERY WRITER; shared transaction with campaign/fill effects NOT PROVEN |
+| FW-PT-01 | `portfolio_trader.py::_repair_stale_reconcile_states` L239 onward and direct SQL near L264 | Repairs reconciliation state | Direct SQL path; complete transaction/call context requires focused review | CONFIRMED STATE WRITER; ATOMICITY NOT VERIFIED |
+| FW-PT-02 | `portfolio_trader.py::_reconcile_trade` L1209 onward | Reconciles local trade/position from exchange evidence | Calls and persistence effects require path-by-path test; not one demonstrated canonical fill applier | CONFIRMED RECONCILIATION PATH; exactly-once financial effect NOT PROVEN |
+| FW-PT-03 | `portfolio_trader.py::recover` L1685 onward | Recovery orchestration over pending entries and positions | Multiple downstream reads/writes; full recovery atomicity not established | CONFIRMED ORCHESTRATOR; effect ownership UNRESOLVED |
+| FW-TR-01 | `trader.py::recover_state` L914 onward; `_recover_closed_trade` L1067 onward | Legacy recovery and trade projection | Multiple direct DB writes and state transitions; no single shared fill application claim established | CONFIRMED RECOVERY PATH; exactly-once NOT PROVEN |
+| FW-TJ-01 | `trade_journal.py::record_entry` L127 onward and `record_exit` L137 onward | Delegates journal updates into DB trade-journal writer | Separate journal persistence can lag/lead trade close unless an outer transaction is demonstrated | CONFIRMED JOURNAL PATH; cross-entity atomicity NOT VERIFIED |
+
+**Inventory scope warning:** this is a verified direct-writer inventory for the named financial/recovery modules and the directly located SQL sinks. It is not yet a proof that every indirect caller across all 264 tree entries has been enumerated. Other SQL-bearing files, server/API paths, and Android persistence paths must be included before claiming the repository-wide inventory is complete. A search with no match in one query is not evidence of absence.
+
+### 14.4 SQLite transaction semantics and crash windows
+
+Observed in `db.py`:
+- `Database.__init__`, L13–18: `sqlite3.connect(..., check_same_thread=False, timeout=20)`, `busy_timeout=20000`, WAL journal mode and `synchronous=FULL`.
+- `Database.transaction()`, L23–39: issues `BEGIN`, commits on normal exit, rolls back on `Exception`.
+- Nested use is tracked by an instance-level `_transaction_active` boolean (L24–28), with no savepoint; this is not a cross-connection or cross-process coordinator.
+- `init()` commits schema/recovery-state setup at L280; this is separate from runtime fill application.
+- Numerous persistence methods conditionally commit when `_transaction_active` is false. A caller that does not wrap every related effect can persist each step separately.
+- The fill row, campaign projection, legacy trade row, bot-state/recovery keys and campaign event journal have separate writer methods. The inspected `campaign_execution.py` exit/recovery paths contain explicit commits after direct SQL writes; no end-to-end transaction covering fill + position + fee + PnL + campaign + journal was demonstrated.
+
+| Operation | Writes / crash window | Recovery consequence |
+|---|---|---|
+| Persist fill | `campaign_fills` insert can commit independently | Restart can find a fill journal row while position/campaign effects remain unapplied |
+| Apply legacy trade/position | `save_trade`, `update_trade_quantity`, `close_trade` commit separately | Replay may duplicate or diverge from the fill journal unless a shared effect identity guards it |
+| Apply campaign projection | `save_campaign` UPSERT can commit separately | Campaign quantity/VWAP/PnL may disagree with fill/trade rows after crash |
+| Apply commission/PnL | Commission fields can be written in fill or legacy trade; close/PnL update is separate | Fee and PnL may be missing, duplicated, or sourced from a different snapshot |
+| Campaign event / trade journal | Separate insert/update methods and commits | Journal can lag/lead the authoritative position projection |
+| Recovery gate | Separate state-key writes unless explicitly wrapped | Partially updated state keys can be observed; new entries must remain blocked until authoritative reconciliation completes |
+
+SQLite transaction atomicity applies only to writes made through the same connection and within the same actual transaction. It does not make a SQLite transaction atomic with Binance, nor does it make independent database connections share an in-memory `_transaction_active` flag.
+
+### 14.5 Fill identity and exactly-once boundary
+
+Observed in `db.py`:
+- `campaign_fills.exchange_trade_id` is indexed uniquely with `symbol` by `uq_campaign_fills_exchange_trade` (partial index; see `_migrate_recovery_schema`, L303–348).
+- `save_campaign_fill` derives ID from `exchange_trade_id`, `tradeId`, `trade_id`, or `id`, and rejects missing symbol/ID (L1182–1194).
+- Repeated ID payloads are compared using float-converted values and a tuple; conflicting values raise; exact repeat returns `False` without inserting another journal row (L1195–1218).
+- Identity scope is `(symbol, exchange_trade_id)`; exchange/account namespace and source-type semantics are not part of the uniqueness key.
+- This method protects the fill journal row only. It does not atomically claim and apply position, commission, PnL, campaign, reserve and ledger effects.
+- The existing TASK 007.15 audit at `docs/WILLIAMS_BOT_2_1_TASK_007_15_CANONICAL_FILL_FINANCIAL_WRITER_AUDIT.md` independently records **BLOCKED — MULTIPLE FINANCIAL WRITERS** and states that no complete shared production-enforced `CanonicalFillV1` contract was established.
+
+No `CanonicalFillV1` implementation is asserted by this refresh. The required contract proposal remains separate work: validated canonical identity, exact decimal payload, explicit fee status (including UNKNOWN versus confirmed zero), payload-conflict handling, one durable effect claim, atomic financial projections, and replay/reconciliation after an ambiguous commit.
+
+### 14.6 Monetary type flow
+
+- `execution_accumulator.py::accumulate_fills` converts exchange strings to `Decimal` using `Decimal(str(...))`, sums quantity and quote, and values quote/base-asset commissions in Decimal. Third-asset commissions are recorded as unvalued assets rather than silently assigned a quote value.
+- `accumulate_order` falls back to cumulative order fields and returns Decimal values.
+- `db.py::save_campaign_fill` converts quantity, price, quote and fee fields to Python `float` before SQLite insertion (L1219–1233).
+- `db.py` schema defines financial columns including campaign fill values, campaign position/VWAP/PnL/reserves, and legacy trade quantity/prices/PnL/fees as SQLite `REAL` (schema definitions near L90–200).
+- `db.py::save_campaign` converts campaign monetary projections to `float` before persistence (L1027–1069).
+- Read paths commonly return SQLite REAL values and callers convert to `float` for calculations; exact Decimal continuity across persist/recovery is therefore NOT established.
+- Invalid/non-finite Decimal handling is not uniformly enforced by the accumulator: malformed numeric strings may raise, but a repository-wide NaN/Infinity rejection contract was not demonstrated. The accumulator skips non-positive quantity/price; it does not prove all other paths enforce identical validation.
+- SQLite REAL history cannot be made exact retroactively by a code-only conversion. No schema migration or historical financial-data conversion was performed in this audit.
+
+### 14.7 Required characterization / fault-injection matrix
+
+The following tests are **PLANNED, NOT RUN by this refresh**. Each test must use isolated temporary SQLite databases and production persistence/application methods, record the exact implementation SHA, command and return code, and assert every financial projection—not only fill-row count.
+
+| ID | Scenario / injected boundary | Required assertions |
+|---|---|---|
+| T01 | Replay same `exchange_trade_id` and identical payload | One fill; position, fee, realized PnL, campaign, reserve and ledger effects applied once |
+| T02 | Same ID with conflicting quantity/price/commission/campaign | Fail closed; no second effect; recovery-required latch; conflict evidence retained |
+| T03 | Two concurrent handlers apply same fill | Exactly one durable effect owner; no double position/fee/PnL update |
+| T04 | Two independent SQLite connections apply same fill | Same as T03 across connections; no reliance on Python instance flags |
+| T05 | Crash after fill commit before position update | Restart detects incomplete effect and completes or blocks safely; no duplicate on replay |
+| T06 | Crash after position mutation before fee write | Position and fee/PnL consistency restored or entries remain blocked |
+| T07 | Crash between fee and PnL writes | No partially accepted final financial state |
+| T08 | Commit succeeds but caller observes exception/timeout | Read-after-restart resolves durable outcome; replay does not double apply |
+| T09 | Re-run recovery after partially applied operation | Idempotent reconciliation to one canonical state |
+| T10 | Same fill arrives through REST and WebSocket | Shared identity and single effect claim across both sources |
+| T11 | Local position differs from exchange inventory/trade history | Latch reconciliation-required; block entries until mismatch resolved |
+| T12 | SQLite write/commit raises (including BUSY/locked) | No exchange mutation without durable intent; no false success; no partial financial effect accepted |
+
+**Test completion status:** NOT RUN in this documentation refresh. Existing intent-claim concurrency tests are not substitutes for same-fill financial-effect concurrency tests.
+
+### 14.8 Recovery/reconciliation evidence and single-writer decision
+
+The code contains recovery paths in `portfolio_trader.py::recover` (L1685 onward), `_reconcile_trade` (L1209 onward), and `trader.py::recover_state` (L914 onward), plus campaign order reconciliation in `campaign_execution.py`. The reviewed sources show multiple local persistence routes and exchange-history lookups, but this refresh did not prove a single mandatory path for REST, WebSocket and restart-recovered fills.
+
+**Required architecture decision:** one production-enforced financial effect applier must own the transition from exchange-confirmed canonical fill to all local financial projections. Other modules may parse, fetch, propose, or report, but must not independently apply the same fill's position/fee/PnL/campaign effects. The chosen transaction must atomically persist the fill identity, financial projection updates, and an application-complete marker in SQLite; ambiguous exchange results remain a separate reconciliation concern.
+
+Do not permit new entries while the canonical financial state, fee valuation, order result, or required reconciliation remains UNKNOWN / incomplete.
+
+### 14.9 Updated decision
+
+- Exact remote implementation SHA identified: **YES** (`b5d285f978a491f8eff8c09dce815a0f6d1e6afb`).
+- Trusted origin and local Git integrity gates (`git bundle verify`, `git fsck --full`, clean working tree): **NOT VERIFIED / NOT RUN**.
+- Direct writers in the named core modules: **PARTIALLY INVENTORIED**; repository-wide indirect call graph: **NOT COMPLETE**.
+- Atomic fill + position + fee + PnL + campaign + ledger boundary: **NOT PROVEN**.
+- Exactly-once financial effect across replay, REST/WebSocket and recovery: **NOT PROVEN**.
+- Monetary Decimal continuity through SQLite and recovery: **NOT PROVEN**.
+- Characterization/fault-injection matrix in §14.7: **PLANNED — NOT RUN**.
+- Production code/schema/financial records and Mainnet/real orders: **NOT CHANGED / NOT USED** by this documentation-only refresh.
+
+**TASK 007.2 status: BLOCKED — TRUSTED BASELINE PROVENANCE AND COMPLETE WRITER/CALL-GRAPH EVIDENCE INCOMPLETE.** The exact remote source commit was identified, but the acceptance criteria are not met. No PASS is claimed.
