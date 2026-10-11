@@ -16,7 +16,7 @@ Relevant baseline files were inspected: db.py, execution_barrier.py, execution_r
 ## Changes made in TASK 009.4
 
 - db.py: schema version 10; durable execution_account_bindings table keyed by exchange, execution scope, and configured account scope; pins credential fingerprint, optional Binance account UID/type, and Testnet/live domain. A changed key, domain, or observed UID fails closed.
-- execution_account_identity.py: performs an authenticated client.account() request before campaign recovery or mutation; fingerprints only the API key (SHA-256), never the API secret; supports optional WILLIAMS_EXPECTED_API_KEY_SHA256; does not emit full fingerprint or credentials to logs.
+- execution_account_identity.py: performs an authenticated client.account() request before campaign recovery or mutation; fingerprints only the API key (SHA-256), never the API secret; requires WILLIAMS_EXPECTED_API_KEY_SHA256 to be explicitly configured and matched before identity pinning; does not emit full fingerprint or credentials to logs.
 - campaign_execution.py: checks account identity before recovery and before the canonical barrier submission path.
 - portfolio_trader.py: production BinanceSpotClient legacy emergency SELL and OCO sinks are blocked before mutation; production manual SELL routes through CampaignExecutionService.exit_market; production legacy direct-entry fallback is blocked. Fake exchange adapters remain available to offline regression tests only.
 - trader.py: production BinanceSpotClient legacy single-symbol BUY and OCO entry points are blocked before mutation because they do not share the campaign fill/position ledger. Offline fake clients retain the legacy fixture path for regression tests.
@@ -32,9 +32,9 @@ Before campaign recovery/mutation:
 3. The API key is fingerprinted with SHA-256; the secret is neither stored nor logged.
 4. The first authenticated use pins the fingerprint, execution scope, configured account scope, Testnet/live domain, and optional UID/type to SQLite.
 5. Subsequent mismatch blocks execution. A key rotation requires a deliberate offline rebind with trading stopped; unchanged account_scope alone cannot authorize it.
-6. WILLIAMS_EXPECTED_API_KEY_SHA256, when configured, must match the active key fingerprint.
+6. WILLIAMS_EXPECTED_API_KEY_SHA256 is mandatory and must match the active key fingerprint before a binding can be pinned. Compute/approve this fingerprint locally; never send the key or secret to remote logs.
 
-**Important limit:** the fingerprint is credential identity, not a universal immutable Binance account ID. Spot /api/v3/account responses may not expose a stable UID. If UID is present, it is cross-checked. Trust-on-first-use does not independently establish the operator's intended account. This means account identity is improved and key/domain changes are detected, but P0 account-ownership acceptance is not fully proven until explicit operator-approved fingerprint enrollment and the supported Binance identity fields are settled.
+**Important limit:** the fingerprint is credential identity, not a universal immutable Binance account ID. Spot /api/v3/account responses may not expose a stable UID. If UID is present, it is cross-checked. The required expected fingerprint is an explicit operator approval of the credential. The first successful signed account request pins it to SQLite. This still does not independently prove a universal immutable Binance account UID when Binance does not return one. P0 account-ownership acceptance remains blocked until the account identity fields/rotation contract is verified for the supported Binance account types.
 
 Secrets remain local; the new table stores only a credential fingerprint and non-secret account metadata.
 
