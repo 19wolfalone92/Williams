@@ -85,10 +85,11 @@ def test_unknown_lock_survives_restart_and_requires_evidence_to_clear(tmp_path):
     gate = restarted.execution_readiness()
     assert gate["ready"] is False
     assert gate["reason"] == "EXECUTION_LOCKED"
-    assert restarted.resolve_execution_intent(
-        item.intent_id, "OPEN", {"status": "NEW"}, "exchange-order-9001"
-    ) is True
-    assert restarted.execution_readiness()["ready"] is True
+    with pytest.raises(PermissionError):
+        restarted.resolve_execution_intent(
+            item.intent_id, {"status": "OPEN", "evidence_id": "untrusted-caller"}
+        )
+    assert restarted.execution_readiness()["ready"] is False
 
 
 def test_unknown_lock_write_failure_leaves_unresolved_intent_blocking(tmp_path):
@@ -98,7 +99,7 @@ def test_unknown_lock_write_failure_leaves_unresolved_intent_blocking(tmp_path):
     db.conn.execute("""
         CREATE TRIGGER fail_unknown_lock
         BEFORE INSERT ON bot_state
-        WHEN NEW.key='execution_lock:spot'
+        WHEN NEW.key='execution_lock:spot:spot-default'
         BEGIN SELECT RAISE(ABORT, 'injected lock write failure'); END
     """)
     db.conn.commit()
