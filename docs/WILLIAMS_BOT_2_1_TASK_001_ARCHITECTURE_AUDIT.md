@@ -936,3 +936,18 @@ This is a source inventory of confirmed high-impact paths, **not yet a complete 
 8. Run all required workflows on the final exact SHA and update this report with run IDs. Keep PR #47 Draft and all new entries blocked until every P0 criterion is proven.
 
 **Final decision: TASK 001.8 — BLOCKED — NOT ACCEPTED.** This report does not claim that the production Effect Applier, exactly-once accounting, Decimal Integrity, crash recovery, physical Android restart, Spot Testnet lifecycle, or Futures behavior has been implemented or verified. New trade entries must remain blocked while any required financial reconciliation is unresolved.
+
+
+## TASK 001.8 implementation delta — follow-up
+
+**Implementation commit:** `cf47f92aac616417051c9e4dc1f000c35588af7b`  
+**Regression-test commit / code head before this report update:** `eb41caea60c661e1cfe5fc5c233cc3b6629f701b`
+
+- **CODE-CONFIRMED:** `Database.record_exchange_fill()` now delegates to a transactional ingestion method and catches immutable fill identity/content conflicts after the inner transaction has rolled back. It attempts to commit a separate durable recovery latch: `financial_recovery_state=RECONCILE_REQUIRED`, global and symbol `position_state=RECONCILE_REQUIRED`, and the existing journal row's `effect_status=RECONCILE_REQUIRED`. If persisting the latch fails, it raises a distinct fatal error rather than treating the conflict as handled.
+- **CODE-CONFIRMED:** Added `test_fill_identity_conflict_durably_latches_recovery_after_rejected_transaction` to `test_task001_recovery_regressions.py`. It checks that conflicting quantity/quote values do not replace the original ledger facts and that the reconciliation latch survives closing and reopening the SQLite database.
+- **TEST-PROVEN:** Python backend tests passed on SHA `eb41caea60c661e1cfe5fc5c233cc3b6629f701b`, run [38119208650](https://github.com/19wolfalone92/Williams/actions/runs/38119208650).
+- **CI-PROVEN:** Williams Campaign CI passed on SHA `eb41caea60c661e1cfe5fc5c233cc3b6629f701b`, run [38119208649](https://github.com/19wolfalone92/Williams/actions/runs/38119208649).
+- **PENDING at report preparation:** Build Android APK run [38119208644](https://github.com/19wolfalone92/Williams/actions/runs/38119208644) on SHA `eb41caea60c661e1cfe5fc5c233cc3b6629f701b` was still running. These results do not apply to a later report-only commit.
+- **NOT VERIFIED:** The durable-latch regression currently proves a single-process reopen path only; it does not establish two-process races, the complete applier, or the entire crash matrix.
+
+This narrow fix addresses one durable-diagnostics defect only. It does not close P0-01 through P0-13, and TASK 001.8 remains **BLOCKED — NOT ACCEPTED**. The report-only commit below must receive its own exact-SHA CI runs.
