@@ -7,7 +7,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 8
+    SCHEMA_VERSION = 9
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -141,7 +141,9 @@ class Database:
             account_scope TEXT NOT NULL DEFAULT 'spot-default',
             execution_scope TEXT NOT NULL DEFAULT 'spot',
             campaign_id TEXT,
-            order_id TEXT
+            order_id TEXT,
+            target_order_id TEXT,
+            target_client_order_id TEXT
         );
         CREATE TABLE IF NOT EXISTS execution_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -308,6 +310,8 @@ class Database:
             "execution_scope": "TEXT NOT NULL DEFAULT 'spot'",
             "campaign_id": "TEXT",
             "order_id": "TEXT",
+            "target_order_id": "TEXT",
+            "target_client_order_id": "TEXT",
         }
         for name, sql_type in additions.items():
             if name not in columns:
@@ -494,8 +498,8 @@ class Database:
                         intent_id,symbol,side,order_type,purpose,
                         required_context_versions_json,hypothesis_id,invalidation_level,
                         status,reason,client_order_id,exchange,account_scope,
-                        execution_scope,campaign_id,order_id
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        execution_scope,campaign_id,order_id,target_order_id,target_client_order_id
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         str(intent.intent_id), str(intent.symbol).upper(), str(intent.side).upper(),
                         str(intent.order_type).upper(), str(intent.purpose),
@@ -504,6 +508,8 @@ class Database:
                         float(getattr(intent, "invalidation_level", 0.0) or 0.0),
                         "PENDING", "", client_order_id, exchange, account_scope,
                         scope, campaign_id, None,
+                        str(getattr(intent, "target_order_id", "") or "") or None,
+                        str(getattr(intent, "target_client_order_id", "") or "") or None,
                     ),
                 )
             except sqlite3.IntegrityError:
