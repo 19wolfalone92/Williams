@@ -7,12 +7,14 @@ on:
     paths:
       - "*.py"
       - "tests/**"
+      - "app/**"
       - "requirements.txt"
       - ".github/workflows/**"
   pull_request:
     paths:
       - "*.py"
       - "tests/**"
+      - "app/**"
       - "requirements.txt"
       - ".github/workflows/**"
   workflow_dispatch:
