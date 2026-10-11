@@ -256,3 +256,68 @@ After the audit above, the following narrow corrections were committed on the sa
 **Latest source head before the report refresh:** `18071fdee99c792a7c5752b85f284b8f070e1948`. The current source head must be re-read after this report commit. Workflow runs for the latest code commits were still queued or cancelled due to subsequent pushes at the time of this update; therefore the five earlier failures are known evidence, and no post-fix green result is claimed. The 006.5 acceptance status remains **BLOCKED — NOT ACCEPTED** until the exact final head's required workflows complete successfully and the global financial-recovery proof is implemented.
 
 No production gate was bypassed and no Mainnet/live trading was used.
+
+
+---
+
+## TASK 006.6 — Global Recovery Closure, Atomic Financial Ledger & Decimal Integrity
+**Status: BLOCKED — NOT ACCEPTED**  
+**Task baseline:** `77a7f1d4abb1c0bbd44aeb31a29557733cf41795`  
+**Source candidate before this report update:** `8789031d10ade43760d2ebef438db7ef6873182d`  
+**Base:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**PR #46:** Open, Draft, unmerged.
+
+### TASK 006.6 changes made on the existing branch
+
+1. **Canonical exact-decimal fill evidence.** Added `exchange_fill_ledger`, keyed by `(exchange, account_id, symbol, trade_id)`, with quantity, price, quote quantity and commission persisted as validated decimal strings. Canonical input rejects binary `float`, booleans, malformed/non-finite values, missing order identity, invalid side and unknown commission fields.
+2. **Legacy table demotion.** `campaign_fills` is now explicitly a compatibility/reporting projection. Its `REAL` columns are not the exact-value source of truth. The canonical ledger and projection are written within the same SQLite transaction; a failed projection insert rolls back the canonical insert.
+3. **Effect state remains pending by design.** A new canonical fill starts with `effect_state='PENDING'`. No production financial-effect applier has been proven to atomically update position, campaign/PnL, fees and risk reservations, so the code does not falsely mark it `APPLIED`. `Database.pending_exchange_fill_effects()` exposes pending rows, and `MultiPositionTrader.recover()` now refuses a clean recovery result while any such effect remains pending.
+4. **Fail-closed legacy migration.** Existing `campaign_fills` rows without matching canonical decimal evidence are preserved and recorded in `legacy_fill_decimal_migration`; the persistent global gate is set to `RECOVERY_REQUIRED`. The migration does not invent trade IDs or reconstruct exact values from SQLite `REAL`.
+5. **Android entry gate.** Added `GlobalRecoveryGateContract` and wired native execution readiness, campaign-entry preflight and the final campaign mutation boundary to it. The runtime persists `global_financial_recovery_complete=false` on state load and at recovery start. Because a full Android-side financial proof producer is not implemented, the runtime intentionally does not claim recovery success and new entries remain blocked. Existing safe recovery/reduction routes are not reclassified as entry permission.
+6. **Regression tests.** Added tests for high-precision decimal preservation, rejection of float inputs, atomic rollback when the compatibility projection fails, legacy-row migration blocking, pending financial effects and the Android gate contract.
+
+### Important limitation — exactly-once financial application is still not closed
+
+The canonical ledger prevents identity duplication and preserves source decimals, but it is **not** yet an exactly-once financial-effect engine. No complete transactional applier currently moves each fill through fee valuation → position → campaign/PnL → risk reservation → protection quantity and then marks the effect applied. This is deliberately represented as `PENDING`; it must not be bypassed or manually changed to `APPLIED`.
+
+The global recovery contract also still lacks one end-to-end authoritative proof for order/fill history completeness, quote/base/third-asset fee valuation, exchange balances versus locked funds and residual inventory, campaign PnL, risk reservations and actual OCO/protective coverage. Python's broader campaign/position models still contain legacy `REAL` / `float` fields; the new canonical fill ledger does not prove that all downstream financial decisions have been migrated to decimal strings.
+
+### Android proof status
+
+- Android code gate: **IMPLEMENTED, fail-closed** while global financial proof is absent.
+- JVM unit test for the isolated gate contract: **ADDED; CI result pending for this candidate**.
+- Mutation-spy proof across every Android network sink: **NOT VERIFIED**.
+- Physical Android process-death/restart: **NOT VERIFIED**.
+- Spot Testnet authenticated read-only gate: **NOT RUN in this task update**; the workflow requires an explicit dispatch and configured Testnet secrets.
+- Futures mode/position-mode accounting: **NOT VERIFIED** and must remain disabled for unproven scenarios.
+
+### CI evidence and exact-SHA discipline
+
+- The earlier baseline `77a7f1d4abb1c0bbd44aeb31a29557733cf41795` had successful Python backend, Campaign CI and APK workflows (runs `38115784703`, `38115784711`, `38115784741`). These are **baseline only**, not proof for TASK 006.6 changes.
+- On intermediate candidate `4a7af9e9eeb70891469cb15e63f488fd20ea4029`, Python backend run `38116775884` failed **3 tests / 215 passed** because existing tests expected a generic financial validation error while the new Decimal parser emitted precise field-specific errors. The tests were updated to assert those specific errors; this was not a production-gate relaxation.
+- At the time of this report addition, exact-head checks for candidate `8789031d10ade43760d2ebef438db7ef6873182d` were queued:
+  - [Python backend tests — run 38116861911](https://github.com/19wolfalone92/Williams/actions/runs/38116861911) — QUEUED
+  - [Build Android APK — run 38116861915](https://github.com/19wolfalone92/Williams/actions/runs/38116861915) — QUEUED
+  - [Williams Campaign CI — run 38116861971](https://github.com/19wolfalone92/Williams/actions/runs/38116861971) — PENDING
+- The report commit itself creates a new candidate SHA. Re-fetch the branch head and verify all mandatory workflow conclusions against that exact final SHA before making any acceptance decision.
+
+### TASK 006.6 acceptance matrix
+
+| Requirement | Status | Evidence / blocker |
+|---|---|---|
+| Current PR/base/branch verified | PASS | PR #46 remains open Draft, base unchanged |
+| Canonical decimal fill identity | IMPLEMENTED; CI PENDING | `exchange_fill_ledger` and decimal-string tests |
+| Unknown fee is not silently zero | PASS in accumulator contract | Existing strict accumulator; broader fee valuation still incomplete |
+| Atomic ledger + compatibility projection | TEST ADDED; CI PENDING | Trigger-injected rollback regression |
+| Exactly-once downstream financial effect | FAIL / NOT IMPLEMENTED | No atomic position/campaign/PnL/risk effect applier |
+| Global Python recovery proof | BLOCKED | Orders/fills/fees/balances/positions/risk/protection not closed end-to-end |
+| Populated v6/v7/v8 migration matrix | NOT VERIFIED | Only a focused legacy-row migration regression added; supported-version fixtures still required |
+| Two independent OS-process recovery matrix | NOT VERIFIED | Existing thread-level race test is not cross-process proof |
+| Fault injection at all required crash points | NOT VERIFIED | Only a projection-write rollback injection added in this update |
+| Android entry gate fails closed | IMPLEMENTED; CI PENDING | Native contract and unit test; no global proof producer |
+| Android mutation-spy / physical process-death | NOT VERIFIED | Requires broader test harness and real device |
+| Spot Testnet read-only gate | NOT RUN | Explicit workflow dispatch/secrets required |
+| Futures accounting | NOT VERIFIED | Separate contract/test matrix required |
+| All mandatory CI on final SHA | PENDING | Recheck after report commit |
+
+**TASK 006.6 decision: BLOCKED — NOT ACCEPTED.** Do not set `RECOVERY_COMPLETE` or `effect_state='APPLIED'` without the missing proof. No `main` changes, no merge, no Mainnet or live orders.
