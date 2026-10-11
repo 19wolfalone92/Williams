@@ -401,23 +401,28 @@ class ExecutionBarrier:
                     raise RuntimeError(
                         "ExecutionBarrier: exchange response lacks authoritative order state"
                     )
-            self._persist(intent, "SUBMITTED")
-            # The exchange call has already happened. Failure to persist its outcome
-            # must surface as ambiguous and force reconciliation; it must not be reported
-            # as a clean successful local completion.
+            # The exchange call has already happened. Any local persistence failure
+            # from this point is an ambiguous outcome, never evidence that no order exists.
             try:
+                self._persist(intent, "SUBMITTED")
                 self._persist_event_required(
                     intent, "BINANCE_SUBMITTED",
                     {"symbol": intent.symbol, "side": intent.side},
                 )
-            except Exception:
+            except Exception as exc:
                 try:
-                    self._persist(intent, "AMBIGUOUS", "submission returned but result event persistence failed")
-                finally:
-                    raise RuntimeError(
-                        "ExecutionBarrier: submission outcome requires reconciliation; "
-                        "BINANCE_SUBMITTED event persistence failed"
+                    self._persist(
+                        intent, "AMBIGUOUS",
+                        f"submission returned but outcome persistence failed: {type(exc).__name__}",
                     )
+                except Exception:
+                    # Preserve the reconciliation-required exception even if SQLite
+                    # is still unavailable; callers must not blindly retry the request.
+                    pass
+                raise RuntimeError(
+                    "ExecutionBarrier: submission outcome requires reconciliation; "
+                    "local result persistence failed"
+                ) from exc
             self._record("INFO", "execution_submitted", intent, "Binance accepted request", {
                 "intent_id": intent.intent_id,
             })
