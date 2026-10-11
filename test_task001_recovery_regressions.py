@@ -781,3 +781,69 @@ def test_legacy_authoritative_execution_accepts_explicit_zero_fee_idempotently(t
     assert first.executed_qty == second.executed_qty
     assert db.state_get("position_state") == "FLAT"
     db.conn.close()
+
+
+def test_financial_effect_journal_is_idempotent_and_preserves_unknown_fee_until_confirmed(tmp_path):
+    db = ready_db(tmp_path)
+    unknown = {
+        "id": 7001, "orderId": 9001, "qty": "0.010000000000000001",
+        "price": "100.123456789123456789",
+        "quoteQty": "1.00123456789123456789",
+    }
+    first = db.record_exchange_fill("BTCUSDT", unknown)
+    replay = db.record_exchange_fill("BTCUSDT", unknown)
+    row = db.conn.execute(
+        """SELECT * FROM financial_effect_journal
+           WHERE venue='BINANCE' AND market_type='SPOT'
+             AND symbol='BTCUSDT' AND exchange_trade_id='7001'"""
+    ).fetchone()
+    assert first["financial_state"] == "UNKNOWN"
+    assert replay["inserted"] is False
+    assert row is not None
+    assert row["effect_status"] == "RECONCILE_REQUIRED"
+    assert row["fee_state"] == "UNKNOWN"
+    assert row["commission_amount_text"] is None
+
+    confirmed = dict(unknown, commission="0", commissionAsset="USDT")
+    db.record_exchange_fill("BTCUSDT", confirmed)
+    # A later REST/recovery observation without fee fields must not downgrade
+    # authoritative fee evidence or create a second journal row.
+    db.record_exchange_fill("BTCUSDT", unknown)
+    rows = db.conn.execute(
+        """SELECT COUNT(*) AS n FROM financial_effect_journal
+           WHERE venue='BINANCE' AND market_type='SPOT'
+             AND symbol='BTCUSDT' AND exchange_trade_id='7001'"""
+    ).fetchone()
+    row = db.conn.execute(
+        """SELECT * FROM financial_effect_journal
+           WHERE venue='BINANCE' AND market_type='SPOT'
+             AND symbol='BTCUSDT' AND exchange_trade_id='7001'"""
+    ).fetchone()
+    assert rows["n"] == 1
+    assert row["fee_state"] == "CONFIRMED"
+    assert row["commission_amount_text"] == "0"
+    assert row["commission_asset"] == "USDT"
+    assert row["quantity_text"] == "0.010000000000000001"
+    assert row["price_text"] == "100.123456789123456789"
+    assert row["effect_status"] == "READY_TO_APPLY"
+    db.conn.close()
+
+
+def test_financial_effect_journal_scopes_trade_identity_by_venue_market_and_symbol(tmp_path):
+    db = ready_db(tmp_path)
+    trade = {
+        "id": 42, "orderId": 100, "qty": "1.25", "price": "2.5",
+        "quoteQty": "3.125", "commission": "0", "commissionAsset": "USDT",
+    }
+    db.record_exchange_fill("BTCUSDT", trade)
+    # Different symbols are separate identity spaces even if a trade ID repeats.
+    db.record_exchange_fill("ETHUSDT", dict(trade, orderId=101))
+    rows = db.conn.execute(
+        "SELECT symbol,exchange_trade_id FROM financial_effect_journal "
+        "WHERE venue='BINANCE' AND market_type='SPOT' AND exchange_trade_id='42' "
+        "ORDER BY symbol"
+    ).fetchall()
+    assert [(r["symbol"], r["exchange_trade_id"]) for r in rows] == [
+        ("BTCUSDT", "42"), ("ETHUSDT", "42")
+    ]
+    db.conn.close()
