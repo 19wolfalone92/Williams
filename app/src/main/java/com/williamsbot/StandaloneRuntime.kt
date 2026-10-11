@@ -926,8 +926,10 @@ private class NativeEngine(
     private fun executionReady(): Boolean =
         running &&
             !paused &&
-            !reconcileRequired &&
-            globalFinancialRecoveryComplete &&
+            GlobalRecoveryGateContract.entryAllowed(
+                globalFinancialRecoveryComplete,
+                reconcileRequired
+            ) &&
             !killLatched &&
             marketDataFresh() &&
             marketWebSocketFresh() &&
@@ -3043,8 +3045,10 @@ private class NativeEngine(
     private fun campaignMutationEnvironmentReady(): Boolean =
         running &&
             !paused &&
-            !reconcileRequired &&
-            globalFinancialRecoveryComplete &&
+            GlobalRecoveryGateContract.entryAllowed(
+                globalFinancialRecoveryComplete,
+                reconcileRequired
+            ) &&
             !killLatched &&
             marketDataFresh() &&
             marketSocketConnected &&
@@ -3063,8 +3067,15 @@ private class NativeEngine(
         if (!running) error("Runtime is not running")
         if (paused) error("Runtime is paused")
         if (reconcileRequired) error("RECONCILE_REQUIRED")
-        require(globalFinancialRecoveryComplete || (purpose != "CAMPAIGN_ENTRY" && purpose != "CAMPAIGN_ADD_ON")) {
-            "GLOBAL_FINANCIAL_RECOVERY_INCOMPLETE: new exposure blocked"
+        if (purpose == "CAMPAIGN_ENTRY" || purpose == "CAMPAIGN_ADD_ON") {
+            require(
+                GlobalRecoveryGateContract.entryAllowed(
+                    globalFinancialRecoveryComplete,
+                    reconcileRequired
+                )
+            ) {
+                "GLOBAL_FINANCIAL_RECOVERY_INCOMPLETE: new exposure blocked"
+            }
         }
         if (killLatched) error("KILL_SWITCH_LATCHED")
         require(executionGate.tryReserve(symbol))
