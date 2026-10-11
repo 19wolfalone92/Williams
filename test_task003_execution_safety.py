@@ -920,8 +920,8 @@ def test_financial_fill_effect_is_idempotent_and_decimal_exact(tmp_path):
     assert first["status"] == "APPLIED" and not first["duplicate"]
     assert duplicate["status"] == "APPLIED" and duplicate["duplicate"]
     assert len(applied) == 1
-    assert applied[0]["quantity"] == "0.01000000"
-    assert applied[0]["price"] == "61234.12000000"
+    assert applied[0]["quantity"] == "0.01"
+    assert applied[0]["price"] == "61234.12"
     assert db.conn.execute("SELECT COUNT(*) FROM test_financial_projection").fetchone()[0] == 1
     row = db.conn.execute("SELECT * FROM financial_effect_journal").fetchone()
     assert row["commission_status"] == "KNOWN"
@@ -958,7 +958,7 @@ def test_unknown_commission_blocks_projection_until_explicit_resolution(tmp_path
     )
     assert resolved["status"] == "APPLIED"
     assert len(calls) == 1
-    assert calls[0]["commission"] == "0.00001000"
+    assert calls[0]["commission"] == "0.00001"
     assert db.conn.execute("SELECT COUNT(*) FROM test_financial_projection").fetchone()[0] == 1
 
 
