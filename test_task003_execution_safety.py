@@ -708,3 +708,144 @@ def test_legacy_trader_preserves_entry_identity_while_execution_is_unresolved():
     unresolved_recheck = buy_body.index("if self._execution_recovery_blocked():", rejected_pos)
     delete_pos = buy_body.index("self.db.state_delete('entry_client_order_id')", rejected_pos)
     assert unresolved_recheck < delete_pos
+
+
+# TASK 003.3: independent OS-process proof. Threads are deliberately not used
+# here: each worker opens its own SQLite connection to the same persistent file.
+def _task0033_process_submit_worker(db_path, intent, start_event, result_queue, submit_counter):
+    import time
+    from db import Database
+    from execution_barrier import ExecutionBarrier
+
+    db = Database(db_path)
+    try:
+        cache = _cache()
+        barrier = ExecutionBarrier(cache, db)
+        if not start_event.wait(timeout=10):
+            result_queue.put(("ERROR", "start barrier timed out"))
+            return
+
+        def submit():
+            with submit_counter.get_lock():
+                submit_counter.value += 1
+            return {
+                "symbol": intent.symbol,
+                "orderId": 9001,
+                "clientOrderId": intent.client_order_id,
+                "status": "FILLED",
+                "executedQty": "1.0",
+                "cummulativeQuoteQty": "100.0",
+            }
+
+        result = barrier.execute(
+            intent,
+            submit,
+            pre_submit_checks=lambda _snapshot: None,
+        )
+        result_queue.put(("ACCEPTED" if result.accepted else "BLOCKED", result.reason))
+    finally:
+        db.conn.close()
+
+
+def test_independent_processes_same_logical_intent_submit_at_most_once(tmp_path):
+    import multiprocessing
+
+    db_path = str(tmp_path / "cross-process.sqlite3")
+    bootstrap = Database(db_path)
+    # Initialize schema before racing workers, so the race exercises intent
+    # reservation/submit semantics rather than first-boot DDL contention.
+    bootstrap.conn.close()
+
+    ctx = multiprocessing.get_context("spawn")
+    start_event = ctx.Event()
+    result_queue = ctx.Queue()
+    submit_counter = ctx.Value("i", 0)
+    intent = _entry_intent(signal_id="BTCUSDT:1h:ENTRY:cross-process-0033")
+
+    workers = [
+        ctx.Process(
+            target=_task0033_process_submit_worker,
+            args=(db_path, intent, start_event, result_queue, submit_counter),
+        )
+        for _ in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    start_event.set()
+    outcomes = [result_queue.get(timeout=20) for _ in workers]
+    for worker in workers:
+        worker.join(timeout=20)
+
+    assert all(not worker.is_alive() for worker in workers)
+    assert [worker.exitcode for worker in workers] == [0, 0]
+    assert submit_counter.value == 1
+    assert sum(status == "ACCEPTED" for status, _ in outcomes) == 1
+    assert sum(status == "BLOCKED" for status, _ in outcomes) == 1
+
+    # Reopen the same durable file in the parent and confirm one identity claim
+    # and one terminal intent are visible across process boundaries.
+    verify = Database(db_path)
+    try:
+        assert verify.load_execution_intent(intent.intent_id) is not None
+        assert not verify.has_unresolved_execution_intents()
+    finally:
+        verify.conn.close()
+
+
+def _task0033_crash_after_submitting_worker(db_path, intent, ready_event):
+    from db import Database
+
+    db = Database(db_path)
+    try:
+        assert db.save_execution_intent(
+            intent, "SUBMITTING", "TASK0033 injected process death before known response"
+        )
+        ready_event.set()
+        # The parent terminates this OS process after the durable state is visible.
+        import time
+        time.sleep(30)
+    finally:
+        db.conn.close()
+
+
+def test_os_process_death_after_submitting_blocks_second_process_retry(tmp_path):
+    import multiprocessing
+    from db import Database
+    from execution_barrier import ExecutionBarrier
+
+    db_path = str(tmp_path / "process-death.sqlite3")
+    bootstrap = Database(db_path)
+    bootstrap.conn.close()
+    ctx = multiprocessing.get_context("spawn")
+    ready = ctx.Event()
+    intent = _entry_intent(signal_id="BTCUSDT:1h:ENTRY:process-death-0033")
+    first = ctx.Process(
+        target=_task0033_crash_after_submitting_worker,
+        args=(db_path, intent, ready),
+    )
+    first.start()
+    try:
+        assert ready.wait(timeout=15)
+        first.terminate()
+        first.join(timeout=10)
+        assert first.exitcode is not None
+
+        db = Database(db_path)
+        try:
+            barrier = ExecutionBarrier(_cache(), db)
+            calls = []
+            result = barrier.execute(
+                intent,
+                lambda: calls.append("blind-retry") or _filled(),
+                pre_submit_checks=lambda _snapshot: None,
+            )
+            assert not result.accepted
+            assert calls == []
+            assert db.has_unresolved_execution_intents()
+            assert db.load_execution_intent(intent.intent_id)["status"] == "SUBMITTING"
+        finally:
+            db.conn.close()
+    finally:
+        if first.is_alive():
+            first.terminate()
+            first.join(timeout=5)
