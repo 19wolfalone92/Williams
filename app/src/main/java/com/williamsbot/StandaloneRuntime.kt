@@ -1589,13 +1589,20 @@ private class NativeEngine(
                 ?: values["listClientOrderId"]
                 ?: values["cancelOrderId"]
 
+            // A generated client ID must be reproducible after a caller retry or
+            // process restart. A random UUID here would create a fresh exchange
+            // identity for the same ambiguous request and defeat replay blocking.
+            // Bind it to the caller's original unsigned request (never credentials
+            // or a signature) before adding any generated identifier.
+            val stableRequestSeed = digest("$method|$path|$symbol|$params")
+            val generatedClientId = "W21_" + stableRequestSeed.take(28)
             val exchangeClientId = when {
                 method == "DELETE" -> clientKey
                 !clientKey.isNullOrBlank() -> clientKey
                 path.endsWith("/orderList/oco") ||
                     path.endsWith("/order") ||
                     path.endsWith("/cancelReplace") ->
-                    "W21_" + UUID.randomUUID().toString().replace("-", "")
+                    generatedClientId
                 else -> null
             }
             if (method == "POST" && exchangeClientId != null && clientKey.isNullOrBlank()) {
