@@ -15,7 +15,7 @@ import java.util.Locale
  * of the exchange outcome.
  */
 class DurableMutationLedger(context: Context) :
-    SQLiteOpenHelper(context, "williams_mutation_ledger.db", null, 3) {
+    SQLiteOpenHelper(context, "williams_mutation_ledger.db", null, 4) {
 
     enum class State {
         PREPARED,
@@ -71,6 +71,7 @@ class DurableMutationLedger(context: Context) :
         db.execSQL("CREATE INDEX mutation_intents_state_idx ON mutation_intents(state)")
         db.execSQL("CREATE INDEX mutation_intents_symbol_idx ON mutation_intents(symbol, state)")
         db.execSQL("CREATE INDEX mutation_intents_exchange_client_idx ON mutation_intents(exchange, exchange_client_id)")
+        db.execSQL("CREATE UNIQUE INDEX mutation_intents_new_client_unique_idx ON mutation_intents(exchange, symbol, exchange_client_id) WHERE kind LIKE 'POST:%' AND exchange_client_id IS NOT NULL AND exchange_client_id <> ''")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -99,7 +100,12 @@ class DurableMutationLedger(context: Context) :
                     "WHERE state = 'RECONCILED' AND reconciliation_evidence_json IS NULL"
             )
         }
-        if (newVersion > 3) {
+        if (oldVersion < 4) {
+            // New POST/OCO/cancel-replace client IDs must be unique per exchange/symbol.
+            // DELETE rows refer to an existing order client ID and are excluded.
+            db.execSQL("CREATE UNIQUE INDEX mutation_intents_new_client_unique_idx ON mutation_intents(exchange, symbol, exchange_client_id) WHERE kind LIKE 'POST:%' AND exchange_client_id IS NOT NULL AND exchange_client_id <> ''")
+        }
+        if (newVersion > 4) {
             throw IllegalStateException("MUTATION_LEDGER_MIGRATION_REQUIRED")
         }
     }

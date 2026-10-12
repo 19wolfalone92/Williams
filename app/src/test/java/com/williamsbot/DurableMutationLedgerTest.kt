@@ -443,6 +443,33 @@ class DurableMutationLedgerTest {
     }
 
     @Test
+    fun newMutationClientIdsAreUniquePerExchangeAndSymbol() {
+        ledger!!.prepare(
+            "client-unique-first", "POST:/api/v3/order", "BTCUSDT",
+            "1".repeat(64), "W21_same_client"
+        )
+        assertThrows(android.database.sqlite.SQLiteConstraintException::class.java) {
+            ledger!!.prepare(
+                "client-unique-second", "POST:/api/v3/order", "BTCUSDT",
+                "2".repeat(64), "W21_same_client"
+            )
+        }
+    }
+
+    @Test
+    fun cancellationMayReferenceTheClientIdOfAnExistingOrder() {
+        ledger!!.prepare(
+            "client-unique-order", "POST:/api/v3/order", "BTCUSDT",
+            "1".repeat(64), "W21_existing_order"
+        )
+        val cancel = ledger!!.prepare(
+            "client-unique-cancel", "DELETE:/api/v3/order", "BTCUSDT",
+            "2".repeat(64), "W21_existing_order"
+        )
+        assertEquals("W21_existing_order", cancel.exchangeClientId)
+    }
+
+    @Test
     fun conflictingReuseOfOperationIdIsRejected() {
         ledger!!.prepare("op-conflict", "POST:/api/v3/order", "BTCUSDT", "b".repeat(64), "client-a")
 
