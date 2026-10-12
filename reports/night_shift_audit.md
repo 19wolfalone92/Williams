@@ -29,8 +29,8 @@
 - **Evidence:** Actions job `114579902614`, run [38176499309](https://github.com/19wolfalone92/Williams/actions/runs/38176499309), reports: `gradle/wrapper/gradle-wrapper.properties:3` — newer Gradle 8.14.6 is available than 8.14.5 (`AndroidGradlePluginVersion`). Lint reported 1 error, 0 warnings, 2 hints.
 - **Root cause:** The wrapper distribution and workflow-installed Gradle were pinned to 8.14.5; the configured lint policy has `warningsAsErrors = true`.
 - **Change:** Updated wrapper distribution to Gradle 8.14.6 and aligned Android/Campaign workflow Gradle versions to 8.14.6. No lint rules were disabled and no suppressions were added.
-- **Validation:** Not yet confirmed by a post-change Actions run. Lint, Android unit tests and debug/release APK builds remain pending until CI runs on this branch.
-- **Residual risk:** A subsequent lint finding or Gradle/AGP compatibility issue may remain; only a fresh CI run can establish the result.
+- **Validation:** Confirmed by fresh CI on audit branch HEAD `ff7842d93c8d8c8a8053a4192d802d387120051a`: required Android lint PASS, Android unit tests PASS, debug APK build PASS, release unsigned APK build PASS, APK file/metadata checks PASS, and persistent debug signing certificate check PASS. See Actions runs 38177124662 and 38177124654.
+- **Residual risk:** CI verifies compilation, lint, unit tests, packaging, and the configured debug signing check; it does not replace installation/launch tests on a physical supported device.
 
 ## 3. PR #65 change review
 
@@ -49,11 +49,13 @@
 | Python compilation | Same Python run, step 6 | PASS (CI-reported) |
 | Full static safety audit | Same Python run, step 7 | PASS (CI-reported) |
 | Explicit offline test command | Same Python run, step 8 | PASS (CI-reported); exact test count unavailable in inspected summary |
-| Android lint | Run 38176499309, job 114579902614 | FAIL: Gradle 8.14.5 version finding |
-| Android unit tests | Same Android run | SKIPPED after lint failure |
-| Debug/release APK build | Same Android run | SKIPPED after lint failure |
-| Campaign CI on PR #55 / base audit branch | Run 38172137377 | Android job failed; Python job passed. Full failure log was not extracted in this session, so no root cause is asserted here. |
-| Post-fix CI on this audit branch | Not yet available at report creation | BLOCKED / pending |
+| Android lint (baseline) | Run 38176499309, job 114579902614 | FAIL: Gradle 8.14.5 version finding; superseded by passing post-fix run |
+| Android unit tests (baseline) | Same baseline run | SKIPPED after lint failure |
+| Debug/release APK build (baseline) | Same baseline run | SKIPPED after lint failure |
+| Campaign CI on audit branch | Run 38177124662 | PASS: Android build/static checks and Python tests |
+| Android APK workflow on audit branch | Run 38177124654 | PASS: lint, unit tests, debug APK, release unsigned APK, metadata/signature checks, artifact upload |
+| Python backend workflow on audit branch | Run 38177124730 | PASS: 148 passed, 4 warnings in 3.87s |
+| Post-fix validation | Commit `ff7842d93c8d8c8a8053a4192d802d387120051a` | PASS for all three GitHub Actions workflows; no device-level install/launch test performed |
 
 ## 5. Security and trading safety
 
@@ -86,8 +88,8 @@ The environment limitation is lack of a local checkout/runtime in this session. 
 
 ## 8. Remaining risks and next actions
 
-- **P1:** Confirm Gradle 8.14.6 resolves the lint failure; then ensure Android unit tests and both APK build steps execute.
-- **P1:** Obtain and inspect the full Campaign CI Android failure log for run 38172137377 before attributing its cause.
+- **P1 — resolved in CI:** Gradle 8.14.6 resolves the recorded lint failure; required lint, Android unit tests, debug/release APK builds and APK verification all passed on the audit branch.
+- **P1 — historical run:** The older Campaign CI failure was caused by the same Gradle 8.14.5 lint finding; the corresponding post-fix Campaign CI now passes.
 - **P2:** Run default pytest in a clean environment with network disabled and no credentials; record exact test count/time and prove collection has no operational side effects.
 - **P2:** Determine whether `data/test_tmp/trader.sqlite3.clean_20261004_082723` is a generated artifact or a stale test prerequisite; fix the owning fixture/script, not by creating a placeholder.
 - **P2:** Verify testnet API-key source/configuration and testnet-vs-mainnet selection without printing credential values.
@@ -100,4 +102,4 @@ The environment limitation is lack of a local checkout/runtime in this session. 
 - PR #65 base: `audit/task-0007-api-contract`, commit `939ceac0bf34ef10cb6551301be9b8758a4a4c59`.
 - Separate audit branch created: `night-shift-audit-20261012`, based on PR #65 head.
 - No branch deletion, force push, history rewrite, target-branch change, or merge was performed.
-- Changes in this branch require a fresh CI run before they can be considered verified.
+- The CI/configuration fixes in this branch are verified by successful runs 38177124730, 38177124662 and 38177124654 on commit `ff7842d93c8d8c8a8053a4192d802d387120051a`. The broader audit remains incomplete as described above.
