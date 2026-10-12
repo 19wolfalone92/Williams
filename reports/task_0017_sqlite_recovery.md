@@ -1,17 +1,30 @@
-# TASK 001.7 — SQLite Migrations, Concurrency and Recovery
+# TASK 001.8 — SQLite Migration, Concurrency and Recovery
 
-- Code SHA: `e5f82ae60b0b5c1e9512f9efe3bedc1d018ab132`.
+- Audited code/test SHA: `31ba73ff81c43edb5be4606b200dce752148967a`.
 - Status: PARTIAL — P0 OPEN.
 
-## Existing implementation / evidence
-- Android `DurableMutationLedger.kt` persists operation identity, request fingerprint, client ID, state, timestamps, exchange order ID and reconciliation evidence; transitions are transaction-wrapped.
-- Schema v4 adds a partial unique index for POST client IDs and reopens legacy RECONCILED rows lacking evidence as unresolved RECONCILING.
-- Existing Android tests cover competing claims, conflicting operation reuse and selected migration/evidence transitions.
-- Python `db.py` stores execution-intent leases/recovery fields; Python recovery/SQLite tests are part of Campaign CI.
+## IMPLEMENTED (source inspection)
 
-## Not tested or not proven
-- Every supported schema migration version, interrupted migration and transaction rollback at each DDL/DML boundary.
-- Corrupt/legacy rows, duplicate client IDs causing unique-index migration failure, and all historical falsely reconciled records.
-- Concurrent reconciliation workers across processes; restarts during each of SUBMITTING, UNKNOWN and RECONCILING; idempotent recovery replay across every operation kind.
-- A single atomic transaction across Android and Python stores does not exist. The exchange remains authoritative; cross-runtime recovery requires reconciliation, not assumptions about database atomicity.
-- No migration/concurrency closure is claimed. Exact-SHA Android results remain blocked by the standalone APK workflow startup failure; the Campaign Android job outcome must be checked separately.
+- Android ledger persists operation identity, request fingerprint, client ID, state, timestamps, exchange order ID and reconciliation evidence.
+- Ledger transitions are transaction-wrapped; schema v4 adds a partial unique index for POST client IDs.
+- Migration reopens legacy RECONCILED rows without evidence as unresolved RECONCILING.
+- Python `db.py` stores execution-intent lease/recovery fields; Python recovery and SQLite lifecycle tests are in Campaign CI.
+- Android SQLite and Python SQLite are separate transactions/databases; no cross-runtime atomicity is assumed.
+
+## TESTED / VERIFIED at audited SHA
+
+- Campaign Python test job run [38301629067](https://github.com/19wolfalone92/Williams/actions/runs/38301629067): SUCCESS.
+- Android ledger unit tests are not marked verified until the Campaign Android job finishes on the exact SHA; it was still running at last inspection.
+- No end-to-end cross-runtime atomicity test is applicable; correctness must rely on exchange reconciliation and fail-closed gates.
+
+## NOT YET TESTED / BLOCKED
+
+- Every supported old Android schema version and every Python DB migration path.
+- Interrupted DDL/DML migrations, rollback at each migration boundary, repeated migration after partial completion.
+- Duplicate legacy client IDs that may cause unique-index creation to fail.
+- Corrupt/legacy rows and historical RECONCILED rows with incomplete or invalid evidence.
+- Multi-process concurrent claims and concurrent reconciliation workers.
+- Crash/restart at each SUBMITTING, UNKNOWN and RECONCILING transition for all operation types.
+- Atomicity/rollback and duplicate mutation assertions across the production transport boundary.
+
+Do not claim migration/concurrency closure based on code inspection or selected unit tests. P0 remains open.
