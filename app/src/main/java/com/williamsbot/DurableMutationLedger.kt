@@ -229,13 +229,15 @@ class DurableMutationLedger(context: Context) :
     fun unresolved(): List<Intent> {
         val db = readableDatabase
         val result = mutableListOf<Intent>()
-        db.rawQuery(
+        // ACKNOWLEDGED means the HTTP mutation received a response, not
+        // that order/fill/protection state has been reconciled with Binance.
+        // Keep execution blocked until a reconciliation worker records RECONCILED.
+        val unresolvedSql =
             "SELECT operation_id, kind, symbol, request_fingerprint, exchange_client_id, state, " +
                 "exchange_order_id, created_at_ms, updated_at_ms, exchange, campaign_id, signal_id, attempt_id " +
-                // ACKNOWLEDGED means the HTTP mutation received a response, not
-            // that order/fill/protection state has been reconciled with Binance.
-            // Keep execution blocked until a reconciliation worker records RECONCILED.
-            "FROM mutation_intents WHERE state IN (?, ?, ?, ?) ORDER BY created_at_ms",
+                "FROM mutation_intents WHERE state IN (?, ?, ?, ?) ORDER BY created_at_ms"
+        db.rawQuery(
+            unresolvedSql,
             arrayOf(
                 State.PREPARED.name,
                 State.SUBMITTING.name,
