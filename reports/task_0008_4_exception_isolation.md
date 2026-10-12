@@ -1,16 +1,13 @@
 # TASK 000.8.4 — BL-004 Exception Isolation
 Date: 2026-10-12 UTC
 
-Source inspected: `execution_barrier.py`, `binance_client.py`, secret-redaction tests, SQLite lifecycle tests, and persistence fail-closed tests on the branch.
+## CI result
+On test-fix SHA `a78a3f78a8a8be80d60fcc5b4e4ddf6ccaa627d0`:
+- Python backend CI `38234529997`: SUCCESS, 219 passed, 4 warnings.
+- Campaign Python job `38234529976`: SUCCESS, 230 passed, 4 warnings.
+- The persistence-failure test now passes in the configured suites with assertions for sanitized public wording, no `__cause__`, no `__context__`, `__suppress_context__ is True`, and absence of raw synthetic transport/DB text.
 
-Observed design:
-- transport exceptions are converted to sanitized reason text rather than copied with `str(exc)`;
-- a public RuntimeError is raised after exiting the transport handler, to avoid retaining the original exception in `__context__`;
-- selected tests assert absent `__cause__`/`__context__`, context suppression, and no synthetic raw error content in the public message;
-- internal diagnostics preserve a redacted error type/classification and reconciliation-required semantics.
+## Scope limits
+Source review supports raising a sanitized public RuntimeError outside the transport handler. Existing secret-redaction tests use synthetic sensitive markers and assert no raw text in selected public/state/event sinks. However, a complete end-to-end consumer matrix has not been proven for traceback/repr, every application logger, every structured event, real isolated SQLite rows, recovery diagnostics after restart, cancellation failures, and reconciliation failures. The current CI pass verifies configured test suites, not every requested channel/scenario.
 
-The CI run on SHA `d038813e4c5e3e3b1d9797891e6d0ddbe3800266` failed before the new exception-chain assertions in the affected test could all complete, due to the incorrect expected phrase. The assertion was corrected in commit `a78a3f78a8a8be80d60fcc5b4e4ddf6ccaa627d0`, but no test run on that SHA is available yet.
-
-Not executed end-to-end on current SHA: traceback and repr inspection; all application logger/structured-event sinks; real isolated SQLite records; recovery diagnostics after restart; cancel-order and failed-reconciliation exceptions. No claim is made that every sensitive marker is absent from every consumer.
-
-Status: **OPEN — FIX NOT VERIFIED**. BL-004 must remain open until exact-SHA CI passes and consumer-channel coverage is demonstrated.
+Status: **OPEN — FIX NOT VERIFIED** for full BL-004 closure. The specific regression assertion is verified on test-fix SHA; BL-004 remains open until all required propagation channels are demonstrated.
