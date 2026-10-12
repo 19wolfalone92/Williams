@@ -168,9 +168,13 @@ internal object MutationIdentity {
     ): String {
         require(logicalOperationId.isNotBlank()) { "MUTATION_OPERATION_ID_REQUIRED" }
         require(prefix.matches(Regex("[A-Za-z0-9_-]{1,8}"))) { "MUTATION_CLIENT_ID_PREFIX_INVALID" }
-        val canonical = canonicalRequest(method, path, symbol, unsignedParams)
+        // Validate the request, but do not make exchange identity depend on
+        // mutable request economics. A changed request under the same logical
+        // operation must collide with the durable ledger fingerprint and fail
+        // closed, rather than silently becoming a second exchange order.
+        canonicalRequest(method, path, symbol, unsignedParams)
         val suffixLength = 36 - prefix.length
-        return prefix + sha256("$logicalOperationId|$canonical").take(suffixLength)
+        return prefix + sha256(logicalOperationId).take(suffixLength)
     }
 
     fun operationId(operationType: String, exchange: String, symbol: String, logicalKey: String): String {
