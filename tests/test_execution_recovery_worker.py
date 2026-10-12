@@ -19,8 +19,10 @@ class FakeExchange:
         self.trade_error = None
         self.trade_rows = None
         self.trade_calls = 0
+        self.last_lookup = None
         self.calls, self.lock = 0, threading.Lock()
     def get_order(self, symbol, *, order_id=None, orig_client_order_id=None):
+        self.last_lookup = {"order_id": order_id, "orig_client_order_id": orig_client_order_id}
         with self.lock: self.calls += 1
         if self.delay: time.sleep(self.delay)
         if self.error: raise self.error
@@ -243,3 +245,26 @@ def test_oco_all_done_conflicting_with_active_legs_remains_ambiguous(tmp_path):
         row = db.conn.execute("SELECT status,last_reconcile_error FROM execution_intents WHERE intent_id=?",(intent.intent_id,)).fetchone()
         assert result["deferred"] == 1 and row["status"] == "AMBIGUOUS"
         assert "ALL_DONE but a leg is not terminal" in row["last_reconcile_error"]
+
+
+def test_non_cancel_intent_gets_a_stable_recovery_client_id():
+    intent = OrderIntent.new("BTCUSDT", "BUY", "MARKET", {}, purpose="ENTRY")
+    assert intent.client_order_id.startswith("WILLV4_")
+    assert len(intent.client_order_id) <= 36
+
+
+def test_worker_prefers_persisted_order_id_when_available(tmp_path):
+    with Database(str(tmp_path / "order-id-lookup.sqlite3")) as db:
+        intent = _intent(db)
+        db.save_execution_intent(intent, "AMBIGUOUS", "lost response",
+            exchange_order={"orderId": 123, "status": "NEW"})
+        exchange = FakeExchange(_order("FILLED", executedQty="0.01"))
+        result = ExecutionRecoveryWorker(db, exchange).run_once(now=1000)
+        assert result["reconciled"] == 1
+        assert str(exchange.last_lookup["order_id"]) == "123"
+        assert exchange.last_lookup["orig_client_order_id"] is None
+
+
+def test_cancel_intent_does_not_fabricate_target_order_id():
+    intent = OrderIntent.new("BTCUSDT", "BUY", "CANCEL", {}, purpose="EXIT")
+    assert intent.client_order_id == ""
