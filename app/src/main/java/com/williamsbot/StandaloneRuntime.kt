@@ -1487,22 +1487,27 @@ private class NativeEngine(
             require(trades.length() < 1000) {
                 "MUTATION_RECONCILIATION_TRADE_HISTORY_TRUNCATED"
             }
-            var summedTradeQty = java.math.BigDecimal.ZERO
-            for (tradeIndex in 0 until trades.length()) {
-                val trade = trades.getJSONObject(tradeIndex)
-                require(trade.optString("orderId") == exchangeOrderId) {
-                    "MUTATION_RECONCILIATION_TRADE_ORDER_ID_MISMATCH"
-                }
-                val tradeQty = trade.optString("qty").toBigDecimalOrNull()
-                    ?: throw IllegalStateException("MUTATION_RECONCILIATION_TRADE_QTY_INVALID")
-                require(tradeQty.signum() > 0) {
-                    "MUTATION_RECONCILIATION_TRADE_QTY_NON_POSITIVE"
-                }
-                summedTradeQty = summedTradeQty.add(tradeQty)
+            require(originalQty.signum() > 0) {
+                "MUTATION_RECONCILIATION_ORIG_QTY_NON_POSITIVE"
             }
-            require(summedTradeQty.compareTo(executedQty) == 0) {
-                "MUTATION_RECONCILIATION_TRADE_QTY_MISMATCH"
+            when (status) {
+                "NEW" -> require(executedQty.signum() == 0) {
+                    "MUTATION_RECONCILIATION_NEW_ORDER_HAS_EXECUTIONS"
+                }
+                "PARTIALLY_FILLED" -> require(
+                    executedQty.signum() > 0 && executedQty.compareTo(originalQty) < 0
+                ) { "MUTATION_RECONCILIATION_PARTIAL_STATUS_QUANTITY_CONFLICT" }
+                "FILLED" -> require(executedQty.compareTo(originalQty) == 0) {
+                    "MUTATION_RECONCILIATION_FILLED_STATUS_QUANTITY_CONFLICT"
+                }
             }
+            val tradeEvidence = BinanceTradeEvidence.verify(
+                expectedSymbol = intent.symbol,
+                expectedOrderId = exchangeOrderId,
+                expectedExecutedQty = executedQty,
+                trades = trades
+            )
+            val summedTradeQty = tradeEvidence.executedQty
 
             val reconciliationEvidence = JSONObject()
                 .put("source", "BINANCE_SPOT_TESTNET")
@@ -1513,8 +1518,10 @@ private class NativeEngine(
                 .put("order_status", status)
                 .put("original_qty", originalQty.toPlainString())
                 .put("executed_qty", executedQty.toPlainString())
-                .put("trade_count", trades.length())
+                .put("trade_count", tradeEvidence.tradeCount)
+                .put("trade_ids", JSONArray(tradeEvidence.tradeIds))
                 .put("trade_qty_sum", summedTradeQty.toPlainString())
+                .put("trade_evidence_verified", true)
                 .put("checked_at_ms", System.currentTimeMillis())
 
             // This certifies only the individual order and its recorded fills.
