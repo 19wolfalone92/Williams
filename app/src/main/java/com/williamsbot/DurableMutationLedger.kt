@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import androidx.core.database.transaction
 import java.util.Locale
 
 /**
@@ -113,10 +114,8 @@ class DurableMutationLedger(context: Context) :
         val stableAttemptId = attemptId ?: "$operationId:attempt-1"
         require(stableAttemptId.isNotBlank()) { "MUTATION_ATTEMPT_ID_REQUIRED" }
 
-        val db = writableDatabase
-        db.beginTransaction()
-        try {
-            val existing = readById(db, operationId)
+        return writableDatabase.transaction {
+            val existing = readById(this, operationId)
             if (existing != null) {
                 if (existing.kind != kind || existing.symbol != normalizedSymbol ||
                     existing.requestFingerprint != requestFingerprint.lowercase(Locale.US) ||
@@ -127,8 +126,7 @@ class DurableMutationLedger(context: Context) :
                     existing.attemptId != stableAttemptId) {
                     throw IntentConflictException()
                 }
-                db.setTransactionSuccessful()
-                return existing
+                return@transaction existing
             }
 
             val values = ContentValues().apply {
@@ -147,13 +145,10 @@ class DurableMutationLedger(context: Context) :
                 if (signalId == null) putNull("signal_id") else put("signal_id", signalId)
                 put("attempt_id", stableAttemptId)
             }
-            check(db.insertOrThrow("mutation_intents", null, values) != -1L) {
+            check(insertOrThrow("mutation_intents", null, values) != -1L) {
                 "MUTATION_INTENT_PERSIST_FAILED"
             }
-            db.setTransactionSuccessful()
-            return requireNotNull(readById(db, operationId))
-        } finally {
-            db.endTransaction()
+            requireNotNull(readById(this, operationId))
         }
     }
 
@@ -166,14 +161,10 @@ class DurableMutationLedger(context: Context) :
         nowMs: Long = System.currentTimeMillis()
     ): Intent {
         require(expected.isNotEmpty()) { "MUTATION_EXPECTED_STATE_REQUIRED" }
-        val db = writableDatabase
-        db.beginTransaction()
-        try {
-            val current = readById(db, operationId)
+        return writableDatabase.transaction {
+            val current = readById(this, operationId)
                 ?: throw IllegalStateException("MUTATION_INTENT_NOT_FOUND")
             // Never treat an already-claimed target state as a successful claim.
-            // In particular, a second worker asking PREPARED -> SUBMITTING must fail
-            // after the first worker commits; otherwise both could submit the mutation.
             if (current.state !in expected || !allowed(current.state, next)) {
                 throw InvalidTransitionException()
             }
@@ -182,17 +173,14 @@ class DurableMutationLedger(context: Context) :
                 put("updated_at_ms", nowMs)
                 if (exchangeOrderId != null) put("exchange_order_id", exchangeOrderId)
             }
-            val changed = db.update(
+            val changed = update(
                 "mutation_intents",
                 values,
                 "operation_id = ? AND state = ?",
                 arrayOf(operationId, current.state.name)
             )
             check(changed == 1) { "MUTATION_CONCURRENT_TRANSITION" }
-            db.setTransactionSuccessful()
-            return requireNotNull(readById(db, operationId))
-        } finally {
-            db.endTransaction()
+            requireNotNull(readById(this, operationId))
         }
     }
 
@@ -203,14 +191,12 @@ class DurableMutationLedger(context: Context) :
      */
     @Synchronized
     fun claimForSubmission(operationId: String, nowMs: Long = System.currentTimeMillis()): Intent {
-        val db = writableDatabase
-        db.beginTransaction()
-        try {
-            val current = readById(db, operationId)
+        return writableDatabase.transaction {
+            val current = readById(this, operationId)
                 ?: throw IllegalStateException("MUTATION_INTENT_NOT_FOUND")
             if (current.state != State.PREPARED) throw InvalidTransitionException()
 
-            val activeConflict = db.rawQuery(
+            val activeConflict = rawQuery(
                 "SELECT operation_id FROM mutation_intents " +
                     "WHERE symbol = ? AND state IN (?, ?) AND operation_id <> ? LIMIT 1",
                 arrayOf(
@@ -228,17 +214,14 @@ class DurableMutationLedger(context: Context) :
                 put("state", State.SUBMITTING.name)
                 put("updated_at_ms", nowMs)
             }
-            val changed = db.update(
+            val changed = update(
                 "mutation_intents",
                 values,
                 "operation_id = ? AND state = ?",
                 arrayOf(operationId, State.PREPARED.name)
             )
             check(changed == 1) { "MUTATION_SUBMISSION_CLAIM_FAILED" }
-            db.setTransactionSuccessful()
-            return requireNotNull(readById(db, operationId))
-        } finally {
-            db.endTransaction()
+            requireNotNull(readById(this, operationId))
         }
     }
 
