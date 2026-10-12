@@ -16,4 +16,4 @@
 6. Simulated storage failure after exchange acceptance: no blind retry.
 7. Cancel-replace partial result: UNKNOWN until both old and replacement order states are reconciled.
 
-No concurrency or bypass test is marked PASS. `@Synchronized` on ledger methods alone is not evidence that the whole prepare → authorize → network → acknowledge sequence is globally serialized across all runtime paths.
+Added Robolectric ledger unit tests in `app/src/test/java/com/williamsbot/DurableMutationLedgerTest.kt`: persistence after reopen, identical duplicate intent, conflicting intent rejection, UNKNOWN persistence, ACKNOWLEDGED terminal behavior, and illegal-transition rejection. These are ledger tests only; they do not yet satisfy the 12 fake-exchange fault scenarios or prove the network sink cannot be bypassed. No concurrency or bypass test is marked PASS. `@Synchronized` on ledger methods alone is not evidence that the whole prepare → authorize → network → acknowledge sequence is globally serialized across all runtime paths.
