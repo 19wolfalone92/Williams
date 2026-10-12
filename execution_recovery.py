@@ -166,6 +166,10 @@ class ExecutionRecoveryWorker:
             listing = self.exchange.order_list(symbol, list_client_order_id=client_id)
             if not isinstance(listing, dict) or str(listing.get("listClientOrderId", "")) != client_id:
                 raise RecoveryValidationError("exchange order list does not match persisted list client ID")
+            persisted_list_id = row.get("order_list_id")
+            returned_list_id = listing.get("orderListId")
+            if persisted_list_id is not None and returned_list_id is not None and str(persisted_list_id) != str(returned_list_id):
+                raise RecoveryValidationError("exchange orderListId conflicts with persisted evidence")
             list_status = str(listing.get("listOrderStatus", "")).upper()
             mapping = {"EXECUTING": "OCO_EXECUTING", "ALL_DONE": "OCO_ALL_DONE", "REJECT": "OCO_REJECTED"}
             if list_status not in mapping:
