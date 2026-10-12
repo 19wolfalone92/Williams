@@ -467,7 +467,7 @@ class DurableMutationLedgerTest {
     }
 
     @Test
-    fun acknowledgedIntentIsNotClassifiedAsUnresolved() {
+    fun acknowledgedIntentRemainsBlockedUntilExchangeReconciliation() {
         ledger!!.prepare("op-ack", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-ack")
         ledger!!.claimForSubmission("op-ack")
         ledger!!.transition(
@@ -477,7 +477,8 @@ class DurableMutationLedgerTest {
             exchangeOrderId = "12345"
         )
 
-        assertFalse(ledger!!.hasUnresolved())
+        assertTrue(ledger!!.hasUnresolved())
+        assertEquals(DurableMutationLedger.State.ACKNOWLEDGED, ledger!!.unresolved().single().state)
         assertEquals("12345", ledger!!.find("op-ack")!!.exchangeOrderId)
     }
 
