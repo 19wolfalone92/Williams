@@ -8,29 +8,30 @@ Base: `fix/pytest-safe-collection`
 ## SHA and changes
 - Starting SHA: `d038813e4c5e3e3b1d9797891e6d0ddbe3800266`.
 - Test correction commit: `a78a3f78a8a8be80d60fcc5b4e4ddf6ccaa627d0`.
-- The only TASK 000.8 code/test edit is `tests/test_execution_barrier_persistence_fail_closed.py`: expected safe public wording changed from the nonexistent phrase `mandatory before any retry` to `reconciliation must be completed before any retry`. Chain assertions remain intact.
-- Report files are documentation-only commits after the test correction; final HEAD must be re-queried after all report commits.
+- Test change: `tests/test_execution_barrier_persistence_fail_closed.py` now expects the actual safe wording `reconciliation must be completed before any retry`; no exception-chain/redaction assertion was removed.
+- Reports-only commits were added after the test correction. Final branch HEAD must be read from PR metadata after this report commit.
 
-## CI
-- On starting SHA `d038813`, Python backend run `38233695660`: FAILED, 1 failed / 218 passed / 4 warnings.
-- On starting SHA `d038813`, Campaign run `38233695652`: overall FAILED; Python 1 failed / 229 passed / 4 warnings; Android build/static checks succeeded.
-- Android workflow `38233696947`: startup_failure, no jobs.
-- The failing assertion mismatch is established from job logs.
-- No workflow run/status check was observed for test correction SHA `a78a3f78a8a8be80d60fcc5b4e4ddf6ccaa627d0`. No local test execution is available through the connector.
-- Workflow YAML supports `pull_request` for Python and Campaign and `workflow_dispatch`; the connector exposes rerun operations only, not dispatch. Rerunning old jobs would validate the old SHA and is not a substitute.
+## CI results
+- Starting SHA `d038813`: Python `38233695660` FAILED (1 failed, 218 passed, 4 warnings); Campaign `38233695652` FAILED overall (Python 1 failed, 229 passed, 4 warnings; Android job SUCCESS); standalone Android `38233696947` startup_failure.
+- Test-fix SHA `a78a3f78a8a8be80d60fcc5b4e4ddf6ccaa627d0`: Python `38234529997` SUCCESS, **219 passed, 4 warnings**. Dependency audit, release gate, compile and static safety audit succeeded.
+- Same test-fix SHA: Campaign `38234529976` Python job SUCCESS, **230 passed, 4 warnings**. Campaign Android build/test/lint job was still in progress at report update; wait for final conclusion before calling Campaign green.
+- Standalone Android run `38234530951`: startup_failure, no job records.
+- Test-fix CI artifacts: Python pytest report ID `11739579011`, ZIP digest `5eddf6033f3b24d1e24f977a7c4a313b10f42ca837245c24ef0258913038a75d`.
 
 ## BL-004
-Source review supports raising a sanitized public RuntimeError outside the transport handler and selected tests assert no cause/context. But target test assertions have not passed on the corrected SHA, and the full traceback/log/event/SQLite/recovery-consumer matrix remains unexecuted.
+The specific persistence-failure regression test is included in the passing configured suites, and the selected no-cause/no-context/redaction assertions pass there. Full traceback/repr/logger/structured-event/SQLite/recovery-diagnostic propagation matrix remains incomplete.
 
-Status: **OPEN — FIX NOT VERIFIED**.
+Status: **OPEN — FIX NOT VERIFIED** for full BL-004 closure.
 
 ## Order recovery and mutation paths
-Barrier and client source indicate PENDING-before-submit, duplicate intent guard, redacted ambiguity state, no blind POST/DELETE retries, and reconciliation-required handling. Full ten-scenario mock-exchange matrix and complete Python+Android source-to-sink proof remain incomplete.
+Source inspection indicates PENDING-before-submit, duplicate intent guard, redacted ambiguity state, no blind POST/DELETE retry, and reconciliation-required handling. Full ten-scenario mock-exchange matrix and complete Python+Android source-to-sink proof remain incomplete.
 
 Status: **INCOMPLETE — EVIDENCE MISSING**.
 
 ## Android and dependencies
-Campaign Android job succeeded on starting SHA and uploaded artifacts: debug APK ZIP ID `11739543288`, SHA-256 `282db932f92992efb7eb4ed048892bd5e1b11628a53705900704219f91345dea`; lint artifact ID `11739293554`, SHA-256 `d311dd4a1dc99f9927ff12f30fd6cd60c554864017585647c04d7f535640e45d`. These hashes are archive digests, not embedded APK hashes. Signature verification against a trusted release certificate and Android SCA are incomplete. Android startup_failure root cause unavailable without runner/job diagnostics. Python pip-audit succeeded for processed manifests on starting SHA, but complete SCA/reproducibility not established.
+Campaign Android job on test-fix SHA is still running at report update. Previous Campaign Android job on starting SHA succeeded and uploaded artifacts. Standalone Android workflow startup_failure persists with no jobs/runner logs. Signature verification against a trusted release certificate and Android SCA are incomplete. Python pip-audit succeeded for processed manifests in the passing test-fix Python job; hash-locked reproducibility is not established.
+
+Status: **BLOCKED — ACCESS REQUIRED** for standalone startup-failure diagnostics; **INCOMPLETE — EVIDENCE MISSING** for trusted signature and Android SCA.
 
 ## Security controls
 Read-only workflow permissions and SHA-pinned Actions observed. Branch protection/rulesets/Secrets/Environments remain inaccessible. Shallow history prevents full all-ref scan. No settings changed or history rewritten.
@@ -40,9 +41,10 @@ Read-only workflow permissions and SHA-pinned Actions observed. Branch protectio
 |---|---|
 | Starting SHA and PR identity | CLOSED — VERIFIED |
 | Root cause of starting-SHA Python test failure | CLOSED — VERIFIED |
-| Test assertion correction | OPEN — FIX NOT VERIFIED |
-| BL-004 exception isolation | OPEN — FIX NOT VERIFIED |
-| Targeted/full regression on corrected SHA | OPEN — FIX NOT VERIFIED |
+| Configured Python regression on test-fix SHA | CLOSED — VERIFIED |
+| Campaign Python regression on test-fix SHA | CLOSED — VERIFIED |
+| Full Campaign conclusion | OPEN — FIX NOT VERIFIED |
+| BL-004 all-channel proof | OPEN — FIX NOT VERIFIED |
 | Order recovery matrix | INCOMPLETE — EVIDENCE MISSING |
 | Complete Python/Android mutation-path registry | INCOMPLETE — EVIDENCE MISSING |
 | Android workflow startup_failure cause | BLOCKED — ACCESS REQUIRED |
@@ -52,12 +54,12 @@ Read-only workflow permissions and SHA-pinned Actions observed. Branch protectio
 | Reproducible dependencies/full SCA | OPEN — FIX NOT VERIFIED |
 
 ## Required owner actions
-1. Run Python backend tests and Campaign CI on the exact current HEAD using authorized Actions UI/API access.
-2. Provide runner/Actions diagnostics for Android startup_failure runs.
-3. Provide exported branch protection/ruleset/Secrets/Environments configuration or authorized read access.
-4. Supply trusted release certificate fingerprint, if a release signing identity is intended.
-5. Complete full mirror/all-ref secret scanning and rotate any discovered exposed credentials.
-6. Complete mock-exchange recovery tests and full source-to-sink mutation-path proof.
+1. Wait for and preserve Campaign Android job result on test-fix SHA.
+2. Complete full mock-exchange fault injection and source-to-sink mutation path proof.
+3. Provide Actions runner diagnostics for standalone Android startup_failure runs.
+4. Provide authorized branch protection/ruleset/Secrets/Environments evidence.
+5. Supply trusted release certificate fingerprint, if applicable; complete Android SCA.
+6. Complete full mirror/all-ref secret scanning and hash-locked dependency installation.
 
 ## Final disposition
-**TASK 000.8 NOT CLOSED. P0 NOT CLOSED.** No real orders, no authenticated mutating Binance calls, no merge, no force-push, and no changes to `main`.
+**TASK 000.8 NOT CLOSED. P0 NOT CLOSED.** Python configured suites pass on test-fix SHA; this does not establish full execution safety. No real orders, no authenticated mutating Binance calls, no merge, no force-push, and no changes to `main`.
