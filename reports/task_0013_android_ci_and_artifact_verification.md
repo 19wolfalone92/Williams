@@ -1,14 +1,10 @@
 # TASK 001.3 — Android CI and artifact verification
 
-**Status: BLOCKED / NOT VERIFIED on the current implementation SHA.**
+**Status: BLOCKED / NOT VERIFIED on current implementation SHA `74f12c595181d0b4362fa02f2b2de436db9a751c`.**
 
-Latest implementation/test SHA: `8415ab5e6b74e082b865e2cf2ddbcbde29fdb366`.
+- Campaign CI `38247803390`, source SHA `f51392ad42c440e52a5bfb1f92d84f0d7564ae4c`: unit-test task and `assembleDebug` completed; lint failed with 2 errors. First reported error: `DurableMutationLedger.kt:170 [UseKtx]` (“Use the KTX extension function SQLiteDatabase.transaction instead?”). The current SHA refactors the ledger to `androidx.core.database.transaction`, but that correction is **NOT YET VERIFIED** by CI.
+- The prior Campaign CI `38247007163`, SHA `eaa8f7c5a2446dd7678ae13fc82010e84684b51b`, also failed lint with 3 errors; the recovery function's synchronous persistence was annotated narrowly with `@SuppressLint("ApplySharedPref")` in later code.
+- Standalone Android APK run `38247804640`, SHA `f51392ad42c440e52a5bfb1f92d84f0d7564ae4c`: `startup_failure`; zero jobs and no artifacts. The rerun endpoint returned HTTP 403 for a prior startup-failure run; root cause is **NOT ESTABLISHED**.
+- Python backend run `38247803258`, SHA `f51392ad42c440e52a5bfb1f92d84f0d7564ae4c`: SUCCESS; 219 passed, 4 warnings. Artifact `11745814344`, digest `sha256:af526e724bd85c8cc34efb9e856c4b58e1e16d37be4204f04a92001c5e47ecfa`.
 
-- Campaign CI run `38244759203`: PENDING at last inspection; jobs endpoint returned zero jobs.
-- Python backend run `38244759173`: IN_PROGRESS at last inspection; backend-test job had reached dependency installation and had not yet executed the test step.
-- Standalone Android APK run `38244760292`: `startup_failure`; exact SHA matches the implementation SHA, and the jobs endpoint returned zero jobs with no artifacts.
-- Rerun request for prior startup-failure run `38244633544` returned HTTP 403: “This workflow run cannot be retried.” The integration exposes no workflow-dispatch action. No workflow permissions were changed.
-
-At the original starting SHA `d2f6333977069f5b411b99e79e7c1cdc1abde5c9`, Campaign CI `38239294642` succeeded and produced debug APK artifact `11742102433` and lint artifact `11743100882`; those artifacts belong to the old SHA and are not evidence for this implementation.
-
-No Kotlin test count, lint result, APK checksum, artifact ID or signing certificate is claimed for the current implementation SHA. The standalone startup failure's root cause remains **NOT ESTABLISHED**.
+No current-SHA APK artifact, checksum or signing certificate is available. The Campaign workflow did assemble a debug APK on SHA f513, but the overall step failed at lint and did not upload it. Debug output is not a trusted release. The current SHA has no completed CI result yet.

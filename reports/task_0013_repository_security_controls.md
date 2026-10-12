@@ -2,8 +2,8 @@
 
 **Status: PARTIAL / NOT VERIFIED.**
 
-The inspected `.github/workflows/android-apk.yml` declares `permissions: contents: read`; third-party actions in that workflow use full commit-SHA pins. Persistent signing-key restoration is conditioned on trusted `main`/`master` refs, while the pull-request debug build step does not receive signing secrets. Workflow source includes lint, unit tests, APK assembly, metadata/signature checks, checksums and artifact uploads.
+The inspected `.github/workflows/android-apk.yml` declares `permissions: contents: read`; third-party actions in that workflow use full commit-SHA pins. Persistent signing-key restoration is conditioned on trusted `main`/`master` refs, while pull-request debug assembly does not receive signing secrets. The workflow includes lint, unit tests, APK assembly, metadata/signature checks, checksums and artifact upload.
 
-Current standalone APK run `38244760292` failed with `startup_failure` before job creation; the jobs endpoint returned zero jobs and no artifact. A rerun attempt on prior run `38244633544` was denied with HTTP 403. Root cause is not established, and permissions were not broadened.
+Standalone APK run `38247804640` failed with `startup_failure` before job creation; jobs and artifacts were absent. A prior retry attempt returned HTTP 403 (“This workflow run cannot be retried”). The root cause is not established; permissions were not broadened. The workflow supports `workflow_dispatch`, but the connected GitHub integration exposes no dispatch action; an authorized repository maintainer should use Actions → Build Android APK → Run workflow on the PR branch without changing permissions.
 
-Not verified through the available integration: repository branch protection/ruleset administration, required-check policy, secret-scanning settings, and effective permissions across all workflows. No real credentials or live order mutations were used.
+Branch-protection API returned 403; repository rulesets endpoint returned an empty list, which does not prove branch protection is absent. Required-check policy, secret scanning, retention policy and effective permissions across all workflows remain **NOT VERIFIED**. No live orders or real credentials were used.
