@@ -54,7 +54,7 @@ internal object MutationIdentity {
         "signature", "apikey", "api_key", "apisecret", "api_secret",
         "secret", "authorization", "x-mbx-apikey"
     )
-    private val transportOnlyKeys = setOf("timestamp", "recvWindow")
+    private val transportOnlyKeys = setOf("timestamp", "recvwindow")
     private val decimalKeys = setOf(
         "quantity", "quoteorderqty", "price", "stopprice", "stoplimitprice",
         "icebergqty", "origqty", "executedqty", "aboveprice", "abovestopprice", "belowprice", "belowstopprice"
@@ -73,6 +73,7 @@ internal object MutationIdentity {
     fun canonicalUnsignedParams(unsignedParams: String): String {
         if (unsignedParams.isBlank()) return ""
         val values = linkedMapOf<String, String>()
+        val seenNormalizedKeys = mutableSetOf<String>()
         for (part in unsignedParams.split("&")) {
             require(part.isNotEmpty()) { "MUTATION_PARAMETER_EMPTY_SEGMENT" }
             val split = part.indexOf('=')
@@ -82,8 +83,8 @@ internal object MutationIdentity {
             val value = decode(part.substring(split + 1))
             require(key.isNotBlank()) { "MUTATION_PARAMETER_KEY_REQUIRED" }
             require(normalizedKey !in sensitiveKeys) { "MUTATION_CREDENTIAL_PARAMETER_REJECTED" }
-            require(key !in values) { "MUTATION_DUPLICATE_PARAMETER_REJECTED" }
-            if (key !in transportOnlyKeys) {
+            require(seenNormalizedKeys.add(normalizedKey)) { "MUTATION_DUPLICATE_PARAMETER_REJECTED" }
+            if (normalizedKey !in transportOnlyKeys) {
                 values[key] = normalizeValue(normalizedKey, value)
             }
         }
@@ -139,13 +140,15 @@ internal object MutationIdentity {
         sha256(canonicalRequest(method, path, symbol, unsignedParams))
 
     /**
-     * Stable endpoint-compatible client ID for legacy call sites without an
-     * explicit logical ID. This is deterministic for canonical request data,
-     * but identical independent operations can collide; production call sites
-     * should use the overload with a persisted logicalOperationId.
+     * Fail closed for callers that do not supply a business-operation identity.
+     * Request economics are not an operation identity: two independent orders
+     * can legitimately have byte-for-byte identical parameters. Callers must
+     * provide a persisted logicalOperationId created at the business-action boundary.
      */
-    fun generatedClientOrderId(method: String, path: String, symbol: String, unsignedParams: String): String =
-        generatedClientOrderId(method, path, symbol, unsignedParams, fingerprint(method, path, symbol, unsignedParams))
+    @Deprecated("Pass a persisted logicalOperationId; request economics are not identity")
+    fun generatedClientOrderId(method: String, path: String, symbol: String, unsignedParams: String): String {
+        throw IllegalArgumentException("MUTATION_LOGICAL_OPERATION_ID_REQUIRED")
+    }
 
     fun generatedClientOrderId(
         method: String,
