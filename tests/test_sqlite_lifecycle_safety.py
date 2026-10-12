@@ -314,3 +314,37 @@ def test_trade_column_migration_is_idempotent_after_reopen(tmp_path):
         assert required <= columns
         assert reopened.state_get("schema_version") == str(Database.SCHEMA_VERSION)
         assert reopened.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_interrupted_schema_migration_rolls_back_and_retry_completes(tmp_path, monkeypatch):
+    path = tmp_path / "migration-interrupted.sqlite3"
+    original = Database._migrate_trade_columns
+
+    def fail_after_first_alter(db):
+        db.conn.execute(
+            "ALTER TABLE trades ADD COLUMN entry_client_order_id TEXT"
+        )
+        raise sqlite3.OperationalError("injected migration interruption")
+
+    monkeypatch.setattr(Database, "_migrate_trade_columns", fail_after_first_alter)
+    with pytest.raises(sqlite3.OperationalError, match="injected migration interruption"):
+        Database(str(path))
+
+    # Initialization must close the failed connection, and the ALTER must roll back.
+    monkeypatch.setattr(Database, "_migrate_trade_columns", original)
+    with closing(sqlite3.connect(path)) as check:
+        columns = {row[1] for row in check.execute("PRAGMA table_info(trades)")}
+        assert "entry_client_order_id" not in columns
+        version = check.execute(
+            "SELECT value FROM bot_state WHERE key='schema_version'"
+        ).fetchone()
+        assert version is None
+
+    with Database(str(path)) as recovered:
+        columns = {row["name"] for row in recovered.conn.execute("PRAGMA table_info(trades)")}
+        assert {
+            "entry_client_order_id", "exit_order_list_client_id", "stop_price",
+            "take_profit_price", "risk_pct", "updated_at",
+        } <= columns
+        assert recovered.state_get("schema_version") == str(Database.SCHEMA_VERSION)
+        assert recovered.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
