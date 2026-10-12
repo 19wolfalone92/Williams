@@ -574,3 +574,60 @@ class DurableMutationLedgerTest {
         }
     }
 }
+
+
+    @Test
+    fun reconcilingIntentRemainsUnresolvedAcrossWorkerCrash() {
+        val prepared = ledger!!.prepare(
+            operationId = "reconcile-crash-op",
+            kind = "POST:/api/v3/order",
+            symbol = "BTCUSDT",
+            requestFingerprint = "a".repeat(64),
+            exchangeClientId = "W21_reconcile_crash"
+        )
+        ledger!!.claimForSubmission(prepared.operationId)
+        ledger!!.transition(
+            prepared.operationId,
+            setOf(DurableMutationLedger.State.SUBMITTING),
+            DurableMutationLedger.State.UNKNOWN
+        )
+        ledger!!.transition(
+            prepared.operationId,
+            setOf(DurableMutationLedger.State.UNKNOWN),
+            DurableMutationLedger.State.RECONCILING
+        )
+
+        assertTrue(ledger!!.hasUnresolved())
+        assertEquals(1, ledger!!.unresolved().size)
+        assertEquals(
+            DurableMutationLedger.State.RECONCILING,
+            ledger!!.find(prepared.operationId)!!.state
+        )
+    }
+
+    @Test
+    fun reconcilingIntentCanResumeAndOnlyReconciledClosesTheBarrier() {
+        val prepared = ledger!!.prepare(
+            operationId = "reconcile-resume-op",
+            kind = "POST:/api/v3/order",
+            symbol = "ETHUSDT",
+            requestFingerprint = "b".repeat(64),
+            exchangeClientId = "W21_reconcile_resume"
+        )
+        ledger!!.claimForSubmission(prepared.operationId)
+        ledger!!.transition(
+            prepared.operationId,
+            setOf(DurableMutationLedger.State.SUBMITTING),
+            DurableMutationLedger.State.RECONCILING
+        )
+
+        assertTrue(ledger!!.hasUnresolved())
+        ledger!!.transition(
+            prepared.operationId,
+            setOf(DurableMutationLedger.State.RECONCILING),
+            DurableMutationLedger.State.RECONCILED,
+            exchangeOrderId = "testnet-order-123"
+        )
+        assertFalse(ledger!!.hasUnresolved())
+        assertEquals("testnet-order-123", ledger!!.find(prepared.operationId)!!.exchangeOrderId)
+    }
