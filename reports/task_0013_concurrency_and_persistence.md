@@ -1,7 +1,7 @@
 # TASK 001.3 — Concurrency and persistence
 
-**Status: PARTIAL / NOT VERIFIED.** Source SHA: `efe5d12272e3cdd01ef48daeac4a56af6f685040`.
+**Status: PARTIAL / NOT VERIFIED.** Implementation/test source SHA: `8415ab5e6b74e082b865e2cf2ddbcbde29fdb366`.
 
-Existing Robolectric tests cover basic ledger reopen, duplicate prepare, conflicting operation ID, unresolved UNKNOWN after restart, ACKNOWLEDGED classification, and invalid transition. New tests add identity canonicalization and fail-closed input cases. They have not yet been observed executing on the current source SHA.
+Implemented source changes: SQLite schema v1→v2 additive migration; typed operation metadata persistence; a stable attempt identifier; and a transition correction so a second worker cannot treat an already-claimed `SUBMITTING` row as its own successful claim. Tests were added for a concurrent claim through two ledger instances and migration of an unresolved v1 row.
 
-The ledger uses SQLite transactions and conditional state updates; this is useful implementation evidence but is not proof of two-instance concurrency safety or commit-ambiguity handling. The required two-worker claim race, database busy/rollback/commit ambiguity, migration with unresolved intents, cancellation/fill race, repeated recovery, protection gap and 22 additional concurrency/persistence cases are **NOT RUN**. Physical disk failure is also not simulated.
+**Execution status:** these new tests have not yet been observed running on the implementation SHA. Required database busy/rollback/commit ambiguity, disk/write failure, stale in-memory state, cancellation/fill race, repeated recovery, missing protection, incomplete/conflicting evidence and remaining concurrency cases are **NOT RUN**. SQLite transactions are real in the test harness, but passing concurrency evidence is not yet available.

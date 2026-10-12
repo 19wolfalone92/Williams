@@ -1,9 +1,9 @@
 # TASK 001.3 — Durable submission control
 
-**Status: PARTIAL — P0 OPEN.** Source SHA: `efe5d12272e3cdd01ef48daeac4a56af6f685040`.
+**Status: PARTIAL — P0 OPEN.** Implementation/test source SHA: `8415ab5e6b74e082b865e2cf2ddbcbde29fdb366`.
 
-The Android mutation sink persists a `PREPARED` ledger row, then uses a SQLite transaction and conditional state transition to `SUBMITTING` before network I/O. Existing states are `PREPARED`, `SUBMITTING`, `UNKNOWN`, `ACKNOWLEDGED`, `RECONCILED`, and `REJECTED`. The sink rejects non-`PREPARED` replays; exceptions after submission attempt set reconciliation-required and attempt to persist `UNKNOWN`. Execution readiness includes both the runtime reconciliation flag and unresolved ledger rows.
+The Android sink prepares a durable ledger intent and transitions `PREPARED` to `SUBMITTING` in a SQLite transaction before network I/O. The conditional state update is the submission claim. The transition helper no longer returns success when another worker has already moved the row to the requested target state; a second `PREPARED → SUBMITTING` claimant now fails instead of receiving a false claim success.
 
-TASK 001.3 corrected identity derivation to canonicalize request parameters, added typed identity helpers, reordered replay rejection before the submission transition, and removed the random-UUID fallback for mutation paths that lack a stable logical/client/target key.
+The ledger schema is version 2 and adds exchange, campaign ID, signal ID and stable attempt ID fields. The v1→v2 migration is additive and preserves existing rows, including unresolved `SUBMITTING`/`UNKNOWN` intents. The runtime rejects mutation calls without a stable client/target key. Exceptions after submission attempt set reconciliation-required and attempt to persist `UNKNOWN`.
 
-**Not proven:** transaction contention across independent SQLite helper instances; commit-ambiguity behavior; full persistence failure injection; caller-supplied operation identity across all entry/exit/protection paths; operation-attempt history; or Android exchange reconciliation. No exactly-once claim is made. New source tests have not yet been observed passing on this SHA.
+**Tests added but not yet executed:** two-ledger-instance concurrent claim test, schema-v1 migration preserving an unresolved intent, typed metadata persistence, plus canonical identity cases. A successful SQLite transaction is not atomic with Binance. Commit ambiguity, database busy/write failure, actual response-persistence failure, and exchange reconciliation remain unproven. No exactly-once claim is made.

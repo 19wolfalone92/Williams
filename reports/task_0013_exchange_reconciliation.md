@@ -1,9 +1,9 @@
 # TASK 001.3 — Exchange reconciliation
 
-**Status: BLOCKED / NOT IMPLEMENTED COMPLETELY.** Source SHA reviewed: `efe5d12272e3cdd01ef48daeac4a56af6f685040`.
+**Status: BLOCKED / NOT IMPLEMENTED COMPLETELY.** Implementation/test source SHA: `8415ab5e6b74e082b865e2cf2ddbcbde29fdb366`.
 
-Observed Android `recover()` behavior: when the durable ledger has unresolved intents it sets/retains `RECONCILE_REQUIRED`, returns `recovered=false`, reports the unresolved count, and does not enable execution. This is fail-closed but is not a reconciliation worker.
+Android `recover()` retains the reconciliation barrier and returns `recovered=false` when durable unresolved intents exist. This is fail-closed behavior, not a reconciliation worker.
 
-No complete Android operation-specific recovery worker was implemented in this change. In particular, order lookup by persisted client ID, order/trade-history completeness, cancellation and fill reconciliation, OCO child-order reconciliation, both legs of cancel-replace, exposure reconciliation, and protection-gap resolution are **NOT VERIFIED / NOT IMPLEMENTED COMPLETELY**.
+No complete Android operation-specific reconciliation was implemented. Order query/history by stable client ID, trade/fill completeness, cancellation outcomes, OCO child-order state, both legs of cancel-replace, exposure reconstruction and protection-gap recovery remain **NOT VERIFIED / NOT IMPLEMENTED COMPLETELY**. No endpoint result was treated as proof without code.
 
-Python `execution_recovery.py` is a separate read-only worker and does not share an atomic transaction or ledger with Android. It cannot be counted as Android reconciliation evidence. Do not clear the Android recovery barrier based only on a successful REST request.
+Python `execution_recovery.py` is a separate read-only worker; it does not share an atomic transaction or ledger with Android. Do not clear the Android barrier based solely on a successful REST request. Gate C remains open.

@@ -2,6 +2,8 @@
 
 **Status: PARTIAL / NOT VERIFIED.**
 
-Inspected `.github/workflows/android-apk.yml` at the starting SHA. It declares `permissions: contents: read`; third-party actions in the inspected workflow use full commit-SHA pins. Persistent signing-key restoration is conditioned on trusted `main`/ `master` refs, while pull-request debug assembly has no signing secret in its step environment. The workflow includes lint, Android unit tests, debug/release assembly, APK metadata/signature checks, checksums and artifact upload steps, but the standalone run at the starting SHA failed before job creation.
+The inspected `.github/workflows/android-apk.yml` declares `permissions: contents: read`; third-party actions in that workflow use full commit-SHA pins. Persistent signing-key restoration is conditioned on trusted `main`/`master` refs, while the pull-request debug build step does not receive signing secrets. Workflow source includes lint, unit tests, APK assembly, metadata/signature checks, checksums and artifact uploads.
 
-Not verified through the available integration: repository branch protection/ruleset administration, required-check policy, secret scanning settings, artifact retention policy outside visible workflow definitions, and all workflows' effective permissions. No workflow permissions were changed. No real credentials or live order mutations were used.
+Current standalone APK run `38244760292` failed with `startup_failure` before job creation; the jobs endpoint returned zero jobs and no artifact. A rerun attempt on prior run `38244633544` was denied with HTTP 403. Root cause is not established, and permissions were not broadened.
+
+Not verified through the available integration: repository branch protection/ruleset administration, required-check policy, secret-scanning settings, and effective permissions across all workflows. No real credentials or live order mutations were used.

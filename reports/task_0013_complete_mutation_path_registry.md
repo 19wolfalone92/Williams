@@ -1,12 +1,9 @@
 # TASK 001.3 — Mutation path registry
 
-**Status: PARTIAL — P0 OPEN.** Source SHA: `efe5d12272e3cdd01ef48daeac4a56af6f685040`.
+**Status: PARTIAL — P0 OPEN.** Implementation/test source SHA: `8415ab5e6b74e082b865e2cf2ddbcbde29fdb366`.
 
-## Android sink observed
-The inspected `StandaloneRuntime.kt` routes `signedPost()`, `signedDelete()`, and `signedCancelReplace()` through `signedRequest()`. The visible authenticated OkHttp POST/DELETE request builders are inside `signedRequest()`. A source search identified multiple entry, protection, cancellation, OCO, exit and emergency call sites.
+## Android sink evidence
+Inspected `StandaloneRuntime.kt`: `signedPost()`, `signedDelete()`, and `signedCancelReplace()` route through `signedRequest()`; the visible authenticated OkHttp POST/DELETE request builders are inside that sink. The source scan identified entry, protection, cancellation, OCO, exit and emergency call sites. The sink now canonicalizes the unsigned request before ledger preparation, derives operation IDs from stable client/target keys, and rejects missing identity rather than using a fresh UUID fallback.
 
-## Contract corrections
-The sink now rejects mutation calls without a stable client/target key rather than inventing a fresh UUID operation identity. It canonicalizes request identity before persisting and transitions the intent to `SUBMITTING` before the request is built/sent.
-
-## Not a complete proof
-No whole-repository call graph or automated source-to-sink checker was executed. Indirect wrappers, all Python mutation paths, legacy/fallback branches, and runtime reachability of every call site remain **NOT VERIFIED**. The exact callsite registry with test mapping is incomplete. Gate D remains open.
+## Limits
+No complete interprocedural call graph or automated source-to-sink checker was executed. Indirect wrappers, all Python mutation paths, all legacy/fallback branches, and runtime reachability of every call site remain **NOT VERIFIED**. There is no exhaustive path-to-test registry. Gate D remains open.
