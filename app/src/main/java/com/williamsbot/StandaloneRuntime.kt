@@ -1423,10 +1423,15 @@ private class NativeEngine(
 
         recoveryInProgress = true
         recoveryMutationThread = Thread.currentThread()
-        prefs.edit()
+        val recoveryBarrierCommitted = prefs.edit()
             .putBoolean("recovery_in_progress", true)
             .putBoolean("reconcile_required", true)
-            .apply()
+            .commit()
+        if (!recoveryBarrierCommitted) {
+            reconcileRequired = true
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, "recovery barrier persistence failed")
+            throw IllegalStateException("RECOVERY_BARRIER_PERSIST_FAILED")
+        }
         return try {
             // Keep execution readiness blocked throughout recovery. The recovery thread
             // may perform its synchronous, journaled recovery operations.
@@ -1482,7 +1487,7 @@ private class NativeEngine(
         } finally {
             recoveryMutationThread = null
             recoveryInProgress = false
-            prefs.edit().putBoolean("recovery_in_progress", false).apply()
+            prefs.edit().putBoolean("recovery_in_progress", false).commit()
         }
     }
 
