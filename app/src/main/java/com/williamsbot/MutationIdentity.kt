@@ -153,10 +153,21 @@ internal object MutationIdentity {
         symbol: String,
         unsignedParams: String,
         logicalOperationId: String
+    ): String = generatedClientOrderId(method, path, symbol, unsignedParams, logicalOperationId, "W21_")
+
+    fun generatedClientOrderId(
+        method: String,
+        path: String,
+        symbol: String,
+        unsignedParams: String,
+        logicalOperationId: String,
+        prefix: String
     ): String {
         require(logicalOperationId.isNotBlank()) { "MUTATION_OPERATION_ID_REQUIRED" }
+        require(prefix.matches(Regex("[A-Za-z0-9_-]{1,8}"))) { "MUTATION_CLIENT_ID_PREFIX_INVALID" }
         val canonical = canonicalRequest(method, path, symbol, unsignedParams)
-        return "W21_" + sha256("$logicalOperationId|$canonical").take(28)
+        val suffixLength = 36 - prefix.length
+        return prefix + sha256("$logicalOperationId|$canonical").take(suffixLength)
     }
 
     fun operationId(operationType: String, exchange: String, symbol: String, logicalKey: String): String {
