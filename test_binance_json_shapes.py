@@ -303,3 +303,85 @@ def test_order_mutation_rate_limit_is_unknown_and_not_retried(monkeypatch):
     assert exc.value.unknown_execution is True
     assert exc.value.status_code == 429
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("status", ["NEW", "PARTIALLY_FILLED", "FILLED", "PENDING_CANCEL", "PENDING_NEW"])
+def test_order_safe_reconciles_ambiguous_post_by_client_order_id(monkeypatch, status):
+    client = make_client()
+    client_order_id = "WILLIAMS_AUDIT_RECONCILE_001"
+    ambiguous = BinanceAPIError("simulated response lost", unknown_execution=True)
+    submit = __import__("unittest.mock", fromlist=["Mock"]).Mock(side_effect=ambiguous)
+    existing = {
+        "symbol": "BTCUSDT",
+        "clientOrderId": client_order_id,
+        "orderId": 98765,
+        "status": status,
+        "executedQty": "0.25" if status == "PARTIALLY_FILLED" else "1.0" if status == "FILLED" else "0",
+    }
+    lookup = __import__("unittest.mock", fromlist=["Mock"]).Mock(return_value=existing)
+    monkeypatch.setattr(client, "order", submit)
+    monkeypatch.setattr(client, "get_order", lookup)
+
+    result = client.order_safe(
+        "BTCUSDT", "BUY", "LIMIT",
+        quantity="1",
+        new_client_order_id=client_order_id,
+    )
+
+    assert result is existing
+    submit.assert_called_once()
+    lookup.assert_called_once_with("BTCUSDT", orig_client_order_id=client_order_id)
+
+
+def test_order_safe_does_not_retry_when_reconciliation_lookup_fails(monkeypatch):
+    client = make_client()
+    client_order_id = "WILLIAMS_AUDIT_RECONCILE_002"
+    submit = __import__("unittest.mock", fromlist=["Mock"]).Mock(
+        side_effect=BinanceAPIError("simulated timeout", unknown_execution=True)
+    )
+    lookup = __import__("unittest.mock", fromlist=["Mock"]).Mock(
+        side_effect=BinanceAPIError("simulated order lookup unavailable")
+    )
+    monkeypatch.setattr(client, "order", submit)
+    monkeypatch.setattr(client, "get_order", lookup)
+
+    with pytest.raises(BinanceAPIError, match="Reconciliation is required before retry") as exc:
+        client.order_safe(
+            "BTCUSDT", "BUY", "LIMIT",
+            quantity="1",
+            new_client_order_id=client_order_id,
+        )
+
+    assert exc.value.unknown_execution is True
+    submit.assert_called_once()
+    lookup.assert_called_once_with("BTCUSDT", orig_client_order_id=client_order_id)
+
+
+def test_order_safe_reports_known_terminal_cancel_without_retry(monkeypatch):
+    client = make_client()
+    client_order_id = "WILLIAMS_AUDIT_RECONCILE_003"
+    submit = __import__("unittest.mock", fromlist=["Mock"]).Mock(
+        side_effect=BinanceAPIError("simulated timeout", unknown_execution=True)
+    )
+    existing = {
+        "symbol": "BTCUSDT",
+        "clientOrderId": client_order_id,
+        "orderId": 98767,
+        "status": "CANCELED",
+        "executedQty": "0.25",
+    }
+    lookup = __import__("unittest.mock", fromlist=["Mock"]).Mock(return_value=existing)
+    monkeypatch.setattr(client, "order", submit)
+    monkeypatch.setattr(client, "get_order", lookup)
+
+    with pytest.raises(BinanceAPIError, match="terminal after ambiguous submission") as exc:
+        client.order_safe(
+            "BTCUSDT", "BUY", "LIMIT",
+            quantity="1",
+            new_client_order_id=client_order_id,
+        )
+
+    assert exc.value.payload is existing
+    assert exc.value.unknown_execution is False
+    submit.assert_called_once()
+    lookup.assert_called_once_with("BTCUSDT", orig_client_order_id=client_order_id)
