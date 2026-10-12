@@ -66,6 +66,99 @@ class DurableMutationLedgerTest {
         assertFalse(fingerprint.contains("signature"))
     }
 
+
+    @Test
+    fun canonicalFingerprintIgnoresParameterOrderEncodingAndTransportMetadata() {
+        val first = MutationIdentity.fingerprint(
+            "post", "/api/v3/order", "btcusdt",
+            "symbol=btcusdt&side=buy&type=market&quantity=0.0100&price=1.0&timestamp=123&recvWindow=5000"
+        )
+        val equivalent = MutationIdentity.fingerprint(
+            "POST", "/api/v3/order", "BTCUSDT",
+            "recvWindow=10000&price=1.00&type=MARKET&quantity=1e-2&side=BUY&symbol=BTCUSDT&timestamp=456"
+        )
+        assertEquals(first, equivalent)
+    }
+
+    @Test
+    fun canonicalFingerprintPreservesAbsentVersusExplicitEmpty() {
+        val absent = MutationIdentity.fingerprint(
+            "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=BUY"
+        )
+        val empty = MutationIdentity.fingerprint(
+            "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=BUY&timeInForce="
+        )
+        assertFalse(absent == empty)
+    }
+
+    @Test
+    fun duplicateParametersAreRejectedRatherThanSilentlyCollapsed() {
+        assertThrows(IllegalArgumentException::class.java) {
+            MutationIdentity.canonicalUnsignedParams("symbol=BTCUSDT&side=BUY&side=SELL")
+        }
+    }
+
+    @Test
+    fun credentialAndSignatureParametersAreRejectedBeforeFingerprinting() {
+        val markers = listOf(
+            "signature=SYNTHETIC_SIGNATURE_MARKER",
+            "apiKey=SYNTHETIC_API_KEY_MARKER",
+            "api_secret=SYNTHETIC_API_SECRET_MARKER",
+            "authorization=SYNTHETIC_AUTH_HEADER_MARKER"
+        )
+        for (marker in markers) {
+            assertThrows(IllegalArgumentException::class.java) {
+                MutationIdentity.canonicalUnsignedParams("symbol=BTCUSDT&$marker")
+            }
+        }
+    }
+
+    @Test
+    fun distinctLogicalOperationsWithIdenticalParametersHaveDistinctClientIds() {
+        val params = "symbol=BTCUSDT&side=BUY&type=MARKET&quantity=0.01"
+        val first = MutationIdentity.generatedClientOrderId(
+            "POST", "/api/v3/order", "BTCUSDT", params, "campaign-1-signal-10-entry"
+        )
+        val second = MutationIdentity.generatedClientOrderId(
+            "POST", "/api/v3/order", "BTCUSDT", params, "campaign-2-signal-20-entry"
+        )
+        assertFalse(first == second)
+        assertTrue(first.length <= 36)
+        assertTrue(first.matches(Regex("[A-Za-z0-9_-]{1,36}")))
+    }
+
+    @Test
+    fun clientIdIsStableForSameLogicalOperationAcrossRestartEquivalentInvocation() {
+        val params = "quantity=0.0100&side=buy&type=market&symbol=btcusdt"
+        val beforeRestart = MutationIdentity.generatedClientOrderId(
+            "POST", "/api/v3/order", "BTCUSDT", params, "persisted-operation-42"
+        )
+        val afterRestart = MutationIdentity.generatedClientOrderId(
+            "POST", "/api/v3/order", "BTCUSDT",
+            "symbol=BTCUSDT&type=MARKET&side=BUY&quantity=0.01",
+            "persisted-operation-42"
+        )
+        assertEquals(beforeRestart, afterRestart)
+    }
+
+    @Test
+    fun changedEconomicParametersChangeFingerprint() {
+        val small = MutationIdentity.fingerprint(
+            "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=BUY&type=MARKET&quantity=0.01"
+        )
+        val large = MutationIdentity.fingerprint(
+            "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=BUY&type=MARKET&quantity=0.02"
+        )
+        assertFalse(small == large)
+    }
+
+    @Test
+    fun unsupportedDecimalRepresentationFailsClosed() {
+        assertThrows(IllegalArgumentException::class.java) {
+            MutationIdentity.canonicalUnsignedParams("symbol=BTCUSDT&quantity=not-a-number")
+        }
+    }
+
     @Test
     fun preparedIntentSurvivesLedgerReopen() {
         val id = ledger!!.prepare(
