@@ -1,6 +1,7 @@
 package com.williamsbot
 
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -159,13 +160,63 @@ class DurableMutationLedgerTest {
         }
     }
 
+
+    @Test
+    fun ledgerPersistsTypedOperationMetadataAndStableAttemptIdentity() {
+        val prepared = ledger!!.prepare(
+            operationId = "typed-operation",
+            kind = "POST:/api/v3/order",
+            symbol = "btcusdt",
+            requestFingerprint = "e".repeat(64),
+            exchangeClientId = "W21_typed",
+            exchange = "binance_spot",
+            campaignId = "campaign-17",
+            signalId = "signal-22"
+        )
+        assertEquals("BINANCE_SPOT", prepared.exchange)
+        assertEquals("BTCUSDT", prepared.symbol)
+        assertEquals("campaign-17", prepared.campaignId)
+        assertEquals("signal-22", prepared.signalId)
+        assertEquals("typed-operation:attempt-1", prepared.attemptId)
+        assertEquals(prepared.createdAtMs, prepared.updatedAtMs)
+    }
+
+    @Test
+    fun schemaV1MigrationPreservesUnresolvedIntent() {
+        ledger!!.close()
+        ledger = null
+        context.deleteDatabase("williams_mutation_ledger.db")
+        val oldDb = context.openOrCreateDatabase("williams_mutation_ledger.db", 0, null)
+        oldDb.execSQL(
+            "CREATE TABLE mutation_intents (" +
+                "operation_id TEXT PRIMARY KEY NOT NULL, kind TEXT NOT NULL, symbol TEXT NOT NULL, " +
+                "request_fingerprint TEXT NOT NULL, exchange_client_id TEXT, state TEXT NOT NULL, " +
+                "exchange_order_id TEXT, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)"
+        )
+        oldDb.execSQL(
+            "INSERT INTO mutation_intents(operation_id,kind,symbol,request_fingerprint,exchange_client_id,state," +
+                "exchange_order_id,created_at_ms,updated_at_ms) VALUES(" +
+                "'legacy-unresolved','POST:/api/v3/order','BTCUSDT','" + "f".repeat(64) +
+                "','W21_legacy','SUBMITTING',NULL,100,101)"
+        )
+        oldDb.version = 1
+        oldDb.close()
+
+        ledger = DurableMutationLedger(context)
+        val migrated = ledger!!.find("legacy-unresolved")!!
+        assertEquals(DurableMutationLedger.State.SUBMITTING, migrated.state)
+        assertEquals("BINANCE_SPOT", migrated.exchange)
+        assertEquals("legacy-unresolved:attempt-1", migrated.attemptId)
+        assertTrue(ledger!!.hasUnresolved())
+    }
+
     @Test
     fun preparedIntentSurvivesLedgerReopen() {
         val id = ledger!!.prepare(
             operationId = "op-restart",
             kind = "POST:/api/v3/order",
             symbol = "BTCUSDT",
-            requestFingerprint = "fingerprint-a",
+            requestFingerprint = "a".repeat(64),
             exchangeClientId = "W21_restart"
         )
         assertEquals(DurableMutationLedger.State.PREPARED, id.state)
@@ -181,7 +232,7 @@ class DurableMutationLedgerTest {
 
     @Test
     fun duplicateIdenticalIntentIsIdempotent() {
-        val first = ledger!!.prepare("op-duplicate", "POST:/api/v3/order", "BTCUSDT", "fp", "client-a")
+        val first = ledger!!.prepare("op-duplicate", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-a")
         val second = ledger!!.prepare("op-duplicate", "POST:/api/v3/order", "BTCUSDT", "fp", "client-a")
 
         assertEquals(first.operationId, second.operationId)
@@ -191,10 +242,10 @@ class DurableMutationLedgerTest {
 
     @Test
     fun conflictingReuseOfOperationIdIsRejected() {
-        ledger!!.prepare("op-conflict", "POST:/api/v3/order", "BTCUSDT", "fp-a", "client-a")
+        ledger!!.prepare("op-conflict", "POST:/api/v3/order", "BTCUSDT", "b".repeat(64), "client-a")
 
         assertThrows(DurableMutationLedger.IntentConflictException::class.java) {
-            ledger!!.prepare("op-conflict", "POST:/api/v3/order", "ETHUSDT", "fp-b", "client-b")
+            ledger!!.prepare("op-conflict", "POST:/api/v3/order", "ETHUSDT", "c".repeat(64), "client-b")
         }
     }
 
