@@ -482,7 +482,7 @@ def test_fi_09_trade_history_at_limit_is_not_assumed_complete(tmp_path):
     ({"commissionAsset": ""}, "lacks required execution evidence"),
 ])
 def test_fi_09_contradictory_or_incomplete_trade_fields_fail_closed(tmp_path, trade_updates, expected_error):
-    with Database(str(tmp_path / ("fi09-invalid-" + str(abs(hash(tuple(sorted(trade_updates.items()))))) + ".sqlite3"))) as db:
+    with Database(str(tmp_path / ("fi09-invalid-" + expected_error.replace(" ", "_") + ".sqlite3"))) as db:
         exchange = DeterministicFakeExchange()
         intent = _new_intent(client_id="fi09-invalid-trade-fields")
         _persist_ambiguous(db, intent)
