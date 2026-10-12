@@ -57,11 +57,11 @@ internal object MutationIdentity {
     private val transportOnlyKeys = setOf("timestamp", "recvwindow")
     private val decimalKeys = setOf(
         "quantity", "quoteorderqty", "price", "stopprice", "stoplimitprice",
-        "icebergqty", "origqty", "executedqty"
+        "icebergqty", "origqty", "executedqty", "aboveprice", "abovestopprice", "belowprice", "belowstopprice"
     )
     private val enumKeys = setOf(
         "side", "type", "timeinforce", "cancelreplacemode", "neworderresptype",
-        "stoplimittimeinforce", "selftradpreventionmode", "workingtype",
+        "stoplimittimeinforce", "abovetimeinforce", "belowtimeinforce", "selftradpreventionmode", "workingtype",
         "responsetype"
     )
 
