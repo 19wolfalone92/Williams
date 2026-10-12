@@ -468,3 +468,61 @@ The previously listed standalone Android run has now completed successfully on t
 - Persistent keystore restore/validation and persistent-keystore signature comparison were correctly **SKIPPED** for the pull-request event; they are not claimed as tested.
 
 This final result supersedes the preceding paragraph that said the standalone APK run was still in progress. The latest fully validated **code SHA** is still `892429e8d522673a5b44e0025fdf16449b88dbd7`; the newer branch HEAD changes only this report.
+
+
+## Full engineering audit continuation — 2026-10-12
+This addendum supersedes older status summaries above where the branch SHA or recovery behavior differs. Evidence below is tied to the exact SHA/run named in each item; historical green runs are not treated as proof for later code.
+
+### A. GitHub state
+- Branch: `night-shift-audit-20261012`
+- Code SHA at this audit snapshot: `1a696ad5b41928800861f57fdbd84ec532e4072f`
+- PR #66: OPEN / DRAFT / NOT MERGED; base `fix/pytest-safe-collection`.
+- No force push or merge performed.
+- The report-only commit that appends this addendum is not a code-validation SHA.
+
+### B. Recovery worker and execution barrier
+- Added/extended `execution_recovery.py` and mock-only coverage in `tests/test_execution_recovery_worker.py`.
+- The worker queries durable unresolved and active intents, atomically claims work with a lease, prefers saved `orderId`, falls back to saved `clientOrderId`, validates symbol/side/identifiers, verifies trade history for fills, and uses a bounded retry delay for read-only reconciliation. It never calls an order-submission method.
+- Recovery now covers both `PENDING` and `AMBIGUOUS` after database reopen, plus `SUBMITTED` and legacy active statuses for continued polling. A confirmed active exchange order is stored as `SUBMITTED` with `exchange_status`, quantities, IDs, and `next_reconcile_at`; it is not falsely labeled terminal. A verified terminal result stores the terminal state. Unknown/not-found responses, missing IDs, contradictory identity, API errors, trade-history errors, and persistence failures do not produce a false successful resolution.
+- Exception text from the exchange adapter is not persisted verbatim; non-validation errors are reduced to exception type plus a generic diagnostic to avoid leaking request details.
+- Important policy distinction: only `PENDING` / `AMBIGUOUS` block the global execution barrier. Confirmed active orders remain scheduled for polling but do not globally block all campaign actions; this preserves campaign reconciliation and protection of partial fills. Per-campaign strategy gates and stable intent/client-order IDs must continue to prevent duplicate entries. A strict “block every action until every active order is terminal” policy is not implemented and would require a campaign-aware allowlist for protective exits/cancels.
+- Key commits in this continuation: `a96ae8091fa6f2115b499829074e29b5799ddf24` (active orders under recovery tracking), `20ffe325dd198166282d589a903b5f0c2aed1bb4` (honor retry backoff), `75b26305d6861af9524da6a4075ce5627bef83e3` (redact recovery diagnostics), `8f7da06958413af7c316a224035756a5733751ab` (canonical exchange list status), `3dd188c01828c7b4e61ea11a9207a1e4e57b555d` (track active orders without globally blocking campaign recovery), `1a696ad5b41928800861f57fdbd84ec532e4072f` (PENDING restart recovery/client-order-ID regression coverage).
+- No real trades or authenticated state-changing Binance calls were performed.
+
+### C. SQLite, backup and restore
+- On code SHA `1a696ad5b41928800861f57fdbd84ec532e4072f`, the backend safety suite passed, including the SQLite lifecycle tests: PASS, 219 tests, 4 warnings (run 38219343061).
+- Campaign Python tests passed on the same SHA: PASS, 230 tests, 4 warnings (job in run 38219343060).
+- Existing temporary-database tests cover WAL online backup, interrupted backup not published as final, migration idempotency/reopen, busy/lock contention, write rollback, integrity and recovery behavior. The VPS backup script was not run against a real host or production database.
+- There is no proven end-to-end production restore procedure in this audit. Temporary-copy integrity checks are not a substitute for a documented restore drill.
+
+### D. CI evidence and Android
+- Python backend tests — run [38219343061](https://github.com/19wolfalone92/Williams/actions/runs/38219343061), SHA `1a696ad5b41928800861f57fdbd84ec532e4072f`: PASS; 219 passed, 4 warnings. Release contract gate, compile checks, static safety audit and safe offline tests passed.
+- Python dependency audit within that run: `pip-audit -r requirements.txt` and `pip-audit -r requirements-research.txt` both reported “No known vulnerabilities found”. This is point-in-time SCA, not proof that all dependency risks are absent.
+- Campaign CI — run [38219343060](https://github.com/19wolfalone92/Williams/actions/runs/38219343060), SHA `1a696ad5b41928800861f57fdbd84ec532e4072f`: Python job PASS (230 passed, 4 warnings); Android job was still running `:app:testDebugUnitTest :app:lintDebug :app:assembleDebug` at the last observation. Do not count that Android job as PASS until it concludes.
+- Standalone Build Android APK — run [38219344147](https://github.com/19wolfalone92/Williams/actions/runs/38219344147), SHA `1a696ad5b41928800861f57fdbd84ec532e4072f`: `startup_failure`; the run exposed no jobs or job logs, so the failure cannot be attributed to project code from available evidence. The same pre-job failure recurred on several newer SHAs. It is not an Android PASS.
+- Historical Campaign Android build/lint/unit tests passed on SHA `8f7da06958413af7c316a224035756a5733751ab` (run 38217814418), but that older SHA is not a substitute for the pending current-SHA job.
+- CI efficiency change: commit `bb3f590fe3af3552c89226b54791b0c6cc92fe2b` limits Campaign CI push runs to main/master while PRs validate feature branches, and adds 30-minute job timeouts to avoid unbounded runs.
+
+### E. Supply chain, permissions and trust boundary
+- Third-party Actions in the reviewed Android, Campaign, Python and read-only Testnet workflows are pinned to full 40-character commit SHAs. The SHAs were checked against the corresponding official GitHub repositories. The Python release-contract gate validates full-SHA pinning on the reviewed workflow set; it passed on SHA `1a696ad5b41928800861f57fdbd84ec532e4072f`.
+- Workflow permissions are read-only where declared (`contents: read`). The credentialed Testnet workflow is limited in its current code to trusted main/master refs and is read-only, but this is not a robust boundary against a malicious same-repository PR that can modify its workflow YAML. Internal PRs may have access to repository secrets. A protected GitHub Environment with main/master branch restrictions and required reviewers, plus moving sensitive credentials to environment-scoped secrets, is required; repository environment/secret settings could not be inspected or changed through the available connector. Do not treat the current `if github.ref` guard alone as proof that internal PRs cannot exfiltrate secrets.
+- Secret scan: BLOCKED. A full Gitleaks/TruffleHog-equivalent scan of the current tree and full Git history was not available through the connected tools; GitHub secret-scanning alert access was also unavailable. Selected source/workflow files were reviewed for obvious credential literals without printing values, but this is not a full secret scan. No claim of “no secrets found” is made.
+- Python dependency lock/constraints: no lockfile was found; requirements files use version ranges. Pinning the scanner itself and generating a reproducible dependency lock are follow-up tasks.
+- Android/Gradle SCA: NOT RUN. The repository has no Gradle dependency lockfile or verification metadata and no dedicated Gradle vulnerability scanner in the current workflow; lint explicitly disables `GradleDependency`. Dependency alerts were not accessible through the connector. Do not treat successful Gradle build/lint as a vulnerability scan.
+- APK binary secret/endpoint/signature inspection on the current SHA: NOT RUN. The standalone APK workflow failed before jobs, and artifact metadata alone did not provide a binary for inspection. The successful older APK inspection applies only to its recorded older SHA.
+- Static manifest review: `allowBackup=false`; cleartext traffic is denied except loopback; the launcher activity is exported and the foreground service/widget receiver are not. This is static review, not device/runtime validation. The app uses the legacy AndroidX Security Crypto encrypted-preferences API; plan migration to platform Android Keystore-backed storage, but do not change it without a focused migration/test.
+
+### F. Binance behavior
+- Error handling for `-1021` / `-2014`, endpoint selection, request signing, bounded retry behavior and credential redaction remain mock/unit-test checks only. No root cause for `-2014` is asserted without authenticated evidence. No real credentials or state-changing calls were used.
+- The client has a finite request timeout; reconciliation uses read-only `GET` methods for order/list/trade lookup. A single “order not found” response is not treated as proof that submission never occurred.
+
+### G. Remaining blockers and decision
+- HIGH — full secret/history scan not performed; need a trusted local scanner over the complete Git history and a secret rotation decision if any real credential is found.
+- HIGH — internal-PR secret trust boundary depends on repository settings that were not inspectable; configure a protected Environment and restrict secret access before using persistent signing/Testnet credentials.
+- HIGH — standalone Android workflow repeatedly fails before job creation on the latest SHA; obtain a successful current-SHA run with lint, unit tests, debug/release artifact metadata and signature checks. Current Campaign Android job must also reach a final result.
+- HIGH — Android/Gradle SCA and current-APK binary inspection are NOT RUN.
+- MEDIUM — no dependency lockfiles; Python scanner installation is not fully reproducible; Android dependency freshness lint is disabled.
+- MEDIUM — active confirmed orders are polled but do not globally block every new action; campaign-aware entry/exit/cancel policy must be tested before Testnet readiness.
+- MEDIUM — no complete restore drill against a disposable isolated environment has been demonstrated.
+
+**Decision: BLOCKED — CRITICAL REQUIREMENTS UNVERIFIED.** Keep PR #66 OPEN / DRAFT / NOT MERGED. No Testnet credentialed run or live trading is authorized by this audit.
