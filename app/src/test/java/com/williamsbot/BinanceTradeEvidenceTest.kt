@@ -75,7 +75,8 @@ class BinanceTradeEvidenceTest {
         assertThrows(IllegalArgumentException::class.java) { verify(trade(quoteQty = "9")) }
         val missingTime = trade().put("time", 0L)
         assertThrows(IllegalArgumentException::class.java) { verify(missingTime) }
-        val missingFlags = trade().remove("isMaker")
+        val missingFlags = trade()
+        missingFlags.remove("isMaker")
         assertThrows(IllegalArgumentException::class.java) { verify(missingFlags) }
     }
 
