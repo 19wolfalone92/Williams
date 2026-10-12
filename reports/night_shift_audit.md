@@ -129,7 +129,17 @@ The environment limitation is lack of a local checkout/runtime in this session. 
 - Python backend run [38200218167](https://github.com/19wolfalone92/Williams/actions/runs/38200218167) on `cbf6353c13d16fe14b9160a0e0aa579193ea0ff4`: **FAIL**, 2 failed, 154 passed, 4 warnings in 4.46s.
 - Both failures were incorrect expected diagnostic substrings in the newly ported mock tests, not failures of the fail-closed behavior: the configured mock fails persistence of the `AMBIGUOUS` intent while the durable reconciliation-state write succeeds. The tests incorrectly expected the reconciliation-state write itself to fail.
 - Corrected the assertions to verify the actual ambiguous-intent persistence failure and the mandatory-before-retry diagnostic. This preserves the safety assertions and does not bypass or remove tests.
-- The corrected tests are awaiting a fresh CI run on the next commit. No PASS is claimed for the corrected tests yet.
+- **Fresh validation PASS:** Python backend run [38200332135](https://github.com/19wolfalone92/Williams/actions/runs/38200332135) on code/test SHA `d0affea85a37b9190001dcb1faa99de207304693` completed: release contract gate, Python compile, static safety audit and offline tests passed; pytest reported `156 passed, 4 warnings in 4.92s`.
+- **Fresh validation PASS:** Campaign CI Python job on run [38200327718](https://github.com/19wolfalone92/Williams/actions/runs/38200327718), same SHA, included the focused execution-barrier regression module and reported `167 passed, 4 warnings in 4.45s`.
+- Android jobs for this SHA were still running at the last poll; no Android PASS is claimed until the run concludes.
 
 
 - Follow-up CI routing note: the GitHub ref update did not create a fresh Python backend run for the assertion-only follow-up commit. To ensure the focused safety tests are actually executed on the latest tree, added the same test module to the all-branches Campaign CI deterministic test list. The Campaign CI run on the resulting commit is the required evidence; until it finishes, the focused regression suite remains **NOT YET VERIFIED**.
+
+
+## 11. Final state at report update
+
+- Source/test/workflow commit whose Python checks passed: `d0affea85a37b9190001dcb1faa99de207304693`.
+- The report-only follow-up commit records these exact-SHA results; it does not change Python, Android, or workflow source.
+- P0 execution-intent persistence is now fail-closed in the audit branch and covered by mocks; CI verifies the corrected regression tests. SQLite artifact provenance, complete repository/history secret scanning, and end-to-end order restart/reconciliation scenarios remain outstanding and are not declared resolved.
+- Android lint/build checks on the source/test commit were still in progress at the last poll.
