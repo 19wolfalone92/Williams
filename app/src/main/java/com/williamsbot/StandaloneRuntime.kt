@@ -1416,6 +1416,24 @@ private class NativeEngine(
         }
 
         return try {
+            // Never clear the recovery barrier while a durable exchange mutation
+            // is unresolved. Reconciliation for every operation kind must finish
+            // before normal recovery may re-enable execution.
+            if (mutationLedger.hasUnresolved()) {
+                reconcileRequired = true
+                stateMachine.force(
+                    TradingState.RECONCILE_REQUIRED,
+                    "durable mutation intents require exchange reconciliation"
+                )
+                prefs.edit().putBoolean("reconcile_required", true).apply()
+                return JSONObject()
+                    .put("recovered", false)
+                    .put("state", "RECONCILE_REQUIRED")
+                    .put("execution_enabled", false)
+                    .put("unresolved_mutation_count", mutationLedger.unresolved().size)
+                    .put("reason", "durable_mutation_reconciliation_pending")
+            }
+
             clearReconcileRequired()
             recoverPendingEntries()
             reconcilePositionsWithExchange()
