@@ -452,3 +452,19 @@ A previous run on SHA `00cb86310125da24837fe8397308e27f7a6bfb0b` failed nine rec
 
 ### Disposition
 Recovery is now implemented as a bounded, read-only, lease-coordinated reconciliation worker with explicit OCO and fill-history checks. Python and Campaign CI pass on the exact code SHA above. The audit remains **BLOCKED — CRITICAL REQUIREMENTS UNVERIFIED** until the standalone Android workflow reaches a final result and the security gaps above are resolved or explicitly accepted. Keep PR #66 OPEN / DRAFT; do not merge automatically.
+
+
+### Follow-up — standalone Android result finalized after the preceding snapshot
+The previously listed standalone Android run has now completed successfully on the exact code SHA `892429e8d522673a5b44e0025fdf16449b88dbd7`.
+
+- Run [38216762697](https://github.com/19wolfalone92/Williams/actions/runs/38216762697): **PASS**, job `Build APKs` concluded `success`.
+- `:app:lintDebug`: PASS (`BUILD SUCCESSFUL`).
+- `:app:testDebugUnitTest`: PASS (`BUILD SUCCESSFUL`).
+- PR debug APK build: PASS without persistent signing secrets.
+- `:app:assembleRelease`: PASS; output is `app-release-unsigned.apk`, not a signed production release.
+- APK file existence and metadata inspection: PASS; debug and release package IDs/versions were reported by `aapt`.
+- Debug APK signature verification: PASS (APK Signature Scheme v2 verified).
+- SHA-256 checksums and artifact uploads: PASS.
+- Persistent keystore restore/validation and persistent-keystore signature comparison were correctly **SKIPPED** for the pull-request event; they are not claimed as tested.
+
+This final result supersedes the preceding paragraph that said the standalone APK run was still in progress. The latest fully validated **code SHA** is still `892429e8d522673a5b44e0025fdf16449b88dbd7`; the newer branch HEAD changes only this report.
