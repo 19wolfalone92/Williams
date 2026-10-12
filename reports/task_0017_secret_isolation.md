@@ -1,23 +1,21 @@
-# TASK 001.8 — BL-004 Secret Isolation
+# TASK 001.9 — BL-004 Secret Isolation
 
-- Audited code/test SHA: `31ba73ff81c43edb5be4606b200dce752148967a`.
+- Latest source/test HEAD at report preparation: `fd3276c5f041dd47f0941d5b07fff4726c8c9124`.
+- Targeted Python Campaign run [38306130277](https://github.com/19wolfalone92/Williams/actions/runs/38306130277): 258 passed on prior SHA `5c6499a26a493ab4ff11ca44486850a79283d7ef`, including an end-to-end synthetic sentinel test against a temporary SQLite database and public exception output.
 - Status: PARTIAL — P0 OPEN.
-- Only synthetic credentials may be used; no real credentials were read or emitted.
 
-## IMPLEMENTED (source inspection)
+## Tested evidence on prior SHA
 
-- Android mutation fingerprint canonicalization rejects credential/signature/authorization parameter names.
-- `SecretRedactor` and selected Android REST/user-stream audit and persistence tests exist.
-- Python regression tests exist in `tests/test_binance_client_secret_redaction.py` and `tests/test_execution_barrier_secret_redaction.py`.
+- Synthetic sentinel is injected through a submit timeout after fake-exchange acceptance.
+- Public RuntimeError is checked for absence of the sentinel and for suppressed exception cause/context.
+- The actual temporary SQLite database dump is scanned for the sentinel after the failure/reconciliation-required path.
+- Python redaction tests exercise error handling and persistence; Android has selected credential/fingerprint/redaction unit tests.
 
-## TESTED / VERIFIED
+## Remaining BL-004 gaps
 
-- Python test job in run [38301629067](https://github.com/19wolfalone92/Williams/actions/runs/38301629067) completed SUCCESS on audited SHA 31ba73f; this verifies only the tests actually configured in that job.
-- Android sentinel tests and complete artifact/storage scan are NOT VERIFIED because the Campaign Android job was still running at last inspection.
-- No evidence yet proves synthetic API key/secret/signature/auth header/signed URL sentinel values are absent from every log, exception, diagnostic, SQLite row, DecisionTrace, CI artifact, report and crash/recovery output.
+- Full sentinel matrix for API key, API secret, signature, Authorization header and signed query parameters across every transport and recovery path.
+- Scanning all captured application logs, Android SQLite, Python SQLite, DecisionTrace, diagnostic outputs, crash/recovery outputs and every CI artifact.
+- The downloaded APK artifact from prior SHA contains the APK, checksum, provenance and signature text; it is not evidence that every diagnostic or test artifact was scanned for every sentinel.
+- The new sentinel test and stricter recovery changes still need exact final-SHA CI evidence.
 
-## Required remaining tests
-
-Inject unique synthetic sentinels through actual request, exception, failure, persistence, diagnostics and recovery paths. Inspect bytes/contents of resulting SQLite rows, captured logs, thrown exceptions, trace JSON, CI artifacts and reports. Assert every sentinel is absent. Function-level redactor tests alone are insufficient.
-
-No real credentials or live orders used. P0 remains open.
+Only synthetic sentinel values were used. No real credentials were read or emitted. P0 remains open.
