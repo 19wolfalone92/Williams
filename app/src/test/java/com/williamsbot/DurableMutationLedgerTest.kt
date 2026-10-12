@@ -512,6 +512,56 @@ class DurableMutationLedgerTest {
     }
 
     @Test
+    fun ambiguousSingleOrderIntentCanBeReconciledOnlyWithExplicitExchangeOrderId() {
+        ledger!!.prepare(
+            "op-ambiguous-reconcile",
+            "POST:/api/v3/order",
+            "BTCUSDT",
+            "c".repeat(64),
+            "W21_reconcile"
+        )
+        ledger!!.claimForSubmission("op-ambiguous-reconcile")
+        ledger!!.transition(
+            "op-ambiguous-reconcile",
+            setOf(DurableMutationLedger.State.SUBMITTING),
+            DurableMutationLedger.State.UNKNOWN
+        )
+
+        val reconciled = ledger!!.transition(
+            "op-ambiguous-reconcile",
+            setOf(DurableMutationLedger.State.UNKNOWN),
+            DurableMutationLedger.State.RECONCILED,
+            exchangeOrderId = "987654"
+        )
+
+        assertEquals(DurableMutationLedger.State.RECONCILED, reconciled.state)
+        assertEquals("987654", reconciled.exchangeOrderId)
+        assertFalse(ledger!!.hasUnresolved())
+    }
+
+    @Test
+    fun acknowledgedIntentCanRemainUnresolvedUntilReconciliationEvidenceIsPersisted() {
+        ledger!!.prepare("op-ack-reconcile", "POST:/api/v3/order", "BTCUSDT", "a".repeat(64), "W21_ack")
+        ledger!!.claimForSubmission("op-ack-reconcile")
+        ledger!!.transition(
+            "op-ack-reconcile",
+            setOf(DurableMutationLedger.State.SUBMITTING),
+            DurableMutationLedger.State.ACKNOWLEDGED,
+            exchangeOrderId = "123"
+        )
+        assertTrue(ledger!!.hasUnresolved())
+
+        val reconciled = ledger!!.transition(
+            "op-ack-reconcile",
+            setOf(DurableMutationLedger.State.ACKNOWLEDGED),
+            DurableMutationLedger.State.RECONCILED,
+            exchangeOrderId = "123"
+        )
+        assertEquals(DurableMutationLedger.State.RECONCILED, reconciled.state)
+        assertFalse(ledger!!.hasUnresolved())
+    }
+
+    @Test
     fun illegalStateTransitionIsRejected() {
         ledger!!.prepare("op-invalid", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-invalid")
 
