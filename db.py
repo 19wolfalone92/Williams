@@ -319,7 +319,7 @@ class Database:
                 self.conn.execute(f'ALTER TABLE execution_intents ADD COLUMN {name} {sql_type}')
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_intents_recovery ON execution_intents(status, next_reconcile_at, lease_until)")
 
-    def state_get(self, key, default=None)
+    def state_get(self, key, default=None):
         r = self.conn.execute(
             'SELECT value FROM bot_state WHERE key=?',
             (key,)
