@@ -315,8 +315,13 @@ class ExecutionBarrier:
                     raise RuntimeError(
                         "submission outcome is ambiguous and reconciliation must be completed "
                         f"before any retry: {ambiguity_reason}"
-                    ) from exc
-                raise
+                    ) from None
+                # Do not propagate unsafe transport exception text or traceback.
+                # HTTP clients may embed credentials, signatures, URLs, headers,
+                # query parameters, or response bodies in exception strings.
+                raise RuntimeError(
+                    "submission outcome is ambiguous; reconciliation is mandatory before any retry"
+                ) from None
 
             if intent.order_type != "CANCEL":
                 status = str(
