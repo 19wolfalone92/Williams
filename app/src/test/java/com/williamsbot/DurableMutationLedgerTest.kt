@@ -290,7 +290,7 @@ class DurableMutationLedgerTest {
     @Test
     fun protectionClientIdIsStableAndDistinctByLogicalPositionContext() {
         val params = "symbol=BTCUSDT&side=SELL&quantity=0.0100&abovePrice=110.0&aboveStopPrice=111.0" +
-            "&aboveTimeInForce=gtc&belowType=STOP_LOSS_LIMIT&belowStopPrice=90.0&belowPrice=89.90&belowTimeInForce=gtc"
+            "&aboveTimeInForce=gtc&aboveType=TAKE_PROFIT_LIMIT&belowType=STOP_LOSS_LIMIT&belowStopPrice=90.0&belowPrice=89.90&belowTimeInForce=gtc"
         val equivalent = "belowTimeInForce=GTC&belowPrice=89.9&belowStopPrice=90.00&belowType=STOP_LOSS_LIMIT" +
             "&aboveTimeInForce=GTC&aboveType=TAKE_PROFIT_LIMIT&aboveStopPrice=111.00&abovePrice=110&quantity=0.01&side=SELL&symbol=btcusdt"
         val first = MutationIdentity.generatedClientOrderId(
