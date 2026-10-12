@@ -138,10 +138,11 @@ def test_exchange_submission_exception_is_not_retried():
 
     try:
         ExecutionBarrier(ContextCache(), db).execute(campaign_intent(), submit)
-    except TimeoutError:
-        pass
+    except RuntimeError as exc:
+        assert "submission outcome is ambiguous" in str(exc)
+        assert "exchange response timed out" not in str(exc)
     else:
-        raise AssertionError("exchange timeout must be propagated")
+        raise AssertionError("ambiguous submission must be reported without raw transport details")
 
     submit.assert_called_once()
     assert db.saved_statuses == ["PENDING", "AMBIGUOUS"]
