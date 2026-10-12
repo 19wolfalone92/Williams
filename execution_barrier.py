@@ -214,9 +214,6 @@ class ExecutionBarrier:
                     order_fsm.state = OrderState.REJECTED
                 self._record("ERROR", "execution_blocked", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
-            if final_status == "REJECTED":
-                self._record("WARNING", "execution_rejected", intent, "Binance returned an authoritative OCO rejection")
-                return ExecutionResult(intent.intent_id, False, response=response, reason="Binance rejected the OCO order list")
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
@@ -412,6 +409,9 @@ class ExecutionBarrier:
                 return ExecutionResult(
                     intent.intent_id, False, response=response, reason=reason
                 )
+            if final_status == "REJECTED":
+                self._record("WARNING", "execution_rejected", intent, "Binance returned an authoritative OCO rejection")
+                return ExecutionResult(intent.intent_id, False, response=response, reason="Binance rejected the OCO order list")
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
