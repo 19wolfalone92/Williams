@@ -72,6 +72,7 @@ jobs:
             tests/test_execution_barrier_persistence_fail_closed.py \
             tests/test_mutation_boundary_inventory.py \
             tests/test_execution_recovery_worker.py \
+            tests/test_fi_01_fi_12_fake_exchange.py \
             tests/test_sqlite_lifecycle_safety.py \
             tests/test_quant_layer.py \
             tests/test_quant_models.py \
@@ -134,6 +135,14 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$APK" | tee app/build/outputs/apk/debug/apk-signature.txt
           sha256sum "$APK" | tee "$APK.sha256"
           printf 'source_sha=%s\n' "$SOURCE_SHA" > "$APK.provenance.txt"
+      - name: Verify debug APK package identity
+        run: |
+          set -euo pipefail
+          AAPT="$(find "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}/build-tools" -maxdepth 2 -type f -name aapt | sort -V | tail -n 1)"
+          test -n "$AAPT"
+          META="$("$AAPT" dump badging app/build/outputs/apk/debug/app-debug.apk)"
+          printf '%s\\n' "$META" | grep -F "package: name='com.williamsbot.debug'"
+          printf '%s\\n' "$META" | grep -F "targetSdkVersion:'36'"
       - name: Upload debug APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
