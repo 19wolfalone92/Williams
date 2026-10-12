@@ -1,6 +1,9 @@
 package com.williamsbot
 
 import android.content.Context
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -178,6 +181,52 @@ class DurableMutationLedgerTest {
         assertEquals("signal-22", prepared.signalId)
         assertEquals("typed-operation:attempt-1", prepared.attemptId)
         assertEquals(prepared.createdAtMs, prepared.updatedAtMs)
+    }
+
+
+    @Test
+    fun twoLedgerInstancesCannotBothClaimOnePreparedIntent() {
+        val operationId = "op-atomic-claim"
+        ledger!!.prepare(
+            operationId,
+            "POST:/api/v3/order",
+            "BTCUSDT",
+            "9".repeat(64),
+            "W21_atomic"
+        )
+        val secondLedger = DurableMutationLedger(context)
+        val start = CountDownLatch(1)
+        val successes = AtomicInteger(0)
+        val failures = AtomicInteger(0)
+
+        fun claimant(target: DurableMutationLedger) = Thread {
+            start.await()
+            try {
+                target.transition(
+                    operationId,
+                    setOf(DurableMutationLedger.State.PREPARED),
+                    DurableMutationLedger.State.SUBMITTING
+                )
+                successes.incrementAndGet()
+            } catch (_: Exception) {
+                failures.incrementAndGet()
+            }
+        }
+
+        val first = claimant(ledger!!)
+        val second = claimant(secondLedger)
+        first.start()
+        second.start()
+        start.countDown()
+        first.join(TimeUnit.SECONDS.toMillis(10))
+        second.join(TimeUnit.SECONDS.toMillis(10))
+        secondLedger.close()
+
+        assertFalse(first.isAlive)
+        assertFalse(second.isAlive)
+        assertEquals(1, successes.get())
+        assertEquals(1, failures.get())
+        assertEquals(DurableMutationLedger.State.SUBMITTING, ledger!!.find(operationId)!!.state)
     }
 
     @Test
