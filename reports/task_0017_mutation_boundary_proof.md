@@ -1,26 +1,27 @@
-# TASK 001.8 — Mutation Boundary Proof
+# TASK 001.9 — Mutation Boundary Proof
 
-- Audited code/test SHA: `31ba73ff81c43edb5be4606b200dce752148967a`.
+- Latest source/test HEAD at report preparation: `fd3276c5f041dd47f0941d5b07fff4726c8c9124`.
 - Status: PARTIAL — P0 OPEN.
 
-## Inventory currently enforced
+## Inventory and controls
 
-- Android raw OkHttp call-site inventory is covered by `tests/test_mutation_boundary_inventory.py`; current guard expects the three raw calls in `StandaloneRuntime.kt` and verifies the signed mutation sink contains durable prepare/claim/state handling.
-- Android wrappers `signedPost`, `signedDelete`, and `signedCancelReplace` route through `signedRequest`; read-only market and signed GET are classified separately.
-- Known mutation endpoints: POST/DELETE `/api/v3/order`, POST `/api/v3/orderList/oco`, DELETE `/api/v3/orderList`, POST `/api/v3/order/cancelReplace`.
-- Python exchange transport is centralized in `binance_client.py:BinanceSpotClient._request`; mutation adjudication/persistence in `execution_barrier.py`; `execution_recovery.py` is read-only; startup gate in `trader.py`; durable state in `db.py`.
+- Android regression inventory: `tests/test_mutation_boundary_inventory.py` enumerates raw OkHttp call sites and asserts Binance mutations remain inside `StandaloneRuntime.signedRequest`, with durable prepare/claim and SUBMITTING/UNKNOWN handling.
+- Known Android mutation wrappers include signed POST/DELETE and cancel-replace; recovery/read-only lookup must not call mutation wrappers.
+- Python HTTP mutations are centralized in `binance_client.py`; execution admission/persistence is mediated by `execution_barrier.py`; recovery uses read-only lookup calls in `execution_recovery.py`.
+- Python fake-exchange tests assert actual mutation counters for ambiguous submission/recovery and unresolved retry.
+- Unsupported `CANCEL_REPLACE`, `CANCEL_LIST`, `CANCEL_ORDER_LIST`, `ORDER_LIST_CANCEL` and `CANCEL_OCO` operation types are now explicitly rejected by recovery before exchange lookup; durable state remains AMBIGUOUS.
 
 ## CI evidence
 
-- Run [38301629067](https://github.com/19wolfalone92/Williams/actions/runs/38301629067), SHA 31ba73f: Campaign Python job SUCCESS, including configured deterministic test set. Campaign Android job remained IN_PROGRESS at last inspection.
-- Static inventory regression is TESTED by that Python job; it does not prove every indirect SDK/adapter route or runtime reachability.
-- Standalone APK run [38301630392](https://github.com/19wolfalone92/Williams/actions/runs/38301630392) failed at workflow startup with no jobs/artifacts; it provides no Android evidence.
+- Campaign Python run [38306130277](https://github.com/19wolfalone92/Williams/actions/runs/38306130277): SUCCESS, 258 passed on prior SHA `5c6499a26a493ab4ff11ca44486850a79283d7ef`.
+- Final OCO list-ID conflict guard/test and documentation descendants require their own exact-SHA CI result.
+- Separate APK workflow [38306239714](https://github.com/19wolfalone92/Williams/actions/runs/38306239714) ended `startup_failure` with no jobs/artifacts; no Android proof is available from that run.
 
 ## Remaining gaps
 
-- No complete dynamic call graph or exhaustive proof for all emergency-exit, recovery worker, background, diagnostic and adapter paths.
-- OCO/cancel/cancelReplace reconciliation is unsupported; those ambiguous operations must remain UNKNOWN/RECONCILING and block normal trading.
-- No integrated fake-exchange mutation-count regression currently demonstrates zero resubmissions during unresolved recovery.
-- Android SQLite and Python SQLite are separate stores and do not form one atomic transaction.
+- Static inventory is not a complete dynamic call graph of every Android/Python emergency exit, background worker, SDK/adapter, diagnostic route and test-only mutation route.
+- No integrated Android fake exchange currently demonstrates zero duplicate mutations across all FI-01–FI-12 boundaries.
+- Compound cancel-replace and order-list cancellation are blocked rather than falsely claimed recovered.
+- Android SQLite and Python SQLite are separate stores and do not share an atomic transaction.
 
 Status: PARTIAL — P0 OPEN.
