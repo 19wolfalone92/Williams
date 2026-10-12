@@ -101,6 +101,15 @@ def main() -> None:
     must(android_ci, "gradle --no-daemon :app:lintDebug", "android workflow")
     must_not(android_ci, "./gradlew --no-daemon :app:", "android workflow")
 
+    # Pull-request Gradle code is untrusted. Persistent signing material may only
+    # be restored or passed to Gradle on trusted push/manual runs, never PR runs.
+    must(android_ci, "if: github.event_name != 'pull_request'\\n        env:\\n          DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}", "trusted signing-key restore")
+    must(android_ci, "if: github.event_name != 'pull_request'\\n        env:\\n          WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}", "trusted signing validation")
+    must(android_ci, "Build debug APK for pull requests (no secrets)", "PR unsigned debug build")
+    must(android_ci, "if: github.event_name == 'pull_request'\\n        run:", "PR secret-free build step")
+    must(android_ci, "Verify debug APK signature", "Android APK signature verification")
+    must(android_ci, "if: github.event_name != 'pull_request'\\n        env:\\n          WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}", "trusted APK signature comparison")
+
     python_ci = read(".github/workflows/python-ci.yml")
     must(python_ci, "python3 ci_release_gate.py", "python workflow")
     must(python_ci, "group: backend-ci-${{ github.ref }}-${{ github.sha }}", "python workflow")
