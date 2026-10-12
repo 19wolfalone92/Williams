@@ -6038,7 +6038,7 @@ private class NativeEngine(
                     qty = qty,
                     entry = entry,
                     stopDistance = stopDistance,
-                    operationContext = "entry-protection:$clientId"
+                    operationContext = "entry-protection:$clientOrderId"
                 )
 
             val journalSnapshot =
