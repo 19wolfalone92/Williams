@@ -406,3 +406,49 @@ On the current code snapshot, the passing Python and Campaign suites include:
 
 ### 7. Disposition
 The latest code snapshot has **PASS** for Python backend CI, Campaign Python CI, standalone Android lint/unit/debug/release build and APK metadata/signature/checksum validation, plus Python dependency audit. This is materially stronger evidence than the earlier in-progress status. However, the audit is **NOT COMPLETE** because full secret-history scanning, Android dependency SCA, standalone workflow immutable pinning, runtime Android security validation, and full automated exchange restart reconciliation remain BLOCKED/NOT RUN or incomplete. Keep PR #66 OPEN / DRAFT; do not merge until these residual risks are explicitly accepted or addressed.
+
+
+## Addendum — recovery worker implementation and latest verification (2026-10-12)
+
+This section supersedes the earlier statement that no automated recovery worker was implemented. The evidence below is tied to the code SHA tested by the listed runs, not to later report-only commits.
+
+### Current code snapshot
+- **Code SHA tested:** `892429e8d522673a5b44e0025fdf16449b88dbd7`.
+- **PR #66:** OPEN / DRAFT / NOT MERGED; base `fix/pytest-safe-collection`.
+- The local developer working tree cannot be inspected through the connected GitHub API; remote branch and PR state were checked directly.
+
+### Recovery worker implementation
+- Added `execution_recovery.py` and integrated `ExecutionRecoveryWorker.run_once()` into `Trader.run()`: one read-only recovery attempt before startup safety gates and bounded periodic recovery in the main loop.
+- Schema migration version 8 adds durable `order_id`, `order_list_id`, exchange status, executed/original quantities, average fill price, retry/backoff, lease, last safe diagnostic and terminal-resolution timestamp fields.
+- `PENDING` / `AMBIGUOUS` rows are claimed with a conditional SQLite lease update. The lease is cross-process, not an in-memory lock. A lost lease cannot persist a result.
+- Normal orders are looked up by persisted `orderId` when available, otherwise by stable `clientOrderId`. Submit-capable `OrderIntent.new()` calls now receive a stable recovery client ID when one was not explicitly provided. A `CANCEL` intent does not fabricate a target order ID.
+- OCO recovery queries the order list by `listClientOrderId`, validates both leg IDs and the symbol/side/client IDs, fetches each leg, checks list/leg state consistency, and records the order-list ID separately. OCO alternative-leg quantities are not incorrectly added together.
+- When executed quantity is non-zero, the worker requires read-only `myTrades` evidence for that order ID and verifies aggregate trade quantity against `executedQty`. Average fill price is computed from verified trade quote/quantity rather than incorrectly treating the limit price as average execution price.
+- Missing order results, API/auth/rate-limit errors, malformed or contradictory responses, missing IDs, trade-history failures and database write failures remain unresolved. These cases use capped exponential retry backoff and do not trigger a new POST/DELETE.
+- The worker never submits, retries or cancels orders. It only uses read-only exchange queries. No authenticated state-changing exchange request was sent during this audit.
+
+### Recovery regression coverage
+`tests/test_execution_recovery_worker.py` now contains 19 test functions, including parameterized lifecycle cases. It covers restart recovery, exact active/partial/terminal states, lookup by order ID and client ID, OCO list/leg verification, conflicting/missing OCO legs, not-found/backoff behavior, identity mismatch, trade-history failures and quantity mismatch, cancellation remaining ambiguous while the order is active, idempotency, failed persistence, competing workers and stable client IDs. The file is explicitly included in both Python backend and Campaign CI; the release gate checks that inclusion.
+
+### CI results for code SHA `892429e8d522673a5b44e0025fdf16449b88dbd7`
+
+| Workflow/job | Run | Status and result |
+|---|---|---|
+| Python backend tests | [38216762974](https://github.com/19wolfalone92/Williams/actions/runs/38216762974) | **PASS** — 210 passed, 4 warnings in 5.29s; release contract gate PASS; both pip-audit requirement scans reported no known vulnerabilities. |
+| Campaign Python tests | [38216762736](https://github.com/19wolfalone92/Williams/actions/runs/38216762736) | **PASS** — 221 passed, 4 warnings. |
+| Campaign Android build and static checks | [38216762736](https://github.com/19wolfalone92/Williams/actions/runs/38216762736) | **PASS** — debug APK build and Android lint/unit-test step succeeded; artifacts uploaded. |
+| Duplicate Campaign CI | [38216758760](https://github.com/19wolfalone92/Williams/actions/runs/38216758760) | **PASS** — Python tests and Android build/static checks succeeded. |
+| Standalone Build Android APK | [38216762697](https://github.com/19wolfalone92/Williams/actions/runs/38216762697) | **IN PROGRESS at report snapshot** — lint and Android unit tests PASS; PR debug APK build PASS without secrets; release APK build still running. Do not claim this workflow's full APK metadata/signature/checksum chain passed until the run has a final conclusion. |
+
+A previous run on SHA `00cb86310125da24837fe8397308e27f7a6bfb0b` failed nine recovery tests because the fake trade fixture treated the string `"0.0"` as a positive price and the missing-ID fixture was auto-populated. Both fixture/intent-ID issues were corrected in `892429e8d522673a5b44e0025fdf16449b88dbd7`; backend and Campaign Python suites then passed on that exact SHA.
+
+### Remaining recovery limitations / risks
+- **HIGH — unresolved result after repeated “not found”:** absence from one order lookup is not proof that a POST was never accepted. The worker intentionally leaves the intent unresolved and retries; prolonged ambiguity can require controlled operator intervention.
+- **HIGH — cancellation target identity:** a CANCEL intent must persist the actual target order ID/client ID. If that identity is absent, the worker cannot safely infer it and remains blocked. No automatic cancel retry is performed.
+- **HIGH — external runtime integration not exercised:** worker behavior was tested with fake exchange adapters and temporary SQLite only. No live Spot Testnet reconciliation was performed, and this audit does not prove API permissions, account-specific data retention or all exchange timing edge cases.
+- **MEDIUM — bounded trade-history window:** the worker queries up to 1,000 trades per order. If that is insufficient to reconcile the full executed quantity, it fails closed rather than accepting partial history; pagination/very-high-fill-count handling remains a follow-up.
+- **MEDIUM — active known orders:** once Binance state is authoritatively known (for example `NEW` or `PARTIALLY_FILLED`), the intent is no longer marked ambiguous. Existing position/strategy management must continue to own that active order; the worker does not implement position management.
+- Secret-history scan remains **BLOCKED**; Android/Gradle SCA and binary APK secret scanning remain **NOT RUN**; standalone Android workflow Action pinning remains open because prior SHA-pinned attempts produced `startup_failure` without actionable job logs.
+
+### Disposition
+Recovery is now implemented as a bounded, read-only, lease-coordinated reconciliation worker with explicit OCO and fill-history checks. Python and Campaign CI pass on the exact code SHA above. The audit remains **BLOCKED — CRITICAL REQUIREMENTS UNVERIFIED** until the standalone Android workflow reaches a final result and the security gaps above are resolved or explicitly accepted. Keep PR #66 OPEN / DRAFT; do not merge automatically.
