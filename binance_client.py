@@ -111,7 +111,7 @@ class BinanceSpotClient:
                 raise BinanceAPIError(
                     'Binance transport error; transport details redacted',
                     unknown_execution=method in {"POST", "DELETE"},
-                ) from exc
+                ) from None
 
             used = r.headers.get('X-MBX-USED-WEIGHT-1M')
             orders = r.headers.get('X-MBX-ORDER-COUNT-1M')
@@ -212,9 +212,9 @@ class BinanceSpotClient:
                 and payload.get('code', 0) < 0
             ):
                 raise BinanceAPIError(
-                    f'Binance {r.status_code}: {payload}',
+                    f'Binance HTTP {r.status_code}: error response body redacted',
                     status_code=r.status_code,
-                    payload=payload,
+                    payload={"code": payload.get("code")} if isinstance(payload, dict) else None,
                 )
 
             if method == "GET" and path == "/api/v3/exchangeInfo":
