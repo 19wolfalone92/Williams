@@ -97,6 +97,12 @@ def test_execution_intent_claim_survives_database_reopen(tmp_path):
         first = ExecutionBarrier(ContextCache(), first_db).execute(intent, first_submit)
         assert first.accepted is True
         first_submit.assert_called_once()
+        # Simulate the recovery worker having authoritatively resolved the order.
+        # This isolates durable duplicate-claim protection from unresolved-order blocking.
+        first_db.save_execution_intent(
+            intent, "FILLED", "simulated terminal reconciliation",
+            exchange_order={"orderId": 3001, "status": "FILLED", "executedQty": "0", "origQty": "0"},
+        )
 
     with Database(str(path)) as reopened_db:
         second_submit = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 3002})
