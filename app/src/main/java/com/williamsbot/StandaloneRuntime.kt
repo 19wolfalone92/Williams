@@ -634,6 +634,8 @@ private class NativeEngine(
     @Volatile private var lastServerTimeSyncMs = 0L
     @Volatile private var lastOrder: JSONObject? = null
     @Volatile private var reconcileRequired = false
+    @Volatile private var recoveryInProgress = false
+    @Volatile private var recoveryMutationThread: Thread? = null
     @Volatile private var killLatched = false
     @Volatile private var userStreamConnected = false
     @Volatile private var userStreamSyncRequired = true
@@ -774,6 +776,7 @@ private class NativeEngine(
         running &&
             !paused &&
             !reconcileRequired &&
+            !recoveryInProgress &&
             !mutationLedger.hasUnresolved() &&
             !killLatched &&
             marketDataFresh() &&
@@ -787,6 +790,7 @@ private class NativeEngine(
             if (!running) add("runtime_not_running")
             if (paused) add("paused")
             if (reconcileRequired) add("reconcile_required")
+            if (recoveryInProgress) add("recovery_in_progress")
             if (mutationLedger.hasUnresolved()) add("unresolved_durable_mutation")
             if (killLatched) add("kill_switch_latched")
             if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
@@ -1415,7 +1419,11 @@ private class NativeEngine(
             "Configure Binance Testnet credentials first"
         }
 
+        recoveryInProgress = true
+        recoveryMutationThread = Thread.currentThread()
         return try {
+            // Keep execution readiness blocked throughout recovery. The recovery thread
+            // may perform its synchronous, journaled recovery operations.
             // Never clear the recovery barrier while a durable exchange mutation
             // is unresolved. Reconciliation for every operation kind must finish
             // before normal recovery may re-enable execution.
@@ -1465,6 +1473,9 @@ private class NativeEngine(
                     "error",
                     x.message ?: x.javaClass.simpleName
                 )
+        } finally {
+            recoveryMutationThread = null
+            recoveryInProgress = false
         }
     }
 
@@ -1559,6 +1570,9 @@ private class NativeEngine(
         params: String
     ): JSONObject {
         val mutating = method == "POST" || method == "DELETE"
+        if (mutating && recoveryInProgress && Thread.currentThread() !== recoveryMutationThread) {
+            throw IllegalStateException("RECOVERY_IN_PROGRESS")
+        }
         var effectiveParams = params
         var intentId: String? = null
 
@@ -1621,25 +1635,30 @@ private class NativeEngine(
             }
             intentId = MutationIdentity.operationId("$method:$path", "BINANCE_SPOT", symbol, logicalKey)
             val fingerprint = MutationIdentity.fingerprint(method, path, symbol, effectiveParams)
-            val existing = mutationLedger.find(intentId!!)
-            if (existing != null && existing.state != DurableMutationLedger.State.PREPARED) {
-                throw IllegalStateException("MUTATION_REPLAY_BLOCKED_${existing.state.name}")
+            try {
+                val existing = mutationLedger.find(intentId!!)
+                if (existing != null && existing.state != DurableMutationLedger.State.PREPARED) {
+                    throw IllegalStateException("MUTATION_REPLAY_BLOCKED_${existing.state.name}")
+                }
+                val isBuyEntry = method == "POST" && path.endsWith("/order") &&
+                    values["side"].equals("BUY", ignoreCase = true)
+                if (isBuyEntry && mutationLedger.unresolved().any { it.operationId != intentId }) {
+                    throw IllegalStateException("MUTATION_RECONCILIATION_REQUIRED")
+                }
+                mutationLedger.prepare(
+                    operationId = intentId!!,
+                    kind = "$method:$path",
+                    symbol = symbol,
+                    requestFingerprint = fingerprint,
+                    exchangeClientId = exchangeClientId
+                )
+                // This SQLite transaction is the only path from PREPARED to SUBMITTING.
+                mutationLedger.claimForSubmission(intentId!!)
+            } catch (x: Exception) {
+                if (x.message?.startsWith("MUTATION_REPLAY_BLOCKED_") == true) throw x
+                setReconcileRequired("Durable mutation preparation or claim failed")
+                throw IllegalStateException("MUTATION_DURABLE_CLAIM_FAILED")
             }
-            val isBuyEntry = method == "POST" && path.endsWith("/order") &&
-                values["side"].equals("BUY", ignoreCase = true)
-            if (isBuyEntry && mutationLedger.unresolved().any { it.operationId != intentId }) {
-                throw IllegalStateException("MUTATION_RECONCILIATION_REQUIRED")
-            }
-            mutationLedger.prepare(
-                operationId = intentId!!,
-                kind = "$method:$path",
-                symbol = symbol,
-                requestFingerprint = fingerprint,
-                exchangeClientId = exchangeClientId
-            )
-            // This SQLite transaction is the only path from PREPARED to SUBMITTING.
-            // A second worker cannot acquire the same or a conflicting active claim.
-            mutationLedger.claimForSubmission(intentId!!)
         }
 
         var lastBody = "{}"

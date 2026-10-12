@@ -54,14 +54,14 @@ internal object MutationIdentity {
         "signature", "apikey", "api_key", "apisecret", "api_secret",
         "secret", "authorization", "x-mbx-apikey"
     )
-    private val transportOnlyKeys = setOf("timestamp", "recvwindow")
+    private val transportOnlyKeys = setOf("timestamp", "recvWindow")
     private val decimalKeys = setOf(
         "quantity", "quoteorderqty", "price", "stopprice", "stoplimitprice",
         "icebergqty", "origqty", "executedqty", "aboveprice", "abovestopprice", "belowprice", "belowstopprice"
     )
     private val enumKeys = setOf(
         "side", "type", "timeinforce", "cancelreplacemode", "neworderresptype",
-        "stoplimittimeinforce", "abovetimeinforce", "belowtimeinforce", "selftradpreventionmode", "workingtype",
+        "stoplimittimeinforce", "abovetype", "belowtype", "abovetimeinforce", "belowtimeinforce", "selftradpreventionmode", "workingtype",
         "responsetype"
     )
 
@@ -83,7 +83,7 @@ internal object MutationIdentity {
             require(key.isNotBlank()) { "MUTATION_PARAMETER_KEY_REQUIRED" }
             require(normalizedKey !in sensitiveKeys) { "MUTATION_CREDENTIAL_PARAMETER_REJECTED" }
             require(key !in values) { "MUTATION_DUPLICATE_PARAMETER_REJECTED" }
-            if (normalizedKey !in transportOnlyKeys) {
+            if (key !in transportOnlyKeys) {
                 values[key] = normalizeValue(normalizedKey, value)
             }
         }
@@ -108,7 +108,7 @@ internal object MutationIdentity {
             } catch (_: NumberFormatException) {
                 throw IllegalArgumentException("MUTATION_DECIMAL_INVALID")
             }
-            require(decimal.signum() >= 0) { "MUTATION_DECIMAL_NEGATIVE" }
+            require(decimal.signum() > 0) { "MUTATION_DECIMAL_NON_POSITIVE" }
             return decimal.stripTrailingZeros().toPlainString()
         }
         return value

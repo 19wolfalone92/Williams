@@ -155,6 +155,14 @@ class DurableMutationLedgerTest {
         assertFalse(small == large)
     }
 
+
+    @Test
+    fun zeroEconomicQuantityIsRejectedAsUnsupportedOrderInput() {
+        assertThrows(IllegalArgumentException::class.java) {
+            MutationIdentity.canonicalUnsignedParams("symbol=BTCUSDT&quantity=0")
+        }
+    }
+
     @Test
     fun unsupportedDecimalRepresentationFailsClosed() {
         assertThrows(IllegalArgumentException::class.java) {
@@ -284,7 +292,7 @@ class DurableMutationLedgerTest {
         val params = "symbol=BTCUSDT&side=SELL&quantity=0.0100&abovePrice=110.0&aboveStopPrice=111.0" +
             "&aboveTimeInForce=gtc&belowType=STOP_LOSS_LIMIT&belowStopPrice=90.0&belowPrice=89.90&belowTimeInForce=gtc"
         val equivalent = "belowTimeInForce=GTC&belowPrice=89.9&belowStopPrice=90.00&belowType=STOP_LOSS_LIMIT" +
-            "&aboveTimeInForce=GTC&aboveStopPrice=111.00&abovePrice=110&quantity=0.01&side=SELL&symbol=btcusdt"
+            "&aboveTimeInForce=GTC&aboveType=TAKE_PROFIT_LIMIT&aboveStopPrice=111.00&abovePrice=110&quantity=0.01&side=SELL&symbol=btcusdt"
         val first = MutationIdentity.generatedClientOrderId(
             "POST", "/api/v3/orderList/oco", "BTCUSDT", params, "position-entry-client-1", "W4O_"
         )
