@@ -105,10 +105,10 @@ jobs:
           validate-wrappers: false
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
-      - name: Regenerate and verify Gradle wrapper from trusted Gradle
+      - name: Download and verify official Gradle wrapper JAR
         run: |
           set -euo pipefail
-          gradle --no-daemon wrapper --gradle-version 8.14.6 --distribution-type bin
+          curl --fail --location --retry 3 --retry-all-errors --output gradle/wrapper/gradle-wrapper.jar https://services.gradle.org/distributions/gradle-8.14.6-wrapper.jar
           printf '%s  %s\n' 'ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0' 'gradle/wrapper/gradle-wrapper.jar' | sha256sum --check -
           ./gradlew --version
       - name: Upload verified Gradle wrapper JAR for source repair
