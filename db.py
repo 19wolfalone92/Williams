@@ -361,7 +361,7 @@ class Database:
     def has_unresolved_execution_intents(self):
         """Return whether a prior intent may still require exchange reconciliation."""
         row = self.conn.execute(
-            "SELECT 1 FROM execution_intents WHERE status IN ('PENDING','AMBIGUOUS','SUBMITTED','NEW','PENDING_NEW','PARTIALLY_FILLED','PENDING_CANCEL','OCO_EXECUTING') LIMIT 1"
+            "SELECT 1 FROM execution_intents WHERE status IN ('PENDING','AMBIGUOUS') LIMIT 1"
         ).fetchone()
         return row is not None
 
@@ -421,7 +421,7 @@ class Database:
         terminal = str(status).upper() in {'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED', 'OCO_ALL_DONE', 'OCO_REJECTED'}
         # An accepted but still-live order is not a completed recovery. Keep it
         # inside the barrier's unresolved set and schedule another read-only poll.
-        stored_status = str(status).upper() if terminal else 'AMBIGUOUS'
+        stored_status = str(status).upper() if terminal else 'SUBMITTED'
         reason = '' if terminal else 'exchange order is active; follow-up reconciliation required'
         next_reconcile_at = 0 if terminal else now + max(1.0, float(retry_seconds))
         cur = self.conn.execute(

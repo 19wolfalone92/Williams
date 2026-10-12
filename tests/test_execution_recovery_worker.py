@@ -61,9 +61,9 @@ def test_worker_recovers_ambiguous_intent_after_database_reopen(tmp_path):
         assert not reopened.has_unresolved_execution_intents() and exchange.calls==1
 
 @pytest.mark.parametrize(("status","executed","expected_local","terminal"),[
-    ("NEW","0","AMBIGUOUS",False),
-    ("PENDING_CANCEL","0","AMBIGUOUS",False),
-    ("PARTIALLY_FILLED","0.004","AMBIGUOUS",False),
+    ("NEW","0","SUBMITTED",False),
+    ("PENDING_CANCEL","0","SUBMITTED",False),
+    ("PARTIALLY_FILLED","0.004","SUBMITTED",False),
     ("FILLED","0.01","FILLED",True),
     ("CANCELED","0.004","CANCELED",True),
     ("EXPIRED","0","EXPIRED",True),
@@ -81,18 +81,22 @@ def test_worker_persists_exact_exchange_lifecycle(tmp_path,status,executed,expec
             assert not db.has_unresolved_execution_intents()
             assert row["next_reconcile_at"] == 0
         else:
-            assert db.has_unresolved_execution_intents()
+            # Known-active orders remain scheduled for polling, but are no longer
+            # ambiguous and do not globally block legitimate campaign management.
+            assert not db.has_unresolved_execution_intents()
             assert row["next_reconcile_at"] == now + 7
             assert row["reason"] == "exchange order is active; follow-up reconciliation required"
+            assert row["intent_id"] in {x["intent_id"] for x in db.list_unresolved_execution_intents(now=now+7)}
 
-def test_active_order_recovery_keeps_execution_barrier_closed_until_terminal(tmp_path):
+def test_active_order_recovery_remains_scheduled_until_terminal(tmp_path):
     with Database(str(tmp_path/"active-barrier.sqlite3")) as db:
         intent=_intent(db)
         exchange=FakeExchange(_order("PARTIALLY_FILLED",executedQty="0.004"))
         worker=ExecutionRecoveryWorker(db,exchange,base_retry_seconds=5)
         first=worker.run_once(now=1000)
-        assert first["active"]==1 and db.has_unresolved_execution_intents()
+        assert first["active"]==1 and not db.has_unresolved_execution_intents()
         assert worker.run_once(now=1001)["claimed"]==0
+        assert db.list_unresolved_execution_intents(now=1005)[0]["intent_id"] == intent.intent_id
         exchange.response=_order("FILLED",executedQty="0.01")
         second=worker.run_once(now=1006)
         row=db.conn.execute("SELECT * FROM execution_intents WHERE intent_id=?",(intent.intent_id,)).fetchone()
@@ -100,26 +104,18 @@ def test_active_order_recovery_keeps_execution_barrier_closed_until_terminal(tmp
         assert not db.has_unresolved_execution_intents()
         assert exchange.calls==2
 
-def test_submitted_intent_stays_unresolved_until_terminal_reconciliation(tmp_path):
+def test_submitted_intent_remains_scheduled_until_terminal_reconciliation(tmp_path):
     with Database(str(tmp_path / "submitted-recovery.sqlite3")) as db:
         intent = _intent(db, status="SUBMITTED")
-        assert db.has_unresolved_execution_intents()
+        assert not db.has_unresolved_execution_intents()
         exchange = FakeExchange(_order("NEW"))
         worker = ExecutionRecoveryWorker(db, exchange, base_retry_seconds=5)
         first = worker.run_once(now=1000)
         row = db.conn.execute("SELECT * FROM execution_intents WHERE intent_id=?",
                               (intent.intent_id,)).fetchone()
-        assert first["active"] == 1 and row["status"] == "AMBIGUOUS"
-        assert row["exchange_status"] == "NEW" and db.has_unresolved_execution_intents()
-
-        submit = Mock(return_value={"status": "NEW", "orderId": 456})
-        blocked = ExecutionBarrier(ContextCache(), db).execute(
-            OrderIntent.new("BTCUSDT", "BUY", "MARKET", {}, purpose="CAMPAIGN_ENTRY"),
-            submit,
-        )
-        assert blocked.accepted is False
-        assert "unresolved PENDING/AMBIGUOUS execution intent" in blocked.reason
-        submit.assert_not_called()
+        assert first["active"] == 1 and row["status"] == "SUBMITTED"
+        assert row["exchange_status"] == "NEW" and not db.has_unresolved_execution_intents()
+        assert row["intent_id"] in {x["intent_id"] for x in db.list_unresolved_execution_intents(now=1005)}
 
         exchange.response = _order("FILLED", executedQty="0.01")
         final = worker.run_once(now=1006)
@@ -278,9 +274,10 @@ def test_worker_reconciles_oco_list_and_both_legs(tmp_path):
         result = ExecutionRecoveryWorker(db, exchange).run_once(now=time.time()+10)
         row = db.conn.execute("SELECT * FROM execution_intents WHERE intent_id=?", (intent.intent_id,)).fetchone()
         assert result["active"] == 1 and row["status"] == "AMBIGUOUS"
+        assert row["status"] == "SUBMITTED"
         assert row["order_list_id"] == "77" and row["orig_qty"] == pytest.approx(0.01)
         assert exchange.list_calls == 1 and exchange.order_calls == 2
-        assert db.has_unresolved_execution_intents()
+        assert not db.has_unresolved_execution_intents()
         assert row["exchange_status"] == "EXECUTING"
         assert row["next_reconcile_at"] > time.time()
 
