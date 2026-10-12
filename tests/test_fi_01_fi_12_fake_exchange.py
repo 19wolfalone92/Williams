@@ -348,3 +348,58 @@ def test_fi_12_retry_while_unresolved_does_not_send_second_mutation(tmp_path):
         assert "unresolved" in result.reason.lower() or "reconcile" in result.reason.lower()
         assert exchange.mutation_count == 0
         assert db.has_unresolved_execution_intents()
+
+
+@pytest.mark.parametrize("unsupported_type", [
+    "CANCEL_REPLACE", "CANCEL-REPLACE", "CANCEL_LIST",
+    "CANCEL_ORDER_LIST", "ORDER_LIST_CANCEL", "CANCEL_OCO",
+])
+def test_compound_cancel_recovery_is_explicitly_unsupported_and_fail_closed(tmp_path, unsupported_type):
+    """A single order lookup must never resolve a compound mutation."""
+    with Database(str(tmp_path / f"unsupported-{unsupported_type.replace('-', '_')}.sqlite3")) as db:
+        exchange = DeterministicFakeExchange()
+        intent = _new_intent(
+            client_id=f"compound-{unsupported_type.replace('-', '_')}",
+            order_type=unsupported_type,
+            purpose="CAMPAIGN_EXIT",
+        )
+        _persist_ambiguous(db, intent)
+        exchange.orders[intent.client_order_id] = {
+            "symbol": "BTCUSDT", "side": "BUY", "orderId": "799",
+            "clientOrderId": intent.client_order_id, "status": "CANCELED",
+            "origQty": "0.010", "executedQty": "0", "price": "0", "avgPrice": "0",
+        }
+        result = _worker(db, exchange).run_once(now=time.time() + 10)
+        row = _row(db, intent)
+        assert result["deferred"] == 1
+        assert row["status"] == "AMBIGUOUS"
+        assert "unsupported" in row["last_reconcile_error"]
+        assert db.has_unresolved_execution_intents()
+        assert exchange.lookup_count == 0
+        assert exchange.mutation_count == 0
+
+
+def test_bl004_synthetic_secret_sentinel_is_absent_from_real_sqlite_and_public_exception(tmp_path):
+    """Scan actual temporary SQLite contents after an ambiguous submit fault."""
+    sentinel = "SYNTHETIC_BL004_SENTINEL_API_SECRET_SIGNATURE_AUTH_QUERY_9f41d2"
+    with Database(str(tmp_path / "bl004-sentinel.sqlite3")) as db:
+        exchange = DeterministicFakeExchange()
+        intent = _new_intent(client_id="bl004-safe-client")
+        def accepted_then_secret_error():
+            exchange.mutation_count += 1
+            exchange.orders[intent.client_order_id] = {
+                "symbol": "BTCUSDT", "side": "BUY", "orderId": "804",
+                "clientOrderId": intent.client_order_id, "status": "NEW",
+                "origQty": "0.010", "executedQty": "0", "price": "0", "avgPrice": "0",
+            }
+            raise TimeoutError(f"synthetic transport diagnostic {sentinel}")
+
+        with pytest.raises(RuntimeError) as caught:
+            ExecutionBarrier(ContextCache(), db).execute(intent, accepted_then_secret_error)
+        assert sentinel not in str(caught.value)
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        persisted_dump = "\\n".join(db.conn.iterdump())
+        assert sentinel not in persisted_dump
+        assert exchange.mutation_count == 1
+        assert db.has_unresolved_execution_intents()
