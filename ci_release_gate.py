@@ -105,19 +105,19 @@ def main() -> None:
     # Pull-request Gradle code is untrusted. Persistent signing material may only
     # be restored or passed to Gradle on trusted push/manual runs, never PR runs.
     restore_step = android_ci.split("- name: Restore persistent debug signing key", 1)[1].split("\n      - name:", 1)[0]
-    must(restore_step, "if: github.event_name != 'pull_request'", "trusted signing-key restore")
+    must(restore_step, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "trusted signing-key restore")
     validate_step = android_ci.split("- name: Validate debug signing configuration", 1)[1].split("\n      - name:", 1)[0]
-    must(validate_step, "if: github.event_name != 'pull_request'", "trusted signing validation")
+    must(validate_step, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "trusted signing validation")
     trusted_build = android_ci.split("- name: Build debug APK with persistent signature (trusted events)", 1)[1].split("\n      - name:", 1)[0]
-    must(trusted_build, "if: github.event_name != 'pull_request'", "trusted debug build")
+    must(trusted_build, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "trusted debug build")
     must(trusted_build, "secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD", "trusted debug build secret")
     pr_build = android_ci.split("- name: Build debug APK for pull requests (no secrets)", 1)[1].split("\n      - name:", 1)[0]
     must(pr_build, "if: github.event_name == 'pull_request'", "PR secret-free build step")
     must_not(pr_build, "secrets.", "PR build secret boundary")
     verify_keystore = android_ci.split("- name: Verify persistent debug keystore", 1)[1].split("\n      - name:", 1)[0]
-    must(verify_keystore, "if: github.event_name != 'pull_request'", "trusted keystore verification")
+    must(verify_keystore, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "trusted keystore verification")
     verify_signature = android_ci.split("- name: Verify persistent debug APK signature", 1)[1].split("\n      - name:", 1)[0]
-    must(verify_signature, "if: github.event_name != 'pull_request'", "trusted APK signature comparison")
+    must(verify_signature, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "trusted APK signature comparison")
     must(android_ci, "apksigner", "all-event APK signature verification")
     must(android_ci, "verify --verbose app/build/outputs/apk/debug/app-debug.apk", "all-event APK signature verification")
 
