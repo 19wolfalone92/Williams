@@ -1473,14 +1473,58 @@ private class NativeEngine(
                 "MUTATION_RECONCILIATION_QUANTITY_INCONSISTENT"
             }
 
-            // RECONCILED here means the single order's authoritative Binance
-            // state was retrieved by exact client ID. It does not certify
-            // campaign exposure or protective OCO children; those are separate gates.
+            // Query order-specific trade history before writing RECONCILED.
+            // The ledger rejects incomplete caller-supplied evidence, so the
+            // evidence below is created only after both authoritative reads pass.
+            val trades = JSONArray(
+                signedRawGet(
+                    "/api/v3/myTrades",
+                    "symbol=" + intent.symbol +
+                        "&orderId=" + exchangeOrderId +
+                        "&limit=1000"
+                )
+            )
+            require(trades.length() < 1000) {
+                "MUTATION_RECONCILIATION_TRADE_HISTORY_TRUNCATED"
+            }
+            var summedTradeQty = java.math.BigDecimal.ZERO
+            for (tradeIndex in 0 until trades.length()) {
+                val trade = trades.getJSONObject(tradeIndex)
+                require(trade.optString("orderId") == exchangeOrderId) {
+                    "MUTATION_RECONCILIATION_TRADE_ORDER_ID_MISMATCH"
+                }
+                val tradeQty = trade.optString("qty").toBigDecimalOrNull()
+                    ?: throw IllegalStateException("MUTATION_RECONCILIATION_TRADE_QTY_INVALID")
+                require(tradeQty.signum() > 0) {
+                    "MUTATION_RECONCILIATION_TRADE_QTY_NON_POSITIVE"
+                }
+                summedTradeQty = summedTradeQty.add(tradeQty)
+            }
+            require(summedTradeQty.compareTo(executedQty) == 0) {
+                "MUTATION_RECONCILIATION_TRADE_QTY_MISMATCH"
+            }
+
+            val reconciliationEvidence = JSONObject()
+                .put("source", "BINANCE_SPOT_TESTNET")
+                .put("scope", "ORDER_MUTATION")
+                .put("query_complete", true)
+                .put("order_verified", true)
+                .put("fills_verified", true)
+                .put("order_status", status)
+                .put("original_qty", originalQty.toPlainString())
+                .put("executed_qty", executedQty.toPlainString())
+                .put("trade_count", trades.length())
+                .put("trade_qty_sum", summedTradeQty.toPlainString())
+                .put("checked_at_ms", System.currentTimeMillis())
+
+            // This certifies only the individual order and its recorded fills.
+            // It does not certify campaign exposure or protective OCO children.
             mutationLedger.transition(
                 operationId = reconciling.operationId,
                 expected = setOf(DurableMutationLedger.State.RECONCILING),
                 next = DurableMutationLedger.State.RECONCILED,
-                exchangeOrderId = exchangeOrderId
+                exchangeOrderId = exchangeOrderId,
+                reconciliationEvidenceJson = reconciliationEvidence.toString()
             )
         }
     }
