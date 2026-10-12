@@ -196,6 +196,52 @@ class DurableMutationLedger(context: Context) :
         }
     }
 
+    /**
+     * Atomically acquire the only submission claim for this symbol while another
+     * operation is in SUBMITTING/UNKNOWN. A second worker cannot reuse a claim
+     * merely because the row already has the target state.
+     */
+    @Synchronized
+    fun claimForSubmission(operationId: String, nowMs: Long = System.currentTimeMillis()): Intent {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val current = readById(db, operationId)
+                ?: throw IllegalStateException("MUTATION_INTENT_NOT_FOUND")
+            if (current.state != State.PREPARED) throw InvalidTransitionException()
+
+            val activeConflict = db.rawQuery(
+                "SELECT operation_id FROM mutation_intents " +
+                    "WHERE symbol = ? AND state IN (?, ?) AND operation_id <> ? LIMIT 1",
+                arrayOf(
+                    current.symbol,
+                    State.SUBMITTING.name,
+                    State.UNKNOWN.name,
+                    operationId
+                )
+            ).use { it.moveToFirst() }
+            if (activeConflict) {
+                throw IllegalStateException("MUTATION_RECONCILIATION_REQUIRED")
+            }
+
+            val values = ContentValues().apply {
+                put("state", State.SUBMITTING.name)
+                put("updated_at_ms", nowMs)
+            }
+            val changed = db.update(
+                "mutation_intents",
+                values,
+                "operation_id = ? AND state = ?",
+                arrayOf(operationId, State.PREPARED.name)
+            )
+            check(changed == 1) { "MUTATION_SUBMISSION_CLAIM_FAILED" }
+            db.setTransactionSuccessful()
+            return requireNotNull(readById(db, operationId))
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     @Synchronized
     fun unresolved(): List<Intent> {
         val db = readableDatabase
@@ -242,7 +288,7 @@ class DurableMutationLedger(context: Context) :
     )
 
     private fun allowed(from: State, to: State): Boolean = when (from) {
-        State.PREPARED -> to == State.SUBMITTING || to == State.REJECTED
+        State.PREPARED -> to == State.REJECTED
         State.SUBMITTING -> to == State.ACKNOWLEDGED || to == State.UNKNOWN ||
             to == State.REJECTED || to == State.RECONCILED
         State.UNKNOWN -> to == State.ACKNOWLEDGED || to == State.RECONCILED
