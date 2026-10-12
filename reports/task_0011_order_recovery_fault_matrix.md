@@ -1,7 +1,7 @@
 # TASK 001.1 — Order recovery fault matrix
 **Status: NOT EXECUTED — P0 OPEN.** This is the required test plan and current evidence state, not a passing test report.
 
-Implementation under test: `DurableMutationLedger.kt`, `StandaloneRuntime.signedRequest`; code commit `05d26e34cb34af66472124621a95c118ec69a81a`.
+Implementation under test: `DurableMutationLedger.kt`, `StandaloneRuntime.signedRequest`; code commit `12f3e70eb58915d56c4bf66ebb5d00c7130a97b`.
 
 | # | Fault scenario | Required assertions | Current evidence |
 |---:|---|---|---|
