@@ -1,7 +1,6 @@
 package com.williamsbot
 
 import android.content.Context
-import android.database.sqlite.SQLiteDatabase
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -233,7 +232,7 @@ class DurableMutationLedgerTest {
     @Test
     fun duplicateIdenticalIntentIsIdempotent() {
         val first = ledger!!.prepare("op-duplicate", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-a")
-        val second = ledger!!.prepare("op-duplicate", "POST:/api/v3/order", "BTCUSDT", "fp", "client-a")
+        val second = ledger!!.prepare("op-duplicate", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-a")
 
         assertEquals(first.operationId, second.operationId)
         assertEquals(DurableMutationLedger.State.PREPARED, second.state)
@@ -251,7 +250,7 @@ class DurableMutationLedgerTest {
 
     @Test
     fun unknownIntentRemainsUnresolvedAfterRestart() {
-        ledger!!.prepare("op-unknown", "POST:/api/v3/order", "BTCUSDT", "fp", "client-unknown")
+        ledger!!.prepare("op-unknown", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-unknown")
         ledger!!.transition(
             "op-unknown",
             setOf(DurableMutationLedger.State.PREPARED),
@@ -271,7 +270,7 @@ class DurableMutationLedgerTest {
 
     @Test
     fun acknowledgedIntentIsNotClassifiedAsUnresolved() {
-        ledger!!.prepare("op-ack", "POST:/api/v3/order", "BTCUSDT", "fp", "client-ack")
+        ledger!!.prepare("op-ack", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-ack")
         ledger!!.transition(
             "op-ack",
             setOf(DurableMutationLedger.State.PREPARED),
@@ -290,7 +289,7 @@ class DurableMutationLedgerTest {
 
     @Test
     fun illegalStateTransitionIsRejected() {
-        ledger!!.prepare("op-invalid", "POST:/api/v3/order", "BTCUSDT", "fp", "client-invalid")
+        ledger!!.prepare("op-invalid", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-invalid")
 
         assertThrows(DurableMutationLedger.InvalidTransitionException::class.java) {
             ledger!!.transition(
