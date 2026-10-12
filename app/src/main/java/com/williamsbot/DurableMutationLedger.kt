@@ -4,21 +4,17 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import java.util.Locale
 
 /**
  * Durable journal for exchange mutations.
  *
- * The journal is deliberately conservative: SUBMITTING is treated as unresolved
- * after a crash because the process may have died after Binance accepted a
- * request but before the response was persisted. It does not claim a SQLite
- * transaction is atomic with Binance.
- *
- * Integration requirement: every exchange mutation must obtain an operation
- * from this journal before reaching the network sink. This class alone does
- * not provide that integration.
+ * A durable SUBMITTING claim is intentionally unresolved after a crash: local
+ * SQLite and Binance do not share a transaction. A journal state is not proof
+ * of the exchange outcome.
  */
 class DurableMutationLedger(context: Context) :
-    SQLiteOpenHelper(context, "williams_mutation_ledger.db", null, 1) {
+    SQLiteOpenHelper(context, "williams_mutation_ledger.db", null, 2) {
 
     enum class State {
         PREPARED,
@@ -37,7 +33,12 @@ class DurableMutationLedger(context: Context) :
         val exchangeClientId: String?,
         val state: State,
         val exchangeOrderId: String?,
-        val updatedAtMs: Long
+        val createdAtMs: Long,
+        val updatedAtMs: Long,
+        val exchange: String,
+        val campaignId: String?,
+        val signalId: String?,
+        val attemptId: String
     )
 
     class IntentConflictException : IllegalStateException("MUTATION_INTENT_CONFLICT")
@@ -55,17 +56,39 @@ class DurableMutationLedger(context: Context) :
                 state TEXT NOT NULL,
                 exchange_order_id TEXT,
                 created_at_ms INTEGER NOT NULL,
-                updated_at_ms INTEGER NOT NULL
+                updated_at_ms INTEGER NOT NULL,
+                exchange TEXT NOT NULL DEFAULT 'BINANCE_SPOT',
+                campaign_id TEXT,
+                signal_id TEXT,
+                attempt_id TEXT NOT NULL
             )
             """.trimIndent()
         )
         db.execSQL("CREATE INDEX mutation_intents_state_idx ON mutation_intents(state)")
         db.execSQL("CREATE INDEX mutation_intents_symbol_idx ON mutation_intents(symbol, state)")
+        db.execSQL("CREATE INDEX mutation_intents_exchange_client_idx ON mutation_intents(exchange, exchange_client_id)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Versioned migrations must be added explicitly; never discard unresolved intents.
-        throw IllegalStateException("MUTATION_LEDGER_MIGRATION_REQUIRED")
+        // Migration is additive and preserves every existing intent, including
+        // unresolved SUBMITTING/UNKNOWN rows. Never drop or recreate the table.
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE mutation_intents ADD COLUMN exchange TEXT NOT NULL DEFAULT 'BINANCE_SPOT'")
+            db.execSQL("ALTER TABLE mutation_intents ADD COLUMN campaign_id TEXT")
+            db.execSQL("ALTER TABLE mutation_intents ADD COLUMN signal_id TEXT")
+            db.execSQL("ALTER TABLE mutation_intents ADD COLUMN attempt_id TEXT NOT NULL DEFAULT ''")
+            db.execSQL(
+                "UPDATE mutation_intents SET attempt_id = operation_id || ':attempt-1' " +
+                    "WHERE attempt_id = ''"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS mutation_intents_exchange_client_idx " +
+                    "ON mutation_intents(exchange, exchange_client_id)"
+            )
+        }
+        if (newVersion > 2) {
+            throw IllegalStateException("MUTATION_LEDGER_MIGRATION_REQUIRED")
+        }
     }
 
     @Synchronized
@@ -75,19 +98,33 @@ class DurableMutationLedger(context: Context) :
         symbol: String,
         requestFingerprint: String,
         exchangeClientId: String? = null,
+        exchange: String = "BINANCE_SPOT",
+        campaignId: String? = null,
+        signalId: String? = null,
+        attemptId: String? = null,
         nowMs: Long = System.currentTimeMillis()
     ): Intent {
         require(operationId.isNotBlank() && kind.isNotBlank() && symbol.isNotBlank() &&
-            requestFingerprint.isNotBlank()) { "MUTATION_INTENT_FIELDS_REQUIRED" }
+            requestFingerprint.matches(Regex("[0-9a-fA-F]{64}")) && exchange.isNotBlank()) {
+            "MUTATION_INTENT_FIELDS_REQUIRED"
+        }
+        val normalizedSymbol = symbol.uppercase(Locale.US)
+        val normalizedExchange = exchange.uppercase(Locale.US)
+        val stableAttemptId = attemptId ?: "$operationId:attempt-1"
+        require(stableAttemptId.isNotBlank()) { "MUTATION_ATTEMPT_ID_REQUIRED" }
 
         val db = writableDatabase
         db.beginTransaction()
         try {
             val existing = readById(db, operationId)
             if (existing != null) {
-                if (existing.kind != kind || existing.symbol != symbol ||
-                    existing.requestFingerprint != requestFingerprint ||
-                    existing.exchangeClientId != exchangeClientId) {
+                if (existing.kind != kind || existing.symbol != normalizedSymbol ||
+                    existing.requestFingerprint != requestFingerprint.lowercase(Locale.US) ||
+                    existing.exchangeClientId != exchangeClientId ||
+                    existing.exchange != normalizedExchange ||
+                    existing.campaignId != campaignId ||
+                    existing.signalId != signalId ||
+                    existing.attemptId != stableAttemptId) {
                     throw IntentConflictException()
                 }
                 db.setTransactionSuccessful()
@@ -97,14 +134,18 @@ class DurableMutationLedger(context: Context) :
             val values = ContentValues().apply {
                 put("operation_id", operationId)
                 put("kind", kind)
-                put("symbol", symbol.uppercase(java.util.Locale.US))
-                put("request_fingerprint", requestFingerprint)
+                put("symbol", normalizedSymbol)
+                put("request_fingerprint", requestFingerprint.lowercase(Locale.US))
                 if (exchangeClientId == null) putNull("exchange_client_id")
                 else put("exchange_client_id", exchangeClientId)
                 put("state", State.PREPARED.name)
                 putNull("exchange_order_id")
                 put("created_at_ms", nowMs)
                 put("updated_at_ms", nowMs)
+                put("exchange", normalizedExchange)
+                if (campaignId == null) putNull("campaign_id") else put("campaign_id", campaignId)
+                if (signalId == null) putNull("signal_id") else put("signal_id", signalId)
+                put("attempt_id", stableAttemptId)
             }
             check(db.insertOrThrow("mutation_intents", null, values) != -1L) {
                 "MUTATION_INTENT_PERSIST_FAILED"
@@ -161,22 +202,12 @@ class DurableMutationLedger(context: Context) :
         val db = readableDatabase
         val result = mutableListOf<Intent>()
         db.rawQuery(
-            "SELECT operation_id, kind, symbol, request_fingerprint, exchange_client_id, state, exchange_order_id, updated_at_ms " +
+            "SELECT operation_id, kind, symbol, request_fingerprint, exchange_client_id, state, " +
+                "exchange_order_id, created_at_ms, updated_at_ms, exchange, campaign_id, signal_id, attempt_id " +
                 "FROM mutation_intents WHERE state IN (?, ?, ?) ORDER BY created_at_ms",
             arrayOf(State.PREPARED.name, State.SUBMITTING.name, State.UNKNOWN.name)
         ).use { cursor ->
-            while (cursor.moveToNext()) {
-                result += Intent(
-                    operationId = cursor.getString(0),
-                    kind = cursor.getString(1),
-                    symbol = cursor.getString(2),
-                    requestFingerprint = cursor.getString(3),
-                    exchangeClientId = if (cursor.isNull(4)) null else cursor.getString(4),
-                    state = State.valueOf(cursor.getString(5)),
-                    exchangeOrderId = if (cursor.isNull(6)) null else cursor.getString(6),
-                    updatedAtMs = cursor.getLong(7)
-                )
-            }
+            while (cursor.moveToNext()) result += cursorToIntent(cursor)
         }
         return result
     }
@@ -189,22 +220,27 @@ class DurableMutationLedger(context: Context) :
 
     private fun readById(db: SQLiteDatabase, operationId: String): Intent? =
         db.rawQuery(
-            "SELECT operation_id, kind, symbol, request_fingerprint, exchange_client_id, state, exchange_order_id, updated_at_ms " +
+            "SELECT operation_id, kind, symbol, request_fingerprint, exchange_client_id, state, " +
+                "exchange_order_id, created_at_ms, updated_at_ms, exchange, campaign_id, signal_id, attempt_id " +
                 "FROM mutation_intents WHERE operation_id = ?",
             arrayOf(operationId)
-        ).use { cursor ->
-            if (!cursor.moveToFirst()) null
-            else Intent(
-                operationId = cursor.getString(0),
-                kind = cursor.getString(1),
-                symbol = cursor.getString(2),
-                requestFingerprint = cursor.getString(3),
-                exchangeClientId = if (cursor.isNull(4)) null else cursor.getString(4),
-                state = State.valueOf(cursor.getString(5)),
-                exchangeOrderId = if (cursor.isNull(6)) null else cursor.getString(6),
-                updatedAtMs = cursor.getLong(7)
-            )
-        }
+        ).use { cursor -> if (cursor.moveToFirst()) cursorToIntent(cursor) else null }
+
+    private fun cursorToIntent(cursor: android.database.Cursor): Intent = Intent(
+        operationId = cursor.getString(0),
+        kind = cursor.getString(1),
+        symbol = cursor.getString(2),
+        requestFingerprint = cursor.getString(3),
+        exchangeClientId = if (cursor.isNull(4)) null else cursor.getString(4),
+        state = State.valueOf(cursor.getString(5)),
+        exchangeOrderId = if (cursor.isNull(6)) null else cursor.getString(6),
+        createdAtMs = cursor.getLong(7),
+        updatedAtMs = cursor.getLong(8),
+        exchange = cursor.getString(9),
+        campaignId = if (cursor.isNull(10)) null else cursor.getString(10),
+        signalId = if (cursor.isNull(11)) null else cursor.getString(11),
+        attemptId = cursor.getString(12)
+    )
 
     private fun allowed(from: State, to: State): Boolean = when (from) {
         State.PREPARED -> to == State.SUBMITTING || to == State.REJECTED
