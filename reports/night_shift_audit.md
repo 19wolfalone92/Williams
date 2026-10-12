@@ -103,3 +103,22 @@ The environment limitation is lack of a local checkout/runtime in this session. 
 - Separate audit branch created: `night-shift-audit-20261012`, based on PR #65 head.
 - No branch deletion, force push, history rewrite, target-branch change, or merge was performed.
 - The CI/configuration fixes are verified by successful runs 38177124730, 38177124662 and 38177124654 on code/configuration commit `ff7842d93c8d8c8a8053a4192d802d387120051a`. Current branch HEAD is documentation-only commit `ec22d42eb2301a062f9bdad9f332fe467e78255a`; the broader audit remains incomplete as described above.
+
+
+## 10. Follow-up audit — 2026-10-12
+
+### AUDIT-TRADE-001 — execution-intent persistence was fail-open (P0)
+
+- **Evidence at prior audit HEAD** `e2493f9f20dbcaa5cc2c233a4e81d3642c642500`: `execution_barrier.py` implemented `_persist()` with `except Exception: pass`; a missing DB or missing `save_execution_intent` method also allowed execution to continue. The barrier could call the exchange submission callback without durably recording a `PENDING` intent. The source also contained duplicate FSM transitions and duplicated exchange-response validation blocks.
+- **Risk:** after a crash or ambiguous exchange response, local state might not establish that a submission was attempted; an unsafe retry could duplicate an order.
+- **Change prepared:** make intent persistence mandatory and fail closed; durably mark `RECONCILE_REQUIRED` for ambiguous outcomes; treat post-submit persistence failure as ambiguous without resubmitting; add mock-only regression tests and include them in Python CI.
+- **Regression coverage:** `tests/test_execution_barrier_persistence_fail_closed.py` covers missing persistence, PENDING/SUBMITTED/AMBIGUOUS write failures, and timeout/no-retry behavior with mocks only.
+- **Validation status:** the focused tests are included in the explicit Python CI command. The new commit's workflow results must be checked before this fix is marked PASS. No local checkout/runtime is available in this connector session; no local test execution is claimed.
+- **Trading safety:** no exchange endpoint was called and no order or balance mutation was performed by this audit.
+
+### CI observed on prior audit HEAD
+
+- Python backend run `38199984673`: completed successfully; release gate, compilation, static safety audit and configured offline tests succeeded. Exact test count was not exposed in the job-step summary.
+- Campaign CI run `38199984689`: Python tests succeeded; Android build/lint was still running at the last poll.
+- Android APK run `38199984681`: release gate, source validation, Android lint and Android unit tests succeeded; APK packaging checks were still running at the last poll.
+- These results apply only to `e2493f9f20dbcaa5cc2c233a4e81d3642c642500`, not to the follow-up commit.
