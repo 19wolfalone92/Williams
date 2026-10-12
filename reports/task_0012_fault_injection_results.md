@@ -18,5 +18,7 @@ The 12 required fake-exchange scenarios have not yet been implemented as a produ
 | 11 | Partial reconciliation failure | NOT RUN | No resumable reconciliation worker for Android ledger |
 | 12 | Retry while unresolved | PARTIAL | Ledger rejects non-PREPARED replay in sink, but exact network mutation count not tested |
 
-## Added test coverage
-Three unit tests were added for deterministic generated client-order identity and credential-free fingerprint shape. They are source changes, not PASS claims; no test run has been inspected for the post-change SHA.
+## Test/CI evidence
+- Added three unit tests for deterministic generated client-order identity and credential-free fingerprint shape. They are not separately identified in CI output, so they are NOT counted as executed/passed here.
+- Backend run `38239120184` passed on implementation/test SHA `b93c299247ff97e85eec552efbeb0a452847cf7b`, but it runs Python/backend checks and is not evidence for Android fake-exchange scenarios.
+- Campaign run `38239120174` was cancelled; Android run `38239121106` ended `startup_failure` with no jobs returned.
