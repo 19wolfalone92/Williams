@@ -1,38 +1,42 @@
-# TASK 001.8 — Exchange Reconciliation
+# TASK 001.9 — Exchange Reconciliation
 
-- Audited code/test SHA: `31ba73ff81c43edb5be4606b200dce752148967a`.
+- Latest source/test HEAD at report preparation: `fd3276c5f041dd47f0941d5b07fff4726c8c9124`.
+- Last completed targeted Python Campaign CI: [38306130277](https://github.com/19wolfalone92/Williams/actions/runs/38306130277), 258 passed on prior SHA `5c6499a26a493ab4ff11ca44486850a79283d7ef). The final OCO list-ID guard/test added afterward still requires exact-SHA verification.
 - Status: PARTIALLY IMPLEMENTED — P0 OPEN.
-- Relevant code: `StandaloneRuntime.kt`, `BinanceTradeEvidence.kt`, `DurableMutationLedger.kt`; tests: `BinanceTradeEvidenceTest.kt`, `DurableMutationLedgerTest.kt`.
 
-## IMPLEMENTED (source inspection; not a blanket runtime verification)
+## Implemented in Python recovery code
 
-- Single POST order recovery queries by symbol and original client order ID.
-- Identity validator requires matching symbol and exact clientOrderId, nonempty exchange order ID, and rejects conflict with a previously persisted exchange order ID.
-- Fill evidence validates trade identity, uniqueness, required fields, quantity/price/quote quantity, commission fields, trade time/side flags, quote consistency, and summed quantity against exchange executedQty.
-- Evidence is bound to the durable intent; transition to RECONCILED validates evidence and persists it with the state transition inside the ledger transaction.
-- Trade history response capped at 1000 rows is treated as potentially truncated and therefore not complete.
-- Legacy RECONCILED records without evidence are reopened as unresolved during migration.
-- Failure/contradiction should leave the operation unresolved; the newly added tests cover selected identity conflicts and durable ID immutability.
+- Trade history requires unique non-empty trade IDs and exact non-empty order IDs matching the recovered order.
+- Missing required quantity/economic fields are rejected; quantity, price, quote quantity, commission, commission asset, time, buyer flag and maker flag are validated.
+- Buyer flag must agree with the recovered order side; quote quantity must agree with quantity × price within a bounded tolerance.
+- A bounded `myTrades(limit=1000)` response containing 1000 rows is rejected as potentially truncated. Pagination completeness is not assumed.
+- OCO list client ID is checked; persisted `orderListId` conflicts now raise a fail-closed validation error before child-leg lookup.
+- Single-order identity/evidence validation and durable reconciliation checks remain in place.
 
-## TESTED / VERIFIED
+## Tested on prior SHA
 
-- Campaign Python job in run 38301629067: SUCCESS; unrelated to Android reconciliation.
-- Android unit tests for the current audited SHA: NOT YET VERIFIED; Campaign Android job was still running at inspection.
-- The single-order path is not claimed verified until exact-SHA Android unit tests pass and their report/artifact is inspected.
+The passing Campaign Python run includes deterministic fake-exchange tests for:
+- pre-submit persistence failure with zero mutations;
+- exchange acceptance followed by lost response and restart reconciliation;
+- response followed by failed local status persistence;
+- restart from AMBIGUOUS;
+- partial fill followed by cancellation with trade evidence;
+- duplicate recovery invocation;
+- crash after reconciliation commit;
+- exchange order exists while local exchange order ID is absent;
+- incomplete, missing-ID, duplicate-ID and truncated trade history;
+- ambiguous cancellation and retry blocking;
+- compound cancellation/cancel-replace fail-closed behavior;
+- BL-004 sentinel scan of actual temporary SQLite content.
 
-## Unsupported / BLOCKED
+The above results are **TESTED** only on SHA `5c6499a26a493ab4ff11ca44486850a79283d7ef`. The later OCO persisted-list-ID conflict test has not yet been confirmed by CI.
 
-- OCO parent/list and child-order recovery.
-- Cancel single order, cancel order list, and cancelReplace including partial success.
-- End-to-end test for crash after exchange acceptance/response but before SQLite persistence and mutation-count proof.
-- Full pagination contract beyond conservative refusal at the 1000-record boundary.
-- Account balance, campaign exposure, protection coverage, and REST/user-stream convergence.
-- A response timeout or unavailable history is not proof that an order does not exist; unknown remains unresolved and must block risky mutation.
+## Unsupported / still blocked
 
-## Required next tests
+- Cancel-replace (including partial success), cancel order-list and cancel OCO recovery deliberately remain unresolved/unsupported; no single-order lookup can prove a two-sided operation's final state.
+- OCO recovery does not by itself prove campaign exposure/protective coverage or REST/user-stream convergence.
+- The fake-exchange harness exercises Python production abstractions, not Android's direct REST runtime. Android end-to-end mutation counts and crash/restart injection remain unverified.
+- FI-07 does not yet inject a crash at every individual durable transition. FI-08 models missing local exchange order ID, not every possible missing-local-record recovery case.
+- A timeout, unavailable endpoint, incomplete history, contradictory order/list identity or failed persistence is not evidence of non-acceptance. UNKNOWN remains unresolved and must block unsafe retry.
 
-- Deterministic fake-exchange tests asserting both SQLite final state and exact mutation count after identity/evidence failure.
-- Fault injection between response receipt and transaction commit; restart must reconcile, never blindly resubmit.
-- Duplicate, missing, conflicting and truncated trade evidence must not transition to RECONCILED.
-
-No live Binance credentials or orders used.
+No live credentials or orders used.
