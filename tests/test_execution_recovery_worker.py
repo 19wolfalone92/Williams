@@ -2,9 +2,11 @@
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import Mock
 import pytest
 from db import Database
-from execution_barrier import OrderIntent
+from execution_barrier import ExecutionBarrier, OrderIntent
+from market_context import ContextCache
 from execution_recovery import ExecutionRecoveryWorker
 
 def _intent(db, *, status="AMBIGUOUS", client_id="williams-test-intent"):
@@ -97,6 +99,35 @@ def test_active_order_recovery_keeps_execution_barrier_closed_until_terminal(tmp
         assert second["reconciled"]==1 and row["status"]=="FILLED"
         assert not db.has_unresolved_execution_intents()
         assert exchange.calls==2
+
+def test_submitted_intent_stays_unresolved_until_terminal_reconciliation(tmp_path):
+    with Database(str(tmp_path / "submitted-recovery.sqlite3")) as db:
+        intent = _intent(db, status="SUBMITTED")
+        assert db.has_unresolved_execution_intents()
+        exchange = FakeExchange(_order("NEW"))
+        worker = ExecutionRecoveryWorker(db, exchange, base_retry_seconds=5)
+        first = worker.run_once(now=1000)
+        row = db.conn.execute("SELECT * FROM execution_intents WHERE intent_id=?",
+                              (intent.intent_id,)).fetchone()
+        assert first["active"] == 1 and row["status"] == "AMBIGUOUS"
+        assert row["exchange_status"] == "NEW" and db.has_unresolved_execution_intents()
+
+        submit = Mock(return_value={"status": "NEW", "orderId": 456})
+        blocked = ExecutionBarrier(ContextCache(), db).execute(
+            OrderIntent.new("BTCUSDT", "BUY", "MARKET", {}, purpose="CAMPAIGN_ENTRY"),
+            submit,
+        )
+        assert blocked.accepted is False
+        assert "unresolved PENDING/AMBIGUOUS execution intent" in blocked.reason
+        submit.assert_not_called()
+
+        exchange.response = _order("FILLED", executedQty="0.01")
+        final = worker.run_once(now=1006)
+        row = db.conn.execute("SELECT * FROM execution_intents WHERE intent_id=?",
+                              (intent.intent_id,)).fetchone()
+        assert final["reconciled"] == 1 and row["status"] == "FILLED"
+        assert not db.has_unresolved_execution_intents()
+
 
 def test_not_found_or_rate_limit_remains_ambiguous_with_backoff(tmp_path):
     with Database(str(tmp_path/"retry.sqlite3")) as db:

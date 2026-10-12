@@ -361,7 +361,7 @@ class Database:
     def has_unresolved_execution_intents(self):
         """Return whether a prior intent may still require exchange reconciliation."""
         row = self.conn.execute(
-            "SELECT 1 FROM execution_intents WHERE status IN ('PENDING', 'AMBIGUOUS') LIMIT 1"
+            "SELECT 1 FROM execution_intents WHERE status IN ('PENDING','AMBIGUOUS','SUBMITTED','NEW','PENDING_NEW','PARTIALLY_FILLED','PENDING_CANCEL','OCO_EXECUTING') LIMIT 1"
         ).fetchone()
         return row is not None
 
@@ -372,7 +372,7 @@ class Database:
         return [
             dict(row) for row in self.conn.execute(
                 """SELECT * FROM execution_intents
-                   WHERE status IN ('PENDING', 'AMBIGUOUS')
+                   WHERE status IN ('PENDING','AMBIGUOUS','SUBMITTED','NEW','PENDING_NEW','PARTIALLY_FILLED','PENDING_CANCEL','OCO_EXECUTING')
                      AND COALESCE(next_reconcile_at, 0) <= ?
                      AND (lease_until IS NULL OR lease_until <= ?)
                    ORDER BY created_at, intent_id LIMIT ?""",
@@ -387,7 +387,7 @@ class Database:
         cur = self.conn.execute(
             """UPDATE execution_intents
                SET lease_owner=?, lease_until=?, recovery_attempts=COALESCE(recovery_attempts,0)+1
-               WHERE intent_id=? AND status IN ('PENDING', 'AMBIGUOUS')
+               WHERE intent_id=? AND status IN ('PENDING','AMBIGUOUS','SUBMITTED','NEW','PENDING_NEW','PARTIALLY_FILLED','PENDING_CANCEL','OCO_EXECUTING')
                  AND COALESCE(next_reconcile_at,0) <= ?
                  AND (lease_until IS NULL OR lease_until <= ?)""",
             (str(owner), now + max(1.0, float(lease_seconds)), str(intent_id), now, now),
@@ -429,7 +429,7 @@ class Database:
                    exchange_status=?, executed_qty=?, orig_qty=?, avg_price=?,
                    last_reconcile_error=NULL, next_reconcile_at=?,
                    lease_owner=NULL, lease_until=NULL, resolved_at=?
-               WHERE intent_id=? AND lease_owner=? AND status IN ('PENDING','AMBIGUOUS')""",
+               WHERE intent_id=? AND lease_owner=? AND status IN ('PENDING','AMBIGUOUS','SUBMITTED','NEW','PENDING_NEW','PARTIALLY_FILLED','PENDING_CANCEL','OCO_EXECUTING')""",
             (
                 stored_status, reason,
                 str(order.get('orderId')) if order.get('orderId') is not None else None,
@@ -462,7 +462,7 @@ class Database:
         cur = self.conn.execute(
             """UPDATE execution_intents SET next_reconcile_at=?, last_reconcile_error=?,
                    lease_owner=NULL, lease_until=NULL
-               WHERE intent_id=? AND lease_owner=? AND status IN ('PENDING','AMBIGUOUS')""",
+               WHERE intent_id=? AND lease_owner=? AND status IN ('PENDING','AMBIGUOUS','SUBMITTED','NEW','PENDING_NEW','PARTIALLY_FILLED','PENDING_CANCEL','OCO_EXECUTING')""",
             (now + delay, str(error)[:500], str(intent_id), str(owner)),
         )
         if not self._transaction_active:
