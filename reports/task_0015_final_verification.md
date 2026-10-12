@@ -1,40 +1,38 @@
 # TASK 001.5 — Final Verification Snapshot
 
-- Executable source and tests audited: `b2b1a78c9d43a30e077d936e65a9314ddddcfcdf`
-- Required starting SHA: `8a5ea866a6d7fa10960aca25b2123a34c11601c0`
-- PR #66: OPEN, Draft, unmerged at last metadata fetch.
-- Base: `fix/pytest-safe-collection`, SHA `0007e79b1afde86b8c736128e6d09bfdd370106f`.
-- Seven commits ahead of the required starting SHA; no commits behind.
-- No merge, close, force-push, or base-branch modification performed by this task.
+**Executable source SHA verified:** `cf35f2fb8d2f68770f191efaa272864e7debe04c`  
+**Required starting SHA:** `8a5ea866a6d7fa10960aca25b2123a34c11601c0`  
+**PR #66:** OPEN, Draft, unmerged  
+**Base branch:** `fix/pytest-safe-collection` at `0007e79b1afde86b8c736128e6d09bfdd370106f`  
+**Compare:** 21 commits ahead, 0 behind. No base-branch modification, merge, close, reset, or force-push.
 
-## Changes made
+## Changes verified in source
 
-- Prevented automatic POST/DELETE retransmission on timestamp-error response in Android signed transport.
-- Added a production-used retry policy that permits only one timestamp retry for read-only GET.
-- Added durable reconciliation evidence to Android SQLite schema v3.
-- Required complete structured evidence before `RECONCILED`.
-- Reopened legacy `RECONCILED` rows without evidence as unresolved `RECONCILING`.
-- Added tests for transport retry policy, evidence requirements, and migration behavior.
-- Fixed a Kotlin test class-scope defect diagnosed from the Campaign CI logs.
+- No automatic POST/DELETE retransmission in Android timestamp retry path.
+- Evidence-gated durable `RECONCILED` transition and safe reopening of legacy terminal rows.
+- SQLite schema v4 client ID uniqueness for new POST-type operations.
+- Redaction of REST/user-stream audit payloads plus synthetic-secret tests.
+- Exact PR-head checkout in CI; pinned Gradle distribution checksum; trusted wrapper regeneration and official wrapper JAR checksum verification before `./gradlew`.
+- APK checksum, debug signing verification, and source SHA provenance.
 
-## Verification snapshot
+## Verification results
 
-- Python backend run `38264561046`: SUCCESS; 219 passed, 4 warnings.
-- Standalone Android workflow run `38264563243`: `startup_failure`, zero jobs; not a compile result.
-- Campaign CI Android job: in progress at the last recorded observation; do not infer success.
-- No APK artifact/hash/signature is verified.
-- FI-01–FI-12 have not all been executed as an integrated production-path suite.
-- Complete mutation-path containment and BL-004 closure are not proven.
+- Python backend run `38268195155`: SUCCESS; 219 passed, 4 warnings.
+- Campaign CI run `38268195164`: SUCCESS; Android unit tests, lint, debug APK build, APK checksum/signature/provenance, and artifact upload passed.
+- APK source SHA: `cf35f2fb8d2f68770f191efaa272864e7debe04c`.
+- APK SHA-256: `23e8cf4684ba81117516961f152eb09446aaa6930ac676f1e4c0a6143bc73bc7`.
+- Standalone Android workflow `38268196664`: `startup_failure`, zero jobs; unresolved external workflow-startup issue.
+- Exact Android test count was not exposed by the workflow log/artifacts; only task success is claimed.
+- The checked-in wrapper JAR is not yet replaced, although CI regenerates and verifies an official copy before executing it.
 
 ## Remaining P0 blockers
 
-1. Obtain successful exact-source Android lint, unit-test, build and artifact provenance results.
-2. Implement and test complete Android exchange reconciliation with durable evidence.
-3. Complete campaign, balances/exposure, OCO children, cancellation, cancel-replace, protection-gap, and REST/user-stream reconciliation.
-4. Execute all FI-01–FI-12 through production abstractions with required assertions.
-5. Complete cross-platform mutation-path containment proof.
-6. Complete concurrency and migration matrix.
-7. Complete BL-004 sentinel sweep across all sinks and backend persistence.
-8. Persist per-transmission attempt evidence and prove recovery idempotency.
+1. Complete Android exchange reconciliation for orders/fills/OCO children/cancel-replace/balances/exposure/campaign/protection and REST-vs-stream discrepancies.
+2. Execute FI-01–FI-12 through production mutation/recovery abstractions with every required assertion.
+3. Complete exhaustive Android/Python source-to-sink mutation containment and automated bypass tests.
+4. Complete migration matrix across all supported schema versions, interrupted writes and repeated recovery idempotency.
+5. Complete BL-004 sentinel sweep across every log, exception, diagnostics, report and remote backend persistence path.
+6. Replace the checked-in non-validated wrapper JAR with the verified official binary; current CI mitigates by regenerating it before execution.
+7. Resolve the standalone Android workflow `startup_failure` or retain it as an explicitly unavailable check.
 
 **Permitted status: PARTIALLY IMPLEMENTED — P0 OPEN.** This is not a closure certificate.

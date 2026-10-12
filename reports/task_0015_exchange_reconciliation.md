@@ -1,27 +1,28 @@
 # TASK 001.5 — Exchange Reconciliation
 
-- Audited executable-source SHA: `b2b1a78c9d43a30e077d936e65a9314ddddcfcdf`
-- Status: PARTIALLY IMPLEMENTED — P0 remains open.
+**Executable source SHA:** `cf35f2fb8d2f68770f191efaa272864e7debe04c`  
+**Status:** PARTIALLY IMPLEMENTED — P0 OPEN.
 
 ## Existing capabilities inspected
 
-Python `ExecutionRecoveryWorker` uses read-only adapter calls, validates order identifiers/status/quantities, verifies nonzero execution quantity against trade history, normalizes OCO parent/child records, and leaves missing, malformed, mismatched, or unavailable lookups unresolved with backoff. The current Python tests use a deterministic fake exchange.
+Python `ExecutionRecoveryWorker` performs read-only order/trade queries, checks order identifiers/status/quantities, validates nonzero execution quantities against trade history, normalizes OCO parent/child records, and leaves missing/malformed/mismatched/unavailable responses unresolved with backoff. Python tests use a deterministic fake exchange.
 
-Android has REST/user-stream recovery code and a durable mutation ledger, but the ledger is not yet integrated with a complete reconciliation worker that persists comprehensive evidence for every mutation type.
+Android recovery and user-stream code exists, but it is not integrated with a complete durable reconciliation worker covering all mutation types and account/campaign/protection state.
 
-## Implemented in this task
+## Implemented
 
-- Schema v3 adds `reconciliation_evidence_json`.
-- Transition to `RECONCILED` requires non-empty structured evidence with `source`, `query_complete=true`, `order_verified=true`, `fills_verified=true`, and a positive `checked_at_ms`.
-- Evidence is stored in the same SQLite row as the transition.
-- Legacy `RECONCILED` rows without evidence are moved to unresolved `RECONCILING` during migration.
-- A single-order evidence record is not defined as campaign/protection certification.
+- SQLite schema v3 adds persisted `reconciliation_evidence_json`.
+- A transition to `RECONCILED` requires `source=BINANCE_SPOT_TESTNET`, `scope=ORDER_MUTATION`, `query_complete=true`, `order_verified=true`, `fills_verified=true`, and positive `checked_at_ms`.
+- Evidence is stored with the ledger row.
+- Schema migration reopens legacy `RECONCILED` rows without evidence as unresolved `RECONCILING`.
+- Schema v4 adds uniqueness protection for new client IDs.
 
 ## Still missing
 
-- Unified Android read-only exchange-query abstraction and durable recovery worker.
-- End-to-end reconciliation for OCO parent and both child legs, cancel-replace partial outcomes, fills/event deduplication, account balances/managed exposure, campaign state, protection coverage, and REST-versus-user-stream discrepancies.
-- A tested protocol for when a not-found result can establish non-acceptance.
-- Evidence completeness/ownership checks across all production callers.
+- A complete Android read-only exchange-query abstraction and recovery worker.
+- End-to-end OCO parent/child, cancel-replace, partial-fill, duplicate/out-of-order event, balance/exposure, campaign/position, protection-gap, and REST-versus-user-stream reconciliation.
+- A documented and tested protocol under which a not-found order result can establish non-acceptance.
+- Typed evidence that proves the query result rather than accepting caller-supplied boolean fields.
+- Durable recovery progress across all records and safe partial-resume tests.
 
-No claim is made that full reconciliation is implemented or verified.
+A single-order ledger transition is not treated as campaign or protection certification.

@@ -1,18 +1,28 @@
 # TASK 001.5 — Android CI and APK Verification
 
-- Audited executable-source SHA: `b2b1a78c9d43a30e077d936e65a9314ddddcfcdf`
-- APK status: NOT VERIFIED.
+**Executable source SHA:** `cf35f2fb8d2f68770f191efaa272864e7debe04c`  
+**Campaign CI run:** `38268195164` — SUCCESS  
+**Standalone Android workflow run:** `38268196664` — `startup_failure`, zero jobs.
 
-## Workflow diagnosis
+## Diagnosed wrapper issue
 
-- Standalone Android workflow run `38264563243` on this SHA ended in `startup_failure` and exposed zero jobs. This is a workflow startup failure, not evidence of a Kotlin compile result.
-- The separate Campaign CI Android job was still running at the last recorded check.
-- An earlier Campaign CI run on starting SHA `8a5ea866a6d7fa10960aca25b2123a34c11601c0` did execute Gradle and failed Kotlin compilation. Logs identified `DurableMutationLedgerTest.kt` references outside the class scope (`Unresolved reference 'ledger'` at line 581 and following). The misplaced class terminator was removed and the class closing brace restored.
+The checked-in `gradle/wrapper/gradle-wrapper.jar` failed the official wrapper validator (checked-in SHA-256 observed earlier: `8607d05f0a36b0a10a8e0ce28b2f`, not the official Gradle 8.14.6 wrapper SHA-256). The CI now uses the pinned Gradle 8.14.6 distribution to regenerate the wrapper JAR, verifies the generated JAR against `ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0`, then executes `./gradlew`. The Gradle distribution SHA-256 is pinned in `gradle-wrapper.properties` as `7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24`.
 
-## Required final checks
+The checked-in binary itself has not been replaced; CI regenerates it in the ephemeral runner before execution. Local use of the repository's original wrapper JAR remains a risk until the binary is replaced.
 
-- Confirm Campaign CI result on the audited SHA.
-- Obtain Gradle wrapper validation, Android lint, unit test and APK build results.
-- Confirm artifact exists, expected variant, source SHA provenance, SHA-256 and signing information.
-- The standalone `startup_failure` still requires infrastructure-level diagnosis; no jobs/logs are available from that run.
-- No APK is claimed verified, and no APK hash/signature is claimed.
+## Exact-SHA build result
+
+- Exact source checkout: `cf35f2fb8d2f68770f191efaa272864e7debe04c`; APK provenance file confirms `source_sha=cf35f2fb8d2f68770f191efaa272864e7debe04c`.
+- `./gradlew --version` after verified wrapper regeneration: PASS.
+- `:app:testDebugUnitTest`: PASS (exact test count was not surfaced in the workflow log/artifact).
+- `:app:lintDebug`: PASS.
+- `:app:assembleDebug`: PASS.
+- APK exists at debug variant path and was uploaded in artifact `11756315887`.
+- APK SHA-256: `23e8cf4684ba81117516961f152eb09446aaa6930ac676f1e4c0a6143bc73bc7`. The artifact's checksum file matched this value.
+- Signing: debug certificate; APK Signature Scheme v2 verified. Certificate SHA-256 digest: `88f93f81219769a22f081072955f1b4937a0e78c4572b11be18f6cf03442ed3d`.
+- Lint report artifact: `11755463715`.
+- Verified generated wrapper artifact: `11755682525`.
+
+## Remaining
+
+The separate `Build Android APK` workflow still ends in `startup_failure` before jobs are created. It provides no logs or independent APK result; Campaign CI is the successful exact-SHA build evidence. No real credentials or live exchange mutations were used.

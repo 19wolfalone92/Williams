@@ -1,23 +1,23 @@
 # TASK 001.5 — Mutation-Path Proof
 
-- Audited executable-source SHA: `b2b1a78c9d43a30e077d936e65a9314ddddcfcdf`
-- Status: NOT CLOSED.
+**Executable source SHA:** `cf35f2fb8d2f68770f191efaa272864e7debe04c`  
+**Status:** PARTIAL — no complete containment proof.
 
 ## Observed paths
 
-Android: business callers and recovery code invoke signed request wrappers; `signedRequest()` is the authenticated REST mutation sink currently inspected. Wrappers include POST, DELETE, and cancel-replace operations.
+Android mutation callers use signed request wrappers, including POST, DELETE, and cancel-replace; the inspected authenticated sink is `StandaloneRuntime.signedRequest()`. Python submissions are guarded through `ExecutionBarrier`; `ExecutionRecoveryWorker` is read-only; `BinanceSpotClient._request()` handles REST transport.
 
-Python: `ExecutionBarrier.execute()` is a guarded submission path; `ExecutionRecoveryWorker` is read-only; `BinanceSpotClient._request()` performs REST transport and contains endpoint-aware retry handling. `Trader` and multi-position components invoke barrier/recovery abstractions, but the entire repository call graph has not been enumerated and mechanically verified.
+## Automated guard improvements
 
-## Change in this task
-
-Mutation transport retry policy is now explicit and tested independently. This guards the timestamp-retry behavior but is not a substitute for source-to-sink containment.
+- Added a production-used transport retry policy and unit tests preventing automatic signed mutation retransmission.
+- Updated `ci_release_gate.py` to enforce the trusted wrapper bootstrap/checksum and wrapper-based Android build commands.
+- Added audit payload redaction tests at the persistent REST and user-stream sinks.
 
 ## Still required
 
-- Enumerate every caller, wrapper, adapter, endpoint and legacy/disabled path.
-- Add a static checker that detects direct HTTP mutations and unclassified endpoint additions across all relevant source.
-- Prove disabled legacy paths are not executable.
-- Run bypass tests and inspect their output at the exact final source SHA.
+- Exhaustively enumerate every caller, adapter, endpoint, cancel/replace/OCO/protection route, recovery-triggered mutation, and disabled legacy path across Android and Python.
+- Add a complete static source-to-sink checker that fails on direct transport calls and unclassified new mutation endpoints.
+- Prove all disabled legacy paths cannot execute mutations.
+- Run bypass tests against the entire relevant source tree.
 
-No complete mutation-boundary proof is claimed.
+The current work does not prove that no mutation path bypasses the approved boundary.

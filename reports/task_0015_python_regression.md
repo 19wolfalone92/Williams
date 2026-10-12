@@ -1,21 +1,22 @@
 # TASK 001.5 — Python Regression and Cross-Platform Contract
 
-- Audited executable-source SHA: `b2b1a78c9d43a30e077d936e65a9314ddddcfcdf`
-- Python CI: SUCCESS.
+**Executable source SHA:** `cf35f2fb8d2f68770f191efaa272864e7debe04c`  
+**Python backend run:** `38268195155` — SUCCESS  
+**Campaign CI run:** `38268195164` — SUCCESS.
 
 ## Exact-SHA evidence
 
-Workflow run `38264561046` (`Python backend tests`) completed successfully on this SHA. Job logs report:
 - Release contract gate: PASS.
-- Production Python compilation: PASS.
-- Full static safety audit: completed.
-- Safe offline pytest suite: 219 passed, 4 warnings in 4.67 seconds.
-- Live Binance Testnet integration was not run; no real credentials or live trading mutations were used.
+- Python source compilation: PASS.
+- Full static safety audit ran; 3 audit warnings require review.
+- Safe offline pytest suite: 219 passed, 4 warnings in 4.87 seconds.
+- Campaign CI Python tests: PASS.
+- No live Binance Testnet integration or live order mutation was performed.
 
 ## Inspected components
 
-`execution_barrier.py`, `execution_recovery.py`, `binance_client.py`, `db.py`, `trader.py`, `ci_release_gate.py`, `risk_engine.py`, and relevant barrier/recovery/SQLite/secret tests.
+`execution_barrier.py`, `execution_recovery.py`, `binance_client.py`, `db.py`, `trader.py`, `ci_release_gate.py`, `risk_engine.py`, and related recovery/barrier/SQLite/secret tests.
 
 ## Remaining
 
-Python recovery has single-order and OCO handling and validates trade history for non-zero fills. It does not yet provide a complete shared cross-platform contract for campaign/protection coverage, balances/exposure, stream-vs-REST reconciliation, and all cancel-replace cases. The Python suite success is not evidence that TASK 001.5 as a whole is complete.
+Python recovery has single-order and OCO handling and validates trade history for nonzero fills. It does not yet provide a complete shared Android/Python contract for account balances/exposure, campaign/protection coverage, stream-versus-REST discrepancies, all cancel-replace outcomes, and the full FI-01–FI-12 matrix.

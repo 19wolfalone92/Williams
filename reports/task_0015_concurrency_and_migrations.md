@@ -1,24 +1,23 @@
 # TASK 001.5 — Concurrency, SQLite Migrations and Recovery
 
-- Audited executable-source SHA: `b2b1a78c9d43a30e077d936e65a9314ddddcfcdf`
-- Status: PARTIAL; Android tests awaiting CI confirmation.
+**Executable source SHA:** `cf35f2fb8d2f68770f191efaa272864e7debe04c`  
+**Status:** PARTIAL.
 
-## Android changes
+## Android
 
-- SQLite ledger schema increased from version 2 to 3.
-- Migration is additive and retains unresolved rows.
-- Legacy `RECONCILED` rows without persisted evidence become `RECONCILING`, which remains in `unresolved()`.
-- Transition updates remain transactional and compare the expected prior state.
-- Added a Robolectric test that creates a v2 database with an unsupported terminal row and expects it to reopen unresolved.
-- Existing tests cover conflicting prepare, duplicate prepare, and competing claims; the complete matrix across supported old versions is not yet proven.
+- Durable mutation ledger schema is version 4.
+- Schema v3 adds persisted reconciliation evidence; legacy `RECONCILED` rows without evidence become unresolved `RECONCILING`.
+- Schema v4 adds a partial unique index for new POST-type client IDs per exchange/symbol.
+- Tests cover competing claims, conflicting operation reuse, evidence-required closure, a v2-to-v4 migration with a legacy terminal row, duplicate new client IDs, and DELETE references to an existing client ID.
+- Campaign CI run `38268195164` passed Android unit tests, lint and debug build.
 
-## Python evidence
+## Python
 
-The current Python suite includes independent-connection claims, SQLite reopen, transaction rollback, and busy-timeout checks. The exact-SHA Python workflow completed successfully with 219 passed, 4 warnings.
+The exact-SHA Python suite passed 219 tests with 4 warnings, including existing SQLite reopen, transaction, concurrency and recovery coverage.
 
 ## Remaining
 
-- Execute Android schema migration and concurrent claim tests successfully on CI.
-- Test every supported prior schema version, interrupted migration, corrupt/partial schema, and reopen after migration.
-- Verify no migration can clear a barrier without evidence.
-- Add repeated-recovery idempotency tests for each mutation kind.
+- Migration from every supported prior schema version is not demonstrated.
+- Interrupted/corrupt migration behavior and all partial-write cases need a dedicated matrix.
+- Multi-process concurrency and repeated recovery idempotency across every mutation kind remain unproven.
+- A duplicate client ID discovered during migration will cause unique-index creation to fail closed; no automatic repair of ambiguous historical rows is implemented.

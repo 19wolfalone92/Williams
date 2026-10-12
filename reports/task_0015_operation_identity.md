@@ -1,33 +1,30 @@
 # TASK 001.5 — Operation Identity
 
-- Audited executable-source SHA: `b2b1a78c9d43a30e077d936e65a9314ddddcfcdf`
-- Status: PARTIALLY IMPLEMENTED — contract still has gaps.
+**Executable source SHA:** `cf35f2fb8d2f68770f191efaa272864e7debe04c`  
+**Status:** PARTIALLY IMPLEMENTED.
 
 ## Implemented
 
-- `operation_id` is the SQLite primary key.
-- Request fingerprint is stored separately and conflicting reuse of an operation ID is rejected by `prepare()`.
-- Client order ID generation requires an explicit logical operation ID; request economics are validated but are not the sole source of client ID identity.
-- Canonicalization rejects duplicate normalized parameter keys, including case aliases.
-- `timestamp` and `recvWindow` are excluded case-insensitively; credential/signature-like fields are rejected.
-- Ledger fields include mutation kind, symbol, fingerprint, client ID, exchange order ID, state, timestamps, exchange, campaign/signal IDs, attempt ID, and now reconciliation evidence JSON.
-- SQLite schema is version 3. The new migration reopens legacy `RECONCILED` rows lacking evidence as `RECONCILING`.
+- `operation_id` is the SQLite primary key and is distinct from request fingerprint, client order ID, exchange order ID, and attempt ID.
+- A conflicting fingerprint for an existing operation ID is rejected.
+- Client order ID generation requires explicit logical operation identity and no longer derives identity solely from economic request parameters.
+- Canonicalization rejects normalized duplicate keys, including case aliases.
+- `timestamp` and `recvWindow` are excluded case-insensitively; credential/signature-like parameters are rejected.
+- Schema version 4 adds a partial unique index for new POST/OCO/cancel-replace client IDs per exchange and symbol. DELETE rows are excluded because they refer to an existing order's client ID.
+- Stored mutation fields include kind, symbol, fingerprint, exchange client ID, exchange order ID, state, timestamps, exchange, campaign/signal IDs, attempt ID, and reconciliation evidence JSON.
 
-## Identity rules observed in current code
+## Current identity semantics
 
-- New order: caller-provided exchange client ID is used as the logical key; missing logical identity fails closed.
-- Cancel: operation identity derives from the cancellation route and target identifier.
-- OCO: list client ID is the logical identity where supplied.
-- Cancel-replace: a generated client ID is tied to the logical target/action key and persisted request fingerprint rejects changed economics under the same operation.
-- Fingerprint includes canonical method/path/symbol/unsigned parameters after documented transport-only exclusions.
+- New order: caller-supplied client ID is the logical key; absent logical identity fails closed.
+- Cancel: identity includes the DELETE route and target order/client ID.
+- OCO: list client ID identifies the list-level operation.
+- Cancel-replace: generated client identity is bound to the logical target/action; changed request economics under the same operation are rejected by the ledger fingerprint.
 
-## Remaining gaps
+## Guarantees not established
 
-- The exchange-client-ID index is not a UNIQUE constraint. Collision protection relies on application identity generation and the operation primary key; database-level uniqueness for exchange client IDs is not proven.
-- `attempt_id` is stored as a field but there is no append-only table for each actual HTTP transmission. This does not prove per-wire-attempt accounting.
-- Cancel-replace's two outcomes must be reconciled independently; one local operation row does not itself prove both cancel and replacement legs.
-- The contract has not been proven for every caller, restart path, OCO variant, or concurrent multi-process writer.
+- `attempt_id` is a durable field, but there is no append-only record for every individual HTTP transmission.
+- Cancel-replace's cancel and replacement outcomes are not independently reconciled end-to-end.
+- Caller-to-ledger coverage is not proven for every path.
+- The raw JSON evidence object is validated for required fields but is not a typed, cryptographically unforgeable exchange attestation.
 
-## Evidence
-
-Android tests added for evidence-required closure, migration of unsupported legacy terminal state, and no automatic mutating timestamp retry. Those tests are not marked passed until the Campaign CI Android job completes successfully. Python suite on the audited source SHA: 219 passed, 4 warnings.
+Android unit tests on the audited SHA passed as part of Campaign CI. No exactly-once guarantee is claimed.

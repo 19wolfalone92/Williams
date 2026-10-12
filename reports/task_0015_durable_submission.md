@@ -1,27 +1,28 @@
 # TASK 001.5 — Durable Submission and Crash Safety
 
-- Audited executable-source SHA: `b2b1a78c9d43a30e077d936e65a9314ddddcfcdf`
-- Status: PARTIALLY IMPLEMENTED.
+**Executable source SHA:** `cf35f2fb8d2f68770f191efaa272864e7debe04c`  
+**Status:** PARTIALLY IMPLEMENTED.
 
 ## Changes
 
-1. Signed mutation transport no longer retries POST/DELETE inside its timestamp-retry loop. The retry predicate is isolated in `MutationTransportPolicy` and permits only the first read-only GET retry for a timestamp rejection.
-2. SQLite schema version 3 stores reconciliation evidence with the mutation row.
-3. A transition to `RECONCILED` is rejected without structured complete order/fill evidence.
-4. Existing terminal labels without such evidence are reopened as `RECONCILING` by migration.
-5. Tests were added for missing/incomplete evidence and legacy migration.
+- Signed mutation transport no longer automatically retransmits POST/DELETE on timestamp-error responses. `MutationTransportPolicy` allows one retry only for a read-only GET.
+- A mutation's durable intent and claim precede submission.
+- Ambiguous outcomes remain unresolved; the transport does not assume that a missing response means non-acceptance.
+- Ledger schema v3 requires persisted structured exchange evidence for `RECONCILED`.
+- Legacy `RECONCILED` rows without evidence are reopened as `RECONCILING`.
+- Schema v4 adds a partial unique index for new POST-type client IDs.
+- Android tests cover retry policy, evidence requirements, migration, client ID uniqueness, and persistent audit redaction.
 
-## Safety properties retained
+## CI evidence
 
-- A durable claim is written before the signed request.
-- An ambiguous result is not blindly retransmitted.
-- An unresolved ledger row continues to block execution.
-- Local SQLite is not treated as atomic with Binance.
+Campaign CI run `38268195164` succeeded on exact source SHA `cf35f2fb8d2f68770f191efaa272864e7debe04c`: Android unit-test task, lint, and debug APK build passed. Python backend run `38268195155` succeeded (219 passed, 4 warnings).
 
-## Remaining risks
+## Remaining
 
-- The transport still does not persist an append-only record for every wire attempt.
-- Full fault injection at each boundary has not been executed through the actual Android transport and recovery worker.
-- If a state transition fails after exchange acceptance, correctness depends on the unresolved row/barrier surviving the persistence failure; this requires the FI suite.
-- REJECTED authority and safe pre-submission rejection evidence need a typed, persisted contract.
-- No claim of exactly-once execution is made.
+- No integrated Android FI-01–FI-12 harness covers each wire/persistence boundary.
+- No append-only attempt journal records each individual HTTP transmission.
+- A typed, durable proof for safe `REJECTED` classification is not complete.
+- Database persistence failure after exchange acceptance still requires full fault-injection proof.
+- Recovery is not proven idempotent across all mutation types and process restarts.
+
+No exactly-once execution claim is made.
