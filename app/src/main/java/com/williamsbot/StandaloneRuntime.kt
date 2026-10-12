@@ -1657,6 +1657,17 @@ private class NativeEngine(
                         lastBody
                     )
                     if (response.isSuccessful) {
+                        val responseJson = JSONObject(lastBody)
+                        if (
+                            mutating &&
+                            path.endsWith("/cancelReplace") &&
+                            (responseJson.optString("cancelResult") != "SUCCESS" ||
+                                responseJson.optString("newOrderResult") != "SUCCESS")
+                        ) {
+                            // HTTP 200 is not proof that both halves of cancel-replace
+                            // succeeded. Keep the operation unresolved for reconciliation.
+                            error("CANCEL_REPLACE_RECONCILIATION_REQUIRED")
+                        }
                         if (mutating) {
                             mutationLedger.transition(
                                 requireNotNull(intentId),
