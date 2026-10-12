@@ -144,8 +144,9 @@ def main() -> None:
     must(testnet_ci, 'TESTNET: "true"', "testnet workflow")
     must(testnet_ci, "test_testnet_release_gate.py --read-only", "testnet workflow")
 
-    # All external actions are pinned to verified immutable commit SHAs.
+    # Every third-party Action is pinned to a verified immutable revision.
     for workflow_path in (
+        ".github/workflows/android-apk.yml",
         ".github/workflows/campaign-ci.yml",
         ".github/workflows/python-ci.yml",
         ".github/workflows/testnet-readonly.yml",
@@ -157,15 +158,11 @@ def main() -> None:
                 assert re.fullmatch(r".+@[0-9a-f]{40}(?:\s+#.*)?", reference), (
                     f"unpinned external action reference in {workflow_path}: {reference}"
                 )
-
-    # The standalone APK workflow's SHA-pinned refs caused repeated GitHub
-    # startup_failure runs with zero jobs/logs. Keep its previously successful
-    # major-version refs until the Actions startup issue can be isolated.
-    must(android_ci, "actions/checkout@v5", "APK workflow known-good action ref")
-    must(android_ci, "actions/setup-java@v6", "APK workflow known-good action ref")
-    must(android_ci, "android-actions/setup-android@v4", "APK workflow known-good action ref")
-    must(android_ci, "gradle/actions/setup-gradle@v5", "APK workflow known-good action ref")
-    must(android_ci, "actions/upload-artifact@v7", "APK workflow known-good action ref")
+    must(android_ci, "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09", "APK workflow verified Action revision")
+    must(android_ci, "actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6", "APK workflow verified Action revision")
+    must(android_ci, "android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd", "APK workflow verified Action revision")
+    must(android_ci, "gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c", "APK workflow verified Action revision")
+    must(android_ci, "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9", "APK workflow verified Action revision")
 
     print("WILLIAMS RELEASE CONTRACT GATE: PASS")
 
