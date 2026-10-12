@@ -185,7 +185,7 @@ class ExecutionBarrier:
             try:
                 unresolved = unresolved_check()
             except Exception as exc:
-                reason = f"unresolved_intent_read_failed: {type(exc).__name__}: {exc}"
+                reason = f"unresolved_intent_read_failed: {type(exc).__name__}: [REDACTED]"
                 self._record("ERROR", "execution_blocked", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
             if unresolved:
@@ -200,7 +200,7 @@ class ExecutionBarrier:
             try:
                 claimed = claim(f"execution_intent_claim:{intent.intent_id}", "CLAIMED")
             except Exception as exc:
-                reason = f"execution_intent_claim_failed: {type(exc).__name__}: {exc}"
+                reason = f"execution_intent_claim_failed: {type(exc).__name__}: [REDACTED]"
                 self._record("ERROR", "execution_blocked", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
             if not claimed:
@@ -212,7 +212,7 @@ class ExecutionBarrier:
             except Exception as exc:
                 # Fail closed: no exchange call is allowed until durable intent
                 # admission succeeds. There is no exchange mutation to reconcile.
-                reason = f"execution_intent_persistence_failed: {type(exc).__name__}: {exc}"
+                reason = f"execution_intent_persistence_failed: {type(exc).__name__}: [REDACTED]"
                 try:
                     order_fsm.transition(OrderState.CANCELED)
                 except ValueError:
@@ -228,13 +228,13 @@ class ExecutionBarrier:
                 snapshot = self.context_cache.snapshot()
                 reason = self._validate(intent, snapshot)
             except Exception as exc:
-                reason = f"execution_state_read_failed: {type(exc).__name__}: {exc}"
+                reason = f"execution_state_read_failed: {type(exc).__name__}: [REDACTED]"
                 try:
                     self._mark_reconciliation_required(intent)
                 except Exception as state_exc:
                     reason += (
                         "; reconciliation_state_persistence_failed: "
-                        f"{type(state_exc).__name__}: {state_exc}"
+                        f"{type(state_exc).__name__}: [REDACTED]"
                     )
                 reason += "; no submission attempted; reconciliation required before retry"
                 try:
@@ -242,7 +242,7 @@ class ExecutionBarrier:
                 except Exception as persist_exc:
                     reason += (
                         "; blocked_intent_persistence_failed: "
-                        f"{type(persist_exc).__name__}: {persist_exc}"
+                        f"{type(persist_exc).__name__}: [REDACTED]"
                     )
                 self._record("ERROR", "execution_state_read_failed", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
@@ -263,7 +263,7 @@ class ExecutionBarrier:
                         order_fsm.transition(OrderState.CANCELED)
                     except ValueError:
                         order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    reason = f"pre_submit_check_failed: {type(exc).__name__}: {exc}"
+                    reason = f"pre_submit_check_failed: {type(exc).__name__}: [REDACTED]"
                     self._persist(intent, "BLOCKED", reason)
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
@@ -288,20 +288,20 @@ class ExecutionBarrier:
                 response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
-                ambiguity_reason = f"{type(exc).__name__}: {exc}"
+                ambiguity_reason = f"{type(exc).__name__}: [REDACTED]"
                 try:
                     self._persist(intent, "AMBIGUOUS", ambiguity_reason)
                 except Exception as persist_exc:
                     ambiguity_reason += (
                         "; ambiguous_intent_persistence_failed: "
-                        f"{type(persist_exc).__name__}: {persist_exc}"
+                        f"{type(persist_exc).__name__}: [REDACTED]"
                     )
                 try:
                     self._mark_reconciliation_required(intent)
                 except Exception as state_exc:
                     ambiguity_reason += (
                         "; reconciliation_state_persistence_failed: "
-                        f"{type(state_exc).__name__}: {state_exc}"
+                        f"{type(state_exc).__name__}: [REDACTED]"
                     )
                 ambiguity_reason += "; exchange reconciliation is mandatory before any retry"
                 self._record(
@@ -355,14 +355,14 @@ class ExecutionBarrier:
                     except Exception as persist_exc:
                         persistence_errors.append(
                             "ambiguous_intent_persistence_failed: "
-                            f"{type(persist_exc).__name__}: {persist_exc}"
+                            f"{type(persist_exc).__name__}: [REDACTED]"
                         )
                     try:
                         self._mark_reconciliation_required(intent)
                     except Exception as state_exc:
                         persistence_errors.append(
                             "reconciliation_state_persistence_failed: "
-                            f"{type(state_exc).__name__}: {state_exc}"
+                            f"{type(state_exc).__name__}: [REDACTED]"
                         )
                     if persistence_errors:
                         reason += "; " + "; ".join(persistence_errors)
@@ -387,21 +387,21 @@ class ExecutionBarrier:
                 order_fsm.state = OrderState.RECONCILE_REQUIRED
                 reason = (
                     "post_submit_persistence_failed: "
-                    f"{type(exc).__name__}: {exc}"
+                    f"{type(exc).__name__}: [REDACTED]"
                 )
                 try:
                     self._persist(intent, "AMBIGUOUS", reason)
                 except Exception as ambiguous_exc:
                     reason += (
                         "; ambiguous_intent_persistence_failed: "
-                        f"{type(ambiguous_exc).__name__}: {ambiguous_exc}"
+                        f"{type(ambiguous_exc).__name__}: [REDACTED]"
                     )
                 try:
                     self._mark_reconciliation_required(intent)
                 except Exception as state_exc:
                     reason += (
                         "; reconciliation_state_persistence_failed: "
-                        f"{type(state_exc).__name__}: {state_exc}"
+                        f"{type(state_exc).__name__}: [REDACTED]"
                     )
                 reason += "; exchange reconciliation is mandatory before any retry"
                 self._record(
