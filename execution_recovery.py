@@ -13,6 +13,12 @@ class RecoveryValidationError(ValueError):
 
 
 KNOWN_STATUSES = {"NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED", "PENDING_CANCEL", "CANCELED", "REJECTED", "EXPIRED", "OCO_EXECUTING", "OCO_ALL_DONE", "OCO_REJECTED"}
+UNSUPPORTED_COMPOUND_MUTATIONS = {
+    "CANCEL_REPLACE", "CANCELREPLACE", "CANCEL-REPLACE",
+    "CANCEL_LIST", "CANCEL_ORDER_LIST", "ORDER_LIST_CANCEL", "CANCEL_OCO",
+}
+
+
 
 class ExecutionRecoveryWorker:
     """Reconcile persisted PENDING/AMBIGUOUS intents through a read-only adapter."""
@@ -115,6 +121,13 @@ class ExecutionRecoveryWorker:
         symbol = str(row.get("symbol", "")).upper()
         order_id = row.get("order_id")
         client_id = str(row.get("client_order_id") or "")
+        operation_type = str(row.get("order_type", "")).upper()
+        if operation_type in UNSUPPORTED_COMPOUND_MUTATIONS:
+            # A single order lookup cannot prove the outcome of a two-sided
+            # cancel-replace or an order-list cancellation. Keep UNKNOWN durable.
+            raise RecoveryValidationError(
+                "compound cancellation/cancel-replace recovery is unsupported; reconciliation remains required"
+            )
         if str(row.get("order_type", "")).upper() == "OCO":
             if not client_id or not callable(getattr(self.exchange, "order_list", None)):
                 raise RuntimeError("OCO intent lacks list client ID or order-list lookup capability")
