@@ -158,7 +158,7 @@ def test_timeout_with_ambiguous_persistence_failure_reports_mandatory_reconcilia
         # Public exceptions expose only the stable, sanitized safety contract;
         # detailed persistence classifications remain in internal diagnostic state.
         assert "durable safety-state persistence failed" in str(exc)
-        assert "mandatory before any retry" in str(exc)
+        assert "reconciliation must be completed before any retry" in str(exc)
         assert exc.__cause__ is None
         assert exc.__context__ is None
         assert exc.__suppress_context__ is True
