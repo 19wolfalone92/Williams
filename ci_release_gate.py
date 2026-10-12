@@ -121,10 +121,12 @@ def main() -> None:
     must(android_ci, "verify --verbose app/build/outputs/apk/debug/app-debug.apk", "all-event APK signature verification")
 
     python_ci = read(".github/workflows/python-ci.yml")
+    must(python_ci, "permissions:\\n  contents: read", "python workflow least privilege")
     must(python_ci, "python3 ci_release_gate.py", "python workflow")
     must(python_ci, "group: backend-ci-${{ github.ref }}-${{ github.sha }}", "python workflow")
 
     testnet_ci = read(".github/workflows/testnet-readonly.yml")
+    must(testnet_ci, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "credentialed Testnet trusted-branch boundary")
     must(testnet_ci, "python3 ci_release_gate.py", "testnet workflow")
     must(testnet_ci, 'ALLOW_LIVE: "false"', "testnet workflow")
     must(testnet_ci, 'TESTNET: "true"', "testnet workflow")
