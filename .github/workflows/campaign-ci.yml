@@ -118,7 +118,7 @@ jobs:
           test -n "$APKSIGNER"
           "$APKSIGNER" verify --verbose --print-certs "$APK" | tee app/build/outputs/apk/debug/apk-signature.txt
           sha256sum "$APK" | tee "$APK.sha256"
-          printf 'source_sha=%s\\n' "$SOURCE_SHA" > "$APK.provenance.txt"
+          printf 'source_sha=%s\n' "$SOURCE_SHA" > "$APK.provenance.txt"
       - name: Upload debug APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
