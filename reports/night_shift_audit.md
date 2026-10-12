@@ -143,3 +143,55 @@ The environment limitation is lack of a local checkout/runtime in this session. 
 - The report-only follow-up commit records these exact-SHA results; it does not change Python, Android, or workflow source.
 - P0 execution-intent persistence is now fail-closed in the audit branch and covered by mocks; CI verifies the corrected regression tests. SQLite artifact provenance, complete repository/history secret scanning, and end-to-end order restart/reconciliation scenarios remain outstanding and are not declared resolved.
 - Android lint/build checks on the source/test commit were still in progress at the last poll.
+
+
+## 12. Follow-up audit — current evidence as of 2026-10-12 03:43 UTC
+
+### Execution barrier: malformed/ambiguous exchange response
+
+- **Finding:** After a submission callback returned a dictionary without an authoritative order status, the barrier wrote `AMBIGUOUS` without handling persistence failure and raised immediately. If that write failed, the branch did not attempt to durably set `position_state=RECONCILE_REQUIRED`; a subsequent process could lack a persistent global reconciliation lock.
+- **Fix commit:** `2ebf843240fa233ef07d46117c52efe6cd35c9a9`. The non-authoritative response path now attempts both ambiguous-intent persistence and durable reconciliation-state persistence, records failures in the raised diagnostic, and never retries the exchange submission.
+- **Regression coverage:** added mock-only tests that force the `AMBIGUOUS` intent write to fail for a non-authoritative response and assert the global reconciliation lock is set and a second submit callback is not invoked.
+- **Python backend validation:** run [38200802961](https://github.com/19wolfalone92/Williams/actions/runs/38200802961), exact source/test SHA `2ebf843240fa233ef07d46117c52efe6cd35c9a9`: **PASS**, `158 passed, 4 warnings in 3.04s`.
+- **Campaign Python validation:** run [38200798812](https://github.com/19wolfalone92/Williams/actions/runs/38200798812), same SHA: Python job **PASS**, `169 passed, 4 warnings in 4.77s`.
+- **Android validation on this exact SHA:** runs [38200802985](https://github.com/19wolfalone92/Williams/actions/runs/38200802985) and [38200798812](https://github.com/19wolfalone92/Williams/actions/runs/38200798812) were still running at this report snapshot. Do not interpret as PASS. The previous report-only SHA `0ca7639bc19f6235eee61a12c83befd365126a1c` did have successful Android APK run [38200424540](https://github.com/19wolfalone92/Williams/actions/runs/38200424540) and Campaign CI run [38200424541](https://github.com/19wolfalone92/Williams/actions/runs/38200424541), but those results do not validate the new barrier source change.
+
+### SQLite data/artifact investigation
+
+- **Artifact tracking:** `data/test_tmp/trader.sqlite3.clean_20261004_082723` is **not present in the recursive Git tree** at audit HEAD, and the GitHub commits-by-exact-path query returned an empty list. This establishes that the exact path is not tracked in the inspected current tree and no path-specific commit was returned; it does **not** establish who created it or whether a local/unavailable artifact exists. Provenance remains **BLOCKED** pending access to the artifact or its originating environment.
+- **Protection already present:** `.gitignore` excludes `data/`, SQLite WAL/SHM files, `data/test_backups/`, and `data/test_tmp/`. `test_db_guard.py` resolves configured paths and blocks the exact production path unless the explicit opt-in `WILLIAMS_ALLOW_PROD_DB_TEST=1` is set. Several DB tests create temporary databases and use mocks; the deterministic CI suite passed on the SHAs cited above.
+- **Residual risk:** path guard inspection does not prove that all tests restore modified environment variables, close every connection, or protect against hard-link aliases. No local SQLite artifact was opened, copied, deleted, restored, or modified. WAL checkpoint/backup restore, corruption, lock contention, migration rollback, and close lifecycle were not directly exercised in this connector session. Overall SQLite lifecycle/recovery status: **IN PROGRESS**; exact artifact provenance: **BLOCKED**.
+
+### Binance API / order recovery
+
+- `BinanceSpotClient` defaults to `https://testnet.binance.vision`; the `Trader` constructor defaults `TESTNET` to true and reads API key/secret from environment variables. The manual workflow `.github/workflows/testnet-readonly.yml` sets `TESTNET=true`, `ALLOW_LIVE=false`, and uses dedicated Testnet secret names; it is workflow_dispatch-only and invokes a read-only gate.
+- The client marks transport timeout/connection failures on POST/DELETE as `unknown_execution` and does not blindly retry them; GET requests can retry. A signed `-1021` timestamp rejection has a one-time time-sync retry. This was code inspection, not a live exchange test.
+- Binance `-2014` root cause remains **NOT RUN / unconfirmed** in this audit: no authenticated request was sent and no credential values were inspected or printed. No live or Testnet trading order was submitted.
+
+### Security and CI/CD review
+
+- **Current tracked sensitive-looking paths:** the recursive tree showed `.env.example` and `deploy/.env.example`, but no tracked `.env`, private key, PKCS#12, PEM, or SQLite database file at current HEAD. The example environment file contains blank credential placeholders and a replace-me mobile token, not a live credential as inspected.
+- **Android network configuration:** main config denies cleartext globally and allows it only for exact `localhost` and `127.0.0.1`; release overlay denies cleartext globally. Main manifest declares INTERNET, notification and foreground-service permissions; app backup is disabled and widget/service components are not exported. Release manifest disables cleartext.
+- **GitHub Actions:** inspected Campaign and read-only Testnet workflows declare `permissions: contents: read`; Python workflow does not declare an explicit top-level permissions block, so effective token permissions depend on repository/org defaults. Actions are referenced by version tags in several workflows; immutable SHA pinning and dependency vulnerability review remain outstanding.
+- **Secret scan status:** the recursive current-tree filename check is a limited inspection, not a full content/history secret scan. GitHub code-search responses were incomplete and returned no usable findings; therefore full current-file and Git-history secret scanning is **BLOCKED**, not PASS. No secret values were copied into this report.
+
+### Status summary at this report snapshot
+
+| Area | Status | Evidence / limitation |
+|---|---|---|
+| Fail-closed PENDING persistence | PASS | Regression test and Python CI on `2ebf843` |
+| SUBMITTED/AMBIGUOUS persistence failure and no blind retry | PASS (covered scenarios) | Mock regression tests + Python CI on `2ebf843`; no exchange calls |
+| Malformed exchange response persistence failure | PASS | New regression tests + Python CI on `2ebf843` |
+| Python backend CI | PASS | Run 38200802961; 158 passed |
+| Campaign Python tests | PASS | Run 38200798812 Python job; 169 passed |
+| Android lint/unit tests/APK on `2ebf843` | IN PROGRESS | Runs 38200802985 and 38200798812 at snapshot time |
+| Android + Campaign CI on previous `0ca7639` | PASS | Runs 38200424540 and 38200424541; do not transfer this status to newer SHA |
+| SQLite artifact provenance | BLOCKED | Artifact absent from Git tree; no local artifact access |
+| SQLite isolation/lifecycle/recovery matrix | IN PROGRESS | Static inspection and existing CI only; matrix not executed |
+| Binance `-2014` root cause | NOT RUN | No authenticated call; no credential access |
+| Full secret/history scan | BLOCKED | No full scanner/history corpus available via this connector session |
+| Android manifest/network review | PASS (static inspection only) | Current manifest and network config inspected |
+| Workflow immutable action pinning/dependency audit | NOT RUN | No dependency vulnerability scan or action SHA migration performed |
+| Real trading operations | NOT RUN by design | No orders, account mutations, or live credentials used |
+
+The audit is still open. Do not merge PR #66 automatically. Recheck Android workflow conclusions against their exact `head_sha` before closing this audit.
