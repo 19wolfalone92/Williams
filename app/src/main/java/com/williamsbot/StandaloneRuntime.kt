@@ -1614,10 +1614,9 @@ private class NativeEngine(
                 ?: values["cancelOrderId"]
 
             // A generated client ID must be reproducible after a caller retry or
-            // process restart. A random UUID here would create a fresh exchange
-            // identity for the same ambiguous request and defeat replay blocking.
-            // Bind it to the caller's original unsigned request (never credentials
-            // or a signature) before adding any generated identifier.
+            // process restart. Derive it from the logical target/action identity,
+            // not mutable request economics. The ledger fingerprint separately
+            // rejects changed economics under the same operation identity.
             // Canonicalization rejects duplicate/credential parameters before any durable intent is written.
             val canonicalFingerprint = MutationIdentity.fingerprint(method, path, symbol, params)
             val logicalContext = clientKey?.takeIf { it.isNotBlank() }
