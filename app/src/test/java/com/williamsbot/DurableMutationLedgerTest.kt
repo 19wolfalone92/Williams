@@ -89,7 +89,7 @@ class DurableMutationLedgerTest {
             "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=BUY"
         )
         val empty = MutationIdentity.fingerprint(
-            "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=BUY&timeInForce="
+            "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=BUY&emptyField="
         )
         assertFalse(absent == empty)
     }
