@@ -22,6 +22,8 @@ import java.net.Socket
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.UUID
 import java.util.Locale
 import java.util.ArrayDeque
 import java.util.Calendar
@@ -529,6 +531,7 @@ private class NativeEngine(
     private val historyStore = MarketHistoryStore(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
+    private val mutationLedger = DurableMutationLedger(context)
     private val executionAccumulator = ExecutionAccumulator()
     private val stateMachine = TradingStateMachine(
         onTransition = { from, to, reason ->
@@ -771,6 +774,7 @@ private class NativeEngine(
         running &&
             !paused &&
             !reconcileRequired &&
+            !mutationLedger.hasUnresolved() &&
             !killLatched &&
             marketDataFresh() &&
             restAccountReady &&
@@ -783,6 +787,7 @@ private class NativeEngine(
             if (!running) add("runtime_not_running")
             if (paused) add("paused")
             if (reconcileRequired) add("reconcile_required")
+            if (mutationLedger.hasUnresolved()) add("unresolved_durable_mutation")
             if (killLatched) add("kill_switch_latched")
             if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
             if (!restAccountReady) add("rest_account_not_ready")
@@ -1524,56 +1529,172 @@ private class NativeEngine(
             params = ""
         )
 
+    /**
+     * Sole authenticated REST mutation sink. Every POST/DELETE is journaled
+     * before network I/O. SUBMITTING/UNKNOWN intents are never replayed blindly.
+     * This journal is not atomic with Binance; ambiguous outcomes require
+     * exchange reconciliation before the campaign may admit another entry.
+     */
     private fun signedRequest(
         method: String,
         path: String,
         params: String
     ): JSONObject {
-        var lastBody = "{}"
-        repeat(2) { attempt ->
-            val query = if (params.isBlank()) {
-                "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            } else {
-                params + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+        val mutating = method == "POST" || method == "DELETE"
+        var effectiveParams = params
+        var intentId: String? = null
+
+        if (mutating) {
+            val values = params.split("&").filter { it.contains("=") }
+                .associate { part ->
+                    val pair = part.split("=", limit = 2)
+                    pair[0] to pair[1]
+                }.toMutableMap()
+            val symbol = values["symbol"].orEmpty().uppercase(Locale.US)
+            require(symbol.isNotBlank()) { "MUTATION_SYMBOL_REQUIRED" }
+
+            fun digest(value: String): String =
+                MessageDigest.getInstance("SHA-256")
+                    .digest(value.toByteArray(StandardCharsets.UTF_8))
+                    .joinToString("") { "%02x".format(it) }
+
+            val clientKey = when {
+                method == "DELETE" -> values["origClientOrderId"]
+                    ?: values["listClientOrderId"]
+                    ?: values["clientOrderId"]
+                path.endsWith("/orderList/oco") -> values["listClientOrderId"]
+                else -> values["newClientOrderId"]
             }
-            val signature = hmac(query, secret())
-            val request = when (method) {
-                "POST" -> Request.Builder()
-                    .url(baseUrl + path)
-                    .header("X-MBX-APIKEY", key())
-                    .post((query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType()))
-                    .build()
-                "DELETE" -> Request.Builder()
-                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
-                    .header("X-MBX-APIKEY", key())
-                    .delete()
-                    .build()
-                else -> Request.Builder()
-                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
-                    .header("X-MBX-APIKEY", key())
-                    .get()
-                    .build()
+            val targetKey = values["orderId"]
+                ?: values["origClientOrderId"]
+                ?: values["orderListId"]
+                ?: values["listClientOrderId"]
+                ?: values["cancelOrderId"]
+
+            val exchangeClientId = when {
+                method == "DELETE" -> clientKey
+                !clientKey.isNullOrBlank() -> clientKey
+                path.endsWith("/orderList/oco") ||
+                    path.endsWith("/order") ||
+                    path.endsWith("/cancelReplace") ->
+                    "W21_" + UUID.randomUUID().toString().replace("-", "")
+                else -> null
             }
-            rateGuard.beforeRequest()
-            http.newCall(request).execute().use { response ->
-                rateGuard.observe(response.headers, response.code)
-                lastBody = response.body?.string() ?: "{}"
-                auditStore.recordRestCall(
-                    method,
-                    path,
-                    response.code,
-                    params.ifBlank { null },
-                    lastBody
-                )
-                if (response.isSuccessful) return JSONObject(lastBody)
-                if (attempt == 0 && lastBody.contains("-1021")) {
-                    runCatching { syncServerTime() }
-                    return@use
+            if (method == "POST" && exchangeClientId != null && clientKey.isNullOrBlank()) {
+                val keyName = if (path.endsWith("/orderList/oco")) "listClientOrderId" else "newClientOrderId"
+                effectiveParams = if (effectiveParams.isBlank()) {
+                    "$keyName=$exchangeClientId"
+                } else {
+                    "$effectiveParams&$keyName=$exchangeClientId"
                 }
-                error("Binance " + response.code + ": " + lastBody)
+            }
+
+            val identity = when {
+                method == "DELETE" -> "DELETE|${path}|${symbol}|${targetKey ?: digest(params)}"
+                !exchangeClientId.isNullOrBlank() -> "${method}|${path}|${symbol}|${exchangeClientId}"
+                else -> "${method}|${path}|${symbol}|${UUID.randomUUID()}"
+            }
+            intentId = "mut_" + digest(identity).take(48)
+            val fingerprint = digest("${method}|${path}|${symbol}|${effectiveParams}")
+            val existing = mutationLedger.find(intentId!!)
+            val intent = mutationLedger.prepare(
+                operationId = intentId!!,
+                kind = "$method:$path",
+                symbol = symbol,
+                requestFingerprint = fingerprint,
+                exchangeClientId = exchangeClientId
+            )
+            when (intent.state) {
+                DurableMutationLedger.State.PREPARED -> {
+                    mutationLedger.transition(
+                        intentId!!,
+                        setOf(DurableMutationLedger.State.PREPARED),
+                        DurableMutationLedger.State.SUBMITTING
+                    )
+                }
+                else -> throw IllegalStateException("MUTATION_REPLAY_BLOCKED_${intent.state.name}")
+            }
+            if (existing != null && existing.state != DurableMutationLedger.State.PREPARED) {
+                throw IllegalStateException("MUTATION_REPLAY_BLOCKED_${existing.state.name}")
             }
         }
-        error("Binance timestamp retry failed: " + lastBody)
+
+        var lastBody = "{}"
+        try {
+            repeat(2) { attempt ->
+                val query = if (effectiveParams.isBlank()) {
+                    "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+                } else {
+                    effectiveParams + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+                }
+                val signature = hmac(query, secret())
+                val request = when (method) {
+                    "POST" -> Request.Builder()
+                        .url(baseUrl + path)
+                        .header("X-MBX-APIKEY", key())
+                        .post((query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+                        .build()
+                    "DELETE" -> Request.Builder()
+                        .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                        .header("X-MBX-APIKEY", key())
+                        .delete()
+                        .build()
+                    else -> Request.Builder()
+                        .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                        .header("X-MBX-APIKEY", key())
+                        .get()
+                        .build()
+                }
+                rateGuard.beforeRequest()
+                http.newCall(request).execute().use { response ->
+                    rateGuard.observe(response.headers, response.code)
+                    lastBody = response.body?.string() ?: "{}"
+                    auditStore.recordRestCall(
+                        method,
+                        path,
+                        response.code,
+                        effectiveParams.ifBlank { null },
+                        lastBody
+                    )
+                    if (response.isSuccessful) {
+                        if (mutating) {
+                            mutationLedger.transition(
+                                requireNotNull(intentId),
+                                setOf(DurableMutationLedger.State.SUBMITTING),
+                                DurableMutationLedger.State.ACKNOWLEDGED,
+                                exchangeOrderId = runCatching {
+                                    JSONObject(lastBody).optString("orderId").takeIf { it.isNotBlank() }
+                                }.getOrNull()
+                            )
+                        }
+                        return JSONObject(lastBody)
+                    }
+                    if (attempt == 0 && lastBody.contains("-1021")) {
+                        runCatching { syncServerTime() }
+                        return@use
+                    }
+                    error("Binance " + response.code + ": " + lastBody)
+                }
+            }
+            error("Binance timestamp retry failed: " + lastBody)
+        } catch (x: Exception) {
+            if (mutating && intentId != null) {
+                runCatching {
+                    val current = mutationLedger.find(intentId!!)
+                    if (current?.state == DurableMutationLedger.State.SUBMITTING) {
+                        mutationLedger.transition(
+                            intentId!!,
+                            setOf(DurableMutationLedger.State.SUBMITTING),
+                            DurableMutationLedger.State.UNKNOWN
+                        )
+                    }
+                }
+                reconcileRequired = true
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, "ambiguous exchange mutation")
+                prefs.edit().putBoolean("reconcile_required", true).apply()
+            }
+            throw x
+        }
     }
 
     private fun signedRawGet(
@@ -2608,7 +2729,7 @@ private class NativeEngine(
 
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
-        if (reconcileRequired || paused || killLatched) return
+        if (reconcileRequired || mutationLedger.hasUnresolved() || paused || killLatched) return
         if (positionList().any { it.symbol == candidate.symbol }) return
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
         if (positionList().size >= maxOpenPositions) return
