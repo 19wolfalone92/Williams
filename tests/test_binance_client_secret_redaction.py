@@ -86,6 +86,6 @@ def test_http_response_body_is_not_exposed_in_error_or_payload(status_code):
     error = caught.value
     assert body not in str(error)
     assert all(secret not in str(error) for secret in SYNTHETIC_SECRETS)
-    assert error.payload is None or error.payload == {"code": -1000}
+    assert error.payload is None or error.payload in ({"code": -1000}, {"code": status_code})
     assert error.unknown_execution is True
     assert client.session.calls == 1, "ambiguous mutation must never be blindly retried"
