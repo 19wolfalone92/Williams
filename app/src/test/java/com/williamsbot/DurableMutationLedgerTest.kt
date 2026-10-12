@@ -202,11 +202,7 @@ class DurableMutationLedgerTest {
         fun claimant(target: DurableMutationLedger) = Thread {
             start.await()
             try {
-                target.transition(
-                    operationId,
-                    setOf(DurableMutationLedger.State.PREPARED),
-                    DurableMutationLedger.State.SUBMITTING
-                )
+                target.claimForSubmission(operationId)
                 successes.incrementAndGet()
             } catch (_: Exception) {
                 failures.incrementAndGet()
@@ -227,6 +223,30 @@ class DurableMutationLedgerTest {
         assertEquals(1, successes.get())
         assertEquals(1, failures.get())
         assertEquals(DurableMutationLedger.State.SUBMITTING, ledger!!.find(operationId)!!.state)
+    }
+
+
+    @Test
+    fun unresolvedClaimBlocksConflictingSameSymbolMutationButNotOtherSymbol() {
+        ledger!!.prepare("op-btc-1", "POST:/api/v3/order", "BTCUSDT", "1".repeat(64), "client-btc-1")
+        ledger!!.claimForSubmission("op-btc-1")
+        ledger!!.transition(
+            "op-btc-1",
+            setOf(DurableMutationLedger.State.SUBMITTING),
+            DurableMutationLedger.State.UNKNOWN
+        )
+
+        ledger!!.prepare("op-btc-2", "POST:/api/v3/order", "BTCUSDT", "2".repeat(64), "client-btc-2")
+        assertThrows(IllegalStateException::class.java) {
+            ledger!!.claimForSubmission("op-btc-2")
+        }
+
+        ledger!!.prepare("op-eth-1", "POST:/api/v3/order", "ETHUSDT", "3".repeat(64), "client-eth-1")
+        assertEquals(
+            DurableMutationLedger.State.SUBMITTING,
+            ledger!!.claimForSubmission("op-eth-1").state
+        )
+        assertTrue(ledger!!.hasUnresolved())
     }
 
     @Test
@@ -300,11 +320,7 @@ class DurableMutationLedgerTest {
     @Test
     fun unknownIntentRemainsUnresolvedAfterRestart() {
         ledger!!.prepare("op-unknown", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-unknown")
-        ledger!!.transition(
-            "op-unknown",
-            setOf(DurableMutationLedger.State.PREPARED),
-            DurableMutationLedger.State.SUBMITTING
-        )
+        ledger!!.claimForSubmission("op-unknown")
         ledger!!.transition(
             "op-unknown",
             setOf(DurableMutationLedger.State.SUBMITTING),
@@ -320,11 +336,7 @@ class DurableMutationLedgerTest {
     @Test
     fun acknowledgedIntentIsNotClassifiedAsUnresolved() {
         ledger!!.prepare("op-ack", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-ack")
-        ledger!!.transition(
-            "op-ack",
-            setOf(DurableMutationLedger.State.PREPARED),
-            DurableMutationLedger.State.SUBMITTING
-        )
+        ledger!!.claimForSubmission("op-ack")
         ledger!!.transition(
             "op-ack",
             setOf(DurableMutationLedger.State.SUBMITTING),
