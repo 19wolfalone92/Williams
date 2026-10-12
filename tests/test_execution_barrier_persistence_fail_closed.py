@@ -15,6 +15,12 @@ class FailingIntentDB:
     def state_get(self, key, default=None):
         return self.states.get(key, default)
 
+    def try_claim_state(self, key, value):
+        if key in self.states:
+            return False
+        self.states[key] = str(value)
+        return True
+
     def state_set(self, key, value):
         self.states[key] = str(value)
 
@@ -31,10 +37,13 @@ class FailingIntentDB:
 
 
 class DBWithoutIntentPersistence:
-    """Represents the legacy optional-persistence interface."""
+    """Represents a legacy DB missing required execution persistence."""
 
     def state_get(self, key, default=None):
         return default
+
+    def try_claim_state(self, key, value):
+        return True
 
 
 def campaign_intent():
@@ -76,7 +85,7 @@ def test_db_without_save_method_blocks_submission_without_claiming_durable_persi
     )
 
     assert result.accepted is False
-    assert "save_execution_intent is missing" in result.reason
+    assert "durable execution-intent persistence is unavailable" in result.reason
     submit.assert_not_called()
 
 
@@ -199,3 +208,46 @@ def test_untrusted_exchange_response_marks_reconciliation_even_when_ambiguous_wr
 
     assert db.state_get("position_state") == "RECONCILE_REQUIRED"
     submit.assert_called_once()
+
+
+def test_duplicate_intent_id_is_claimed_once_and_never_submitted_twice():
+    db = FailingIntentDB()
+    barrier = ExecutionBarrier(ContextCache(), db)
+    intent = campaign_intent()
+    first_submit = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 1001})
+    first = barrier.execute(intent, first_submit)
+    assert first.accepted is True
+    first_submit.assert_called_once()
+
+    second_submit = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 1002})
+    second = barrier.execute(intent, second_submit)
+    assert second.accepted is False
+    assert "duplicate execution intent already claimed" in second.reason
+    second_submit.assert_not_called()
+
+
+def test_state_read_failure_fails_closed_and_records_reconciliation():
+    class ReadFailDB(FailingIntentDB):
+        def state_get(self, key, default=None):
+            raise OSError("simulated state read failure")
+
+    db = ReadFailDB()
+    submit = Mock(return_value={"status": "NEW", "executedQty": "0"})
+    result = ExecutionBarrier(ContextCache(), db).execute(campaign_intent(), submit)
+    assert result.accepted is False
+    assert "execution_state_read_failed" in result.reason
+    assert db.state_get.__func__ is ReadFailDB.state_get
+    assert db.states["position_state"] == "RECONCILE_REQUIRED"
+    submit.assert_not_called()
+
+
+def test_duplicate_claim_survives_barrier_recreation():
+    db = FailingIntentDB()
+    intent = campaign_intent()
+    first_submit = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 1003})
+    first = ExecutionBarrier(ContextCache(), db).execute(intent, first_submit)
+    assert first.accepted is True
+    second_submit = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 1004})
+    second = ExecutionBarrier(ContextCache(), db).execute(intent, second_submit)
+    assert second.accepted is False
+    second_submit.assert_not_called()

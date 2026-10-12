@@ -157,6 +157,28 @@ class ExecutionBarrier:
         with self.context_cache.execution_lock:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
+            # Check the persistence API before claiming the id, then atomically
+            # claim it in durable storage. This survives process restarts and
+            # prevents two processes from submitting the same intent_id.
+            if self.db is None or not callable(getattr(self.db, "save_execution_intent", None)):
+                reason = "durable execution-intent persistence is unavailable"
+                self._record("ERROR", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
+            claim = getattr(self.db, "try_claim_state", None)
+            if not callable(claim):
+                reason = "durable execution-intent claim is unavailable; refusing submission"
+                self._record("ERROR", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
+            try:
+                claimed = claim(f"execution_intent_claim:{intent.intent_id}", "CLAIMED")
+            except Exception as exc:
+                reason = f"execution_intent_claim_failed: {type(exc).__name__}: {exc}"
+                self._record("ERROR", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
+            if not claimed:
+                reason = "duplicate execution intent already claimed; reconciliation required before retry"
+                self._record("WARNING", "execution_duplicate_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
             try:
                 self._persist(intent, "PENDING")
             except Exception as exc:
@@ -174,8 +196,28 @@ class ExecutionBarrier:
                     self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
                 except Exception:
                     pass
-            snapshot = self.context_cache.snapshot()
-            reason = self._validate(intent, snapshot)
+            try:
+                snapshot = self.context_cache.snapshot()
+                reason = self._validate(intent, snapshot)
+            except Exception as exc:
+                reason = f"execution_state_read_failed: {type(exc).__name__}: {exc}"
+                try:
+                    self._mark_reconciliation_required(intent)
+                except Exception as state_exc:
+                    reason += (
+                        "; reconciliation_state_persistence_failed: "
+                        f"{type(state_exc).__name__}: {state_exc}"
+                    )
+                reason += "; no submission attempted; reconciliation required before retry"
+                try:
+                    self._persist(intent, "BLOCKED", reason)
+                except Exception as persist_exc:
+                    reason += (
+                        "; blocked_intent_persistence_failed: "
+                        f"{type(persist_exc).__name__}: {persist_exc}"
+                    )
+                self._record("ERROR", "execution_state_read_failed", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
             if reason:
                 try:
                     order_fsm.transition(OrderState.CANCELED)

@@ -44,6 +44,12 @@ class ExecutionIntentDB:
     def state_get(self, key, default=None):
         return self.states.get(key, default)
 
+    def try_claim_state(self, key, value):
+        if key in self.states:
+            return False
+        self.states[key] = str(value)
+        return True
+
     def state_set(self, key, value):
         self.states[key] = str(value)
 
