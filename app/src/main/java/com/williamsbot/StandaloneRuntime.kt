@@ -1571,10 +1571,7 @@ private class NativeEngine(
             val symbol = values["symbol"].orEmpty().uppercase(Locale.US)
             require(symbol.isNotBlank()) { "MUTATION_SYMBOL_REQUIRED" }
 
-            fun digest(value: String): String =
-                MessageDigest.getInstance("SHA-256")
-                    .digest(value.toByteArray(StandardCharsets.UTF_8))
-                    .joinToString("") { "%02x".format(it) }
+            fun digest(value: String): String = MutationIdentity.sha256(value)
 
             val clientKey = when {
                 method == "DELETE" -> values["origClientOrderId"]
@@ -1594,8 +1591,7 @@ private class NativeEngine(
             // identity for the same ambiguous request and defeat replay blocking.
             // Bind it to the caller's original unsigned request (never credentials
             // or a signature) before adding any generated identifier.
-            val stableRequestSeed = digest("$method|$path|$symbol|$params")
-            val generatedClientId = "W21_" + stableRequestSeed.take(28)
+            val generatedClientId = MutationIdentity.generatedClientOrderId(method, path, symbol, params)
             val exchangeClientId = when {
                 method == "DELETE" -> clientKey
                 !clientKey.isNullOrBlank() -> clientKey
@@ -1620,7 +1616,7 @@ private class NativeEngine(
                 else -> "${method}|${path}|${symbol}|${UUID.randomUUID()}"
             }
             intentId = "mut_" + digest(identity).take(48)
-            val fingerprint = digest("${method}|${path}|${symbol}|${effectiveParams}")
+            val fingerprint = MutationIdentity.fingerprint(method, path, symbol, effectiveParams)
             val existing = mutationLedger.find(intentId!!)
             val intent = mutationLedger.prepare(
                 operationId = intentId!!,
