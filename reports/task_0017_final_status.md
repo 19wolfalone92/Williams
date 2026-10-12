@@ -1,14 +1,19 @@
-# TASK 001.7 — Final Status
+# TASK 001.8 — Final Status
 
 **PARTIALLY IMPLEMENTED — P0 OPEN**
 
-- PR #66: OPEN, Draft, unmerged. Base branch: `fix/pytest-safe-collection`.
-- Current source/test SHA at snapshot: `7e7b240f07d11e0077d1b1d741a8087f4846a750`.
-- Added strict single-order trade evidence validation and intent-bound durable evidence; expanded deterministic Android unit tests; added automated Python static mutation-boundary regression; strengthened Android workflow path filters and expected APK package/target-SDK checks.
-- Campaign Python on the current SHA: SUCCESS, `233 passed, 4 warnings` in run `38278336855`, including `tests/test_mutation_boundary_inventory.py`.
-- Python backend run `38278337094` was queued/in progress when this snapshot was written; check its final result separately.
-- Campaign Android job in run `38278336855` was still running `Build debug APK and run unit tests`; no pass is claimed yet. Prior SHA `f60e41b...` failed Android test compilation due a fixture bug at `BinanceTradeEvidenceTest.kt:79`; corrected in `7e7b240...`.
-- Standalone Android APK run `38278338697` ended `startup_failure` with zero jobs/artifacts. Rerun was rejected by GitHub with HTTP 403, “This workflow run cannot be retried.” Android APK/signature/checksum/metadata remain unverified until Campaign Android validation passes.
-- Canonical FI-01–FI-12 integrated fake-exchange scenarios remain NOT TESTED. OCO, cancellation and cancel-replace reconciliation remains unsupported and fail-closed. Full migration/concurrency/crash matrix and full BL-004 sentinel sweep remain open.
-- No production credentials or live order mutations were used.
-- P0 is not closed.
+- Audited code/test SHA: `31ba73ff81c43edb5be4606b200dce752148967a`.
+- PR #66: OPEN, Draft, unmerged; base `fix/pytest-safe-collection`.
+- Exact-SHA Python backend run [38301629007](https://github.com/19wolfalone92/Williams/actions/runs/38301629007): SUCCESS.
+- Exact-SHA Campaign run [38301629067](https://github.com/19wolfalone92/Williams/actions/runs/38301629067): Python job SUCCESS; Android build/unit-test/lint job still IN_PROGRESS at last inspection.
+- Exact-SHA standalone APK run [38301630392](https://github.com/19wolfalone92/Williams/actions/runs/38301630392): `startup_failure`, zero jobs, zero artifacts. Root cause is not exposed; do not attribute it to Gradle.
+- Campaign artifacts at inspection: only verified Gradle wrapper JAR, not APK. Package identity, APK signature, APK SHA-256, provenance and APK upload are not yet verified.
+- Single-order reconciliation has identity/evidence validation and durable evidence checks; full runtime proof awaits Android tests.
+- Mutation-boundary static regression is present and Python CI passed; it is not complete dynamic proof.
+- OCO/cancel/cancelReplace recovery, FI-01–FI-12 end-to-end fake exchange tests, full migration/concurrency/restart matrix and complete BL-004 sentinel sweep remain open.
+- Android and Python SQLite are not a single atomic transaction; recovery must reconcile with the exchange.
+- No live credentials or live order mutations were used.
+
+## P0 closure decision
+
+P0 cannot close while any mandatory scenario, Android test, APK verification, or security evidence is missing. The exact-head CI must be checked again after this report commit, because report changes themselves create a new branch HEAD and trigger workflows.
