@@ -1447,16 +1447,12 @@ private class NativeEngine(
                 "/api/v3/order",
                 "symbol=" + intent.symbol + "&origClientOrderId=" + clientOrderId
             )
-            require(order.optString("symbol").equals(intent.symbol, ignoreCase = true)) {
-                "MUTATION_RECONCILIATION_SYMBOL_MISMATCH"
-            }
-            require(order.optString("clientOrderId") == clientOrderId) {
-                "MUTATION_RECONCILIATION_CLIENT_ID_MISMATCH"
-            }
-            val exchangeOrderId = order.optString("orderId")
-            require(exchangeOrderId.isNotBlank() && exchangeOrderId != "null") {
-                "MUTATION_RECONCILIATION_ORDER_ID_MISSING"
-            }
+            val exchangeOrderId = BinanceTradeEvidence.verifyOrderIdentity(
+                expectedSymbol = intent.symbol,
+                expectedClientOrderId = clientOrderId,
+                persistedExchangeOrderId = reconciling.exchangeOrderId,
+                order = order
+            )
             val status = order.optString("status").uppercase(Locale.US)
             require(status in setOf(
                 "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED",
