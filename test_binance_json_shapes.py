@@ -386,3 +386,34 @@ def test_order_safe_reports_known_terminal_cancel_without_retry(monkeypatch):
     assert exc.value.unknown_execution is False
     submit.assert_called_once()
     lookup.assert_called_once_with("BTCUSDT", orig_client_order_id=client_order_id)
+
+
+def test_minus_2014_is_reported_without_retry_or_assumed_root_cause(monkeypatch):
+    client = make_client()
+    calls = []
+
+    class FakeResponse:
+        status_code = 400
+        headers = {}
+        content = b'{"code":-2014,"msg":"API-key format invalid."}'
+
+        @property
+        def text(self):
+            return self.content.decode()
+
+        def json(self):
+            return {"code": -2014, "msg": "API-key format invalid."}
+
+    def fake_request(*args, **kwargs):
+        calls.append((args, kwargs))
+        return FakeResponse()
+
+    monkeypatch.setattr(client.session, "request", fake_request)
+
+    with pytest.raises(BinanceAPIError) as exc:
+        client._request("GET", "/api/v3/account", {}, signed=True)
+
+    assert exc.value.status_code == 400
+    assert exc.value.payload["code"] == -2014
+    assert exc.value.unknown_execution is False
+    assert len(calls) == 1
