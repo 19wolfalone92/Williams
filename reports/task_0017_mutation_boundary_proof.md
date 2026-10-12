@@ -1,27 +1,22 @@
 # TASK 001.9 — Mutation Boundary Proof
 
-- Latest source/test HEAD at report preparation: `fd3276c5f041dd47f0941d5b07fff4726c8c9124`.
-- Status: PARTIAL — P0 OPEN.
+- Code/test SHA: `fd3276c5f041dd47f0941d5b07fff4726c8c9124`.
+- Campaign Python test step [38306238359](https://github.com/19wolfalone92/Williams/actions/runs/38306238359): 259 passed, 4 warnings; overall run was cancelled during cleanup/concurrency. Android build had not reached APK validation.
+- Branch HEAD before this report refresh: `1b051659dba73913ad3c2e0a39f8278042cf4729`.
 
-## Inventory and controls
+## Implemented controls
 
-- Android regression inventory: `tests/test_mutation_boundary_inventory.py` enumerates raw OkHttp call sites and asserts Binance mutations remain inside `StandaloneRuntime.signedRequest`, with durable prepare/claim and SUBMITTING/UNKNOWN handling.
-- Known Android mutation wrappers include signed POST/DELETE and cancel-replace; recovery/read-only lookup must not call mutation wrappers.
-- Python HTTP mutations are centralized in `binance_client.py`; execution admission/persistence is mediated by `execution_barrier.py`; recovery uses read-only lookup calls in `execution_recovery.py`.
-- Python fake-exchange tests assert actual mutation counters for ambiguous submission/recovery and unresolved retry.
-- Unsupported `CANCEL_REPLACE`, `CANCEL_LIST`, `CANCEL_ORDER_LIST`, `ORDER_LIST_CANCEL` and `CANCEL_OCO` operation types are now explicitly rejected by recovery before exchange lookup; durable state remains AMBIGUOUS.
-
-## CI evidence
-
-- Campaign Python run [38306130277](https://github.com/19wolfalone92/Williams/actions/runs/38306130277): SUCCESS, 258 passed on prior SHA `5c6499a26a493ab4ff11ca44486850a79283d7ef`.
-- Final OCO list-ID conflict guard/test and documentation descendants require their own exact-SHA CI result.
-- Separate APK workflow [38306239714](https://github.com/19wolfalone92/Williams/actions/runs/38306239714) ended `startup_failure` with no jobs/artifacts; no Android proof is available from that run.
+- `tests/test_mutation_boundary_inventory.py` checks raw Android OkHttp call-site inventory and requires Binance mutations to remain in the signed durable sink.
+- Python HTTP mutations are centralized through `binance_client.py`; `ExecutionBarrier` is the final admission point and `ExecutionRecoveryWorker` performs read-only reconciliation.
+- FI fake-exchange tests assert SQLite state and actual mutation counts for submission failure, lost response, failed persistence and retry while unresolved.
+- Recovery explicitly refuses compound cancel-replace and order-list cancellation types before exchange lookup.
+- OCO recovery rejects a persisted-vs-returned order-list ID conflict.
 
 ## Remaining gaps
 
-- Static inventory is not a complete dynamic call graph of every Android/Python emergency exit, background worker, SDK/adapter, diagnostic route and test-only mutation route.
-- No integrated Android fake exchange currently demonstrates zero duplicate mutations across all FI-01–FI-12 boundaries.
-- Compound cancel-replace and order-list cancellation are blocked rather than falsely claimed recovered.
-- Android SQLite and Python SQLite are separate stores and do not share an atomic transaction.
+- Static inventory is not a full dynamic call graph for every Android/Python emergency exit, background worker, adapter, diagnostic and test path.
+- The fake-exchange suite is Python-side; no complete Android production-boundary fake-exchange matrix exists.
+- Compound mutation recovery is blocked rather than falsely claimed complete.
+- Android and Python SQLite are separate stores, not a shared atomic transaction.
 
 Status: PARTIAL — P0 OPEN.
