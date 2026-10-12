@@ -47,10 +47,11 @@ def _order(status="NEW", **updates):
     value.update(updates)
     return value
 
-def test_worker_recovers_ambiguous_intent_after_database_reopen(tmp_path):
+@pytest.mark.parametrize("initial_status", ["PENDING", "AMBIGUOUS"])
+def test_worker_recovers_unresolved_intent_after_database_reopen(tmp_path, initial_status):
     path=tmp_path/"recover.sqlite3"
     with Database(str(path)) as db:
-        intent=_intent(db); intent_id=intent.intent_id
+        intent=_intent(db, status=initial_status); intent_id=intent.intent_id
     with Database(str(path)) as reopened:
         exchange=FakeExchange(_order("FILLED", executedQty="0.01000000"))
         result=ExecutionRecoveryWorker(reopened, exchange).run_once(now=time.time()+10)
@@ -58,6 +59,8 @@ def test_worker_recovers_ambiguous_intent_after_database_reopen(tmp_path):
         assert result["reconciled"]==1 and row["status"]=="FILLED"
         assert row["order_id"]=="123" and row["exchange_status"]=="FILLED"
         assert row["executed_qty"]==pytest.approx(0.01)
+        assert exchange.last_lookup["order_id"] is None
+        assert exchange.last_lookup["orig_client_order_id"] == intent.client_order_id
         assert not reopened.has_unresolved_execution_intents() and exchange.calls==1
 
 @pytest.mark.parametrize(("status","executed","expected_local","terminal"),[
