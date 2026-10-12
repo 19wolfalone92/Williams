@@ -35,15 +35,18 @@ def test_android_exchange_mutation_transport_is_contained_in_signed_sink():
         (path, line) for path, line, source in raw_call_sites
         if path.endswith("StandaloneRuntime.kt")
     ]
-    assert len(exchange_calls) == 2, f"Binance raw HTTP call-site inventory changed: {exchange_calls}"
+    assert len(exchange_calls) == 3, f"Binance raw HTTP call-site inventory changed: {exchange_calls}"
     runtime = (ROOT / "app/src/main/java/com/williamsbot/StandaloneRuntime.kt").read_text(encoding="utf-8")
     sink = _kotlin_body(runtime, r"private\s+fun\s+signedRequest\s*\(")
     raw_get = _kotlin_body(runtime, r"private\s+fun\s+signedRawGet\s*\(")
+    market_get = _kotlin_body(runtime, r"private\s+fun\s+getBody\s*\(")
     assert ".newCall(request).execute()" in sink
     assert ".newCall(request).execute()" in raw_get
+    assert ".newCall(request).execute()" in market_get
     assert 'Request.Builder()' in sink and 'mutating' in sink
     assert '.post(' in sink and '.delete()' in sink
     assert '.post(' not in raw_get and '.delete()' not in raw_get
+    assert '.post(' not in market_get and '.delete()' not in market_get
 
 
 def test_android_mutation_wrappers_delegate_to_durable_sink():
