@@ -50,6 +50,9 @@ class ExecutionIntentDB:
         self.states[key] = str(value)
         return True
 
+    def has_unresolved_execution_intents(self):
+        return False
+
     def state_set(self, key, value):
         self.states[key] = str(value)
 

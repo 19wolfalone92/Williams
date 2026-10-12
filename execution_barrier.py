@@ -164,6 +164,21 @@ class ExecutionBarrier:
                 reason = "durable execution-intent persistence is unavailable"
                 self._record("ERROR", "execution_blocked", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
+            unresolved_check = getattr(self.db, "has_unresolved_execution_intents", None)
+            if not callable(unresolved_check):
+                reason = "durable unresolved-intent inspection is unavailable; refusing submission"
+                self._record("ERROR", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
+            try:
+                unresolved = unresolved_check()
+            except Exception as exc:
+                reason = f"unresolved_intent_read_failed: {type(exc).__name__}: {exc}"
+                self._record("ERROR", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
+            if unresolved:
+                reason = "unresolved PENDING/AMBIGUOUS execution intent exists; reconciliation required before retry"
+                self._record("WARNING", "execution_reconcile_required", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
             claim = getattr(self.db, "try_claim_state", None)
             if not callable(claim):
                 reason = "durable execution-intent claim is unavailable; refusing submission"

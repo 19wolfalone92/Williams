@@ -323,6 +323,13 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    def has_unresolved_execution_intents(self):
+        """Return whether a prior intent may still require exchange reconciliation."""
+        row = self.conn.execute(
+            "SELECT 1 FROM execution_intents WHERE status IN ('PENDING', 'AMBIGUOUS') LIMIT 1"
+        ).fetchone()
+        return row is not None
+
     def save_execution_intent(self, intent, status, reason=''):
         self.conn.execute(
             '''INSERT OR REPLACE INTO execution_intents(

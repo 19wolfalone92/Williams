@@ -11,6 +11,7 @@ class FailingIntentDB:
         self.saved_statuses = []
         self.events = []
         self.states = {"position_state": "FLAT"}
+        self.intent_statuses = {}
 
     def state_get(self, key, default=None):
         return self.states.get(key, default)
@@ -21,13 +22,20 @@ class FailingIntentDB:
         self.states[key] = str(value)
         return True
 
+    def has_unresolved_execution_intents(self):
+        return False
+
     def state_set(self, key, value):
         self.states[key] = str(value)
+
+    def has_unresolved_execution_intents(self):
+        return any(status in {"PENDING", "AMBIGUOUS"} for status in self.intent_statuses.values())
 
     def save_execution_intent(self, intent, status, reason):
         self.saved_statuses.append(status)
         if status in self.fail_statuses:
             raise OSError(f"simulated database failure at {status}")
+        self.intent_statuses[intent.intent_id] = status
 
     def log_event(self, *args, **kwargs):
         self.events.append((args, kwargs))
@@ -44,6 +52,9 @@ class DBWithoutIntentPersistence:
 
     def try_claim_state(self, key, value):
         return True
+
+    def has_unresolved_execution_intents(self):
+        return False
 
 
 def campaign_intent():
@@ -167,7 +178,7 @@ def test_post_submit_persistence_failure_locks_subsequent_execution_until_reconc
     second = barrier.execute(campaign_intent(), second_submit)
 
     assert second.accepted is False
-    assert second.reason == "RECONCILE_REQUIRED"
+    assert "unresolved PENDING/AMBIGUOUS execution intent" in second.reason
     second_submit.assert_not_called()
 
 
@@ -191,7 +202,7 @@ def test_untrusted_exchange_response_persistence_failure_still_locks_retries():
     retry = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 992})
     result = barrier.execute(campaign_intent(), retry)
     assert result.accepted is False
-    assert result.reason == "RECONCILE_REQUIRED"
+    assert "unresolved PENDING/AMBIGUOUS execution intent" in result.reason
     retry.assert_not_called()
 
 
@@ -251,3 +262,38 @@ def test_duplicate_claim_survives_barrier_recreation():
     second = ExecutionBarrier(ContextCache(), db).execute(intent, second_submit)
     assert second.accepted is False
     second_submit.assert_not_called()
+
+
+
+def test_state_write_failure_still_blocks_new_intents_via_unresolved_record():
+    class StateWriteFailDB(FailingIntentDB):
+        def state_set(self, key, value):
+            if key == "position_state" and value == "RECONCILE_REQUIRED":
+                raise OSError("simulated state write failure")
+            super().state_set(key, value)
+
+    db = StateWriteFailDB({"SUBMITTED", "AMBIGUOUS"})
+    submit = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 2001})
+    first = ExecutionBarrier(ContextCache(), db).execute(campaign_intent(), submit)
+    assert first.accepted is False
+    assert "reconciliation_state_persistence_failed" in first.reason
+    assert db.has_unresolved_execution_intents()
+
+    next_submit = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 2002})
+    second = ExecutionBarrier(ContextCache(), db).execute(campaign_intent(), next_submit)
+    assert second.accepted is False
+    assert "unresolved PENDING/AMBIGUOUS execution intent" in second.reason
+    next_submit.assert_not_called()
+
+
+def test_unresolved_intent_read_failure_blocks_submission():
+    class ReadFailDB(FailingIntentDB):
+        def has_unresolved_execution_intents(self):
+            raise OSError("simulated unresolved intent query failure")
+
+    db = ReadFailDB()
+    submit = Mock(return_value={"status": "NEW", "executedQty": "0"})
+    result = ExecutionBarrier(ContextCache(), db).execute(campaign_intent(), submit)
+    assert result.accepted is False
+    assert "unresolved_intent_read_failed" in result.reason
+    submit.assert_not_called()
