@@ -12,12 +12,17 @@ class Database:
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path, check_same_thread=False, timeout=20)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute('PRAGMA busy_timeout=20000')
-        self.conn.execute('PRAGMA journal_mode=WAL')
-        self.conn.execute('PRAGMA synchronous=NORMAL')
-        self._transaction_active = False
-        self.init()
+        try:
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute('PRAGMA busy_timeout=20000')
+            self.conn.execute('PRAGMA journal_mode=WAL')
+            self.conn.execute('PRAGMA synchronous=NORMAL')
+            self._transaction_active = False
+            self.init()
+        except Exception:
+            # Do not leak a connection/lock when schema initialization fails.
+            self.conn.close()
+            raise
 
     @contextmanager
     def transaction(self):
@@ -271,10 +276,12 @@ class Database:
         CREATE INDEX IF NOT EXISTS idx_campaign_events_campaign
             ON campaign_events(campaign_id, id);
         ''')
-        self._migrate_trade_columns()
-        self.state_set('schema_version', self.SCHEMA_VERSION)
-        self.state_set('position_state', self.state_get('position_state', 'FLAT'))
-        self.conn.commit()
+        # Schema migration and version marker are one transaction. A failure
+        # halfway through ALTER TABLE operations must leave the old schema intact.
+        with self.transaction():
+            self._migrate_trade_columns()
+            self.state_set('schema_version', self.SCHEMA_VERSION)
+            self.state_set('position_state', self.state_get('position_state', 'FLAT'))
 
     def _migrate_trade_columns(self):
         columns = {
