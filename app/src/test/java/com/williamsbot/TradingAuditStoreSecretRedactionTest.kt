@@ -5,6 +5,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -39,7 +40,7 @@ class TradingAuditStoreSecretRedactionTest {
             null
         ).use { cursor ->
             assertNotNull(cursor)
-            assert(cursor.moveToFirst())
+            assertTrue(cursor.moveToFirst())
             val request = cursor.getString(0)
             val response = cursor.getString(1)
             listOf(
