@@ -2729,10 +2729,15 @@ private class NativeEngine(
         purpose: String,
         block: () -> JSONObject
     ): JSONObject {
-        if (!running) error("Runtime is not running")
-        if (paused) error("Runtime is paused")
-        if (reconcileRequired) error("RECONCILE_REQUIRED")
-        if (killLatched) error("KILL_SWITCH_LATCHED")
+        // The campaign exit path is the controlled emergency protocol. It still
+        // passes through the durable mutation sink, but must remain callable when
+        // entries are paused, reconciliation is required, or kill is latched.
+        val emergencyExit = purpose == "CAMPAIGN_EXIT" ||
+            purpose == "CAMPAIGN_EXIT_CANCEL_PROTECTION"
+        if (!running && !emergencyExit) error("Runtime is not running")
+        if (paused && !emergencyExit) error("Runtime is paused")
+        if (reconcileRequired && !emergencyExit) error("RECONCILE_REQUIRED")
+        if (killLatched && !emergencyExit) error("KILL_SWITCH_LATCHED")
         require(executionGate.tryReserve(symbol)) {
             "Campaign execution already reserved for " + symbol
         }
