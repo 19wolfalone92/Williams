@@ -40,6 +40,8 @@ class ExecutionRecoveryWorker:
         status = str(order.get("status", "")).upper()
         if status not in KNOWN_STATUSES:
             return False, "exchange lookup returned an unknown or missing status"
+        if str(row.get("order_type", "")).upper() == "CANCEL" and status not in {"FILLED", "CANCELED", "REJECTED", "EXPIRED"}:
+            return False, "cancel outcome remains unresolved while the exchange order is active"
         if str(order.get("symbol", "")).upper() != str(row.get("symbol", "")).upper():
             return False, "exchange order symbol does not match persisted intent"
         if str(order.get("side", "")).upper() != str(row.get("side", "")).upper():
@@ -63,7 +65,47 @@ class ExecutionRecoveryWorker:
             return False, "exchange response contains invalid numeric fields"
         if status == "FILLED" and original > 0 and executed + 1e-12 < original:
             return False, "FILLED status conflicts with executed quantity"
+        if executed > 0 and float(order.get("avgPrice", 0) or 0) <= 0:
+            return False, "executed order lacks verified average fill price"
         return True, status
+
+    def _verify_trade_history(self, symbol, order):
+        """Verify every non-zero fill against read-only account trade history."""
+        executed = float(order.get("executedQty", 0) or 0)
+        if executed <= 0:
+            return order
+        order_id = order.get("orderId")
+        if order_id is None:
+            raise ValueError("executed order lacks orderId for trade-history verification")
+        lookup = getattr(self.exchange, "my_trades", None)
+        if not callable(lookup):
+            raise RuntimeError("exchange adapter lacks read-only trade-history lookup")
+        trades = lookup(symbol, order_id=order_id, limit=1000)
+        if not isinstance(trades, list) or not trades:
+            raise ValueError("trade history is missing for a non-zero executed quantity")
+        total_qty = 0.0
+        total_quote = 0.0
+        for trade in trades:
+            if not isinstance(trade, dict):
+                raise ValueError("trade history contains a non-object row")
+            trade_order_id = trade.get("orderId")
+            if trade_order_id is not None and str(trade_order_id) != str(order_id):
+                raise ValueError("trade history contains a different orderId")
+            try:
+                qty = float(trade.get("qty", 0) or 0)
+                price = float(trade.get("price", 0) or 0)
+                quote = float(trade.get("quoteQty", price * qty) or 0)
+            except (TypeError, ValueError):
+                raise ValueError("trade history contains invalid numeric fields")
+            if qty <= 0 or price <= 0 or quote <= 0:
+                raise ValueError("trade history contains non-positive fill values")
+            total_qty += qty
+            total_quote += quote
+        tolerance = max(1e-8, abs(executed) * 1e-6)
+        if abs(total_qty - executed) > tolerance:
+            raise ValueError("trade-history quantity does not reconcile with executedQty")
+        order["avgPrice"] = total_quote / total_qty
+        return order
 
     def _lookup(self, row):
         symbol = str(row.get("symbol", "")).upper()
@@ -98,7 +140,15 @@ class ExecutionRecoveryWorker:
                     raise ValueError("OCO leg clientOrderId conflicts with order-list evidence")
                 if str(found.get("status", "")).upper() not in KNOWN_STATUSES - {"OCO_EXECUTING", "OCO_ALL_DONE", "OCO_REJECTED"}:
                     raise ValueError("OCO leg has unknown status")
-                verified_legs.append(found)
+                verified_legs.append(self._verify_trade_history(symbol, found))
+            leg_statuses = [str(x.get("status", "")).upper() for x in verified_legs]
+            terminal_leg_statuses = {"FILLED", "CANCELED", "REJECTED", "EXPIRED"}
+            if list_status == "ALL_DONE" and not all(x in terminal_leg_statuses for x in leg_statuses):
+                raise ValueError("OCO list is ALL_DONE but a leg is not terminal")
+            if list_status == "EXECUTING" and all(x in terminal_leg_statuses for x in leg_statuses):
+                raise ValueError("OCO list is EXECUTING but both legs are terminal")
+            if list_status == "REJECT" and not any(x == "REJECTED" for x in leg_statuses):
+                raise ValueError("OCO list is REJECT but no leg confirms rejection")
             return {
                 "_oco_normalized": True, "symbol": symbol, "side": str(row.get("side", "")).upper(),
                 "orderListId": listing.get("orderListId"), "listClientOrderId": client_id,
@@ -106,6 +156,7 @@ class ExecutionRecoveryWorker:
                 "executedQty": sum(float(x.get("executedQty", 0) or 0) for x in verified_legs),
                 # OCO legs are alternative exits, not additive order quantity.
                 "origQty": max(float(x.get("origQty", 0) or 0) for x in verified_legs),
+                "avgPrice": (sum(float(x.get("avgPrice", 0) or 0) * float(x.get("executedQty", 0) or 0) for x in verified_legs) / sum(float(x.get("executedQty", 0) or 0) for x in verified_legs)) if sum(float(x.get("executedQty", 0) or 0) for x in verified_legs) > 0 else None,
                 "price": 0, "orders": verified_legs,
             }
         if order_id is not None:
@@ -126,6 +177,8 @@ class ExecutionRecoveryWorker:
             stats["claimed"] += 1
             try:
                 order = self._lookup(row)
+                if str(row.get("order_type", "")).upper() != "OCO":
+                    order = self._verify_trade_history(str(row.get("symbol", "")).upper(), order)
                 valid, status_or_reason = self._validate_order(row, order)
                 if not valid:
                     raise ValueError(status_or_reason)

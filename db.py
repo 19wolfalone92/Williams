@@ -396,6 +396,22 @@ class Database:
             self.conn.commit()
         return cur.rowcount == 1
 
+    @staticmethod
+    def _average_execution_price(order):
+        """Return a verified average price field, never the order's limit price."""
+        try:
+            avg = order.get('avgPrice')
+            if avg is not None and float(avg) > 0:
+                return float(avg)
+            executed = float(order.get('executedQty', 0) or 0)
+            quote = order.get('cummulativeQuoteQty', order.get('cumulativeQuoteQty'))
+            if executed > 0 and quote is not None:
+                value = float(quote) / executed
+                return value if value > 0 else None
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+        return None
+
     def complete_execution_intent_recovery(self, intent_id, owner, status, order, now=None):
         """Persist authoritative exchange evidence only while holding the lease."""
         from datetime import datetime, timezone
@@ -415,7 +431,7 @@ class Database:
                 str(order.get('status') or order.get('listOrderStatus') or '').upper(),
                 float(order.get('executedQty', 0) or 0),
                 float(order.get('origQty', 0) or 0),
-                float(order.get('price', 0) or 0),
+                self._average_execution_price(order),
                 datetime.now(timezone.utc).isoformat() if terminal else None,
                 str(intent_id), str(owner),
             ),
@@ -478,7 +494,7 @@ class Database:
                 str(order.get('status') or order.get('listOrderStatus')).upper() if (order.get('status') is not None or order.get('listOrderStatus') is not None) else None,
                 float(order.get('executedQty', 0) or 0) if order else None,
                 float(order.get('origQty', 0) or 0) if order else None,
-                float(order.get('price', 0) or 0) if order else None,
+                self._average_execution_price(order) if order else None,
             ),
         )
         if not self._transaction_active:
