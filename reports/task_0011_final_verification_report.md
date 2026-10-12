@@ -6,7 +6,7 @@
 - PR: #66, `night-shift-audit-20261012`
 - PR remains open and Draft; no merge performed.
 - Requested baseline: `11746c202fd2b7eb2126292d3e9978a2f238169b`.
-- Latest code commit at report preparation: `05d26e34cb34af66472124621a95c118ec69a81a`.
+- Latest code commit at report preparation: `12f3e70eb58915d56c4bf66ebb5d00c7130a97b`.
 
 ## Delivered in code
 - Durable SQLite mutation intent ledger with explicit states and conflict protection.
@@ -22,7 +22,7 @@
 3. Twelve fault-injection scenarios pass: **NOT RUN**.
 4. Concurrency, restart and ambiguous-result tests: **NOT RUN**.
 5. BL-004 across all channels: **NOT VERIFIED**.
-6. Python and Android regression on final SHA: **NOT VERIFIED**.
+6. Python/backend run `38237781740`: **IN PROGRESS at report update**. Campaign run `38237781557`: **PENDING at report update**. Android APK run `38237782829`: **startup_failure; no jobs**. Final-SHA regression: **NOT VERIFIED**.
 7. CI/artifacts on exact final SHA: **NOT AVAILABLE**.
 8. Release trust, SCA and administrative security controls: **OPEN / NOT VERIFIED**.
 
