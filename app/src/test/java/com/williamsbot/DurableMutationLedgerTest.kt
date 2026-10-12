@@ -33,6 +33,40 @@ class DurableMutationLedgerTest {
     }
 
     @Test
+    fun generatedClientOrderIdIsStableAcrossRepeatedIdenticalRequests() {
+        val first = MutationIdentity.generatedClientOrderId(
+            "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=BUY&type=MARKET&quantity=0.01"
+        )
+        val repeated = MutationIdentity.generatedClientOrderId(
+            "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=BUY&type=MARKET&quantity=0.01"
+        )
+        assertEquals(first, repeated)
+        assertTrue(first.startsWith("W21_"))
+        assertTrue(first.length <= 36)
+    }
+
+    @Test
+    fun generatedClientOrderIdChangesWhenUnsignedRequestChanges() {
+        val buy = MutationIdentity.generatedClientOrderId(
+            "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=BUY&type=MARKET&quantity=0.01"
+        )
+        val sell = MutationIdentity.generatedClientOrderId(
+            "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=SELL&type=MARKET&quantity=0.01"
+        )
+        assertFalse(buy == sell)
+    }
+
+    @Test
+    fun mutationFingerprintDoesNotNeedCredentialsOrSignature() {
+        val fingerprint = MutationIdentity.fingerprint(
+            "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=BUY&type=MARKET&quantity=0.01"
+        )
+        assertEquals(64, fingerprint.length)
+        assertFalse(fingerprint.contains("SECRET"))
+        assertFalse(fingerprint.contains("signature"))
+    }
+
+    @Test
     fun preparedIntentSurvivesLedgerReopen() {
         val id = ledger!!.prepare(
             operationId = "op-restart",
