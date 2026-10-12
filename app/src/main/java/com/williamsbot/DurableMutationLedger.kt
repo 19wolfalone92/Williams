@@ -203,6 +203,7 @@ class DurableMutationLedger(context: Context) :
                     current.symbol,
                     State.SUBMITTING.name,
                     State.UNKNOWN.name,
+                    State.ACKNOWLEDGED.name,
                     operationId
                 )
             ).use { it.moveToFirst() }
@@ -232,8 +233,16 @@ class DurableMutationLedger(context: Context) :
         db.rawQuery(
             "SELECT operation_id, kind, symbol, request_fingerprint, exchange_client_id, state, " +
                 "exchange_order_id, created_at_ms, updated_at_ms, exchange, campaign_id, signal_id, attempt_id " +
-                "FROM mutation_intents WHERE state IN (?, ?, ?) ORDER BY created_at_ms",
-            arrayOf(State.PREPARED.name, State.SUBMITTING.name, State.UNKNOWN.name)
+                // ACKNOWLEDGED means the HTTP mutation received a response, not
+            // that order/fill/protection state has been reconciled with Binance.
+            // Keep execution blocked until a reconciliation worker records RECONCILED.
+            "FROM mutation_intents WHERE state IN (?, ?, ?, ?) ORDER BY created_at_ms",
+            arrayOf(
+                State.PREPARED.name,
+                State.SUBMITTING.name,
+                State.UNKNOWN.name,
+                State.ACKNOWLEDGED.name
+            )
         ).use { cursor ->
             while (cursor.moveToNext()) result += cursorToIntent(cursor)
         }
