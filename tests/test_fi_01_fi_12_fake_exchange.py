@@ -606,6 +606,8 @@ def test_fi_13b_concurrent_database_initialization_is_diagnostic_and_durable(tmp
     def initialize(owner):
         stage = "worker-start"
         try:
+            stage = "start-barrier"
+            start.wait(timeout=10)
             stage = "database-init"
             db = Database(path)
             try:
@@ -625,12 +627,7 @@ def test_fi_13b_concurrent_database_initialization_is_diagnostic_and_durable(tmp
                     "message": str(exc),
                     "traceback": traceback.format_exc(),
                 })
-        finally:
-            try:
-                start.wait(timeout=10)
-            except threading.BrokenBarrierError:
-                pass
-
+    
     first = threading.Thread(target=initialize, args=("init-a",), daemon=True)
     second = threading.Thread(target=initialize, args=("init-b",), daemon=True)
     first.start()
