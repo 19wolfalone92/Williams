@@ -3,6 +3,7 @@
 # Autonomous Android runtime contract is validated alongside the Python release gate.
 from __future__ import annotations
 import ast
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -137,6 +138,22 @@ def main() -> None:
     must(testnet_ci, 'ALLOW_LIVE: "false"', "testnet workflow")
     must(testnet_ci, 'TESTNET: "true"', "testnet workflow")
     must(testnet_ci, "test_testnet_release_gate.py --read-only", "testnet workflow")
+
+    # All external actions are pinned to verified immutable commit SHAs.
+    for workflow_path in (
+        ".github/workflows/android-apk.yml",
+        ".github/workflows/campaign-ci.yml",
+        ".github/workflows/python-ci.yml",
+        ".github/workflows/testnet-readonly.yml",
+    ):
+        workflow = read(workflow_path)
+        for line in workflow.splitlines():
+            if line.strip().startswith("uses:"):
+                reference = line.strip().split("uses:", 1)[1].strip()
+                must(
+                    bool(re.fullmatch(r".+@[0-9a-f]{40}(?:\\s+#.*)?", reference)),
+                    f"unpinned external action reference in {workflow_path}",
+                )
 
     print("WILLIAMS RELEASE CONTRACT GATE: PASS")
 
