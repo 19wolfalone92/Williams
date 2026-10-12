@@ -483,6 +483,35 @@ class DurableMutationLedgerTest {
     }
 
     @Test
+    fun acknowledgedEntryRemainsUnresolvedButAllowsDependentProtectionMutation() {
+        ledger!!.prepare("entry-op", "POST:/api/v3/order", "BTCUSDT", "a".repeat(64), "entry-client")
+        ledger!!.claimForSubmission("entry-op")
+        ledger!!.transition(
+            "entry-op",
+            setOf(DurableMutationLedger.State.SUBMITTING),
+            DurableMutationLedger.State.ACKNOWLEDGED,
+            exchangeOrderId = "12345"
+        )
+
+        // A response is not exchange reconciliation, so the execution gate
+        // must remain blocked; however, a dependent protection mutation must
+        // not be prevented solely by the acknowledged entry journal row.
+        assertTrue(ledger!!.hasUnresolved())
+        ledger!!.prepare(
+            "protection-op",
+            "POST:/api/v3/orderList/oco",
+            "BTCUSDT",
+            "b".repeat(64),
+            "protection-client"
+        )
+        assertEquals(
+            DurableMutationLedger.State.SUBMITTING,
+            ledger!!.claimForSubmission("protection-op").state
+        )
+        assertTrue(ledger!!.hasUnresolved())
+    }
+
+    @Test
     fun illegalStateTransitionIsRejected() {
         ledger!!.prepare("op-invalid", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-invalid")
 
