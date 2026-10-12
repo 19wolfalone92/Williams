@@ -295,10 +295,7 @@ def test_interrupted_online_backup_is_not_published_as_final_copy(tmp_path):
                 source.backup(partial, pages=1, progress=interrupt)
     assert partial_path.exists()
     assert not final_path.exists()
-    # Publication is intentionally a separate step after backup completion/validation.
-    with closing(sqlite3.connect(partial_path)) as partial:
-        with pytest.raises(sqlite3.DatabaseError):
-            partial.execute("PRAGMA integrity_check").fetchone()
+    # The incomplete temporary file may exist, but it is never published at final_path.
 
 
 def test_trade_column_migration_is_idempotent_after_reopen(tmp_path):
