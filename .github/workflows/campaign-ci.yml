@@ -1,8 +1,10 @@
 name: Williams Campaign CI
 
 on:
+  # Feature branches are validated by pull_request; avoid a duplicate full
+  # Android build on every push to a branch that already has an open PR.
   push:
-    branches: ["**"]
+    branches: [main, master]
   pull_request:
     branches: ["**"]
   workflow_dispatch:
@@ -18,6 +20,7 @@ jobs:
   python:
     name: Python tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -80,6 +83,7 @@ jobs:
   android:
     name: Android build and static checks
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
