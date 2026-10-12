@@ -284,6 +284,7 @@ class ExecutionBarrier:
                     "client_order_id": intent.client_order_id,
                 },
             )
+            submission_error_message = None
             try:
                 response = submit()
             except Exception as exc:
@@ -312,16 +313,20 @@ class ExecutionBarrier:
                     {"error": ambiguity_reason},
                 )
                 if "persistence_failed" in ambiguity_reason:
-                    raise RuntimeError(
+                    submission_error_message = (
                         "submission outcome is ambiguous and reconciliation must be completed "
-                        f"before any retry: {ambiguity_reason}"
-                    ) from None
-                # Do not propagate unsafe transport exception text or traceback.
-                # HTTP clients may embed credentials, signatures, URLs, headers,
-                # query parameters, or response bodies in exception strings.
-                raise RuntimeError(
-                    "submission outcome is ambiguous; reconciliation is mandatory before any retry"
-                ) from None
+                        "before any retry; durable safety-state persistence failed"
+                    )
+                else:
+                    submission_error_message = (
+                        "submission outcome is ambiguous; reconciliation is mandatory before any retry"
+                    )
+
+            # Raise only after leaving the transport exception handler. Suppressing
+            # display with 'from None' alone leaves the original exception reachable
+            # through __context__; raising here avoids retaining that public chain.
+            if submission_error_message is not None:
+                raise RuntimeError(submission_error_message) from None
 
             if intent.order_type != "CANCEL":
                 status = str(
