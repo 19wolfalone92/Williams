@@ -37,6 +37,17 @@ class Database:
         finally:
             self._transaction_active = False
 
+    def close(self):
+        """Close the SQLite connection; callers should use this at lifecycle boundaries."""
+        self.conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.close()
+        return False
+
     def init(self):
         self.conn.executescript('''
         CREATE TABLE IF NOT EXISTS bot_state(
