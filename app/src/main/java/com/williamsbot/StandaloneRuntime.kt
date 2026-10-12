@@ -4265,7 +4265,8 @@ private class NativeEngine(
                         symbol = stored.symbol,
                         qty = stored.qty,
                         entry = stored.entry,
-                        stopDistance = distance
+                        stopDistance = distance,
+                        operationContext = "protection-replace:${stored.ocoListId.ifBlank { stored.ocoListClientId }}:${fmtPrice(desiredStop, tick)}"
                     )
 
                 synchronized(positions) {
@@ -4739,7 +4740,8 @@ private class NativeEngine(
                                 symbol = intent.symbol,
                                 qty = qty,
                                 entry = entryPrice,
-                                stopDistance = intent.stopDistance
+                                stopDistance = intent.stopDistance,
+                                operationContext = "protection-recovery:${intent.clientOrderId}"
                             )
                         }
 
@@ -5145,7 +5147,8 @@ private class NativeEngine(
                         symbol = stored.symbol,
                         qty = current.qty,
                         entry = stored.entry,
-                        stopDistance = distance
+                        stopDistance = distance,
+                        operationContext = "protection-reconcile:${stored.entryClientOrderId}:${stored.ocoListId}"
                     )
 
                 current =
@@ -6003,7 +6006,8 @@ private class NativeEngine(
                     symbol = candidate.symbol,
                     qty = qty,
                     entry = entry,
-                    stopDistance = stopDistance
+                    stopDistance = stopDistance,
+                    operationContext = "entry-protection:$clientId"
                 )
 
             val journalSnapshot =
@@ -6208,8 +6212,10 @@ private class NativeEngine(
         symbol: String,
         qty: Double,
         entry: Double,
-        stopDistance: Double
+        stopDistance: Double,
+        operationContext: String
     ): Protection {
+        require(operationContext.isNotBlank()) { "PROTECTION_OPERATION_ID_REQUIRED" }
         val rules = symbolFilters(symbol)
 
         if (!rules.ocoAllowed) {
@@ -6283,51 +6289,34 @@ private class NativeEngine(
             error("OCO notional above Binance maximum")
         }
 
-        val ocoClientId =
-            "W4O_" +
-                java.util.UUID.randomUUID()
-                    .toString()
-                    .replace("-", "")
-                    .take(28)
+        val ocoRequestParams =
+            "symbol=" + symbol +
+                "&side=SELL" +
+                "&quantity=" + fmtQty(normalizedQty, rules.decimals) +
+                "&aboveType=TAKE_PROFIT_LIMIT" +
+                "&abovePrice=" + fmtPrice(takeLimit, rules.tick) +
+                "&aboveStopPrice=" + fmtPrice(take, rules.tick) +
+                "&aboveTimeInForce=GTC" +
+                "&belowType=STOP_LOSS_LIMIT" +
+                "&belowStopPrice=" + fmtPrice(stop, rules.tick) +
+                "&belowPrice=" + fmtPrice(stopLimit, rules.tick) +
+                "&belowTimeInForce=GTC" +
+                "&newOrderRespType=FULL"
 
-        val oco =
-            signedPost(
-                "/api/v3/orderList/oco",
-                "symbol=" + symbol +
-                    "&side=SELL" +
-                    "&quantity=" +
-                    fmtQty(
-                        normalizedQty,
-                        rules.decimals
-                    ) +
-                    "&aboveType=TAKE_PROFIT_LIMIT" +
-                    "&abovePrice=" +
-                    fmtPrice(
-                        takeLimit,
-                        rules.tick
-                    ) +
-                    "&aboveStopPrice=" +
-                    fmtPrice(
-                        take,
-                        rules.tick
-                    ) +
-                    "&aboveTimeInForce=GTC" +
-                    "&belowType=STOP_LOSS_LIMIT" +
-                    "&belowStopPrice=" +
-                    fmtPrice(
-                        stop,
-                        rules.tick
-                    ) +
-                    "&belowPrice=" +
-                    fmtPrice(
-                        stopLimit,
-                        rules.tick
-                    ) +
-                    "&belowTimeInForce=GTC" +
-                    "&newOrderRespType=FULL" +
-                    "&listClientOrderId=" +
-                    ocoClientId
-            )
+        // Bind protection identity to the position/campaign context and full
+        // economic request, not to a new random ID generated on every recovery.
+        val ocoClientId = MutationIdentity.generatedClientOrderId(
+            "POST",
+            "/api/v3/orderList/oco",
+            symbol,
+            ocoRequestParams,
+            operationContext,
+            "W4O_"
+        )
+        val oco = signedPost(
+            "/api/v3/orderList/oco",
+            "$ocoRequestParams&listClientOrderId=$ocoClientId"
+        )
 
         val actualStopDistance =
             ((entry - stop) / entry)
