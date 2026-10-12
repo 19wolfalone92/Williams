@@ -417,7 +417,7 @@ class Database:
         from datetime import datetime, timezone
         import time
         now = float(time.time() if now is None else now)
-        exchange_status = str(order.get('status') or order.get('listOrderStatus') or status or '').upper()
+        exchange_status = str(order.get('listOrderStatus') or order.get('status') or status or '').upper()
         terminal = str(status).upper() in {'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED', 'OCO_ALL_DONE', 'OCO_REJECTED'}
         # An accepted but still-live order is not a completed recovery. Keep it
         # inside the barrier's unresolved set and schedule another read-only poll.
