@@ -117,7 +117,8 @@ def main() -> None:
     must(verify_keystore, "if: github.event_name != 'pull_request'", "trusted keystore verification")
     verify_signature = android_ci.split("- name: Verify persistent debug APK signature", 1)[1].split("\n      - name:", 1)[0]
     must(verify_signature, "if: github.event_name != 'pull_request'", "trusted APK signature comparison")
-    must(android_ci, "apksigner\\" verify --verbose app/build/outputs/apk/debug/app-debug.apk", "all-event APK signature verification")
+    must(android_ci, "apksigner", "all-event APK signature verification")
+    must(android_ci, "verify --verbose app/build/outputs/apk/debug/app-debug.apk", "all-event APK signature verification")
 
     python_ci = read(".github/workflows/python-ci.yml")
     must(python_ci, "python3 ci_release_gate.py", "python workflow")
