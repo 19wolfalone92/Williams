@@ -72,7 +72,7 @@ def test_worker_persists_exact_exchange_lifecycle(tmp_path,status,executed,expec
         now=1000
         result=ExecutionRecoveryWorker(db,exchange,base_retry_seconds=7).run_once(now=now)
         row=db.conn.execute("SELECT * FROM execution_intents WHERE intent_id=?",(intent.intent_id,)).fetchone()
-        assert result["reconciled"]==1 and row["status"]==expected_local
+        assert (result["reconciled"] if terminal else result["active"])==1 and row["status"]==expected_local
         assert row["exchange_status"]==status and row["executed_qty"]==pytest.approx(float(executed))
         assert (row["resolved_at"] is not None) is terminal
         if terminal:
@@ -89,7 +89,7 @@ def test_active_order_recovery_keeps_execution_barrier_closed_until_terminal(tmp
         exchange=FakeExchange(_order("PARTIALLY_FILLED",executedQty="0.004"))
         worker=ExecutionRecoveryWorker(db,exchange,base_retry_seconds=5)
         first=worker.run_once(now=1000)
-        assert first["reconciled"]==1 and db.has_unresolved_execution_intents()
+        assert first["active"]==1 and db.has_unresolved_execution_intents()
         assert worker.run_once(now=1001)["claimed"]==0
         exchange.response=_order("FILLED",executedQty="0.01")
         second=worker.run_once(now=1006)
@@ -203,10 +203,12 @@ def test_worker_reconciles_oco_list_and_both_legs(tmp_path):
         exchange = FakeOcoExchange(listing, legs)
         result = ExecutionRecoveryWorker(db, exchange).run_once(now=time.time()+10)
         row = db.conn.execute("SELECT * FROM execution_intents WHERE intent_id=?", (intent.intent_id,)).fetchone()
-        assert result["reconciled"] == 1 and row["status"] == "OCO_EXECUTING"
+        assert result["active"] == 1 and row["status"] == "AMBIGUOUS"
         assert row["order_list_id"] == "77" and row["orig_qty"] == pytest.approx(0.01)
         assert exchange.list_calls == 1 and exchange.order_calls == 2
-        assert not db.has_unresolved_execution_intents()
+        assert db.has_unresolved_execution_intents()
+        assert row["exchange_status"] == "EXECUTING"
+        assert row["next_reconcile_at"] > time.time()
 
 
 def test_worker_does_not_resolve_oco_when_one_leg_is_missing(tmp_path):

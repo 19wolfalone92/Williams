@@ -168,7 +168,7 @@ class ExecutionRecoveryWorker:
     def run_once(self, *, now=None) -> dict[str, int]:
         """Process one bounded batch; every failed lookup stays unresolved."""
         current = time.time() if now is None else float(now)
-        stats = {"claimed": 0, "reconciled": 0, "deferred": 0, "lease_lost": 0}
+        stats = {"claimed": 0, "reconciled": 0, "active": 0, "deferred": 0, "lease_lost": 0}
         rows = self.db.list_unresolved_execution_intents(self.batch_size, now=current)
         for row in rows:
             intent_id = str(row["intent_id"])
@@ -189,7 +189,12 @@ class ExecutionRecoveryWorker:
                 if not persisted:
                     stats["lease_lost"] += 1
                     continue
-                stats["reconciled"] += 1
+                if status_or_reason in {"FILLED", "CANCELED", "REJECTED", "EXPIRED", "OCO_ALL_DONE", "OCO_REJECTED"}:
+                    stats["reconciled"] += 1
+                else:
+                    # Exchange identity is confirmed, but a live order is not a
+                    # terminal recovery and must keep the execution barrier closed.
+                    stats["active"] += 1
             except Exception as exc:
                 try:
                     # Do not persist raw transport/API exception text: it may contain
