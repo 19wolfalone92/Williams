@@ -630,7 +630,7 @@ class DurableMutationLedgerTest {
         legacy.execSQL("CREATE INDEX mutation_intents_exchange_client_idx ON mutation_intents(exchange, exchange_client_id)")
         legacy.execSQL(
             "INSERT INTO mutation_intents(operation_id,kind,symbol,request_fingerprint,exchange_client_id,state,created_at_ms,updated_at_ms,exchange,attempt_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
-            arrayOf("legacy-reconciled", "POST:/api/v3/order", "BTCUSDT", "f".repeat(64), "W21_legacy", "RECONCILED", 100L, 200L, "BINANCE_SPOT", "legacy-attempt-1")
+            arrayOf<Any>("legacy-reconciled", "POST:/api/v3/order", "BTCUSDT", "f".repeat(64), "W21_legacy", "RECONCILED", 100L, 200L, "BINANCE_SPOT", "legacy-attempt-1")
         )
         legacy.version = 2
         legacy.close()
