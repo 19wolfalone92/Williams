@@ -1,19 +1,26 @@
-# TASK 001.7 — Mutation Boundary Proof
+# TASK 001.8 — Mutation Boundary Proof
 
-- Current source/test SHA: `7e7b240f07d11e0077d1b1d741a8087f4846a750`.
+- Audited code/test SHA: `31ba73ff81c43edb5be4606b200dce752148967a`.
 - Status: PARTIAL — P0 OPEN.
 
-## Inventory and enforced boundaries
-- Android mutation wrappers `signedPost`, `signedDelete`, and `signedCancelReplace` delegate to `StandaloneRuntime.signedRequest`, where durable intent preparation/claim and mutation state tracking occur.
-- Android read-only call sites include `getBody` (market reads) and `signedRawGet` (signed GET). Automated guard classifies these separately from the mutation sink.
-- Known mutation endpoints include POST/DELETE `/api/v3/order`, POST `/api/v3/orderList/oco`, DELETE `/api/v3/orderList`, and POST `/api/v3/order/cancelReplace`. Only single POST orders have operation-specific Android reconciliation; OCO, cancellation and cancel-replace remain unresolved/fail-closed.
-- Python transport boundary is `binance_client.py:BinanceSpotClient._request`; `execution_barrier.py` persists/adjudicates mutations; `execution_recovery.py` is read-only; `trader.py` blocks startup on unresolved recovery/gates; `db.py` persists recovery state.
+## Inventory currently enforced
 
-## Automated regression
-- `tests/test_mutation_boundary_inventory.py` inventories raw Android OkHttp call sites, asserts mutation wrappers delegate to the durable sink, distinguishes read-only GET call sites, flags direct Python HTTP mutation calls outside the central client, and checks recovery remains read-only.
-- Campaign CI Python job `38278336855` on SHA `7e7b240...`: SUCCESS, 233 passed / 4 warnings, including the inventory regression.
-- The guard caught two false positives during development (dashboard backend HTTP and Telegram notification) and one omitted Binance read-only GET call site; classifications were corrected rather than suppressing the test.
-- This static regression is not proof of all indirect SDK/adapter call chains or runtime reachability.
+- Android raw OkHttp call-site inventory is covered by `tests/test_mutation_boundary_inventory.py`; current guard expects the three raw calls in `StandaloneRuntime.kt` and verifies the signed mutation sink contains durable prepare/claim/state handling.
+- Android wrappers `signedPost`, `signedDelete`, and `signedCancelReplace` route through `signedRequest`; read-only market and signed GET are classified separately.
+- Known mutation endpoints: POST/DELETE `/api/v3/order`, POST `/api/v3/orderList/oco`, DELETE `/api/v3/orderList`, POST `/api/v3/order/cancelReplace`.
+- Python exchange transport is centralized in `binance_client.py:BinanceSpotClient._request`; mutation adjudication/persistence in `execution_barrier.py`; `execution_recovery.py` is read-only; startup gate in `trader.py`; durable state in `db.py`.
 
-## Remaining
-- Complete endpoint and caller-chain inventory, OCO/cancel/cancel-replace recovery, deterministic exchange mutation-count/retry tests, and proof of protection/exposure gates. Android and Python SQLite transactions are separate; no cross-runtime atomicity is assumed.
+## CI evidence
+
+- Run [38301629067](https://github.com/19wolfalone92/Williams/actions/runs/38301629067), SHA 31ba73f: Campaign Python job SUCCESS, including configured deterministic test set. Campaign Android job remained IN_PROGRESS at last inspection.
+- Static inventory regression is TESTED by that Python job; it does not prove every indirect SDK/adapter route or runtime reachability.
+- Standalone APK run [38301630392](https://github.com/19wolfalone92/Williams/actions/runs/38301630392) failed at workflow startup with no jobs/artifacts; it provides no Android evidence.
+
+## Remaining gaps
+
+- No complete dynamic call graph or exhaustive proof for all emergency-exit, recovery worker, background, diagnostic and adapter paths.
+- OCO/cancel/cancelReplace reconciliation is unsupported; those ambiguous operations must remain UNKNOWN/RECONCILING and block normal trading.
+- No integrated fake-exchange mutation-count regression currently demonstrates zero resubmissions during unresolved recovery.
+- Android SQLite and Python SQLite are separate stores and do not form one atomic transaction.
+
+Status: PARTIAL — P0 OPEN.
