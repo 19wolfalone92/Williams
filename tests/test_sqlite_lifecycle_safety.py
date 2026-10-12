@@ -1,12 +1,16 @@
 """SQLite lifecycle and production-path guard regressions; temporary DBs only."""
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
 import test_db_guard
 from db import Database
+from execution_barrier import ExecutionBarrier, OrderIntent
+from market_context import ContextCache
 from test_db_guard import assert_test_db_path
 
 
@@ -74,3 +78,49 @@ def test_vps_backup_uses_sqlite_online_backup_instead_of_copying_live_main_file(
     assert "tar czf - -C /tmp" in script
     assert "tar czf - -C /app/data trader.sqlite3" not in script
     assert "set -euo pipefail" in script
+
+
+def test_execution_intent_claim_survives_database_reopen(tmp_path):
+    path = tmp_path / "restart.sqlite3"
+    intent = OrderIntent.new(
+        symbol="BTCUSDT", side="BUY", order_type="LIMIT",
+        required_context_versions={}, purpose="CAMPAIGN_ENTRY",
+    )
+    with Database(str(path)) as first_db:
+        first_submit = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 3001})
+        first = ExecutionBarrier(ContextCache(), first_db).execute(intent, first_submit)
+        assert first.accepted is True
+        first_submit.assert_called_once()
+
+    with Database(str(path)) as reopened_db:
+        second_submit = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 3002})
+        second = ExecutionBarrier(ContextCache(), reopened_db).execute(intent, second_submit)
+        assert second.accepted is False
+        assert "duplicate execution intent already claimed" in second.reason
+        second_submit.assert_not_called()
+
+
+def test_parallel_barriers_cannot_submit_the_same_intent_twice(tmp_path):
+    path = tmp_path / "parallel.sqlite3"
+    with Database(str(path)) as setup_db:
+        pass
+    db1, db2 = Database(str(path)), Database(str(path))
+    intent = OrderIntent.new(
+        symbol="BTCUSDT", side="BUY", order_type="LIMIT",
+        required_context_versions={}, purpose="CAMPAIGN_ENTRY",
+    )
+    submit1 = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 4001})
+    submit2 = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 4002})
+    barrier1, barrier2 = ExecutionBarrier(ContextCache(), db1), ExecutionBarrier(ContextCache(), db2)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(barrier1.execute, intent, submit1),
+                pool.submit(barrier2.execute, intent, submit2),
+            ]
+            results = [future.result(timeout=10) for future in futures]
+        assert sum(result.accepted for result in results) == 1
+        assert submit1.call_count + submit2.call_count == 1
+    finally:
+        db1.close()
+        db2.close()
