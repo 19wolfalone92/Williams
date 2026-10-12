@@ -77,13 +77,14 @@ internal object MutationIdentity {
             require(part.isNotEmpty()) { "MUTATION_PARAMETER_EMPTY_SEGMENT" }
             val split = part.indexOf('=')
             require(split > 0) { "MUTATION_PARAMETER_INVALID" }
-            val key = decode(part.substring(0, split)).lowercase(Locale.US)
+            val key = decode(part.substring(0, split))
+            val normalizedKey = key.lowercase(Locale.US)
             val value = decode(part.substring(split + 1))
             require(key.isNotBlank()) { "MUTATION_PARAMETER_KEY_REQUIRED" }
-            require(key !in sensitiveKeys) { "MUTATION_CREDENTIAL_PARAMETER_REJECTED" }
+            require(normalizedKey !in sensitiveKeys) { "MUTATION_CREDENTIAL_PARAMETER_REJECTED" }
             require(key !in values) { "MUTATION_DUPLICATE_PARAMETER_REJECTED" }
-            if (key !in transportOnlyKeys) {
-                values[key] = normalizeValue(key, value)
+            if (normalizedKey !in transportOnlyKeys) {
+                values[key] = normalizeValue(normalizedKey, value)
             }
         }
         return values.entries
