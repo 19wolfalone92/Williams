@@ -171,10 +171,9 @@ class DurableMutationLedger(context: Context) :
         try {
             val current = readById(db, operationId)
                 ?: throw IllegalStateException("MUTATION_INTENT_NOT_FOUND")
-            if (current.state == next) {
-                db.setTransactionSuccessful()
-                return current
-            }
+            // Never treat an already-claimed target state as a successful claim.
+            // In particular, a second worker asking PREPARED -> SUBMITTING must fail
+            // after the first worker commits; otherwise both could submit the mutation.
             if (current.state !in expected || !allowed(current.state, next)) {
                 throw InvalidTransitionException()
             }
