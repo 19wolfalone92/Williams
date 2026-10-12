@@ -155,8 +155,15 @@ def test_timeout_with_ambiguous_persistence_failure_reports_mandatory_reconcilia
     try:
         ExecutionBarrier(ContextCache(), db).execute(campaign_intent(), submit)
     except RuntimeError as exc:
-        assert "ambiguous_intent_persistence_failed" in str(exc) and "mandatory before any retry" in str(exc)
+        # Public exceptions expose only the stable, sanitized safety contract;
+        # detailed persistence classifications remain in internal diagnostic state.
+        assert "durable safety-state persistence failed" in str(exc)
         assert "mandatory before any retry" in str(exc)
+        assert exc.__cause__ is None
+        assert exc.__context__ is None
+        assert exc.__suppress_context__ is True
+        assert "exchange response timed out" not in str(exc)
+        assert "simulated database failure" not in str(exc)
     else:
         raise AssertionError("failed ambiguity persistence must be explicit")
 
