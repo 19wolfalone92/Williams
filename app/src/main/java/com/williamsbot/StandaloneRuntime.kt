@@ -940,8 +940,10 @@ private class NativeEngine(
             }
         }
 
+        // A process crash during recovery must not lose the execution barrier.
         reconcileRequired =
-            prefs.getBoolean("reconcile_required", false)
+            prefs.getBoolean("reconcile_required", false) ||
+                prefs.getBoolean("recovery_in_progress", false)
         killLatched =
             prefs.getBoolean("kill_latched", false)
     }
@@ -1421,6 +1423,10 @@ private class NativeEngine(
 
         recoveryInProgress = true
         recoveryMutationThread = Thread.currentThread()
+        prefs.edit()
+            .putBoolean("recovery_in_progress", true)
+            .putBoolean("reconcile_required", true)
+            .apply()
         return try {
             // Keep execution readiness blocked throughout recovery. The recovery thread
             // may perform its synchronous, journaled recovery operations.
@@ -1476,6 +1482,7 @@ private class NativeEngine(
         } finally {
             recoveryMutationThread = null
             recoveryInProgress = false
+            prefs.edit().putBoolean("recovery_in_progress", false).apply()
         }
     }
 
