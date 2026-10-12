@@ -1818,7 +1818,7 @@ private class NativeEngine(
                     // that proves non-acceptance. Keep the intent unresolved and let
                     // the read-only recovery path establish the outcome. Safe GETs may
                     // still synchronize time and retry once.
-                    if (attempt == 0 && lastBody.contains("-1021") && !mutating) {
+                    if (MutationTransportPolicy.mayRetryTimestampRejection(method, attempt, lastBody)) {
                         runCatching { syncServerTime() }
                         return@use
                     }
