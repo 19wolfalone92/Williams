@@ -37,6 +37,39 @@ class BinanceTradeEvidenceTest {
             }
         )
 
+    @Test fun orderIdentityMustMatchPersistedSymbolClientAndExchangeIds() {
+        val order = JSONObject()
+            .put("symbol", "BTCUSDT")
+            .put("clientOrderId", "logical-order-1")
+            .put("orderId", "9001")
+        assertEquals(
+            "9001",
+            BinanceTradeEvidence.verifyOrderIdentity(
+                "BTCUSDT", "logical-order-1", "9001", order
+            )
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            BinanceTradeEvidence.verifyOrderIdentity(
+                "ETHUSDT", "logical-order-1", "9001", order
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            BinanceTradeEvidence.verifyOrderIdentity(
+                "BTCUSDT", "different-client-id", "9001", order
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            BinanceTradeEvidence.verifyOrderIdentity(
+                "BTCUSDT", "logical-order-1", "9002", order
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            BinanceTradeEvidence.verifyOrderIdentity(
+                "BTCUSDT", "logical-order-1", null, JSONObject()
+            )
+        }
+    }
+
     @Test fun validTradeEvidenceMatchesExpectedExecutedQuantity() {
         val result = verify(trade())
         assertEquals(1, result.tradeCount)
