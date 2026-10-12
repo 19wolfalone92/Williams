@@ -1591,14 +1591,18 @@ private class NativeEngine(
             // identity for the same ambiguous request and defeat replay blocking.
             // Bind it to the caller's original unsigned request (never credentials
             // or a signature) before adding any generated identifier.
-            val generatedClientId = MutationIdentity.generatedClientOrderId(method, path, symbol, params)
+            // Canonicalization rejects duplicate/credential parameters before any durable intent is written.
+            val canonicalFingerprint = MutationIdentity.fingerprint(method, path, symbol, params)
+            val logicalContext = clientKey?.takeIf { it.isNotBlank() }
+                ?: targetKey?.takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("MUTATION_LOGICAL_ID_REQUIRED")
+            val generatedClientId = MutationIdentity.generatedClientOrderId(
+                method, path, symbol, params, "$logicalContext:$canonicalFingerprint"
+            )
             val exchangeClientId = when {
                 method == "DELETE" -> clientKey
                 !clientKey.isNullOrBlank() -> clientKey
-                path.endsWith("/orderList/oco") ||
-                    path.endsWith("/order") ||
-                    path.endsWith("/cancelReplace") ->
-                    generatedClientId
+                path.endsWith("/cancelReplace") -> generatedClientId
                 else -> null
             }
             if (method == "POST" && exchangeClientId != null && clientKey.isNullOrBlank()) {
@@ -1610,12 +1614,12 @@ private class NativeEngine(
                 }
             }
 
-            val identity = when {
-                method == "DELETE" -> "DELETE|${path}|${symbol}|${targetKey ?: digest(params)}"
-                !exchangeClientId.isNullOrBlank() -> "${method}|${path}|${symbol}|${exchangeClientId}"
-                else -> "${method}|${path}|${symbol}|${UUID.randomUUID()}"
+            val logicalKey = when {
+                method == "DELETE" -> targetKey ?: throw IllegalStateException("MUTATION_TARGET_ID_REQUIRED")
+                !exchangeClientId.isNullOrBlank() -> exchangeClientId
+                else -> throw IllegalStateException("MUTATION_LOGICAL_ID_REQUIRED")
             }
-            intentId = "mut_" + digest(identity).take(48)
+            intentId = MutationIdentity.operationId("$method:$path", "BINANCE_SPOT", symbol, logicalKey)
             val fingerprint = MutationIdentity.fingerprint(method, path, symbol, effectiveParams)
             val existing = mutationLedger.find(intentId!!)
             val intent = mutationLedger.prepare(
@@ -1625,18 +1629,16 @@ private class NativeEngine(
                 requestFingerprint = fingerprint,
                 exchangeClientId = exchangeClientId
             )
-            when (intent.state) {
-                DurableMutationLedger.State.PREPARED -> {
-                    mutationLedger.transition(
-                        intentId!!,
-                        setOf(DurableMutationLedger.State.PREPARED),
-                        DurableMutationLedger.State.SUBMITTING
-                    )
-                }
-                else -> throw IllegalStateException("MUTATION_REPLAY_BLOCKED_${intent.state.name}")
-            }
             if (existing != null && existing.state != DurableMutationLedger.State.PREPARED) {
                 throw IllegalStateException("MUTATION_REPLAY_BLOCKED_${existing.state.name}")
+            }
+            when (intent.state) {
+                DurableMutationLedger.State.PREPARED -> mutationLedger.transition(
+                    intentId!!,
+                    setOf(DurableMutationLedger.State.PREPARED),
+                    DurableMutationLedger.State.SUBMITTING
+                )
+                else -> throw IllegalStateException("MUTATION_REPLAY_BLOCKED_${intent.state.name}")
             }
         }
 
