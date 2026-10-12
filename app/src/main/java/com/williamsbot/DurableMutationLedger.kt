@@ -198,7 +198,7 @@ class DurableMutationLedger(context: Context) :
 
             val activeConflict = rawQuery(
                 "SELECT operation_id FROM mutation_intents " +
-                    "WHERE symbol = ? AND state IN (?, ?) AND operation_id <> ? LIMIT 1",
+                    "WHERE symbol = ? AND state IN (?, ?, ?) AND operation_id <> ? LIMIT 1",
                 arrayOf(
                     current.symbol,
                     State.SUBMITTING.name,
