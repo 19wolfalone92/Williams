@@ -247,3 +247,43 @@ The audit is still open. Do not merge PR #66 automatically. Recheck Android work
 The duplicate-intent path is now protected by an atomic persistent claim and unresolved-intent inspection; the added restart/concurrency tests are included in the passing Python CI jobs on `a688654`. SQLite connection closure, hard-link path alias protection and WAL-consistent backup generation were also changed and covered by temporary-database or static regression tests.
 
 **The full audit is not yet complete.** Android lint/unit tests/APK and Campaign Android results on the latest code SHA still need a final poll. SQLite lock-contention/corruption recovery, live-independent Binance reconciliation behavior beyond mocks, full secret-history scanning and dependency vulnerability scanning remain explicitly outstanding. No production database or unknown local artifact was modified; no real trading request was sent; PR #66 remains open and unmerged.
+
+
+## 14. SQLite failure-mode regressions and current CI follow-up — 2026-10-12
+
+### New tests and commits
+
+- Commit [a19c6b2cf122e88ea7cad7f624aa6790b3680c2d](https://github.com/19wolfalone92/Williams/commit/a19c6b2cf122e88ea7cad7f624aa6790b3680c2d): added temporary-DB regression tests for bounded `SQLITE_BUSY` timeout behavior, writes through independent SQLite connections, database integrity after a failed write, detection of a corrupt test DB, and a failed backup-open path that must not damage the source or create a claimed backup.
+- CI caught a test-fixture mistake on that intermediate commit: inserting NULL into `bot_state.key` does not reliably raise `IntegrityError` in SQLite's rowid-table semantics. The test was corrected to violate the `execution_intents.symbol NOT NULL` constraint.
+- Commit [8705c32e1049792f2b18e5fdc7159d63489ac95e](https://github.com/19wolfalone92/Williams/commit/8705c32e1049792f2b18e5fdc7159d63489ac95e): corrected the injected write failure so the test exercises an actual SQLite constraint error.
+- Commit [38c37c2e7c2916dc034ae3b9bbb087d1e52aa991](https://github.com/19wolfalone92/Williams/commit/38c37c2e7c2916dc034ae3b9bbb087d1e52aa991): added a real-SQLite restart regression: a submission timeout leaves an unresolved intent; after closing/reopening the DB, a second execution attempt must be blocked without calling the submit mock.
+
+All added database tests use pytest temporary paths and fake/mock submission callbacks. No production DB or unknown artifact was opened or modified.
+
+### CI results tied to exact SHAs
+
+| Workflow | Run | SHA | Result |
+|---|---|---|---|
+| Python backend tests | [38202313905](https://github.com/19wolfalone92/Williams/actions/runs/38202313905) | `38c37c2e7c2916dc034ae3b9bbb087d1e52aa991` | **PASS** — 176 passed, 4 warnings in 4.45s; static safety audit: 0 failures |
+| Campaign CI — Python job | [38202313953](https://github.com/19wolfalone92/Williams/actions/runs/38202313953) | same SHA | **PASS** — 187 passed, 4 warnings in 4.81s |
+| Campaign CI — Python job | [38202311066](https://github.com/19wolfalone92/Williams/actions/runs/38202311066) | same SHA | **PASS** — 187 passed, 4 warnings in 4.61s |
+| Android APK workflow | [38202313858](https://github.com/19wolfalone92/Williams/actions/runs/38202313858) | same SHA | **IN PROGRESS** at last poll |
+| Campaign CI — Android job | [38202313953](https://github.com/19wolfalone92/Williams/actions/runs/38202313953) | same SHA | **IN PROGRESS** at last poll |
+| Campaign CI — Android job | [38202311066](https://github.com/19wolfalone92/Williams/actions/runs/38202311066) | same SHA | **IN PROGRESS** at last poll |
+
+The intermediate backend run [38202230822](https://github.com/19wolfalone92/Williams/actions/runs/38202230822) on `a19c6b2cf122e88ea7cad7f624aa6790b3680c2d` was **FAIL** (1 failed, 174 passed) because of the incorrect test fixture described above. It is superseded by the corrected passing backend run on `38c37c2e7c2916dc034ae3b9bbb087d1e52aa991`. Runs cancelled after a newer push are **CANCELLED**, not PASS.
+
+### What these checks establish — and what they do not
+
+- **PASS:** bounded lock-timeout behavior, independent-connection concurrent writes, rollback after a real constraint violation, post-failure integrity, corruption detection, online backup/restore roundtrip, and unresolved-intent blocking across a database reopen are covered by temporary-database tests in the passing Python CI.
+- **PASS (mock/SQLite only):** the execution barrier's ambiguous submission is persisted and a retry is blocked after reopening the DB. This is not proof of full Binance reconciliation by `orderId`/`clientOrderId`, partial-fill recovery, or cancel-replace recovery against an exchange.
+- **NOT RUN:** actual VPS/container execution of `deploy/backup_vps.sh`; tests cover the SQLite backup API roundtrip and static script contract, not the deployed backup environment.
+- **NOT RUN:** crash/power-loss fault injection during SQLite's backup operation, a full migration rollback matrix, or production-like multi-process load testing beyond the two-connection regression.
+- **BLOCKED:** provenance and contents of `data/test_tmp/trader.sqlite3.clean_20261004_082723`; the artifact/environment remains unavailable and has not been recreated.
+- **BLOCKED:** full current-tree and Git-history secret scan; connector access did not provide a usable complete content/history scan.
+- **NOT RUN:** dependency vulnerability database scan and immutable SHA pinning for every third-party GitHub Action. No bulk action-reference changes were made without validating trusted SHAs and compatibility.
+- **Static review only:** Android manifest/network configuration and workflow permission declarations. No emulator/device security test or release-APK content scan for secrets was performed. Python CI logs include Node.js 20 deprecation warnings for older actions in the workflow; these are maintenance warnings, not a test failure.
+
+### Current disposition
+
+At the time of this evidence snapshot, code/test HEAD is `38c37c2e7c2916dc034ae3b9bbb087d1e52aa991`; the report update itself is a documentation-only follow-up and does not change application code or workflow definitions. The Android APK and Campaign Android jobs had not yet completed at the last poll, so those results remain **IN PROGRESS** and the audit is **not complete** until final statuses are checked. PR #66 remains open, draft, unmerged, and targets `fix/pytest-safe-collection`. No real order was submitted and no production settings were changed.
