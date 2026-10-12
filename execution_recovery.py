@@ -183,7 +183,8 @@ class ExecutionRecoveryWorker:
                 if not valid:
                     raise ValueError(status_or_reason)
                 persisted = self.db.complete_execution_intent_recovery(
-                    intent_id, self.owner, status_or_reason, order, now=current
+                    intent_id, self.owner, status_or_reason, order, now=current,
+                    retry_seconds=self.base_retry_seconds
                 )
                 if not persisted:
                     stats["lease_lost"] += 1
