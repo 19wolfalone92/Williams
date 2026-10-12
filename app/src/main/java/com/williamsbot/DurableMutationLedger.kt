@@ -4,7 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
-import androidx.core.database.transaction
+import androidx.core.database.sqlite.transaction
 import java.util.Locale
 
 /**
