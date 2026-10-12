@@ -63,6 +63,7 @@ jobs:
           gradle-version: ${{ env.GRADLE_VERSION }}
           validate-wrappers: false
       - name: Restore persistent debug signing key
+        if: github.event_name != 'pull_request'
         env:
           DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
         run: |
@@ -75,6 +76,7 @@ jobs:
           printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > build/williams-debug.p12
           chmod 600 build/williams-debug.p12
       - name: Validate debug signing configuration
+        if: github.event_name != 'pull_request'
         env:
           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
           WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
@@ -113,10 +115,19 @@ jobs:
             app/build/reports/tests/testDebugUnitTest/**
           if-no-files-found: ignore
           retention-days: 7
-      - name: Build debug APK
+      - name: Build debug APK with persistent signature (trusted events)
+        if: github.event_name != 'pull_request'
         env:
           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
           WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
+        run: |
+          set +e
+          gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-debug.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          exit "$rc"
+      - name: Build debug APK for pull requests (no secrets)
+        if: github.event_name == 'pull_request'
         run: |
           set +e
           gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-debug.log
@@ -146,10 +157,12 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/release/app-release-unsigned.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
       - name: Verify persistent debug keystore
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
           test -s build/williams-debug.p12
       - name: Verify persistent debug APK signature
+        if: github.event_name != 'pull_request'
         env:
           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
         run: |
@@ -163,6 +176,10 @@ jobs:
           test -n "$APK_SHA"
           test "$(printf '%s' "$KEYSTORE_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$APK_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
           "$APKSIGNER" verify --verbose "$APK"
+      - name: Verify debug APK signature
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose app/build/outputs/apk/debug/app-debug.apk
       - name: Generate SHA-256 checksums
         run: |
           set -euo pipefail
