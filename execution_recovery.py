@@ -88,8 +88,11 @@ class ExecutionRecoveryWorker:
                 stats["reconciled"] += 1
             except Exception as exc:
                 try:
+                    # Do not persist raw transport/API exception text: it may contain
+                    # request details. Validation errors above use fixed safe messages.
+                    safe_error = str(exc) if isinstance(exc, ValueError) else type(exc).__name__ + ': reconciliation lookup or persistence failed'
                     deferred = self.db.defer_execution_intent_recovery(
-                        intent_id, self.owner, f"{type(exc).__name__}: {exc}",
+                        intent_id, self.owner, safe_error,
                         self.base_retry_seconds, self.max_retry_seconds, now=current)
                 except Exception:
                     deferred = False

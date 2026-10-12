@@ -1438,7 +1438,7 @@ class Trader:
                     unresolved = self.db.has_unresolved_execution_intents()
                 except Exception:
                     raise
-                if not unresolved:
+                if not unresolved or not self.client.api_key or not self.client.api_secret:
                     raise
                 self.db.log_event('ERROR', 'startup_recovery_blocked',
                     f'{type(e).__name__}: unresolved execution intents remain; retrying safely')

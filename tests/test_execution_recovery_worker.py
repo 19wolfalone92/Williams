@@ -122,4 +122,4 @@ def test_failure_to_persist_reconciliation_does_not_claim_success(tmp_path,monke
         result=ExecutionRecoveryWorker(db,exchange).run_once(now=1000)
         row=db.conn.execute("SELECT status,last_reconcile_error FROM execution_intents WHERE intent_id=?",(intent.intent_id,)).fetchone()
         assert result["deferred"]==1 and row["status"]=="AMBIGUOUS"
-        assert "injected reconciliation write failure" in row["last_reconcile_error"]
+        assert "OSError" in row["last_reconcile_error"]

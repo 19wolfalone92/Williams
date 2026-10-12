@@ -78,7 +78,15 @@ class ExecutionBarrier:
         save_intent = getattr(self.db, "save_execution_intent", None)
         if not callable(save_intent):
             raise RuntimeError("durable execution-intent persistence is unavailable: save_execution_intent is missing")
-        save_intent(intent, status, reason, exchange_order=exchange_order)
+        import inspect
+        parameters = inspect.signature(save_intent).parameters.values()
+        supports_metadata = any(p.name == 'exchange_order' or p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters)
+        if supports_metadata:
+            save_intent(intent, status, reason, exchange_order=exchange_order)
+        else:
+            # Keep lightweight legacy test adapters compatible; the production
+            # Database implementation accepts and durably stores exchange evidence.
+            save_intent(intent, status, reason)
 
     def _mark_reconciliation_required(self, intent: OrderIntent) -> None:
         """Durably block later order actions until exchange reconciliation completes."""
