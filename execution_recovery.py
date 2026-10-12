@@ -93,18 +93,33 @@ class ExecutionRecoveryWorker:
         trades = lookup(symbol, order_id=order_id, limit=1000)
         if not isinstance(trades, list) or not trades:
             raise RecoveryValidationError("trade history is missing for a non-zero executed quantity")
+        # Binance's bounded myTrades response can be truncated at the limit.
+        # Without explicit pagination support, exactly 1000 rows is not proof
+        # of completeness even when the returned quantities happen to sum.
+        if len(trades) >= 1000:
+            raise RecoveryValidationError("trade history reached the bounded limit; completeness is unproven")
         total_qty = 0.0
         total_quote = 0.0
+        seen_trade_ids = set()
         for trade in trades:
             if not isinstance(trade, dict):
                 raise RecoveryValidationError("trade history contains a non-object row")
+            trade_id = trade.get("id")
+            if trade_id is None or not str(trade_id).strip():
+                raise RecoveryValidationError("trade history row lacks an authoritative trade ID")
+            normalized_trade_id = str(trade_id)
+            if normalized_trade_id in seen_trade_ids:
+                raise RecoveryValidationError("trade history contains duplicate trade IDs")
+            seen_trade_ids.add(normalized_trade_id)
             trade_order_id = trade.get("orderId")
-            if trade_order_id is not None and str(trade_order_id) != str(order_id):
-                raise RecoveryValidationError("trade history contains a different orderId")
+            if trade_order_id is None or str(trade_order_id) != str(order_id):
+                raise RecoveryValidationError("trade history contains a missing or different orderId")
+            if any(key not in trade or trade.get(key) in (None, "") for key in ("qty", "price", "quoteQty")):
+                raise RecoveryValidationError("trade history row lacks required quantity evidence")
             try:
-                qty = float(trade.get("qty", 0) or 0)
-                price = float(trade.get("price", 0) or 0)
-                quote = float(trade.get("quoteQty", price * qty) or 0)
+                qty = float(trade["qty"])
+                price = float(trade["price"])
+                quote = float(trade["quoteQty"])
             except (TypeError, ValueError):
                 raise RecoveryValidationError("trade history contains invalid numeric fields")
             if qty <= 0 or price <= 0 or quote <= 0:
