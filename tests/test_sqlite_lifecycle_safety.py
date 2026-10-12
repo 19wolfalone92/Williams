@@ -251,8 +251,10 @@ def test_ambiguous_submission_survives_restart_and_blocks_blind_retry(tmp_path):
 
     with Database(str(path)) as first_db:
         submit = Mock(side_effect=TimeoutError("simulated response lost after submit"))
-        with pytest.raises(TimeoutError, match="response lost"):
+        with pytest.raises(RuntimeError, match="submission outcome is ambiguous") as caught:
             ExecutionBarrier(ContextCache(), first_db).execute(intent, submit)
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
         submit.assert_called_once()
         assert first_db.has_unresolved_execution_intents() is True
 
