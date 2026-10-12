@@ -1812,7 +1812,13 @@ private class NativeEngine(
                         }
                         return JSONObject(lastBody)
                     }
-                    if (attempt == 0 && lastBody.contains("-1021")) {
+                    // A signed mutation is never retransmitted from this transport,
+                    // even for a timestamp error. The response may be authoritative
+                    // rejection, but this layer does not persist typed exchange evidence
+                    // that proves non-acceptance. Keep the intent unresolved and let
+                    // the read-only recovery path establish the outcome. Safe GETs may
+                    // still synchronize time and retry once.
+                    if (attempt == 0 && lastBody.contains("-1021") && !mutating) {
                         runCatching { syncServerTime() }
                         return@use
                     }
