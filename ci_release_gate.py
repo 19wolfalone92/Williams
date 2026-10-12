@@ -128,6 +128,10 @@ def main() -> None:
     must(python_ci, "pip-audit -r requirements-research.txt", "optional Python dependency vulnerability scan")
     must(python_ci, "python3 ci_release_gate.py", "python workflow")
     must(python_ci, "group: backend-ci-${{ github.ref }}-${{ github.sha }}", "python workflow")
+    must(python_ci, "execution_recovery.py", "recovery worker compile coverage")
+    must(python_ci, "tests/test_execution_recovery_worker.py", "recovery worker regression coverage")
+    campaign_ci = read(".github/workflows/campaign-ci.yml")
+    must(campaign_ci, "tests/test_execution_recovery_worker.py", "Campaign recovery worker regression coverage")
 
     requirements = read("requirements.txt")
     must(requirements, "requests>=2.33.0", "patched requests minimum")
