@@ -203,36 +203,49 @@ class DurableMutationLedgerTest {
             "W21_atomic"
         )
         val secondLedger = DurableMutationLedger(context)
+        ledger!!.claimForSubmission(operationId)
+        assertThrows(DurableMutationLedger.InvalidTransitionException::class.java) {
+            secondLedger.claimForSubmission(operationId)
+        }
+        secondLedger.close()
+        assertEquals(DurableMutationLedger.State.SUBMITTING, ledger!!.find(operationId)!!.state)
+    }
+
+    @Test
+    fun simultaneousCallersOnOneLedgerCannotBothClaimOnePreparedIntent() {
+        val operationId = "op-thread-claim"
+        ledger!!.prepare(
+            operationId,
+            "POST:/api/v3/order",
+            "ETHUSDT",
+            "8".repeat(64),
+            "W21_thread"
+        )
         val start = CountDownLatch(1)
         val successes = AtomicInteger(0)
         val failures = AtomicInteger(0)
-
-        fun claimant(target: DurableMutationLedger) = Thread {
+        fun claimant() = Thread {
             start.await()
             try {
-                target.claimForSubmission(operationId)
+                ledger!!.claimForSubmission(operationId)
                 successes.incrementAndGet()
             } catch (_: Exception) {
                 failures.incrementAndGet()
             }
         }
-
-        val first = claimant(ledger!!)
-        val second = claimant(secondLedger)
+        val first = claimant()
+        val second = claimant()
         first.start()
         second.start()
         start.countDown()
         first.join(TimeUnit.SECONDS.toMillis(10))
         second.join(TimeUnit.SECONDS.toMillis(10))
-        secondLedger.close()
-
         assertFalse(first.isAlive)
         assertFalse(second.isAlive)
         assertEquals(1, successes.get())
         assertEquals(1, failures.get())
         assertEquals(DurableMutationLedger.State.SUBMITTING, ledger!!.find(operationId)!!.state)
     }
-
 
     @Test
     fun unresolvedClaimBlocksConflictingSameSymbolMutationButNotOtherSymbol() {
