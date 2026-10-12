@@ -130,3 +130,6 @@ The environment limitation is lack of a local checkout/runtime in this session. 
 - Both failures were incorrect expected diagnostic substrings in the newly ported mock tests, not failures of the fail-closed behavior: the configured mock fails persistence of the `AMBIGUOUS` intent while the durable reconciliation-state write succeeds. The tests incorrectly expected the reconciliation-state write itself to fail.
 - Corrected the assertions to verify the actual ambiguous-intent persistence failure and the mandatory-before-retry diagnostic. This preserves the safety assertions and does not bypass or remove tests.
 - The corrected tests are awaiting a fresh CI run on the next commit. No PASS is claimed for the corrected tests yet.
+
+
+- Follow-up CI routing note: the GitHub ref update did not create a fresh Python backend run for the assertion-only follow-up commit. To ensure the focused safety tests are actually executed on the latest tree, added the same test module to the all-branches Campaign CI deterministic test list. The Campaign CI run on the resulting commit is the required evidence; until it finishes, the focused regression suite remains **NOT YET VERIFIED**.
