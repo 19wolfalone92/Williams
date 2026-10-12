@@ -78,6 +78,12 @@ def test_vps_backup_uses_sqlite_online_backup_instead_of_copying_live_main_file(
     assert "tar czf - -C /tmp" in script
     assert "tar czf - -C /app/data trader.sqlite3" not in script
     assert "set -euo pipefail" in script
+    assert 'TMP_ARCHIVE="backups/.williams-data-$STAMP.tgz.tmp"' in script
+    assert 'tar -tzf "$TMP_ARCHIVE" >/dev/null' in script
+    assert 'mv -f "$TMP_ARCHIVE" "$FINAL_ARCHIVE"' in script
+    assert script.index('tar -tzf "$TMP_ARCHIVE" >/dev/null') < script.index(
+        'mv -f "$TMP_ARCHIVE" "$FINAL_ARCHIVE"'
+    )
 
 
 def test_execution_intent_claim_survives_database_reopen(tmp_path):
@@ -251,3 +257,63 @@ def test_ambiguous_submission_survives_restart_and_blocks_blind_retry(tmp_path):
         assert "unresolved PENDING/AMBIGUOUS execution intent" in result.reason
         retry.assert_not_called()
         assert reopened_db.has_unresolved_execution_intents() is True
+
+
+def test_online_backup_includes_committed_pages_still_in_wal(tmp_path):
+    source_path = tmp_path / "wal-source.sqlite3"
+    backup_path = tmp_path / "wal-backup.sqlite3"
+    source = sqlite3.connect(source_path)
+    try:
+        assert source.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower() == "wal"
+        source.execute("PRAGMA wal_autocheckpoint=0")
+        source.execute("CREATE TABLE wal_probe(value TEXT NOT NULL)")
+        source.execute("INSERT INTO wal_probe(value) VALUES('committed-in-wal')")
+        source.commit()
+        assert Path(str(source_path) + "-wal").exists()
+
+        with closing(sqlite3.connect(backup_path)) as backup:
+            source.backup(backup)
+        with closing(sqlite3.connect(backup_path)) as backup:
+            assert backup.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert backup.execute("SELECT value FROM wal_probe").fetchone()[0] == "committed-in-wal"
+    finally:
+        source.close()
+
+
+def test_interrupted_online_backup_is_not_published_as_final_copy(tmp_path):
+    source_path = tmp_path / "source.sqlite3"
+    partial_path = tmp_path / "backup.partial.sqlite3"
+    final_path = tmp_path / "backup.sqlite3"
+    with closing(sqlite3.connect(source_path)) as source:
+        source.execute("CREATE TABLE payload(value TEXT)")
+        source.executemany("INSERT INTO payload(value) VALUES(?)", [(str(i),) for i in range(500)])
+        source.commit()
+        with closing(sqlite3.connect(partial_path)) as partial:
+            def interrupt(status, remaining, total):
+                raise RuntimeError("simulated interruption during backup")
+            with pytest.raises(RuntimeError, match="simulated interruption"):
+                source.backup(partial, pages=1, progress=interrupt)
+    assert partial_path.exists()
+    assert not final_path.exists()
+    # Publication is intentionally a separate step after backup completion/validation.
+    with closing(sqlite3.connect(partial_path)) as partial:
+        with pytest.raises(sqlite3.DatabaseError):
+            partial.execute("PRAGMA integrity_check").fetchone()
+
+
+def test_trade_column_migration_is_idempotent_after_reopen(tmp_path):
+    path = tmp_path / "migration.sqlite3"
+    with Database(str(path)) as first:
+        columns = {row["name"] for row in first.conn.execute("PRAGMA table_info(trades)")}
+        required = {
+            "entry_client_order_id", "exit_order_list_client_id", "stop_price",
+            "take_profit_price", "risk_pct", "updated_at",
+        }
+        assert required <= columns
+        assert first.state_get("schema_version") == str(Database.SCHEMA_VERSION)
+
+    with Database(str(path)) as reopened:
+        columns = {row["name"] for row in reopened.conn.execute("PRAGMA table_info(trades)")}
+        assert required <= columns
+        assert reopened.state_get("schema_version") == str(Database.SCHEMA_VERSION)
+        assert reopened.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
