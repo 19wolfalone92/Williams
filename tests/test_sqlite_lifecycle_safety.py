@@ -124,3 +124,100 @@ def test_parallel_barriers_cannot_submit_the_same_intent_twice(tmp_path):
     finally:
         db1.close()
         db2.close()
+
+
+def test_sqlite_busy_timeout_fails_boundedly_without_mutating_database(tmp_path):
+    path = tmp_path / "busy.sqlite3"
+    blocker = sqlite3.connect(path, timeout=1)
+    blocker.execute("PRAGMA journal_mode=DELETE")
+    blocker.execute("CREATE TABLE probe (value TEXT NOT NULL)")
+    blocker.commit()
+    blocker.execute("BEGIN EXCLUSIVE")
+    blocker.execute("INSERT INTO probe(value) VALUES('uncommitted')")
+
+    contender = sqlite3.connect(path, timeout=0.05)
+    contender.execute("PRAGMA busy_timeout=50")
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            contender.execute("INSERT INTO probe(value) VALUES('blocked')")
+        # A timed-out contender must not report or leave a partial write.
+        assert blocker.execute("SELECT COUNT(*) FROM probe").fetchone()[0] == 1
+    finally:
+        contender.close()
+        blocker.rollback()
+        blocker.close()
+
+    with closing(sqlite3.connect(path)) as verify:
+        assert verify.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert verify.execute("SELECT COUNT(*) FROM probe").fetchone()[0] == 0
+
+
+def test_concurrent_writes_from_independent_database_connections(tmp_path):
+    path = tmp_path / "concurrent-writes.sqlite3"
+    with Database(str(path)):
+        pass
+    db1, db2 = Database(str(path)), Database(str(path))
+
+    def write_many(db, prefix):
+        for index in range(40):
+            db.state_set(f"{prefix}:{index}", str(index))
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(write_many, db1, "writer-a")
+            second = pool.submit(write_many, db2, "writer-b")
+            first.result(timeout=15)
+            second.result(timeout=15)
+    finally:
+        db1.close()
+        db2.close()
+
+    with Database(str(path)) as verify:
+        assert verify.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert verify.conn.execute(
+            "SELECT COUNT(*) FROM bot_state WHERE key LIKE 'writer-a:%'"
+        ).fetchone()[0] == 40
+        assert verify.conn.execute(
+            "SELECT COUNT(*) FROM bot_state WHERE key LIKE 'writer-b:%'"
+        ).fetchone()[0] == 40
+
+
+def test_failed_write_rolls_back_and_database_remains_usable(tmp_path):
+    path = tmp_path / "failed-write.sqlite3"
+    with Database(str(path)) as db:
+        with pytest.raises(sqlite3.IntegrityError):
+            with db.transaction():
+                db.state_set("before_failure", "temporary")
+                db.conn.execute(
+                    "INSERT INTO bot_state(key, value) VALUES(NULL, 'invalid')"
+                )
+                db.state_set("after_failure", "must_not_exist")
+
+        assert db.state_get("before_failure") is None
+        assert db.state_get("after_failure") is None
+        assert db.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        db.state_set("after_rollback", "usable")
+
+
+def test_corrupt_temporary_database_is_detected_without_repair_attempt(tmp_path):
+    path = tmp_path / "corrupt.sqlite3"
+    path.write_bytes(b"not a SQLite database; test fixture only")
+
+    with closing(sqlite3.connect(path)) as conn:
+        with pytest.raises(sqlite3.DatabaseError, match="not a database"):
+            conn.execute("SELECT name FROM sqlite_master").fetchall()
+
+    # Detection is intentional; this test never attempts an in-place repair.
+
+
+def test_failed_backup_open_does_not_damage_source_or_create_successful_backup(tmp_path):
+    source_path = tmp_path / "source.sqlite3"
+    impossible_backup = tmp_path / "missing-directory" / "backup.sqlite3"
+    with Database(str(source_path)) as source:
+        source.state_set("durable_probe", "still_here")
+        with pytest.raises(sqlite3.OperationalError):
+            sqlite3.connect(impossible_backup)
+
+        assert source.state_get("durable_probe") == "still_here"
+        assert source.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert not impossible_backup.exists()
