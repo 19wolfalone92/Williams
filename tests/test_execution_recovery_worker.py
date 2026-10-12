@@ -58,17 +58,45 @@ def test_worker_recovers_ambiguous_intent_after_database_reopen(tmp_path):
         assert row["executed_qty"]==pytest.approx(0.01)
         assert not reopened.has_unresolved_execution_intents() and exchange.calls==1
 
-@pytest.mark.parametrize(("status","executed","expected"),[
-    ("NEW","0","NEW"),("PARTIALLY_FILLED","0.004","PARTIALLY_FILLED"),
-    ("FILLED","0.01","FILLED"),("CANCELED","0.004","CANCELED"),("EXPIRED","0","EXPIRED")])
-def test_worker_persists_exact_exchange_lifecycle(tmp_path,status,executed,expected):
+@pytest.mark.parametrize(("status","executed","expected_local","terminal"),[
+    ("NEW","0","AMBIGUOUS",False),
+    ("PENDING_CANCEL","0","AMBIGUOUS",False),
+    ("PARTIALLY_FILLED","0.004","AMBIGUOUS",False),
+    ("FILLED","0.01","FILLED",True),
+    ("CANCELED","0.004","CANCELED",True),
+    ("EXPIRED","0","EXPIRED",True),
+    ("REJECTED","0","REJECTED",True)])
+def test_worker_persists_exact_exchange_lifecycle(tmp_path,status,executed,expected_local,terminal):
     with Database(str(tmp_path/"lifecycle.sqlite3")) as db:
         intent=_intent(db); exchange=FakeExchange(_order(status,executedQty=executed))
-        result=ExecutionRecoveryWorker(db,exchange).run_once(now=time.time()+10)
+        now=1000
+        result=ExecutionRecoveryWorker(db,exchange,base_retry_seconds=7).run_once(now=now)
         row=db.conn.execute("SELECT * FROM execution_intents WHERE intent_id=?",(intent.intent_id,)).fetchone()
-        assert result["reconciled"]==1 and row["status"]==expected
-        assert row["exchange_status"]==expected and row["executed_qty"]==pytest.approx(float(executed))
-        assert (row["resolved_at"] is not None) is (status in {"FILLED","CANCELED","EXPIRED"})
+        assert result["reconciled"]==1 and row["status"]==expected_local
+        assert row["exchange_status"]==status and row["executed_qty"]==pytest.approx(float(executed))
+        assert (row["resolved_at"] is not None) is terminal
+        if terminal:
+            assert not db.has_unresolved_execution_intents()
+            assert row["next_reconcile_at"] == 0
+        else:
+            assert db.has_unresolved_execution_intents()
+            assert row["next_reconcile_at"] == now + 7
+            assert row["reason"] == "exchange order is active; follow-up reconciliation required"
+
+def test_active_order_recovery_keeps_execution_barrier_closed_until_terminal(tmp_path):
+    with Database(str(tmp_path/"active-barrier.sqlite3")) as db:
+        intent=_intent(db)
+        exchange=FakeExchange(_order("PARTIALLY_FILLED",executedQty="0.004"))
+        worker=ExecutionRecoveryWorker(db,exchange,base_retry_seconds=5)
+        first=worker.run_once(now=1000)
+        assert first["reconciled"]==1 and db.has_unresolved_execution_intents()
+        assert worker.run_once(now=1001)["claimed"]==0
+        exchange.response=_order("FILLED",executedQty="0.01")
+        second=worker.run_once(now=1006)
+        row=db.conn.execute("SELECT * FROM execution_intents WHERE intent_id=?",(intent.intent_id,)).fetchone()
+        assert second["reconciled"]==1 and row["status"]=="FILLED"
+        assert not db.has_unresolved_execution_intents()
+        assert exchange.calls==2
 
 def test_not_found_or_rate_limit_remains_ambiguous_with_backoff(tmp_path):
     with Database(str(tmp_path/"retry.sqlite3")) as db:

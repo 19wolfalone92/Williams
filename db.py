@@ -412,26 +412,33 @@ class Database:
             return None
         return None
 
-    def complete_execution_intent_recovery(self, intent_id, owner, status, order, now=None):
-        """Persist authoritative exchange evidence only while holding the lease."""
+    def complete_execution_intent_recovery(self, intent_id, owner, status, order, now=None, retry_seconds=5.0):
+        """Persist exchange evidence under lease; active orders remain unresolved."""
         from datetime import datetime, timezone
         import time
         now = float(time.time() if now is None else now)
+        exchange_status = str(order.get('status') or order.get('listOrderStatus') or status or '').upper()
         terminal = str(status).upper() in {'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED', 'OCO_ALL_DONE', 'OCO_REJECTED'}
+        # An accepted but still-live order is not a completed recovery. Keep it
+        # inside the barrier's unresolved set and schedule another read-only poll.
+        stored_status = str(status).upper() if terminal else 'AMBIGUOUS'
+        reason = '' if terminal else 'exchange order is active; follow-up reconciliation required'
+        next_reconcile_at = 0 if terminal else now + max(1.0, float(retry_seconds))
         cur = self.conn.execute(
-            """UPDATE execution_intents SET status=?, reason='', order_id=?, order_list_id=?,
+            """UPDATE execution_intents SET status=?, reason=?, order_id=?, order_list_id=?,
                    exchange_status=?, executed_qty=?, orig_qty=?, avg_price=?,
-                   last_reconcile_error=NULL, next_reconcile_at=0,
+                   last_reconcile_error=NULL, next_reconcile_at=?,
                    lease_owner=NULL, lease_until=NULL, resolved_at=?
                WHERE intent_id=? AND lease_owner=? AND status IN ('PENDING','AMBIGUOUS')""",
             (
-                str(status).upper(),
+                stored_status, reason,
                 str(order.get('orderId')) if order.get('orderId') is not None else None,
                 str(order.get('orderListId')) if order.get('orderListId') is not None else None,
-                str(order.get('status') or order.get('listOrderStatus') or '').upper(),
+                exchange_status,
                 float(order.get('executedQty', 0) or 0),
                 float(order.get('origQty', 0) or 0),
                 self._average_execution_price(order),
+                next_reconcile_at,
                 datetime.now(timezone.utc).isoformat() if terminal else None,
                 str(intent_id), str(owner),
             ),
