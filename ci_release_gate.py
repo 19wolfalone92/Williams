@@ -150,9 +150,8 @@ def main() -> None:
         for line in workflow.splitlines():
             if line.strip().startswith("uses:"):
                 reference = line.strip().split("uses:", 1)[1].strip()
-                must(
-                    bool(re.fullmatch(r".+@[0-9a-f]{40}(?:\s+#.*)?", reference)),
-                    f"unpinned external action reference in {workflow_path}",
+                assert re.fullmatch(r".+@[0-9a-f]{40}(?:\s+#.*)?", reference), (
+                    f"unpinned external action reference in {workflow_path}: {reference}"
                 )
 
     print("WILLIAMS RELEASE CONTRACT GATE: PASS")
