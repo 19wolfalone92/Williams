@@ -111,7 +111,7 @@ The environment limitation is lack of a local checkout/runtime in this session. 
 
 - **Evidence at prior audit HEAD** `e2493f9f20dbcaa5cc2c233a4e81d3642c642500`: `execution_barrier.py` implemented `_persist()` with `except Exception: pass`; a missing DB or missing `save_execution_intent` method also allowed execution to continue. The barrier could call the exchange submission callback without durably recording a `PENDING` intent. The source also contained duplicate FSM transitions and duplicated exchange-response validation blocks.
 - **Risk:** after a crash or ambiguous exchange response, local state might not establish that a submission was attempted; an unsafe retry could duplicate an order.
-- **Change prepared:** make intent persistence mandatory and fail closed; durably mark `RECONCILE_REQUIRED` for ambiguous outcomes; treat post-submit persistence failure as ambiguous without resubmitting; add mock-only regression tests and include them in Python CI.
+- **Change committed:** make intent persistence mandatory and fail closed; durably mark `RECONCILE_REQUIRED` for ambiguous outcomes; treat post-submit persistence failure as ambiguous without resubmitting; add mock-only regression tests and include them in Python CI.
 - **Regression coverage:** `tests/test_execution_barrier_persistence_fail_closed.py` covers missing persistence, PENDING/SUBMITTED/AMBIGUOUS write failures, and timeout/no-retry behavior with mocks only.
 - **Validation status:** the focused tests are included in the explicit Python CI command. The new commit's workflow results must be checked before this fix is marked PASS. No local checkout/runtime is available in this connector session; no local test execution is claimed.
 - **Trading safety:** no exchange endpoint was called and no order or balance mutation was performed by this audit.
@@ -122,3 +122,11 @@ The environment limitation is lack of a local checkout/runtime in this session. 
 - Campaign CI run `38199984689`: Python tests succeeded; Android build/lint was still running at the last poll.
 - Android APK run `38199984681`: release gate, source validation, Android lint and Android unit tests succeeded; APK packaging checks were still running at the last poll.
 - These results apply only to `e2493f9f20dbcaa5cc2c233a4e81d3642c642500`, not to the follow-up commit.
+
+
+### CI follow-up for execution-barrier regression tests
+
+- Python backend run [38200218167](https://github.com/19wolfalone92/Williams/actions/runs/38200218167) on `cbf6353c13d16fe14b9160a0e0aa579193ea0ff4`: **FAIL**, 2 failed, 154 passed, 4 warnings in 4.46s.
+- Both failures were incorrect expected diagnostic substrings in the newly ported mock tests, not failures of the fail-closed behavior: the configured mock fails persistence of the `AMBIGUOUS` intent while the durable reconciliation-state write succeeds. The tests incorrectly expected the reconciliation-state write itself to fail.
+- Corrected the assertions to verify the actual ambiguous-intent persistence failure and the mandatory-before-retry diagnostic. This preserves the safety assertions and does not bypass or remove tests.
+- The corrected tests are awaiting a fresh CI run on the next commit. No PASS is claimed for the corrected tests yet.

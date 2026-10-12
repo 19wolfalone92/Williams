@@ -105,7 +105,7 @@ def test_submitted_and_ambiguous_persistence_failures_are_explicit():
 
     assert result.accepted is False
     assert "post_submit_persistence_failed" in result.reason
-    assert "reconciliation_state_persistence_failed" in result.reason
+    assert "ambiguous_intent_persistence_failed" in result.reason
     assert "mandatory before any retry" in result.reason
     assert result.response is exchange_response
     submit.assert_called_once()
@@ -134,7 +134,7 @@ def test_timeout_with_ambiguous_persistence_failure_reports_mandatory_reconcilia
     try:
         ExecutionBarrier(ContextCache(), db).execute(campaign_intent(), submit)
     except RuntimeError as exc:
-        assert "durable reconciliation state could not be saved" in str(exc)
+        assert "ambiguous_intent_persistence_failed" in str(exc) and "mandatory before any retry" in str(exc)
         assert "mandatory before any retry" in str(exc)
     else:
         raise AssertionError("failed ambiguity persistence must be explicit")
