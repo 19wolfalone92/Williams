@@ -112,7 +112,7 @@ class ExecutionRecoveryWorker:
             return self.exchange.get_order(symbol, order_id=order_id)
         if client_id:
             return self.exchange.get_order(symbol, orig_client_order_id=client_id)
-        raise RuntimeError("intent has no persisted orderId or clientOrderId; safe lookup is impossible")
+        raise ValueError("intent has no persisted orderId or clientOrderId; safe lookup is impossible")
 
     def run_once(self, *, now=None) -> dict[str, int]:
         """Process one bounded batch; every failed lookup stays unresolved."""
