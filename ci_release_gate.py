@@ -99,8 +99,15 @@ def main() -> None:
     android_ci = read(".github/workflows/android-apk.yml")
     must(android_ci, "python3 ci_release_gate.py", "android workflow")
     must(android_ci, "group: android-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}", "android workflow")
-    must(android_ci, "gradle --no-daemon :app:lintDebug", "android workflow")
-    must_not(android_ci, "./gradlew --no-daemon :app:", "android workflow")
+    must(android_ci, "gradle --no-daemon wrapper --gradle-version 8.14.6 --distribution-type bin", "android workflow trusted wrapper bootstrap")
+    must(android_ci, "ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0", "android workflow official wrapper checksum")
+    must(android_ci, "./gradlew --no-daemon :app:lintDebug", "android workflow")
+    must_not(android_ci, "gradle --no-daemon :app:", "android workflow direct system-Gradle build")
+    campaign_ci = read(".github/workflows/campaign-ci.yml")
+    must(campaign_ci, "ref: ${{ github.event.pull_request.head.sha || github.sha }}", "campaign CI exact source checkout")
+    must(campaign_ci, "gradle --no-daemon wrapper --gradle-version 8.14.6 --distribution-type bin", "campaign CI trusted wrapper bootstrap")
+    must(campaign_ci, "ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0", "campaign CI official wrapper checksum")
+    must(campaign_ci, "./gradlew --no-daemon :app:testDebugUnitTest", "campaign CI Gradle wrapper build")
 
     # Pull-request Gradle code is untrusted. Persistent signing material may only
     # be restored or passed to Gradle on trusted push/manual runs, never PR runs.

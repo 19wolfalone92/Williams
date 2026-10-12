@@ -69,7 +69,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
         with:
-          validate-wrappers: true
+          gradle-version: "8.14.6"
+          # The checked-in wrapper JAR fails official checksum validation.
+          # Regenerate it with this trusted distribution and verify its official hash before use.
+          validate-wrappers: false
       - name: Restore persistent debug signing key
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         env:
@@ -93,8 +96,12 @@ jobs:
           test -s build/williams-debug.p12
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
-      - name: Validate Gradle wrapper and distribution
-        run: ./gradlew --version
+      - name: Regenerate and verify Gradle wrapper from trusted Gradle
+        run: |
+          set -euo pipefail
+          gradle --no-daemon wrapper --gradle-version 8.14.6 --distribution-type bin
+          printf '%s  %s\n' 'ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0' 'gradle/wrapper/gradle-wrapper.jar' | sha256sum --check -
+          ./gradlew --version
       # Release gate is the single pre-build contract check for every APK commit.
       - name: Run release contract gate
         run: python3 ci_release_gate.py
