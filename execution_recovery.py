@@ -104,7 +104,8 @@ class ExecutionRecoveryWorker:
                 "orderListId": listing.get("orderListId"), "listClientOrderId": client_id,
                 "listOrderStatus": list_status, "status": mapping[list_status],
                 "executedQty": sum(float(x.get("executedQty", 0) or 0) for x in verified_legs),
-                "origQty": sum(float(x.get("origQty", 0) or 0) for x in verified_legs),
+                # OCO legs are alternative exits, not additive order quantity.
+                "origQty": max(float(x.get("origQty", 0) or 0) for x in verified_legs),
                 "price": 0, "orders": verified_legs,
             }
         if order_id is not None:

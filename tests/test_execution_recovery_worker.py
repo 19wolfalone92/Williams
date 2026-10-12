@@ -123,3 +123,53 @@ def test_failure_to_persist_reconciliation_does_not_claim_success(tmp_path,monke
         row=db.conn.execute("SELECT status,last_reconcile_error FROM execution_intents WHERE intent_id=?",(intent.intent_id,)).fetchone()
         assert result["deferred"]==1 and row["status"]=="AMBIGUOUS"
         assert "OSError" in row["last_reconcile_error"]
+
+
+class FakeOcoExchange:
+    def __init__(self, listing, legs):
+        self.listing, self.legs = listing, legs
+        self.list_calls = self.order_calls = 0
+
+    def order_list(self, symbol, *, list_client_order_id=None):
+        self.list_calls += 1
+        return dict(self.listing)
+
+    def get_order(self, symbol, *, order_id=None, orig_client_order_id=None):
+        self.order_calls += 1
+        return dict(self.legs[str(order_id)])
+
+
+def test_worker_reconciles_oco_list_and_both_legs(tmp_path):
+    with Database(str(tmp_path / "oco.sqlite3")) as db:
+        intent = OrderIntent.new("BTCUSDT", "SELL", "OCO", {},
+            purpose="EXIT", client_order_id="williams-oco-list")
+        db.save_execution_intent(intent, "AMBIGUOUS", "lost OCO response")
+        listing = {"symbol":"BTCUSDT","orderListId":77,"listClientOrderId":"williams-oco-list",
+            "listOrderStatus":"EXECUTING","orders":[
+                {"orderId":201,"clientOrderId":"tp-leg"},{"orderId":202,"clientOrderId":"sl-leg"}]}
+        legs = {
+            "201":{"symbol":"BTCUSDT","side":"SELL","orderId":201,"clientOrderId":"tp-leg","status":"NEW","origQty":"0.01","executedQty":"0","price":"100"},
+            "202":{"symbol":"BTCUSDT","side":"SELL","orderId":202,"clientOrderId":"sl-leg","status":"NEW","origQty":"0.01","executedQty":"0","price":"90"},
+        }
+        exchange = FakeOcoExchange(listing, legs)
+        result = ExecutionRecoveryWorker(db, exchange).run_once(now=time.time()+10)
+        row = db.conn.execute("SELECT * FROM execution_intents WHERE intent_id=?", (intent.intent_id,)).fetchone()
+        assert result["reconciled"] == 1 and row["status"] == "OCO_EXECUTING"
+        assert row["order_list_id"] == "77" and row["orig_qty"] == pytest.approx(0.01)
+        assert exchange.list_calls == 1 and exchange.order_calls == 2
+        assert not db.has_unresolved_execution_intents()
+
+
+def test_worker_does_not_resolve_oco_when_one_leg_is_missing(tmp_path):
+    with Database(str(tmp_path / "oco-missing-leg.sqlite3")) as db:
+        intent = OrderIntent.new("BTCUSDT", "SELL", "OCO", {},
+            purpose="EXIT", client_order_id="williams-oco-list")
+        db.save_execution_intent(intent, "AMBIGUOUS", "lost OCO response")
+        listing = {"orderListId":77,"listClientOrderId":"williams-oco-list",
+            "listOrderStatus":"EXECUTING","orders":[{"orderId":201,"clientOrderId":"tp-leg"}]}
+        exchange = FakeOcoExchange(listing, {"201":{"symbol":"BTCUSDT","side":"SELL","orderId":201,
+            "clientOrderId":"tp-leg","status":"NEW","origQty":"0.01","executedQty":"0","price":"100"}})
+        result = ExecutionRecoveryWorker(db, exchange).run_once(now=1000)
+        row = db.conn.execute("SELECT status,last_reconcile_error FROM execution_intents WHERE intent_id=?",(intent.intent_id,)).fetchone()
+        assert result["deferred"] == 1 and row["status"] == "AMBIGUOUS"
+        assert "both authoritative order legs" in row["last_reconcile_error"]
