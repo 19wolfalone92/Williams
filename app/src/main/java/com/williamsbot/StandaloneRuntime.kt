@@ -1412,6 +1412,69 @@ private class NativeEngine(
         return JSONObject().put("resumed", true)
     }
 
+    /**
+     * Read-only reconciliation for single-order POST mutations.
+     *
+     * This deliberately does not infer success from local ACK state or from a
+     * missing order. A positive, exact clientOrderId match from Binance is
+     * required. OCO, cancel, and cancel-replace operations remain unresolved
+     * until their operation-specific parent/child/target reconciliation exists.
+     */
+    private fun reconcileJournaledSingleOrders() {
+        val candidates = mutationLedger.unresolved().filter { intent ->
+            intent.kind == "POST:/api/v3/order" &&
+                !intent.exchangeClientId.isNullOrBlank() &&
+                intent.state in setOf(
+                    DurableMutationLedger.State.SUBMITTING,
+                    DurableMutationLedger.State.UNKNOWN,
+                    DurableMutationLedger.State.ACKNOWLEDGED
+                )
+        }
+
+        for (intent in candidates) {
+            val clientOrderId = requireNotNull(intent.exchangeClientId)
+            val order = signedGet(
+                "/api/v3/order",
+                "symbol=" + intent.symbol + "&origClientOrderId=" + clientOrderId
+            )
+            require(order.optString("symbol").equals(intent.symbol, ignoreCase = true)) {
+                "MUTATION_RECONCILIATION_SYMBOL_MISMATCH"
+            }
+            require(order.optString("clientOrderId") == clientOrderId) {
+                "MUTATION_RECONCILIATION_CLIENT_ID_MISMATCH"
+            }
+            val exchangeOrderId = order.optString("orderId")
+            require(exchangeOrderId.isNotBlank() && exchangeOrderId != "null") {
+                "MUTATION_RECONCILIATION_ORDER_ID_MISSING"
+            }
+            val status = order.optString("status").uppercase(Locale.US)
+            require(status in setOf(
+                "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED",
+                "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"
+            )) {
+                "MUTATION_RECONCILIATION_STATUS_UNKNOWN"
+            }
+            val originalQty = order.optString("origQty").toBigDecimalOrNull()
+                ?: throw IllegalStateException("MUTATION_RECONCILIATION_ORIG_QTY_INVALID")
+            val executedQty = order.optString("executedQty").toBigDecimalOrNull()
+                ?: throw IllegalStateException("MUTATION_RECONCILIATION_EXECUTED_QTY_INVALID")
+            require(originalQty.signum() >= 0 && executedQty.signum() >= 0 &&
+                executedQty.compareTo(originalQty) <= 0) {
+                "MUTATION_RECONCILIATION_QUANTITY_INCONSISTENT"
+            }
+
+            // RECONCILED here means the single order's authoritative Binance
+            // state was retrieved by exact client ID. It does not certify
+            // campaign exposure or protective OCO children; those are separate gates.
+            mutationLedger.transition(
+                operationId = intent.operationId,
+                expected = setOf(intent.state),
+                next = DurableMutationLedger.State.RECONCILED,
+                exchangeOrderId = exchangeOrderId
+            )
+        }
+    }
+
     @SuppressLint("ApplySharedPref")
     @Synchronized
     fun recover(): JSONObject {
@@ -1434,6 +1497,11 @@ private class NativeEngine(
             throw IllegalStateException("RECOVERY_BARRIER_PERSIST_FAILED")
         }
         return try {
+            // Reconcile only operations for which an exact exchange-side identity
+            // and complete single-order response are available. Unsupported mutation
+            // kinds deliberately remain unresolved and keep the execution barrier set.
+            reconcileJournaledSingleOrders()
+
             // Keep execution readiness blocked throughout recovery. The recovery thread
             // may perform its synchronous, journaled recovery operations.
             // Never clear the recovery barrier while a durable exchange mutation
