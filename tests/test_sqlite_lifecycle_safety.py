@@ -224,3 +224,30 @@ def test_failed_backup_open_does_not_damage_source_or_create_successful_backup(t
         assert source.state_get("durable_probe") == "still_here"
         assert source.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert not impossible_backup.exists()
+
+
+def test_ambiguous_submission_survives_restart_and_blocks_blind_retry(tmp_path):
+    path = tmp_path / "ambiguous-restart.sqlite3"
+    intent = OrderIntent.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        order_type="LIMIT",
+        required_context_versions={},
+        purpose="CAMPAIGN_ENTRY",
+        client_order_id="audit-restart-ambiguous-001",
+    )
+
+    with Database(str(path)) as first_db:
+        submit = Mock(side_effect=TimeoutError("simulated response lost after submit"))
+        with pytest.raises(TimeoutError, match="response lost"):
+            ExecutionBarrier(ContextCache(), first_db).execute(intent, submit)
+        submit.assert_called_once()
+        assert first_db.has_unresolved_execution_intents() is True
+
+    with Database(str(path)) as reopened_db:
+        retry = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 9002})
+        result = ExecutionBarrier(ContextCache(), reopened_db).execute(intent, retry)
+        assert result.accepted is False
+        assert "unresolved PENDING/AMBIGUOUS execution intent" in result.reason
+        retry.assert_not_called()
+        assert reopened_db.has_unresolved_execution_intents() is True
