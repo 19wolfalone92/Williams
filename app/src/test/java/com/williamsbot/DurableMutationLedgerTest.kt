@@ -342,6 +342,30 @@ class DurableMutationLedgerTest {
     }
 
     @Test
+    fun conflictingPrepareRollsBackAndPreservesOriginalIntent() {
+        val original = ledger!!.prepare(
+            "immutable-operation",
+            "POST:/api/v3/order",
+            "BTCUSDT",
+            "a".repeat(64),
+            "W21_immutable"
+        )
+        assertThrows(DurableMutationLedger.IntentConflictException::class.java) {
+            ledger!!.prepare(
+                "immutable-operation",
+                "POST:/api/v3/order",
+                "BTCUSDT",
+                "b".repeat(64),
+                "W21_immutable"
+            )
+        }
+        val after = ledger!!.find("immutable-operation")!!
+        assertEquals(original.requestFingerprint, after.requestFingerprint)
+        assertEquals(original.exchangeClientId, after.exchangeClientId)
+        assertEquals(DurableMutationLedger.State.PREPARED, after.state)
+    }
+
+    @Test
     fun duplicateIdenticalIntentIsIdempotent() {
         val first = ledger!!.prepare("op-duplicate", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-a")
         val second = ledger!!.prepare("op-duplicate", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-a")
