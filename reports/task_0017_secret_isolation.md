@@ -1,16 +1,23 @@
-# TASK 001.7 — BL-004 Secret Isolation
+# TASK 001.8 — BL-004 Secret Isolation
 
-- Code SHA: `e5f82ae60b0b5c1e9512f9efe3bedc1d018ab132`.
+- Audited code/test SHA: `31ba73ff81c43edb5be4606b200dce752148967a`.
 - Status: PARTIAL — P0 OPEN.
+- Only synthetic credentials may be used; no real credentials were read or emitted.
 
-## Existing controls
+## IMPLEMENTED (source inspection)
+
 - Android mutation fingerprint canonicalization rejects credential/signature/authorization parameter names.
-- `SecretRedactor` and existing tests cover selected Android REST/user-stream audit and persistence paths.
-- Python tests exist in `tests/test_binance_client_secret_redaction.py` and `tests/test_execution_barrier_secret_redaction.py`.
+- `SecretRedactor` and selected Android REST/user-stream audit and persistence tests exist.
+- Python regression tests exist in `tests/test_binance_client_secret_redaction.py` and `tests/test_execution_barrier_secret_redaction.py`.
 
-## Not verified
-- Full sentinel injection across exception messages, stack traces, Logcat, diagnostics, SQLite rows, reconciliation evidence, CI logs/artifacts and crash reports.
-- Complete arbitrary nested payload redaction and proof that no secret material reaches a remote service.
-- The new trade evidence validator has no synthetic-secret end-to-end persistence/diagnostic test yet.
+## TESTED / VERIFIED
 
-Only synthetic test values were used for this audit; no real credentials were read, printed, or uploaded, and no live order was submitted.
+- Python test job in run [38301629067](https://github.com/19wolfalone92/Williams/actions/runs/38301629067) completed SUCCESS on audited SHA 31ba73f; this verifies only the tests actually configured in that job.
+- Android sentinel tests and complete artifact/storage scan are NOT VERIFIED because the Campaign Android job was still running at last inspection.
+- No evidence yet proves synthetic API key/secret/signature/auth header/signed URL sentinel values are absent from every log, exception, diagnostic, SQLite row, DecisionTrace, CI artifact, report and crash/recovery output.
+
+## Required remaining tests
+
+Inject unique synthetic sentinels through actual request, exception, failure, persistence, diagnostics and recovery paths. Inspect bytes/contents of resulting SQLite rows, captured logs, thrown exceptions, trace JSON, CI artifacts and reports. Assert every sentinel is absent. Function-level redactor tests alone are insufficient.
+
+No real credentials or live orders used. P0 remains open.
