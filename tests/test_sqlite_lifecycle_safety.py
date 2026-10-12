@@ -1,5 +1,6 @@
 """SQLite lifecycle and production-path guard regressions; temporary DBs only."""
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -55,10 +56,10 @@ def test_backup_and_restore_roundtrip_uses_only_temporary_databases(tmp_path):
 
     with Database(str(source_path)) as source:
         source.state_set("backup_probe", "original")
-        with sqlite3.connect(backup_path) as backup:
+        with closing(sqlite3.connect(backup_path)) as backup:
             source.conn.backup(backup)
 
-    with sqlite3.connect(backup_path) as backup, sqlite3.connect(restored_path) as restored:
+    with closing(sqlite3.connect(backup_path)) as backup, closing(sqlite3.connect(restored_path)) as restored:
         backup.backup(restored)
 
     with Database(str(restored_path)) as restored:
