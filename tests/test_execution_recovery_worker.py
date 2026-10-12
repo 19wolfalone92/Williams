@@ -273,7 +273,7 @@ def test_worker_reconciles_oco_list_and_both_legs(tmp_path):
         exchange = FakeOcoExchange(listing, legs)
         result = ExecutionRecoveryWorker(db, exchange).run_once(now=time.time()+10)
         row = db.conn.execute("SELECT * FROM execution_intents WHERE intent_id=?", (intent.intent_id,)).fetchone()
-        assert result["active"] == 1 and row["status"] == "AMBIGUOUS"
+        assert result["active"] == 1 and row["status"] == "SUBMITTED"
         assert row["status"] == "SUBMITTED"
         assert row["order_list_id"] == "77" and row["orig_qty"] == pytest.approx(0.01)
         assert exchange.list_calls == 1 and exchange.order_calls == 2
