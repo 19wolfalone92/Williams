@@ -560,7 +560,7 @@ class DurableMutationLedgerTest {
             setOf(DurableMutationLedger.State.UNKNOWN),
             DurableMutationLedger.State.RECONCILED,
             exchangeOrderId = "987654",
-            reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","scope":"ORDER_MUTATION","query_complete":true,"order_verified":true,"fills_verified":true,"checked_at_ms":1760000000000}"""
+            reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","scope":"ORDER_MUTATION","query_complete":true,"order_verified":true,"fills_verified":true,"trade_evidence_verified":true,"order_status":"NEW","symbol":"BTCUSDT","client_order_id":"W21_reconcile","exchange_order_id":"987654","original_qty":"0.01","executed_qty":"0","trade_count":0,"trade_ids":[],"trade_qty_sum":"0","checked_at_ms":1760000000000}"""
         )
 
         assertEquals(DurableMutationLedger.State.RECONCILED, reconciled.state)
@@ -585,7 +585,7 @@ class DurableMutationLedgerTest {
             setOf(DurableMutationLedger.State.ACKNOWLEDGED),
             DurableMutationLedger.State.RECONCILED,
             exchangeOrderId = "123",
-            reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","scope":"ORDER_MUTATION","query_complete":true,"order_verified":true,"fills_verified":true,"checked_at_ms":1760000000000}"""
+            reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","scope":"ORDER_MUTATION","query_complete":true,"order_verified":true,"fills_verified":true,"trade_evidence_verified":true,"order_status":"NEW","symbol":"BTCUSDT","client_order_id":"W21_ack","exchange_order_id":"123","original_qty":"0.01","executed_qty":"0","trade_count":0,"trade_ids":[],"trade_qty_sum":"0","checked_at_ms":1760000000000}"""
         )
         assertEquals(DurableMutationLedger.State.RECONCILED, reconciled.state)
         assertFalse(ledger!!.hasUnresolved())
@@ -619,7 +619,8 @@ class DurableMutationLedgerTest {
                 prepared.operationId,
                 setOf(DurableMutationLedger.State.UNKNOWN),
                 DurableMutationLedger.State.RECONCILED,
-                reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","scope":"ORDER_MUTATION","query_complete":false,"order_verified":true,"fills_verified":true,"checked_at_ms":1760000000000}"""
+                exchangeOrderId = "777",
+                reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","scope":"ORDER_MUTATION","query_complete":false,"order_verified":true,"fills_verified":true,"trade_evidence_verified":true,"order_status":"NEW","symbol":"BTCUSDT","client_order_id":"W21_evidence_required","exchange_order_id":"777","original_qty":"0.01","executed_qty":"0","trade_count":0,"trade_ids":[],"trade_qty_sum":"0","checked_at_ms":1760000000000}"""
             )
         }
 
@@ -678,7 +679,8 @@ class DurableMutationLedgerTest {
                 "op-invalid",
                 setOf(DurableMutationLedger.State.PREPARED),
                 DurableMutationLedger.State.RECONCILED,
-                reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","scope":"ORDER_MUTATION","query_complete":true,"order_verified":true,"fills_verified":true,"checked_at_ms":1760000000000}"""
+                exchangeOrderId = "invalid-order",
+                reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","scope":"ORDER_MUTATION","query_complete":true,"order_verified":true,"fills_verified":true,"trade_evidence_verified":true,"order_status":"NEW","symbol":"BTCUSDT","client_order_id":"client-invalid","exchange_order_id":"invalid-order","original_qty":"0.01","executed_qty":"0","trade_count":0,"trade_ids":[],"trade_qty_sum":"0","checked_at_ms":1760000000000}"""
             )
         }
     }
@@ -734,7 +736,7 @@ class DurableMutationLedgerTest {
             setOf(DurableMutationLedger.State.RECONCILING),
             DurableMutationLedger.State.RECONCILED,
             exchangeOrderId = "testnet-order-123",
-            reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","scope":"ORDER_MUTATION","query_complete":true,"order_verified":true,"fills_verified":true,"checked_at_ms":1760000000000}"""
+            reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","scope":"ORDER_MUTATION","query_complete":true,"order_verified":true,"fills_verified":true,"trade_evidence_verified":true,"order_status":"NEW","symbol":"ETHUSDT","client_order_id":"W21_reconcile_resume","exchange_order_id":"testnet-order-123","original_qty":"0.01","executed_qty":"0","trade_count":0,"trade_ids":[],"trade_qty_sum":"0","checked_at_ms":1760000000000}"""
         )
         assertFalse(ledger!!.hasUnresolved())
         assertEquals("testnet-order-123", ledger!!.find(prepared.operationId)!!.exchangeOrderId)
