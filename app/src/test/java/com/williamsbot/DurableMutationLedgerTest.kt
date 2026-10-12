@@ -630,6 +630,72 @@ class DurableMutationLedgerTest {
     }
 
     @Test
+    fun reconciliationRejectsEvidenceThatConflictsWithDurableIntentIdentity() {
+        val prepared = ledger!!.prepare(
+            "identity-conflict-op",
+            "POST:/api/v3/order",
+            "BTCUSDT",
+            "9".repeat(64),
+            "W21_identity_conflict"
+        )
+        ledger!!.claimForSubmission(prepared.operationId)
+        ledger!!.transition(
+            prepared.operationId,
+            setOf(DurableMutationLedger.State.SUBMITTING),
+            DurableMutationLedger.State.UNKNOWN
+        )
+        fun evidence(symbol: String, clientId: String, orderId: String) =
+            """{"source":"BINANCE_SPOT_TESTNET","scope":"ORDER_MUTATION","query_complete":true,"order_verified":true,"fills_verified":true,"trade_evidence_verified":true,"order_status":"NEW","symbol":"$symbol","client_order_id":"$clientId","exchange_order_id":"$orderId","original_qty":"0.01","executed_qty":"0","trade_count":0,"trade_ids":[],"trade_qty_sum":"0","checked_at_ms":1760000000000}"""
+
+        assertThrows(IllegalArgumentException::class.java) {
+            ledger!!.transition(
+                prepared.operationId, setOf(DurableMutationLedger.State.UNKNOWN),
+                DurableMutationLedger.State.RECONCILED, exchangeOrderId = "777",
+                reconciliationEvidenceJson = evidence("ETHUSDT", "W21_identity_conflict", "777")
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ledger!!.transition(
+                prepared.operationId, setOf(DurableMutationLedger.State.UNKNOWN),
+                DurableMutationLedger.State.RECONCILED, exchangeOrderId = "777",
+                reconciliationEvidenceJson = evidence("BTCUSDT", "different-client", "777")
+            )
+        }
+        assertEquals(DurableMutationLedger.State.UNKNOWN, ledger!!.find(prepared.operationId)!!.state)
+        assertTrue(ledger!!.hasUnresolved())
+    }
+
+    @Test
+    fun reconciliationCannotReplacePreviouslyPersistedExchangeOrderId() {
+        val prepared = ledger!!.prepare(
+            "persisted-order-id-conflict-op",
+            "POST:/api/v3/order",
+            "BTCUSDT",
+            "8".repeat(64),
+            "W21_persisted_id"
+        )
+        ledger!!.claimForSubmission(prepared.operationId)
+        ledger!!.transition(
+            prepared.operationId,
+            setOf(DurableMutationLedger.State.SUBMITTING),
+            DurableMutationLedger.State.ACKNOWLEDGED,
+            exchangeOrderId = "123"
+        )
+        val evidence = """{"source":"BINANCE_SPOT_TESTNET","scope":"ORDER_MUTATION","query_complete":true,"order_verified":true,"fills_verified":true,"trade_evidence_verified":true,"order_status":"NEW","symbol":"BTCUSDT","client_order_id":"W21_persisted_id","exchange_order_id":"999","original_qty":"0.01","executed_qty":"0","trade_count":0,"trade_ids":[],"trade_qty_sum":"0","checked_at_ms":1760000000000}"""
+        assertThrows(IllegalArgumentException::class.java) {
+            ledger!!.transition(
+                prepared.operationId,
+                setOf(DurableMutationLedger.State.ACKNOWLEDGED),
+                DurableMutationLedger.State.RECONCILED,
+                exchangeOrderId = "999",
+                reconciliationEvidenceJson = evidence
+            )
+        }
+        assertEquals(DurableMutationLedger.State.ACKNOWLEDGED, ledger!!.find(prepared.operationId)!!.state)
+        assertTrue(ledger!!.hasUnresolved())
+    }
+
+    @Test
     fun legacyReconciledRowsWithoutEvidenceAreReopenedAsUnresolvedDuringMigration() {
         ledger!!.close()
         context.deleteDatabase("williams_mutation_ledger.db")
