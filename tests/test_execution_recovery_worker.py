@@ -33,7 +33,9 @@ class FakeExchange:
         if self.trade_rows is not None: return list(self.trade_rows)
         qty = float(self.response.get("executedQty", 0) or 0)
         if qty <= 0: return []
-        price = float(self.response.get("price", 0) or 100)
+        price = float(self.response.get("price", 0) or 0)
+        if price <= 0:
+            price = 100.0
         return [{"orderId": order_id, "qty": str(qty), "price": str(price), "quoteQty": str(qty * price)}]
 
 def _order(status="NEW", **updates):

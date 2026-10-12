@@ -43,7 +43,7 @@ class OrderIntent:
         intent_id = uuid.uuid4().hex
         # Persist a stable recovery key for every submit-capable intent. CANCEL
         # intents must carry the target order's actual clientOrderId explicitly.
-        if not kwargs.get("client_order_id") and str(order_type).upper() != "CANCEL":
+        if "client_order_id" not in kwargs and str(order_type).upper() != "CANCEL":
             kwargs["client_order_id"] = f"WILLV4_{intent_id[:20]}"
         return cls(
             intent_id=intent_id,
