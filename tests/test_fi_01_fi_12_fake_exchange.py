@@ -509,8 +509,9 @@ def test_fi_09_contradictory_or_incomplete_trade_fields_fail_closed(tmp_path, tr
 
 
 def test_fi_13_concurrent_recovery_workers_do_not_duplicate_exchange_observation_or_mutation(tmp_path):
-    """Two independent SQLite connections cannot both own one recovery lease."""
+    """Two initialized, independent SQLite connections compete for one recovery lease."""
     import threading
+    import traceback
 
     path = str(tmp_path / "fi13-concurrent.sqlite3")
     exchange = DeterministicFakeExchange()
@@ -523,41 +524,131 @@ def test_fi_13_concurrent_recovery_workers_do_not_duplicate_exchange_observation
     with Database(path) as seed:
         _persist_ambiguous(seed, intent)
 
+    # Keep schema creation/migrations out of the lease race. Each connection is
+    # independently opened against the same SQLite file before the barrier.
+    # Concurrent initialization is exercised by the companion test below.
+    db1 = Database(path)
+    db2 = Database(path)
     start = threading.Barrier(3)
     outcomes = []
     failures = []
+    outcome_lock = threading.Lock()
 
-    def recover(owner):
+    def recover(db, owner):
+        stage = "worker-start"
         try:
-            with Database(path) as db:
-                worker = ExecutionRecoveryWorker(
-                    db, exchange, base_retry_seconds=5, owner=owner
-                )
-                start.wait(timeout=5)
-                outcomes.append(worker.run_once(now=time.time() + 10))
+            worker = ExecutionRecoveryWorker(
+                db, exchange, base_retry_seconds=5, owner=owner
+            )
+            stage = "barrier-wait"
+            start.wait(timeout=10)
+            stage = "run_once"
+            result = worker.run_once(now=time.time() + 10)
+            with outcome_lock:
+                outcomes.append(result)
         except Exception as exc:
-            failures.append(type(exc).__name__)
+            with outcome_lock:
+                failures.append({
+                    "owner": owner,
+                    "stage": stage,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "traceback": traceback.format_exc(),
+                })
+            try:
+                start.abort()
+            except Exception:
+                pass
 
-    first = threading.Thread(target=recover, args=("fi13-worker-a",))
-    second = threading.Thread(target=recover, args=("fi13-worker-b",))
+    first = threading.Thread(target=recover, args=(db1, "fi13-worker-a"), daemon=True)
+    second = threading.Thread(target=recover, args=(db2, "fi13-worker-b"), daemon=True)
+    try:
+        first.start()
+        second.start()
+        try:
+            start.wait(timeout=10)
+        except threading.BrokenBarrierError:
+            pass
+        first.join(timeout=10)
+        second.join(timeout=10)
+
+        assert not first.is_alive() and not second.is_alive(), (
+            f"recovery workers did not terminate; failures={failures!r}"
+        )
+        assert failures == [], f"worker failure details: {failures!r}"
+        assert len(outcomes) == 2, f"expected both worker outcomes, got {outcomes!r}"
+        assert sum(int(result.get("claimed", 0)) for result in outcomes) == 1
+        assert sum(int(result.get("active", 0)) for result in outcomes) == 1
+        assert exchange.mutation_count == 0
+        assert exchange.lookup_count == 1
+
+        with Database(path) as final_db:
+            final_row = _row(final_db, intent)
+            assert final_row["status"] == "SUBMITTED"
+            assert final_row["order_id"] == "713"
+            assert not final_db.has_unresolved_execution_intents()
+    finally:
+        for db in (db1, db2):
+            db.close()
+
+
+def test_fi_13b_concurrent_database_initialization_is_diagnostic_and_durable(tmp_path):
+    """Concurrent schema initialization must either succeed or report full errors."""
+    import threading
+    import traceback
+
+    path = str(tmp_path / "fi13-concurrent-init.sqlite3")
+    start = threading.Barrier(3)
+    successes = []
+    failures = []
+    lock = threading.Lock()
+
+    def initialize(owner):
+        stage = "worker-start"
+        try:
+            stage = "database-init"
+            db = Database(path)
+            try:
+                stage = "integrity-check"
+                integrity = db.conn.execute("PRAGMA integrity_check").fetchone()[0]
+                assert integrity == "ok", f"unexpected SQLite integrity result: {integrity!r}"
+                with lock:
+                    successes.append(owner)
+            finally:
+                db.close()
+        except Exception as exc:
+            with lock:
+                failures.append({
+                    "owner": owner,
+                    "stage": stage,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "traceback": traceback.format_exc(),
+                })
+        finally:
+            try:
+                start.wait(timeout=10)
+            except threading.BrokenBarrierError:
+                pass
+
+    first = threading.Thread(target=initialize, args=("init-a",), daemon=True)
+    second = threading.Thread(target=initialize, args=("init-b",), daemon=True)
     first.start()
     second.start()
-    start.wait(timeout=5)
+    try:
+        start.wait(timeout=10)
+    except threading.BrokenBarrierError:
+        pass
     first.join(timeout=10)
     second.join(timeout=10)
 
-    assert not first.is_alive() and not second.is_alive()
-    assert failures == []
-    assert len(outcomes) == 2
-    assert sum(int(result.get("claimed", 0)) for result in outcomes) == 1
-    assert sum(int(result.get("active", 0)) for result in outcomes) == 1
-    assert exchange.mutation_count == 0
-
-    with Database(path) as final_db:
-        final_row = _row(final_db, intent)
-        assert final_row["status"] == "SUBMITTED"
-        assert final_row["order_id"] == "713"
-        assert not final_db.has_unresolved_execution_intents()
+    assert not first.is_alive() and not second.is_alive(), (
+        f"database initialization workers did not terminate; failures={failures!r}"
+    )
+    assert failures == [], f"concurrent database initialization failed: {failures!r}"
+    assert sorted(successes) == ["init-a", "init-b"]
+    with Database(path) as verify:
+        assert verify.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
 def test_recovery_refuses_conflicting_exchange_order_id_without_mutation(tmp_path):
