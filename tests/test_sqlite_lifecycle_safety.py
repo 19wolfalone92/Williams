@@ -1,6 +1,7 @@
 """SQLite lifecycle and production-path guard regressions; temporary DBs only."""
 import sqlite3
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 
@@ -64,3 +65,12 @@ def test_backup_and_restore_roundtrip_uses_only_temporary_databases(tmp_path):
 
     with Database(str(restored_path)) as restored:
         assert restored.state_get("backup_probe") == "original"
+
+
+def test_vps_backup_uses_sqlite_online_backup_instead_of_copying_live_main_file():
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "backup_vps.sh").read_text()
+    assert "src.backup(dst)" in script
+    assert "mode=ro" in script
+    assert "tar czf - -C /tmp" in script
+    assert "tar czf - -C /app/data trader.sqlite3" not in script
+    assert "set -euo pipefail" in script
