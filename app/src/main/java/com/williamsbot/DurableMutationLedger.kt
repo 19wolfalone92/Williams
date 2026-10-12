@@ -238,6 +238,10 @@ class DurableMutationLedger(context: Context) :
                     evidence.optString("client_order_id") == current.exchangeClientId) {
                     "MUTATION_RECONCILIATION_INTENT_MISMATCH"
                 }
+                require(current.exchangeOrderId.isNullOrBlank() ||
+                    current.exchangeOrderId == exchangeOrderId) {
+                    "MUTATION_RECONCILIATION_PERSISTED_ORDER_ID_MISMATCH"
+                }
             }
             // Never treat an already-claimed target state as a successful claim.
             if (current.state !in expected || !allowed(current.state, next)) {
