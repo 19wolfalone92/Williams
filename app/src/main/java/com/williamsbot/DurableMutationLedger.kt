@@ -22,6 +22,7 @@ class DurableMutationLedger(context: Context) :
         SUBMITTING,
         UNKNOWN,
         ACKNOWLEDGED,
+        RECONCILING,
         RECONCILED,
         REJECTED
     }
@@ -235,14 +236,15 @@ class DurableMutationLedger(context: Context) :
         val unresolvedSql =
             "SELECT operation_id, kind, symbol, request_fingerprint, exchange_client_id, state, " +
                 "exchange_order_id, created_at_ms, updated_at_ms, exchange, campaign_id, signal_id, attempt_id " +
-                "FROM mutation_intents WHERE state IN (?, ?, ?, ?) ORDER BY created_at_ms"
+                "FROM mutation_intents WHERE state IN (?, ?, ?, ?, ?) ORDER BY created_at_ms"
         db.rawQuery(
             unresolvedSql,
             arrayOf(
                 State.PREPARED.name,
                 State.SUBMITTING.name,
                 State.UNKNOWN.name,
-                State.ACKNOWLEDGED.name
+                State.ACKNOWLEDGED.name,
+                State.RECONCILING.name
             )
         ).use { cursor ->
             while (cursor.moveToNext()) result += cursorToIntent(cursor)
@@ -283,9 +285,10 @@ class DurableMutationLedger(context: Context) :
     private fun allowed(from: State, to: State): Boolean = when (from) {
         State.PREPARED -> to == State.REJECTED
         State.SUBMITTING -> to == State.ACKNOWLEDGED || to == State.UNKNOWN ||
-            to == State.REJECTED || to == State.RECONCILED
-        State.UNKNOWN -> to == State.ACKNOWLEDGED || to == State.RECONCILED
-        State.ACKNOWLEDGED -> to == State.RECONCILED || to == State.UNKNOWN
+            to == State.REJECTED || to == State.RECONCILING || to == State.RECONCILED
+        State.UNKNOWN -> to == State.ACKNOWLEDGED || to == State.RECONCILING || to == State.RECONCILED
+        State.ACKNOWLEDGED -> to == State.RECONCILED || to == State.UNKNOWN || to == State.RECONCILING
+        State.RECONCILING -> to == State.RECONCILED || to == State.UNKNOWN
         State.RECONCILED, State.REJECTED -> false
     }
 }
