@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any
 
-KNOWN_STATUSES = {"NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED", "PENDING_CANCEL", "CANCELED", "REJECTED", "EXPIRED"}
+KNOWN_STATUSES = {"NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED", "PENDING_CANCEL", "CANCELED", "REJECTED", "EXPIRED", "OCO_EXECUTING", "OCO_ALL_DONE", "OCO_REJECTED"}
 
 class ExecutionRecoveryWorker:
     """Reconcile persisted PENDING/AMBIGUOUS intents through a read-only adapter."""
@@ -26,6 +26,17 @@ class ExecutionRecoveryWorker:
     def _validate_order(row: dict[str, Any], order: Any) -> tuple[bool, str]:
         if not isinstance(order, dict):
             return False, "exchange lookup returned a non-object response"
+        if str(row.get("order_type", "")).upper() == "OCO":
+            if not order.get("_oco_normalized"):
+                return False, "OCO response was not fully normalized from authoritative legs"
+            status = str(order.get("status", "")).upper()
+            if status not in {"OCO_EXECUTING", "OCO_ALL_DONE", "OCO_REJECTED"}:
+                return False, "exchange order list returned an unknown status"
+            if str(order.get("listClientOrderId", "")) != str(row.get("client_order_id", "")):
+                return False, "exchange listClientOrderId does not match persisted intent"
+            if order.get("orderListId") is None:
+                return False, "exchange order list lacks authoritative orderListId"
+            return True, status
         status = str(order.get("status", "")).upper()
         if status not in KNOWN_STATUSES:
             return False, "exchange lookup returned an unknown or missing status"
@@ -58,6 +69,44 @@ class ExecutionRecoveryWorker:
         symbol = str(row.get("symbol", "")).upper()
         order_id = row.get("order_id")
         client_id = str(row.get("client_order_id") or "")
+        if str(row.get("order_type", "")).upper() == "OCO":
+            if not client_id or not callable(getattr(self.exchange, "order_list", None)):
+                raise RuntimeError("OCO intent lacks list client ID or order-list lookup capability")
+            listing = self.exchange.order_list(symbol, list_client_order_id=client_id)
+            if not isinstance(listing, dict) or str(listing.get("listClientOrderId", "")) != client_id:
+                raise ValueError("exchange order list does not match persisted list client ID")
+            list_status = str(listing.get("listOrderStatus", "")).upper()
+            mapping = {"EXECUTING": "OCO_EXECUTING", "ALL_DONE": "OCO_ALL_DONE", "REJECT": "OCO_REJECTED"}
+            if list_status not in mapping:
+                raise ValueError("exchange order list returned unknown status")
+            legs = listing.get("orders")
+            if not isinstance(legs, list) or len(legs) < 2:
+                raise ValueError("exchange order list lacks both authoritative order legs")
+            verified_legs = []
+            for leg in legs:
+                leg_id = leg.get("orderId") if isinstance(leg, dict) else None
+                if leg_id is None:
+                    raise ValueError("exchange order list leg lacks orderId")
+                found = self.exchange.get_order(symbol, order_id=leg_id)
+                if not isinstance(found, dict):
+                    raise ValueError("OCO leg lookup returned a non-object response")
+                if str(found.get("symbol", "")).upper() != symbol or str(found.get("side", "")).upper() != str(row.get("side", "")).upper():
+                    raise ValueError("OCO leg symbol or side conflicts with persisted intent")
+                if str(found.get("orderId", "")) != str(leg_id):
+                    raise ValueError("OCO leg orderId conflicts with order-list evidence")
+                if leg.get("clientOrderId") and str(found.get("clientOrderId", "")) != str(leg.get("clientOrderId")):
+                    raise ValueError("OCO leg clientOrderId conflicts with order-list evidence")
+                if str(found.get("status", "")).upper() not in KNOWN_STATUSES - {"OCO_EXECUTING", "OCO_ALL_DONE", "OCO_REJECTED"}:
+                    raise ValueError("OCO leg has unknown status")
+                verified_legs.append(found)
+            return {
+                "_oco_normalized": True, "symbol": symbol, "side": str(row.get("side", "")).upper(),
+                "orderListId": listing.get("orderListId"), "listClientOrderId": client_id,
+                "listOrderStatus": list_status, "status": mapping[list_status],
+                "executedQty": sum(float(x.get("executedQty", 0) or 0) for x in verified_legs),
+                "origQty": sum(float(x.get("origQty", 0) or 0) for x in verified_legs),
+                "price": 0, "orders": verified_legs,
+            }
         if order_id is not None:
             return self.exchange.get_order(symbol, order_id=order_id)
         if client_id:

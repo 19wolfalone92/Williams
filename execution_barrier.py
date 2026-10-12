@@ -319,6 +319,14 @@ class ExecutionBarrier:
                     if isinstance(response, dict)
                     else ""
                 ).upper()
+                if intent.order_type.upper() == "OCO":
+                    list_status = str(response.get("listOrderStatus", "")).upper() if isinstance(response, dict) else ""
+                    list_client_id = str(response.get("listClientOrderId", "")) if isinstance(response, dict) else ""
+                    reports = response.get("orderReports", response.get("orders", [])) if isinstance(response, dict) else []
+                    if list_client_id == intent.client_order_id and list_status in {"EXECUTING", "ALL_DONE", "REJECT"} and isinstance(reports, list) and len(reports) >= 2:
+                        status = "REJECTED" if list_status == "REJECT" else "NEW"
+                    else:
+                        status = ""
                 if status:
                     order_fsm.observe_exchange_status(
                         status,
@@ -366,7 +374,8 @@ class ExecutionBarrier:
                     )
                     raise RuntimeError(f"ExecutionBarrier: {reason}")
             try:
-                self._persist(intent, "SUBMITTED", exchange_order=response if isinstance(response, dict) else None)
+                final_status = "REJECTED" if intent.order_type.upper() == "OCO" and isinstance(response, dict) and str(response.get("listOrderStatus", "")).upper() == "REJECT" else "SUBMITTED"
+                self._persist(intent, final_status, exchange_order=response if isinstance(response, dict) else None)
             except Exception as exc:
                 # The exchange may have accepted/mutated the order. Never retry
                 # submit here; preserve the ambiguity for reconciliation.

@@ -308,7 +308,7 @@ class Database:
         """Add durable exchange evidence and cross-process recovery leases."""
         columns = {row['name'] for row in self.conn.execute('PRAGMA table_info(execution_intents)').fetchall()}
         additions = {
-            'order_id': 'TEXT', 'exchange_status': 'TEXT', 'executed_qty': 'REAL',
+            'order_id': 'TEXT', 'order_list_id': 'TEXT', 'exchange_status': 'TEXT', 'executed_qty': 'REAL',
             'orig_qty': 'REAL', 'avg_price': 'REAL',
             'recovery_attempts': 'INTEGER NOT NULL DEFAULT 0',
             'next_reconcile_at': 'REAL NOT NULL DEFAULT 0', 'lease_owner': 'TEXT',
@@ -401,9 +401,9 @@ class Database:
         from datetime import datetime, timezone
         import time
         now = float(time.time() if now is None else now)
-        terminal = str(status).upper() in {'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED'}
+        terminal = str(status).upper() in {'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED', 'OCO_ALL_DONE', 'OCO_REJECTED'}
         cur = self.conn.execute(
-            """UPDATE execution_intents SET status=?, reason='', order_id=?,
+            """UPDATE execution_intents SET status=?, reason='', order_id=?, order_list_id=?,
                    exchange_status=?, executed_qty=?, orig_qty=?, avg_price=?,
                    last_reconcile_error=NULL, next_reconcile_at=0,
                    lease_owner=NULL, lease_until=NULL, resolved_at=?
@@ -411,7 +411,8 @@ class Database:
             (
                 str(status).upper(),
                 str(order.get('orderId')) if order.get('orderId') is not None else None,
-                str(order.get('status', '')).upper(),
+                str(order.get('orderListId')) if order.get('orderListId') is not None else None,
+                str(order.get('status') or order.get('listOrderStatus') or '').upper(),
                 float(order.get('executedQty', 0) or 0),
                 float(order.get('origQty', 0) or 0),
                 float(order.get('price', 0) or 0),
@@ -452,8 +453,8 @@ class Database:
             """INSERT INTO execution_intents(
                 intent_id,symbol,side,order_type,purpose,required_context_versions_json,
                 hypothesis_id,invalidation_level,status,reason,client_order_id,
-                order_id,exchange_status,executed_qty,orig_qty,avg_price
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                order_id,order_list_id,exchange_status,executed_qty,orig_qty,avg_price
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(intent_id) DO UPDATE SET
                 symbol=excluded.symbol, side=excluded.side, order_type=excluded.order_type,
                 purpose=excluded.purpose,
@@ -462,6 +463,7 @@ class Database:
                 status=excluded.status, reason=excluded.reason,
                 client_order_id=COALESCE(NULLIF(excluded.client_order_id,''), execution_intents.client_order_id),
                 order_id=COALESCE(excluded.order_id, execution_intents.order_id),
+                order_list_id=COALESCE(excluded.order_list_id, execution_intents.order_list_id),
                 exchange_status=COALESCE(excluded.exchange_status, execution_intents.exchange_status),
                 executed_qty=COALESCE(excluded.executed_qty, execution_intents.executed_qty),
                 orig_qty=COALESCE(excluded.orig_qty, execution_intents.orig_qty),
@@ -472,7 +474,8 @@ class Database:
                 intent.hypothesis_id, float(intent.invalidation_level or 0.0), status, reason,
                 getattr(intent, 'client_order_id', ''),
                 str(order.get('orderId')) if order.get('orderId') is not None else None,
-                str(order.get('status')).upper() if order.get('status') is not None else None,
+                str(order.get('orderListId')) if order.get('orderListId') is not None else None,
+                str(order.get('status') or order.get('listOrderStatus')).upper() if (order.get('status') is not None or order.get('listOrderStatus') is not None) else None,
                 float(order.get('executedQty', 0) or 0) if order else None,
                 float(order.get('origQty', 0) or 0) if order else None,
                 float(order.get('price', 0) or 0) if order else None,

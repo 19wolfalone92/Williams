@@ -1202,6 +1202,7 @@ class Trader:
             self.refresh_execution_context(self.symbol)
             snap = self.context_cache.snapshot()
             required_versions = {tf: snap.context(self.symbol, tf).version for tf in self.config.structural_timeframes}
+            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
             intent = OrderIntent.new(
                 self.symbol,
                 'SELL',
@@ -1209,8 +1210,8 @@ class Trader:
                 required_context_versions=required_versions,
                 purpose='EXIT',
                 quantity=self.client.decimal_format(actual_qty),
+                client_order_id=cid,
             )
-            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
             self._set_state('EXIT_PENDING')
             result = self.execution_barrier.execute(
                 intent,
