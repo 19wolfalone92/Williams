@@ -1412,6 +1412,7 @@ private class NativeEngine(
         return JSONObject().put("resumed", true)
     }
 
+    @SuppressLint("ApplySharedPref")
     @Synchronized
     fun recover(): JSONObject {
         require(
