@@ -151,7 +151,7 @@ def main() -> None:
             if line.strip().startswith("uses:"):
                 reference = line.strip().split("uses:", 1)[1].strip()
                 must(
-                    bool(re.fullmatch(r".+@[0-9a-f]{40}(?:\\s+#.*)?", reference)),
+                    bool(re.fullmatch(r".+@[0-9a-f]{40}(?:\s+#.*)?", reference)),
                     f"unpinned external action reference in {workflow_path}",
                 )
 
