@@ -473,3 +473,36 @@ def test_fi_09_trade_history_at_limit_is_not_assumed_complete(tmp_path):
         assert "completeness is unproven" in _row(db, intent)["last_reconcile_error"]
         assert db.has_unresolved_execution_intents()
         assert exchange.mutation_count == 0
+
+
+
+@pytest.mark.parametrize(("trade_updates", "expected_error"), [
+    ({"quoteQty": "9.99"}, "quote quantity conflicts"),
+    ({"isBuyer": False}, "buyer flag conflicts"),
+    ({"commissionAsset": ""}, "lacks required execution evidence"),
+])
+def test_fi_09_contradictory_or_incomplete_trade_fields_fail_closed(tmp_path, trade_updates, expected_error):
+    with Database(str(tmp_path / ("fi09-invalid-" + str(abs(hash(tuple(sorted(trade_updates.items()))))) + ".sqlite3"))) as db:
+        exchange = DeterministicFakeExchange()
+        intent = _new_intent(client_id="fi09-invalid-trade-fields")
+        _persist_ambiguous(db, intent)
+        exchange.orders[intent.client_order_id] = {
+            "symbol": "BTCUSDT", "side": "BUY", "orderId": "793",
+            "clientOrderId": intent.client_order_id, "status": "FILLED",
+            "origQty": "0.010", "executedQty": "0.010", "price": "100", "avgPrice": "100",
+        }
+        trade = {
+            "id": "trade-793-1", "orderId": "793", "qty": "0.010",
+            "price": "100", "quoteQty": "1.0", "commission": "0",
+            "commissionAsset": "BNB", "time": 1760000000000,
+            "isBuyer": True, "isMaker": False,
+        }
+        trade.update(trade_updates)
+        exchange.trade_rows["793"] = [trade]
+        result = _worker(db, exchange).run_once(now=time.time() + 10)
+        row = _row(db, intent)
+        assert result["deferred"] == 1
+        assert row["status"] == "AMBIGUOUS"
+        assert expected_error in row["last_reconcile_error"]
+        assert db.has_unresolved_execution_intents()
+        assert exchange.mutation_count == 0
