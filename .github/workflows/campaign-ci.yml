@@ -141,8 +141,8 @@ jobs:
           AAPT="$(find "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}/build-tools" -maxdepth 2 -type f -name aapt | sort -V | tail -n 1)"
           test -n "$AAPT"
           META="$("$AAPT" dump badging app/build/outputs/apk/debug/app-debug.apk)"
-          printf '%s\\n' "$META" | grep -F "package: name='com.williamsbot.debug'"
-          printf '%s\\n' "$META" | grep -F "targetSdkVersion:'36'"
+          printf '%s\n' "$META" | grep -F "package: name='com.williamsbot.debug'"
+          printf '%s\n' "$META" | grep -F "targetSdkVersion:'36'"
       - name: Upload debug APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
