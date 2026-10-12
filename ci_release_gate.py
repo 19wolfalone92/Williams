@@ -126,6 +126,10 @@ def main() -> None:
     must(python_ci, "python3 ci_release_gate.py", "python workflow")
     must(python_ci, "group: backend-ci-${{ github.ref }}-${{ github.sha }}", "python workflow")
 
+    requirements = read("requirements.txt")
+    must(requirements, "requests>=2.33.0", "patched requests minimum")
+    must(requirements, "cryptography>=48.0.1", "patched cryptography minimum")
+
     testnet_ci = read(".github/workflows/testnet-readonly.yml")
     must(testnet_ci, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "credentialed Testnet trusted-branch boundary")
     must(testnet_ci, "python3 ci_release_gate.py", "testnet workflow")
