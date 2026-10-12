@@ -287,3 +287,60 @@ The intermediate backend run [38202230822](https://github.com/19wolfalone92/Will
 ### Current disposition
 
 At the time of this evidence snapshot, code/test HEAD is `38c37c2e7c2916dc034ae3b9bbb087d1e52aa991`; the report update itself is a documentation-only follow-up and does not change application code or workflow definitions. The Android APK and Campaign Android jobs had not yet completed at the last poll, so those results remain **IN PROGRESS** and the audit is **not complete** until final statuses are checked. PR #66 remains open, draft, unmerged, and targets `fix/pytest-safe-collection`. No real order was submitted and no production settings were changed.
+
+
+## 15. Follow-up audit: migration atomicity, dependency SCA, CI trust boundary — 2026-10-12
+
+### Exact revision and PR state
+
+- Code/test HEAD at this evidence snapshot: `51de6817386011a51865758ed89bacf1243c8def`.
+- PR #66 remains OPEN / DRAFT / NOT MERGED and targets `fix/pytest-safe-collection`.
+- This section is append-only; older CI status snapshots above are historical and are not substituted for the current run results.
+
+### Additional confirmed fixes and regression coverage
+
+- [`52cd0e1a15f35bfdf0f40b81e7c218768624f37f`](https://github.com/19wolfalone92/Williams/commit/52cd0e1a15f35bfdf0f40b81e7c218768624f37f) wraps schema column migration and schema-version updates in one SQLite transaction, and closes the connection if database initialization raises. This avoids leaking a failed-init connection and rolls back partial `ALTER TABLE` work.
+- [`2e3696bbfb834c633480a9b82c19830b5882edb2`](https://github.com/19wolfalone92/Williams/commit/2e3696bbfb834c633480a9b82c19830b5882edb2) adds a temporary-DB fault-injection test: the migration raises after its first `ALTER TABLE`; the test verifies the column and schema-version marker roll back, then verifies a clean retry completes and `PRAGMA integrity_check` returns `ok`.
+- [`51de6817386011a51865758ed89bacf1243c8def`](https://github.com/19wolfalone92/Williams/commit/51de6817386011a51865758ed89bacf1243c8def) adds a mock-only Binance `-2014` test. It asserts the error is surfaced as received, not retried, and not assigned an unproven root cause.
+- [`bc6a5ebe415f1d0e22d9237bd3855064e74f86f9`](https://github.com/19wolfalone92/Williams/commit/bc6a5ebe415f1d0e22d9237bd3855064e74f86f9) and [`6775800d79f072e41b5a855a1c278c5f95ad7cfe`](https://github.com/19wolfalone92/Williams/commit/6775800d79f072e41b5a855a1c278c5f95ad7cfe) add mock regressions for `order_safe`: after an ambiguous POST, query by `clientOrderId`; accept returned NEW/PARTIALLY_FILLED/FILLED/PENDING_CANCEL/PENDING_NEW states without resubmitting; preserve UNKNOWN when lookup fails; and surface a known CANCELED order without retry.
+- [`a4e731a2edacab4e7d148322d27e0271b9cee792`](https://github.com/19wolfalone92/Williams/commit/a4e731a2edacab4e7d148322d27e0271b9cee792) raises dependency floors to `requests>=2.33.0` and `cryptography>=48.0.1`. The Requests floor addresses CVE-2026-25645 (fixed in 2.33.0; the advisory specifically concerns direct use of `extract_zipped_paths()`, not ordinary Requests calls). The cryptography floor is above the known DNS name-constraint fix in 46.0.6 and later fixes included by 48.0.1. References: [CVE-2026-25645](https://www.cve.org/CVERecord?id=CVE-2026-25645), [cryptography advisory record](https://deps.dev/advisory/osv/GHSA-m959-cc7f-wv43).
+- [`d7a4566cb0310a8cab65bbc7057b27723e5ebd0b`](https://github.com/19wolfalone92/Williams/commit/d7a4566cb0310a8cab65bbc7057b27723e5ebd0b) adds `pip-audit` to Python backend CI. [`1657a8059447cc2426dae59bd185437693c05f21`](https://github.com/19wolfalone92/Williams/commit/1657a8059447cc2426dae59bd185437693c05f21) extends the scan to `requirements-research.txt`.
+- [`919a0d14cfb8217ff5c0d8ab8a586438723226e1`](https://github.com/19wolfalone92/Williams/commit/919a0d14cfb8217ff5c0d8ab8a586438723226e1) fixes Android workflow path filters so root Python inputs, `.env.example`, and both requirements files trigger the APK contract check. Python CI also now triggers when `requirements-research.txt` changes.
+- [`5d1e6f57bba71b6dc943dfa9968cd842bd0d78c7`](https://github.com/19wolfalone92/Williams/commit/5d1e6f57bba71b6dc943dfa9968cd842bd0d78c7) and [`2212de13921621337b47d6eb16c477c8e4087c81`](https://github.com/19wolfalone92/Williams/commit/2212de13921621337b47d6eb16c477c8e4087c81) restrict persistent debug-signing secret steps to `refs/heads/main` or `refs/heads/master`, including manual dispatches. PR builds use a secret-free debug build path. The credentialed Testnet workflow has the same trusted-branch guard; Python CI declares `permissions: contents: read`.
+- External Actions in Campaign CI, Python CI and the read-only Testnet workflow are pinned to full commit SHAs; `ci_release_gate.py` checks these references. The standalone APK workflow temporarily remains on its previously working major-version action refs after repeated SHA-pinned runs ended as `startup_failure` with zero jobs and no logs. The cause could not be established from GitHub evidence; this is a remaining supply-chain risk, not a proven action compromise.
+
+### CI evidence tied to exact SHAs
+
+| Workflow / job | Run | SHA | Status and result |
+|---|---|---|---|
+| Python backend tests | [38203957666](https://github.com/19wolfalone92/Williams/actions/runs/38203957666) | `51de6817386011a51865758ed89bacf1243c8def` | **PASS** — 188 passed, 4 warnings; release contract gate PASS; static safety audit 0 failures |
+| Python dependency SCA in backend CI | [38203957666](https://github.com/19wolfalone92/Williams/actions/runs/38203957666) | same SHA | **PASS** — `pip-audit -r requirements.txt` and `pip-audit -r requirements-research.txt` both reported “No known vulnerabilities found” |
+| Campaign CI — Python tests | [38203957682](https://github.com/19wolfalone92/Williams/actions/runs/38203957682) | same SHA | **PASS** — 199 passed, 4 warnings |
+| Build Android APK | [38203957754](https://github.com/19wolfalone92/Williams/actions/runs/38203957754) | same SHA | **IN PROGRESS** at last poll; lint step running; no final conclusion yet |
+| Campaign CI — Android build and static checks | [38203957682](https://github.com/19wolfalone92/Williams/actions/runs/38203957682) | same SHA | **IN PROGRESS** at last poll; Gradle debug build/test step running; no final conclusion yet |
+
+An earlier Android APK run on the same code before the last migration and Binance regressions passed, but it is not used as evidence for SHA `51de6817…`. Several intervening standalone APK runs returned `startup_failure` with no jobs; after restoring the last-known-good major-version action refs, a new run started normally and is currently executing. No conclusion is inferred from an in-progress run.
+
+### SQLite and backup results
+
+- **PASS:** online backup copied a committed row still in a WAL file while the source connection remained open; the backup passed `PRAGMA integrity_check`.
+- **PASS:** simulated backup interruption left only a temporary partial file; the final-name artifact was not published. The VPS script now writes a hidden temporary archive, validates it with `tar -tzf`, and atomically renames it only after validation.
+- **PASS:** schema migration fault injection rolled back the partial `ALTER TABLE` and allowed a subsequent initialization to complete.
+- **PASS:** the existing temporary-DB suite covers bounded `SQLITE_BUSY`, independent-connection writes, rollback after constraint failure, corruption detection, backup/restore roundtrip, and unresolved intent blocking after database reopen.
+- **NOT RUN:** execution of `deploy/backup_vps.sh` against a real VPS/container, crash/power-loss injection during the actual shell backup pipeline, and a broad multi-process production-load test. No production database was opened or modified.
+- **NOT RUN:** restoring a deliberately corrupt backup through a dedicated restore command; the repository does not expose a dedicated restore implementation to test end-to-end. Corrupt-database detection and safe refusal to open a corrupt temporary DB are covered.
+
+### Security review and remaining limits
+
+- **Static review:** Android manifest declares INTERNET, notifications and foreground-service permissions; launcher activity is exported, while widget receiver and trading service are non-exported. App backup is disabled. Main network security permits cleartext only to localhost/127.0.0.1; release config disables cleartext. No emulator/device runtime test was performed.
+- **Secret files:** the current tree path scan found only example environment/keystore files and key-generation scripts among sensitive-name patterns; no tracked real `.env`, private-key/certificate file or SQLite DB was found. This is not a full content/history scan.
+- **BLOCKED:** full secret scanning of the entire current tree and Git history. The available GitHub code-search/alert connector did not provide a complete usable scan. No secret values were printed or intentionally read.
+- **PASS (Python only):** pip-audit checked the resolved requirements and optional research requirements in CI. **NOT RUN:** Android/Gradle dependency vulnerability scan; no usable Dependabot/SCA alert endpoint or Gradle SCA scanner was available through the connected tools. The Android `GradleDependency` lint rule remains disabled in project configuration, so it is not a substitute for SCA.
+- **NOT RUN:** full release-APK secret-content scan and Android runtime security testing. The PR build does not pass signing secrets to Gradle and the tracked tree contains no real signing properties, but this does not prove a binary-level secret scan.
+- **BLOCKED:** origin and contents of `data/test_tmp/trader.sqlite3.clean_20261004_082723`; the artifact/environment remains unavailable and was not recreated.
+- **NOT RUN:** Binance `-2014` diagnosis with real credentials. The new test only verifies safe error propagation/no retry. No real credentials, authenticated state-changing requests, or orders were used.
+- **Residual trading risk:** `order_safe` can query by `clientOrderId` during the same call, and the execution barrier durably blocks unresolved intents. A complete restart recovery worker that enumerates persisted PENDING/AMBIGUOUS intents, reconciles them against Binance by `orderId`/`clientOrderId`, and durably advances them to proven terminal states is not demonstrated. Without that process, unresolved intents may remain blocked until a separate operator/reconciliation action. Partial-fill/cancel mocks do not establish live exchange recovery.
+
+### Current disposition
+
+The Python suite and Python dependency scan **PASS** on `51de6817386011a51865758ed89bacf1243c8def`. Android APK and Campaign Android jobs are still **IN PROGRESS** at the last poll, so the audit remains **not complete**. Do not move PR #66 out of Draft until those jobs reach final status and the remaining BLOCKED/NOT RUN security and exchange-recovery items are reviewed. No live orders, production DB writes, force push, or merge were performed.
