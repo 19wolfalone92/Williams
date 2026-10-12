@@ -160,3 +160,42 @@ def test_post_submit_persistence_failure_locks_subsequent_execution_until_reconc
     assert second.accepted is False
     assert second.reason == "RECONCILE_REQUIRED"
     second_submit.assert_not_called()
+
+
+
+def test_untrusted_exchange_response_persistence_failure_still_locks_retries():
+    db = FailingIntentDB({"AMBIGUOUS"})
+    submit = Mock(return_value={"orderId": 991})  # no authoritative status
+    barrier = ExecutionBarrier(ContextCache(), db)
+
+    try:
+        barrier.execute(campaign_intent(), submit)
+    except RuntimeError as exc:
+        assert "ambiguous_intent_persistence_failed" in str(exc)
+        assert "mandatory before any retry" in str(exc)
+    else:
+        raise AssertionError("non-authoritative exchange response must be rejected")
+
+    assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+    submit.assert_called_once()
+
+    retry = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 992})
+    result = barrier.execute(campaign_intent(), retry)
+    assert result.accepted is False
+    assert result.reason == "RECONCILE_REQUIRED"
+    retry.assert_not_called()
+
+
+def test_untrusted_exchange_response_marks_reconciliation_even_when_ambiguous_write_fails():
+    db = FailingIntentDB({"AMBIGUOUS"})
+    submit = Mock(return_value={"orderId": 993})
+
+    try:
+        ExecutionBarrier(ContextCache(), db).execute(campaign_intent(), submit)
+    except RuntimeError as exc:
+        assert "ambiguous_intent_persistence_failed" in str(exc)
+    else:
+        raise AssertionError("non-authoritative exchange response must be rejected")
+
+    assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+    submit.assert_called_once()

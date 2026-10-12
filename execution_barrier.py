@@ -270,21 +270,36 @@ class ExecutionBarrier:
                     order_fsm.state = OrderState.OPEN
                 else:
                     order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
+                    reason = "exchange response did not contain authoritative order state"
+                    persistence_errors = []
+                    try:
+                        self._persist(intent, "AMBIGUOUS", reason)
+                    except Exception as persist_exc:
+                        persistence_errors.append(
+                            "ambiguous_intent_persistence_failed: "
+                            f"{type(persist_exc).__name__}: {persist_exc}"
+                        )
+                    try:
+                        self._mark_reconciliation_required(intent)
+                    except Exception as state_exc:
+                        persistence_errors.append(
+                            "reconciliation_state_persistence_failed: "
+                            f"{type(state_exc).__name__}: {state_exc}"
+                        )
+                    if persistence_errors:
+                        reason += "; " + "; ".join(persistence_errors)
+                    reason += "; exchange reconciliation is mandatory before any retry"
                     self._record(
                         "ERROR",
                         "execution_ambiguous",
                         intent,
-                        "Exchange accepted an operation without authoritative state",
-                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
+                        "Exchange response lacks authoritative order state; reconciliation required",
+                        {
+                            "response_keys": list(response.keys()) if isinstance(response, dict) else [],
+                            "error": reason,
+                        },
                     )
-                    raise RuntimeError(
-                        "ExecutionBarrier: exchange response lacks authoritative order state"
-                    )
+                    raise RuntimeError(f"ExecutionBarrier: {reason}")
             try:
                 self._persist(intent, "SUBMITTED")
             except Exception as exc:
