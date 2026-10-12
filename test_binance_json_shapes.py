@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import Mock
 
 from binance_client import BinanceAPIError, BinanceSpotClient
 
@@ -310,7 +311,7 @@ def test_order_safe_reconciles_ambiguous_post_by_client_order_id(monkeypatch, st
     client = make_client()
     client_order_id = "WILLIAMS_AUDIT_RECONCILE_001"
     ambiguous = BinanceAPIError("simulated response lost", unknown_execution=True)
-    submit = __import__("unittest.mock", fromlist=["Mock"]).Mock(side_effect=ambiguous)
+    submit = Mock(side_effect=ambiguous)
     existing = {
         "symbol": "BTCUSDT",
         "clientOrderId": client_order_id,
