@@ -38,7 +38,7 @@ class FakeExchange:
         price = float(self.response.get("price", 0) or 0)
         if price <= 0:
             price = 100.0
-        return [{"id": f"trade-{order_id}-1", "orderId": order_id, "qty": str(qty), "price": str(price), "quoteQty": str(qty * price)}]
+        return [{"id": f"trade-{order_id}-1", "orderId": order_id, "qty": str(qty), "price": str(price), "quoteQty": str(qty * price), "commission": "0", "commissionAsset": "BNB", "time": 1760000000000, "isBuyer": str(self.response.get("side", "BUY")).upper() == "BUY", "isMaker": False}]
 
 def _order(status="NEW", **updates):
     value = {"symbol":"BTCUSDT","side":"BUY","orderId":123,
@@ -258,7 +258,7 @@ class FakeOcoExchange:
         qty = float(leg.get("executedQty", 0) or 0)
         if qty <= 0: return []
         price = float(leg.get("price", 0) or 100)
-        return [{"id": f"trade-{order_id}-1", "orderId": order_id, "qty": str(qty), "price": str(price), "quoteQty": str(qty * price)}]
+        return [{"id": f"trade-{order_id}-1", "orderId": order_id, "qty": str(qty), "price": str(price), "quoteQty": str(qty * price), "commission": "0", "commissionAsset": "BNB", "time": 1760000000000, "isBuyer": str(leg.get("side", "SELL")).upper() == "BUY", "isMaker": False}]
 
 
 def test_worker_reconciles_oco_list_and_both_legs(tmp_path):
@@ -316,7 +316,7 @@ def test_trade_history_quantity_mismatch_keeps_intent_ambiguous(tmp_path):
     with Database(str(tmp_path / "trade-history-mismatch.sqlite3")) as db:
         intent = _intent(db)
         exchange = FakeExchange(_order("FILLED", executedQty="0.01"))
-        exchange.trade_rows = [{"id":"trade-123-1","orderId":123,"qty":"0.005","price":"100","quoteQty":"0.5"}]
+        exchange.trade_rows = [{"id":"trade-123-1","orderId":123,"qty":"0.005","price":"100","quoteQty":"0.5","commission":"0","commissionAsset":"BNB","time":1760000000000,"isBuyer":True,"isMaker":False}]
         result = ExecutionRecoveryWorker(db, exchange).run_once(now=1000)
         row = db.conn.execute("SELECT status,last_reconcile_error FROM execution_intents WHERE intent_id=?",(intent.intent_id,)).fetchone()
         assert result["deferred"] == 1 and row["status"] == "AMBIGUOUS"
