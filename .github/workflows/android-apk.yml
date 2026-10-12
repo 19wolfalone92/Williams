@@ -14,6 +14,8 @@ on:
       - 'gradle/**'
       - 'settings.gradle.kts'
       - '.github/workflows/**'
+      - 'tests/**'
+      - 'reports/task_0017_*.md'
   pull_request:
     paths:
       - 'app/**'
@@ -26,6 +28,8 @@ on:
       - 'gradle/**'
       - 'settings.gradle.kts'
       - '.github/workflows/**'
+      - 'tests/**'
+      - 'reports/task_0017_*.md'
   workflow_dispatch:
 
 permissions:
@@ -173,8 +177,14 @@ jobs:
       - name: Inspect APK metadata
         run: |
           set -euo pipefail
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/release/app-release-unsigned.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
+          DEBUG_META="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk)"
+          RELEASE_META="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/release/app-release-unsigned.apk)"
+          printf '%s\n' "$DEBUG_META" | grep -F "package: name='com.williamsbot.debug'"
+          printf '%s\n' "$RELEASE_META" | grep -F "package: name='com.williamsbot'"
+          printf '%s\n' "$DEBUG_META" | grep -F "targetSdkVersion:'36'"
+          printf '%s\n' "$RELEASE_META" | grep -F "targetSdkVersion:'36'"
+          printf '%s\n' "$DEBUG_META" | grep -E "sdkVersion:|targetSdkVersion:"
+          printf '%s\n' "$RELEASE_META" | grep -E "sdkVersion:|targetSdkVersion:"
       - name: Verify persistent debug keystore
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
