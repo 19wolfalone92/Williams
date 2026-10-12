@@ -1624,7 +1624,7 @@ private class NativeEngine(
                 ?: targetKey?.takeIf { it.isNotBlank() }
                 ?: throw IllegalStateException("MUTATION_LOGICAL_ID_REQUIRED")
             val generatedClientId = MutationIdentity.generatedClientOrderId(
-                method, path, symbol, params, "$logicalContext:$canonicalFingerprint"
+                method, path, symbol, params, logicalContext
             )
             val exchangeClientId = when {
                 method == "DELETE" -> clientKey
