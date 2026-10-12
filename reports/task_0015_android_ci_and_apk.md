@@ -6,7 +6,7 @@
 
 ## Diagnosed wrapper issue
 
-The checked-in `gradle/wrapper/gradle-wrapper.jar` failed the official wrapper validator (checked-in SHA-256 observed earlier: `8607d05f0a36b0a10a8e0ce28b2f`, not the official Gradle 8.14.6 wrapper SHA-256). The CI now uses the pinned Gradle 8.14.6 distribution to regenerate the wrapper JAR, verifies the generated JAR against `ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0`, then executes `./gradlew`. The Gradle distribution SHA-256 is pinned in `gradle-wrapper.properties` as `7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24`.
+The checked-in `gradle/wrapper/gradle-wrapper.jar` failed the official wrapper validator (checked-in SHA-256 observed earlier: `8607c6b85ac4fcb94a33aaa940c549ed26419be067a7abce9bb4ee73f7d1df26`, not the official Gradle 8.14.6 wrapper SHA-256). The CI now uses the pinned Gradle 8.14.6 distribution to regenerate the wrapper JAR, verifies the generated JAR against `ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0`, then executes `./gradlew`. The Gradle distribution SHA-256 is pinned in `gradle-wrapper.properties` as `7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24`.
 
 The checked-in binary itself has not been replaced; CI regenerates it in the ephemeral runner before execution. Local use of the repository's original wrapper JAR remains a risk until the binary is replaced.
 
