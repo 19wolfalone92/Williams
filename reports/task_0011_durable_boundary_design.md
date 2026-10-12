@@ -3,7 +3,7 @@
 
 ## Baseline and implementation refs
 - Requested baseline: `11746c202fd2b7eb2126292d3e9978a2f238169b`.
-- Baseline was checked before implementation; PR #66 subsequently advanced through the task commits. Current code commit at report preparation: `05d26e34cb34af66472124621a95c118ec69a81a`.
+- Baseline was checked before implementation; PR #66 subsequently advanced through the task commits. Current code commit at report preparation: `12f3e70eb58915d56c4bf66ebb5d00c7130a97b`.
 - PR #66 remains open and Draft; no merge was performed.
 - Files: `app/src/main/java/com/williamsbot/DurableMutationLedger.kt`; `app/src/main/java/com/williamsbot/StandaloneRuntime.kt`.
 
