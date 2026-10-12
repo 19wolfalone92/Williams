@@ -84,7 +84,7 @@ These checks were **not** run directly by this session and must not be interpret
 - full PR/base compatibility and complete diff review in a local worktree;
 - verification of all workflow path filters and all historical CI failures.
 
-The environment limitation is lack of a local checkout/runtime in this session. GitHub Actions runs provide CI evidence for the exact recorded commit only; they do not establish the outcome of the new audit branch until its workflows complete.
+The environment limitation is lack of a local checkout/runtime in this session. GitHub Actions evidence below applies to code/configuration commit `ff7842d93c8d8c8a8053a4192d802d387120051a`. The current branch HEAD is a documentation-only follow-up commit (`ec22d42eb2301a062f9bdad9f332fe467e78255a`); the CI workflows have not been observed on that documentation-only SHA, and no source or workflow configuration changed in that follow-up.
 
 ## 8. Remaining risks and next actions
 
@@ -102,4 +102,4 @@ The environment limitation is lack of a local checkout/runtime in this session. 
 - PR #65 base: `audit/task-0007-api-contract`, commit `939ceac0bf34ef10cb6551301be9b8758a4a4c59`.
 - Separate audit branch created: `night-shift-audit-20261012`, based on PR #65 head.
 - No branch deletion, force push, history rewrite, target-branch change, or merge was performed.
-- The CI/configuration fixes in this branch are verified by successful runs 38177124730, 38177124662 and 38177124654 on commit `ff7842d93c8d8c8a8053a4192d802d387120051a`. The broader audit remains incomplete as described above.
+- The CI/configuration fixes are verified by successful runs 38177124730, 38177124662 and 38177124654 on code/configuration commit `ff7842d93c8d8c8a8053a4192d802d387120051a`. Current branch HEAD is documentation-only commit `ec22d42eb2301a062f9bdad9f332fe467e78255a`; the broader audit remains incomplete as described above.
