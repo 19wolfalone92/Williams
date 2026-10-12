@@ -5,6 +5,10 @@ on:
     branches: [main, master]
     paths:
       - 'app/**'
+      - '*.py'
+      - '.env.example'
+      - 'requirements.txt'
+      - 'requirements-research.txt'
       - '*.gradle.kts'
       - 'gradle.properties'
       - 'gradle/**'
@@ -13,6 +17,10 @@ on:
   pull_request:
     paths:
       - 'app/**'
+      - '*.py'
+      - '.env.example'
+      - 'requirements.txt'
+      - 'requirements-research.txt'
       - '*.gradle.kts'
       - 'gradle.properties'
       - 'gradle/**'
