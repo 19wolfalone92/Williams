@@ -564,6 +564,84 @@ class DurableMutationLedgerTest {
     }
 
     @Test
+    fun reconciledStateRequiresCompletePersistedExchangeEvidence() {
+        val prepared = ledger!!.prepare(
+            "evidence-required-op",
+            "POST:/api/v3/order",
+            "BTCUSDT",
+            "e".repeat(64),
+            "W21_evidence_required"
+        )
+        ledger!!.claimForSubmission(prepared.operationId)
+        ledger!!.transition(
+            prepared.operationId,
+            setOf(DurableMutationLedger.State.SUBMITTING),
+            DurableMutationLedger.State.UNKNOWN
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            ledger!!.transition(
+                prepared.operationId,
+                setOf(DurableMutationLedger.State.UNKNOWN),
+                DurableMutationLedger.State.RECONCILED
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ledger!!.transition(
+                prepared.operationId,
+                setOf(DurableMutationLedger.State.UNKNOWN),
+                DurableMutationLedger.State.RECONCILED,
+                reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","query_complete":false,"order_verified":true,"fills_verified":true,"checked_at_ms":1760000000000}"""
+            )
+        }
+
+        assertTrue(ledger!!.hasUnresolved())
+        assertEquals(DurableMutationLedger.State.UNKNOWN, ledger!!.find(prepared.operationId)!!.state)
+        assertEquals(null, ledger!!.find(prepared.operationId)!!.reconciliationEvidenceJson)
+    }
+
+    @Test
+    fun legacyReconciledRowsWithoutEvidenceAreReopenedAsUnresolvedDuringMigration() {
+        ledger!!.close()
+        context.deleteDatabase("williams_mutation_ledger.db")
+        val path = context.getDatabasePath("williams_mutation_ledger.db")
+        path.parentFile?.mkdirs()
+        val legacy = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(path, null)
+        legacy.execSQL(
+            """CREATE TABLE mutation_intents (
+                operation_id TEXT PRIMARY KEY NOT NULL,
+                kind TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                request_fingerprint TEXT NOT NULL,
+                exchange_client_id TEXT,
+                state TEXT NOT NULL,
+                exchange_order_id TEXT,
+                created_at_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                exchange TEXT NOT NULL DEFAULT 'BINANCE_SPOT',
+                campaign_id TEXT,
+                signal_id TEXT,
+                attempt_id TEXT NOT NULL
+            )""".trimIndent()
+        )
+        legacy.execSQL("CREATE INDEX mutation_intents_state_idx ON mutation_intents(state)")
+        legacy.execSQL("CREATE INDEX mutation_intents_symbol_idx ON mutation_intents(symbol, state)")
+        legacy.execSQL("CREATE INDEX mutation_intents_exchange_client_idx ON mutation_intents(exchange, exchange_client_id)")
+        legacy.execSQL(
+            "INSERT INTO mutation_intents(operation_id,kind,symbol,request_fingerprint,exchange_client_id,state,created_at_ms,updated_at_ms,exchange,attempt_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            arrayOf("legacy-reconciled", "POST:/api/v3/order", "BTCUSDT", "f".repeat(64), "W21_legacy", "RECONCILED", 100L, 200L, "BINANCE_SPOT", "legacy-attempt-1")
+        )
+        legacy.version = 2
+        legacy.close()
+
+        ledger = DurableMutationLedger(context)
+        val migrated = ledger!!.find("legacy-reconciled")!!
+        assertEquals(DurableMutationLedger.State.RECONCILING, migrated.state)
+        assertTrue(ledger!!.hasUnresolved())
+        assertEquals(null, migrated.reconciliationEvidenceJson)
+    }
+
+    @Test
     fun illegalStateTransitionIsRejected() {
         ledger!!.prepare("op-invalid", "POST:/api/v3/order", "BTCUSDT", "d".repeat(64), "client-invalid")
 
