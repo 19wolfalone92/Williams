@@ -195,3 +195,55 @@ The environment limitation is lack of a local checkout/runtime in this session. 
 | Real trading operations | NOT RUN by design | No orders, account mutations, or live credentials used |
 
 The audit is still open. Do not merge PR #66 automatically. Recheck Android workflow conclusions against their exact `head_sha` before closing this audit.
+
+
+## 13. Final follow-up — execution idempotency, SQLite lifecycle and backup integrity
+
+### Source changes and regression coverage
+
+**Execution barrier and persistent duplicate prevention**
+- Commits: `11f7182fc7a0dab8d9c81f2f950a73698a956846` and `1c522a1405e005f90235e7f495b83341dd655ee7`.
+- The barrier now requires both durable intent persistence and atomic `try_claim_state` support before any submission. A stable key `execution_intent_claim:<intent_id>` is atomically claimed in SQLite; a duplicate claim is rejected. This protects duplicate calls across barrier instances and process restarts, not only calls serialized by one in-memory lock.
+- Added a durable query for unresolved `PENDING`/`AMBIGUOUS` intents. If that query fails or finds an unresolved intent, the barrier refuses a new submission. If writing `RECONCILE_REQUIRED` fails after an uncertain outcome, the prior unresolved intent row (or its original `PENDING` status if ambiguity updates also fail) remains a second durable block.
+- Regression tests cover PENDING/SUBMITTED/AMBIGUOUS write failures, submission timeout, malformed exchange response, state-read failure, unresolved-intent query failure, failed reconciliation-state write, duplicate intent ID, restart-style database reopen, and two parallel barrier instances using separate SQLite connections. All exchange calls are mocks.
+
+**SQLite lifecycle and production path guard**
+- Commit: `4201ea596843b4a006410e86f945c752ceb87ed6`.
+- Added `Database.close()` and context-manager support to make connection closure explicit.
+- Strengthened `test_db_guard.py` to reject a hard-link alias of the configured production DB, rather than checking only resolved path strings.
+- Added temporary-database tests for close/reopen persistence, transaction rollback, hard-link guard behavior and SQLite online backup/restore roundtrip.
+- Commit `646e02f1530779d89504e8a7643c43932bc35419` changes `deploy/backup_vps.sh` to use Python's SQLite online backup API before archiving the snapshot. The prior script archived only `trader.sqlite3` while WAL could be active and suppressed tar errors, which could omit committed WAL pages or create an empty/invalid backup. A static regression test asserts the script uses online backup and strict shell failure handling. The VPS backup script itself was **not executed** during this audit.
+- Commit `a688654466efdbd1a0e6ac46a492f30f28c1d0fb` adds real-SQLite tests for a claim surviving a database close/reopen and for two concurrent barrier instances sharing one database. These tests use only `tmp_path` databases.
+
+### Exact-SHA CI evidence
+
+- Python backend run [38201612560](https://github.com/19wolfalone92/Williams/actions/runs/38201612560), SHA `a688654466efdbd1a0e6ac46a492f30f28c1d0fb`: **PASS**, `170 passed, 4 warnings in 6.84s`; static safety audit reported zero failures.
+- Campaign Python job in run [38201612675](https://github.com/19wolfalone92/Williams/actions/runs/38201612675), same SHA: **PASS**, `181 passed, 4 warnings in 4.60s`. Campaign overall was still **IN PROGRESS** at the last poll because its Android job had not completed.
+- Campaign Python job in run [38201609354](https://github.com/19wolfalone92/Williams/actions/runs/38201609354), same SHA: **PASS**, `181 passed, 4 warnings in 4.60s`; Android job was still running at last poll.
+- Android APK run [38201612690](https://github.com/19wolfalone92/Williams/actions/runs/38201612690), same SHA, remained **IN PROGRESS** at the last poll in required Android lint. No final status is inferred from a running job.
+- Android APK run [38200901495](https://github.com/19wolfalone92/Williams/actions/runs/38200901495) and Campaign runs [38200901513](https://github.com/19wolfalone92/Williams/actions/runs/38200901513) / [38200898686](https://github.com/19wolfalone92/Williams/actions/runs/38200898686) passed on SHA `945efe96eea7543852c94265682e26d50cc54d42`. Those runs validate that earlier source/configuration snapshot only; do not attribute them to later Python/SQLite changes.
+- Several Campaign runs for intermediate commits were cancelled when newer commits arrived. Cancellation is not a test failure and not a pass.
+
+### Remaining checks / limitations
+
+| Area | Status | Evidence / limitation |
+|---|---|---|
+| Durable duplicate-claim and restart-style reopen tests | PASS | Backend and Campaign Python jobs on `a688654` |
+| Concurrent same-intent submission test | PASS (CI-reported) | Real SQLite temporary DB, two separate connections, Campaign Python run on `a688654` |
+| SQLite transaction rollback / online backup-restore roundtrip | PASS (CI-reported) | Temporary databases only, Campaign Python run on `a688654` |
+| SQLite SQLITE_BUSY/long lock contention, corruption recovery, migration rollback matrix | NOT RUN | Not exercised by the new regression module |
+| VPS backup script end-to-end on an isolated container | NOT RUN | Script was inspected and a static contract test was added; production backup script was not run |
+| Exact artifact `data/test_tmp/trader.sqlite3.clean_20261004_082723` provenance | BLOCKED | Path absent from current Git tree and no path-specific commit returned; source environment/artifact unavailable |
+| Binance `-2014` root cause | NOT RUN | No authenticated call or credential inspection |
+| Live/Testnet order recovery against exchange | NOT RUN | No exchange order submitted; offline mocks only |
+| Full current-tree + Git-history secret scan | BLOCKED | GitHub code-search connector returned no usable matches; no dedicated secret-scanning alert endpoint was available through this connector |
+| Dependency vulnerability database scan | NOT RUN | No Dependabot/SCA result available through current connector |
+| Immutable SHA pinning of all third-party Actions | NOT RUN | Workflows still contain version-tag references such as `actions/checkout@v4`; no mass pinning was done without verifying trusted commit SHAs |
+| Android manifest/network static review | PASS (static inspection only) | No device/emulator runtime security test |
+| Android APK + Campaign Android on SHA `a688654` | IN PROGRESS | Run 38201612690 and Campaign run 38201612675 had Android jobs running at last poll |
+
+### Current conclusion
+
+The duplicate-intent path is now protected by an atomic persistent claim and unresolved-intent inspection; the added restart/concurrency tests are included in the passing Python CI jobs on `a688654`. SQLite connection closure, hard-link path alias protection and WAL-consistent backup generation were also changed and covered by temporary-database or static regression tests.
+
+**The full audit is not yet complete.** Android lint/unit tests/APK and Campaign Android results on the latest code SHA still need a final poll. SQLite lock-contention/corruption recovery, live-independent Binance reconciliation behavior beyond mocks, full secret-history scanning and dependency vulnerability scanning remain explicitly outstanding. No production database or unknown local artifact was modified; no real trading request was sent; PR #66 remains open and unmerged.
