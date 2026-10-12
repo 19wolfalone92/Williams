@@ -1,32 +1,25 @@
-# TASK 001.8 — FI-01–FI-12 Fault Injection
+# TASK 001.9 — FI-01–FI-12 Fault Injection
 
-- Audited source/test SHA: `31ba73ff81c43edb5be4606b200dce752148967a`.
-- Canonical definitions are retained from `reports/task_0012_fault_injection_results.md` and `reports/task_0013_fault_injection_results.md`; no scenarios have been renamed or substituted.
-- Status: NOT CLOSED — P0 OPEN.
+- Latest source/test HEAD at report preparation: `fd3276c5f041dd47f0941d5b07fff4726c8c9124`.
+- Canonical definitions remain sourced from `reports/task_0012_fault_injection_results.md` and `reports/task_0013_fault_injection_results.md`; they were not redefined.
+- Last completed Campaign Python run [38306130277](https://github.com/19wolfalone92/Williams/actions/runs/38306130277): 258 passed on prior SHA `5c6499a26a493ab4ff11ca44486850a79283d7ef).
+- The new OCO list-ID conflict test/code added after that run is awaiting exact-SHA CI.
 
-| FI | Canonical scenario | Evidence/result at audited SHA |
-|---|---|---|
-| FI-01 | Failure before acceptance/transmission | NOT TESTED end-to-end |
-| FI-02 | Exchange accepts, response lost | NOT TESTED end-to-end |
-| FI-03 | Response/local persistence failure | NOT TESTED end-to-end |
-| FI-04 | Restart with SUBMITTING/UNKNOWN | PARTIAL ledger unit coverage; integrated fake exchange NOT RUN |
-| FI-05 | Partial fill then cancellation | NOT TESTED end-to-end |
-| FI-06 | Duplicate event delivery | NOT TESTED end-to-end |
-| FI-07 | Crash at state transitions | NOT TESTED at every boundary |
-| FI-08 | Exchange order exists/local state missing | NOT TESTED end-to-end |
-| FI-09 | Missing order vs incomplete/unavailable history | PARTIAL fail-closed code; integrated fake exchange NOT RUN |
-| FI-10 | Ambiguous cancellation/exit | NOT TESTED end-to-end |
-| FI-11 | Partial reconciliation failure | NOT TESTED end-to-end |
-| FI-12 | Retry while unresolved | PARTIAL static/ledger guards; exact exchange mutation count NOT TESTED |
+| FI | Canonical scenario | Targeted fake-exchange test on prior SHA | Coverage limitation |
+|---|---|---|---|
+| FI-01 | Failure before acceptance/transmission | PASS in targeted Python harness | Android path not injected |
+| FI-02 | Accepted order, lost response | PASS; mutation count remains 1 after restart recovery | Android path not injected |
+| FI-03 | Exchange success/local persistence failure | PASS; ambiguous row reconciles without resubmit | Android path not injected |
+| FI-04 | Restart with UNKNOWN/SUBMITTING | PASS for persisted AMBIGUOUS restart path | Full Android SUBMITTING matrix not covered |
+| FI-05 | Partial fill then cancellation | PASS with trade history and final SQLite state | Not all exchange lifecycle permutations |
+| FI-06 | Duplicate event/recovery delivery | PASS; second recovery claims no terminal intent | Does not cover every stream-event ordering |
+| FI-07 | Crash at state transitions | PARTIAL; pre-commit failure test exists and post-commit crash test passes | Not injected at every transition |
+| FI-08 | Exchange order exists/local state missing | PASS for missing local exchange order ID recovered by client ID | Full missing local-intent inventory recovery not implemented |
+| FI-09 | Confirmed absence vs incomplete/unavailable history | PARTIAL; unavailable/not-found, quantity mismatch, missing/duplicate IDs and 1000-row cap covered | No explicit multi-page pagination implementation; 1000-row response is rejected |
+| FI-10 | Ambiguous cancellation/exit | PASS for active order after cancel ambiguity; remains unresolved | Cancel-list and cancel-replace are intentionally unsupported |
+| FI-11 | Partial reconciliation failure | PASS for trade-history lookup and local persistence failures | Not every storage fault boundary |
+| FI-12 | Retry while unresolved | PASS; second submit blocked and mutation counter stays 0 | Android path not injected |
 
-## Exact-SHA CI evidence
-
-- Python backend run [38301629007](https://github.com/19wolfalone92/Williams/actions/runs/38301629007): SUCCESS on SHA 31ba73f.
-- Campaign run [38301629067](https://github.com/19wolfalone92/Williams/actions/runs/38301629067): Python job SUCCESS; Android job was still running at inspection.
-- Passing general Python tests do not establish FI scenario PASS. No FI row is marked PASS without scenario-specific assertions and recorded mutation counts.
-
-## Missing required evidence
-
-For every FI, still need initial durable state, injected failure point, observed behavior, final SQLite state, actual fake-exchange mutation count, fail-closed result, restart outcome and test result tied to a commit SHA. Do not close FI-01–FI-12 until all twelve have executed against production abstractions.
+These PASS labels refer only to the targeted Python fake-exchange test cases on the prior SHA, not complete closure of each canonical acceptance matrix. The Campaign run reported 258 passed, 4 warnings. No FI-01–FI-12 closure is claimed until all required sub-boundaries, including Android production-boundary scenarios, are exercised on the final SHA.
 
 No live credentials or live orders used.
