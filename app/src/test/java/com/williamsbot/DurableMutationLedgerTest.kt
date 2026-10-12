@@ -531,7 +531,8 @@ class DurableMutationLedgerTest {
             "op-ambiguous-reconcile",
             setOf(DurableMutationLedger.State.UNKNOWN),
             DurableMutationLedger.State.RECONCILED,
-            exchangeOrderId = "987654"
+            exchangeOrderId = "987654",
+            reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","query_complete":true,"order_verified":true,"fills_verified":true,"checked_at_ms":1760000000000}"""
         )
 
         assertEquals(DurableMutationLedger.State.RECONCILED, reconciled.state)
@@ -555,7 +556,8 @@ class DurableMutationLedgerTest {
             "op-ack-reconcile",
             setOf(DurableMutationLedger.State.ACKNOWLEDGED),
             DurableMutationLedger.State.RECONCILED,
-            exchangeOrderId = "123"
+            exchangeOrderId = "123",
+            reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","query_complete":true,"order_verified":true,"fills_verified":true,"checked_at_ms":1760000000000}"""
         )
         assertEquals(DurableMutationLedger.State.RECONCILED, reconciled.state)
         assertFalse(ledger!!.hasUnresolved())
@@ -569,12 +571,11 @@ class DurableMutationLedgerTest {
             ledger!!.transition(
                 "op-invalid",
                 setOf(DurableMutationLedger.State.PREPARED),
-                DurableMutationLedger.State.RECONCILED
+                DurableMutationLedger.State.RECONCILED,
+                reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","query_complete":true,"order_verified":true,"fills_verified":true,"checked_at_ms":1760000000000}"""
             )
         }
     }
-}
-
 
     @Test
     fun reconcilingIntentRemainsUnresolvedAcrossWorkerCrash() {
@@ -626,8 +627,10 @@ class DurableMutationLedgerTest {
             prepared.operationId,
             setOf(DurableMutationLedger.State.RECONCILING),
             DurableMutationLedger.State.RECONCILED,
-            exchangeOrderId = "testnet-order-123"
+            exchangeOrderId = "testnet-order-123",
+            reconciliationEvidenceJson = """{"source":"BINANCE_SPOT_TESTNET","query_complete":true,"order_verified":true,"fills_verified":true,"checked_at_ms":1760000000000}"""
         )
         assertFalse(ledger!!.hasUnresolved())
         assertEquals("testnet-order-123", ledger!!.find(prepared.operationId)!!.exchangeOrderId)
     }
+}
