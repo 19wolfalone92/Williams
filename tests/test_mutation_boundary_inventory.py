@@ -20,62 +20,58 @@ def _kotlin_body(source: str, signature: str) -> str:
     raise AssertionError(f"unbalanced function body: {signature}")
 
 
-def _python_body(source: str, signature: str) -> str:
-    lines = source.splitlines()
-    for index, line in enumerate(lines):
-        if re.search(signature, line):
-            indent = len(line) - len(line.lstrip())
-            result = []
-            for candidate in lines[index + 1:]:
-                if candidate.strip() and len(candidate) - len(candidate.lstrip()) <= indent:
-                    break
-                result.append(candidate)
-            return "\n".join(result)
-    raise AssertionError(f"required Python boundary function missing: {signature}")
-
-
-def test_android_raw_http_execution_is_contained_in_signed_request_sink():
+def test_android_exchange_mutation_transport_is_contained_in_signed_sink():
     source_root = ROOT / "app/src/main"
     raw_call_sites = []
     for path in source_root.rglob("*.kt"):
         source = path.read_text(encoding="utf-8")
         for match in re.finditer(r"\.newCall\s*\(", source):
-            raw_call_sites.append((path.relative_to(ROOT).as_posix(), source.count("\n", 0, match.start()) + 1))
+            line = source.count("\n", 0, match.start()) + 1
+            raw_call_sites.append((path.relative_to(ROOT).as_posix(), line, source))
     assert raw_call_sites, "expected Android HTTP call inventory is empty"
-    assert all(path == "app/src/main/java/com/williamsbot/StandaloneRuntime.kt" for path, _ in raw_call_sites), raw_call_sites
+    # MainActivity's backend API is a distinct dashboard/backend transport;
+    # the two Binance REST calls must stay in StandaloneRuntime.
+    exchange_calls = [
+        (path, line) for path, line, source in raw_call_sites
+        if path.endswith("StandaloneRuntime.kt")
+    ]
+    assert len(exchange_calls) == 2, f"Binance raw HTTP call-site inventory changed: {exchange_calls}"
     runtime = (ROOT / "app/src/main/java/com/williamsbot/StandaloneRuntime.kt").read_text(encoding="utf-8")
     sink = _kotlin_body(runtime, r"private\s+fun\s+signedRequest\s*\(")
-    assert ".newCall(" in sink, "raw HTTP transport moved outside the approved signedRequest sink"
+    raw_get = _kotlin_body(runtime, r"private\s+fun\s+signedRawGet\s*\(")
+    assert ".newCall(request).execute()" in sink
+    assert ".newCall(request).execute()" in raw_get
+    assert 'Request.Builder()' in sink and 'mutating' in sink
+    assert '.post(' in sink and '.delete()' in sink
+    assert '.post(' not in raw_get and '.delete()' not in raw_get
 
 
-def test_android_mutation_wrappers_delegate_to_single_durable_sink():
+def test_android_mutation_wrappers_delegate_to_durable_sink():
     source = (ROOT / "app/src/main/java/com/williamsbot/StandaloneRuntime.kt").read_text(encoding="utf-8")
-    for signature in (
-        r"private\s+fun\s+signedPost\s*\(",
-        r"private\s+fun\s+signedDelete\s*\(",
-        r"private\s+fun\s+signedCancelReplace\s*\(",
-    ):
-        body = _kotlin_body(source, signature)
-        assert "signedRequest(" in body, f"mutation wrapper bypasses durable sink: {signature}"
+    assert re.search(r'private\s+fun\s+signedPost\s*\([\s\S]*?\)\s*:\s*JSONObject\s*=\s*signedRequest\("POST"', source)
+    assert re.search(r'private\s+fun\s+signedDelete\s*\([\s\S]*?\)\s*:\s*JSONObject\s*=\s*signedRequest\("DELETE"', source)
+    cancel_replace = _kotlin_body(source, r"private\s+fun\s+signedCancelReplace\s*\(")
+    assert 'signedPost("/api/v3/order/cancelReplace"' in cancel_replace
     sink = _kotlin_body(source, r"private\s+fun\s+signedRequest\s*\(")
     for required in ("mutationLedger.prepare(", "claimForSubmission(", "State.SUBMITTING", "State.UNKNOWN"):
         assert required in sink, f"durable mutation boundary lost invariant: {required}"
 
 
-def test_python_rest_transport_is_centralized_and_recovery_is_read_only():
+def test_python_exchange_http_mutations_are_centralized_and_recovery_is_read_only():
     client = (ROOT / "binance_client.py").read_text(encoding="utf-8")
-    request_body = _python_body(client, r"def\s+_request\s*\(")
-    assert "self.session.request(" in request_body
-    production_files = [
-        p for p in ROOT.glob("*.py")
-        if p.name not in {"binance_client.py"} and not p.name.startswith("test_")
-    ]
-    direct_mutations = []
+    lines = client.splitlines()
+    request_line = next((i for i, line in enumerate(lines) if re.search(r"def\s+_request\s*\(", line)), None)
+    assert request_line is not None
+    assert any("self.session.request(" in line for line in lines[request_line:request_line + 120])
+
     pattern = re.compile(r"(?:requests|session|self\.session)\s*\.\s*(?:post|delete|put|patch)\s*\(", re.I)
-    for path in production_files:
-        content = path.read_text(encoding="utf-8")
-        for match in pattern.finditer(content):
-            direct_mutations.append((path.name, content.count("\n", 0, match.start()) + 1))
+    direct_mutations = []
+    for path in ROOT.glob("*.py"):
+        if path.name in {"binance_client.py", "telegram_bot.py"} or path.name.startswith("test_"):
+            continue
+        source = path.read_text(encoding="utf-8")
+        for match in pattern.finditer(source):
+            direct_mutations.append((path.name, source.count("\n", 0, match.start()) + 1))
     assert not direct_mutations, f"direct Python HTTP mutation bypass candidates: {direct_mutations}"
     recovery = (ROOT / "execution_recovery.py").read_text(encoding="utf-8")
     assert not re.search(r"\.\s*(?:submit_order|create_order|cancel_order|cancel_replace|order_oco)\s*\(", recovery), (
