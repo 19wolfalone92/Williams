@@ -71,14 +71,14 @@ class ExecutionBarrier:
         self.context_cache = context_cache
         self.db = db
 
-    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
+    def _persist(self, intent: OrderIntent, status: str, reason: str = "", exchange_order=None) -> None:
         """Persist safety-critical order state; failures must reach the caller."""
         if self.db is None:
             raise RuntimeError("durable execution-intent persistence is unavailable: database is not configured")
         save_intent = getattr(self.db, "save_execution_intent", None)
         if not callable(save_intent):
             raise RuntimeError("durable execution-intent persistence is unavailable: save_execution_intent is missing")
-        save_intent(intent, status, reason)
+        save_intent(intent, status, reason, exchange_order=exchange_order)
 
     def _mark_reconciliation_required(self, intent: OrderIntent) -> None:
         """Durably block later order actions until exchange reconciliation completes."""
@@ -358,7 +358,7 @@ class ExecutionBarrier:
                     )
                     raise RuntimeError(f"ExecutionBarrier: {reason}")
             try:
-                self._persist(intent, "SUBMITTED")
+                self._persist(intent, "SUBMITTED", exchange_order=response if isinstance(response, dict) else None)
             except Exception as exc:
                 # The exchange may have accepted/mutated the order. Never retry
                 # submit here; preserve the ambiguity for reconciliation.

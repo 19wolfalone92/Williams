@@ -15,6 +15,7 @@ from trading_config import TradingConfig
 from market_context import ContextCache, TFMarketContext
 from hypothesis_engine import build_hypotheses
 from execution_barrier import ExecutionBarrier, OrderIntent
+from execution_recovery import ExecutionRecoveryWorker
 from execution_accumulator import accumulate_order, accumulate_fills
 from l2_slippage import L2SlippageGuard
 from equity_breaker import EquityCircuitBreaker
@@ -50,6 +51,7 @@ class Trader:
         self.wise_men_long = WiseMenStateMachine(self.db, self.symbol, 'LONG')
         self.wise_men_short = WiseMenStateMachine(self.db, self.symbol, 'SHORT')
         self.client=BinanceSpotClient(api_key if api_key is not None else os.getenv('BINANCE_API_KEY',''), api_secret if api_secret is not None else os.getenv('BINANCE_API_SECRET',''), testnet=(os.getenv('TESTNET','true').lower()=='true') if testnet is None else testnet)
+        self.execution_recovery_worker = ExecutionRecoveryWorker(self.db, self.client)
         self.filters={}; self.base_asset=self.quote_asset=None; self.recovered=False
         self.symbol_rules = None
         self.preflight_report = None
@@ -1423,10 +1425,31 @@ class Trader:
         )
 
     def run(self):
-        self.setup()
+        # Retry startup only while durable execution intents remain unresolved.
+        # Recovery performs read-only exchange lookups and never submits orders.
         while True:
-            try:self.process()
-            except Exception as e:self.db.log_event('ERROR','loop_error',str(e)); self.notify(f'Williams ERROR\n{self.symbol}\n{type(e).__name__}: {e}')
+            try:
+                self.client.sync_time()
+                self.execution_recovery_worker.run_once()
+                self.setup()
+                break
+            except Exception as e:
+                try:
+                    unresolved = self.db.has_unresolved_execution_intents()
+                except Exception:
+                    raise
+                if not unresolved:
+                    raise
+                self.db.log_event('ERROR', 'startup_recovery_blocked',
+                    f'{type(e).__name__}: unresolved execution intents remain; retrying safely')
+                time.sleep(min(60, max(5, self.poll_seconds)))
+        while True:
+            try:
+                self.execution_recovery_worker.run_once()
+                self.process()
+            except Exception as e:
+                self.db.log_event('ERROR','loop_error',str(e))
+                self.notify(f'Williams ERROR\\n{self.symbol}\\n{type(e).__name__}: {e}')
             time.sleep(self.poll_seconds)
 
 if __name__=='__main__':Trader().run()

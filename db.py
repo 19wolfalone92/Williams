@@ -6,11 +6,12 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
         Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.path = str(path)
         self.conn = sqlite3.connect(path, check_same_thread=False, timeout=20)
         try:
             self.conn.row_factory = sqlite3.Row
@@ -280,6 +281,7 @@ class Database:
         # halfway through ALTER TABLE operations must leave the old schema intact.
         with self.transaction():
             self._migrate_trade_columns()
+            self._migrate_execution_intent_columns()
             self.state_set('schema_version', self.SCHEMA_VERSION)
             self.state_set('position_state', self.state_get('position_state', 'FLAT'))
 
@@ -302,7 +304,22 @@ class Database:
                     f'ALTER TABLE trades ADD COLUMN {name} {sql_type}'
                 )
 
-    def state_get(self, key, default=None):
+    def _migrate_execution_intent_columns(self):
+        """Add durable exchange evidence and cross-process recovery leases."""
+        columns = {row['name'] for row in self.conn.execute('PRAGMA table_info(execution_intents)').fetchall()}
+        additions = {
+            'order_id': 'TEXT', 'exchange_status': 'TEXT', 'executed_qty': 'REAL',
+            'orig_qty': 'REAL', 'avg_price': 'REAL',
+            'recovery_attempts': 'INTEGER NOT NULL DEFAULT 0',
+            'next_reconcile_at': 'REAL NOT NULL DEFAULT 0', 'lease_owner': 'TEXT',
+            'lease_until': 'REAL', 'last_reconcile_error': 'TEXT', 'resolved_at': 'TEXT',
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                self.conn.execute(f'ALTER TABLE execution_intents ADD COLUMN {name} {sql_type}')
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_intents_recovery ON execution_intents(status, next_reconcile_at, lease_until)")
+
+    def state_get(self, key, default=None)
         r = self.conn.execute(
             'SELECT value FROM bot_state WHERE key=?',
             (key,)
@@ -348,24 +365,117 @@ class Database:
         ).fetchone()
         return row is not None
 
-    def save_execution_intent(self, intent, status, reason=''):
-        self.conn.execute(
-            '''INSERT OR REPLACE INTO execution_intents(
-                intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+    def list_unresolved_execution_intents(self, limit=20, now=None):
+        """Return due recovery work; active leases and backoff windows are excluded."""
+        import time
+        now = float(time.time() if now is None else now)
+        return [
+            dict(row) for row in self.conn.execute(
+                """SELECT * FROM execution_intents
+                   WHERE status IN ('PENDING', 'AMBIGUOUS')
+                     AND COALESCE(next_reconcile_at, 0) <= ?
+                     AND (lease_until IS NULL OR lease_until <= ?)
+                   ORDER BY created_at, intent_id LIMIT ?""",
+                (now, now, max(1, min(int(limit), 100))),
+            ).fetchall()
+        ]
+
+    def claim_execution_intent_recovery(self, intent_id, owner, lease_seconds=30, now=None):
+        """Atomically lease one unresolved intent across threads/processes."""
+        import time
+        now = float(time.time() if now is None else now)
+        cur = self.conn.execute(
+            """UPDATE execution_intents
+               SET lease_owner=?, lease_until=?, recovery_attempts=COALESCE(recovery_attempts,0)+1
+               WHERE intent_id=? AND status IN ('PENDING', 'AMBIGUOUS')
+                 AND COALESCE(next_reconcile_at,0) <= ?
+                 AND (lease_until IS NULL OR lease_until <= ?)""",
+            (str(owner), now + max(1.0, float(lease_seconds)), str(intent_id), now, now),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+        return cur.rowcount == 1
+
+    def complete_execution_intent_recovery(self, intent_id, owner, status, order, now=None):
+        """Persist authoritative exchange evidence only while holding the lease."""
+        from datetime import datetime, timezone
+        import time
+        now = float(time.time() if now is None else now)
+        terminal = str(status).upper() in {'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED'}
+        cur = self.conn.execute(
+            """UPDATE execution_intents SET status=?, reason='', order_id=?,
+                   exchange_status=?, executed_qty=?, orig_qty=?, avg_price=?,
+                   last_reconcile_error=NULL, next_reconcile_at=0,
+                   lease_owner=NULL, lease_until=NULL, resolved_at=?
+               WHERE intent_id=? AND lease_owner=? AND status IN ('PENDING','AMBIGUOUS')""",
             (
-                intent.intent_id,
-                intent.symbol,
-                intent.side,
-                intent.order_type,
-                intent.purpose,
+                str(status).upper(),
+                str(order.get('orderId')) if order.get('orderId') is not None else None,
+                str(order.get('status', '')).upper(),
+                float(order.get('executedQty', 0) or 0),
+                float(order.get('origQty', 0) or 0),
+                float(order.get('price', 0) or 0),
+                datetime.now(timezone.utc).isoformat() if terminal else None,
+                str(intent_id), str(owner),
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+        return cur.rowcount == 1
+
+    def defer_execution_intent_recovery(self, intent_id, owner, error, base_seconds=5, max_seconds=300, now=None):
+        """Keep the intent unresolved and apply capped exponential backoff."""
+        import time
+        now = float(time.time() if now is None else now)
+        row = self.conn.execute(
+            "SELECT recovery_attempts FROM execution_intents WHERE intent_id=? AND lease_owner=?",
+            (str(intent_id), str(owner)),
+        ).fetchone()
+        if row is None:
+            return False
+        attempts = max(1, int(row['recovery_attempts'] or 1))
+        delay = min(float(max_seconds), float(base_seconds) * (2 ** min(attempts - 1, 16)))
+        cur = self.conn.execute(
+            """UPDATE execution_intents SET next_reconcile_at=?, last_reconcile_error=?,
+                   lease_owner=NULL, lease_until=NULL
+               WHERE intent_id=? AND lease_owner=? AND status IN ('PENDING','AMBIGUOUS')""",
+            (now + delay, str(error)[:500], str(intent_id), str(owner)),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+        return cur.rowcount == 1
+
+    def save_execution_intent(self, intent, status, reason='', exchange_order=None):
+        """Upsert intent state without erasing exchange evidence recorded by recovery."""
+        order = exchange_order if isinstance(exchange_order, dict) else {}
+        self.conn.execute(
+            """INSERT INTO execution_intents(
+                intent_id,symbol,side,order_type,purpose,required_context_versions_json,
+                hypothesis_id,invalidation_level,status,reason,client_order_id,
+                order_id,exchange_status,executed_qty,orig_qty,avg_price
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(intent_id) DO UPDATE SET
+                symbol=excluded.symbol, side=excluded.side, order_type=excluded.order_type,
+                purpose=excluded.purpose,
+                required_context_versions_json=excluded.required_context_versions_json,
+                hypothesis_id=excluded.hypothesis_id, invalidation_level=excluded.invalidation_level,
+                status=excluded.status, reason=excluded.reason,
+                client_order_id=COALESCE(NULLIF(excluded.client_order_id,''), execution_intents.client_order_id),
+                order_id=COALESCE(excluded.order_id, execution_intents.order_id),
+                exchange_status=COALESCE(excluded.exchange_status, execution_intents.exchange_status),
+                executed_qty=COALESCE(excluded.executed_qty, execution_intents.executed_qty),
+                orig_qty=COALESCE(excluded.orig_qty, execution_intents.orig_qty),
+                avg_price=COALESCE(excluded.avg_price, execution_intents.avg_price)""",
+            (
+                intent.intent_id, intent.symbol, intent.side, intent.order_type, intent.purpose,
                 json.dumps(dict(intent.required_context_versions), sort_keys=True),
-                intent.hypothesis_id,
-                float(intent.invalidation_level or 0.0),
-                status,
-                reason,
+                intent.hypothesis_id, float(intent.invalidation_level or 0.0), status, reason,
                 getattr(intent, 'client_order_id', ''),
+                str(order.get('orderId')) if order.get('orderId') is not None else None,
+                str(order.get('status')).upper() if order.get('status') is not None else None,
+                float(order.get('executedQty', 0) or 0) if order else None,
+                float(order.get('origQty', 0) or 0) if order else None,
+                float(order.get('price', 0) or 0) if order else None,
             ),
         )
         if not self._transaction_active:
