@@ -179,7 +179,8 @@ class DurableMutationLedger(context: Context) :
             val evidence = runCatching { org.json.JSONObject(reconciliationEvidenceJson) }.getOrNull()
                 ?: throw IllegalArgumentException("MUTATION_RECONCILIATION_EVIDENCE_INVALID")
             require(
-                evidence.optString("source").isNotBlank() &&
+                evidence.optString("source") == "BINANCE_SPOT_TESTNET" &&
+                    evidence.optString("scope") == "ORDER_MUTATION" &&
                     evidence.optBoolean("query_complete", false) &&
                     evidence.optBoolean("order_verified", false) &&
                     evidence.optBoolean("fills_verified", false) &&
