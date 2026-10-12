@@ -374,3 +374,44 @@ def test_worker_prefers_persisted_order_id_when_available(tmp_path):
 def test_cancel_intent_does_not_fabricate_target_order_id():
     intent = OrderIntent.new("BTCUSDT", "BUY", "CANCEL", {}, purpose="EXIT")
     assert intent.client_order_id == ""
+
+
+
+def test_oco_recovery_rejects_list_id_conflicting_with_durable_evidence(tmp_path):
+    with Database(str(tmp_path / "oco-list-id-conflict.sqlite3")) as db:
+        intent = OrderIntent.new(
+            "BTCUSDT", "SELL", "OCO", {}, purpose="EXIT",
+            client_order_id="williams-oco-list-id-conflict",
+        )
+        db.save_execution_intent(
+            intent, "AMBIGUOUS", "lost OCO response",
+            exchange_order={"orderListId": 77},
+        )
+        listing = {
+            "symbol": "BTCUSDT", "orderListId": 78,
+            "listClientOrderId": intent.client_order_id,
+            "listOrderStatus": "EXECUTING",
+            "orders": [
+                {"orderId": 201, "clientOrderId": "tp-leg"},
+                {"orderId": 202, "clientOrderId": "sl-leg"},
+            ],
+        }
+        legs = {
+            "201": {"symbol": "BTCUSDT", "side": "SELL", "orderId": 201,
+                    "clientOrderId": "tp-leg", "status": "NEW", "origQty": "0.01",
+                    "executedQty": "0", "price": "100"},
+            "202": {"symbol": "BTCUSDT", "side": "SELL", "orderId": 202,
+                    "clientOrderId": "sl-leg", "status": "NEW", "origQty": "0.01",
+                    "executedQty": "0", "price": "90"},
+        }
+        exchange = FakeOcoExchange(listing, legs)
+        result = ExecutionRecoveryWorker(db, exchange).run_once(now=time.time() + 10)
+        row = db.conn.execute(
+            "SELECT status,last_reconcile_error FROM execution_intents WHERE intent_id=?",
+            (intent.intent_id,),
+        ).fetchone()
+        assert result["deferred"] == 1
+        assert row["status"] == "AMBIGUOUS"
+        assert "orderListId conflicts" in row["last_reconcile_error"]
+        assert exchange.list_calls == 1 and exchange.order_calls == 0
+        assert db.has_unresolved_execution_intents()
