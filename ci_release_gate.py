@@ -123,6 +123,7 @@ def main() -> None:
     python_ci = read(".github/workflows/python-ci.yml")
     must(python_ci, "permissions:", "python workflow least privilege")
     must(python_ci, "contents: read", "python workflow least privilege")
+    must(python_ci, "pip-audit -r requirements.txt", "Python dependency vulnerability scan")
     must(python_ci, "python3 ci_release_gate.py", "python workflow")
     must(python_ci, "group: backend-ci-${{ github.ref }}-${{ github.sha }}", "python workflow")
 
