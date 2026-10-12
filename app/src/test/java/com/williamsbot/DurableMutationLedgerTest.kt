@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -597,7 +598,7 @@ class DurableMutationLedgerTest {
 
         assertTrue(ledger!!.hasUnresolved())
         assertEquals(DurableMutationLedger.State.UNKNOWN, ledger!!.find(prepared.operationId)!!.state)
-        assertEquals(null, ledger!!.find(prepared.operationId)!!.reconciliationEvidenceJson)
+        assertNull(ledger!!.find(prepared.operationId)!!.reconciliationEvidenceJson)
     }
 
     @Test
@@ -638,7 +639,7 @@ class DurableMutationLedgerTest {
         val migrated = ledger!!.find("legacy-reconciled")!!
         assertEquals(DurableMutationLedger.State.RECONCILING, migrated.state)
         assertTrue(ledger!!.hasUnresolved())
-        assertEquals(null, migrated.reconciliationEvidenceJson)
+        assertNull(migrated.reconciliationEvidenceJson)
     }
 
     @Test
