@@ -238,6 +238,27 @@ class DurableMutationLedgerTest {
 
 
     @Test
+    fun sameOperationIdWithChangedRequestFingerprintIsRejected() {
+        ledger!!.prepare(
+            operationId = "stable-business-operation",
+            kind = "POST:/api/v3/order",
+            symbol = "BTCUSDT",
+            requestFingerprint = "1".repeat(64),
+            exchangeClientId = "W21_stable"
+        )
+
+        assertThrows(DurableMutationLedger.IntentConflictException::class.java) {
+            ledger!!.prepare(
+                operationId = "stable-business-operation",
+                kind = "POST:/api/v3/order",
+                symbol = "BTCUSDT",
+                requestFingerprint = "2".repeat(64),
+                exchangeClientId = "W21_stable"
+            )
+        }
+    }
+
+    @Test
     fun twoLedgerInstancesCannotBothClaimOnePreparedIntent() {
         val operationId = "op-atomic-claim"
         ledger!!.prepare(
