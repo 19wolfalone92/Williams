@@ -506,3 +506,81 @@ def test_fi_09_contradictory_or_incomplete_trade_fields_fail_closed(tmp_path, tr
         assert expected_error in row["last_reconcile_error"]
         assert db.has_unresolved_execution_intents()
         assert exchange.mutation_count == 0
+
+
+def test_fi_13_concurrent_recovery_workers_do_not_duplicate_exchange_observation_or_mutation(tmp_path):
+    """Two independent SQLite connections cannot both own one recovery lease."""
+    import threading
+
+    path = str(tmp_path / "fi13-concurrent.sqlite3")
+    exchange = DeterministicFakeExchange()
+    intent = _new_intent(client_id="fi13-concurrent-client")
+    exchange.orders[intent.client_order_id] = {
+        "symbol": "BTCUSDT", "side": "BUY", "orderId": "713",
+        "clientOrderId": intent.client_order_id, "status": "NEW",
+        "origQty": "0.010", "executedQty": "0", "price": "0", "avgPrice": "0",
+    }
+    with Database(path) as seed:
+        _persist_ambiguous(seed, intent)
+
+    start = threading.Barrier(3)
+    outcomes = []
+    failures = []
+
+    def recover(owner):
+        try:
+            with Database(path) as db:
+                worker = ExecutionRecoveryWorker(
+                    db, exchange, base_retry_seconds=5, owner=owner
+                )
+                start.wait(timeout=5)
+                outcomes.append(worker.run_once(now=time.time() + 10))
+        except Exception as exc:
+            failures.append(type(exc).__name__)
+
+    first = threading.Thread(target=recover, args=("fi13-worker-a",))
+    second = threading.Thread(target=recover, args=("fi13-worker-b",))
+    first.start()
+    second.start()
+    start.wait(timeout=5)
+    first.join(timeout=10)
+    second.join(timeout=10)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert failures == []
+    assert len(outcomes) == 2
+    assert sum(int(result.get("claimed", 0)) for result in outcomes) == 1
+    assert sum(int(result.get("active", 0)) for result in outcomes) == 1
+    assert exchange.mutation_count == 0
+
+    with Database(path) as final_db:
+        final_row = _row(final_db, intent)
+        assert final_row["status"] == "SUBMITTED"
+        assert final_row["order_id"] == "713"
+        assert not final_db.has_unresolved_execution_intents()
+
+
+def test_recovery_refuses_conflicting_exchange_order_id_without_mutation(tmp_path):
+    """A persisted exchange order ID is immutable evidence, not a hint."""
+    with Database(str(tmp_path / "fi-order-id-conflict.sqlite3")) as db:
+        exchange = DeterministicFakeExchange()
+        intent = _new_intent(client_id="fi-order-id-conflict")
+        _persist_ambiguous(db, intent)
+        db.conn.execute(
+            "UPDATE execution_intents SET order_id=? WHERE intent_id=?",
+            ("known-order-999", intent.intent_id),
+        )
+        exchange.orders[intent.client_order_id] = {
+            "symbol": "BTCUSDT", "side": "BUY", "orderId": "714",
+            "clientOrderId": intent.client_order_id, "status": "NEW",
+            "origQty": "0.010", "executedQty": "0", "price": "0", "avgPrice": "0",
+        }
+
+        result = _worker(db, exchange).run_once(now=time.time() + 10)
+
+        assert result["deferred"] == 1
+        row = _row(db, intent)
+        assert row["status"] == "AMBIGUOUS"
+        assert row["order_id"] == "known-order-999"
+        assert db.has_unresolved_execution_intents()
+        assert exchange.mutation_count == 0
