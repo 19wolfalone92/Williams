@@ -189,7 +189,10 @@ def test_failed_write_rolls_back_and_database_remains_usable(tmp_path):
             with db.transaction():
                 db.state_set("before_failure", "temporary")
                 db.conn.execute(
-                    "INSERT INTO bot_state(key, value) VALUES(NULL, 'invalid')"
+                    """INSERT INTO execution_intents(
+                        intent_id, symbol, side, order_type, purpose,
+                        required_context_versions_json, status
+                    ) VALUES('invalid', NULL, 'BUY', 'LIMIT', 'ENTRY', '{}', 'PENDING')"""
                 )
                 db.state_set("after_failure", "must_not_exist")
 
