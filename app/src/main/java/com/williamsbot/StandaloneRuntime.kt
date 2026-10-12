@@ -1427,12 +1427,22 @@ private class NativeEngine(
                 intent.state in setOf(
                     DurableMutationLedger.State.SUBMITTING,
                     DurableMutationLedger.State.UNKNOWN,
-                    DurableMutationLedger.State.ACKNOWLEDGED
+                    DurableMutationLedger.State.ACKNOWLEDGED,
+                    DurableMutationLedger.State.RECONCILING
                 )
         }
 
         for (intent in candidates) {
-            val clientOrderId = requireNotNull(intent.exchangeClientId)
+            val reconciling = if (intent.state == DurableMutationLedger.State.RECONCILING) {
+                intent
+            } else {
+                mutationLedger.transition(
+                    operationId = intent.operationId,
+                    expected = setOf(intent.state),
+                    next = DurableMutationLedger.State.RECONCILING
+                )
+            }
+            val clientOrderId = requireNotNull(reconciling.exchangeClientId)
             val order = signedGet(
                 "/api/v3/order",
                 "symbol=" + intent.symbol + "&origClientOrderId=" + clientOrderId
@@ -1467,8 +1477,8 @@ private class NativeEngine(
             // state was retrieved by exact client ID. It does not certify
             // campaign exposure or protective OCO children; those are separate gates.
             mutationLedger.transition(
-                operationId = intent.operationId,
-                expected = setOf(intent.state),
+                operationId = reconciling.operationId,
+                expected = setOf(DurableMutationLedger.State.RECONCILING),
                 next = DurableMutationLedger.State.RECONCILED,
                 exchangeOrderId = exchangeOrderId
             )
