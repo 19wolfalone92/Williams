@@ -180,24 +180,65 @@ class DurableMutationLedger(context: Context) :
         nowMs: Long = System.currentTimeMillis()
     ): Intent {
         require(expected.isNotEmpty()) { "MUTATION_EXPECTED_STATE_REQUIRED" }
-        if (next == State.RECONCILED) {
+        val evidenceForTransition = if (next == State.RECONCILED) {
             requireNotNull(reconciliationEvidenceJson) { "MUTATION_RECONCILIATION_EVIDENCE_REQUIRED" }
             val evidence = runCatching { org.json.JSONObject(reconciliationEvidenceJson) }.getOrNull()
                 ?: throw IllegalArgumentException("MUTATION_RECONCILIATION_EVIDENCE_INVALID")
+            val originalQty = evidence.optString("original_qty").toBigDecimalOrNull()
+            val executedQty = evidence.optString("executed_qty").toBigDecimalOrNull()
+            val tradeQtySum = evidence.optString("trade_qty_sum").toBigDecimalOrNull()
+            val tradeCount = evidence.optInt("trade_count", -1)
+            val tradeIds = evidence.optJSONArray("trade_ids")
+            val status = evidence.optString("order_status")
             require(
                 evidence.optString("source") == "BINANCE_SPOT_TESTNET" &&
                     evidence.optString("scope") == "ORDER_MUTATION" &&
                     evidence.optBoolean("query_complete", false) &&
                     evidence.optBoolean("order_verified", false) &&
                     evidence.optBoolean("fills_verified", false) &&
-                    evidence.optLong("checked_at_ms", 0L) > 0L
+                    evidence.optBoolean("trade_evidence_verified", false) &&
+                    evidence.optLong("checked_at_ms", 0L) > 0L &&
+                    !exchangeOrderId.isNullOrBlank() &&
+                    evidence.optString("exchange_order_id") == exchangeOrderId &&
+                    evidence.optString("symbol").isNotBlank() &&
+                    evidence.optString("client_order_id").isNotBlank() &&
+                    status in setOf("NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH") &&
+                    originalQty != null && originalQty.signum() > 0 &&
+                    executedQty != null && executedQty.signum() >= 0 && executedQty.compareTo(originalQty) <= 0 &&
+                    tradeQtySum != null && tradeQtySum.compareTo(executedQty) == 0 &&
+                    tradeCount >= 0 && tradeIds != null && tradeIds.length() == tradeCount
             ) { "MUTATION_RECONCILIATION_EVIDENCE_INCOMPLETE" }
+            val seenTradeIds = HashSet<String>()
+            for (index in 0 until tradeIds!!.length()) {
+                val id = tradeIds.optString(index)
+                require(id.isNotBlank() && id != "null" && seenTradeIds.add(id)) {
+                    "MUTATION_RECONCILIATION_TRADE_IDS_INVALID"
+                }
+            }
+            require(
+                when (status) {
+                    "NEW" -> executedQty!!.signum() == 0
+                    "PARTIALLY_FILLED" -> executedQty!!.signum() > 0 && executedQty.compareTo(originalQty) < 0
+                    "FILLED" -> executedQty!!.compareTo(originalQty) == 0
+                    else -> true
+                } && ((tradeCount == 0 && executedQty!!.signum() == 0) ||
+                    (tradeCount > 0 && executedQty!!.signum() > 0))
+            ) { "MUTATION_RECONCILIATION_EVIDENCE_QUANTITY_CONFLICT" }
+            evidence
         } else {
             require(reconciliationEvidenceJson == null) { "MUTATION_EVIDENCE_ONLY_ALLOWED_FOR_RECONCILED" }
+            null
         }
         return writableDatabase.transaction {
             val current = readById(this, operationId)
                 ?: throw IllegalStateException("MUTATION_INTENT_NOT_FOUND")
+            if (next == State.RECONCILED) {
+                val evidence = requireNotNull(evidenceForTransition)
+                require(evidence.optString("symbol").equals(current.symbol, ignoreCase = true) &&
+                    evidence.optString("client_order_id") == current.exchangeClientId) {
+                    "MUTATION_RECONCILIATION_INTENT_MISMATCH"
+                }
+            }
             // Never treat an already-claimed target state as a successful claim.
             if (current.state !in expected || !allowed(current.state, next)) {
                 throw InvalidTransitionException()
