@@ -8,6 +8,10 @@ import time
 import uuid
 from typing import Any
 
+class RecoveryValidationError(ValueError):
+    """Internal validation failure with a deliberately safe, fixed message."""
+
+
 KNOWN_STATUSES = {"NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED", "PENDING_CANCEL", "CANCELED", "REJECTED", "EXPIRED", "OCO_EXECUTING", "OCO_ALL_DONE", "OCO_REJECTED"}
 
 class ExecutionRecoveryWorker:
@@ -76,34 +80,34 @@ class ExecutionRecoveryWorker:
             return order
         order_id = order.get("orderId")
         if order_id is None:
-            raise ValueError("executed order lacks orderId for trade-history verification")
+            raise RecoveryValidationError("executed order lacks orderId for trade-history verification")
         lookup = getattr(self.exchange, "my_trades", None)
         if not callable(lookup):
             raise RuntimeError("exchange adapter lacks read-only trade-history lookup")
         trades = lookup(symbol, order_id=order_id, limit=1000)
         if not isinstance(trades, list) or not trades:
-            raise ValueError("trade history is missing for a non-zero executed quantity")
+            raise RecoveryValidationError("trade history is missing for a non-zero executed quantity")
         total_qty = 0.0
         total_quote = 0.0
         for trade in trades:
             if not isinstance(trade, dict):
-                raise ValueError("trade history contains a non-object row")
+                raise RecoveryValidationError("trade history contains a non-object row")
             trade_order_id = trade.get("orderId")
             if trade_order_id is not None and str(trade_order_id) != str(order_id):
-                raise ValueError("trade history contains a different orderId")
+                raise RecoveryValidationError("trade history contains a different orderId")
             try:
                 qty = float(trade.get("qty", 0) or 0)
                 price = float(trade.get("price", 0) or 0)
                 quote = float(trade.get("quoteQty", price * qty) or 0)
             except (TypeError, ValueError):
-                raise ValueError("trade history contains invalid numeric fields")
+                raise RecoveryValidationError("trade history contains invalid numeric fields")
             if qty <= 0 or price <= 0 or quote <= 0:
-                raise ValueError("trade history contains non-positive fill values")
+                raise RecoveryValidationError("trade history contains non-positive fill values")
             total_qty += qty
             total_quote += quote
         tolerance = max(1e-8, abs(executed) * 1e-6)
         if abs(total_qty - executed) > tolerance:
-            raise ValueError("trade-history quantity does not reconcile with executedQty")
+            raise RecoveryValidationError("trade-history quantity does not reconcile with executedQty")
         order["avgPrice"] = total_quote / total_qty
         return order
 
@@ -116,39 +120,39 @@ class ExecutionRecoveryWorker:
                 raise RuntimeError("OCO intent lacks list client ID or order-list lookup capability")
             listing = self.exchange.order_list(symbol, list_client_order_id=client_id)
             if not isinstance(listing, dict) or str(listing.get("listClientOrderId", "")) != client_id:
-                raise ValueError("exchange order list does not match persisted list client ID")
+                raise RecoveryValidationError("exchange order list does not match persisted list client ID")
             list_status = str(listing.get("listOrderStatus", "")).upper()
             mapping = {"EXECUTING": "OCO_EXECUTING", "ALL_DONE": "OCO_ALL_DONE", "REJECT": "OCO_REJECTED"}
             if list_status not in mapping:
-                raise ValueError("exchange order list returned unknown status")
+                raise RecoveryValidationError("exchange order list returned unknown status")
             legs = listing.get("orders")
             if not isinstance(legs, list) or len(legs) < 2:
-                raise ValueError("exchange order list lacks both authoritative order legs")
+                raise RecoveryValidationError("exchange order list lacks both authoritative order legs")
             verified_legs = []
             for leg in legs:
                 leg_id = leg.get("orderId") if isinstance(leg, dict) else None
                 if leg_id is None:
-                    raise ValueError("exchange order list leg lacks orderId")
+                    raise RecoveryValidationError("exchange order list leg lacks orderId")
                 found = self.exchange.get_order(symbol, order_id=leg_id)
                 if not isinstance(found, dict):
-                    raise ValueError("OCO leg lookup returned a non-object response")
+                    raise RecoveryValidationError("OCO leg lookup returned a non-object response")
                 if str(found.get("symbol", "")).upper() != symbol or str(found.get("side", "")).upper() != str(row.get("side", "")).upper():
-                    raise ValueError("OCO leg symbol or side conflicts with persisted intent")
+                    raise RecoveryValidationError("OCO leg symbol or side conflicts with persisted intent")
                 if str(found.get("orderId", "")) != str(leg_id):
-                    raise ValueError("OCO leg orderId conflicts with order-list evidence")
+                    raise RecoveryValidationError("OCO leg orderId conflicts with order-list evidence")
                 if leg.get("clientOrderId") and str(found.get("clientOrderId", "")) != str(leg.get("clientOrderId")):
-                    raise ValueError("OCO leg clientOrderId conflicts with order-list evidence")
+                    raise RecoveryValidationError("OCO leg clientOrderId conflicts with order-list evidence")
                 if str(found.get("status", "")).upper() not in KNOWN_STATUSES - {"OCO_EXECUTING", "OCO_ALL_DONE", "OCO_REJECTED"}:
-                    raise ValueError("OCO leg has unknown status")
+                    raise RecoveryValidationError("OCO leg has unknown status")
                 verified_legs.append(self._verify_trade_history(symbol, found))
             leg_statuses = [str(x.get("status", "")).upper() for x in verified_legs]
             terminal_leg_statuses = {"FILLED", "CANCELED", "REJECTED", "EXPIRED"}
             if list_status == "ALL_DONE" and not all(x in terminal_leg_statuses for x in leg_statuses):
-                raise ValueError("OCO list is ALL_DONE but a leg is not terminal")
+                raise RecoveryValidationError("OCO list is ALL_DONE but a leg is not terminal")
             if list_status == "EXECUTING" and all(x in terminal_leg_statuses for x in leg_statuses):
-                raise ValueError("OCO list is EXECUTING but both legs are terminal")
+                raise RecoveryValidationError("OCO list is EXECUTING but both legs are terminal")
             if list_status == "REJECT" and not any(x == "REJECTED" for x in leg_statuses):
-                raise ValueError("OCO list is REJECT but no leg confirms rejection")
+                raise RecoveryValidationError("OCO list is REJECT but no leg confirms rejection")
             return {
                 "_oco_normalized": True, "symbol": symbol, "side": str(row.get("side", "")).upper(),
                 "orderListId": listing.get("orderListId"), "listClientOrderId": client_id,
@@ -163,7 +167,7 @@ class ExecutionRecoveryWorker:
             return self.exchange.get_order(symbol, order_id=order_id)
         if client_id:
             return self.exchange.get_order(symbol, orig_client_order_id=client_id)
-        raise ValueError("intent has no persisted orderId or clientOrderId; safe lookup is impossible")
+        raise RecoveryValidationError("intent has no persisted orderId or clientOrderId; safe lookup is impossible")
 
     def run_once(self, *, now=None) -> dict[str, int]:
         """Process one bounded batch; every failed lookup stays unresolved."""
@@ -181,7 +185,7 @@ class ExecutionRecoveryWorker:
                     order = self._verify_trade_history(str(row.get("symbol", "")).upper(), order)
                 valid, status_or_reason = self._validate_order(row, order)
                 if not valid:
-                    raise ValueError(status_or_reason)
+                    raise RecoveryValidationError(status_or_reason)
                 persisted = self.db.complete_execution_intent_recovery(
                     intent_id, self.owner, status_or_reason, order, now=current,
                     retry_seconds=self.base_retry_seconds
@@ -199,7 +203,7 @@ class ExecutionRecoveryWorker:
                 try:
                     # Do not persist raw transport/API exception text: it may contain
                     # request details. Validation errors above use fixed safe messages.
-                    safe_error = str(exc) if isinstance(exc, ValueError) else type(exc).__name__ + ': reconciliation lookup or persistence failed'
+                    safe_error = str(exc) if isinstance(exc, RecoveryValidationError) else type(exc).__name__ + ': reconciliation lookup or persistence failed'
                     deferred = self.db.defer_execution_intent_recovery(
                         intent_id, self.owner, safe_error,
                         self.base_retry_seconds, self.max_retry_seconds, now=current)

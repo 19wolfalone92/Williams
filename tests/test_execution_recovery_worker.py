@@ -107,6 +107,49 @@ def test_not_found_or_rate_limit_remains_ambiguous_with_backoff(tmp_path):
         assert row["next_reconcile_at"]==1005 and row["lease_owner"] is None
         assert db.has_unresolved_execution_intents() and exchange.calls==1
 
+@pytest.mark.parametrize("error", [
+    RuntimeError("HTTP 429 rate limit with private request details"),
+    PermissionError("HTTP 401 unauthorized with private request details"),
+])
+def test_rate_limit_and_auth_errors_are_redacted_and_fail_closed(tmp_path, error):
+    with Database(str(tmp_path / "api-errors.sqlite3")) as db:
+        intent = _intent(db)
+        exchange = FakeExchange(error=error)
+        result = ExecutionRecoveryWorker(db, exchange).run_once(now=1000)
+        row = db.conn.execute("SELECT status,last_reconcile_error FROM execution_intents WHERE intent_id=?",
+                              (intent.intent_id,)).fetchone()
+        assert result["deferred"] == 1
+        assert row["status"] == "AMBIGUOUS" and db.has_unresolved_execution_intents()
+        assert "private request details" not in row["last_reconcile_error"]
+        assert type(error).__name__ in row["last_reconcile_error"]
+        assert exchange.calls == 1 and not hasattr(exchange, "submit_order")
+
+
+def test_none_order_lookup_is_not_treated_as_proof_of_non_submission(tmp_path):
+    with Database(str(tmp_path / "not-found-response.sqlite3")) as db:
+        intent = _intent(db)
+        exchange = FakeExchange({"status": None})
+        result = ExecutionRecoveryWorker(db, exchange).run_once(now=1000)
+        row = db.conn.execute("SELECT status,last_reconcile_error FROM execution_intents WHERE intent_id=?",
+                              (intent.intent_id,)).fetchone()
+        assert result["deferred"] == 1
+        assert row["status"] == "AMBIGUOUS" and db.has_unresolved_execution_intents()
+        assert exchange.calls == 1
+
+
+def test_database_read_failure_aborts_recovery_before_exchange_lookup(tmp_path, monkeypatch):
+    with Database(str(tmp_path / "read-failure.sqlite3")) as db:
+        intent = _intent(db)
+        exchange = FakeExchange(_order("FILLED", executedQty="0.01"))
+        def fail_read(*args, **kwargs):
+            raise OSError("simulated local database unavailable")
+        monkeypatch.setattr(db, "list_unresolved_execution_intents", fail_read)
+        with pytest.raises(OSError):
+            ExecutionRecoveryWorker(db, exchange).run_once(now=1000)
+        assert exchange.calls == 0
+        assert db.has_unresolved_execution_intents()
+
+
 def test_mismatched_order_identity_is_never_marked_reconciled(tmp_path):
     with Database(str(tmp_path/"mismatch.sqlite3")) as db:
         intent=_intent(db); exchange=FakeExchange(_order("FILLED",clientOrderId="other-intent"))
