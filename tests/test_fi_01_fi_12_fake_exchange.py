@@ -189,7 +189,7 @@ def test_fi_05_partial_fill_then_cancel_requires_matching_trade_history(tmp_path
             "avgPrice": "100",
         }
         exchange.trade_rows["705"] = [{
-            "orderId": "705", "qty": "0.004", "price": "100", "quoteQty": "0.4"
+            "id": "trade-705-1", "orderId": "705", "qty": "0.004", "price": "100", "quoteQty": "0.4"
         }]
         result = _worker(db, exchange).run_once(now=time.time() + 10)
         row = _row(db, intent)
@@ -212,7 +212,7 @@ def test_fi_06_duplicate_recovery_delivery_is_idempotent(tmp_path):
             "avgPrice": "100",
         }
         exchange.trade_rows["706"] = [{
-            "orderId": "706", "qty": "0.010", "price": "100", "quoteQty": "1.0"
+            "id": "trade-706-1", "orderId": "706", "qty": "0.010", "price": "100", "quoteQty": "1.0"
         }]
         worker = _worker(db, exchange)
         first = worker.run_once(now=time.time() + 10)
@@ -238,7 +238,7 @@ def test_fi_07_crash_after_reconciliation_commit_does_not_repeat_mutation(tmp_pa
             "avgPrice": "100",
         }
         exchange.trade_rows["707"] = [{
-            "orderId": "707", "qty": "0.010", "price": "100", "quoteQty": "1.0"
+            "id": "trade-707-1", "orderId": "707", "qty": "0.010", "price": "100", "quoteQty": "1.0"
         }]
         original = db.complete_execution_intent_recovery
 
@@ -284,7 +284,7 @@ def test_fi_09_incomplete_or_unavailable_history_never_reconciles_fill(tmp_path)
             "avgPrice": "100",
         }
         exchange.trade_rows["709"] = [{
-            "orderId": "709", "qty": "0.004", "price": "100", "quoteQty": "0.4"
+            "id": "trade-709-1", "orderId": "709", "qty": "0.004", "price": "100", "quoteQty": "0.4"
         }]
         result = _worker(db, exchange).run_once(now=time.time() + 10)
         assert result["deferred"] == 1
@@ -403,3 +403,73 @@ def test_bl004_synthetic_secret_sentinel_is_absent_from_real_sqlite_and_public_e
         assert sentinel not in persisted_dump
         assert exchange.mutation_count == 1
         assert db.has_unresolved_execution_intents()
+
+
+
+def test_fi_09_missing_trade_id_does_not_reconcile(tmp_path):
+    """Missing execution identity is not repaired by matching aggregate quantity."""
+    with Database(str(tmp_path / "fi09-missing-trade-id.sqlite3")) as db:
+        exchange = DeterministicFakeExchange()
+        intent = _new_intent(client_id="fi09-missing-trade-id")
+        _persist_ambiguous(db, intent)
+        exchange.orders[intent.client_order_id] = {
+            "symbol": "BTCUSDT", "side": "BUY", "orderId": "790",
+            "clientOrderId": intent.client_order_id, "status": "FILLED",
+            "origQty": "0.010", "executedQty": "0.010", "price": "100", "avgPrice": "100",
+        }
+        exchange.trade_rows["790"] = [{
+            "orderId": "790", "qty": "0.010", "price": "100", "quoteQty": "1.0"
+        }]
+        result = _worker(db, exchange).run_once(now=time.time() + 10)
+        assert result["deferred"] == 1
+        assert _row(db, intent)["status"] == "AMBIGUOUS"
+        assert "trade ID" in _row(db, intent)["last_reconcile_error"]
+        assert db.has_unresolved_execution_intents()
+        assert exchange.mutation_count == 0
+
+
+def test_fi_09_duplicate_trade_ids_do_not_reconcile(tmp_path):
+    """Duplicate execution IDs are rejected even if aggregate quantity matches."""
+    with Database(str(tmp_path / "fi09-duplicate-trade-id.sqlite3")) as db:
+        exchange = DeterministicFakeExchange()
+        intent = _new_intent(client_id="fi09-duplicate-trade-id")
+        _persist_ambiguous(db, intent)
+        exchange.orders[intent.client_order_id] = {
+            "symbol": "BTCUSDT", "side": "BUY", "orderId": "791",
+            "clientOrderId": intent.client_order_id, "status": "FILLED",
+            "origQty": "0.010", "executedQty": "0.010", "price": "100", "avgPrice": "100",
+        }
+        exchange.trade_rows["791"] = [
+            {"id": "duplicate-trade-id", "orderId": "791", "qty": "0.005", "price": "100", "quoteQty": "0.5"},
+            {"id": "duplicate-trade-id", "orderId": "791", "qty": "0.005", "price": "100", "quoteQty": "0.5"},
+        ]
+        result = _worker(db, exchange).run_once(now=time.time() + 10)
+        assert result["deferred"] == 1
+        assert _row(db, intent)["status"] == "AMBIGUOUS"
+        assert "duplicate trade IDs" in _row(db, intent)["last_reconcile_error"]
+        assert db.has_unresolved_execution_intents()
+        assert exchange.mutation_count == 0
+
+
+def test_fi_09_trade_history_at_limit_is_not_assumed_complete(tmp_path):
+    """A 1000-row bounded response is conservatively treated as potentially truncated."""
+    with Database(str(tmp_path / "fi09-truncated-trade-history.sqlite3")) as db:
+        exchange = DeterministicFakeExchange()
+        intent = _new_intent(client_id="fi09-truncated-trades")
+        _persist_ambiguous(db, intent)
+        exchange.orders[intent.client_order_id] = {
+            "symbol": "BTCUSDT", "side": "BUY", "orderId": "792",
+            "clientOrderId": intent.client_order_id, "status": "FILLED",
+            "origQty": "0.010", "executedQty": "0.010", "price": "100", "avgPrice": "100",
+        }
+        exchange.trade_rows["792"] = [
+            {"id": f"trade-792-{i}", "orderId": "792", "qty": "0.00001",
+             "price": "100", "quoteQty": "0.001"}
+            for i in range(1000)
+        ]
+        result = _worker(db, exchange).run_once(now=time.time() + 10)
+        assert result["deferred"] == 1
+        assert _row(db, intent)["status"] == "AMBIGUOUS"
+        assert "completeness is unproven" in _row(db, intent)["last_reconcile_error"]
+        assert db.has_unresolved_execution_intents()
+        assert exchange.mutation_count == 0
