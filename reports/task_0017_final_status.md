@@ -2,10 +2,13 @@
 
 **PARTIALLY IMPLEMENTED — P0 OPEN**
 
-- PR #66 remains OPEN, Draft, unmerged; base remains `fix/pytest-safe-collection`.
-- Starting SHA `f9d96b98c639c5a7a6232f4ef9a5f15be3342cb4` matched the PR head when this task began.
-- Implementation commit `e5f82ae60b0b5c1e9512f9efe3bedc1d018ab132` added strict per-trade evidence checks and seven deterministic unit tests. Static mutation-boundary guard was added in `1ef8b13575bc5b728c8447b0cd92b54c24e89504`.
-- Python backend run `38276014288` succeeded on `e5f82ae...`. The Python job in Campaign CI run `38276014293` succeeded on that SHA, but its Android job was still in progress at last query.
-- Android APK workflow run `38276015940` on `e5f82ae...` ended `startup_failure`, zero jobs and zero artifacts. Re-run request was rejected with HTTP 403 “This workflow run cannot be retried.” This remains an external verification blocker, not a passing or failing Gradle build.
-- Canonical FI-01–FI-12 end-to-end fake-exchange tests remain NOT TESTED. OCO, cancellation and cancel-replace reconciliation remains unsupported and fail-closed. Full migration/concurrency, mutation path reachability and BL-004 sentinel sweep remain open.
-- The standalone Android workflow has no exact-SHA Android test/lint/APK/signature/checksum evidence. P0 cannot close.
+- PR #66: OPEN, Draft, unmerged. Base branch: `fix/pytest-safe-collection`.
+- Current source/test SHA at snapshot: `7e7b240f07d11e0077d1b1d741a8087f4846a750`.
+- Added strict single-order trade evidence validation and intent-bound durable evidence; expanded deterministic Android unit tests; added automated Python static mutation-boundary regression; strengthened Android workflow path filters and expected APK package/target-SDK checks.
+- Campaign Python on the current SHA: SUCCESS, `233 passed, 4 warnings` in run `38278336855`, including `tests/test_mutation_boundary_inventory.py`.
+- Python backend run `38278337094` was queued/in progress when this snapshot was written; check its final result separately.
+- Campaign Android job in run `38278336855` was still running `Build debug APK and run unit tests`; no pass is claimed yet. Prior SHA `f60e41b...` failed Android test compilation due a fixture bug at `BinanceTradeEvidenceTest.kt:79`; corrected in `7e7b240...`.
+- Standalone Android APK run `38278338697` ended `startup_failure` with zero jobs/artifacts. Rerun was rejected by GitHub with HTTP 403, “This workflow run cannot be retried.” Android APK/signature/checksum/metadata remain unverified until Campaign Android validation passes.
+- Canonical FI-01–FI-12 integrated fake-exchange scenarios remain NOT TESTED. OCO, cancellation and cancel-replace reconciliation remains unsupported and fail-closed. Full migration/concurrency/crash matrix and full BL-004 sentinel sweep remain open.
+- No production credentials or live order mutations were used.
+- P0 is not closed.
