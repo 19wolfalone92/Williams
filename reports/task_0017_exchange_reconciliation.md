@@ -1,23 +1,38 @@
-# TASK 001.7 — Exchange Reconciliation
+# TASK 001.8 — Exchange Reconciliation
 
-- Current source SHA: `7e7b240f07d11e0077d1b1d741a8087f4846a750`.
-- Core code: `StandaloneRuntime.kt:reconcileJournaledSingleOrders`, `BinanceTradeEvidence.kt`, `DurableMutationLedger.kt`; tests in `BinanceTradeEvidenceTest.kt` and `DurableMutationLedgerTest.kt`.
+- Audited code/test SHA: `31ba73ff81c43edb5be4606b200dce752148967a`.
 - Status: PARTIALLY IMPLEMENTED — P0 OPEN.
+- Relevant code: `StandaloneRuntime.kt`, `BinanceTradeEvidence.kt`, `DurableMutationLedger.kt`; tests: `BinanceTradeEvidenceTest.kt`, `DurableMutationLedgerTest.kt`.
 
-## Implemented
-- Exact symbol + persisted `origClientOrderId` order lookup; missing/contradictory response stays unresolved.
-- Trade query scoped to symbol/order ID, with conservative refusal at 1000 records because completeness cannot be assumed.
-- Per-trade checks: symbol/order ID, non-empty unique trade IDs, positive quantity/price/quote quantity, nonnegative commission, commission asset for nonzero commission, positive time, boolean buyer/maker flags, quote quantity consistency, and exact summed quantity versus order executedQty.
-- NEW/PARTIALLY_FILLED/FILLED status-to-quantity consistency checks.
-- Evidence now carries symbol, client order ID, exchange order ID, status, original/executed quantity, trade IDs/count/sum, and verification flags.
-- Durable ledger requires structured evidence, validates status/quantity/trade-ID consistency, binds evidence symbol/client ID to the persisted intent, checks exchange order ID equality, and persists evidence with the state transition transaction. Legacy RECONCILED rows lacking evidence are reopened as unresolved during migration.
-- No blind mutation retry occurs in this reconciler.
+## IMPLEMENTED (source inspection; not a blanket runtime verification)
 
-## Tests
-- New `BinanceTradeEvidenceTest` suite covers valid evidence, zero-execution empty history, duplicate IDs, symbol/order mismatches, invalid economics, commission fields, quote mismatch, missing fields and aggregate quantity mismatch.
-- `DurableMutationLedgerTest` valid reconciliation fixtures now include the required structured and intent-bound evidence.
-- Exact-SHA Android test outcome is pending the current Campaign Android job; a previous run failed to compile a fixture at line 79, fixed in `7e7b240...`.
+- Single POST order recovery queries by symbol and original client order ID.
+- Identity validator requires matching symbol and exact clientOrderId, nonempty exchange order ID, and rejects conflict with a previously persisted exchange order ID.
+- Fill evidence validates trade identity, uniqueness, required fields, quantity/price/quote quantity, commission fields, trade time/side flags, quote consistency, and summed quantity against exchange executedQty.
+- Evidence is bound to the durable intent; transition to RECONCILED validates evidence and persists it with the state transition inside the ledger transaction.
+- Trade history response capped at 1000 rows is treated as potentially truncated and therefore not complete.
+- Legacy RECONCILED records without evidence are reopened as unresolved during migration.
+- Failure/contradiction should leave the operation unresolved; the newly added tests cover selected identity conflicts and durable ID immutability.
 
-## Unresolved
-- Full pagination contract; order-intent economics compared against a typed persisted request (only fingerprint currently persists); commission aggregation by asset; OCO/list children; cancellation/cancel-replace; account balances, campaign exposure, protective coverage and REST/user-stream convergence.
-- A single order/fill match is not campaign or protection certification. P0 remains open.
+## TESTED / VERIFIED
+
+- Campaign Python job in run 38301629067: SUCCESS; unrelated to Android reconciliation.
+- Android unit tests for the current audited SHA: NOT YET VERIFIED; Campaign Android job was still running at inspection.
+- The single-order path is not claimed verified until exact-SHA Android unit tests pass and their report/artifact is inspected.
+
+## Unsupported / BLOCKED
+
+- OCO parent/list and child-order recovery.
+- Cancel single order, cancel order list, and cancelReplace including partial success.
+- End-to-end test for crash after exchange acceptance/response but before SQLite persistence and mutation-count proof.
+- Full pagination contract beyond conservative refusal at the 1000-record boundary.
+- Account balance, campaign exposure, protection coverage, and REST/user-stream convergence.
+- A response timeout or unavailable history is not proof that an order does not exist; unknown remains unresolved and must block risky mutation.
+
+## Required next tests
+
+- Deterministic fake-exchange tests asserting both SQLite final state and exact mutation count after identity/evidence failure.
+- Fault injection between response receipt and transaction commit; restart must reconcile, never blindly resubmit.
+- Duplicate, missing, conflicting and truncated trade evidence must not transition to RECONCILED.
+
+No live Binance credentials or orders used.
