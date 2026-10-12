@@ -70,6 +70,8 @@ def test_ambiguous_submit_never_persists_or_returns_raw_exception(secret):
         barrier.execute(intent(), submit)
 
     assert "submission outcome is ambiguous" in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
     assert secret not in str(caught.value)
     assert db.intents
     assert set(db.intents.values()) == {"AMBIGUOUS"}
