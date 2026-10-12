@@ -1622,24 +1622,24 @@ private class NativeEngine(
             intentId = MutationIdentity.operationId("$method:$path", "BINANCE_SPOT", symbol, logicalKey)
             val fingerprint = MutationIdentity.fingerprint(method, path, symbol, effectiveParams)
             val existing = mutationLedger.find(intentId!!)
-            val intent = mutationLedger.prepare(
+            if (existing != null && existing.state != DurableMutationLedger.State.PREPARED) {
+                throw IllegalStateException("MUTATION_REPLAY_BLOCKED_${existing.state.name}")
+            }
+            val isBuyEntry = method == "POST" && path.endsWith("/order") &&
+                values["side"].equals("BUY", ignoreCase = true)
+            if (isBuyEntry && mutationLedger.unresolved().any { it.operationId != intentId }) {
+                throw IllegalStateException("MUTATION_RECONCILIATION_REQUIRED")
+            }
+            mutationLedger.prepare(
                 operationId = intentId!!,
                 kind = "$method:$path",
                 symbol = symbol,
                 requestFingerprint = fingerprint,
                 exchangeClientId = exchangeClientId
             )
-            if (existing != null && existing.state != DurableMutationLedger.State.PREPARED) {
-                throw IllegalStateException("MUTATION_REPLAY_BLOCKED_${existing.state.name}")
-            }
-            when (intent.state) {
-                DurableMutationLedger.State.PREPARED -> mutationLedger.transition(
-                    intentId!!,
-                    setOf(DurableMutationLedger.State.PREPARED),
-                    DurableMutationLedger.State.SUBMITTING
-                )
-                else -> throw IllegalStateException("MUTATION_REPLAY_BLOCKED_${intent.state.name}")
-            }
+            // This SQLite transaction is the only path from PREPARED to SUBMITTING.
+            // A second worker cannot acquire the same or a conflicting active claim.
+            mutationLedger.claimForSubmission(intentId!!)
         }
 
         var lastBody = "{}"
