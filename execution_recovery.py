@@ -114,16 +114,33 @@ class ExecutionRecoveryWorker:
             trade_order_id = trade.get("orderId")
             if trade_order_id is None or str(trade_order_id) != str(order_id):
                 raise RecoveryValidationError("trade history contains a missing or different orderId")
-            if any(key not in trade or trade.get(key) in (None, "") for key in ("qty", "price", "quoteQty")):
-                raise RecoveryValidationError("trade history row lacks required quantity evidence")
+            required_fields = (
+                "qty", "price", "quoteQty", "commission", "commissionAsset",
+                "time", "isBuyer", "isMaker",
+            )
+            if any(key not in trade or trade.get(key) in (None, "") for key in required_fields):
+                raise RecoveryValidationError("trade history row lacks required execution evidence")
+            if not isinstance(trade.get("isBuyer"), bool) or not isinstance(trade.get("isMaker"), bool):
+                raise RecoveryValidationError("trade history contains invalid maker/buyer flags")
+            if not str(trade.get("commissionAsset", "")).strip():
+                raise RecoveryValidationError("trade history lacks commission asset")
+            side = str(order.get("side", "")).upper()
+            if side not in {"BUY", "SELL"} or trade["isBuyer"] != (side == "BUY"):
+                raise RecoveryValidationError("trade history buyer flag conflicts with order side")
             try:
                 qty = float(trade["qty"])
                 price = float(trade["price"])
                 quote = float(trade["quoteQty"])
-            except (TypeError, ValueError):
+                commission = float(trade["commission"])
+                trade_time = int(trade["time"])
+            except (TypeError, ValueError, OverflowError):
                 raise RecoveryValidationError("trade history contains invalid numeric fields")
-            if qty <= 0 or price <= 0 or quote <= 0:
-                raise RecoveryValidationError("trade history contains non-positive fill values")
+            if qty <= 0 or price <= 0 or quote <= 0 or commission < 0 or trade_time <= 0:
+                raise RecoveryValidationError("trade history contains invalid fill economics or time")
+            expected_quote = qty * price
+            quote_tolerance = max(1e-8, abs(expected_quote) * 1e-6)
+            if abs(quote - expected_quote) > quote_tolerance:
+                raise RecoveryValidationError("trade history quote quantity conflicts with price and quantity")
             total_qty += qty
             total_quote += quote
         tolerance = max(1e-8, abs(executed) * 1e-6)
