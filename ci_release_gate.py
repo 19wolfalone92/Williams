@@ -142,7 +142,6 @@ def main() -> None:
 
     # All external actions are pinned to verified immutable commit SHAs.
     for workflow_path in (
-        ".github/workflows/android-apk.yml",
         ".github/workflows/campaign-ci.yml",
         ".github/workflows/python-ci.yml",
         ".github/workflows/testnet-readonly.yml",
@@ -154,6 +153,15 @@ def main() -> None:
                 assert re.fullmatch(r".+@[0-9a-f]{40}(?:\s+#.*)?", reference), (
                     f"unpinned external action reference in {workflow_path}: {reference}"
                 )
+
+    # The standalone APK workflow's SHA-pinned refs caused repeated GitHub
+    # startup_failure runs with zero jobs/logs. Keep its previously successful
+    # major-version refs until the Actions startup issue can be isolated.
+    must(android_ci, "actions/checkout@v5", "APK workflow known-good action ref")
+    must(android_ci, "actions/setup-java@v6", "APK workflow known-good action ref")
+    must(android_ci, "android-actions/setup-android@v4", "APK workflow known-good action ref")
+    must(android_ci, "gradle/actions/setup-gradle@v5", "APK workflow known-good action ref")
+    must(android_ci, "actions/upload-artifact@v7", "APK workflow known-good action ref")
 
     print("WILLIAMS RELEASE CONTRACT GATE: PASS")
 
