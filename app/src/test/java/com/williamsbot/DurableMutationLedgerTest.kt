@@ -163,6 +163,33 @@ class DurableMutationLedgerTest {
     }
 
     @Test
+    fun sameLogicalOperationKeepsClientIdWhenRequestEconomicsChange() {
+        val original = MutationIdentity.generatedClientOrderId(
+            "POST", "/api/v3/order", "BTCUSDT",
+            "symbol=BTCUSDT&side=BUY&type=MARKET&quantity=0.01",
+            "persisted-entry-operation-77"
+        )
+        val changed = MutationIdentity.generatedClientOrderId(
+            "POST", "/api/v3/order", "BTCUSDT",
+            "symbol=BTCUSDT&side=BUY&type=MARKET&quantity=0.02",
+            "persisted-entry-operation-77"
+        )
+
+        // Client identity names the logical operation. The ledger fingerprint
+        // must reject changed economics under that same operation ID.
+        assertEquals(original, changed)
+        assertFalse(
+            MutationIdentity.fingerprint(
+                "POST", "/api/v3/order", "BTCUSDT",
+                "symbol=BTCUSDT&side=BUY&type=MARKET&quantity=0.01"
+            ) == MutationIdentity.fingerprint(
+                "POST", "/api/v3/order", "BTCUSDT",
+                "symbol=BTCUSDT&side=BUY&type=MARKET&quantity=0.02"
+            )
+        )
+    }
+
+    @Test
     fun changedEconomicParametersChangeFingerprint() {
         val small = MutationIdentity.fingerprint(
             "POST", "/api/v3/order", "BTCUSDT", "symbol=BTCUSDT&side=BUY&type=MARKET&quantity=0.01"
