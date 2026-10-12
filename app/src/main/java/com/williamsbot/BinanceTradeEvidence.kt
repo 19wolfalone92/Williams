@@ -17,6 +17,32 @@ internal object BinanceTradeEvidence {
         val executedQty: BigDecimal
     )
 
+    fun verifyOrderIdentity(
+        expectedSymbol: String,
+        expectedClientOrderId: String,
+        persistedExchangeOrderId: String?,
+        order: org.json.JSONObject
+    ): String {
+        require(expectedSymbol.isNotBlank()) { "ORDER_EVIDENCE_SYMBOL_REQUIRED" }
+        require(expectedClientOrderId.isNotBlank()) { "ORDER_EVIDENCE_CLIENT_ID_REQUIRED" }
+        require(order.optString("symbol").equals(expectedSymbol, ignoreCase = true)) {
+            "ORDER_EVIDENCE_SYMBOL_MISMATCH"
+        }
+        require(order.optString("clientOrderId") == expectedClientOrderId) {
+            "ORDER_EVIDENCE_CLIENT_ID_MISMATCH"
+        }
+        val exchangeOrderId = order.optString("orderId")
+        require(exchangeOrderId.isNotBlank() && exchangeOrderId != "null") {
+            "ORDER_EVIDENCE_EXCHANGE_ID_MISSING"
+        }
+        if (!persistedExchangeOrderId.isNullOrBlank()) {
+            require(persistedExchangeOrderId == exchangeOrderId) {
+                "ORDER_EVIDENCE_PERSISTED_EXCHANGE_ID_MISMATCH"
+            }
+        }
+        return exchangeOrderId
+    }
+
     fun verify(
         expectedSymbol: String,
         expectedOrderId: String,
