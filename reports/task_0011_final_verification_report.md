@@ -22,7 +22,7 @@
 3. Twelve fault-injection scenarios pass: **NOT RUN**.
 4. Concurrency, restart and ambiguous-result tests: **NOT RUN**.
 5. BL-004 across all channels: **NOT VERIFIED**.
-6. Python/backend run `38237781740`: **IN PROGRESS at report update**. Campaign run `38237781557`: **PENDING at report update**. Android APK run `38237782829`: **startup_failure; no jobs**. Final-SHA regression: **NOT VERIFIED**.
+6. Python/backend run `38237781740`: **SUCCESS** on code/test SHA `12f3e70eb58915d56c4bf66ebb5d00c7130a97b`. Campaign run `38237781557`: **PENDING, no jobs returned**. Android APK run `38237782829`: **startup_failure; no jobs**. Android unit tests/lint/debug APK: **NOT VERIFIED**.
 7. CI/artifacts on exact final SHA: **NOT AVAILABLE**.
 8. Release trust, SCA and administrative security controls: **OPEN / NOT VERIFIED**.
 
