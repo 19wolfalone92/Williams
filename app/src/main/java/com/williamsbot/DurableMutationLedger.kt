@@ -15,7 +15,7 @@ import java.util.Locale
  * of the exchange outcome.
  */
 class DurableMutationLedger(context: Context) :
-    SQLiteOpenHelper(context, "williams_mutation_ledger.db", null, 2) {
+    SQLiteOpenHelper(context, "williams_mutation_ledger.db", null, 3) {
 
     enum class State {
         PREPARED,
@@ -40,7 +40,8 @@ class DurableMutationLedger(context: Context) :
         val exchange: String,
         val campaignId: String?,
         val signalId: String?,
-        val attemptId: String
+        val attemptId: String,
+        val reconciliationEvidenceJson: String?
     )
 
     class IntentConflictException : IllegalStateException("MUTATION_INTENT_CONFLICT")
@@ -62,7 +63,8 @@ class DurableMutationLedger(context: Context) :
                 exchange TEXT NOT NULL DEFAULT 'BINANCE_SPOT',
                 campaign_id TEXT,
                 signal_id TEXT,
-                attempt_id TEXT NOT NULL
+                attempt_id TEXT NOT NULL,
+                reconciliation_evidence_json TEXT
             )
             """.trimIndent()
         )
@@ -88,7 +90,16 @@ class DurableMutationLedger(context: Context) :
                     "ON mutation_intents(exchange, exchange_client_id)"
             )
         }
-        if (newVersion > 2) {
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE mutation_intents ADD COLUMN reconciliation_evidence_json TEXT")
+            // Legacy RECONCILED rows have no durable evidence. Re-open them as
+            // unresolved rather than trusting a terminal label without proof.
+            db.execSQL(
+                "UPDATE mutation_intents SET state = 'RECONCILING' " +
+                    "WHERE state = 'RECONCILED' AND reconciliation_evidence_json IS NULL"
+            )
+        }
+        if (newVersion > 3) {
             throw IllegalStateException("MUTATION_LEDGER_MIGRATION_REQUIRED")
         }
     }
@@ -159,9 +170,24 @@ class DurableMutationLedger(context: Context) :
         expected: Set<State>,
         next: State,
         exchangeOrderId: String? = null,
+        reconciliationEvidenceJson: String? = null,
         nowMs: Long = System.currentTimeMillis()
     ): Intent {
         require(expected.isNotEmpty()) { "MUTATION_EXPECTED_STATE_REQUIRED" }
+        if (next == State.RECONCILED) {
+            requireNotNull(reconciliationEvidenceJson) { "MUTATION_RECONCILIATION_EVIDENCE_REQUIRED" }
+            val evidence = runCatching { org.json.JSONObject(reconciliationEvidenceJson) }.getOrNull()
+                ?: throw IllegalArgumentException("MUTATION_RECONCILIATION_EVIDENCE_INVALID")
+            require(
+                evidence.optString("source").isNotBlank() &&
+                    evidence.optBoolean("query_complete", false) &&
+                    evidence.optBoolean("order_verified", false) &&
+                    evidence.optBoolean("fills_verified", false) &&
+                    evidence.optLong("checked_at_ms", 0L) > 0L
+            ) { "MUTATION_RECONCILIATION_EVIDENCE_INCOMPLETE" }
+        } else {
+            require(reconciliationEvidenceJson == null) { "MUTATION_EVIDENCE_ONLY_ALLOWED_FOR_RECONCILED" }
+        }
         return writableDatabase.transaction {
             val current = readById(this, operationId)
                 ?: throw IllegalStateException("MUTATION_INTENT_NOT_FOUND")
@@ -173,6 +199,7 @@ class DurableMutationLedger(context: Context) :
                 put("state", next.name)
                 put("updated_at_ms", nowMs)
                 if (exchangeOrderId != null) put("exchange_order_id", exchangeOrderId)
+                if (reconciliationEvidenceJson != null) put("reconciliation_evidence_json", reconciliationEvidenceJson)
             }
             val changed = update(
                 "mutation_intents",
@@ -235,7 +262,7 @@ class DurableMutationLedger(context: Context) :
         // Keep execution blocked until a reconciliation worker records RECONCILED.
         val unresolvedSql =
             "SELECT operation_id, kind, symbol, request_fingerprint, exchange_client_id, state, " +
-                "exchange_order_id, created_at_ms, updated_at_ms, exchange, campaign_id, signal_id, attempt_id " +
+                "exchange_order_id, created_at_ms, updated_at_ms, exchange, campaign_id, signal_id, attempt_id, reconciliation_evidence_json " +
                 "FROM mutation_intents WHERE state IN (?, ?, ?, ?, ?) ORDER BY created_at_ms"
         db.rawQuery(
             unresolvedSql,
@@ -261,7 +288,7 @@ class DurableMutationLedger(context: Context) :
     private fun readById(db: SQLiteDatabase, operationId: String): Intent? =
         db.rawQuery(
             "SELECT operation_id, kind, symbol, request_fingerprint, exchange_client_id, state, " +
-                "exchange_order_id, created_at_ms, updated_at_ms, exchange, campaign_id, signal_id, attempt_id " +
+                "exchange_order_id, created_at_ms, updated_at_ms, exchange, campaign_id, signal_id, attempt_id, reconciliation_evidence_json " +
                 "FROM mutation_intents WHERE operation_id = ?",
             arrayOf(operationId)
         ).use { cursor -> if (cursor.moveToFirst()) cursorToIntent(cursor) else null }
@@ -279,7 +306,8 @@ class DurableMutationLedger(context: Context) :
         exchange = cursor.getString(9),
         campaignId = if (cursor.isNull(10)) null else cursor.getString(10),
         signalId = if (cursor.isNull(11)) null else cursor.getString(11),
-        attemptId = cursor.getString(12)
+        attemptId = cursor.getString(12),
+        reconciliationEvidenceJson = if (cursor.isNull(13)) null else cursor.getString(13)
     )
 
     private fun allowed(from: State, to: State): Boolean = when (from) {
