@@ -150,6 +150,8 @@ class TradingConfig:
         max_positions = min(5, max(1, _int(source, "MAX_OPEN_POSITIONS", 5)))
         risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
         risk = max(0.0, min(0.0025, _float(source, risk_key, 0.0025)))
+        initial_entry_risk = max(0.0, min(risk, 0.0025, _float(source, "INITIAL_ENTRY_RISK_PCT", 0.002)))
+        campaign_risk = max(risk, min(0.006, _float(source, "CAMPAIGN_RISK_LIMIT_PCT", 0.006)))
         total_risk = max(0.0, min(0.006, _float(source, "MAX_TOTAL_RISK_PCT", 0.006)))
 
         execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", source.get("INTERVAL", "1h"))).strip().lower()
@@ -182,6 +184,8 @@ class TradingConfig:
             require_htf_confirmation=_bool(source, "REQUIRE_HTF_CONFIRMATION", True),
             no_trade_when_uncertain=_bool(source, "NO_TRADE_WHEN_UNCERTAIN", True),
             risk_per_trade_pct=risk,
+            initial_entry_risk_pct=initial_entry_risk,
+            campaign_risk_limit_pct=campaign_risk,
             max_total_risk_pct=max(total_risk, risk),
             max_daily_loss_pct=max(0.0, min(0.03, _float(source, "MAX_DAILY_LOSS_PCT", 0.03))),
             max_consecutive_losses=max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 3)),
