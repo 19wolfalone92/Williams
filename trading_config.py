@@ -149,11 +149,18 @@ class TradingConfig:
             symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
 
         max_positions = min(1, max(1, _int(source, "MAX_OPEN_POSITIONS", 1)))
-        risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
-        risk = max(0.0, min(0.0025, _float(source, risk_key, 0.0025)))
-        initial_entry_risk = max(0.0, min(risk, 0.0025, _float(source, "INITIAL_ENTRY_RISK_PCT", 0.002)))
-        campaign_risk = max(risk, min(0.006, _float(source, "CAMPAIGN_RISK_LIMIT_PCT", 0.006)))
+        # Parse outer caps first. A user may tighten any cap, but no lower-level
+        # risk parameter may silently override a stricter campaign/portfolio cap.
         total_risk = max(0.0, min(0.006, _float(source, "MAX_TOTAL_RISK_PCT", 0.006)))
+        requested_campaign_risk = max(
+            0.0, min(0.006, _float(source, "CAMPAIGN_RISK_LIMIT_PCT", 0.006))
+        )
+        campaign_risk = min(total_risk, requested_campaign_risk)
+        risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
+        risk = max(0.0, min(0.0025, total_risk, campaign_risk, _float(source, risk_key, 0.0025)))
+        initial_entry_risk = max(
+            0.0, min(risk, 0.0025, _float(source, "INITIAL_ENTRY_RISK_PCT", 0.002))
+        )
 
         execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", source.get("INTERVAL", "1h"))).strip().lower()
         structural_timeframes = _tf_chain(execution_timeframe, source)
@@ -187,7 +194,7 @@ class TradingConfig:
             risk_per_trade_pct=risk,
             initial_entry_risk_pct=initial_entry_risk,
             campaign_risk_limit_pct=campaign_risk,
-            max_total_risk_pct=max(total_risk, risk),
+            max_total_risk_pct=total_risk,
             max_daily_loss_pct=max(0.0, min(0.01, _float(source, "MAX_DAILY_LOSS_PCT", 0.01))),
             max_consecutive_losses=min(2, max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 2))),
             cooldown_minutes=max(0, _int(source, "COOLDOWN_MINUTES", 30)),
