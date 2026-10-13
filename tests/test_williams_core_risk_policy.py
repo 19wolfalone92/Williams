@@ -7,9 +7,9 @@ class WilliamsCoreRiskPolicyTests(unittest.TestCase):
     def setUp(self):
         self.engine = RiskEngine(balance_quote=10_000)
 
-    def test_core_defaults_use_conservative_risk_overlay(self):
-        self.assertAlmostEqual(self.engine.risk_per_trade_pct, 0.0025)
-        self.assertAlmostEqual(self.engine.max_daily_loss_pct, 0.01)
+    def test_core_defaults_preserve_user_selected_risk_limits(self):
+        self.assertAlmostEqual(self.engine.risk_per_trade_pct, 0.005)
+        self.assertAlmostEqual(self.engine.max_daily_loss_pct, 0.03)
 
     def test_missing_structural_stop_fails_closed_instead_of_using_atr_fallback(self):
         result = self.engine.analyse(
