@@ -1026,6 +1026,7 @@ class CampaignExecutionService:
         )
         campaign.tags["signal_role"] = signal.role.value
         campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
+        campaign.tags["last_signal_time_ms"] = int(signal.event_time_ms)
         campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
         campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
