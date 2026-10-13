@@ -99,15 +99,15 @@ def _row_time_ms(row: pd.Series) -> int:
 
 def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5, side: str | None = None) -> tuple[float, bool]:
     """Approximate increasing separation of price from the Alligator Jaw."""
-    if index < 1 or "jaw_shifted" not in ind.columns:
+    if index < 1 or not ({"jaw_current", "jaw_shifted"} & set(ind.columns)):
         return 0.0, False
 
     start = max(0, index - max(3, int(window)) + 1)
     rows = ind.iloc[start:index + 1].copy()
-    if len(rows) < 3 or rows["jaw_shifted"].isna().all():
+    if len(rows) < 3 or rows.get("jaw_current", rows.get("jaw_shifted")).isna().all():
         return 0.0, False
 
-    jaw = pd.to_numeric(rows["jaw_shifted"], errors="coerce")
+    jaw = pd.to_numeric(rows.get("jaw_current", rows.get("jaw_shifted")), errors="coerce")
     low = pd.to_numeric(rows["low"], errors="coerce")
     high = pd.to_numeric(rows["high"], errors="coerce")
     close = pd.to_numeric(rows["close"], errors="coerce")
@@ -315,7 +315,7 @@ def _latest_confirmed_fractal(
             if direction == "LONG"
             else pd.to_numeric(group["high"], errors="coerce").max()
         )
-        teeth = float(row.get("teeth_shifted", 0.0) or 0.0)
+        teeth = float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0)
 
         if current_teeth is not None:
             if direction == "LONG" and trigger <= float(current_teeth):
@@ -467,7 +467,7 @@ def extract_ntd_ao_signal_specs(
         trigger_price=trigger,
         protective_reference=protective,
         trigger_buffer_ticks=1,
-        teeth_at_detection=float(current.get("teeth_shifted", 0.0) or 0.0),
+        teeth_at_detection=float(current.get("teeth_current", current.get("teeth_shifted", 0.0)) or 0.0),
         alligator_bullish=bool(current.get("bullish_alligator", False)),
         alligator_awake=bool(current.get("alligator_awake", False)),
         reason=reason,
@@ -601,7 +601,9 @@ def extract_ntd_zone_add_on_specs(
     direction = str(side or "").upper()
     if direction not in {"LONG", "SHORT"} or ind is None or len(ind) < 2:
         return []
-    required = {"open", "high", "low", "close", "ao", "ac", "teeth_shifted"}
+    required = {"open", "high", "low", "close", "ao", "ac"}
+    if not ({"teeth_current", "teeth_shifted"} & set(ind.columns)):
+        return []
     gate_col = "long_fractal_outside" if direction == "LONG" else "short_fractal_outside"
     if not required.issubset(ind.columns) or gate_col not in ind.columns:
         return []
@@ -732,7 +734,7 @@ def extract_ntd_fractal_signal_specs(
         center = ind.iloc[center_i]
         confirmation = ind.iloc[confirmation_i]
         level = float(center["high"] if is_long else center["low"])
-        teeth = float(confirmation.get("teeth_shifted", 0.0) or 0.0)
+        teeth = float(confirmation.get("teeth_current", confirmation.get("teeth_shifted", 0.0)) or 0.0)
         if not all(math.isfinite(v) and v > 0 for v in (level, teeth)):
             continue
         trigger = level + tick if is_long else level - tick
