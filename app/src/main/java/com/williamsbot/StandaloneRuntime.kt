@@ -2455,9 +2455,13 @@ private class NativeEngine(
             val startedAt = System.currentTimeMillis()
             try {
                 performScan()
-                scannerState = "READY"
-                scannerError = null
-                lastError = null
+                // The campaign scanner may deliberately finish in PARTIAL_BLOCKED,
+                // FAILED, or BLOCKED_*; do not overwrite that decision with READY.
+                if (scannerState == "RUNNING") {
+                    scannerState = "READY"
+                    scannerError = null
+                    lastError = null
+                }
             } catch (x: Exception) {
                 scannerState = "FAILED"
                 scannerError = x.javaClass.simpleName + ": " + (x.message ?: "")
