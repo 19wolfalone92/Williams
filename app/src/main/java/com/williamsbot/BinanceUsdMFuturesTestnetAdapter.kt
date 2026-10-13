@@ -41,6 +41,22 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     fun exchangeInfo(): JSONObject =
         request("GET", "/fapi/v1/exchangeInfo", emptyMap(), signed = false)
 
+    fun markPrice(symbol: String): Double {
+        requireSymbol(symbol)
+        val url = HttpUrl.parse("$base/fapi/v1/premiumIndex")!!.newBuilder()
+            .addQueryParameter("symbol", symbol)
+            .build()
+        val request = Request.Builder().url(url).get().build()
+        http.newCall(request).execute().use { response ->
+            val body = response.body()?.string().orEmpty()
+            if (!response.isSuccessful) throw IOException("Futures mark price HTTP ${response.code()}: ${body.take(300)}")
+            val value = JSONObject(body).optString("markPrice").toDoubleOrNull()
+                ?: throw IOException("Futures mark price response is malformed")
+            if (!value.isFinite() || value <= 0.0) throw IOException("Futures mark price is invalid")
+            return value
+        }
+    }
+
     fun klines(symbol: String, interval: String = "1h", limit: Int = 300): JSONArray {
         requireSymbol(symbol)
         require(interval in setOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"))
@@ -90,6 +106,40 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     fun openOrders(symbol: String): JSONArray {
         requireSymbol(symbol)
         return JSONArray(requestRaw("GET", "/fapi/v1/openOrders", mapOf("symbol" to symbol), signed = true))
+    }
+
+    /** Explicit direction API prevents strategy code from accidentally mapping SHORT to BUY. */
+    fun openMarketPosition(
+        symbol: String,
+        direction: String,
+        quantity: String,
+        clientOrderId: String
+    ): JSONObject {
+        require(direction == "LONG" || direction == "SHORT") { "Direction must be LONG or SHORT" }
+        return newOrder(
+            symbol = symbol,
+            side = if (direction == "LONG") "BUY" else "SELL",
+            quantity = quantity,
+            reduceOnly = false,
+            clientOrderId = clientOrderId
+        )
+    }
+
+    /** Close only by reducing the current one-way position; never reverse on exit. */
+    fun closeMarketPosition(
+        symbol: String,
+        direction: String,
+        quantity: String,
+        clientOrderId: String
+    ): JSONObject {
+        require(direction == "LONG" || direction == "SHORT") { "Direction must be LONG or SHORT" }
+        return newOrder(
+            symbol = symbol,
+            side = if (direction == "LONG") "SELL" else "BUY",
+            quantity = quantity,
+            reduceOnly = true,
+            clientOrderId = clientOrderId
+        )
     }
 
     /** New order is intentionally reduce-only capable; strategy must supply side and quantity. */
@@ -200,8 +250,15 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     }
 
     private fun requireSymbol(symbol: String) {
-        require(symbol.matches(Regex("[A-Z0-9]{5,20}")) && symbol.endsWith("USDT")) {
-            "Only approved USDT-margined Futures symbols are supported"
+        require(symbol in APPROVED_SYMBOLS) {
+            "Symbol is outside the fixed approved USD-M Futures universe: $symbol"
         }
+    }
+
+    companion object {
+        val APPROVED_SYMBOLS: Set<String> = setOf(
+            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+            "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
+        )
     }
 }
