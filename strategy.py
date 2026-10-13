@@ -29,13 +29,24 @@ def _streak(mask):
     return pd.Series(out, index=mask.index, dtype=int)
 
 
-def _profitunity_window(volume_up, mfi_up):
-    """Classify Williams' four volume/MFI states."""
-    result = pd.Series("STABLE", index=volume_up.index, dtype=object)
-    result.loc[volume_up & mfi_up] = "GREEN"
-    result.loc[~volume_up & ~mfi_up] = "FADING"
-    result.loc[~volume_up & mfi_up] = "FAKE"
-    result.loc[volume_up & ~mfi_up] = "SQUAT"
+def _profitunity_window(volume_up, mfi_up, valid=None):
+    """Classify relative MFI/volume states without inventing a warm-up state.
+
+    UNKNOWN means at least one current/previous input is unavailable. STABLE
+    is reserved for valid equal-direction comparisons, not NaN comparisons.
+    """
+    if valid is None:
+        valid = volume_up.notna() & mfi_up.notna()
+    else:
+        valid = valid.astype(bool)
+    volume_up = volume_up.fillna(False).astype(bool)
+    mfi_up = mfi_up.fillna(False).astype(bool)
+    result = pd.Series("UNKNOWN", index=volume_up.index, dtype=object)
+    result.loc[valid] = "STABLE"
+    result.loc[valid & volume_up & mfi_up] = "GREEN"
+    result.loc[valid & ~volume_up & ~mfi_up] = "FADING"
+    result.loc[valid & ~volume_up & mfi_up] = "FAKE"
+    result.loc[valid & volume_up & ~mfi_up] = "SQUAT"
     return result
 
 
@@ -81,32 +92,90 @@ def calculate_indicators(df, cfg):
     x.loc[x["ao_green"] & x["ac_green"], "williams_zone"] = "GREEN"
     x.loc[x["ao_red"] & x["ac_red"], "williams_zone"] = "RED"
 
-    # Fractals. The center must be strictly higher/lower than the two bars
-    # on each side; equality therefore does not create a false fractal.
-    left = cfg["fractal_left"]
-    right = cfg["fractal_right"]
+    # Williams fractals: the centre may be a plateau of adjacent equal
+    # extremes. Two bars on each side of the whole plateau must be strictly
+    # lower (up fractal) / higher (down fractal). The anchor is the LAST bar
+    # of the equal-extreme group; confirmation is the close of the second
+    # right-hand bar. Centre markers are retrospective diagnostics only;
+    # consumers must use the explicit confirmation columns for decisions.
+    left = max(2, int(cfg["fractal_left"]))
+    right = max(2, int(cfg["fractal_right"]))
+    highs = pd.to_numeric(x["high"], errors="coerce").to_numpy(dtype=float)
+    lows = pd.to_numeric(x["low"], errors="coerce").to_numpy(dtype=float)
+    n = len(x)
+
     x["fractal_up"] = False
     x["fractal_down"] = False
-    for i in range(left, len(x) - right):
-        if (
-            x["high"].iloc[i] > x["high"].iloc[i-left:i].max()
-            and x["high"].iloc[i] > x["high"].iloc[i+1:i+right+1].max()
-        ):
-            x.iloc[i, x.columns.get_loc("fractal_up")] = True
-        if (
-            x["low"].iloc[i] < x["low"].iloc[i-left:i].min()
-            and x["low"].iloc[i] < x["low"].iloc[i+1:i+right+1].min()
-        ):
-            x.iloc[i, x.columns.get_loc("fractal_down")] = True
-
+    x["fractal_up_group_start_index"] = np.nan
+    x["fractal_down_group_start_index"] = np.nan
+    x["fractal_up_confirmation_index"] = np.nan
+    x["fractal_down_confirmation_index"] = np.nan
+    x["fractal_up_confirmed"] = False
+    x["fractal_down_confirmed"] = False
     x["confirmed_up_level"] = np.nan
     x["confirmed_down_level"] = np.nan
-    for i in range(left + right, len(x)):
-        fi = i - right
-        if bool(x["fractal_up"].iloc[fi]):
-            x.iloc[i, x.columns.get_loc("confirmed_up_level")] = x["high"].iloc[fi]
-        if bool(x["fractal_down"].iloc[fi]):
-            x.iloc[i, x.columns.get_loc("confirmed_down_level")] = x["low"].iloc[fi]
+    x["confirmed_up_center_index"] = np.nan
+    x["confirmed_down_center_index"] = np.nan
+    x["confirmed_up_group_start_index"] = np.nan
+    x["confirmed_down_group_start_index"] = np.nan
+    x["confirmed_up_confirmation_index"] = np.nan
+    x["confirmed_down_confirmation_index"] = np.nan
+
+    for anchor in range(left, n):
+        # Only the last bar of an adjacent equal-extreme group can anchor it.
+        high_value = highs[anchor]
+        low_value = lows[anchor]
+        if not (np.isfinite(high_value) and np.isfinite(low_value)):
+            continue
+
+        high_start = anchor
+        while high_start > 0 and highs[high_start - 1] == high_value:
+            high_start -= 1
+        low_start = anchor
+        while low_start > 0 and lows[low_start - 1] == low_value:
+            low_start -= 1
+
+        # If the equal-extreme group continues to the next bar, defer it until
+        # the group's last bar; this avoids duplicate pivots for one plateau.
+        high_is_group_end = anchor + 1 >= n or highs[anchor + 1] != high_value
+        low_is_group_end = anchor + 1 >= n or lows[anchor + 1] != low_value
+        confirmation = anchor + right
+        if confirmation >= n:
+            continue
+
+        if (
+            high_is_group_end
+            and high_start >= left
+            and np.isfinite(highs[high_start-left:high_start]).all()
+            and np.isfinite(highs[anchor+1:confirmation+1]).all()
+            and (highs[high_start-left:high_start] < high_value).all()
+            and (highs[anchor+1:confirmation+1] < high_value).all()
+        ):
+            x.iloc[anchor, x.columns.get_loc("fractal_up")] = True
+            x.iloc[anchor, x.columns.get_loc("fractal_up_group_start_index")] = high_start
+            x.iloc[anchor, x.columns.get_loc("fractal_up_confirmation_index")] = confirmation
+            x.iloc[confirmation, x.columns.get_loc("fractal_up_confirmed")] = True
+            x.iloc[confirmation, x.columns.get_loc("confirmed_up_level")] = high_value
+            x.iloc[confirmation, x.columns.get_loc("confirmed_up_center_index")] = anchor
+            x.iloc[confirmation, x.columns.get_loc("confirmed_up_group_start_index")] = high_start
+            x.iloc[confirmation, x.columns.get_loc("confirmed_up_confirmation_index")] = confirmation
+
+        if (
+            low_is_group_end
+            and low_start >= left
+            and np.isfinite(lows[low_start-left:low_start]).all()
+            and np.isfinite(lows[anchor+1:confirmation+1]).all()
+            and (lows[low_start-left:low_start] > low_value).all()
+            and (lows[anchor+1:confirmation+1] > low_value).all()
+        ):
+            x.iloc[anchor, x.columns.get_loc("fractal_down")] = True
+            x.iloc[anchor, x.columns.get_loc("fractal_down_group_start_index")] = low_start
+            x.iloc[anchor, x.columns.get_loc("fractal_down_confirmation_index")] = confirmation
+            x.iloc[confirmation, x.columns.get_loc("fractal_down_confirmed")] = True
+            x.iloc[confirmation, x.columns.get_loc("confirmed_down_level")] = low_value
+            x.iloc[confirmation, x.columns.get_loc("confirmed_down_center_index")] = anchor
+            x.iloc[confirmation, x.columns.get_loc("confirmed_down_group_start_index")] = low_start
+            x.iloc[confirmation, x.columns.get_loc("confirmed_down_confirmation_index")] = confirmation
 
     x["last_up_level"] = x["confirmed_up_level"].ffill()
     x["last_down_level"] = x["confirmed_down_level"].ffill()
@@ -299,12 +368,19 @@ def calculate_indicators(df, cfg):
         x["mfi_proxy_source"] = "BASE_VOLUME_PROXY"
     x["mfi_volume_proxy"] = mfi_volume
     x["mfi_proxy"] = (x["high"] - x["low"]) / mfi_volume.replace(0, np.nan)
-    x["volume_up"] = mfi_volume > mfi_volume.shift(1)
-    x["volume_down"] = mfi_volume < mfi_volume.shift(1)
-    x["mfi_up"] = x["mfi_proxy"] > x["mfi_proxy"].shift(1)
-    x["mfi_down"] = x["mfi_proxy"] < x["mfi_proxy"].shift(1)
-    x["profitunity_window"] = _profitunity_window(x["volume_up"], x["mfi_up"])
-    x["squatting_bar"] = x["profitunity_window"] == "SQUAT"
+    x["volume_up"] = (mfi_volume > mfi_volume.shift(1)).fillna(False).astype(bool)
+    x["volume_down"] = (mfi_volume < mfi_volume.shift(1)).fillna(False).astype(bool)
+    x["mfi_up"] = (x["mfi_proxy"] > x["mfi_proxy"].shift(1)).fillna(False).astype(bool)
+    x["mfi_down"] = (x["mfi_proxy"] < x["mfi_proxy"].shift(1)).fillna(False).astype(bool)
+    mfi_comparison_valid = (
+        mfi_volume.notna() & mfi_volume.shift(1).notna()
+        & x["mfi_proxy"].notna() & x["mfi_proxy"].shift(1).notna()
+    )
+    x["mfi_proxy_valid"] = mfi_comparison_valid.astype(bool)
+    x["profitunity_window"] = _profitunity_window(
+        x["volume_up"], x["mfi_up"], valid=mfi_comparison_valid
+    )
+    x["squatting_bar"] = (x["profitunity_window"] == "SQUAT").astype(bool)
 
     return x
 
