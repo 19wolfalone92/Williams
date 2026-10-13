@@ -14,7 +14,7 @@ import org.json.JSONObject
  * Binance told the bot, without relying on RAM or SharedPreferences.
  */
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 4) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 5) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
@@ -114,6 +114,23 @@ class TradingAuditStore(context: Context) :
                 created_at INTEGER NOT NULL
             )
         """.trimIndent())
+
+        db.execSQL("""
+            CREATE TABLE mutation_intents(
+                mutation_id TEXT PRIMARY KEY,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                symbol TEXT,
+                client_order_id TEXT,
+                request_params TEXT,
+                state TEXT NOT NULL,
+                response_code INTEGER,
+                response_json TEXT,
+                error TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+        """.trimIndent())
     }
 
     override fun onUpgrade(
@@ -121,6 +138,22 @@ class TradingAuditStore(context: Context) :
         oldVersion: Int,
         newVersion: Int
     ) {
+        db.execSQL("""
+            CREATE TABLE mutation_intents(
+                mutation_id TEXT PRIMARY KEY,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                symbol TEXT,
+                client_order_id TEXT,
+                request_params TEXT,
+                state TEXT NOT NULL,
+                response_code INTEGER,
+                response_json TEXT,
+                error TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+        """.trimIndent())
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS trades(
                 trade_id TEXT PRIMARY KEY,
@@ -242,6 +275,101 @@ class TradingAuditStore(context: Context) :
         if (inserted) return "CLAIMED"
         return if (stored == canonicalPayload) "DUPLICATE" else "CONFLICT"
     }
+    /**
+     * Write-ahead record for every signed POST/DELETE. The caller must not
+     * touch the exchange unless this row and its post-insert read-back succeed.
+     */
+    @Synchronized
+    fun beginMutation(
+        method: String,
+        path: String,
+        requestParams: String
+    ): String {
+        val id = java.util.UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        val symbol = requestParams.split("&")
+            .firstOrNull { it.startsWith("symbol=") }
+            ?.substringAfter("=")
+            ?.let { android.net.Uri.decode(it) }
+        val clientOrderId = requestParams.split("&")
+            .firstOrNull {
+                it.startsWith("newClientOrderId=") ||
+                    it.startsWith("listClientOrderId=")
+            }
+            ?.substringAfter("=")
+            ?.let { android.net.Uri.decode(it) }
+        val values = ContentValues().apply {
+            put("mutation_id", id)
+            put("method", method)
+            put("path", path)
+            put("symbol", symbol)
+            put("client_order_id", clientOrderId)
+            put("request_params", requestParams)
+            put("state", "PREPARED")
+            put("created_at", now)
+            put("updated_at", now)
+        }
+        val db = writableDatabase
+        db.insertOrThrow("mutation_intents", null, values)
+        db.rawQuery(
+            "SELECT state, method, path FROM mutation_intents WHERE mutation_id=?",
+            arrayOf(id)
+        ).use { cursor ->
+            check(cursor.moveToFirst()) { "mutation intent read-back missing" }
+            check(cursor.getString(0) == "PREPARED") { "mutation intent state mismatch" }
+            check(cursor.getString(1) == method && cursor.getString(2) == path) {
+                "mutation intent identity mismatch"
+            }
+        }
+        return id
+    }
+
+    @Synchronized
+    fun completeMutation(
+        mutationId: String,
+        responseCode: Int,
+        responseJson: String
+    ) {
+        val values = ContentValues().apply {
+            put("state", "HTTP_RESPONSE")
+            put("response_code", responseCode)
+            put("response_json", responseJson)
+            put("updated_at", System.currentTimeMillis())
+        }
+        val db = writableDatabase
+        check(db.update(
+            "mutation_intents",
+            values,
+            "mutation_id=? AND state IN ('PREPARED','UNKNOWN')",
+            arrayOf(mutationId)
+        ) == 1) { "mutation intent completion update missing" }
+        db.rawQuery(
+            "SELECT state, response_code FROM mutation_intents WHERE mutation_id=?",
+            arrayOf(mutationId)
+        ).use { cursor ->
+            check(cursor.moveToFirst()) { "mutation completion read-back missing" }
+            check(cursor.getString(0) == "HTTP_RESPONSE" && cursor.getInt(1) == responseCode) {
+                "mutation completion read-back mismatch"
+            }
+        }
+    }
+
+    @Synchronized
+    fun markMutationUnknown(mutationId: String, error: String) {
+        val values = ContentValues().apply {
+            put("state", "UNKNOWN")
+            put("error", error.take(1000))
+            put("updated_at", System.currentTimeMillis())
+        }
+        val db = writableDatabase
+        check(db.update(
+            "mutation_intents",
+            values,
+            "mutation_id=? AND state='PREPARED'",
+            arrayOf(mutationId)
+        ) == 1) { "unknown mutation state update missing" }
+    }
+
     @Synchronized
     fun recordRestCall(
         method: String,
