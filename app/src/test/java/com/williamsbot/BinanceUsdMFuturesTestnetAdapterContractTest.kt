@@ -24,4 +24,17 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
             }
         )
     }
+    @Test
+    fun longAndShortEntryAndExitSidesAreOppositeAndNeverAmbiguous() {
+        assertEquals("BUY", BinanceUsdMFuturesTestnetAdapter.entrySide("LONG"))
+        assertEquals("SELL", BinanceUsdMFuturesTestnetAdapter.entrySide("SHORT"))
+        assertEquals("SELL", BinanceUsdMFuturesTestnetAdapter.closeSide("LONG"))
+        assertEquals("BUY", BinanceUsdMFuturesTestnetAdapter.closeSide("SHORT"))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun invalidDirectionCannotReachOrderSideMapping() {
+        BinanceUsdMFuturesTestnetAdapter.entrySide("FLAT")
+    }
+
 }
