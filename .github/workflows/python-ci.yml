@@ -2,7 +2,7 @@ name: Python backend tests
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, audit/williams-2.1-task-009-integration]
     paths:
       - "*.py"
       - "tests/**"
@@ -43,7 +43,7 @@ jobs:
 
       - name: Compile production Python
         run: |
-          python -m py_compile             strategy.py data.py risk_engine.py db.py binance_client.py binance_rules.py preflight_gate.py             market_scanner.py wave_engine.py portfolio_scanner.py             portfolio_controller.py trader.py server.py ws_hub.py trading_config.py market_context.py execution_barrier.py wise_men.py l2_slippage.py equity_breaker.py mtf_context_service.py hypothesis_engine.py execution_accumulator.py             feature_store.py ai_shadow.py cpcv_backtester.py stress_suite.py mock_exchange.py quant_models.py shap_explain.py derivatives_features.py shadow_execution.py quant_ml_pipeline.py
+          python -m py_compile             strategy.py data.py risk_engine.py db.py binance_client.py binance_rules.py preflight_gate.py             market_scanner.py wave_engine.py portfolio_scanner.py             portfolio_controller.py portfolio_trader.py campaign_engine.py campaign_model.py campaign_execution.py williams_signals.py trader.py server.py ws_hub.py trading_config.py market_context.py execution_barrier.py wise_men.py l2_slippage.py equity_breaker.py mtf_context_service.py hypothesis_engine.py execution_accumulator.py             feature_store.py ai_shadow.py cpcv_backtester.py stress_suite.py mock_exchange.py quant_models.py shap_explain.py derivatives_features.py shadow_execution.py quant_ml_pipeline.py
 
       - name: Run full static safety audit
         run: python full_safety_audit.py
@@ -88,6 +88,16 @@ jobs:
             test_execution_architecture.py \
             test_integration_bindings.py \
             test_testnet_release_gate.py \
+            test_equity_breaker.py \
+            tests/test_campaign_entry_context_gate.py \
+            tests/test_execution_persistence_fail_closed.py \
+            tests/test_fractal_equal_extremes.py \
+            tests/test_williams_core_risk_policy.py \
+            tests/test_super_ao_event_semantics.py \
+            tests/test_configurable_super_ao.py \
+            tests/test_campaign_risk_defaults.py \
+            tests/test_scanner_context_version_vector.py \
+            tests/test_spot_universe_allowlist.py \
             2>&1 | tee pytest-output.txt
 
       - name: Upload pytest diagnostics

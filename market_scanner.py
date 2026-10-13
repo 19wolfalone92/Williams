@@ -13,6 +13,7 @@ from feature_store import FeatureStore, build_market_feature_vector
 from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
 from williams_signals import extract_long_signal_specs
 from shadow_execution import ShadowExecutionSimulator
+from trading_config import TradingConfig
 
 
 log = logging.getLogger("williams-scanner")
@@ -126,23 +127,26 @@ class MarketScanner:
     4. Re-rank using the legacy score plus a bounded wave adjustment.
     """
 
-    def __init__(self, client, symbols=None, interval=None):
+    def __init__(self, client, symbols=None, interval=None, context_cache=None):
         self.client = client
+        self.context_cache = context_cache
 
         self.interval = _normalize_interval(interval or os.getenv("INTERVAL", "1h"))
 
         # `None` means resolve the configured/default universe. An explicit []
         # remains a genuine empty test universe and does not fall back to all.
         self.explicit_symbols = symbols is not None
-        self.symbols = (
+        allowed_symbols = set(TradingConfig.from_env().symbols)
+        requested_symbols = (
             [str(x).upper().strip() for x in symbols if str(x).strip()]
             if symbols is not None
             else self._load_symbols()
         )
+        self.symbols = [x for x in requested_symbols if x in allowed_symbols]
 
-        self.scan_all_usdt = (
-            os.getenv("SCAN_ALL_USDT", "true").lower() == "true"
-        )  # dynamically discover Spot/USDT pairs
+        # Dynamic universe discovery is intentionally disabled for the Williams
+        # Spot runtime: scanner and execution must share the same five-pair allowlist.
+        self.scan_all_usdt = False
         self.scan_max_symbols = max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "0")))
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
@@ -170,10 +174,6 @@ class MarketScanner:
         self.require_htf_confirmation = (
             os.getenv("REQUIRE_HTF_CONFIRMATION", "true").lower() == "true"
         )
-        self.min_risk_reward = float(os.getenv("MIN_RISK_REWARD", "1.5"))
-        self.stop_pct = float(os.getenv("STOP_LOSS_PCT", "0.02"))
-        self.target_pct = float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
-        self.min_rr = self.min_risk_reward
         self.htf_interval = _normalize_interval(os.getenv("HTF_INTERVAL", "4h"))
 
         self.wave_engine = MultiTimeframeWaveEngine(
@@ -197,15 +197,32 @@ class MarketScanner:
             tick_pct=float(os.getenv("SHADOW_TICK_PCT", "0.0001")),
         )
 
+    def _signal_context_versions(self, symbol):
+        """Return a complete version vector for the operative Williams context.
+
+        An incomplete D1/H4/H1 context is not downgraded to a partial vector:
+        the final execution barrier must block new exposure until every required
+        frame is present and versioned.
+        """
+        if self.context_cache is None:
+            return {}
+        required_frames = tuple(dict.fromkeys(("1d", "4h", "1h", self.interval)))
+        try:
+            snapshot = self.context_cache.snapshot()
+            versions = snapshot.versions(symbol, list(required_frames))
+        except Exception:
+            return {}
+        return versions if len(versions) == len(required_frames) else {}
+
     def _load_symbols(self):
         raw = os.getenv("SCAN_SYMBOLS", "").strip()
-        # An explicit AUTO/ALL/* selection means dynamic Spot/USDT discovery.
-        # Otherwise an explicit list remains supported for deterministic tests.
-        if raw.upper() in {"ALL", "AUTO", "*"}:
-            return []
-        if raw:
-            return [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
-        return []
+        # TradingConfig is the single source of the fixed native Spot allowlist.
+        allowed = tuple(TradingConfig.from_env().symbols)
+        # ALL/AUTO/* means that configured allowlist, never every exchange pair.
+        if not raw or raw.upper() in {"ALL", "AUTO", "*"}:
+            return list(allowed)
+        requested = [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
+        return [x for x in requested if x in allowed]
     def _atr(df, period):
         prev = df["close"].shift(1)
         tr = pd.concat(
@@ -275,67 +292,18 @@ class MarketScanner:
         return True
 
     def _discover_usdt_symbols(self):
-        if not self.scan_all_usdt:
-            return list(self.symbols)
-
-        import time
-
-        now = time.monotonic()
-        if self._universe_cache and now - self._universe_cache_time < self.universe_cache_seconds:
-            return list(self._universe_cache)
-
-        payload = self.client.exchange_info()
-        items = payload.get("symbols", [])
-        result = []
-        metadata = {}
-
-        for item in items:
-            symbol = str(item.get("symbol", "")).upper()
-            if not symbol or item.get("quoteAsset") != "USDT":
-                continue
-            if self._symbol_is_valid(symbol, {symbol: item}):
-                result.append(symbol)
-                metadata[symbol] = item
-
-        result = sorted(set(result))
-        # Two-stage universe selection: exchangeInfo gives correctness; the
-        # bulk 24h ticker selects the most liquid symbols for expensive candle
-        # analysis. This keeps broad coverage without spending latency on
-        # inactive pairs.
-        if self.liquidity_preselect:
-            try:
-                tickers = self.client.ticker_24hr()
-                volume = {
-                    str(x.get("symbol", "")).upper(): float(x.get("quoteVolume", 0) or 0)
-                    for x in tickers if isinstance(x, dict)
-                }
-                result.sort(key=lambda s: volume.get(s, 0.0), reverse=True)
-                result = result[: self.liquidity_preselect]
-            except Exception as exc:
-                log.warning("Liquidity preselect unavailable: %s", exc)
-
-        if self.scan_max_symbols:
-            result = result[: self.scan_max_symbols]
-
-        self._universe_cache = result
-        self._universe_metadata = {symbol: metadata[symbol] for symbol in result if symbol in metadata}
-        self._universe_cache_time = now
-        self.symbols = list(result)
-        return result
+        """Compatibility shim: return the configured allowlist, never exchange-wide pairs."""
+        return list(self.symbols)
 
     def _resolve_symbols(self):
         if self.explicit_symbols:
             return list(self.symbols)
 
         configured = self._load_symbols()
-        if configured:
-            self.symbols = list(configured)
-            return list(configured)
-
-        if self.scan_all_usdt:
-            return self._discover_usdt_symbols()
-
-        return list(self.symbols)
+        self.symbols = list(configured)
+        # Empty/invalid configuration fails closed; it must not fall back to
+        # dynamic exchange-wide discovery.
+        return list(configured)
 
     def _htf_confirmation(self, symbol):
         if not self.require_htf_confirmation:
@@ -424,12 +392,14 @@ class MarketScanner:
             if tick_size <= 0:
                 return None
 
+            context_versions = self._signal_context_versions(symbol)
             campaign_specs = extract_long_signal_specs(
                 symbol,
                 indicators,
                 timeframe=self.interval,
                 tick_size=tick_size,
                 htf_confirmed=False,
+                context_versions=context_versions,
             )
             setup_state = self._setup_state(last)
             if setup_state == "NONE" and not campaign_specs:
@@ -450,10 +420,6 @@ class MarketScanner:
             if spread_pct > self.max_spread_pct:
                 return None
 
-            rr = self.target_pct / max(self.stop_pct, 1e-9)
-            if rr < self.min_rr:
-                return None
-
             legacy_strict_signal = bool(last.get("long_signal", False))
             campaign_signal = bool(campaign_specs)
             setup_score = float(last.get("long_setup_score", 0.0))
@@ -466,13 +432,17 @@ class MarketScanner:
             else:
                 signal_strength = 0.5
 
-            risk_pct = self.stop_pct * 100.0
-            risk_score = self._clamp(
-                20.0 * (0.02 / max(self.stop_pct, 0.0001)),
-                0.0,
-                20.0,
-            )
-            rr_score = min(20.0, 20.0 * (rr / 3.0))
+            # Risk distance comes from the Williams signal's structural
+            # protective reference. A fixed percent stop/target must not
+            # manufacture a Core risk/reward gate.
+            structural_stop_distance_pct = 0.0
+            if campaign_specs:
+                trigger = float(campaign_specs[0].trigger_price)
+                protective = float(campaign_specs[0].protective_reference)
+                if trigger > protective > 0.0:
+                    structural_stop_distance_pct = (trigger - protective) / trigger
+            risk_pct = structural_stop_distance_pct * 100.0
+
             atr_score = max(
                 0.0,
                 10.0 * (1.0 - atr_pct / max(self.max_atr_pct, 1e-9)),
@@ -484,13 +454,10 @@ class MarketScanner:
             strategy_score = 30.0 * (setup_score / 100.0)
             breakout_bonus = 15.0 if legacy_strict_signal else 0.0
 
+            # Ranking only; this is not a proof score and cannot admit an order.
+            # Structural validity, context, risk and execution are separate gates.
             base_score = self._clamp(
-                strategy_score
-                + risk_score
-                + rr_score
-                + atr_score
-                + spread_score
-                + breakout_bonus,
+                strategy_score + atr_score + spread_score + breakout_bonus,
                 0.0,
                 100.0,
             )
@@ -510,7 +477,7 @@ class MarketScanner:
                 signal_strength=round(signal_strength, 3),
                 breakout_distance_pct=round(breakout_distance_pct, 4),
                 risk_pct=round(risk_pct, 4),
-                risk_reward=round(rr, 3),
+                risk_reward=0.0,
                 atr_pct=round(atr_pct, 6),
                 spread_pct=round(spread_pct, 6),
                 # This is populated authoritatively by Wave Engine. Keep it

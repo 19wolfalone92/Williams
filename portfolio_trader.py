@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from portfolio_controller import PortfolioController
 from db import Database
+from binance_client import BinanceSpotClient
 from equity_breaker import EquityCircuitBreaker
 from l2_slippage import L2SlippageGuard
 from execution_accumulator import ExecutionSummary, accumulate_order
@@ -12,6 +13,7 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
+from trading_config import TradingConfig
 
 
 POSITION_STATES = {
@@ -48,12 +50,13 @@ class MultiPositionTrader:
         if symbols is not None:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
-            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "ALL").strip()
-            self.symbols = (
-                []
-                if raw_symbols.upper() in {"ALL", "AUTO", "*"}
-                else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
-            )
+            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "").strip()
+            allowed_symbols = tuple(TradingConfig.from_env().symbols)
+            if not raw_symbols or raw_symbols.upper() in {"ALL", "AUTO", "*"}:
+                self.symbols = list(allowed_symbols)
+            else:
+                requested = [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
+                self.symbols = [x for x in requested if x in allowed_symbols]
         self.max_open_positions = max(
             0,
             int(os.getenv("MAX_OPEN_POSITIONS", "5")),
@@ -704,6 +707,10 @@ class MultiPositionTrader:
 
     def _emergency_market_sell(self, symbol, qty, trade_id, reason):
         """Close a just-filled/unprotected Spot position if protection is already breached."""
+        if isinstance(self.client, BinanceSpotClient):
+            raise RuntimeError(
+                "Legacy direct emergency SELL is disabled for production clients; use CampaignExecutionService.exit_market"
+            )
         if self.dry_run:
             raise RuntimeError(
                 f"{symbol}: emergency exit required ({reason}) but DRY_RUN=true"
@@ -845,6 +852,10 @@ class MultiPositionTrader:
         target_fraction=None,
         risk_pct=None,
     ):
+        if isinstance(self.client, BinanceSpotClient):
+            raise RuntimeError(
+                "Legacy direct OCO creation is disabled for production clients; use CampaignExecutionService.create_hard_stop"
+            )
         filters = self._filters(symbol)
         qty = self._normalize_qty(symbol, qty)
         if qty <= 0:
@@ -1636,6 +1647,17 @@ class MultiPositionTrader:
 
     def manual_sell(self, symbol):
         symbol = str(symbol).upper().strip()
+        if isinstance(self.client, BinanceSpotClient):
+            if not self.campaign_engine_enabled:
+                raise RuntimeError(
+                    "Manual SELL blocked: legacy direct mutation path is disabled"
+                )
+            campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
+            if campaign is None or float(campaign.position_qty or 0) <= 0:
+                raise RuntimeError(
+                    f"{symbol}: manual SELL blocked; no authoritative active campaign"
+                )
+            return self.campaign_execution.exit_market(campaign, reason="MANUAL")
         trade = self.db.open_trade(symbol)
         if trade is None:
             self.recover()
@@ -2103,6 +2125,10 @@ class MultiPositionTrader:
         return True
 
     def execute(self, selections):
+        if not self.campaign_engine_enabled and isinstance(self.client, BinanceSpotClient):
+            raise RuntimeError(
+                "Autonomous entries blocked: production legacy direct order path is disabled"
+            )
         if self.campaign_engine_enabled:
             if self.dry_run:
                 return [
@@ -2405,10 +2431,12 @@ class MultiPositionTrader:
                     "open_positions": len(open_trades),
                 }
 
+        shared_context_cache = getattr(self.execution_barrier, "context_cache", None)
         controller = PortfolioController(
             self.client,
             balance_quote=balance,
             symbols=self.symbols,
+            context_cache=shared_context_cache,
         )
         selections = controller.select_portfolio(
             open_risk_quote=self.reserved_risk_quote(),

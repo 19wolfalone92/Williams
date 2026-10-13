@@ -201,6 +201,7 @@ private data class CampaignSignalN(
     val type: String,
     val role: String,
     val signalBarTimeMs: Long,
+    val confirmationBarTimeMs: Long = signalBarTimeMs,
     val triggerPrice: Double,
     val protectivePrice: Double,
     val teethAtDetection: Double,
@@ -612,19 +613,20 @@ private class NativeEngine(
     private val campaignEngineEnabled: Boolean
         get() = prefs.getBoolean("campaign_engine_enabled", true)
     private val campaignExecutionTimeframe: String
-        get() = prefs.getString("campaign_execution_timeframe", "5m") ?: "5m"
-    private val campaignRiskLimitPct = 0.005
-    private val campaignInitialRiskPct = 0.002
-    private val campaignAddRiskCapPct = 0.002
+        get() = prefs.getString("campaign_execution_timeframe", "1h") ?: "1h"
+    private val campaignRiskLimitPct = 0.006
+    private val campaignInitialRiskPct = 0.005
+    private val campaignAddRiskCapPct = 0.001
     private val campaignTrailBars: Int
         get() = prefs.getInt("campaign_trail_bars", 5).coerceIn(3, 5)
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
-    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.03)
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
+    @Volatile private var equityCircuitBreakerPersistenceReady = false
     private val feeBufferPerSidePct = 0.001
     @Volatile private var serverTimeOffsetMs = 0L
     private val BINANCE_RECV_WINDOW_MS = 60000L
@@ -767,8 +769,15 @@ private class NativeEngine(
             restLastSuccessMs > 0L &&
             System.currentTimeMillis() - restLastSuccessMs <= maxAgeMs
 
+    // P0 TASK 009.4: Android mutations still lack the verified durable
+    // intent/account-identity/recovery contract implemented for Python Spot.
+    // Keep autonomous execution unavailable until that independent contour is
+    // fully audited and its crash/restart tests pass.
+    private val androidDurableMutationContractVerified = false
+
     private fun executionReady(): Boolean =
-        running &&
+        androidDurableMutationContractVerified &&
+            running &&
             !paused &&
             !reconcileRequired &&
             !killLatched &&
@@ -776,10 +785,14 @@ private class NativeEngine(
             restAccountReady &&
             historyReady &&
             stateMachine.executionAllowed() &&
+            equityCircuitBreakerPersistenceReady &&
             !equityCircuitBreaker.isTripped()
 
     private fun executionBlockers(): List<String> =
         buildList {
+            if (!androidDurableMutationContractVerified) {
+                add("TASK0094_ANDROID_DURABLE_MUTATION_CONTRACT_UNVERIFIED")
+            }
             if (!running) add("runtime_not_running")
             if (paused) add("paused")
             if (reconcileRequired) add("reconcile_required")
@@ -788,6 +801,7 @@ private class NativeEngine(
             if (!restAccountReady) add("rest_account_not_ready")
             if (!historyReady) add("history_not_ready")
             if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
+            if (!equityCircuitBreakerPersistenceReady) add("equity_circuit_breaker_persistence_not_ready")
             if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
         }
 
@@ -1127,7 +1141,23 @@ private class NativeEngine(
             .put("cleared", true)
     }
 
+    // Synchronous persistence is intentional: the autonomous-start blocker must
+    // survive process death before start() returns.
+    @android.annotation.SuppressLint("ApplySharedPref")
     fun start(): JSONObject {
+        if (!androidDurableMutationContractVerified) {
+            prefs.edit()
+                .putBoolean("auto_run", false)
+                .putString(
+                    "execution_contract_blocker",
+                    "TASK0094_ANDROID_DURABLE_MUTATION_CONTRACT_UNVERIFIED"
+                )
+                .commit()
+            return JSONObject()
+                .put("started", false)
+                .put("execution_enabled", false)
+                .put("reason", "TASK0094_ANDROID_DURABLE_MUTATION_CONTRACT_UNVERIFIED")
+        }
         if (killLatched) {
             error("KILL_SWITCH_LATCHED: recover and reset kill switch before START")
         }
@@ -1176,7 +1206,7 @@ private class NativeEngine(
                         ?.toDoubleOrNull()
                         ?: 0.0
                 }
-            equityCircuitBreaker.reset(estimateManagedEquity())
+            restoreEquityCircuitBreaker(estimateManagedEquity())
         } catch (x: Exception) {
             setReconcileRequired(
                 "startup exchange synchronization failed: " +
@@ -1529,6 +1559,28 @@ private class NativeEngine(
         path: String,
         params: String
     ): JSONObject {
+        // Central fail-closed backstop: no BUY-side Spot mutation may bypass
+        // the autonomous execution contract by calling signedPost directly.
+        // This does not block SELL exits/protection or DELETE cancellations.
+        val orderMutation = path.startsWith("/api/v3/order")
+        val buySide = params.split("&").any { field ->
+            val key = field.substringBefore("=", "")
+            val value = field.substringAfter("=", "")
+            key.equals("side", ignoreCase = true) &&
+                value.equals("BUY", ignoreCase = true)
+        }
+        if (
+            method.equals("POST", ignoreCase = true) &&
+            orderMutation &&
+            buySide &&
+            !executionReady()
+        ) {
+            error(
+                "BUY mutation blocked: autonomous execution contract is unverified; blockers=" +
+                    executionBlockers().joinToString(",")
+            )
+        }
+
         var lastBody = "{}"
         repeat(2) { attempt ->
             val query = if (params.isBlank()) {
@@ -1904,9 +1956,10 @@ private class NativeEngine(
     private fun buildIndicatorSnapshot(candles: List<CandleN>, symbol: String, frame: String): JSONObject {
         if (candles.size < 40) return JSONObject().put("symbol", symbol).put("interval", frame).put("ready", false)
         val prices = candles.map { it.c }
-        val jaw = smma(prices, 13)
-        val teeth = smma(prices, 8)
-        val lips = smma(prices, 5)
+        val medians = medianPrices(candles)
+        val jaw = shiftedSeries(smma(medians, 13), 8)
+        val teeth = shiftedSeries(smma(medians, 8), 5)
+        val lips = shiftedSeries(smma(medians, 5), 3)
         val i = candles.lastIndex
         val aoNow = ao(candles, i)
         val aoPrev = ao(candles, i - 1)
@@ -3456,7 +3509,7 @@ private class NativeEngine(
                 }
 
                 if (prefs.getBoolean("campaign_exit_on_teeth", false)) {
-                    val teeth = smma(candles.map { it.c }, 8).lastOrNull() ?: 0.0
+                    val teeth = smma(medianPrices(candles), 8).lastOrNull() ?: 0.0
                     if (teeth > 0.0 && candles.last().c < teeth) {
                         campaignExitMarket(
                             positions[stored.symbol] ?: current,
@@ -3981,7 +4034,7 @@ private class NativeEngine(
 
             val prices = candles.map { it.c }
             val teeth =
-                smma(prices, 8).last()
+                smma(medianPrices(candles), 8).last()
             val lastClosed =
                 candles.last()
 
@@ -4007,24 +4060,9 @@ private class NativeEngine(
                 i in candles.lastIndex downTo
                     max(5, candles.lastIndex - 9)
             ) {
-                val aoNow = ao(candles, i)
-                val aoPrev = ao(candles, i - 1)
-                val acWindowStart = max(0, i - 4)
-                val acNow =
-                    aoNow -
-                        (acWindowStart..i)
-                            .map { ao(candles, it) }
-                            .average()
-                val acPrevWindowStart = max(0, i - 5)
-                val acPrev =
-                    aoPrev -
-                        (acPrevWindowStart until i)
-                            .map { ao(candles, it) }
-                            .average()
-
-                val green =
-                    aoNow > aoPrev &&
-                        acNow > acPrev
+                // NTD's five-bar rule counts same-color PRICE bars, not
+                // rising AO/AC bars. Keep this exit distinct from WM2 Super AO.
+                val green = isBullishWilliamsPriceBar(candles[i].o, candles[i].c)
 
                 if (!green) break
 
@@ -5409,7 +5447,7 @@ private class NativeEngine(
         val candles = candidate.candles
         if (candles.size < 20) return (candidate.atrPct * 2.0).coerceIn(0.01, 0.08)
         val prices = candles.map { it.c }
-        val teeth = smma(prices, 8).lastOrNull() ?: prices.last()
+        val teeth = smma(medianPrices(candles), 8).lastOrNull() ?: prices.last()
         var swingLow = Double.POSITIVE_INFINITY
         for (i in max(2, candles.lastIndex - 30)..candles.lastIndex - 2) {
             if (isDownFractal(candles, i)) swingLow = min(swingLow, candles[i].l)
@@ -5484,6 +5522,48 @@ private class NativeEngine(
         return equity
     }
 
+    private fun utcEquityDayKey(nowMs: Long): String =
+        java.time.Instant.ofEpochMilli(nowMs)
+            .atZone(java.time.ZoneOffset.UTC)
+            .toLocalDate()
+            .toString()
+
+    private fun persistEquityCircuitBreaker(
+        snapshot: EquityCircuitBreaker.Snapshot,
+        nowMs: Long
+    ) {
+        val saved = prefs.edit()
+            .putString("equity_circuit_day_key", utcEquityDayKey(nowMs))
+            .putString("equity_circuit_start_equity", snapshot.startEquity.toString())
+            .putBoolean("equity_circuit_tripped", snapshot.tripped)
+            .commit()
+        equityCircuitBreakerPersistenceReady = saved
+        check(saved) { "failed to persist daily equity circuit breaker" }
+    }
+
+    private fun restoreEquityCircuitBreaker(
+        equity: Double,
+        nowMs: Long = System.currentTimeMillis()
+    ) {
+        require(equity.isFinite() && equity > 0.0) {
+            "cannot establish daily equity baseline from invalid managed equity"
+        }
+        val dayKey = utcEquityDayKey(nowMs)
+        val storedDay = prefs.getString("equity_circuit_day_key", "") ?: ""
+        val storedStart = prefs.getString("equity_circuit_start_equity", "")
+            ?.toDoubleOrNull() ?: 0.0
+        if (storedDay == dayKey && storedStart.isFinite() && storedStart > 0.0) {
+            equityCircuitBreaker.restore(
+                storedStart,
+                prefs.getBoolean("equity_circuit_tripped", false),
+                nowMs
+            )
+        } else {
+            equityCircuitBreaker.reset(equity, nowMs)
+        }
+        persistEquityCircuitBreaker(equityCircuitBreaker.observe(equity, nowMs), nowMs)
+    }
+
     private fun checkAutomaticCircuitBreaker() {
         if (!running || paused || killLatched || circuitBreakerTripInProgress) return
         val now = System.currentTimeMillis()
@@ -5507,6 +5587,7 @@ private class NativeEngine(
                 estimateManagedEquity(),
                 now
             )
+            persistEquityCircuitBreaker(snapshot, now)
             if (snapshot.tripped) {
                 circuitBreakerTripInProgress = true
                 lastError =
@@ -5528,6 +5609,9 @@ private class NativeEngine(
                 }
             }
         }.onFailure {
+            // If the equity source or durable breaker state is unavailable,
+            // keep new exposure blocked until a later successful persisted check.
+            equityCircuitBreakerPersistenceReady = false
             lastError =
                 "equity monitor: " +
                     (it.message ?: it.javaClass.simpleName)
@@ -6409,36 +6493,6 @@ private class NativeEngine(
                 teethS[i] > jawS[i] &&
                 candles[i].c > lipsS[i]
 
-        fun upFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].h > candles[i - 1].h &&
-                candles[i].h > candles[i - 2].h &&
-                candles[i].h > candles[i + 1].h &&
-                candles[i].h > candles[i + 2].h
-        }
-
-        fun downFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].l < candles[i - 1].l &&
-                candles[i].l < candles[i - 2].l &&
-                candles[i].l < candles[i + 1].l &&
-                candles[i].l < candles[i + 2].l
-        }
-
-        fun latestUpFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (upFractal(i)) return i
-            }
-            return null
-        }
-
-        fun latestDownFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (downFractal(i)) return i
-            }
-            return null
-        }
-
         fun angulationScore(i: Int): Double {
             val start = max(0, i - 4)
             if (i - start < 2 || !jawS[i].isFinite()) return 0.0
@@ -6447,11 +6501,6 @@ private class NativeEngine(
                 max(0.0, jawS[start] - candles[start].l)
             } else 0.0
             return max(0.0, now - then) / max(candles[i].c, 1e-9) * 100.0
-        }
-
-        fun lastValidFractalLevel(at: Int): Pair<Int, Double>? {
-            val center = latestUpFractal(max(2, at - 2)) ?: return null
-            return center to candles[center].h
         }
 
         val current = candles.lastIndex
@@ -6493,54 +6542,61 @@ private class NativeEngine(
             }
         }
 
-        // WM2: three consecutive rising AO histogram bars, with the previously
-        // valid buy-fractal/Balance-Line context still present.
+        // WM2: three consecutive rising AO histogram bars. It is independent
+        // of WM3 and can be the first presenting Wise-Man event; bullish
+        // Alligator context and the conditional price trigger still apply.
         var streak = 0
         for (i in candles.lastIndex downTo 35) {
             val a = ao(candles, i)
             val p = ao(candles, i - 1)
             if (a > p) streak++ else break
             if (streak == 3) {
-                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { (center, level) ->
-                    teethS[center + 2].isFinite() && level > teethS[center + 2]
-                } ?: false
-                if (priorFractalValid) {
-                    val trigger = candles[i].h + tick
-                    if (candles[current].c < trigger) {
-                        out += CampaignSignalN(
-                            signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
-                            type = "SUPER_AO",
-                            role = "ENTRY",
-                            signalBarTimeMs = candles[i].t,
-                            triggerPrice = trigger,
-                            protectivePrice = candles[i].l - tick,
-                            teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                            invalidationPrice = candles[i].l - tick,
-                            reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
-                        )
-                    }
+                // WM2 is an independent Wise-Man event. Do not require a
+                // previously confirmed WM3 fractal here; that incorrectly
+                // converts the second Wise Man into a WM3 prerequisite.
+                val trigger = candles[i].h + tick
+                if (candles[current].c < trigger && bullishAlligator(current)) {
+                    out += CampaignSignalN(
+                        signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
+                        type = "SUPER_AO",
+                        role = "ENTRY",
+                        signalBarTimeMs = candles[i].t,
+                        triggerPrice = trigger,
+                        protectivePrice = candles[i].l - tick,
+                        teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
+                        invalidationPrice = candles[i].l - tick,
+                        reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
+                    )
                 }
                 break
             }
         }
 
-        // WM3: most recent confirmed buy fractal. The signal is persistent,
-        // but the trigger is armable only while it remains above current Teeth.
-        val fractalCenter = latestUpFractal(candles.lastIndex - 2)
-        if (fractalCenter != null) {
-            val trigger = candles[fractalCenter].h + tick
+        // WM3: confirmed buy fractal. Equal-extreme groups are supported;
+        // the pivot and its confirmation bar are tracked separately.
+        val fractal = WilliamsFractal.latestUp(candles.map { it.h }, candles.lastIndex)
+        if (fractal != null) {
+            val fractalCenter = fractal.centerIndex
+            val confirmationIndex = fractal.confirmationIndex
+            val trigger = fractal.level + tick
             val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
-            if (candles[current].c < trigger && trigger > currentTeeth) {
+            val teethAtConfirmation = teethS[confirmationIndex]
+            if (
+                teethAtConfirmation.isFinite() &&
+                candles[current].c < trigger &&
+                trigger > currentTeeth
+            ) {
                 out += CampaignSignalN(
                     signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[fractalCenter].t),
                     type = "FRACTAL",
                     role = "ENTRY",
                     signalBarTimeMs = candles[fractalCenter].t,
+                    confirmationBarTimeMs = candles[confirmationIndex].t,
                     triggerPrice = trigger,
                     protectivePrice = candles[fractalCenter].l - tick,
-                    teethAtDetection = currentTeeth,
+                    teethAtDetection = teethAtConfirmation,
                     invalidationPrice = candles[fractalCenter].l - tick,
-                    reason = "WM3 confirmed buy fractal; trigger must remain above Teeth"
+                    reason = "WM3 confirmed fractal above Teeth; conditional trigger"
                 )
             }
         }
@@ -6604,7 +6660,7 @@ private class NativeEngine(
             emptyList()
         }
 
-        val alligator = alligator(closes)
+        val alligator = alligator(workCandles)
         val bullish =
             alligator.lips > alligator.teeth &&
                 alligator.teeth > alligator.jaw &&
@@ -6616,7 +6672,7 @@ private class NativeEngine(
         val fractalIndex = latestConfirmedUpFractal(workCandles, i)
         val fractalHigh =
             fractalIndex?.let { workCandles[it].h }
-        val teethSeries = smma(closes, 8)
+        val teethSeries = smma(medianPrices(workCandles), 8)
         val fractalTeeth =
             fractalIndex?.let { teethSeries.getOrNull(it) }
         val externalFractal =
@@ -7041,6 +7097,7 @@ private class NativeEngine(
                                 .put("type", s.type)
                                 .put("role", s.role)
                                 .put("signal_bar_time_ms", s.signalBarTimeMs)
+                                .put("confirmation_bar_time_ms", s.confirmationBarTimeMs)
                                 .put("trigger_price", s.triggerPrice)
                                 .put("protective_price", s.protectivePrice)
                                 .put("teeth_at_detection", s.teethAtDetection)
@@ -7095,11 +7152,17 @@ private class NativeEngine(
     }
 
     private fun alligator(
-        closes: List<Double>
+        candles: List<CandleN>
     ): TripleValues {
-        val jaw = smma(closes, 13).lastOrNull() ?: 0.0
-        val teeth = smma(closes, 8).lastOrNull() ?: 0.0
-        val lips = smma(closes, 5).lastOrNull() ?: 0.0
+        val medians = medianPrices(candles)
+        val end = candles.lastIndex
+        val jawSeries = smma(medians, 13)
+        val teethSeries = smma(medians, 8)
+        val lipsSeries = smma(medians, 5)
+        // Match plotted Alligator displacement without reading future bars.
+        val jaw = jawSeries.getOrNull(end - 8) ?: 0.0
+        val teeth = teethSeries.getOrNull(end - 5) ?: 0.0
+        val lips = lipsSeries.getOrNull(end - 3) ?: 0.0
         return TripleValues(jaw, teeth, lips)
     }
 
@@ -7108,6 +7171,9 @@ private class NativeEngine(
         val teeth: Double,
         val lips: Double
     )
+
+    private fun medianPrices(candles: List<CandleN>): List<Double> =
+        candles.map { williamsMedianPrice(it.h, it.l) }
 
     private fun smma(
         values: List<Double>,
@@ -7302,7 +7368,7 @@ private class NativeEngine(
             }
 
         val alligatorValues =
-            alligator(candles.map { it.c })
+            alligator(candles)
 
         val bullish =
             alligatorValues.lips >
@@ -7907,11 +7973,12 @@ private class NativeEngine(
         val output = JSONArray()
         val prices =
             sourceCandles.map { it.c }
+        val medians = medianPrices(sourceCandles)
 
         if (prices.isNotEmpty()) {
-            val jaw = smma(prices, 13)
-            val teeth = smma(prices, 8)
-            val lips = smma(prices, 5)
+            val jaw = shiftedSeries(smma(medians, 13), 8)
+            val teeth = shiftedSeries(smma(medians, 8), 5)
+            val lips = shiftedSeries(smma(medians, 5), 3)
 
             val start =
                 max(0, sourceCandles.size - 120)
@@ -7948,7 +8015,7 @@ private class NativeEngine(
                             "long_signal",
                             i >= 40 &&
                                 alligator(
-                                    prices.subList(
+                                    sourceCandles.subList(
                                         0,
                                         i + 1
                                     )
@@ -8303,6 +8370,9 @@ private class NativeEngine(
             .put("campaign_initial_risk_pct", campaignInitialRiskPct)
             .put("campaign_add_on_risk_cap_pct", campaignAddRiskCapPct)
             .put("campaign_trail_bars", campaignTrailBars)
+            .put("equity_circuit_breaker_persistence_ready", equityCircuitBreakerPersistenceReady)
+            .put("equity_circuit_breaker_tripped", equityCircuitBreaker.isTripped())
+            .put("equity_circuit_breaker_daily_limit_pct", 0.03)
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("position_fraction", 0.95)

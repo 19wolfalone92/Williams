@@ -35,12 +35,12 @@ class CampaignEngine:
         db,
         *,
         portfolio_risk_limit_pct: float = 0.01,
-        campaign_risk_limit_pct: float = 0.005,
-        initial_risk_fraction_of_campaign: float = 0.40,
+        campaign_risk_limit_pct: float = 0.006,
+        initial_risk_fraction_of_campaign: float = 0.8333333333333334,
     ) -> None:
         self.db = db
         self.portfolio_risk_limit_pct = max(0.0, min(0.01, float(portfolio_risk_limit_pct)))
-        self.campaign_risk_limit_pct = max(0.0, min(0.005, float(campaign_risk_limit_pct)))
+        self.campaign_risk_limit_pct = max(0.0, min(0.006, float(campaign_risk_limit_pct)))
         self.initial_risk_fraction = max(
             0.05,
             min(1.0, float(initial_risk_fraction_of_campaign)),
@@ -155,7 +155,6 @@ class CampaignEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    @staticmethod
     def pending_signal(signal: SignalSpec, *, campaign_id: str = "") -> PendingSignal:
         return PendingSignal.from_spec(signal, campaign_id=campaign_id)
 
@@ -165,17 +164,20 @@ class CampaignEngine:
 
     @staticmethod
     def choose_initial_signal(signals: Iterable[SignalSpec]) -> SignalSpec | None:
+        now_ms = int(time.time() * 1000)
         candidates = [
             s for s in signals
             if s.role == SignalRole.ENTRY
             and s.side == "BUY"
             and s.trigger_price > 0
+            and s.event_time_ms > 0
+            and s.expires_at_ms > now_ms
         ]
         if not candidates:
             return None
         # Book model: first available valid signal starts the campaign.  We
         # therefore order primarily by signal-bar time, not by a score.
-        return min(candidates, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
+        return min(candidates, key=lambda s: (s.event_time_ms, s.created_at_ms))
 
     @staticmethod
     def should_replace_pending(old: SignalSpec, new: SignalSpec, *, min_ticks: int = 1, tick_size: float = 0.0) -> bool:
@@ -190,7 +192,7 @@ class CampaignEngine:
         if old_pending.is_expired() and not new_pending.is_expired():
             return True
         return (
-            new.signal_bar_time_ms > old.signal_bar_time_ms
+            new.event_time_ms > old.event_time_ms
             and distance >= threshold
             and not new_pending.is_expired()
         )
@@ -265,8 +267,8 @@ class CampaignEngine:
             raise ValueError("add-on requires an open campaign position")
         if signal.side != campaign.side:
             raise ValueError("add-on side does not match campaign")
-        if signal.signal_bar_time_ms <= 0:
-            raise ValueError("add-on signal has no valid signal time")
+        if signal.event_time_ms <= 0:
+            raise ValueError("add-on signal has no valid confirmation/event time")
         if campaign.state not in {
             CampaignState.OPEN_INITIAL,
             CampaignState.TREND_ACTIVE,

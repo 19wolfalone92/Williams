@@ -1002,6 +1002,10 @@ class Trader:
             )
         if not self.client.testnet and os.getenv('ALLOW_LIVE', 'false').lower() != 'true':
             raise RuntimeError('BUY blocked: LIVE trading requires ALLOW_LIVE=true.')
+        if isinstance(self.client, BinanceSpotClient):
+            raise RuntimeError(
+                "Legacy Trader.market_buy is disabled for production clients; use CampaignExecutionService"
+            )
         # Legacy single-symbol entry path: portfolio admission is risk-based.
         # MultiPositionTrader is the authoritative auto-scan executor.
         if (not self.client.testnet) and (self.preflight_report is None or not self.preflight_report.get('ready')):
@@ -1146,6 +1150,10 @@ class Trader:
             raise RuntimeError(reason)
 
     def place_oco(self, qty, entry_price, trade_id=None):
+        if isinstance(self.client, BinanceSpotClient):
+            raise RuntimeError(
+                "Legacy Trader.place_oco is disabled for production clients; use CampaignExecutionService"
+            )
         if self.symbol_rules is None:
             raise RuntimeError('Symbol rules are not loaded')
 

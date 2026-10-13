@@ -82,7 +82,7 @@ class RiskEngine:
         spread_pct: float = 0.0,
         max_spread_pct: float = 0.0015,
         stop_atr_multiplier: float = 2.0,
-        target_atr_multiplier: float = 4.0,
+        target_atr_multiplier: float = 0.0,
         risk_pct_override: float = None,
         side: str = "LONG",
         invalidation_price: float = 0.0,
@@ -110,31 +110,43 @@ class RiskEngine:
         if spread_pct > max_spread_pct:
             return self._blocked(symbol, side, entry, "spread exceeds maximum allowed")
 
-        fallback_stop_distance = atr * stop_atr_multiplier
-        target_distance = atr * target_atr_multiplier
-
-        if fallback_stop_distance <= 0:
-            return self._blocked(symbol, side, entry, "invalid stop distance")
-
+        # Williams Core uses structural invalidation and trailing exits, not a
+        # mandatory fixed take-profit. Never silently replace a missing/invalid
+        # structural stop with an ATR distance: that changes the strategy's
+        # invalidation thesis and can understate risk.
         structural_stop = float(invalidation_price or 0.0)
         if side == "LONG":
-            stop_price = structural_stop if 0.0 < structural_stop < entry else entry - fallback_stop_distance
-            take_profit_price = entry + target_distance
+            valid_structural_stop = 0.0 < structural_stop < entry
         else:
-            stop_price = structural_stop if structural_stop > entry else entry + fallback_stop_distance
-            take_profit_price = entry - target_distance
+            valid_structural_stop = structural_stop > entry
+        if not valid_structural_stop:
+            return self._blocked(
+                symbol, side, entry,
+                "missing or invalid structural invalidation stop",
+            )
 
-        if stop_price <= 0 or take_profit_price <= 0:
-            return self._blocked(symbol, side, entry, "calculated stop price is invalid")
-
+        stop_price = structural_stop
         stop_distance = abs(entry - stop_price)
+        if stop_distance <= 0:
+            return self._blocked(symbol, side, entry, "invalid structural stop distance")
         stop_pct = stop_distance / entry
-        target_pct = abs(take_profit_price - entry) / entry
 
-        rr = abs(take_profit_price - entry) / stop_distance
-
-        if rr < self.min_rr:
-            return self._blocked(symbol, side, entry, f"R:R {rr:.3f} below minimum {self.min_rr:.3f}")
+        # Fixed targets are an explicit legacy/overlay option only. Core leaves
+        # take_profit_price at zero; campaign exhaustion and structural trailing
+        # own exits. A target must never be fabricated from ATR by default.
+        target_distance = atr * max(0.0, float(target_atr_multiplier))
+        if target_distance > 0:
+            take_profit_price = entry + target_distance if side == "LONG" else entry - target_distance
+            if take_profit_price <= 0:
+                return self._blocked(symbol, side, entry, "calculated legacy target price is invalid")
+            target_pct = abs(take_profit_price - entry) / entry
+            rr = abs(take_profit_price - entry) / stop_distance
+            if rr < self.min_rr:
+                return self._blocked(symbol, side, entry, f"legacy R:R {rr:.3f} below minimum {self.min_rr:.3f}")
+        else:
+            take_profit_price = 0.0
+            target_pct = 0.0
+            rr = 0.0
 
         # Maximum money we are allowed to lose on this trade. Size against the
         # protective stop plus bounded fee/slippage reserve.
@@ -169,7 +181,7 @@ class RiskEngine:
         # Score components.
         #
         # Signal strength: 30
-        # R:R:             25
+        # Optional legacy R:R: 25 (zero in Williams Core without a fixed target)
         # Risk efficiency: 20
         # HTF:             15
         # Spread:          5
@@ -181,10 +193,14 @@ class RiskEngine:
             1.0,
         )
 
-        rr_score = 25.0 * self._clamp(
-            (rr - self.min_rr) / max(3.0 - self.min_rr, 0.0001),
-            0.0,
-            1.0,
+        rr_score = (
+            25.0 * self._clamp(
+                (rr - self.min_rr) / max(3.0 - self.min_rr, 0.0001),
+                0.0,
+                1.0,
+            )
+            if take_profit_price > 0
+            else 0.0
         )
 
         risk_efficiency = self._clamp(

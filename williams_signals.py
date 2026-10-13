@@ -142,16 +142,14 @@ def _latest_super_ao(
             streak = int(row.get(streak_col, 0) or 0)
         except (TypeError, ValueError):
             streak = 0
-        # The book's third same-colour bar is the specific signal bar.
-        # Williams' Super AO is a continuation signal inside an established
-        # structure, so retain the existing valid fractal/Balance-Line gate.
-        fractal_gate_col = "long_fractal_outside" if side == "LONG" else "short_fractal_outside"
-        gate_i = max(0, i - 1)
-        gate_ok = (
-            fractal_gate_col not in ind.columns
-            or bool(ind.iloc[gate_i].get(fractal_gate_col, False))
-        )
-        if streak == 3 and gate_ok:
+        # WM2 is a one-shot event on the configured Nth consecutive AO bar.
+        # Keep this threshold aligned with strategy.calculate_indicators(), which
+        # reads SUPER_AO_BARS from configuration.
+        try:
+            event_bar_count = max(1, int(os.getenv("SUPER_AO_BARS", "3")))
+        except (TypeError, ValueError):
+            return None
+        if streak == event_bar_count:
             trigger_base = float(row["high"] if side == "LONG" else row["low"])
             protective = float(row["low"] if side == "LONG" else row["high"])
             return i, trigger_base, protective
@@ -169,18 +167,22 @@ def _latest_confirmed_fractal(
     if level_col not in ind.columns or fractal_col not in ind.columns:
         return None
 
-    right = 2
+    center_col = "confirmed_up_center_index" if side == "LONG" else "confirmed_down_center_index"
     start = max(0, len(ind) - max(3, int(max_age_bars)))
     for confirmation_i in range(len(ind) - 1, start - 1, -1):
         row = ind.iloc[confirmation_i]
         level = row.get(level_col)
-        if level is None or pd.isna(level):
+        center_value = row.get(center_col)
+        if level is None or pd.isna(level) or center_value is None or pd.isna(center_value):
             continue
-        center_i = confirmation_i - right
-        if center_i < 0 or not bool(ind.iloc[center_i].get(fractal_col, False)):
+        center_i = int(center_value)
+        if center_i < 0 or center_i >= len(ind) or not bool(ind.iloc[center_i].get(fractal_col, False)):
             continue
         center = ind.iloc[center_i]
-        trigger_base = float(center["high"] if side == "LONG" else center["low"])
+        # Use the confirmed pattern level rather than assuming the signal
+        # candle is exactly two bars before confirmation. Equal-extreme groups
+        # can require more than two right-side bars before confirmation.
+        trigger_base = float(level)
         protective = float(center["low"] if side == "LONG" else center["high"])
         teeth = float(row.get("teeth_shifted", 0.0) or 0.0)
         return confirmation_i, center_i, trigger_base, protective, teeth
@@ -236,6 +238,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_bar_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -273,6 +276,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_bar_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -312,6 +316,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_bar_time_ms=_row_time_ms(ind.iloc[confirmation_i]),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -326,7 +331,7 @@ def extract_long_signal_specs(
                     reason="WM3 buy fractal; trigger only while price/trigger remains above Teeth",
                     source_candle_index=center_i,
                     expires_at_ms=(
-                        _row_time_ms(row)
+                        _row_time_ms(ind.iloc[confirmation_i])
                         + _timeframe_ms(timeframe) * max(
                             1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8"))
                         )
@@ -339,4 +344,11 @@ def extract_long_signal_specs(
     unique: dict[tuple[str, int], SignalSpec] = {}
     for spec in specs:
         unique[(spec.signal_type.value, spec.signal_bar_time_ms)] = spec
-    return sorted(unique.values(), key=lambda x: (x.signal_bar_time_ms, x.signal_type.value))
+    # Do not leak expired historical candidates to selection/admission. The
+    # latest row is the most recent closed candle; compare in exchange candle
+    # time so replay remains deterministic and does not depend on wall-clock.
+    active = [
+        spec for spec in unique.values()
+        if spec.expires_at_ms > current_time
+    ]
+    return sorted(active, key=lambda x: (x.event_time_ms, x.signal_bar_time_ms, x.signal_type.value))

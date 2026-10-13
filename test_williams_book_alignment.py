@@ -31,13 +31,14 @@ def test_profitunity_mfi_proxy_windows():
     assert 'squatting_bar' in ind
 
 
-def test_ao_green_streak_drives_super_ao():
-    # A monotonic rising series produces consecutive green AO bars after the
-    # 34-bar warmup; the three-bar Super AO condition must then become true.
+def test_ao_green_streak_emits_super_ao_once_on_the_configured_bar():
+    # Super AO is an event on the configured Nth same-direction AO bar, not
+    # a persistent state on every later bar.
     prices = [100 + (i * 0.05) ** 2 for i in range(80)]
     ind = calculate_indicators(frame(prices), config_from_env())
-    assert int(ind['ao_green_streak'].iloc[-1]) >= 3
-    assert bool(ind['super_ao_long'].iloc[-1]) is True
+    event_rows = ind.index[ind["super_ao_long"]]
+    assert len(event_rows) > 0
+    assert (ind.loc[event_rows, "ao_green_streak"].astype(int) == 3).all()
     assert bool(ind['long_ao_positive'].iloc[-1]) is True
 
 
@@ -90,3 +91,18 @@ def test_reversal_bar_needs_followup_extreme_breakout():
     out = calculate_indicators(df, config_from_env())
     assert bool(out['bullish_reversal_bar'].iloc[70]) is True
     assert bool(out['long_wise_reversal_entry'].iloc[70]) is False
+
+
+def test_super_ao_signal_is_not_gated_by_fractal_state():
+    # A valid WM2 event must be discoverable without any fractal columns.
+    # This protects the source-level distinction between WM2 and WM3.
+    from williams_signals import _latest_super_ao
+
+    ind = pd.DataFrame({
+        "high": [10.0, 11.0, 12.0, 13.0],
+        "low": [8.0, 9.0, 10.0, 11.0],
+        "ao_green_streak": [0, 1, 2, 3],
+    })
+    signal = _latest_super_ao(ind, side="LONG")
+    assert signal is not None
+    assert signal[0] == 3

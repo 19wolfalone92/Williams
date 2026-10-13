@@ -212,7 +212,7 @@ class ControlState:
         with self.lock:
             t = self.ensure_trader()
             if self.scanner is None:
-                self.scanner = MarketScanner(t.client)
+                self.scanner = MarketScanner(t.client, context_cache=context_cache)
             return self.scanner
 
     def ensure_multi(self):

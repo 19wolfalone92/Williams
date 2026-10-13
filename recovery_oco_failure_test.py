@@ -12,10 +12,13 @@ os.environ["WILLIAMS_DB_PATH"] = _test_db_path
 assert_test_db_safe()
 
 from trader import Trader
+from binance_client import BinanceSpotClient
 from binance_rules import SymbolRules
 
-class FakeClient:
+class FakeClient(BinanceSpotClient):
     testnet=True
+    def __init__(self):
+        self.order_calls = 0
     def decimal_format(self,x): return f"{x:.8f}"
     def decimal_floor(self,x,step):
         x=float(x)
@@ -24,6 +27,7 @@ class FakeClient:
             raise ValueError("step must be > 0")
         return float(f"{(int(x/step)*step):.8f}")
     def order(self,symbol,side,otype,**kw):
+        self.order_calls += 1
         print("[FAKE] BUY",symbol,side,otype,kw)
         return {"orderId":"1001","status":"FILLED","executedQty":"0.01","cummulativeQuoteQty":"100.0"}
     def get_order(self, symbol, order_id=None, orig_client_order_id=None):
@@ -55,68 +59,21 @@ class FakeClient:
 
 os.environ["MAX_OPEN_POSITIONS"] = "1"
 t=Trader(testnet=True)
-# TEST ONLY: FakeClient simulation, no real exchange.
+# Legacy single-symbol mutations are intentionally contained by TASK 009.4.
+# This script is an offline safety test; no real or fake order should be sent.
 t.dry_run=False
 t.client=FakeClient()
 t.symbol="BTCUSDT"
 t.active_symbol="BTCUSDT"
-t.filters={"LOT_SIZE":{"minQty":"0.00001","stepSize":"0.00001"},"PRICE_FILTER":{"tickSize":"0.01"},"NOTIONAL":{"minNotional":"5"}}
-t.symbol_rules=SymbolRules.from_exchange_info(t.client.exchange_info("BTCUSDT"), "BTCUSDT")
-t.foreign_base_balance=0
 t.db.state_set("position_state","FLAT")
 
-# Simulate the baseline that the real application persists
-# before opening a managed position.
-t.db.state_set("foreign_base_balance:BTCUSDT", 0.0)
-
-print("1) BUY")
-order,qty,entry=t.market_buy(100)
-assert qty>0 and entry>0
-print("[PASS] BUY FILLED:",qty,entry)
-assert t.state()=="ENTRY_PENDING"
-
-print("2) SAVE TRADE")
-tid=t.db.save_trade(symbol="BTCUSDT",entry_price=entry,quantity=qty,entry_order_id=str(order["orderId"]))
-assert tid
-print("[PASS] trade_id =",tid)
-
-print("3) OCO FAILURE")
 try:
-    t.place_oco(qty,entry,trade_id=tid)
-except Exception as e:
-    print("[EXPECTED]",e)
+    t.market_buy(100)
+except RuntimeError as exc:
+    assert "Legacy Trader.market_buy is disabled" in str(exc)
+else:
+    raise AssertionError("legacy direct BUY unexpectedly passed its execution-path gate")
 
-assert t.state()=="RECONCILE_REQUIRED"
-print("[PASS] state = RECONCILE_REQUIRED")
-
-print("4) RESTART")
-t2=Trader(testnet=True)
-# TEST ONLY: FakeClient simulation, no real exchange.
-t2.dry_run=False
-t2.client=t.client
-t2.symbol="BTCUSDT"
-t2.active_symbol="BTCUSDT"
-t2.filters=t.filters
-t2.symbol_rules=t.symbol_rules
-# Baseline is persisted in the test SQLite DB,
-# so a new Trader instance can recover it after restart.
-t2.recover_state()
-
-state=t2.state()
-trade=t2.db.open_trade("BTCUSDT")
-print("[INFO] RECOVERY STATE =",state)
-print("[INFO] TRADE =",trade)
-
-assert trade is not None
-assert state == "RECONCILE_REQUIRED"
-assert state!="OPEN"
-assert state!="FLAT"
-
-print()
-print("================================")
-print("BUY -> OCO FAILURE -> RECOVERY")
-print("PASS")
-print("STATE:",state)
-print("TRADE PRESERVED: YES")
-print("HARD RECOVERY BLOCK: YES")
-print("================================")
+assert t.client.order_calls == 0
+assert t.state() == "FLAT"
+print("[PASS] legacy Trader BUY path is disabled before any order submission")

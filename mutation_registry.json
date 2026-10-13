@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "purpose": "Explicit bounded mutation-path registry for TASK 009.4.4.2. Registry entries document review scope; they do not prove account identity, whole-program reachability, or live-trading approval.",
+  "python_transport_sink": {
+    "path": "binance_client.py",
+    "symbol": "BinanceSpotClient._request",
+    "reason": "Only registered low-level Python REST transport. Mutation methods and endpoint strings are checked at the callsites; unknown/dynamic method or endpoint is rejected.",
+    "evidence_tests": [
+      "test_task0094_mutation_containment.py",
+      "test_task0091_execution_barrier_fail_closed.py",
+      "test_task0094_account_identity.py"
+    ]
+  },
+  "python_mutation_endpoints": [
+    {
+      "method": "POST",
+      "endpoint": "/api/v3/order",
+      "status": "approved",
+      "reason": "Canonical Spot order creation; upstream campaign execution must verify account identity and enter the ExecutionBarrier contract.",
+      "evidence_tests": [
+        "test_campaign_execution.py",
+        "test_task0091_execution_barrier_fail_closed.py",
+        "test_task0094_account_identity.py"
+      ]
+    },
+    {
+      "method": "POST",
+      "endpoint": "/api/v3/order/cancelReplace",
+      "status": "approved",
+      "reason": "Cancel/replace is non-atomic at Binance; caller must inspect both results and reconcile ambiguity.",
+      "evidence_tests": [
+        "test_campaign_execution.py",
+        "test_task0093_exchange_backed_recovery.py"
+      ]
+    },
+    {
+      "method": "POST",
+      "endpoint": "/api/v3/orderList/oco",
+      "status": "approved",
+      "reason": "Native OCO create endpoint; ambiguous outcome is reconciled by list client ID in the safe wrapper.",
+      "evidence_tests": [
+        "test_task0094_mutation_containment.py",
+        "test_task0093_exchange_backed_recovery.py"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "endpoint": "/api/v3/order",
+      "status": "approved",
+      "reason": "Single-order cancel; callers must reconcile if the outcome is unknown.",
+      "evidence_tests": [
+        "test_campaign_execution.py",
+        "test_task0093_exchange_backed_recovery.py"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "endpoint": "/api/v3/openOrders",
+      "status": "approved",
+      "reason": "Cancel all open orders for one symbol; ambiguity must block execution until reconciliation.",
+      "evidence_tests": [
+        "test_task0093_exchange_backed_recovery.py"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "endpoint": "/api/v3/orderList",
+      "status": "approved",
+      "reason": "Cancel native OCO order list; ambiguity must block execution until reconciliation.",
+      "evidence_tests": [
+        "test_task0093_exchange_backed_recovery.py"
+      ]
+    }
+  ],
+  "android_lock_contract": {
+    "path": "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+    "reason": "Android mutation methods are not approved for autonomous execution in this task. Start must persist and return a blocked result while the durable mutation contract is unverified.",
+    "evidence_tests": [
+      "test_android_remote_only.py",
+      "ci_release_gate.py"
+    ],
+    "required_literals": [
+      "private val androidDurableMutationContractVerified = false",
+      "TASK0094_ANDROID_DURABLE_MUTATION_CONTRACT_UNVERIFIED",
+      ".put(\"execution_enabled\", false)"
+    ],
+    "forbidden_literals": [
+      "private val androidDurableMutationContractVerified = true"
+    ]
+  },
+  "external_non_exchange_sinks": [
+    {
+      "path": "telegram_bot.py",
+      "symbol": "Telegram._worker_loop",
+      "method": "post",
+      "status": "approved",
+      "reason": "Non-Binance Telegram notification POST; isolated notification queue, not an exchange/order mutation sink. Exact file and worker symbol only; any other raw POST remains rejected.",
+      "evidence_tests": [
+        "test_telegram_bot.py",
+        "test_production_architecture.py"
+      ]
+    }
+  ]
+}

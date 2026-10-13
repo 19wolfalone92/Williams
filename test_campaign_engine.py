@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 
 from campaign_engine import CampaignEngine
 from campaign_model import (
@@ -13,7 +14,7 @@ from campaign_model import (
 from db import Database
 
 
-def make_signal(signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY, trigger=101.0, bar=1):
+def make_signal(signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY, trigger=101.0, bar=1, confirmed=0):
     return SignalSpec.new(
         symbol="BTCUSDT",
         side="BUY",
@@ -24,7 +25,41 @@ def make_signal(signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY, trigger=
         trigger_price=trigger,
         protective_reference=97.0,
         htf_confirmed=True,
+        expires_at_ms=int(time.time() * 1000) + 60_000,
+        confirmation_bar_time_ms=confirmed,
     )
+
+
+def test_initial_signal_selection_excludes_expired_and_unbounded_signals():
+    expired = make_signal(bar=10)
+    expired = SignalSpec.new(
+        symbol=expired.symbol,
+        side=expired.side,
+        signal_type=expired.signal_type,
+        role=expired.role,
+        timeframe=expired.timeframe,
+        signal_bar_time_ms=expired.signal_bar_time_ms,
+        trigger_price=expired.trigger_price,
+        protective_reference=expired.protective_reference,
+        expires_at_ms=int(time.time() * 1000) - 1,
+    )
+    valid = make_signal(SignalType.SUPER_AO, bar=20)
+    assert CampaignEngine.choose_initial_signal([expired, valid]) == valid
+    assert CampaignEngine.choose_initial_signal([expired]) is None
+
+
+def test_initial_signal_selection_requires_explicit_expiry():
+    unbounded = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="5m",
+        signal_bar_time_ms=10,
+        trigger_price=101.0,
+        protective_reference=97.0,
+    )
+    assert CampaignEngine.choose_initial_signal([unbounded]) is None
 
 
 def test_first_available_signal_starts_campaign():
@@ -34,6 +69,15 @@ def test_first_available_signal_starts_campaign():
         make_signal(SignalType.SUPER_AO, bar=20),
     ]
     assert CampaignEngine.choose_initial_signal(signals).signal_type == SignalType.REVERSAL
+
+
+def test_initial_signal_order_uses_fractal_confirmation_time_not_pivot_time():
+    wm3 = make_signal(SignalType.FRACTAL, bar=10, confirmed=30)
+    wm2 = make_signal(SignalType.SUPER_AO, bar=20, confirmed=20)
+
+    assert wm3.signal_bar_time_ms < wm2.signal_bar_time_ms
+    assert wm3.event_time_ms > wm2.event_time_ms
+    assert CampaignEngine.choose_initial_signal([wm3, wm2]) == wm2
 
 
 def test_wise_men_can_be_later_adds_not_two_of_three_gate():

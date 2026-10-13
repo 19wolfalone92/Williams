@@ -3,6 +3,7 @@ import threading
 import time
 
 from execution_barrier import ExecutionBarrier, OrderIntent
+from db import Database
 from market_context import ContextCache, TFMarketContext, WaveHypothesis
 from wise_men import WiseMenPhase, WiseMenStateMachine
 
@@ -38,10 +39,11 @@ def test_copy_on_write_versions_and_immutable_snapshot():
     assert first.context("BTCUSDT", "1h").version == 1
 
 
-def test_execution_barrier_rejects_stale_context():
+def test_execution_barrier_rejects_stale_context(tmp_path):
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    db = Database(str(tmp_path / "stale-context.sqlite3"))
+    barrier = ExecutionBarrier(cache, db)
     snap = cache.snapshot()
     cache.publish(context())
     intent = OrderIntent.new(
@@ -55,10 +57,11 @@ def test_execution_barrier_rejects_stale_context():
     assert "stale context" in result.reason
 
 
-def test_execution_barrier_serializes_publish_and_submit():
+def test_execution_barrier_serializes_publish_and_submit(tmp_path):
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    db = Database(str(tmp_path / "serialized-submit.sqlite3"))
+    barrier = ExecutionBarrier(cache, db)
     version = cache.snapshot().context("BTCUSDT", "1h").version
     started = threading.Event()
     published = threading.Event()

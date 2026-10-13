@@ -64,40 +64,89 @@ def calculate_indicators(df, cfg):
     x["ao_red"] = x["ao"] < x["ao"].shift(1)
     x["ao_green_streak"] = _streak(x["ao_green"])
     x["ao_red_streak"] = _streak(x["ao_red"])
-    x["super_ao_long"] = x["ao_green_streak"] >= int(cfg["super_ao_bars"])
-    x["super_ao_short"] = x["ao_red_streak"] >= int(cfg["super_ao_bars"])
+    # Super AO is a presenting event on the third same-direction AO bar, not a
+    # persistent state on every later bar. Later AO bars may support campaign
+    # management, but must not mint duplicate WM2 entry events.
+    x["super_ao_long"] = x["ao_green_streak"] == int(cfg["super_ao_bars"])
+    x["super_ao_short"] = x["ao_red_streak"] == int(cfg["super_ao_bars"])
     x["ao_momentum_rising"] = x["ao_green"]
     x["ao_momentum_falling"] = x["ao_red"]
 
     # Accelerator/Decelerator: AO minus its 5-period SMA.
     x["ac"] = x["ao"] - x["ao"].rolling(cfg["ac_period"]).mean()
 
-    # Fractals. The center must be strictly higher/lower than the two bars
-    # on each side; equality therefore does not create a false fractal.
-    left = cfg["fractal_left"]
-    right = cfg["fractal_right"]
+    # Fractals: the source describes a five-bar pattern whose center may be
+    # a GROUP of equal extreme bars. Equal extremes do not count as one of the
+    # two required lower/higher bars on either side. Confirmation is timestamped
+    # at the bar that supplies the second qualifying right-side bar; no future
+    # bar is read at runtime. The last bar of an adjacent equal-extreme group
+    # is used as the deterministic group anchor; price level is shared by the
+    # whole group. This anchor is implementation provenance, not a new signal rule.
+    left = max(2, int(cfg["fractal_left"]))
+    right = max(2, int(cfg["fractal_right"]))
+    n = len(x)
+    highs = pd.to_numeric(x["high"], errors="coerce").to_numpy(dtype=float)
+    lows = pd.to_numeric(x["low"], errors="coerce").to_numpy(dtype=float)
     x["fractal_up"] = False
     x["fractal_down"] = False
-    for i in range(left, len(x) - right):
-        if (
-            x["high"].iloc[i] > x["high"].iloc[i-left:i].max()
-            and x["high"].iloc[i] > x["high"].iloc[i+1:i+right+1].max()
-        ):
-            x.iloc[i, x.columns.get_loc("fractal_up")] = True
-        if (
-            x["low"].iloc[i] < x["low"].iloc[i-left:i].min()
-            and x["low"].iloc[i] < x["low"].iloc[i+1:i+right+1].min()
-        ):
-            x.iloc[i, x.columns.get_loc("fractal_down")] = True
-
+    x["fractal_up_confirmation_index"] = np.nan
+    x["fractal_down_confirmation_index"] = np.nan
     x["confirmed_up_level"] = np.nan
     x["confirmed_down_level"] = np.nan
-    for i in range(left + right, len(x)):
-        fi = i - right
-        if bool(x["fractal_up"].iloc[fi]):
-            x.iloc[i, x.columns.get_loc("confirmed_up_level")] = x["high"].iloc[fi]
-        if bool(x["fractal_down"].iloc[fi]):
-            x.iloc[i, x.columns.get_loc("confirmed_down_level")] = x["low"].iloc[fi]
+    x["confirmed_up_center_index"] = np.nan
+    x["confirmed_down_center_index"] = np.nan
+
+    def _group_end(values, i):
+        j = i
+        while j + 1 < n and np.isfinite(values[j + 1]) and values[j + 1] == values[i]:
+            j += 1
+        return j
+
+    def _side_count(values, level, start_i, step, want_lower, needed):
+        count = 0
+        j = start_i
+        last = -1
+        while 0 <= j < n and count < needed:
+            value = values[j]
+            if not np.isfinite(value):
+                return None
+            if value == level:
+                j += step
+                continue
+            qualifies = value < level if want_lower else value > level
+            if not qualifies:
+                return None
+            count += 1
+            last = j
+            j += step
+        if count < needed:
+            return None
+        return last
+
+    for i in range(n):
+        if not np.isfinite(highs[i]) or not np.isfinite(lows[i]):
+            continue
+
+        # Evaluate each contiguous equal-extreme group once.
+        high_end = _group_end(highs, i)
+        if high_end == i:
+            left_ok = _side_count(highs, highs[i], i - 1, -1, True, left)
+            right_confirm = _side_count(highs, highs[i], high_end + 1, 1, True, right)
+            if left_ok is not None and right_confirm is not None:
+                x.iloc[i, x.columns.get_loc("fractal_up")] = True
+                x.iloc[i, x.columns.get_loc("fractal_up_confirmation_index")] = right_confirm
+                x.iloc[right_confirm, x.columns.get_loc("confirmed_up_level")] = highs[i]
+                x.iloc[right_confirm, x.columns.get_loc("confirmed_up_center_index")] = i
+
+        low_end = _group_end(lows, i)
+        if low_end == i:
+            left_ok = _side_count(lows, lows[i], i - 1, -1, False, left)
+            right_confirm = _side_count(lows, lows[i], low_end + 1, 1, False, right)
+            if left_ok is not None and right_confirm is not None:
+                x.iloc[i, x.columns.get_loc("fractal_down")] = True
+                x.iloc[i, x.columns.get_loc("fractal_down_confirmation_index")] = right_confirm
+                x.iloc[right_confirm, x.columns.get_loc("confirmed_down_level")] = lows[i]
+                x.iloc[right_confirm, x.columns.get_loc("confirmed_down_center_index")] = i
 
     x["last_up_level"] = x["confirmed_up_level"].ffill()
     x["last_down_level"] = x["confirmed_down_level"].ffill()
@@ -181,16 +230,12 @@ def calculate_indicators(df, cfg):
         x["low"].where(x["bearish_reversal_bar"]).ffill().shift(1)
     )
 
-    # Second Wise Man: Super AO. We use Williams' histogram color definition
-    # (green = current AO above previous AO, red = below), not merely AO > 0.
-    x["long_super_ao_signal"] = (
-        x["super_ao_long"]
-        & x["long_fractal_outside"].shift(1).eq(True)
-    )
-    x["short_super_ao_signal"] = (
-        x["super_ao_short"]
-        & x["short_fractal_outside"].shift(1).eq(True)
-    )
+    # Second Wise Man: Super AO. The signal is the third consecutive AO
+    # bar in the same direction. Do not gate WM2 detection on an external
+    # fractal: that would turn a distinct Wise-Man event into a WM3 prerequisite.
+    # Campaign admission and risk/context checks remain downstream gates.
+    x["long_super_ao_signal"] = x["super_ao_long"].astype(bool)
+    x["short_super_ao_signal"] = x["super_ao_short"].astype(bool)
 
     # Conservative execution overlay. The counter-trend Wise-Man signals from
     # the book are retained as diagnostics, but disabled for the long-only
@@ -230,22 +275,28 @@ def calculate_indicators(df, cfg):
     x["short_ac_negative"] = x["ac"] < 0
     x["short_fractal_ready"] = x["last_down_level"].notna()
 
-    # Strict entry: conservative Williams gate + at least one valid Wise-Man
-    # trigger. Fractal breakouts, Super AO continuation and reversal bars are
-    # separate triggers; they are not incorrectly ANDed together.
-    min_wise = int(cfg["min_wise_men_confirmations"])
+    # A Wise-Man event is a distinct event, not a same-candle Boolean
+    # quorum. In particular WM2/Super AO may be the first presenting signal;
+    # it must not be vetoed by the absence of a WM3 fractal or by a configurable
+    # "2 of 3 on this candle" counter. Operative context and safety admission
+    # remain separate downstream gates.
     x["long_signal"] = (
-        # Williams' first gate: no downstream Wise-Man signal is actionable
-        # until a confirmed fractal has formed outside the Teeth/balance line.
-        x["long_fractal_outside"]
-        & x["long_bullish"]
+        x["long_bullish"]
         & x["long_awake"]
-        & x["long_wise_man_count"].ge(min_wise)
+        & (
+            x["long_wise_reversal_entry"]
+            | x["long_super_ao_signal"]
+            | x["long_fractal_signal"]
+        )
     )
     x["short_signal"] = (
         x["short_bearish"]
         & x["short_awake"]
-        & x["short_wise_man_count"].ge(min_wise)
+        & (
+            x["short_wise_reversal_entry"]
+            | x["short_super_ao_signal"]
+            | x["short_fractal_signal"]
+        )
     )
 
     def _family(row, side):

@@ -20,13 +20,13 @@ class FakeScanner:
         return [
             SimpleNamespace(symbol="BTCUSDT", signal=True, score=95.0, signal_strength=1.0,
                              htf_confirmed=True, spread_pct=0.0001, atr_pct=0.02,
-                             wave_invalidation_price=98.0),
+                             wave_invalidation_price=98.0, entry_protective_reference=98.0),
             SimpleNamespace(symbol="ETHUSDT", signal=True, score=90.0, signal_strength=1.0,
                              htf_confirmed=True, spread_pct=0.0001, atr_pct=0.02,
-                             wave_invalidation_price=98.0),
+                             wave_invalidation_price=98.0, entry_protective_reference=98.0),
             SimpleNamespace(symbol="SOLUSDT", signal=True, score=85.0, signal_strength=1.0,
                              htf_confirmed=True, spread_pct=0.0001, atr_pct=0.02,
-                             wave_invalidation_price=98.0),
+                             wave_invalidation_price=98.0, entry_protective_reference=98.0),
         ]
 
 

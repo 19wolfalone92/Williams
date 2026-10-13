@@ -17,8 +17,9 @@ class Selection:
 class PortfolioController:
     """Portfolio-level candidate selection and risk allocation."""
 
-    def __init__(self, client, balance_quote: float, symbols=None, interval=None):
+    def __init__(self, client, balance_quote: float, symbols=None, interval=None, context_cache=None):
         self.client = client
+        self.context_cache = context_cache
         self.interval = interval or os.getenv("INTERVAL", "1h")
         self.max_open_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
         self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))))
@@ -30,8 +31,9 @@ class PortfolioController:
 
         self.scanner = MarketScanner(
             client=client,
-            symbols=(symbols if symbols else None),
+            symbols=symbols,
             interval=self.interval,
+            context_cache=self.context_cache,
         )
         self.risk_engine = RiskEngine(
             balance_quote=float(balance_quote),
@@ -63,7 +65,7 @@ class PortfolioController:
                     htf_confirmed=candidate.htf_confirmed,
                     spread_pct=candidate.spread_pct,
                     max_spread_pct=self.scanner.max_spread_pct,
-                    invalidation_price=float(getattr(candidate, "wave_invalidation_price", 0.0) or 0.0),
+                    invalidation_price=float(getattr(candidate, "entry_protective_reference", 0.0) or 0.0),
                 )
                 if risk.allowed:
                     analysed.append(Selection(

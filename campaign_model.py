@@ -129,6 +129,13 @@ class SignalSpec:
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     expires_at_ms: int = 0
     source_candle_index: int = -1
+    # Source candle and signal confirmation are distinct for WM3: the fractal
+    # pivot is two bars earlier than the candle on which it becomes knowable.
+    confirmation_bar_time_ms: int = 0
+
+    @property
+    def event_time_ms(self) -> int:
+        return int(self.confirmation_bar_time_ms or self.signal_bar_time_ms)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

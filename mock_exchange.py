@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import time
 import uuid
 
@@ -18,6 +19,7 @@ class MockExchange:
             "ETHUSDT": {"bids": [["9.99", "100"]], "asks": [["10.01", "100"]], "lastUpdateId": 1},
         }
         self.orders: list[dict] = []
+        self.trades: list[dict] = []
         self.open_oco: dict[str, dict] = {}
         self.timeout_next = False
         self.partial_fill_ratio = 1.0
@@ -94,15 +96,31 @@ class MockExchange:
         return {"symbols": rows} if symbol is None else {"symbols": [x for x in rows if x["symbol"] == symbol]}
 
     def account(self):
-        return {"balances": [
-            {"asset": k, "free": str(v), "locked": "0.0"}
-            for k, v in self.balances.items()
-        ]}
+        return {
+            "canTrade": True,
+            "accountType": "SPOT",
+            "balances": [
+                {"asset": k, "free": str(v), "locked": "0.0"}
+                for k, v in self.balances.items()
+            ],
+        }
+
+    def _partial_fill_qty(self, symbol, requested_qty):
+        """Simulate exchange fills that obey the symbol's LOT_SIZE step."""
+        requested = max(0.0, float(requested_qty))
+        ratio = max(0.0, min(1.0, float(self.partial_fill_ratio)))
+        filters = self.exchange_info(symbol).get("symbols", [{}])[0].get("filters", [])
+        lot = next((row for row in filters if row.get("filterType") == "LOT_SIZE"), {})
+        step = float(lot.get("stepSize", "0.001") or "0.001")
+        if step <= 0:
+            raise ValueError(f"invalid mock LOT_SIZE step for {symbol}")
+        units = math.floor((requested * ratio + 1e-12) / step)
+        return round(units * step, 12)
 
     def _new_order(self, symbol, side, qty, status="FILLED", client_order_id="", order_type="MARKET", stop_price=0.0):
         oid = str(len(self.orders) + 1)
         executed = (
-            float(qty) * float(self.partial_fill_ratio)
+            self._partial_fill_qty(symbol, qty)
             if str(status).upper() != "NEW"
             else 0.0
         )
@@ -115,11 +133,24 @@ class MockExchange:
             "clientOrderId": client_order_id or "MOCK_" + uuid.uuid4().hex[:10],
             "origQty": str(qty),
             "executedQty": str(executed),
+            "cummulativeQuoteQty": str(executed * float(self.prices[symbol])),
             "stopPrice": str(stop_price) if float(stop_price or 0) > 0 else "0",
             "transactTime": int(time.time() * 1000),
             "time": int(time.time() * 1000),
         }
         self.orders.append(order)
+        if executed > 0:
+            self.trades.append({
+                "symbol": symbol,
+                "id": len(self.trades) + 1,
+                "orderId": oid,
+                "price": str(self.prices[symbol]),
+                "qty": str(executed),
+                "commission": "0",
+                "commissionAsset": "USDT",
+                "isBuyer": str(side).upper() == "BUY",
+                "time": order["transactTime"],
+            })
         return order
 
     def market_buy(self, symbol, quote_order_qty=None, quantity=None, client_order_id=None):
@@ -129,7 +160,7 @@ class MockExchange:
         price = self.prices[symbol]
         qty = float(quantity) if quantity is not None else float(quote_order_qty) / price
         qty = max(0.0, qty)
-        filled = qty * float(self.partial_fill_ratio)
+        filled = self._partial_fill_qty(symbol, qty)
         self.balances["USDT"] -= filled * price
         self.balances[symbol.replace("USDT", "")] += filled
         return self._new_order(symbol, "BUY", qty, client_order_id=client_order_id or "")
@@ -139,7 +170,7 @@ class MockExchange:
             self.timeout_next = False
             raise TimeoutError("mock 504 timeout")
         base = symbol.replace("USDT", "")
-        filled = min(float(quantity) * float(self.partial_fill_ratio), self.balances.get(base, 0.0))
+        filled = min(self._partial_fill_qty(symbol, quantity), self.balances.get(base, 0.0))
         self.balances[base] -= filled
         self.balances["USDT"] += filled * self.prices[symbol]
         return self._new_order(symbol, "SELL", quantity, client_order_id=client_order_id or "")
@@ -187,6 +218,14 @@ class MockExchange:
                 return copy.deepcopy(order)
         raise RuntimeError("mock order not found")
 
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        rows = [
+            copy.deepcopy(row) for row in self.trades
+            if row["symbol"] == symbol
+            and (order_id is None or str(row["orderId"]) == str(order_id))
+        ]
+        return rows[:int(limit)]
+
     def cancel_order(self, symbol, order_id=None, orig_client_order_id=None):
         order = self.get_order(symbol, order_id=order_id, orig_client_order_id=orig_client_order_id)
         for row in self.orders:
@@ -214,7 +253,7 @@ class MockExchange:
                 continue
 
             requested = float(order.get("origQty", 0) or 0)
-            executed = requested * float(self.partial_fill_ratio)
+            executed = self._partial_fill_qty(symbol, requested)
             if side == "BUY":
                 cost = executed * self.prices[symbol]
                 self.balances["USDT"] -= cost
@@ -230,6 +269,18 @@ class MockExchange:
             order["transactTime"] = int(time.time() * 1000)
             order["time"] = order["transactTime"]
             order["status"] = "FILLED" if executed + 1e-12 >= requested else "PARTIALLY_FILLED"
+            if executed > 0:
+                self.trades.append({
+                    "symbol": symbol,
+                    "id": len(self.trades) + 1,
+                    "orderId": str(order["orderId"]),
+                    "price": str(self.prices[symbol]),
+                    "qty": str(executed),
+                    "commission": "0",
+                    "commissionAsset": "USDT",
+                    "isBuyer": side == "BUY",
+                    "time": order["transactTime"],
+                })
 
     def open_order_lists(self):
         return [copy.deepcopy(x) for x in self.open_oco.values()]

@@ -74,7 +74,7 @@ def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
 class TradingConfig:
     symbols: tuple[str, ...] = DEFAULT_SYMBOLS
     structural_timeframes: tuple[str, ...] = DEFAULT_STRUCTURAL_TFS
-    execution_timeframe: str = "5m"
+    execution_timeframe: str = "1h"
 
     allow_long: bool = True
     allow_short: bool = False
@@ -111,16 +111,27 @@ class TradingConfig:
         # seed symbol for legacy status/chart paths instead of treating ALL as a symbol.
         if len(symbols) == 1 and symbols[0].upper() in {"ALL", "AUTO", "*"}:
             symbols = DEFAULT_SYMBOLS
-        # AUTO_SCAN_SYMBOLS remains a backwards-compatible override.
-        if str(source.get("AUTO_SCAN_SYMBOLS", "")).strip():
-            symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
+        # AUTO_SCAN_SYMBOLS remains a backwards-compatible override, but ALL/AUTO/*
+        # resolves to the fixed native Spot allowlist; it never expands the universe.
+        auto_symbols = str(source.get("AUTO_SCAN_SYMBOLS", "")).strip()
+        if auto_symbols:
+            override = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
+            if len(override) == 1 and override[0].upper() in {"ALL", "AUTO", "*"}:
+                symbols = DEFAULT_SYMBOLS
+            else:
+                symbols = tuple(x for x in override if x in DEFAULT_SYMBOLS)
+
+        # The Williams Spot runtime is intentionally restricted to the five
+        # configured native USDT pairs. Unknown symbols are not admitted by an
+        # environment override.
+        symbols = tuple(x for x in symbols if x in DEFAULT_SYMBOLS)
 
         max_positions = max(0, _int(source, "MAX_OPEN_POSITIONS", 5))
         risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
         risk = max(0.0, min(0.005, _float(source, risk_key, 0.005)))
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
-        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "5m")).lower()
+        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "1h")).lower()
 
         return cls(
             symbols=symbols,

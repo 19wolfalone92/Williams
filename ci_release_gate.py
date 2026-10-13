@@ -6,7 +6,7 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-EXPECTED_VERSION = '4.24.0'
+EXPECTED_VERSION = '4.25.0'
 
 def read(path: str) -> str:
     p = ROOT / path
@@ -30,8 +30,8 @@ def main() -> None:
     env = read(".env.example")
     for needle in (
         "TESTNET=true", "ALLOW_LIVE=false", "MAX_OPEN_POSITIONS=5",
-        "AUTO_SCAN_SYMBOLS=", "SCAN_ALL_USDT=true", "SCAN_MAX_SYMBOLS=0",
-        "LIQUIDITY_PRESELECT=0", "WAVE_FULL_TF_ALL=true",
+        "AUTO_SCAN_SYMBOLS=", "WAVE_FULL_TF_ALL=false",
+        "EXECUTION_TIMEFRAME=1h", "WILLIAMS_SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT",
     ):
         must(env, needle, ".env.example")
 
@@ -39,15 +39,21 @@ def main() -> None:
     must(cfg, "max_open_positions: int = 5", "trading_config.py")
     must(cfg, 'MAX_OPEN_POSITIONS", 5', "trading_config.py")
     must(cfg, '{"ALL", "AUTO", "*"}', "trading_config.py")
+    must(cfg, 'execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "1h")).lower()', "trading_config.py")
+    must(cfg, 'symbols = tuple(x for x in symbols if x in DEFAULT_SYMBOLS)', "trading_config.py")
     must(cfg, 'risk_key = "MAX_RISK_PER_TRADE_PCT"', "trading_config.py")
+    must(breaker, 'db.state_get("daily_risk_tripped")', "equity_breaker.py")
+    must(breaker, 'db.state_set("daily_risk_tripped", "1")', "equity_breaker.py")
+    must(breaker, "daily PnL unavailable; entry blocked", "equity_breaker.py")
     must(cfg, 'min(0.005', "trading_config.py")
     must(cfg, 'min(0.01', "trading_config.py")
 
     scanner = read("market_scanner.py")
+    breaker = read("equity_breaker.py")
     for needle in (
-        'os.getenv("SCAN_ALL_USDT", "true")',
-        'os.getenv("SCAN_MAX_SYMBOLS", "0")',
-        'os.getenv("LIQUIDITY_PRESELECT", "0")',
+        "from trading_config import TradingConfig",
+        "allowed_symbols = set(TradingConfig.from_env().symbols)",
+        "return [x for x in requested if x in allowed]",
         'os.getenv("SCAN_WORKERS", "4")',
     ):
         must(scanner, needle, "market_scanner.py")
@@ -76,6 +82,21 @@ def main() -> None:
     must(android, "val maxOpenPositions: Int = 5", "MainActivity.kt")
     runtime = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
     must(runtime, 'prefs.getInt("max_open_positions", 5)', "StandaloneRuntime.kt")
+    must(fractal, "fun latestUp", "WilliamsFractal.kt")
+    must(fractal, "confirmationIndex", "WilliamsFractal.kt")
+    must(runtime, "WilliamsFractal.latestUp(candles.map { it.h }, candles.lastIndex)", "StandaloneRuntime.kt")
+    must(runtime, '.put("confirmation_bar_time_ms", s.confirmationBarTimeMs)', "StandaloneRuntime.kt")
+    must(runtime, 'getString("campaign_execution_timeframe", "1h")', "StandaloneRuntime.kt")
+    must(runtime, "private val campaignRiskLimitPct = 0.006", "StandaloneRuntime.kt")
+    must(runtime, "private val campaignInitialRiskPct = 0.005", "StandaloneRuntime.kt")
+    must(runtime, "private val campaignAddRiskCapPct = 0.001", "StandaloneRuntime.kt")
+    must(runtime, "EquityCircuitBreaker(maxDrawdownPct = 0.03)", "StandaloneRuntime.kt")
+    must(runtime, "restoreEquityCircuitBreaker(estimateManagedEquity())", "StandaloneRuntime.kt")
+    must(runtime, "persistEquityCircuitBreaker(snapshot, now)", "StandaloneRuntime.kt")
+    must(runtime, "equityCircuitBreakerPersistenceReady", "StandaloneRuntime.kt")
+    must(runtime, 'put("equity_circuit_breaker_daily_limit_pct", 0.03)', "StandaloneRuntime.kt")
+    must(runtime, 'private var equityCircuitBreakerPersistenceReady = false', "StandaloneRuntime.kt")
+    must(runtime, 'equityCircuitBreakerPersistenceReady = false', "StandaloneRuntime.kt")
     must(runtime, "private val maxSlippagePct = 0.0015", "StandaloneRuntime.kt")
     must(runtime, "control/self-heal", "StandaloneRuntime.kt")
     must(runtime, "activeHistoryTasks", "StandaloneRuntime.kt")
