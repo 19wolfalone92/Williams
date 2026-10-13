@@ -410,10 +410,8 @@ private class BackendApi(context: Context) {
         require(backendUrl.startsWith("https://")) {
             "Укажите HTTPS Backend URL для Williams Futures."
         }
-        if (!localRuntime) {
-            require(mobileToken.isNotBlank()) {
-                "Сначала укажите Mobile API Token."
-            }
+        require(mobileToken.isNotBlank()) {
+            "Сначала укажите Mobile API Token."
         }
         val requestBuilder = Request.Builder()
             .url(backendUrl + path)
