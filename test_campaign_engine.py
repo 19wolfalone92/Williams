@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 
 from campaign_engine import CampaignEngine
 from campaign_model import (
@@ -24,7 +25,40 @@ def make_signal(signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY, trigger=
         trigger_price=trigger,
         protective_reference=97.0,
         htf_confirmed=True,
+        expires_at_ms=int(time.time() * 1000) + 60_000,
     )
+
+
+def test_initial_signal_selection_excludes_expired_and_unbounded_signals():
+    expired = make_signal(bar=10)
+    expired = SignalSpec.new(
+        symbol=expired.symbol,
+        side=expired.side,
+        signal_type=expired.signal_type,
+        role=expired.role,
+        timeframe=expired.timeframe,
+        signal_bar_time_ms=expired.signal_bar_time_ms,
+        trigger_price=expired.trigger_price,
+        protective_reference=expired.protective_reference,
+        expires_at_ms=int(time.time() * 1000) - 1,
+    )
+    valid = make_signal(SignalType.SUPER_AO, bar=20)
+    assert CampaignEngine.choose_initial_signal([expired, valid]) == valid
+    assert CampaignEngine.choose_initial_signal([expired]) is None
+
+
+def test_initial_signal_selection_requires_explicit_expiry():
+    unbounded = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="5m",
+        signal_bar_time_ms=10,
+        trigger_price=101.0,
+        protective_reference=97.0,
+    )
+    assert CampaignEngine.choose_initial_signal([unbounded]) is None
 
 
 def test_first_available_signal_starts_campaign():
