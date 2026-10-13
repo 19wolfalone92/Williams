@@ -637,8 +637,26 @@ private class NativeEngine(
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
-    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.03)
+    private val equityCircuitBreaker = EquityCircuitBreaker(
+        maxDrawdownPct = 0.03,
+        loadState = {
+            EquityCircuitBreaker.PersistedState(
+                dayKey = prefs.getString("daily_risk_day", "") ?: "",
+                startEquity = prefs.getString("daily_start_equity", "0")
+                    ?.toDoubleOrNull() ?: 0.0,
+                tripped = prefs.getBoolean("daily_loss_tripped", false)
+            )
+        },
+        saveState = { state ->
+            prefs.edit()
+                .putString("daily_risk_day", state.dayKey)
+                .putString("daily_start_equity", state.startEquity.toString())
+                .putBoolean("daily_loss_tripped", state.tripped)
+                .commit()
+        }
+    )
     @Volatile private var lastEquityCheckMs = 0L
+    @Volatile private var dailyRiskMonitorHealthy = false
     private val feeBufferPerSidePct = 0.001
     @Volatile private var serverTimeOffsetMs = 0L
     private val BINANCE_RECV_WINDOW_MS = 60000L
@@ -649,7 +667,8 @@ private class NativeEngine(
     @Volatile private var userStreamConnected = false
     @Volatile private var userStreamSyncRequired = true
     @Volatile private var lastUserEventMs = 0L
-    @Volatile private var liveUsdtBalance = 0.0
+    @Volatile private var liveUsdtBalance = 0.0 // free USDT available for new entries
+    @Volatile private var liveUsdtLockedBalance = 0.0 // locked USDT still counts toward equity
     @Volatile private var restMarketReady = false
     @Volatile private var restAccountReady = false
     @Volatile private var restLastSuccessMs = 0L
@@ -790,6 +809,7 @@ private class NativeEngine(
             restAccountReady &&
             historyReady &&
             stateMachine.executionAllowed() &&
+            dailyRiskMonitorHealthy &&
             !equityCircuitBreaker.isTripped()
 
     private fun executionBlockers(): List<String> =
@@ -802,6 +822,7 @@ private class NativeEngine(
             if (!restAccountReady) add("rest_account_not_ready")
             if (!historyReady) add("history_not_ready")
             if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
+            if (!dailyRiskMonitorHealthy) add("daily_risk_monitor_unhealthy")
             if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
         }
 
@@ -1191,18 +1212,16 @@ private class NativeEngine(
             recoverPendingEntries()
             reconcilePositionsWithExchange()
             auditManagedOpenOrders()
-            liveUsdtBalance = signedAccount()
-                .getJSONArray("balances")
-                .let { balances ->
-                    (0 until balances.length())
-                        .asSequence()
-                        .map { balances.getJSONObject(it) }
-                        .firstOrNull { it.optString("asset") == "USDT" }
-                        ?.optString("free")
-                        ?.toDoubleOrNull()
-                        ?: 0.0
-                }
-            equityCircuitBreaker.reset(estimateManagedEquity())
+            val startupBalances = signedAccount().getJSONArray("balances")
+            val startupUsdt = (0 until startupBalances.length())
+                .asSequence()
+                .map { startupBalances.getJSONObject(it) }
+                .firstOrNull { it.optString("asset") == "USDT" }
+            liveUsdtBalance = startupUsdt?.optString("free")?.toDoubleOrNull() ?: 0.0
+            liveUsdtLockedBalance = startupUsdt?.optString("locked")?.toDoubleOrNull() ?: 0.0
+            // Never reset the UTC-day baseline on process start.
+            // Entry admission stays blocked until a fresh equity observation succeeds.
+            dailyRiskMonitorHealthy = false
         } catch (x: Exception) {
             setReconcileRequired(
                 "startup exchange synchronization failed: " +
@@ -2623,6 +2642,12 @@ private class NativeEngine(
 
     private fun validateNewCampaignEntryAtMutation(symbol: String, purpose: String) {
         if (purpose != "CAMPAIGN_ENTRY" && purpose != "CAMPAIGN_ADD_ON") return
+        require(dailyRiskMonitorHealthy) {
+            "DAILY_RISK_UNAVAILABLE: entry blocked until equity and daily PnL are verified"
+        }
+        require(!equityCircuitBreaker.isTripped()) {
+            "DAILY_LOSS_LIMIT: new entries are blocked"
+        }
         val intent = synchronized(pendingEntries) { pendingEntries[symbol] }
             ?: error("ENTRY_REVALIDATION_UNAVAILABLE: no persisted pending signal")
         val nowMs = System.currentTimeMillis()
@@ -2722,6 +2747,10 @@ private class NativeEngine(
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
         if (reconcileRequired || paused || killLatched) return
+        if (!dailyRiskMonitorHealthy) {
+            lastError = "DAILY_RISK_UNAVAILABLE: new entries blocked until equity and daily PnL are verified"
+            return
+        }
         if (equityCircuitBreaker.isTripped()) {
             lastError = "DAILY_LOSS_LIMIT: new entries blocked; existing position exits remain enabled"
             return
