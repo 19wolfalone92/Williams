@@ -1242,15 +1242,15 @@ private fun DiagnosticsScreen(
         item {
             DiagnosticRow(
                 "Directions",
-                "LONG " + if (status.allowLong) "ENABLED" else "BLOCKED" +
-                    " • SHORT " + if (status.allowShort) "ENABLED" else "BLOCKED"
+                "LONG ${if (status.allowLong) "ENABLED" else "BLOCKED"} • SHORT " +
+                    "${if (status.allowShort) "ENABLED" else "BLOCKED"}"
             )
         }
         item {
             DiagnosticRow(
                 "Futures mode",
-                status.futuresLeverage.toString() + "x • " + status.futuresMarginType +
-                    " • ONE-WAY " + if (status.futuresForceOneWay) "REQUIRED" else "INVALID"
+                "${status.futuresLeverage}x • ${status.futuresMarginType} • ONE-WAY " +
+                    if (status.futuresForceOneWay) "REQUIRED" else "INVALID"
             )
         }
         item { DiagnosticRow("Execution", if (status.p0GatePassed) "READY" else "BLOCKED • " + status.p0GateReason) }
