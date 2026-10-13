@@ -90,7 +90,9 @@ class BinanceFuturesClient:
 
     def _request(self, method, path, params=None, signed=False):
         method = method.upper()
-        max_attempts = 3 if method == "GET" else 1
+        # Signed mutations may be retried only when Binance explicitly rejects the
+        # request for timestamp skew (-1021); transport/5xx ambiguity remains UNKNOWN.
+        max_attempts = 3 if method == "GET" else (2 if signed else 1)
         delays = (0.5, 1.0, 2.0)
         last_exc = None
         time_resync_attempted = False
