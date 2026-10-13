@@ -74,6 +74,9 @@ jobs:
             test_integration_bindings.py \
             test_testnet_release_gate.py \
             test_futures_williams_runtime.py \
+            tests/test_futures_campaign_risk_defaults.py \
+            tests/test_futures_risk_policy_contract.py \
+            tests/test_risk_engine_daily_loss_cap.py \
             test_campaign_engine.py \
             test_campaign_execution.py \
             2>&1 | tee campaign-pytest-output.txt
