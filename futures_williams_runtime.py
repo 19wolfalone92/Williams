@@ -2205,12 +2205,16 @@ class FuturesWilliamsRuntime:
         try:
             current_price = float(self.client.ticker_price(symbol)["price"])
 
-            # NTD exit rule: a closed price bar through the Alligator Teeth
-            # invalidates the current trend leg. Evaluate only completed bars;
-            # this is a distinct strategy exit, not a stop-price adjustment.
-            # The chart-displaced Teeth series is used consistently with the
-            # displayed Alligator and does not read future candles.
-            if {"high", "low", "close"}.issubset(closed.columns) and len(closed) >= 40:
+            # NTD exits must not leak into the TC2 Three Wise Men profile.
+            # They are edition-specific rules, not universal Williams filters.
+            # TC2 retains its structural campaign trailing and opposite/exhaustion
+            # handling below.
+            profile = os.getenv(
+                "WILLIAMS_SIGNAL_PROFILE", "TC2_THREE_WISE_MEN"
+            ).strip().upper()
+            ntd_profile = profile == "NTD_FIVE_DIMENSIONS"
+
+            if ntd_profile and {"high", "low", "close"}.issubset(closed.columns) and len(closed) >= 40:
                 indicator_frame = calculate_indicators(closed, config_from_env())
                 last = indicator_frame.iloc[-1]
                 previous = indicator_frame.iloc[-2]
@@ -2219,9 +2223,6 @@ class FuturesWilliamsRuntime:
                 previous_close = float(previous.get("close", 0.0) or 0.0)
                 previous_teeth = float(previous.get("teeth_shifted", 0.0) or 0.0)
                 if min(close_price, teeth_price, previous_close, previous_teeth) > 0:
-                    # "Through Teeth" means a close-to-close crossing, not
-                    # simply being on the wrong side (important for TC2 WM1
-                    # counter-trend entries that can begin outside the mouth).
                     crossed_teeth = (
                         campaign.side == "BUY"
                         and previous_close >= previous_teeth
@@ -2234,11 +2235,10 @@ class FuturesWilliamsRuntime:
                     if crossed_teeth:
                         return self._exit_market(campaign, "TEETH_CLOSE_EXIT")
 
-            # NTD profit-taking rule: after five consecutive same-colour
-            # completed price bars, trail beneath/above every later completed
-            # bar regardless of its colour. Persist activation on the campaign.
+            # NTD's five-price-bar trailing is activated only in the NTD profile.
+            # The underlying campaign structural trailing remains available to TC2.
             tags = getattr(campaign, "tags", None)
-            if isinstance(tags, dict) and {"open", "close", "high", "low"}.issubset(closed.columns):
+            if ntd_profile and isinstance(tags, dict) and {"open", "close", "high", "low"}.issubset(closed.columns):
                 last_five = closed.tail(5)
                 if len(last_five) == 5 and not tags.get("ntd_five_colour_trail_active", False):
                     green_five = bool((last_five["close"] > last_five["open"]).all())
@@ -2250,7 +2250,7 @@ class FuturesWilliamsRuntime:
                             self.db.save_campaign(campaign)
 
             ntd_trail_active = bool(
-                isinstance(tags, dict) and tags.get("ntd_five_colour_trail_active", False)
+                ntd_profile and isinstance(tags, dict) and tags.get("ntd_five_colour_trail_active", False)
             )
             if campaign.side == "BUY":
                 recent = [float(x) for x in closed["low"].tail(window) if float(x) > 0]
