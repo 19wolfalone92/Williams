@@ -9,6 +9,7 @@ from futures_williams_runtime import FuturesWilliamsRuntime, FuturesWilliamsScan
 from williams_signals import (
     extract_long_signal_specs, extract_short_signal_specs,
     extract_ntd_ao_signal_specs, extract_ntd_ac_signal_specs,
+    extract_ntd_fractal_signal_specs,
     _latest_super_ao, _latest_three_price_bar_signal,
 )
 
@@ -709,6 +710,38 @@ def test_tc2_wm1_is_not_blocked_by_directional_htf_confirmation_policy():
 
 
 
+def test_ntd_external_fractal_is_initial_entry_and_requires_untriggered_breakout():
+    n = 9
+    times = [1_700_000_000_000 + i * 300_000 for i in range(n)]
+    ind = pd.DataFrame({
+        "open_time_ms": times,
+        "high": [100.0, 101.0, 102.0, 103.0, 105.0, 103.5, 104.0, 104.2, 104.7],
+        "low": [98.0, 99.0, 100.0, 101.0, 99.0, 101.0, 102.0, 102.5, 103.0],
+        "close": [99.0, 100.0, 101.0, 102.0, 103.0, 102.5, 103.0, 103.8, 104.5],
+        "teeth_shifted": [98.0, 98.5, 99.0, 100.0, 101.0, 102.0, 104.0, 104.0, 104.1],
+        "fractal_up": [False, False, False, False, True, False, False, False, False],
+        "fractal_down": [False] * n,
+        "bullish_alligator": [True] * n,
+        "alligator_awake": [True] * n,
+    })
+    signals = extract_ntd_fractal_signal_specs(
+        "BTCUSDT", ind, side="LONG", timeframe="5m", tick_size=0.1
+    )
+    assert len(signals) == 1
+    assert signals[0].signal_type == SignalType.FRACTAL
+    assert signals[0].role == SignalRole.ENTRY
+    assert signals[0].signal_bar_time_ms == times[6]
+    assert math.isclose(signals[0].trigger_price, 105.1)
+    assert math.isclose(signals[0].protective_reference, 99.0)
+
+    # If any post-confirmation candle already touched the trigger, do not
+    # resurrect that old conditional order after a scan/process gap.
+    ind.loc[7, "high"] = 105.2
+    assert extract_ntd_fractal_signal_specs(
+        "BTCUSDT", ind, side="LONG", timeframe="5m", tick_size=0.1
+    ) == []
+
+
 def test_ntd_ao_saucer_is_an_explicit_conditional_entry():
     ind = pd.DataFrame({
         "ao": [1.0, 1.1, 1.0, 1.05],
@@ -724,6 +757,7 @@ def test_ntd_ao_saucer_is_an_explicit_conditional_entry():
     )
     assert len(signals) == 1
     assert signals[0].signal_type == SignalType.AO_SAUCER
+    assert signals[0].role == SignalRole.ADD_ON
     assert signals[0].side == "BUY"
     assert math.isclose(signals[0].trigger_price, 101.1)
     assert math.isclose(signals[0].protective_reference, 99.0)
@@ -754,6 +788,8 @@ def test_ntd_ao_zero_line_cross_is_directional_and_mirrored():
     )
     assert [s.signal_type for s in long_signals] == [SignalType.AO_ZERO_LINE]
     assert [s.signal_type for s in short_signals] == [SignalType.AO_ZERO_LINE]
+    assert long_signals[0].role == SignalRole.ADD_ON
+    assert short_signals[0].role == SignalRole.ADD_ON
     assert long_signals[0].side == "BUY"
     assert short_signals[0].side == "SELL"
 
