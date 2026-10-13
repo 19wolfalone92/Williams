@@ -153,7 +153,7 @@ def calculate_indicators(df, cfg):
 
     # NTD names the current-timeframe blue Jaw line the Balance Line. Teeth
     # remains the red Balance Line one degree lower when used as a fractal gate.
-    x["balance_line"] = x["jaw_current"]
+    x["balance_line"] = x["teeth_current"]
     x["balance_line_distance_pct"] = (
         (x["close"] - x["balance_line"]) / x["close"].replace(0, np.nan)
     )
