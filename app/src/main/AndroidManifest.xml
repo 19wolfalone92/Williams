@@ -30,7 +30,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Williams remote Futures cockpit compatibility service" />
+                android:value="Autonomous on-device Binance USD-M Futures Testnet trading runtime" />
         </service>
 
         <activity
