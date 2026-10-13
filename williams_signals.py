@@ -330,7 +330,14 @@ def extract_ntd_ao_signal_specs(
     # for LONG, mirrored red-green-red below zero for SHORT.
     last3 = ao[-3:]
     if is_long:
-        if all(v > 0 for v in last3) and green[-3] and red[-2] and green[-1]:
+        if (
+            all(v > 0 for v in last3)
+            and last3[0] > last3[1] < last3[2]
+            and red[-2] and green[-1]
+        ):
+            # NTD defines the middle bar as the downswing/red bar and the
+            # signal bar as the upswing/green bar. The first bar's colour is
+            # not prescribed; its AO value only needs to exceed the middle bar.
             matches.append((SignalType.AO_SAUCER, "NTD AO Saucer above zero; BUY STOP above signal-bar high"))
         # AO Zero-line Cross: a closed bar crosses from non-positive to positive.
         if ao[-2] <= 0 < ao[-1]:
@@ -351,7 +358,13 @@ def extract_ntd_ao_signal_specs(
                     if all(v < 0 for v in ao[first:second + 1]) and ao[second] > ao[first]:
                         matches.append((SignalType.AO_TWIN_PEAKS, "NTD bullish AO Twin Peaks below zero; BUY STOP above signal-bar high"))
     else:
-        if all(v < 0 for v in last3) and red[-3] and green[-2] and red[-1]:
+        if (
+            all(v < 0 for v in last3)
+            and last3[0] < last3[1] > last3[2]
+            and green[-2] and red[-1]
+        ):
+            # Mirrored bearish Saucer: rising/green middle bar followed by
+            # the falling/red signal bar; the first bar's colour is irrelevant.
             matches.append((SignalType.AO_SAUCER, "NTD AO Saucer below zero; SELL STOP below signal-bar low"))
         if ao[-2] >= 0 > ao[-1]:
             matches.append((SignalType.AO_ZERO_LINE, "NTD AO crossed below zero; SELL STOP below crossing-bar low"))
