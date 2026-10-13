@@ -1,6 +1,5 @@
 package com.williamsbot
 
-import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -13,7 +12,7 @@ import java.util.Locale
  * resolved by client id and exchange state; they are never blindly re-sent.
  */
 internal class NativeFuturesCampaignCoordinator(
-    private val prefs: SharedPreferences,
+    private val executionStore: FuturesExecutionStore,
     private val adapterFactory: () -> BinanceUsdMFuturesTestnetAdapter
 ) {
     enum class Direction { LONG, SHORT }
@@ -841,15 +840,20 @@ internal class NativeFuturesCampaignCoordinator(
         ("W2PS_" + symbol + "_" + entryClientId.takeLast(10))
             .take(36)
 
-    private fun intents(): JSONArray = runCatching {
-        JSONArray(prefs.getString(intentsKey, "[]"))
-    }.getOrElse {
-        throw IllegalStateException("Persisted Futures intents are unreadable; manual reconciliation required")
+    private fun intents(): JSONArray {
+        val raw = executionStore.readState(intentsKey) ?: "[]"
+        return try {
+            JSONArray(raw)
+        } catch (failure: Exception) {
+            state = State.RECONCILE_REQUIRED
+            lastBlocker = "Persisted Futures intents are corrupt; reconciliation is mandatory"
+            throw IllegalStateException(lastBlocker, failure)
+        }
     }
 
     private fun saveIntents(array: JSONArray) {
-        check(prefs.edit().putString(intentsKey, array.toString()).commit()) {
-            "Unable to persist Futures order intent; execution must remain blocked"
+        check(executionStore.writeState(intentsKey, array.toString())) {
+            "SQLite commit failed while persisting Futures execution intents; order mutation is blocked"
         }
     }
 }
