@@ -124,6 +124,10 @@ def main() -> None:
     must(futures, '"ALLOW_LONG", "true"', "futures_williams_runtime.py")
     must(futures, '"ALLOW_SHORT", "true"', "futures_williams_runtime.py")
     must(futures, 'result.sort(key=lambda c: (-c.score, -c.signal.signal_bar_time_ms, c.symbol, c.side))', "futures_williams_runtime.py")
+    must(futures, "self.config.futures_leverage", "futures_williams_runtime.py")
+    must(futures, "self.config.futures_margin_type", "futures_williams_runtime.py")
+    must_not(futures, 'os.getenv("FUTURES_LEVERAGE"', "futures_williams_runtime.py")
+    must_not(futures, 'os.getenv("FUTURES_MARGIN_TYPE"', "futures_williams_runtime.py")
     for needle in (
         "class FuturesWilliamsScanner",
         "class FuturesWilliamsRuntime",
