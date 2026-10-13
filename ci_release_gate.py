@@ -108,12 +108,26 @@ def main() -> None:
     ):
         must(engine, needle, "campaign_engine.py")
 
+    strategy = read("strategy.py")
+    for needle in (
+        "def _profitunity_window(volume_up, mfi_up, valid=None)",
+        '"fractal_up_confirmed"',
+        '"confirmed_up_center_index"',
+        '"confirmed_up_group_start_index"',
+        '"mfi_proxy_valid"',
+        '"UNKNOWN"',
+    ):
+        must(strategy, needle, "strategy.py")
+
     signals = read("williams_signals.py")
     for needle in (
         "def extract_long_signal_specs",
         "def extract_short_signal_specs",
         "def _latest_super_ao",
         "def _latest_reversal",
+        "confirmed_up_center_index",
+        "confirmed_up_group_start_index",
+        "fractal_up_confirmed",
         "side=side",
     ):
         must(signals, needle, "williams_signals.py")
