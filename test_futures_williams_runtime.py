@@ -5,7 +5,7 @@ import pandas as pd
 
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingSignal, SignalRole, SignalSpec, SignalState, SignalType, stop_only_reduces_risk
-from futures_williams_runtime import FuturesWilliamsRuntime
+from futures_williams_runtime import FuturesWilliamsRuntime, FuturesWilliamsScanner
 from williams_signals import extract_short_signal_specs, _latest_super_ao
 
 
@@ -346,3 +346,90 @@ def test_five_magic_bullets_core_math():
     )
     assert state.count == 5
     assert state.all_five
+
+
+def test_futures_universe_fails_closed_without_recovered_approved_ten(monkeypatch):
+    monkeypatch.delenv("FUTURES_APPROVED_SYMBOLS", raising=False)
+
+    class Client:
+        def exchange_info(self):
+            raise AssertionError("exchange discovery must not replace the approved list")
+
+    scanner = FuturesWilliamsScanner(Client(), interval="5m")
+    assert scanner.universe() == []
+    assert "exactly 10 approved symbols" in scanner.last_universe_error
+
+
+def test_futures_universe_rejects_duplicates_and_exchange_ineligible_symbols(monkeypatch):
+    symbols = ["AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT", "EEEUSDT",
+               "FFFUSDT", "GGGUSDT", "HHHUSDT", "IIIUSDT", "JJJUSDT"]
+    monkeypatch.setenv("FUTURES_APPROVED_SYMBOLS", ",".join(symbols[:-1] + [symbols[0]]))
+
+    class Client:
+        def exchange_info(self):
+            raise AssertionError("duplicate configuration must be rejected before exchange lookup")
+
+    scanner = FuturesWilliamsScanner(Client(), interval="5m")
+    assert scanner.universe() == []
+    assert "duplicate" in scanner.last_universe_error
+
+    monkeypatch.setenv("FUTURES_APPROVED_SYMBOLS", ",".join(symbols))
+    rows = []
+    for symbol in symbols:
+        rows.append({
+            "symbol": symbol,
+            "status": "TRADING",
+            "quoteAsset": "USDT",
+            "contractType": "PERPETUAL",
+            "filters": [
+                {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                {"filterType": "LOT_SIZE", "stepSize": "0.001"},
+                {"filterType": "MIN_NOTIONAL", "notional": "5"},
+            ],
+        })
+    rows[-1]["status"] = "BREAK"
+    class IneligibleClient:
+        def exchange_info(self):
+            return {"symbols": rows}
+
+    scanner = FuturesWilliamsScanner(IneligibleClient(), interval="5m")
+    assert scanner.universe() == []
+    assert symbols[-1] in scanner.last_universe_error
+
+
+def test_futures_universe_returns_exact_approved_ten_without_dynamic_additions(monkeypatch):
+    symbols = ["AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT", "EEEUSDT",
+               "FFFUSDT", "GGGUSDT", "HHHUSDT", "IIIUSDT", "JJJUSDT"]
+    monkeypatch.setenv("FUTURES_APPROVED_SYMBOLS", ",".join(symbols))
+    rows = [{
+        "symbol": symbol,
+        "status": "TRADING",
+        "quoteAsset": "USDT",
+        "contractType": "PERPETUAL",
+        "filters": [
+            {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+            {"filterType": "LOT_SIZE", "stepSize": "0.001"},
+            {"filterType": "MIN_NOTIONAL", "notional": "5"},
+        ],
+    } for symbol in symbols]
+    rows.append({
+        "symbol": "UNAPPROVEDUSDT",
+        "status": "TRADING",
+        "quoteAsset": "USDT",
+        "contractType": "PERPETUAL",
+        "filters": [
+            {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+            {"filterType": "LOT_SIZE", "stepSize": "0.001"},
+            {"filterType": "MIN_NOTIONAL", "notional": "5"},
+        ],
+    })
+
+    class Client:
+        def exchange_info(self):
+            return {"symbols": rows}
+
+    scanner = FuturesWilliamsScanner(Client(), interval="5m")
+    assert scanner.universe(limit=40) == symbols
+    assert len(scanner.universe()) == 10
+    assert len(set(scanner.universe())) == 10
+    assert scanner.last_universe_error is None
