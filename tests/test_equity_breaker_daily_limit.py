@@ -48,7 +48,7 @@ def test_daily_loss_breaker_blocks_when_equity_is_zero():
         db, current_equity_quote=0.0
     )
     assert allowed is False
-    assert reason == "equity is zero"
+    assert reason == "equity is zero or negative"
 
 class _DBWithoutDailyPnl(_DB):
     pnl_today_all = None
