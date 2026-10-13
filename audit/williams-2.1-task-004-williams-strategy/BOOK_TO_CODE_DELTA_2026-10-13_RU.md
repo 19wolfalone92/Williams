@@ -55,3 +55,30 @@ Task branch williams_signals.py прямо описывает _angulation() ка
 
 ## Критерий закрытия
 Точный edition/chapter/page/figure → формальное правило → функция и call chain → воспроизводящий тест → correction commit → passing CI на конкретном SHA → replay/fault-injection evidence. Этот реестр фиксирует расхождения, но сам по себе не закрывает кодовые задачи.
+
+
+## Дополнение: выполненные исправления и актуальные ограничения (2026-10-13)
+
+Это дополнение обновляет статусы выше; исходные findings сохранены как история аудита.
+
+### Исправлено в task branch
+- **D-004 / ExecutionBarrier:** mutation блокируется при отсутствии DB, при ошибке сохранения durable intent и при ошибке обязательного admission-event. Если биржевой submit уже мог состояться, а последующая запись результата/события падает, операция переводится в неоднозначное состояние с требованием reconciliation; автоматический повтор submit не выполняется. Добавлены fault-injection regression tests. Код и тесты в commits `0331bde8e40e`, `4c85f4caf435` и предшествующих исправлениях этой ветки.
+- **D-005 / Python Spot admission:** `EquityCircuitBreaker` теперь сохраняет дневной trip latch до следующего UTC-дня; восстановление PnL внутри дня не открывает новые входы повторно. Отсутствующий/несогласованный baseline, повреждённый или будущий day key, недоступный PnL ledger и ошибка сохранения latch блокируют допуск. `scan_and_execute()` проверяет дневной риск до обычного adoption условных входов, а `execute_campaign()` повторно проверяет риск на канонической границе допуска, чтобы прямой вызов не обходил gate. При блокировке отменяются только условные входы; выходы и аварийное снижение риска остаются отдельными путями. Основные commits: `1f7def01b1a2`, `b7fe3e1e3467`, `dec85f34f8b3`, `88b03db3dce4`, `9bfc096fda22`.
+- **D-005 / Android Spot runtime:** добавлено отменяемое через execution barrier снятие ожидающих условных BUY при срабатывании дневного лимита или отказе монитора; неизвестное состояние переводится в reconciliation-required, а не считается успешно отменённым. Логика находится в `StandaloneRuntime.kt`; связанные CI ранее подтвердили сборку на SHA `4c85f4caf435`.
+- **D-001 / Fractal timing:** task branch содержит разделение центра формации и времени подтверждения плюс регрессионные сценарии. Сквозная проверка каждого consumer и source-resolved правило равных экстремумов всё ещё не закрыты.
+- **D-003 / Super AO:** task branch использует точное совпадение длины серии, чтобы не повторять WM2 на четвёртом и последующих барах одной непрерывной серии. Полная cross-runtime golden-replay проверка остаётся открытой.
+
+### Проверка CI
+- На SHA `4c85f4caf435` ранее успешно завершились Python backend tests, Williams Campaign CI и Android APK build.
+- На SHA `b9b8218951a0` Python backend tests завершились успешно после добавления проверки порядка дневного gate и отмены ожидающих входов.
+- На SHA `8c1d5e02fafe` Python backend tests завершились успешно; Android APK build и Williams Campaign CI на момент этого обновления ещё выполнялись. Итог для более позднего SHA должен быть подтверждён отдельно.
+
+### Блокирующий разрыв: Futures
+По текущему дереву репозитория не найдено Futures-специфичных файлов, вызовов Binance Futures API (`/fapi`, `UMFutures`) или отдельного Futures execution path. Следовательно, **Futures не считается реализованным и не может быть сертифицирован на лимит 3% или на parity с Spot/Android**. Нельзя закрывать D-005/D-008 формулировкой «Spot/Futures/Android исправлено»: подтверждены только существующие Spot backend и Android Spot пути. Для Futures требуется отдельная реализация/аудит, включая position mode, margin, leverage, reduce-only, funding/fees, partial fills, stop protection и recovery contracts.
+
+### Открытые пункты
+1. Futures execution/risk path отсутствует — P0 scope gap относительно требования Spot + Futures.
+2. Fractal equal-extreme policy всё ещё UNRESOLVED до привязки к конкретным изданию/странице/рисунку; нужны одинаковые данные и prefix-invariance/replay всех consumers.
+3. WM2: завершить golden-vector и downstream idempotency tests на Python и Android.
+4. Angulation и exit/trailing: отделить подтверждённые книжные правила от инженерных overlays с точными source references.
+5. После последних изменений повторно подтвердить все обязательные CI checks на одном и том же финальном SHA; не переносить результат CI с предыдущего коммита на новый.
