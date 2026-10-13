@@ -7096,7 +7096,7 @@ private class NativeEngine(
                                 .put("type", s.type)
                                 .put("role", s.role)
                                 .put("signal_bar_time_ms", s.signalBarTimeMs)
-                    .put("confirmation_bar_time_ms", s.confirmationBarTimeMs)
+                                .put("confirmation_bar_time_ms", s.confirmationBarTimeMs)
                                 .put("trigger_price", s.triggerPrice)
                                 .put("protective_price", s.protectivePrice)
                                 .put("teeth_at_detection", s.teethAtDetection)
