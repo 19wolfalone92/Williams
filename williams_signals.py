@@ -51,6 +51,37 @@ def _expiry(signal_bar_time_ms: int, timeframe: str, max_age_bars: int) -> int:
     return int(signal_bar_time_ms + max(1, int(max_age_bars)) * step)
 
 
+def _trigger_still_pending(
+    ind: pd.DataFrame,
+    signal_index: int,
+    *,
+    side: str,
+    trigger_price: float,
+) -> bool:
+    """Fail closed if a conditional trigger was touched after signal formation."""
+    if ind is None or ind.empty or signal_index < 0 or signal_index >= len(ind):
+        return False
+    direction = str(side or "").upper()
+    if direction not in {"BUY", "SELL"} or not math.isfinite(float(trigger_price)) or trigger_price <= 0:
+        return False
+    current_close = pd.to_numeric(ind["close"], errors="coerce").iloc[-1] if "close" in ind.columns else float("nan")
+    if not math.isfinite(float(current_close)):
+        return False
+    if direction == "BUY":
+        if float(current_close) >= trigger_price:
+            return False
+        if "high" not in ind.columns:
+            return False
+        highs = pd.to_numeric(ind.iloc[signal_index + 1:]["high"], errors="coerce")
+        return not bool((highs >= trigger_price).any())
+    if float(current_close) <= trigger_price:
+        return False
+    if "low" not in ind.columns:
+        return False
+    lows = pd.to_numeric(ind.iloc[signal_index + 1:]["low"], errors="coerce")
+    return not bool((lows <= trigger_price).any())
+
+
 def _row_time_ms(row: pd.Series) -> int:
     for key in ("open_time_ms", "time_ms", "timestamp", "time", "open_time"):
         value = row.get(key)
@@ -502,7 +533,9 @@ def extract_ntd_ac_signal_specs(
     low = float(row["low"])
     current_close = float(current["close"])
     trigger = high + tick if is_long else low - tick
-    if trigger <= 0 or (is_long and current_close >= trigger) or (not is_long and current_close <= trigger):
+    if trigger <= 0 or not _trigger_still_pending(
+        ind, signal_i, side=order_side, trigger_price=trigger
+    ):
         return []
 
     signal_time = _row_time_ms(row)
@@ -756,7 +789,7 @@ def extract_long_signal_specs(
     if reversal is not None and (point_zero_confirmed or not require_point_zero_for_reversal):
         i, trigger_base, protective = reversal
         trigger = trigger_base + tick
-        if current_close < trigger:
+        if _trigger_still_pending(ind, i, side="BUY", trigger_price=trigger):
             row = ind.iloc[i]
             score, _ = _angulation(ind, i, side="LONG")
             specs.append(
@@ -791,7 +824,7 @@ def extract_long_signal_specs(
     if super_ao is not None:
         i, trigger_base, protective = super_ao
         trigger = trigger_base + tick
-        if current_close < trigger:
+        if _trigger_still_pending(ind, i, side="BUY", trigger_price=trigger):
             row = ind.iloc[i]
             specs.append(
                 SignalSpec.new(
@@ -826,7 +859,7 @@ def extract_long_signal_specs(
     if three_bar is not None:
         i, trigger_base, protective = three_bar
         trigger = trigger_base + tick
-        if current_close < trigger:
+        if _trigger_still_pending(ind, i, side="BUY", trigger_price=trigger):
             row = ind.iloc[i]
             specs.append(
                 SignalSpec.new(
@@ -926,7 +959,7 @@ def extract_short_signal_specs(
     if reversal is not None and (point_zero_confirmed or not require_point_zero_for_reversal):
         i, trigger_base, protective = reversal
         trigger = trigger_base - tick
-        if current_close > trigger:
+        if _trigger_still_pending(ind, i, side="SELL", trigger_price=trigger):
             row = ind.iloc[i]
             score, _ = _angulation(ind, i, side="SHORT")
             specs.append(
@@ -959,7 +992,7 @@ def extract_short_signal_specs(
     if super_ao is not None:
         i, trigger_base, protective = super_ao
         trigger = trigger_base - tick
-        if current_close > trigger:
+        if _trigger_still_pending(ind, i, side="SELL", trigger_price=trigger):
             row = ind.iloc[i]
             specs.append(
                 SignalSpec.new(
@@ -991,7 +1024,7 @@ def extract_short_signal_specs(
     if three_bar is not None:
         i, trigger_base, protective = three_bar
         trigger = trigger_base - tick
-        if current_close > trigger:
+        if _trigger_still_pending(ind, i, side="SELL", trigger_price=trigger):
             row = ind.iloc[i]
             specs.append(
                 SignalSpec.new(
