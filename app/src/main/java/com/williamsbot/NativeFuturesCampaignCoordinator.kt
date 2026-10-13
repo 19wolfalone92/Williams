@@ -240,10 +240,13 @@ internal class NativeFuturesCampaignCoordinator(
                             continue
                         }
                         val refreshed = adapter.openAlgoOrders(symbol)
-                        protective = findProtectiveStop(refreshed, direction)
+                        protective = findProtectiveStop(
+                            refreshed, direction, protectionClientId,
+                            matchingIntent.optString("protective_stop")
+                        )
                         if (protective == null) {
                             anyUnprotected = true
-                            lastBlocker = "$symbol protective stop was submitted but is not confirmed in open algo orders"
+                            lastBlocker = "$symbol protective stop was submitted but its exact client id/structural trigger is not confirmed in open algo orders"
                             continue
                         }
                     }
