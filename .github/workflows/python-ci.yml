@@ -2,7 +2,7 @@ name: Python backend tests
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, audit/williams-2.1-task-009-integration]
     paths:
       - "*.py"
       - "tests/**"
@@ -88,6 +88,16 @@ jobs:
             test_execution_architecture.py \
             test_integration_bindings.py \
             test_testnet_release_gate.py \
+            test_equity_breaker.py \
+            tests/test_campaign_entry_context_gate.py \
+            tests/test_execution_persistence_fail_closed.py \
+            tests/test_fractal_equal_extremes.py \
+            tests/test_williams_core_risk_policy.py \
+            tests/test_super_ao_event_semantics.py \
+            tests/test_configurable_super_ao.py \
+            tests/test_campaign_risk_defaults.py \
+            tests/test_scanner_context_version_vector.py \
+            tests/test_spot_universe_allowlist.py \
             2>&1 | tee pytest-output.txt
 
       - name: Upload pytest diagnostics
