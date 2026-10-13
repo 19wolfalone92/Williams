@@ -1005,7 +1005,7 @@ private class NativeEngine(
             .put("state", stateName())
             .put("open_positions", positionList().size)
             .put("max_open_positions", maxOpenPositions)
-            .put("reserved_risk_pct", reservedRiskPct())
+            .put("reserved_risk_pct", futuresReservedRiskPct)
             .put("circuit_breaker_tripped", equityCircuitBreaker.isTripped())
             .put("managed_equity", estimateManagedEquity())
             .put("max_total_risk_pct", maxTotalRiskPct)
@@ -7828,18 +7828,10 @@ private class NativeEngine(
             .put("recovered", true)
             .put("state", stateName())
             .put("execution_enabled", executionReady())
-            .put(
-                "position_symbol",
-                positionList().firstOrNull()?.symbol ?: JSONObject.NULL
-            )
-            .put(
-                "position_qty",
-                positionList().firstOrNull()?.qty ?: JSONObject.NULL
-            )
-            .put(
-                "position_entry",
-                positionList().firstOrNull()?.entry ?: JSONObject.NULL
-            )
+            .put("position_symbol", firstPosition?.optString("symbol") ?: JSONObject.NULL)
+            .put("position_direction", firstPosition?.optString("direction") ?: JSONObject.NULL)
+            .put("position_qty", firstPosition?.opt("qty") ?: JSONObject.NULL)
+            .put("position_entry", firstPosition?.opt("entry") ?: JSONObject.NULL)
             .put(
                 "last_error",
                 lastError ?: JSONObject.NULL
@@ -7860,48 +7852,33 @@ private class NativeEngine(
             )
             .put(
                 "position",
-                positionList().firstOrNull()?.let {
+                firstPosition?.let {
                     JSONObject()
-                        .put("symbol", it.symbol)
-                        .put("qty", it.qty)
-                        .put("entry", it.entry)
-                        .put("stop", it.stop)
-                        .put("take", it.take)
+                        .put("symbol", it.optString("symbol"))
+                        .put("direction", it.optString("direction"))
+                        .put("qty", it.opt("qty") ?: JSONObject.NULL)
+                        .put("entry", it.opt("entry") ?: JSONObject.NULL)
+                        .put("stop", it.opt("stop") ?: JSONObject.NULL)
+                        .put("take", JSONObject.NULL)
+                        .put("risk_pct", it.opt("risk_pct") ?: JSONObject.NULL)
+                        .put("exchange_confirmed", it.optBoolean("exchange_confirmed", false))
                 } ?: JSONObject.NULL
             )
-            .put(
-                "positions",
-                JSONArray().apply {
-                    positionList().forEach {
-                        put(
-                            JSONObject()
-                                .put("symbol", it.symbol)
-                                .put("qty", it.qty)
-                                .put("entry", it.entry)
-                                .put("stop", it.stop)
-                                .put("take", it.take)
-                                .put("risk_pct", it.riskPct)
-                        )
-                    }
-                }
-            )
-            .put("open_positions", positionList().size)
+            .put("positions", futuresPositions)
+            .put("open_positions", futuresPositions.length())
             .put("max_open_positions", maxOpenPositions)
             .put("reserved_risk_pct", reservedRiskPct())
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
-            .put("pnl", if (positionList().isEmpty()) JSONObject.NULL else livePnl)
-            .put("pnl_pct", if (positionList().isEmpty()) JSONObject.NULL else livePnlPct)
+            .put("pnl", if (futuresPositions.length() == 0) JSONObject.NULL else livePnl)
+            .put("pnl_pct", if (futuresPositions.length() == 0) JSONObject.NULL else livePnlPct)
             .put(
                 "take_profit_price",
                 if (campaignEngineEnabled) JSONObject.NULL
-                else positionList().firstOrNull()?.take ?: JSONObject.NULL
+                else JSONObject.NULL
             )
-            .put(
-                "stop_loss_price",
-                positionList().firstOrNull()?.stop ?: JSONObject.NULL
-            )
+            .put("stop_loss_price", firstPosition?.opt("stop") ?: JSONObject.NULL)
             .put("stop_loss_pct", 0.02)
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
