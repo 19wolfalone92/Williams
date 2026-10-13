@@ -50,6 +50,47 @@ def _profitunity_window(volume_up, mfi_up, valid=None):
     return result
 
 
+CANONICAL_WILLIAMS_INDICATOR_PARAMS = {
+    "jaw": 13,
+    "teeth": 8,
+    "lips": 5,
+    "jaw_shift": 8,
+    "teeth_shift": 5,
+    "lips_shift": 3,
+    "ao_fast": 5,
+    "ao_slow": 34,
+    "ac_period": 5,
+    "fractal_left": 2,
+    "fractal_right": 2,
+    "super_ao_bars": 3,
+}
+
+
+def canonical_indicator_config_from_env(env=os.environ):
+    """Return the canonical production indicator config or fail closed.
+
+    Research callers may still use config_from_env() to explore variants.
+    The Futures execution path must not silently trade a changed indicator
+    period/shift while still labelling the profile as Williams TC2/NTD.
+    """
+    cfg = config_from_env(env)
+    mismatches = {
+        key: (cfg[key], expected)
+        for key, expected in CANONICAL_WILLIAMS_INDICATOR_PARAMS.items()
+        if cfg[key] != expected
+    }
+    if mismatches:
+        detail = ", ".join(
+            f"{key}={actual!r} (required {expected!r})"
+            for key, (actual, expected) in sorted(mismatches.items())
+        )
+        raise ValueError(
+            "Non-canonical Williams indicator parameters are blocked in the "
+            f"Futures execution path: {detail}"
+        )
+    return cfg
+
+
 def calculate_indicators(df, cfg):
     x = df.copy()
     if x.empty:
