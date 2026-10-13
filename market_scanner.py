@@ -126,8 +126,9 @@ class MarketScanner:
     4. Re-rank using the legacy score plus a bounded wave adjustment.
     """
 
-    def __init__(self, client, symbols=None, interval=None):
+    def __init__(self, client, symbols=None, interval=None, context_cache=None):
         self.client = client
+        self.context_cache = context_cache
 
         self.interval = _normalize_interval(interval or os.getenv("INTERVAL", "1h"))
 
@@ -196,6 +197,23 @@ class MarketScanner:
             fee_pct=float(os.getenv("SHADOW_FEE_PCT", "0.001")),
             tick_pct=float(os.getenv("SHADOW_TICK_PCT", "0.0001")),
         )
+
+    def _signal_context_versions(self, symbol):
+        """Return a complete version vector for the operative Williams context.
+
+        An incomplete D1/H4/H1 context is not downgraded to a partial vector:
+        the final execution barrier must block new exposure until every required
+        frame is present and versioned.
+        """
+        if self.context_cache is None:
+            return {}
+        required_frames = tuple(dict.fromkeys(("1d", "4h", "1h", self.interval)))
+        try:
+            snapshot = self.context_cache.snapshot()
+            versions = snapshot.versions(symbol, list(required_frames))
+        except Exception:
+            return {}
+        return versions if len(versions) == len(required_frames) else {}
 
     def _load_symbols(self):
         raw = os.getenv("SCAN_SYMBOLS", "").strip()
@@ -424,12 +442,14 @@ class MarketScanner:
             if tick_size <= 0:
                 return None
 
+            context_versions = self._signal_context_versions(symbol)
             campaign_specs = extract_long_signal_specs(
                 symbol,
                 indicators,
                 timeframe=self.interval,
                 tick_size=tick_size,
                 htf_confirmed=False,
+                context_versions=context_versions,
             )
             setup_state = self._setup_state(last)
             if setup_state == "NONE" and not campaign_specs:
