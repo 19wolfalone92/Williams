@@ -247,8 +247,11 @@ class FuturesWilliamsScanner:
             tick_size=tick,
             point_zero_confirmed=point_zero_confirmed,
             point_zero_score=point_zero_score,
+            # WM1 is a valid first-presenting signal on either side. Requiring
+            # Point Zero on shorts but not longs would create an undocumented
+            # directional asymmetry; make it an explicit opt-in gate for both.
             require_point_zero_for_reversal=os.getenv(
-                "REQUIRE_POINT_ZERO_FOR_WM1", "true"
+                "REQUIRE_POINT_ZERO_FOR_WM1", "false"
             ).lower() == "true",
         )
         long_htf, short_htf = self._htf(symbol)
