@@ -291,11 +291,16 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         require(if (shouldTriggerAbove) trigger > mark else trigger < mark) {
             "Conditional entry trigger is on the wrong side of the current mark price"
         }
+        val exchangeType = when (triggerType) {
+            "STOP" -> "STOP_MARKET"
+            "TAKE_PROFIT" -> "TAKE_PROFIT_MARKET"
+            else -> throw IllegalArgumentException("Unsupported Futures conditional entry type")
+        }
         val params = linkedMapOf(
             "algoType" to "CONDITIONAL",
             "symbol" to symbol,
             "side" to entrySide(direction),
-            "type" to triggerType,
+            "type" to exchangeType,
             "quantity" to qty.stripTrailingZeros().toPlainString(),
             "triggerPrice" to trigger.stripTrailingZeros().toPlainString(),
             "workingType" to "MARK_PRICE",
