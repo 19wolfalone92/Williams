@@ -665,6 +665,7 @@ private class NativeEngine(
     @Volatile private var killLatched = false
     @Volatile private var userStreamConnected = false
     @Volatile private var userStreamSyncRequired = true
+    @Volatile private var futuresStreamReconcileRunning = false
     @Volatile private var lastUserEventMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
     @Volatile private var restMarketReady = false
@@ -699,22 +700,7 @@ private class NativeEngine(
         onConnection = { connected, error ->
             userStreamConnected = connected
             if (connected) {
-                userStreamSyncRequired = true
-                Thread {
-                    try {
-                        recoverPendingEntries()
-                        reconcilePositionsWithExchange()
-                        userStreamSyncRequired = false
-                    } catch (x: Exception) {
-                        setReconcileRequired(
-                            "User stream reconnect reconciliation failed: " +
-                                (x.message ?: x.javaClass.simpleName)
-                        )
-                    }
-                }.apply {
-                    isDaemon = true
-                    start()
-                }
+                scheduleFuturesStreamReconciliation("user stream connected")
             } else if (!error.equals("stopped")) {
                 userStreamSyncRequired = true
                 if (positions.isNotEmpty() && !killLatched) {
@@ -4624,6 +4610,34 @@ private class NativeEngine(
         )
     }
 
+    private fun scheduleFuturesStreamReconciliation(reason: String) {
+        userStreamSyncRequired = true
+        synchronized(this) {
+            if (futuresStreamReconcileRunning) return
+            futuresStreamReconcileRunning = true
+        }
+        Thread {
+            try {
+                val result = futuresCampaignCoordinator.reconcile()
+                check(result.optBoolean("ok", false)) {
+                    result.optString("blocker", "Futures reconciliation returned not-ok")
+                }
+                userStreamSyncRequired = false
+            } catch (failure: Exception) {
+                setReconcileRequired(
+                    "Futures user-stream reconciliation failed (" + reason + "): " +
+                        (failure.message ?: failure.javaClass.simpleName)
+                )
+            } finally {
+                synchronized(this) { futuresStreamReconcileRunning = false }
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-futures-stream-reconcile"
+            start()
+        }
+    }
+
     private fun handleUserEvent(event: JSONObject) {
         tradingEventLoop.post { handleUserEventSerialized(event) }
     }
@@ -4648,6 +4662,10 @@ private class NativeEngine(
         }
 
         when (eventType) {
+            "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE" -> {
+                scheduleFuturesStreamReconciliation(eventType)
+                return
+            }
             "executionReport" -> {
                 val side = event.optString("S").uppercase(Locale.US)
                 val status = event.optString("X").uppercase(Locale.US)
