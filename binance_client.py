@@ -11,6 +11,8 @@ class BinanceAPIError(RuntimeError):
         self.payload = payload
 
 class BinanceSpotClient:
+    product = "SPOT"
+
     def __init__(self, api_key, api_secret, testnet=True, recv_window=5000, timeout=20):
         self.api_key=api_key; self.api_secret=api_secret; self.testnet=bool(testnet)
         self.base_url='https://testnet.binance.vision' if self.testnet else 'https://api.binance.com'
