@@ -196,7 +196,7 @@ internal class FuturesNativeEngine(
     private val maxPositions: Int = 1
     private val perCampaignRiskFraction = 0.0025
     private val portfolioRiskFraction = 0.01
-    private val maxDailyLossFraction = 0.01
+    private val maxDailyLossFraction = 0.03
     private val maxConsecutiveLosses = 2
     private val maxStopOutsPerUtcDay = 2
     private val postLossCooldownMinutes = 30
