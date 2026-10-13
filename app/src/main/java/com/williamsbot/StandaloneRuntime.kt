@@ -1498,8 +1498,8 @@ private class NativeEngine(
         path: String,
         params: String
     ): JSONObject {
-        require(!path.startsWith("/api/v3/")) {
-            "SECURITY_BLOCK: Spot API is disabled in the USD-M Futures Android runtime"
+        require(path.startsWith("/fapi/")) {
+            "SECURITY_BLOCK: legacy signed transport accepts USD-M Futures routes only; use the Futures execution coordinator"
         }
         var lastBody = "{}"
         repeat(2) { attempt ->
