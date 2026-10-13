@@ -619,6 +619,8 @@ private class NativeEngine(
             prefs.getString("execution_gate_symbol", "") ?: ""
         if (interruptedGateSymbol.isNotBlank()) {
             reconcileRequired = true
+            persistSafetyFlag("reconcile_required", true)
+            prefs.edit().putBoolean("auto_run", false).commit()
             lastError =
                 "Execution gate interrupted for " + interruptedGateSymbol +
                     "; REST reconciliation required"
