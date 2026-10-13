@@ -1478,8 +1478,8 @@ private class NativeEngine(
         path: String,
         params: String
     ): JSONObject {
-        require(!(path.startsWith("/api/v3/") && method != "GET")) {
-            "SECURITY_BLOCK: Spot order mutations are disabled; use USD-M Futures execution coordinator"
+        require(!path.startsWith("/api/v3/")) {
+            "SECURITY_BLOCK: Spot API is disabled in the USD-M Futures Android runtime"
         }
         var lastBody = "{}"
         repeat(2) { attempt ->
