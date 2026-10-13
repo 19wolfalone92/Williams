@@ -794,7 +794,7 @@ private class NativeEngine(
 
     private fun executionBlockers(): List<String> =
         buildList {
-            if (!futuresExecutionAdapterReady) add("futures_execution_adapter_missing_spot_api_v3_detected")
+            if (!futuresExecutionAdapterReady) add("futures_execution_adapter_disabled")
             if (!running) add("runtime_not_running")
             if (paused) add("paused")
             if (reconcileRequired) add("reconcile_required")
@@ -7715,6 +7715,9 @@ private class NativeEngine(
         }
 
         val dailyGuard = dailyTradeGuard()
+        val futuresPositions = runCatching { futuresPositionSnapshot() }.getOrDefault(JSONArray())
+        val futuresRuntimeStatus = runCatching { futuresCampaignCoordinator.status() }
+            .getOrElse { JSONObject().put("state", "RECONCILE_REQUIRED").put("blocker", it.message ?: it.javaClass.simpleName) }
 
         return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
@@ -7843,14 +7846,14 @@ private class NativeEngine(
             .put("execution_mode", "AUTONOMOUS_ANDROID")
             .put("decision_timeframe", "1h")
             .put("max_daily_loss_pct", 0.03)
-            .put("futures_runtime", futuresCampaignCoordinator.status())
-            .put("futures_positions", futuresPositionSnapshot())
-            .put("positions", futuresPositionSnapshot())
-            .put("open_positions", futuresPositionSnapshot().length())
-            .put("position_symbol", futuresPositionSnapshot().optJSONObject(0)?.optString("symbol") ?: JSONObject.NULL)
-            .put("position", futuresPositionSnapshot().optJSONObject(0) ?: JSONObject.NULL)
-            .put("position_qty", futuresPositionSnapshot().optJSONObject(0)?.optDouble("qty") ?: JSONObject.NULL)
-            .put("position_entry", futuresPositionSnapshot().optJSONObject(0)?.optDouble("entry") ?: JSONObject.NULL)
+            .put("futures_runtime", futuresRuntimeStatus)
+            .put("futures_positions", futuresPositions)
+            .put("positions", futuresPositions)
+            .put("open_positions", futuresPositions.length())
+            .put("position_symbol", futuresPositions.optJSONObject(0)?.optString("symbol") ?: JSONObject.NULL)
+            .put("position", futuresPositions.optJSONObject(0) ?: JSONObject.NULL)
+            .put("position_qty", futuresPositions.optJSONObject(0)?.optDouble("qty") ?: JSONObject.NULL)
+            .put("position_entry", futuresPositions.optJSONObject(0)?.optDouble("entry") ?: JSONObject.NULL)
     }
 
     fun historyStatus(): JSONObject =
