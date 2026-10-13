@@ -7831,7 +7831,6 @@ private class NativeEngine(
             }.onFailure { lastError = "Futures account status: " + (it.message ?: it.javaClass.simpleName) }
         }
 
-        val dailyGuard = dailyTradeGuard()
         val futuresRuntimeStatus = runCatching { futuresCampaignCoordinator.status() }
             .getOrElse { JSONObject().put("state", "RECONCILE_REQUIRED").put("blocker", it.message ?: it.javaClass.simpleName) }
 
