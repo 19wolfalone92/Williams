@@ -165,6 +165,11 @@ def main() -> None:
     ):
         must(server, needle, "server.py")
 
+    legacy_runtime = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
+    must(legacy_runtime, '"DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"', "StandaloneRuntime.kt")
+    must(legacy_runtime, "private val maxScanSymbols = 10", "StandaloneRuntime.kt")
+    must(legacy_runtime, "Legacy native Spot runtime is disabled; authoritative trading is remote USDⓈ-M Futures Testnet", "StandaloneRuntime.kt")
+
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
     for needle in (
         f"Williams {EXPECTED_VERSION}",
