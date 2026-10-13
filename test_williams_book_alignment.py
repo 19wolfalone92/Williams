@@ -90,3 +90,18 @@ def test_reversal_bar_needs_followup_extreme_breakout():
     out = calculate_indicators(df, config_from_env())
     assert bool(out['bullish_reversal_bar'].iloc[70]) is True
     assert bool(out['long_wise_reversal_entry'].iloc[70]) is False
+
+
+def test_super_ao_signal_is_not_gated_by_fractal_state():
+    # A valid WM2 event must be discoverable without any fractal columns.
+    # This protects the source-level distinction between WM2 and WM3.
+    from williams_signals import _latest_super_ao
+
+    ind = pd.DataFrame({
+        "high": [10.0, 11.0, 12.0, 13.0],
+        "low": [8.0, 9.0, 10.0, 11.0],
+        "ao_green_streak": [0, 1, 2, 3],
+    })
+    signal = _latest_super_ao(ind, side="LONG")
+    assert signal is not None
+    assert signal[0] == 3
