@@ -244,13 +244,6 @@ class ExecutionBarrier:
         with self.context_cache.execution_lock:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
-            admission_event_persisted = self._persist_event_required(
-                intent, "ADMISSION_STARTED", dict(intent.required_context_versions)
-            )
-            if not admission_event_persisted:
-                reason = "required ADMISSION_STARTED event persistence failed; submission aborted"
-                self._record("ERROR", "execution_event_persistence_failed", intent, reason)
-                return ExecutionResult(intent.intent_id, False, reason=reason)
             snapshot = self.context_cache.snapshot()
             reason = self._validate(intent, snapshot)
             if reason:
@@ -311,6 +304,17 @@ class ExecutionBarrier:
                         "client_order_id": intent.client_order_id,
                     })
                     return ExecutionResult(intent.intent_id, False, reason=reason)
+
+            # Persist the admission audit only after read-only validation:
+            # invalid requests should return their actual blocker, while a valid
+            # mutation cannot cross the network boundary without this event.
+            admission_event_persisted = self._persist_event_required(
+                intent, "ADMISSION_STARTED", dict(intent.required_context_versions)
+            )
+            if not admission_event_persisted:
+                reason = "required ADMISSION_STARTED event persistence failed; submission aborted"
+                self._record("ERROR", "execution_event_persistence_failed", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
 
             # Durable intent must exist before the first exchange mutation.
             # When storage is unavailable, fail closed and never call submit().
