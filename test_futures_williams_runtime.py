@@ -6,6 +6,7 @@ import pandas as pd
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingSignal, SignalRole, SignalSpec, SignalState, SignalType, stop_only_reduces_risk
 from futures_williams_runtime import FuturesWilliamsRuntime, FuturesWilliamsScanner
+from trading_config import TradingConfig, DEFAULT_SYMBOLS, DEFAULT_FUTURES_SYMBOLS
 from williams_signals import (
     extract_long_signal_specs, extract_short_signal_specs,
     extract_ntd_ao_signal_specs, extract_ntd_ac_signal_specs,
@@ -1085,3 +1086,19 @@ def test_newer_fractal_inside_teeth_does_not_shadow_older_valid_trigger():
     assert _latest_confirmed_fractal(
         ind, side="LONG", current_teeth=106.0, current_close=107.0, tick_size=1.0
     ) is None
+
+
+
+def test_default_config_keeps_intraday_h1_and_market_specific_universes():
+    futures = TradingConfig.from_env({
+        "BINANCE_MARKET": "futures_usdt",
+        "INTERVAL": "1h",
+    })
+    assert futures.execution_timeframe == "1h"
+    assert futures.structural_timeframes == ("1d", "4h", "1h", "15m")
+    assert futures.symbols == DEFAULT_FUTURES_SYMBOLS
+    assert len(futures.symbols) == 10
+
+    spot = TradingConfig.from_env({"BINANCE_MARKET": "spot"})
+    assert spot.symbols == DEFAULT_SYMBOLS
+    assert len(spot.symbols) == 5
