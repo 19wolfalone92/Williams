@@ -74,6 +74,17 @@ def test_android_campaign_and_intents_are_sqlite_backed():
     assert "prefs.edit().putString(intentsKey" not in coordinator
 
 
+def test_android_reversal_htf_gate_matches_python_campaign_contract():
+    android = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    python = _read(ROOT / "futures_williams_runtime.py")
+
+    assert 'signal.type.contains("REVERSAL", ignoreCase = true)' in android
+    assert "(reversalSignal || h4Bull) && !d1Bear" in android
+    assert "(reversalSignal || h4Bear) && !d1Bull" in android
+    assert "def _requires_directional_htf_confirmation" in python
+    assert "return signal_type != SignalType.REVERSAL" in python
+
+
 def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
 
