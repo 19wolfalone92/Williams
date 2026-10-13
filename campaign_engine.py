@@ -165,11 +165,14 @@ class CampaignEngine:
 
     @staticmethod
     def choose_initial_signal(signals: Iterable[SignalSpec]) -> SignalSpec | None:
+        now_ms = int(time.time() * 1000)
         candidates = [
             s for s in signals
             if s.role == SignalRole.ENTRY
             and s.side == "BUY"
             and s.trigger_price > 0
+            and s.signal_bar_time_ms > 0
+            and s.expires_at_ms > now_ms
         ]
         if not candidates:
             return None
