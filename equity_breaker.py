@@ -57,16 +57,12 @@ class EquityCircuitBreaker:
             return False, f"daily risk latch read failed: {exc}"
 
         try:
-            realized = float(
-                db.pnl_today(symbol) if symbol is not None
-                else db.pnl_today_all()
-            )
-        except AttributeError:
-            realized = float(
-                db.pnl_today(symbol) if symbol is not None else 0.0
-            )
+            if symbol is None:
+                realized = float(db.pnl_today_all())
+            else:
+                realized = float(db.pnl_today(symbol))
         except Exception as exc:
-            return False, f"daily PnL unavailable: {exc}"
+            return False, f"daily PnL unavailable; entry blocked: {exc}"
 
         # Fees are a real loss and must be included even if legacy trade PnL
         # records were written before fee accounting was enabled.
