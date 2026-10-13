@@ -18,9 +18,15 @@ def _frame(rows):
     cols=['open_time','open','high','low','close','volume','close_time','quote_volume','trades','taker_buy_base','taker_buy_quote','ignore']
     df=pd.DataFrame(rows,columns=cols)
     if df.empty:return df
-    for c in ['open','high','low','close','volume']:df[c]=pd.to_numeric(df[c],errors='coerce')
-    df['open_time']=pd.to_datetime(df['open_time'],unit='ms',utc=True);df['close_time']=pd.to_datetime(df['close_time'],unit='ms',utc=True)
-    return df.set_index('open_time')[['open','high','low','close','volume','close_time']].dropna()
+    for c in ['open','high','low','close','volume','quote_volume','trades']:
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+    df['open_time'] = pd.to_datetime(df['open_time'], unit='ms', utc=True)
+    df['close_time'] = pd.to_datetime(df['close_time'], unit='ms', utc=True)
+    # Preserve Binance's per-candle trade count. It is not true tick volume,
+    # but it is a closer MFI denominator proxy than traded base-asset volume.
+    return df.set_index('open_time')[
+        ['open', 'high', 'low', 'close', 'volume', 'quote_volume', 'trades', 'close_time']
+    ].dropna(subset=['open', 'high', 'low', 'close', 'volume', 'close_time'])
 
 def fetch_klines(client_or_symbol, symbol_or_interval, interval=None, limit=200, start=None, end=None):
     """Live: fetch_klines(client, symbol, interval, limit=200). Historical: fetch_klines(symbol, interval, start, end)."""
