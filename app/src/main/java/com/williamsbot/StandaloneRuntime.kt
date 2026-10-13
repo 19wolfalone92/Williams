@@ -2457,8 +2457,8 @@ private class NativeEngine(
                 performScan()
                 // The campaign scanner may deliberately finish in PARTIAL_BLOCKED,
                 // FAILED, or BLOCKED_*; do not overwrite that decision with READY.
-                if (scannerState == "RUNNING") {
-                    scannerState = "READY"
+                if (scannerState == "RUNNING") scannerState = "READY"
+                if (scannerState == "READY") {
                     scannerError = null
                     lastError = null
                 }
