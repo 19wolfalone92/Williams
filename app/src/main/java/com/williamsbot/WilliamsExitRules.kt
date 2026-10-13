@@ -6,3 +6,7 @@ package com.williamsbot
  */
 internal fun isBullishWilliamsPriceBar(open: Double, close: Double): Boolean =
     open.isFinite() && close.isFinite() && close > open
+
+/** Bill Williams' Alligator is calculated from median price (high + low) / 2. */
+internal fun williamsMedianPrice(high: Double, low: Double): Double =
+    (high + low) / 2.0
