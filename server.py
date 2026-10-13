@@ -17,6 +17,13 @@ from feature_store import FeatureStore
 from binance_futures_client import BinanceFuturesClient
 
 load_dotenv()
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, str(default)).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
 VERSION = '4.24.0'
 
@@ -628,10 +635,10 @@ def startup():
         mtf_service.configure_credentials(state.api_key, state.api_secret, state.testnet)
         mtf_service.db = state.ensure_trader().db
         hub.start()
-        if os.getenv('MTF_CONTEXT_ENABLED', 'true').lower() == 'true':
+        if _env_bool('MTF_CONTEXT_ENABLED', True):
             mtf_service.start()
     if (
-        os.getenv('AUTO_START', 'true').lower() == 'true'
+        _env_bool('AUTO_START', True)
         and state.api_key
         and state.api_secret
     ):
