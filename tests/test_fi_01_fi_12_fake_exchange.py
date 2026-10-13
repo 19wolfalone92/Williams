@@ -605,6 +605,136 @@ def test_fi_13_concurrent_recovery_workers_do_not_duplicate_exchange_observation
             for db in (db1, db2):
                 db.close()
 
+
+class _FI13ProcessExchange:
+    """Picklable fake exchange with counters shared across OS processes."""
+
+    def __init__(self, order, lookup_count, mutation_count):
+        self.order = dict(order)
+        self.lookup_count = lookup_count
+        self.mutation_count = mutation_count
+
+    def get_order(self, symbol, *, order_id=None, orig_client_order_id=None):
+        with self.lookup_count.get_lock():
+            self.lookup_count.value += 1
+        if str(self.order.get("symbol", "")).upper() != str(symbol).upper():
+            raise LookupError("synthetic symbol mismatch")
+        if order_id is not None and str(self.order.get("orderId")) != str(order_id):
+            raise LookupError("synthetic order ID mismatch")
+        if orig_client_order_id is not None and self.order.get("clientOrderId") != orig_client_order_id:
+            raise LookupError("synthetic client order ID mismatch")
+        return dict(self.order)
+
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        return []
+
+    def submit(self, intent):
+        with self.mutation_count.get_lock():
+            self.mutation_count.value += 1
+        raise AssertionError("recovery must never resubmit an ambiguous mutation")
+
+
+def _fi13_process_recover(db_path, order, owner, ready, start, lookup_count, mutation_count, results):
+    """OS-process entry point: open an independent SQLite connection and race the lease."""
+    try:
+        db = Database(db_path)
+        try:
+            exchange = _FI13ProcessExchange(order, lookup_count, mutation_count)
+            worker = ExecutionRecoveryWorker(db, exchange, base_retry_seconds=5, owner=owner)
+            with ready.get_lock():
+                ready.value += 1
+            if not start.wait(timeout=10):
+                raise TimeoutError("parent did not release concurrent recovery workers")
+            result = worker.run_once(now=time.time() + 10)
+            results.put({"owner": owner, "result": result, "error": None})
+        finally:
+            db.close()
+    except BaseException as exc:
+        results.put({
+            "owner": owner,
+            "result": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        })
+
+
+def test_fi_13_concurrent_recovery_workers_are_exclusive_across_processes(tmp_path):
+    """Separate OS processes must not both claim or observe the same recovery intent."""
+    import multiprocessing
+
+    # Spawn avoids inheriting SQLite connections from the parent process.
+    ctx = multiprocessing.get_context("spawn")
+    for attempt in range(6):
+        path = str(tmp_path / f"fi13-process-{attempt}.sqlite3")
+        intent = _new_intent(client_id=f"fi13-process-client-{attempt}")
+        order = {
+            "symbol": "BTCUSDT", "side": "BUY", "orderId": str(813 + attempt),
+            "clientOrderId": intent.client_order_id, "status": "NEW",
+            "origQty": "0.010", "executedQty": "0", "price": "0", "avgPrice": "0",
+        }
+        with Database(path) as seed:
+            _persist_ambiguous(seed, intent)
+
+        ready = ctx.Value("i", 0)
+        lookup_count = ctx.Value("i", 0)
+        mutation_count = ctx.Value("i", 0)
+        start = ctx.Event()
+        results = ctx.Queue()
+        processes = [
+            ctx.Process(
+                target=_fi13_process_recover,
+                args=(path, order, f"fi13-process-worker-{n}-{attempt}",
+                      ready, start, lookup_count, mutation_count, results),
+            )
+            for n in (1, 2)
+        ]
+        try:
+            for process in processes:
+                process.start()
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                with ready.get_lock():
+                    if ready.value == 2:
+                        break
+                if any(p.exitcode not in (None, 0) for p in processes):
+                    break
+                time.sleep(0.02)
+            with ready.get_lock():
+                assert ready.value == 2, (
+                    f"both child processes did not become ready on attempt {attempt}; "
+                    f"ready={ready.value}, exitcodes={[p.exitcode for p in processes]}"
+                )
+            start.set()
+            for process in processes:
+                process.join(timeout=15)
+            assert all(not process.is_alive() for process in processes), (
+                f"process recovery race hung on attempt {attempt}"
+            )
+            assert [process.exitcode for process in processes] == [0, 0], (
+                f"child process failed on attempt {attempt}: "
+                f"{[process.exitcode for process in processes]}"
+            )
+            outcomes = [results.get(timeout=3) for _ in processes]
+            assert all(item["error"] is None for item in outcomes), outcomes
+            assert sum(int(item["result"].get("claimed", 0)) for item in outcomes) == 1, outcomes
+            assert sum(int(item["result"].get("active", 0)) for item in outcomes) == 1, outcomes
+            assert lookup_count.value == 1, (
+                f"exchange was observed {lookup_count.value} times on attempt {attempt}"
+            )
+            assert mutation_count.value == 0
+            with Database(path) as verify:
+                row = _row(verify, intent)
+                assert row["status"] == "SUBMITTED"
+                assert row["order_id"] == str(813 + attempt)
+                assert not verify.has_unresolved_execution_intents()
+        finally:
+            start.set()
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+                process.join(timeout=3)
+            results.close()
+            results.join_thread()
+
 def test_fi_13b_concurrent_database_initialization_is_diagnostic_and_durable(tmp_path):
     """Repeated concurrent schema initialization must serialize durably."""
     import threading
