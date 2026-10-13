@@ -89,6 +89,9 @@ jobs:
             test_execution_architecture.py \
             test_integration_bindings.py \
             test_testnet_release_gate.py \
+            tests/test_futures_campaign_risk_defaults.py \
+            tests/test_futures_risk_policy_contract.py \
+            tests/test_risk_engine_daily_loss_cap.py \
             2>&1 | tee pytest-output.txt
 
       - name: Upload pytest diagnostics
