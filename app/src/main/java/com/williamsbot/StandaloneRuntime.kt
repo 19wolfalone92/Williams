@@ -8307,7 +8307,7 @@ private class NativeEngine(
             .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
             .put("execution_block_reason", "Entries require reconciled Futures account, fresh H1 market data, risk approval, and exchange-confirmed protection")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", 0.01)
             .put("max_trades_per_day", 0)
             .put("max_consecutive_losses", 2)
             .put("cooldown_minutes", 30)
