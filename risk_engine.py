@@ -256,10 +256,16 @@ class RiskEngine:
         return result
 
     def _blocked(self, symbol, side, entry, reason):
+        try:
+            safe_entry = float(entry)
+        except (TypeError, ValueError, OverflowError):
+            safe_entry = 0.0
+        if not math.isfinite(safe_entry):
+            safe_entry = 0.0
         return RiskAnalysis(
             symbol=symbol.upper(),
             side=str(side).upper(),
-            entry_price=float(entry),
+            entry_price=safe_entry,
             stop_price=0.0,
             take_profit_price=0.0,
             stop_distance_pct=0.0,
