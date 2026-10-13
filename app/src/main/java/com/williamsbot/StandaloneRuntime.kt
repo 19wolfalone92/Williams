@@ -8429,7 +8429,7 @@ private class NativeEngine(
             .put("history_retention_candles", 6000)
             .put("full_history_base_timeframe", "1h")
             .put("startup_history_frames", startupFrames.joinToString(","))
-            .put("testnet_live_execution", false)
+            .put("testnet_live_execution", executionReady())
             .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
             .put("execution_block_reason", "Entries require reconciled Futures account, fresh H1 market data, risk approval, and exchange-confirmed protection")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
