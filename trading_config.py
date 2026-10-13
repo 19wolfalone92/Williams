@@ -74,7 +74,7 @@ def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
 class TradingConfig:
     symbols: tuple[str, ...] = DEFAULT_SYMBOLS
     structural_timeframes: tuple[str, ...] = DEFAULT_STRUCTURAL_TFS
-    execution_timeframe: str = "5m"
+    execution_timeframe: str = "1h"
     market: str = "futures_usdt"
     futures_leverage: int = 2
     futures_margin_type: str = "ISOLATED"
@@ -124,7 +124,7 @@ class TradingConfig:
         risk = max(0.0, min(0.005, _float(source, risk_key, 0.005)))
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
-        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "5m")).lower()
+        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", source.get("INTERVAL", "1h"))).lower()
         market = str(source.get("BINANCE_MARKET", "futures_usdt")).strip().lower()
         if market in {"futures", "usdm", "usd_m", "usd-m"}:
             market = "futures_usdt"
