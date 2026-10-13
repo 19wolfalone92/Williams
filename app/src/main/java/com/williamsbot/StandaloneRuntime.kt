@@ -6618,7 +6618,7 @@ private class NativeEngine(
         spread: Double,
         volume: Double
     ): BaseAnalysis {
-        val workCandles =
+        val rawWorkCandles =
             if (campaignEngineEnabled &&
                 campaignExecutionTimeframe != interval
             ) {
@@ -6628,6 +6628,15 @@ private class NativeEngine(
             } else {
                 candles
             }
+        // Williams signals and fractals are evaluated only on exchange-confirmed
+        // closed bars. A forming H1 candle must never become a decision candle.
+        val decisionFrame = if (campaignEngineEnabled) campaignExecutionTimeframe else interval
+        val decisionNow = runCatching { futuresMarketData.exchangeNowMs() }
+            .getOrDefault(System.currentTimeMillis())
+        val decisionBarMs = frameSeconds(decisionFrame).coerceAtLeast(60L) * 1000L
+        val workCandles = rawWorkCandles.filter { candle ->
+            candle.t > 0L && candle.t + decisionBarMs <= decisionNow
+        }
         val i = workCandles.lastIndex
         if (i < 40) {
             return BaseAnalysis(
