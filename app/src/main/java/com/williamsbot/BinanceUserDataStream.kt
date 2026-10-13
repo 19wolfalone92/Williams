@@ -83,6 +83,7 @@ class BinanceUserDataStream(
                     object : WebSocketListener() {
                         override fun onOpen(webSocket: WebSocket, response: Response) {
                             connected = true
+                            delayMs = 1000L
                             onConnection(true, null)
                         }
 
