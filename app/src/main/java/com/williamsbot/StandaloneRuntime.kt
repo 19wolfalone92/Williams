@@ -201,6 +201,7 @@ private data class CampaignSignalN(
     val type: String,
     val role: String,
     val signalBarTimeMs: Long,
+    val confirmationBarTimeMs: Long = signalBarTimeMs,
     val triggerPrice: Double,
     val protectivePrice: Double,
     val teethAtDetection: Double,
@@ -6492,36 +6493,6 @@ private class NativeEngine(
                 teethS[i] > jawS[i] &&
                 candles[i].c > lipsS[i]
 
-        fun upFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].h > candles[i - 1].h &&
-                candles[i].h > candles[i - 2].h &&
-                candles[i].h > candles[i + 1].h &&
-                candles[i].h > candles[i + 2].h
-        }
-
-        fun downFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].l < candles[i - 1].l &&
-                candles[i].l < candles[i - 2].l &&
-                candles[i].l < candles[i + 1].l &&
-                candles[i].l < candles[i + 2].l
-        }
-
-        fun latestUpFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (upFractal(i)) return i
-            }
-            return null
-        }
-
-        fun latestDownFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (downFractal(i)) return i
-            }
-            return null
-        }
-
         fun angulationScore(i: Int): Double {
             val start = max(0, i - 4)
             if (i - start < 2 || !jawS[i].isFinite()) return 0.0
@@ -6530,11 +6501,6 @@ private class NativeEngine(
                 max(0.0, jawS[start] - candles[start].l)
             } else 0.0
             return max(0.0, now - then) / max(candles[i].c, 1e-9) * 100.0
-        }
-
-        fun lastValidFractalLevel(at: Int): Pair<Int, Double>? {
-            val center = latestUpFractal(max(2, at - 2)) ?: return null
-            return center to candles[center].h
         }
 
         val current = candles.lastIndex
@@ -6605,23 +6571,31 @@ private class NativeEngine(
             }
         }
 
-        // WM3: most recent confirmed buy fractal. The signal is persistent,
-        // but the trigger is armable only while it remains above current Teeth.
-        val fractalCenter = latestUpFractal(candles.lastIndex - 2)
-        if (fractalCenter != null) {
-            val trigger = candles[fractalCenter].h + tick
+        // WM3: confirmed buy fractal. Equal-extreme groups are supported;
+        // the pivot and its confirmation bar are tracked separately.
+        val fractal = WilliamsFractal.latestUp(candles.map { it.h }, candles.lastIndex)
+        if (fractal != null) {
+            val fractalCenter = fractal.centerIndex
+            val confirmationIndex = fractal.confirmationIndex
+            val trigger = fractal.level + tick
             val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
-            if (candles[current].c < trigger && trigger > currentTeeth) {
+            val teethAtConfirmation = teethS[confirmationIndex]
+            if (
+                teethAtConfirmation.isFinite() &&
+                candles[current].c < trigger &&
+                trigger > currentTeeth
+            ) {
                 out += CampaignSignalN(
                     signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[fractalCenter].t),
                     type = "FRACTAL",
                     role = "ENTRY",
                     signalBarTimeMs = candles[fractalCenter].t,
+                    confirmationBarTimeMs = candles[confirmationIndex].t,
                     triggerPrice = trigger,
                     protectivePrice = candles[fractalCenter].l - tick,
-                    teethAtDetection = currentTeeth,
+                    teethAtDetection = teethAtConfirmation,
                     invalidationPrice = candles[fractalCenter].l - tick,
-                    reason = "WM3 confirmed buy fractal; trigger must remain above Teeth"
+                    reason = "WM3 confirmed fractal above Teeth; conditional trigger"
                 )
             }
         }
@@ -7122,6 +7096,7 @@ private class NativeEngine(
                                 .put("type", s.type)
                                 .put("role", s.role)
                                 .put("signal_bar_time_ms", s.signalBarTimeMs)
+                    .put("confirmation_bar_time_ms", s.confirmationBarTimeMs)
                                 .put("trigger_price", s.triggerPrice)
                                 .put("protective_price", s.protectivePrice)
                                 .put("teeth_at_detection", s.teethAtDetection)
