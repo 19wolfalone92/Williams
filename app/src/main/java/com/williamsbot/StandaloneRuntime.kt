@@ -1242,6 +1242,20 @@ private class NativeEngine(
     }
 
     fun stop(): JSONObject {
+        // Stopping the local worker must not leave an unfilled exchange-side
+        // conditional entry armed to open a position after the phone stops.
+        val cancellation = if (key().isNotBlank() && secret().isNotBlank()) {
+            runCatching { futuresCampaignCoordinator.cancelPendingEntries("RUNTIME_STOP") }
+                .getOrElse { JSONObject().put("ok", false).put("error", it.message ?: it.javaClass.simpleName) }
+        } else {
+            JSONObject().put("ok", false).put("error", "Futures credentials unavailable; exchange cancellation cannot be confirmed")
+        }
+        if (!cancellation.optBoolean("ok", false)) {
+            reconcileRequired = true
+            prefs.edit().putBoolean("reconcile_required", true).commit()
+            lastError = "Stop completed locally, but pending Futures entry cancellation is unconfirmed: " +
+                cancellation.optString("error", cancellation.optString("blocker", "unknown cancellation state"))
+        }
         ++runtimeGeneration
         running = false
         paused = false
@@ -1265,6 +1279,9 @@ private class NativeEngine(
         activeHistoryTasks.clear()
 
         return JSONObject().put("stopped", true).put("state", "STOPPED")
+            .put("pending_entry_cancellation", cancellation)
+            .put("reconcile_required", reconcileRequired)
+            .put("warning", lastError ?: JSONObject.NULL)
     }
 
     @Synchronized
