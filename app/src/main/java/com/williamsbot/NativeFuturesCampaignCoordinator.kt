@@ -90,13 +90,16 @@ internal class NativeFuturesCampaignCoordinator(
                 }
             }
             val activeEntryClientIds = mutableSetOf<String>()
+            val activeExitClientIds = mutableSetOf<String>()
             val activeProtectionClientIds = mutableSetOf<String>()
             for (i in 0 until persisted.length()) {
                 val item = persisted.optJSONObject(i) ?: continue
-                if (item.optString("intent_role", "ENTRY") != "ENTRY") continue
+                val role = item.optString("intent_role", "ENTRY")
                 val status = item.optString("exchange_status").uppercase(Locale.US)
                 val entryId = item.optString("client_id")
-                if (status in activeStatuses && entryId.isNotBlank()) activeEntryClientIds += entryId
+                if (role == "ENTRY" && status in activeStatuses && entryId.isNotBlank()) activeEntryClientIds += entryId
+                if (role == "EXIT" && status in activeStatuses && entryId.isNotBlank()) activeExitClientIds += entryId
+                if (role != "ENTRY") continue
                 if (status in activeStatuses || status in setOf("OPEN_PROTECTED", "POSITION_OPEN")) {
                     item.optString("protection_client_id").takeIf { it.isNotBlank() }
                         ?.let { activeProtectionClientIds += it }
@@ -113,7 +116,9 @@ internal class NativeFuturesCampaignCoordinator(
                     ?: throw IllegalStateException("Malformed account-wide Futures open-order row")
                 val symbol = order.optString("symbol").uppercase(Locale.US)
                 val clientId = order.optString("clientOrderId")
-                if (symbol !in allowedSymbols || clientId !in activeEntryClientIds) {
+                if (symbol !in allowedSymbols ||
+                    (clientId !in activeEntryClientIds && clientId !in activeExitClientIds)
+                ) {
                     throw IllegalStateException(
                         "Unmanaged Futures open order detected ($symbol/$clientId); cancel/reconcile manually before trading"
                     )
