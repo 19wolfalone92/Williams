@@ -792,3 +792,25 @@ def test_invalid_williams_profile_blocks_scan_before_exchange_discovery(monkeypa
     assert scanner.scan() == []
     assert scanner.last_scan_status["state"] == "BLOCKED"
     assert scanner.last_scan_status["reason"] == "INVALID_WILLIAMS_SIGNAL_PROFILE"
+
+
+
+def test_newer_fractal_inside_teeth_does_not_shadow_older_valid_trigger():
+    from williams_signals import _latest_confirmed_fractal
+
+    # Two confirmed upper fractals: the newer one is not above current Teeth,
+    # while the older one remains untriggered and valid. Preserve its trigger.
+    ind = pd.DataFrame({
+        "high": [101.0, 102.0, 110.0, 104.0, 105.0, 103.0, 102.0],
+        "low":  [99.0, 100.0, 108.0, 101.0, 100.0, 101.0, 100.0],
+        "fractal_up": [False, False, True, False, True, False, False],
+        "confirmed_up_level": [float("nan"), float("nan"), float("nan"), float("nan"), 110.0, float("nan"), 105.0],
+        "teeth_shifted": [103.0, 103.0, 103.0, 104.0, 104.0, 106.0, 106.0],
+    })
+    result = _latest_confirmed_fractal(
+        ind, side="LONG", current_teeth=106.0, current_close=107.0, tick_size=1.0
+    )
+    assert result is not None
+    assert result[0] == 4
+    assert result[1] == 2
+    assert result[2] == 110.0
