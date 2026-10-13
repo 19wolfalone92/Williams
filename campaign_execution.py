@@ -495,8 +495,17 @@ class CampaignExecutionService:
                 return self.engine.load_campaign(str(item["campaign_id"]))
         return None
 
-    def reconcile_pending_entries(self) -> list[dict[str, Any]]:
-        """Adopt conditional BUYs after triggers, partial fills, restart or crash."""
+    def reconcile_pending_entries(
+        self,
+        *,
+        force_cancel_reason: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Adopt conditional BUYs after triggers, partial fills, restart or crash.
+
+        A portfolio-wide risk gate may force-cancel still-unfilled conditional
+        entries. This never cancels protective exits and never assumes a cancel
+        succeeded without an authoritative terminal exchange response.
+        """
         rows = self.db.conn.execute(
             "SELECT key,value FROM bot_state "
             "WHERE key LIKE 'entry_client_order_id:%' "
@@ -569,9 +578,17 @@ class CampaignExecutionService:
                     # Safety/Implementation rule; it is not attributed to the
                     # books. Unknown provenance blocks and cancels fail-closed.
                     pending_data = campaign.tags.get("pending_signal")
-                    stale_reason: str | None = None
+                    stale_reason: str | None = (
+                        str(force_cancel_reason).strip().upper()
+                        if force_cancel_reason else None
+                    )
                     now_ms = int(time.time() * 1000)
-                    if not isinstance(pending_data, dict):
+                    if stale_reason is not None:
+                        # A fail-closed portfolio risk gate takes precedence
+                        # over signal freshness: a resting BUY must not trigger
+                        # after daily risk is blocked.
+                        pass
+                    elif not isinstance(pending_data, dict):
                         stale_reason = "REVALIDATION_UNAVAILABLE"
                     else:
                         try:
