@@ -98,6 +98,22 @@ class ExecutionBarrier:
             return False
         return True
 
+    def _persist_event_required(
+        self,
+        intent: OrderIntent,
+        event: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> bool:
+        """Durably record a mutation-boundary event or report failure."""
+        writer = getattr(self.db, "save_execution_event", None) if self.db is not None else None
+        if not callable(writer):
+            return self.db is None and not self.require_durable_intent
+        try:
+            writer(intent.intent_id, event, dict(payload or {}))
+        except Exception:
+            return False
+        return True
+
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
             try:
@@ -228,11 +244,13 @@ class ExecutionBarrier:
         with self.context_cache.execution_lock:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
-            if self.db is not None and hasattr(self.db, "save_execution_event"):
-                try:
-                    self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
-                except Exception:
-                    pass
+            admission_event_persisted = self._persist_event_required(
+                intent, "ADMISSION_STARTED", dict(intent.required_context_versions)
+            )
+            if not admission_event_persisted:
+                reason = "required ADMISSION_STARTED event persistence failed; submission aborted"
+                self._record("ERROR", "execution_event_persistence_failed", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
             snapshot = self.context_cache.snapshot()
             reason = self._validate(intent, snapshot)
             if reason:
