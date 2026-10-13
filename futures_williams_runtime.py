@@ -62,6 +62,22 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _signal_profile_entry_block_reason(profile: str) -> str:
+    profile = str(profile or "").strip().upper()
+    if profile == "NTD_FIVE_DIMENSIONS":
+        return (
+            "BLOCKED: NTD_FIVE_DIMENSIONS is not execution-ready; "
+            "the standalone Balance Line trade engine is missing/unverified. "
+            "Use TC2_THREE_WISE_MEN for execution."
+        )
+    if profile != "TC2_THREE_WISE_MEN":
+        return (
+            "WILLIAMS_SIGNAL_PROFILE must be TC2_THREE_WISE_MEN; "
+            "NTD_FIVE_DIMENSIONS is research-blocked until Balance Line verification"
+        )
+    return ""
+
+
 @dataclass(frozen=True)
 class FuturesCandidate:
     symbol: str
@@ -305,6 +321,10 @@ class FuturesWilliamsScanner:
         profile = os.getenv(
             "WILLIAMS_SIGNAL_PROFILE", "TC2_THREE_WISE_MEN"
         ).strip().upper()
+        profile_block_reason = _signal_profile_entry_block_reason(profile)
+        if profile_block_reason:
+            self.last_signal_profile_error = profile_block_reason
+            return []
         if profile == "TC2_THREE_WISE_MEN":
             long_specs = extract_long_signal_specs(
                 symbol,
@@ -328,24 +348,8 @@ class FuturesWilliamsScanner:
                     "REQUIRE_POINT_ZERO_FOR_WM1", "false"
                 ).lower() == "true",
             )
-        elif profile == "NTD_FIVE_DIMENSIONS":
-            # Do not advertise a partial NTD implementation as the complete
-            # five-dimension system. The standalone Balance Line trade engine
-            # (base-bar persistence, zone-adjusted extreme counts, and
-            # special-blue-light order relocation) is not yet source-verified.
-            # Keep the indicator/signal helpers available for research, but
-            # block new orders until that fifth dimension is implemented and
-            # replay-validated against NTD figures 8-7 through 8-22.
-            self.last_signal_profile_error = (
-                "BLOCKED: NTD_FIVE_DIMENSIONS is not execution-ready; "
-                "the standalone Balance Line trade engine is missing/unverified. "
-                "Use TC2_THREE_WISE_MEN for execution."
-            )
-            return []
         else:
-            self.last_signal_profile_error = (
-                "WILLIAMS_SIGNAL_PROFILE must be TC2_THREE_WISE_MEN; NTD_FIVE_DIMENSIONS is research-blocked until Balance Line verification"
-            )
+            self.last_signal_profile_error = _signal_profile_entry_block_reason(profile)
             return []
         self.last_signal_profile_error = None
         long_htf, short_htf = self._htf(symbol)
