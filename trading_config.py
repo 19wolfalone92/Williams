@@ -168,7 +168,7 @@ class TradingConfig:
             no_trade_when_uncertain=_bool(source, "NO_TRADE_WHEN_UNCERTAIN", True),
             risk_per_trade_pct=risk,
             max_total_risk_pct=max(total_risk, risk),
-            max_daily_loss_pct=max(0.0, _float(source, "MAX_DAILY_LOSS_PCT", 0.03)),
+            max_daily_loss_pct=min(0.03, max(0.0, _float(source, "MAX_DAILY_LOSS_PCT", 0.03))),
             max_consecutive_losses=max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 3)),
             cooldown_minutes=max(0, _int(source, "COOLDOWN_MINUTES", 30)),
             max_open_positions=max_positions,
