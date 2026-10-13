@@ -653,18 +653,21 @@ def extract_ntd_fractal_signal_specs(
         trigger = level + tick if is_long else level - tick
         if trigger <= 0:
             continue
-        post_confirmation = ind.iloc[confirmation_i + 1:]
+        # Include the confirmation candle itself: a fractal only becomes
+        # knowable after its second right-hand bar closes, and that bar may
+        # already have crossed the level intrabar. Never arm a stale trigger.
+        since_confirmation = ind.iloc[confirmation_i:]
         if is_long:
             already_crossed = (
                 current_close >= trigger
-                or (not post_confirmation.empty and
-                    bool((pd.to_numeric(post_confirmation["high"], errors="coerce") >= trigger).any()))
+                or (not since_confirmation.empty and
+                    bool((pd.to_numeric(since_confirmation["high"], errors="coerce") >= trigger).any()))
             )
         else:
             already_crossed = (
                 current_close <= trigger
-                or (not post_confirmation.empty and
-                    bool((pd.to_numeric(post_confirmation["low"], errors="coerce") <= trigger).any()))
+                or (not since_confirmation.empty and
+                    bool((pd.to_numeric(since_confirmation["low"], errors="coerce") <= trigger).any()))
             )
         if already_crossed:
             continue
