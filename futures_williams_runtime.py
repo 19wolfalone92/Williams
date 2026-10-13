@@ -376,7 +376,10 @@ class FuturesWilliamsScanner:
             # TC2 three-price-bar setups are continuation add-ons and are still
             # surfaced to an existing campaign, but can never open a new one.
             initial_pool = [s for s in signal_pool if s.role == SignalRole.ENTRY]
-            signal = min(initial_pool or signal_pool, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
+            # Never resurrect an older setup while a newer valid event exists.
+            # The trigger is conditional; the most recent presenting event is
+            # the only eligible initial-entry candidate for this direction.
+            signal = max(initial_pool or signal_pool, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
             # Keep both-direction signals visible to the campaign
             # manager. HTF confirmation is an initial-entry gate, not an
             # exit/add-on visibility gate.
@@ -452,7 +455,9 @@ class FuturesWilliamsScanner:
                 evaluated.append(symbol)
             except Exception as exc:
                 failures[symbol] = type(exc).__name__
-        result.sort(key=lambda c: (c.signal.signal_bar_time_ms, -c.score))
+        # Prioritize higher-quality, fresher candidates; never let an old
+        # signal consume an available campaign slot before a current one.
+        result.sort(key=lambda c: (-c.score, -c.signal.signal_bar_time_ms, c.symbol, c.side))
         self.last_scan_status = {
             "state": "COMPLETE" if len(evaluated) == 10 else "PARTIAL",
             "reason": None if len(evaluated) == 10 else "ONE_OR_MORE_SYMBOL_EVALUATIONS_FAILED",
