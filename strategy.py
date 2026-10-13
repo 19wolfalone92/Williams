@@ -80,8 +80,17 @@ def calculate_indicators(df, cfg):
     x["ao_momentum_rising"] = x["ao_green"]
     x["ao_momentum_falling"] = x["ao_red"]
 
-    # Accelerator/Decelerator: AO minus its 5-period SMA.
-    x["ac"] = x["ao"] - x["ao"].rolling(cfg["ac_period"]).mean()
+    # Profitunity MACD 5/34/5 is the same 5/34 momentum line plus its
+    # five-period signal average. Expose the pieces explicitly so the old
+    # Course model can be audited without conflating AO, signal line and AC.
+    x["profitunity_macd_line"] = x["ao"]
+    x["profitunity_macd_signal"] = x["ao"].rolling(cfg["ac_period"]).mean()
+    x["profitunity_macd_histogram"] = (
+        x["profitunity_macd_line"] - x["profitunity_macd_signal"]
+    )
+
+    # Accelerator/Decelerator is the MACD histogram: AO minus its 5-period SMA.
+    x["ac"] = x["profitunity_macd_histogram"]
     x["ac_green"] = x["ac"] > x["ac"].shift(1)
     x["ac_red"] = x["ac"] < x["ac"].shift(1)
 
