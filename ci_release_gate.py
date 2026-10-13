@@ -115,6 +115,11 @@ def main() -> None:
         '"confirmed_up_center_index"',
         '"confirmed_up_group_start_index"',
         '"mfi_proxy_valid"',
+        '"profitunity_macd_line"',
+        '"profitunity_macd_signal"',
+        '"profitunity_macd_histogram"',
+        '"balance_line"',
+        '"balance_line_side"',
         '"UNKNOWN"',
     ):
         must(strategy, needle, "strategy.py")
