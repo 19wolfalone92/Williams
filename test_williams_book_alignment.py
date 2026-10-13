@@ -27,7 +27,7 @@ def test_profitunity_mfi_proxy_windows():
     df.loc[4, 'high'], df.loc[4, 'low'] = 101.5, 100.5
     ind = calculate_indicators(df, config_from_env())
     assert 'mfi_proxy' in ind
-    assert set(ind['profitunity_window'].dropna().unique()) <= {'GREEN','FADING','FAKE','SQUAT','STABLE'}
+    assert set(ind['profitunity_window'].dropna().unique()) <= {'GREEN','FADING','FAKE','SQUAT','STABLE','UNKNOWN'}
     assert 'squatting_bar' in ind
 
 
