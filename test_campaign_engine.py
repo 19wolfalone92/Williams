@@ -1,5 +1,7 @@
 import os
 import tempfile
+import time
+from dataclasses import replace
 
 from campaign_engine import CampaignEngine
 from campaign_model import (
@@ -98,3 +100,18 @@ def test_portfolio_risk_includes_pending_campaign():
         db.save_campaign(campaign)
         assert engine.portfolio_reserved_risk_quote() == 40.0
         assert engine.portfolio_reserved_capital_quote() == 500.0
+
+
+
+def test_expired_signal_cannot_start_or_supersede_a_campaign():
+    now_ms = int(time.time() * 1000)
+    expired = replace(
+        make_signal(SignalType.REVERSAL, bar=now_ms - 120_000),
+        expires_at_ms=now_ms - 1,
+    )
+    valid = replace(
+        make_signal(SignalType.SUPER_AO, bar=now_ms - 1_000),
+        expires_at_ms=now_ms + 60_000,
+    )
+    assert CampaignEngine.choose_initial_signal([expired]) is None
+    assert CampaignEngine.choose_initial_signal([expired, valid]) is valid
