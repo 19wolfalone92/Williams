@@ -315,7 +315,7 @@ def _latest_confirmed_fractal(
             if direction == "LONG"
             else pd.to_numeric(group["high"], errors="coerce").max()
         )
-        teeth = float(row.get("teeth_current", row.get("teeth_current", row.get("teeth_shifted", 0.0))) or 0.0)
+        teeth = float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0)
 
         if current_teeth is not None:
             if direction == "LONG" and trigger <= float(current_teeth):
@@ -467,7 +467,7 @@ def extract_ntd_ao_signal_specs(
         trigger_price=trigger,
         protective_reference=protective,
         trigger_buffer_ticks=1,
-        teeth_at_detection=float(current.get("teeth_current", current.get("teeth_current", current.get("teeth_shifted", 0.0))) or 0.0),
+        teeth_at_detection=float(current.get("teeth_current", current.get("teeth_shifted", 0.0)) or 0.0),
         alligator_bullish=bool(current.get("bullish_alligator", False)),
         alligator_awake=bool(current.get("alligator_awake", False)),
         reason=reason,
@@ -569,7 +569,7 @@ def extract_ntd_ac_signal_specs(
         trigger_price=trigger,
         protective_reference=low if is_long else high,
         trigger_buffer_ticks=1,
-        teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
+        teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
         alligator_bullish=bool(row.get("bullish_alligator", False)),
         alligator_awake=bool(row.get("alligator_awake", False)),
         reason=(
@@ -619,7 +619,7 @@ def extract_ntd_zone_add_on_specs(
         high = float(current["high"])
         low = float(current["low"])
         close = float(current["close"])
-        teeth = float(current.get("teeth_shifted", 0.0) or 0.0)
+        teeth = float(current.get("teeth_current", current.get("teeth_shifted", 0.0)) or 0.0)
     except (TypeError, ValueError):
         return []
     values = (ao_now, ao_prev, ac_now, ac_prev, open_price, high, low, close)
@@ -817,7 +817,7 @@ def extract_long_signal_specs(
     specs: list[SignalSpec] = []
     current = ind.iloc[-1]
     current_close = float(current.get("close", 0.0) or 0.0)
-    current_teeth = float(current.get("teeth_shifted", 0.0) or 0.0)
+    current_teeth = float(current.get("teeth_current", current.get("teeth_shifted", 0.0)) or 0.0)
     if current_close <= 0:
         return []
 
@@ -850,7 +850,7 @@ def extract_long_signal_specs(
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
                     invalidation_price=float(wave_invalidation_price or protective),
-                    teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
+                    teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
                     alligator_bullish=bool(row.get("bullish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
                     angulation_score=score,
@@ -884,7 +884,7 @@ def extract_long_signal_specs(
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
                     invalidation_price=float(wave_invalidation_price or protective),
-                    teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
+                    teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
                     alligator_bullish=bool(row.get("bullish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
                     wave_confidence=float(wave_confidence),
@@ -918,7 +918,7 @@ def extract_long_signal_specs(
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
-                    teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
+                    teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
                     alligator_bullish=bool(row.get("bullish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
                     htf_confirmed=bool(htf_confirmed),
@@ -996,7 +996,7 @@ def extract_short_signal_specs(
 
     current = ind.iloc[-1]
     current_close = float(current.get("close", 0.0) or 0.0)
-    current_teeth = float(current.get("teeth_shifted", 0.0) or 0.0)
+    current_teeth = float(current.get("teeth_current", current.get("teeth_shifted", 0.0)) or 0.0)
     if current_close <= 0:
         return []
 
@@ -1023,7 +1023,7 @@ def extract_short_signal_specs(
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
                     invalidation_price=float(wave_invalidation_price or protective),
-                    teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
+                    teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
                     alligator_bullish=bool(row.get("bearish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
                     angulation_score=score,
@@ -1055,7 +1055,7 @@ def extract_short_signal_specs(
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
                     invalidation_price=float(wave_invalidation_price or protective),
-                    teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
+                    teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
                     alligator_bullish=bool(row.get("bearish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
                     wave_confidence=float(wave_confidence),
@@ -1086,7 +1086,7 @@ def extract_short_signal_specs(
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
-                    teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
+                    teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
                     alligator_bullish=bool(row.get("bearish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
                     htf_confirmed=bool(htf_confirmed),
