@@ -56,6 +56,16 @@ def service(db, client):
     return CampaignExecutionService(client, db, barrier)
 
 
+def test_conditional_buy_trigger_rounds_up_to_tick():
+    svc = CampaignExecutionService.__new__(CampaignExecutionService)
+    svc._rules = lambda _symbol: {"PRICE_FILTER": {"tickSize": "0.1"}}
+
+    assert svc._normalize_trigger_price("BTCUSDT", 101.01) == 101.1
+    assert svc._normalize_trigger_price("BTCUSDT", 101.1) == 101.1
+    assert svc._normalize_trigger_price("BTCUSDT", 100.999) == 101.0
+    assert svc._normalize_trigger_price("BTCUSDT", 101.01) >= 101.01
+
+
 def test_conditional_entry_is_armed_not_market():
     with tempfile.TemporaryDirectory() as d:
         db = Database(os.path.join(d, "campaign.sqlite3"))
