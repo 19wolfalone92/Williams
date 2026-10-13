@@ -171,14 +171,14 @@ class CampaignEngine:
             if s.role == SignalRole.ENTRY
             and s.side == "BUY"
             and s.trigger_price > 0
-            and s.signal_bar_time_ms > 0
+            and s.event_time_ms > 0
             and s.expires_at_ms > now_ms
         ]
         if not candidates:
             return None
         # Book model: first available valid signal starts the campaign.  We
         # therefore order primarily by signal-bar time, not by a score.
-        return min(candidates, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
+        return min(candidates, key=lambda s: (s.event_time_ms, s.created_at_ms))
 
     @staticmethod
     def should_replace_pending(old: SignalSpec, new: SignalSpec, *, min_ticks: int = 1, tick_size: float = 0.0) -> bool:
@@ -193,7 +193,7 @@ class CampaignEngine:
         if old_pending.is_expired() and not new_pending.is_expired():
             return True
         return (
-            new.signal_bar_time_ms > old.signal_bar_time_ms
+            new.event_time_ms > old.event_time_ms
             and distance >= threshold
             and not new_pending.is_expired()
         )
@@ -268,8 +268,8 @@ class CampaignEngine:
             raise ValueError("add-on requires an open campaign position")
         if signal.side != campaign.side:
             raise ValueError("add-on side does not match campaign")
-        if signal.signal_bar_time_ms <= 0:
-            raise ValueError("add-on signal has no valid signal time")
+        if signal.event_time_ms <= 0:
+            raise ValueError("add-on signal has no valid confirmation/event time")
         if campaign.state not in {
             CampaignState.OPEN_INITIAL,
             CampaignState.TREND_ACTIVE,
