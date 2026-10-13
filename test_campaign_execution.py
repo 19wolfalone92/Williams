@@ -32,6 +32,22 @@ class FakeCache:
         return FakeSnapshot()
 
 
+class _ValidationIntentDB:
+    """In-memory durable-boundary stub for barrier validation tests."""
+    def __init__(self):
+        self.intents = []
+        self.events = []
+
+    def save_execution_intent(self, intent, status, reason=""):
+        self.intents.append((intent.intent_id, status, reason))
+
+    def save_execution_event(self, intent_id, event, payload):
+        self.events.append((intent_id, event, payload))
+
+    def state_get(self, key, default=None):
+        return default
+
+
 def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=None, trigger=101):
     now_ms = int(time.time() * 1000)
     if bar is None:
@@ -178,7 +194,7 @@ def test_execution_barrier_blocks_non_h1_campaign_entry_without_order_mutation(m
 
     now = int(time.time() * 1000)
     monkeypatch.setenv("EXECUTION_TIMEFRAME", "1h")
-    barrier = ExecutionBarrier(FakeCache(), None, require_durable_intent=False)
+    barrier = ExecutionBarrier(FakeCache(), _ValidationIntentDB())
     attempts = []
 
     cases = [
@@ -207,7 +223,7 @@ def test_execution_barrier_blocks_h1_signal_when_runtime_config_is_non_h1(monkey
 
     now = int(time.time() * 1000)
     monkeypatch.setenv("EXECUTION_TIMEFRAME", "5m")
-    barrier = ExecutionBarrier(FakeCache(), None, require_durable_intent=False)
+    barrier = ExecutionBarrier(FakeCache(), _ValidationIntentDB())
     attempts = []
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "STOP_LOSS", {},
@@ -229,7 +245,7 @@ def test_execution_barrier_blocks_entry_aliases_and_addons_before_submit(monkeyp
 
     now = int(time.time() * 1000)
     monkeypatch.setenv("EXECUTION_TIMEFRAME", "1h")
-    barrier = ExecutionBarrier(FakeCache(), None, require_durable_intent=False)
+    barrier = ExecutionBarrier(FakeCache(), _ValidationIntentDB())
     calls = []
     for purpose in ("ENTRY", "ADD_ON", "CAMPAIGN_ADD_ON"):
         intent = OrderIntent.new(
@@ -253,7 +269,7 @@ def test_execution_barrier_requires_last_mile_callback_for_new_entry(monkeypatch
 
     now = int(time.time() * 1000)
     monkeypatch.setenv("EXECUTION_TIMEFRAME", "1h")
-    barrier = ExecutionBarrier(FakeCache(), None, require_durable_intent=False)
+    barrier = ExecutionBarrier(FakeCache(), _ValidationIntentDB())
     calls = []
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "STOP_LOSS", {},
@@ -276,7 +292,7 @@ def test_execution_barrier_does_not_apply_entry_timeframe_gate_to_campaign_exit(
     from execution_barrier import OrderIntent
 
     monkeypatch.setenv("EXECUTION_TIMEFRAME", "5m")
-    barrier = ExecutionBarrier(FakeCache(), None, require_durable_intent=False)
+    barrier = ExecutionBarrier(FakeCache(), _ValidationIntentDB())
     intent = OrderIntent.new(
         "BTCUSDT", "SELL", "MARKET", {},
         purpose="CAMPAIGN_EXIT",
@@ -454,7 +470,7 @@ def test_daily_risk_gate_cancels_resting_conditional_entry_but_not_protection():
             "BTCUSDT",
             orig_client_order_id=result["client_order_id"],
         )
-        assert refreshed["status"] == "CANCELED"
+        assert refreshed["status"] == "CANCELED", cancelled
         assert cancelled[0]["state"] == "ENTRY_CANCELLED_STALE"
         assert cancelled[0]["reason"] == "DAILY_RISK_GATE_BLOCKED"
         assert not [
