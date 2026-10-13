@@ -1437,7 +1437,8 @@ private class NativeEngine(
             path.startsWith("/api/v3/depth") -> path.replaceFirst("/api/v3/depth", "/fapi/v1/depth")
             path.startsWith("/api/v3/ticker/24hr") -> path.replaceFirst("/api/v3/ticker/24hr", "/fapi/v1/ticker/24hr")
             path.startsWith("/api/v3/ticker/bookTicker") -> path.replaceFirst("/api/v3/ticker/bookTicker", "/fapi/v1/ticker/bookTicker")
-            path.startsWith("/api/v3/ticker/price") -> path.replaceFirst("/api/v3/ticker/price", "/fapi/v2/ticker/price")
+            path.startsWith("/api/v3/ticker/price") -> path.replaceFirst("/api/v3/ticker/price", "/fapi/v1/ticker/price")
+            path.startsWith("/api/v3/avgPrice") -> path.replaceFirst("/api/v3/avgPrice", "/fapi/v1/avgPrice")
             path.startsWith("/api/v3/exchangeInfo") -> path.replaceFirst("/api/v3/exchangeInfo", "/fapi/v1/exchangeInfo")
             path.startsWith("/api/v3/time") -> path.replaceFirst("/api/v3/time", "/fapi/v1/time")
             path.startsWith("/fapi/v1/") || path.startsWith("/fapi/v2/") -> path
