@@ -3628,10 +3628,10 @@ private class NativeEngine(
             .commit()) {
             "Could not persist daily Futures equity/PnL measurement"
         }
-        if (lossPct >= 0.03) {
+        if (lossPct >= 0.01) {
             paused = true
             prefs.edit().putBoolean("auto_run", false).commit()
-            lastError = "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"
+            lastError = "FUTURES_DAILY_LOSS_LIMIT: 1% reached; new entries blocked"
             runCatching { futuresCampaignCoordinator.cancelPendingEntries("DAILY_LOSS_LIMIT") }
             return false
         }
@@ -7938,7 +7938,7 @@ private class NativeEngine(
             .put("stop_loss_pct", if (firstPosition == null || firstPosition.optString("stop").toDoubleOrNull()?.let { it > 0.0 } != true) JSONObject.NULL else kotlin.math.abs((firstPosition.optString("entry").toDoubleOrNull() ?: 0.0) - (firstPosition.optString("stop").toDoubleOrNull() ?: 0.0)) / (firstPosition.optString("entry").toDoubleOrNull() ?: 1.0))
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", 0.01)
             .put("trades_today", futuresTradesToday)
             .put("daily_pnl_usdt", futuresDailyPnl)
             .put("consecutive_losses", JSONObject.NULL)
