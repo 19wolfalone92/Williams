@@ -33,3 +33,14 @@
 - Unsupported compound recovery must stay fail-closed until implemented and tested.
 
 No live Binance credentials or live orders used. P0 cannot close while required evidence remains missing.
+
+## TASK 001.12 — exact-HEAD status update
+
+**PARTIALLY IMPLEMENTED — P0 OPEN**
+
+- Required starting SHA / current baseline: `4e7ad93990b4b9d3b5291bed9d83909fbfac3bcf`. PR #66 remains OPEN, Draft, unmerged; base `fix/pytest-safe-collection`, base SHA `0007e79b1afde86b8c736128e6d09bfdd370106f`.
+- Diff from prior SHA `2bbf6bea41f575a74ebdda67aa4b588d0d733d12`: only `tests/test_fi_01_fi_12_fake_exchange.py` changed (88 additions, 75 deletions), adding repeated FI-13 race coverage.
+- Backend run [38341931627](https://github.com/19wolfalone92/Williams/actions/runs/38341931627): SUCCESS, 223 passed, 4 warnings. Campaign Python job in run [38341931762](https://github.com/19wolfalone92/Williams/actions/runs/38341931762): SUCCESS, 262 passed, 4 warnings. Android job 115114647875 was still running when this report was written; exact-HEAD Android tests/lint/APK evidence were not yet established.
+- Standalone Build Android APK run [38341932569](https://github.com/19wolfalone92/Williams/actions/runs/38341932569): `startup_failure`, zero jobs/artifacts, no exposed diagnostic cause. Earlier APK proof belongs only to source SHA `51ca573ee2366065ce7d75af6699e25ae3ac94a3`, not this HEAD.
+- FI-13 and FI-13B repeat 12 thread-level races each on fresh temporary databases. They do not prove multi-process concurrency. Full crash/lease-expiry matrix, comprehensive BL-004 scan, complete Android mutation-boundary proof and exact-HEAD Android artifact evidence remain unresolved.
+- No live Binance credentials or order mutations were used. P0 cannot close with these missing proofs.
