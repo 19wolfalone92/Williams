@@ -3978,9 +3978,7 @@ private class NativeEngine(
 
             if (candles.size < 40) continue
 
-            val prices = candles.map { it.c }
-            val teeth =
-                smma(prices, 8).last()
+            val teeth = alligator(candles, candles.lastIndex).teeth
             val lastClosed =
                 candles.last()
 
@@ -6391,13 +6389,9 @@ private class NativeEngine(
     ): List<CampaignSignalN> {
         if (candles.size < 45 || tick <= 0.0) return emptyList()
 
-        val medians = candles.map { (it.h + it.l) / 2.0 }
-        val jaw = smma(medians, 13)
-        val teeth = smma(medians, 8)
-        val lips = smma(medians, 5)
-        val jawS = shiftedSeries(jaw, 8)
-        val teethS = shiftedSeries(teeth, 5)
-        val lipsS = shiftedSeries(lips, 3)
+        val jawS = williamsAlligatorLine(candles, 13, 8).map { it ?: Double.NaN }
+        val teethS = williamsAlligatorLine(candles, 8, 5).map { it ?: Double.NaN }
+        val lipsS = williamsAlligatorLine(candles, 5, 3).map { it ?: Double.NaN }
 
         fun bullishAlligator(i: Int): Boolean =
             i in candles.indices &&
@@ -6615,7 +6609,7 @@ private class NativeEngine(
         val fractalIndex = latestConfirmedUpFractal(workCandles, i)
         val fractalHigh =
             fractalIndex?.let { workCandles[it].h }
-        val teethSeries = smma(closes, 8)
+        val teethSeries = williamsAlligatorLine(workCandles, 8, 5)
         val fractalTeeth =
             fractalIndex?.let { teethSeries.getOrNull(it) }
         val externalFractal =
