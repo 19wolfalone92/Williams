@@ -42,10 +42,14 @@ def main() -> None:
     must(cfg, 'execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "1h")).lower()', "trading_config.py")
     must(cfg, 'symbols = tuple(x for x in symbols if x in DEFAULT_SYMBOLS)', "trading_config.py")
     must(cfg, 'risk_key = "MAX_RISK_PER_TRADE_PCT"', "trading_config.py")
+    must(breaker, 'db.state_get("daily_risk_tripped")', "equity_breaker.py")
+    must(breaker, 'db.state_set("daily_risk_tripped", "1")', "equity_breaker.py")
+    must(breaker, "daily PnL unavailable; entry blocked", "equity_breaker.py")
     must(cfg, 'min(0.005', "trading_config.py")
     must(cfg, 'min(0.01', "trading_config.py")
 
     scanner = read("market_scanner.py")
+    breaker = read("equity_breaker.py")
     for needle in (
         "from trading_config import TradingConfig",
         "allowed_symbols = set(TradingConfig.from_env().symbols)",
