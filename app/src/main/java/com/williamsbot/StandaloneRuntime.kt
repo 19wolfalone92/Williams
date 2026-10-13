@@ -3604,6 +3604,7 @@ private class NativeEngine(
         val equity = account.optString("totalMarginBalance").toDoubleOrNull() ?: (wallet + unrealized)
         require(equity.isFinite() && equity > 0.0) { "Futures equity is unavailable/non-positive" }
         val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        utc.timeInMillis = futuresMarketData.exchangeNowMs()
         utc.set(java.util.Calendar.HOUR_OF_DAY, 0)
         utc.set(java.util.Calendar.MINUTE, 0)
         utc.set(java.util.Calendar.SECOND, 0)
@@ -7826,6 +7827,7 @@ private class NativeEngine(
             )) intent.optDouble("risk_pct", 0.0) else 0.0
         }
         val utcDayStart = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+            timeInMillis = futuresMarketData.exchangeNowMs()
             set(java.util.Calendar.HOUR_OF_DAY, 0)
             set(java.util.Calendar.MINUTE, 0)
             set(java.util.Calendar.SECOND, 0)
