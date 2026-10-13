@@ -637,7 +637,7 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
-    // Five independent Futures contracts maximum; aggregate campaign risk is capped at 0.6%.
+    // One active Futures campaign maximum; aggregate campaign risk is capped at 0.6%.
     private val maxOpenPositions: Int
         get() = 1
     private val campaignEngineEnabled: Boolean
