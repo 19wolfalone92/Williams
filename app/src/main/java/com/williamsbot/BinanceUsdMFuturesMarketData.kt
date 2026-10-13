@@ -4,14 +4,16 @@ import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
  * Public USDⓈ-M Futures Testnet market-data transport.
  *
- * Intentionally has no credentials and no order-mutation methods. This keeps candle
- * history separate from Spot /api/v3 and from the signed execution adapter.
+ * This class only reads the demo-fapi host. Signed account/order mutations are
+ * owned by BinanceUsdMFuturesTestnetAdapter; Spot /api/v3 is never used here.
  */
 internal class BinanceUsdMFuturesMarketData(
     private val http: OkHttpClient = OkHttpClient.Builder()
@@ -20,7 +22,7 @@ internal class BinanceUsdMFuturesMarketData(
         .build()
 ) {
     private val base = "https://demo-fapi.binance.com"
-    private val allowedSymbols = setOf(
+    val approvedSymbols: Set<String> = setOf(
         "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
         "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
     )
@@ -36,8 +38,8 @@ internal class BinanceUsdMFuturesMarketData(
         startTime: Long? = null,
         endTime: Long? = null
     ): JSONArray {
-        val normalizedSymbol = symbol.uppercase()
-        require(normalizedSymbol in allowedSymbols) { "Symbol is outside the approved Futures universe" }
+        val normalizedSymbol = symbol.uppercase(Locale.US)
+        require(normalizedSymbol in approvedSymbols) { "Symbol is outside the approved Futures universe" }
         require(interval in allowedIntervals) { "Unsupported Futures kline interval: $interval" }
         require(limit in 1..1500) { "Futures kline limit must be in 1..1500" }
         require(startTime == null || startTime >= 0L) { "startTime must be non-negative" }
@@ -45,25 +47,66 @@ internal class BinanceUsdMFuturesMarketData(
         require(startTime == null || endTime == null || startTime <= endTime) {
             "startTime must not exceed endTime"
         }
-
         val builder = HttpUrl.parse("$base/fapi/v1/klines")!!.newBuilder()
             .addQueryParameter("symbol", normalizedSymbol)
             .addQueryParameter("interval", interval)
             .addQueryParameter("limit", limit.toString())
         startTime?.let { builder.addQueryParameter("startTime", it.toString()) }
         endTime?.let { builder.addQueryParameter("endTime", it.toString()) }
+        val rows = getArray(builder.build().toString())
+        if (rows.length() > limit) throw IOException("USD-M Futures returned more candles than requested")
+        return rows
+    }
 
-        val request = Request.Builder().url(builder.build()).get().build()
+    fun tickerPrices(): JSONArray = getArray("$base/fapi/v1/ticker/price")
+    fun ticker24h(): JSONArray = getArray("$base/fapi/v1/ticker/24hr")
+    fun bookTickers(): JSONArray = getArray("$base/fapi/v1/ticker/bookTicker")
+    fun exchangeInfo(): JSONObject = getObject("$base/fapi/v1/exchangeInfo")
+
+    fun price(symbol: String): Double {
+        requireSymbol(symbol)
+        val url = HttpUrl.parse("$base/fapi/v1/ticker/price")!!.newBuilder()
+            .addQueryParameter("symbol", symbol.uppercase(Locale.US)).build().toString()
+        val value = getObject(url).optString("price").toDoubleOrNull()
+            ?: throw IOException("Malformed Futures ticker price for $symbol")
+        if (!value.isFinite() || value <= 0.0) throw IOException("Invalid Futures ticker price for $symbol")
+        return value
+    }
+
+    fun markPrice(symbol: String): Double {
+        requireSymbol(symbol)
+        val url = HttpUrl.parse("$base/fapi/v1/premiumIndex")!!.newBuilder()
+            .addQueryParameter("symbol", symbol.uppercase(Locale.US)).build().toString()
+        val value = getObject(url).optString("markPrice").toDoubleOrNull()
+            ?: throw IOException("Malformed Futures mark price for $symbol")
+        if (!value.isFinite() || value <= 0.0) throw IOException("Invalid Futures mark price for $symbol")
+        return value
+    }
+
+    private fun requireSymbol(symbol: String) {
+        require(symbol.uppercase(Locale.US) in approvedSymbols) {
+            "Symbol is outside the approved Futures universe: $symbol"
+        }
+    }
+
+    private fun getArray(url: String): JSONArray {
+        val text = execute(url)
+        return JSONArray(text)
+    }
+
+    private fun getObject(url: String): JSONObject {
+        val text = execute(url)
+        return JSONObject(text)
+    }
+
+    private fun execute(url: String): String {
+        val request = Request.Builder().url(url).header("Accept", "application/json").get().build()
         http.newCall(request).execute().use { response ->
             val body = response.body()?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw IOException("USD-M Futures klines HTTP ${response.code()}: ${body.take(300)}")
+                throw IOException("USD-M Futures market data HTTP ${response.code()}: ${body.take(300)}")
             }
-            val rows = JSONArray(body)
-            if (rows.length() > limit) {
-                throw IOException("USD-M Futures returned more candles than requested")
-            }
-            return rows
+            return body
         }
     }
 }
