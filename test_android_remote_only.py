@@ -49,7 +49,9 @@ def test_android_does_not_start_native_spot_runtime():
 
 def test_android_does_not_require_native_portfolio_api():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
-    assert "/api/v1/portfolio" in main
+    # The Android cockpit must not require a remote/native portfolio endpoint
+    # for autonomous Futures execution; this is an architectural non-dependency.
+    assert "/api/v1/portfolio" not in main
     assert "BackendApi" in main
 
 
