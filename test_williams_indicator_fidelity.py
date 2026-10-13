@@ -189,3 +189,48 @@ def test_futures_canonical_indicator_contract_rejects_period_drift():
         canonical_indicator_config_from_env({"AO_FAST": "3"})
     with pytest.raises(ValueError, match="Non-canonical Williams indicator parameters"):
         canonical_indicator_config_from_env({"ALLIGATOR_JAW": "10"})
+
+
+def test_wise_men_corrupt_checkpoint_fails_closed():
+    import pytest
+    from wise_men import WiseMenStateMachine
+
+    class DB:
+        def state_get(self, key):
+            return "{not-json"
+
+        def state_set(self, key, value):
+            raise AssertionError("corrupt checkpoint must not be overwritten")
+
+    with pytest.raises(RuntimeError, match="recovery/reconciliation is required"):
+        WiseMenStateMachine(DB(), "BTCUSDT", "LONG")
+
+
+def test_wise_men_progression_cannot_regress_or_revive_terminal_state():
+    from wise_men import WiseMenPhase, WiseMenStateMachine
+
+    class DB:
+        def __init__(self):
+            self.values = {}
+
+        def state_get(self, key):
+            return self.values.get(key)
+
+        def state_set(self, key, value):
+            self.values[key] = value
+
+    db = DB()
+    machine = WiseMenStateMachine(db, "BTCUSDT", "LONG")
+    machine.observe("c1", wm1_triggered=True, level=101.0)
+    machine.observe("c2", wm2_triggered=True, level=102.0)
+    active = machine.observe("c3", wm3_triggered=True, level=103.0)
+    assert active.phase == WiseMenPhase.TREND_ACTIVE
+
+    regressed = machine.observe("c4", wm1_triggered=True, level=99.0)
+    assert regressed.phase == WiseMenPhase.TREND_ACTIVE
+    assert regressed.wm1_level == 101.0
+
+    terminal = machine.observe("c5", invalidated=True)
+    revived = machine.observe("c6", wm3_triggered=True, level=95.0)
+    assert terminal.phase == WiseMenPhase.INVALIDATED
+    assert revived.phase == WiseMenPhase.INVALIDATED
