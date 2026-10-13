@@ -523,6 +523,10 @@ private class NativeEngine(
     private val http: OkHttpClient
 ) {
     private val baseUrl = "https://testnet.binance.vision"
+    // SAFETY BLOCKER: this native adapter still speaks Spot /api/v3 (Spot account, OCO,
+    // and BUY-only campaign execution). It is NOT a USDⓈ-M Futures adapter. Never permit
+    // order mutation until the Futures REST + position/protection/recovery contract is wired.
+    private val futuresExecutionAdapterReady = false
     private val historyStore = MarketHistoryStore(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
@@ -613,7 +617,7 @@ private class NativeEngine(
     private val campaignEngineEnabled: Boolean
         get() = prefs.getBoolean("campaign_engine_enabled", true)
     private val campaignExecutionTimeframe: String
-        get() = prefs.getString("campaign_execution_timeframe", "5m") ?: "5m"
+        get() = prefs.getString("campaign_execution_timeframe", "1h") ?: "1h"
     private val campaignRiskLimitPct = 0.005
     private val campaignInitialRiskPct = 0.002
     private val campaignAddRiskCapPct = 0.002
@@ -769,7 +773,8 @@ private class NativeEngine(
             System.currentTimeMillis() - restLastSuccessMs <= maxAgeMs
 
     private fun executionReady(): Boolean =
-        running &&
+        futuresExecutionAdapterReady &&
+            running &&
             !paused &&
             !reconcileRequired &&
             !killLatched &&
@@ -781,6 +786,7 @@ private class NativeEngine(
 
     private fun executionBlockers(): List<String> =
         buildList {
+            if (!futuresExecutionAdapterReady) add("futures_execution_adapter_missing_spot_api_v3_detected")
             if (!running) add("runtime_not_running")
             if (paused) add("paused")
             if (reconcileRequired) add("reconcile_required")
@@ -1129,6 +1135,9 @@ private class NativeEngine(
     }
 
     fun start(): JSONObject {
+        require(futuresExecutionAdapterReady) {
+            "FUTURES_EXECUTION_ADAPTER_MISSING: this APK runtime still targets Binance Spot /api/v3; USDⓈ-M Futures LONG/SHORT execution is not implemented. Trading is fail-closed."
+        }
         if (killLatched) {
             error("KILL_SWITCH_LATCHED: recover and reset kill switch before START")
         }
@@ -8141,7 +8150,7 @@ private class NativeEngine(
             )
         }
         test("version_consistency", "runtime", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
-        test("testnet_enabled", "binance", false, "WARN", "Legacy native Spot runtime is disabled; authoritative trading is remote USDⓈ-M Futures Testnet")
+        test("futures_execution_adapter", "binance", futuresExecutionAdapterReady, "FAIL", "FAIL-CLOSED: native runtime still uses Spot /api/v3 and OCO; USDⓈ-M Futures LONG/SHORT adapter is not wired")
         test("local_api_loopback", "runtime", 18080 == 18080, "FAIL", "127.0.0.1:18080")
         test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(","))
         test("runtime_lifecycle", "runtime", running == (worker?.isAlive == true), "FAIL", "running=" + running + "; worker_alive=" + (worker?.isAlive == true))
@@ -8167,6 +8176,8 @@ private class NativeEngine(
             .put("runtime", "standalone")
             .put("device_local_api", "http://127.0.0.1:18080")
             .put("binance_testnet", true)
+            .put("exchange_market", "USDⓈ-M_FUTURES_REQUIRED")
+            .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
             .put("status", status(fast = true))
             .put("settings", settings())
             .put("system_info", JSONObject()
@@ -8269,7 +8280,7 @@ private class NativeEngine(
             .put("campaign_execution_timeframe", campaignExecutionTimeframe)
             .put("campaign_entry_mode", "CONDITIONAL_STOP")
             .put("campaign_fixed_take_profit", false)
-            .put("campaign_entry_execution", "BUY_STOP_ONLY")
+            .put("campaign_entry_execution", "DISABLED_UNTIL_FUTURES_ADAPTER")
             .put("campaign_risk_limit_pct", campaignRiskLimitPct)
             .put("campaign_initial_risk_pct", campaignInitialRiskPct)
             .put("campaign_add_on_risk_cap_pct", campaignAddRiskCapPct)
@@ -8289,7 +8300,9 @@ private class NativeEngine(
             .put("history_retention_candles", 6000)
             .put("full_history_base_timeframe", "1h")
             .put("startup_history_frames", startupFrames.joinToString(","))
-            .put("testnet_live_execution", true)
+            .put("testnet_live_execution", false)
+            .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
+            .put("execution_block_reason", "USDⓈ-M Futures adapter missing; Spot /api/v3 order path must never be used for Futures")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
             .put("max_trades_per_day", 0)
