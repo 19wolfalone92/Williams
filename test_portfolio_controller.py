@@ -37,6 +37,7 @@ class FakeCandidate:
     htf_confirmed: bool
     setup_state: str
     reason: str
+    wave_invalidation_price: float = 99.0
 
 
 @dataclass
