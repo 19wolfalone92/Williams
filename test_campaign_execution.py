@@ -427,3 +427,38 @@ def test_execution_intent_refuses_uncommitted_caller_transaction():
             (intent.intent_id,),
         ).fetchone()
         assert row is None
+
+
+def test_daily_risk_gate_cancels_resting_conditional_entry_but_not_protection():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+
+        pending = client.get_order(
+            "BTCUSDT",
+            orig_client_order_id=result["client_order_id"],
+        )
+        assert pending["status"] == "NEW"
+
+        cancelled = svc.reconcile_pending_entries(
+            force_cancel_reason="DAILY_RISK_GATE_BLOCKED"
+        )
+
+        refreshed = client.get_order(
+            "BTCUSDT",
+            orig_client_order_id=result["client_order_id"],
+        )
+        assert refreshed["status"] == "CANCELED"
+        assert cancelled[0]["state"] == "ENTRY_CANCELLED_STALE"
+        assert cancelled[0]["reason"] == "DAILY_RISK_GATE_BLOCKED"
+        assert not [
+            order for order in client.open_orders("BTCUSDT")
+            if str(order.get("side", "")).upper() == "BUY"
+            and str(order.get("status", "")).upper() in {"NEW", "PARTIALLY_FILLED"}
+        ]
