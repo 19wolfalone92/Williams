@@ -45,6 +45,11 @@ class MultiPositionTrader:
     MANUAL_PREFIX = "WILLV4_MANUAL_"
 
     def __init__(self, client, db=None, symbols=None, execution_barrier=None):
+        if getattr(client, "product", "SPOT") != "SPOT":
+            raise ValueError(
+                "MultiPositionTrader is Spot-only; USD-M Futures must use a dedicated "
+                "position/margin/protection engine, never the Spot OCO lifecycle"
+            )
         self.client = client
         self.db = db or Database()
         if symbols is not None:
