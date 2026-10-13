@@ -156,3 +156,19 @@ def test_success_response_with_missing_order_status_is_blocked_as_unknown():
             "BTCUSDT", "BUY", "MARKET", quantity="0.01",
             new_client_order_id="wb21-entry-004",
         )
+
+
+@pytest.mark.parametrize("kwargs, message", [
+    ({"quantity": "0.01", "stop_price": "60000", "close_position": True}, "quantity"),
+    ({"stop_price": "60000", "close_position": True, "reduce_only": False}, "reduceOnly"),
+    ({"stop_price": "60000", "close_position": False}, "must be true"),
+])
+def test_invalid_close_position_combinations_are_rejected(kwargs, message):
+    c, session = client([])
+    with pytest.raises(ValueError, match=message):
+        c.order(
+            "BTCUSDT", "SELL", "STOP_MARKET",
+            new_client_order_id="wb21-stop-invalid",
+            **kwargs,
+        )
+    assert session.calls == []
