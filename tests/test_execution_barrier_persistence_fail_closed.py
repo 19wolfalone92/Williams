@@ -193,8 +193,7 @@ class _FailsAfterExchangeDB:
 def test_post_submit_persistence_failure_is_ambiguous_and_never_retries():
     submitted = []
     db = _FailsAfterExchangeDB(fail_on="SUBMITTED")
-    from market_context import ContextCache
-    barrier = ExecutionBarrier(ContextCache(), db=db)
+    barrier = ExecutionBarrier(_ContextCache(), db=db)
 
     with pytest.raises(RuntimeError, match="requires reconciliation"):
         barrier.execute(
@@ -218,8 +217,7 @@ def test_post_submit_event_failure_is_ambiguous_and_never_retries():
         db.events.append((intent_id, event, payload))
 
     db.save_execution_event = fail_submitted_event
-    from market_context import ContextCache
-    barrier = ExecutionBarrier(ContextCache(), db=db)
+    barrier = ExecutionBarrier(_ContextCache(), db=db)
 
     with pytest.raises(RuntimeError, match="requires reconciliation"):
         barrier.execute(
