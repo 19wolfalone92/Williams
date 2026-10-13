@@ -280,21 +280,41 @@ def _latest_confirmed_fractal(
     if level_col not in ind.columns or fractal_col not in ind.columns:
         return None
 
-    right = 2
     start = max(0, len(ind) - max(3, int(max_age_bars)))
     tick = max(float(tick_size), 0.0)
+    center_col = "confirmed_up_center_index" if direction == "LONG" else "confirmed_down_center_index"
+    group_start_col = "confirmed_up_group_start_index" if direction == "LONG" else "confirmed_down_group_start_index"
     for confirmation_i in range(len(ind) - 1, start - 1, -1):
         row = ind.iloc[confirmation_i]
         level = row.get(level_col)
         if level is None or pd.isna(level):
             continue
-        center_i = confirmation_i - right
-        if center_i < 0 or not bool(ind.iloc[center_i].get(fractal_col, False)):
+        center_value = row.get(center_col)
+        if center_value is None or pd.isna(center_value):
+            # Compatibility for older persisted/test frames. New indicator
+            # frames always carry the actual confirmation-to-pivot mapping.
+            center_i = confirmation_i - 2
+        else:
+            center_i = int(center_value)
+        if center_i < 0 or center_i >= len(ind) or not bool(ind.iloc[center_i].get(fractal_col, False)):
             continue
         center = ind.iloc[center_i]
+        group_start_value = row.get(group_start_col)
+        group_start_i = (
+            int(group_start_value)
+            if group_start_value is not None and not pd.isna(group_start_value)
+            else center_i
+        )
+        if group_start_i < 0 or group_start_i > center_i:
+            continue
+        group = ind.iloc[group_start_i:center_i + 1]
         trigger_base = float(center["high"] if direction == "LONG" else center["low"])
         trigger = trigger_base + tick if direction == "LONG" else trigger_base - tick
-        protective = float(center["low"] if direction == "LONG" else center["high"])
+        protective = float(
+            pd.to_numeric(group["low" if direction == "LONG" else "high"], errors="coerce").min()
+            if direction == "LONG"
+            else pd.to_numeric(group["high"], errors="coerce").max()
+        )
         teeth = float(row.get("teeth_shifted", 0.0) or 0.0)
 
         if current_teeth is not None:
@@ -677,25 +697,44 @@ def extract_ntd_fractal_signal_specs(
     if not math.isfinite(current_close) or current_close <= 0:
         return []
     earliest_center = max(2, len(ind) - max(3, int(max_age_bars)) - 2)
+    confirmed_col = "fractal_up_confirmed" if is_long else "fractal_down_confirmed"
+    center_col = "confirmed_up_center_index" if is_long else "confirmed_down_center_index"
+    group_start_col = "confirmed_up_group_start_index" if is_long else "confirmed_down_group_start_index"
+
+    # New indicator frames enumerate confirmed events on the actual bar close;
+    # legacy synthetic frames may only have centre markers, so retain a
+    # strictly bounded compatibility path for those test/serialized frames.
+    confirmations: list[tuple[int, int, int]] = []
+    if confirmed_col in ind.columns and center_col in ind.columns:
+        for confirmation_i in range(len(ind) - 1, max(-1, earliest_center - 1), -1):
+            if not bool(ind.iloc[confirmation_i].get(confirmed_col, False)):
+                continue
+            center_value = ind.iloc[confirmation_i].get(center_col)
+            if center_value is None or pd.isna(center_value):
+                continue
+            center_i = int(center_value)
+            group_value = ind.iloc[confirmation_i].get(group_start_col)
+            group_start_i = int(group_value) if group_value is not None and not pd.isna(group_value) else center_i
+            confirmations.append((confirmation_i, center_i, group_start_i))
+    else:
+        confirmations = [
+            (center_i + 2, center_i, center_i)
+            for center_i in range(len(ind) - 3, earliest_center - 1, -1)
+            if bool(ind.iloc[center_i].get(fractal_col, False))
+        ]
 
     # Most recent still-pending external fractal is recoverable after restart.
     # A level that was already crossed after confirmation is deliberately not
     # re-armed: it may have triggered while the process was offline.
-    for center_i in range(len(ind) - 3, earliest_center - 1, -1):
-        if not bool(ind.iloc[center_i].get(fractal_col, False)):
+    for confirmation_i, center_i, group_start_i in confirmations:
+        if confirmation_i >= len(ind) or center_i < 0 or group_start_i < 0 or group_start_i > center_i:
             continue
-        confirmation_i = center_i + 2
         center = ind.iloc[center_i]
         confirmation = ind.iloc[confirmation_i]
         level = float(center["high"] if is_long else center["low"])
         teeth = float(confirmation.get("teeth_shifted", 0.0) or 0.0)
         if not all(math.isfinite(v) and v > 0 for v in (level, teeth)):
             continue
-        if is_long and level <= teeth:
-            continue
-        if not is_long and level >= teeth:
-            continue
-
         trigger = level + tick if is_long else level - tick
         if trigger <= 0:
             continue
@@ -721,7 +760,12 @@ def extract_ntd_fractal_signal_specs(
         signal_time = _row_time_ms(confirmation)
         if signal_time <= 0:
             continue
-        protective = float(center["low"] if is_long else center["high"])
+        group = ind.iloc[group_start_i:center_i + 1]
+        protective = float(
+            pd.to_numeric(group["low" if is_long else "high"], errors="coerce").min()
+            if is_long
+            else pd.to_numeric(group["high"], errors="coerce").max()
+        )
         if not math.isfinite(protective) or protective <= 0:
             continue
         return [SignalSpec.new(
