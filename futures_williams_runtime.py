@@ -329,43 +329,22 @@ class FuturesWilliamsScanner:
                 ).lower() == "true",
             )
         elif profile == "NTD_FIVE_DIMENSIONS":
-            # NTD requires the first valid external fractal to start a campaign.
-            # AO and AC formations are later add-ons, never stand-alone initial
-            # entries. Keep edition-specific signal chronology explicit.
-            long_specs = extract_ntd_fractal_signal_specs(
-                symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
+            # Do not advertise a partial NTD implementation as the complete
+            # five-dimension system. The standalone Balance Line trade engine
+            # (base-bar persistence, zone-adjusted extreme counts, and
+            # special-blue-light order relocation) is not yet source-verified.
+            # Keep the indicator/signal helpers available for research, but
+            # block new orders until that fifth dimension is implemented and
+            # replay-validated against NTD figures 8-7 through 8-22.
+            self.last_signal_profile_error = (
+                "BLOCKED: NTD_FIVE_DIMENSIONS is not execution-ready; "
+                "the standalone Balance Line trade engine is missing/unverified. "
+                "Use TC2_THREE_WISE_MEN for execution."
             )
-            short_specs = extract_ntd_fractal_signal_specs(
-                symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
-            )
-            current = ind.iloc[-1]
-            if bool(current.get("long_fractal_outside", False)):
-                long_specs += (
-                    extract_ntd_ao_signal_specs(
-                        symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
-                    )
-                    + extract_ntd_ac_signal_specs(
-                        symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
-                    )
-                    + extract_ntd_zone_add_on_specs(
-                        symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
-                    )
-                )
-            if bool(current.get("short_fractal_outside", False)):
-                short_specs += (
-                    extract_ntd_ao_signal_specs(
-                        symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
-                    )
-                    + extract_ntd_ac_signal_specs(
-                        symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
-                    )
-                    + extract_ntd_zone_add_on_specs(
-                        symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
-                    )
-                )
+            return []
         else:
             self.last_signal_profile_error = (
-                "WILLIAMS_SIGNAL_PROFILE must be TC2_THREE_WISE_MEN or NTD_FIVE_DIMENSIONS"
+                "WILLIAMS_SIGNAL_PROFILE must be TC2_THREE_WISE_MEN; NTD_FIVE_DIMENSIONS is research-blocked until Balance Line verification"
             )
             return []
         self.last_signal_profile_error = None
