@@ -87,6 +87,8 @@ class TradingConfig:
     no_trade_when_uncertain: bool = True
 
     risk_per_trade_pct: float = 0.0025
+    initial_entry_risk_pct: float = 0.002
+    campaign_risk_limit_pct: float = 0.006
     max_total_risk_pct: float = 0.006
     max_daily_loss_pct: float = 0.03
     max_consecutive_losses: int = 3
