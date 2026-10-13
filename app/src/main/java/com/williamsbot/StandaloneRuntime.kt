@@ -666,6 +666,7 @@ private class NativeEngine(
     @Volatile private var userStreamConnected = false
     @Volatile private var userStreamSyncRequired = true
     @Volatile private var futuresStreamReconcileRunning = false
+    @Volatile private var futuresStreamReconcilePending = false
     @Volatile private var lastUserEventMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
     @Volatile private var restMarketReady = false
@@ -4613,23 +4614,42 @@ private class NativeEngine(
     private fun scheduleFuturesStreamReconciliation(reason: String) {
         userStreamSyncRequired = true
         synchronized(this) {
-            if (futuresStreamReconcileRunning) return
+            if (futuresStreamReconcileRunning) {
+                futuresStreamReconcilePending = true
+                return
+            }
             futuresStreamReconcileRunning = true
+            futuresStreamReconcilePending = false
         }
         Thread {
             try {
-                val result = futuresCampaignCoordinator.reconcile()
-                check(result.optBoolean("ok", false)) {
-                    result.optString("blocker", "Futures reconciliation returned not-ok")
+                while (true) {
+                    synchronized(this) { futuresStreamReconcilePending = false }
+                    val result = futuresCampaignCoordinator.reconcile()
+                    check(result.optBoolean("ok", false)) {
+                        result.optString("blocker", "Futures reconciliation returned not-ok")
+                    }
+                    val repeat = synchronized(this) {
+                        if (futuresStreamReconcilePending) {
+                            true
+                        } else {
+                            userStreamSyncRequired = false
+                            futuresStreamReconcileRunning = false
+                            false
+                        }
+                    }
+                    if (!repeat) break
                 }
-                userStreamSyncRequired = false
             } catch (failure: Exception) {
                 setReconcileRequired(
                     "Futures user-stream reconciliation failed (" + reason + "): " +
                         (failure.message ?: failure.javaClass.simpleName)
                 )
             } finally {
-                synchronized(this) { futuresStreamReconcileRunning = false }
+                synchronized(this) {
+                    futuresStreamReconcileRunning = false
+                    futuresStreamReconcilePending = false
+                }
             }
         }.apply {
             isDaemon = true
