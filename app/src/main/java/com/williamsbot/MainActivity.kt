@@ -227,6 +227,7 @@ data class Status(
     val scannerError: String? = null,
     val scannerSymbols: Int = 0,
     val scannerConfiguredSymbols: Int = 10,
+    val scannerUniverse: List<String> = emptyList(),
     val scannerLongCandidates: Int = 0,
     val scannerShortCandidates: Int = 0,
     val allowLong: Boolean = false,
@@ -1237,6 +1238,12 @@ private fun DiagnosticsScreen(
                     status.scannerConfiguredSymbols + " pairs • LONG " +
                     status.scannerLongCandidates + " / SHORT " +
                     status.scannerShortCandidates + " • " + status.scanDurationMs + " ms"
+            )
+        }
+        item {
+            DiagnosticRow(
+                "Approved Futures universe",
+                status.scannerUniverse.joinToString(", ").ifBlank { "not available" }
             )
         }
         item {
@@ -3117,6 +3124,14 @@ private fun parseStatus(json: JSONObject): Status {
                 it.isNaN() || it == 0.0
             }
 
+    val scannerUniverse = mutableListOf<String>()
+    json.optJSONArray("scanner_universe")?.let { symbols ->
+        for (i in 0 until symbols.length()) {
+            val symbol = symbols.optString(i, "").trim()
+            if (symbol.isNotBlank()) scannerUniverse += symbol
+        }
+    }
+
     val executionContract = json.optJSONObject("execution_state_contract")
     return Status(
         symbol =
@@ -3234,6 +3249,7 @@ private fun parseStatus(json: JSONObject): Status {
             ),
         scannerConfiguredSymbols =
             json.optInt("scanner_configured_symbols", 10),
+        scannerUniverse = scannerUniverse.toList(),
         scannerLongCandidates =
             json.optInt("scanner_long_candidates", 0),
         scannerShortCandidates =
