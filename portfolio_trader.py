@@ -1931,8 +1931,10 @@ class MultiPositionTrader:
                     raise RuntimeError(f"invalid open trade data for {symbol}")
                 unrealized += (mark - entry) * qty
 
+            # Closed-trade pnl is already net of fees. Only entry fees on
+            # still-open positions remain unbooked in unrealized PnL.
             fees = float(self.db.conn.execute(
-                "SELECT COALESCE(SUM(fees),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
+                "SELECT COALESCE(SUM(fees),0) FROM trades WHERE exit_time IS NULL"
             ).fetchone()[0] or 0.0)
             trades_today = int(self.db.conn.execute(
                 "SELECT COUNT(*) FROM trades WHERE entry_time >= date('now')"
