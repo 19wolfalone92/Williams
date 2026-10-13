@@ -294,53 +294,8 @@ class MarketScanner:
         return True
 
     def _discover_usdt_symbols(self):
-        if not self.scan_all_usdt:
-            return list(self.symbols)
-
-        import time
-
-        now = time.monotonic()
-        if self._universe_cache and now - self._universe_cache_time < self.universe_cache_seconds:
-            return list(self._universe_cache)
-
-        payload = self.client.exchange_info()
-        items = payload.get("symbols", [])
-        result = []
-        metadata = {}
-
-        for item in items:
-            symbol = str(item.get("symbol", "")).upper()
-            if not symbol or item.get("quoteAsset") != "USDT":
-                continue
-            if self._symbol_is_valid(symbol, {symbol: item}):
-                result.append(symbol)
-                metadata[symbol] = item
-
-        result = sorted(set(result))
-        # Two-stage universe selection: exchangeInfo gives correctness; the
-        # bulk 24h ticker selects the most liquid symbols for expensive candle
-        # analysis. This keeps broad coverage without spending latency on
-        # inactive pairs.
-        if self.liquidity_preselect:
-            try:
-                tickers = self.client.ticker_24hr()
-                volume = {
-                    str(x.get("symbol", "")).upper(): float(x.get("quoteVolume", 0) or 0)
-                    for x in tickers if isinstance(x, dict)
-                }
-                result.sort(key=lambda s: volume.get(s, 0.0), reverse=True)
-                result = result[: self.liquidity_preselect]
-            except Exception as exc:
-                log.warning("Liquidity preselect unavailable: %s", exc)
-
-        if self.scan_max_symbols:
-            result = result[: self.scan_max_symbols]
-
-        self._universe_cache = result
-        self._universe_metadata = {symbol: metadata[symbol] for symbol in result if symbol in metadata}
-        self._universe_cache_time = now
-        self.symbols = list(result)
-        return result
+        """Compatibility shim: return the configured allowlist, never exchange-wide pairs."""
+        return list(self.symbols)
 
     def _resolve_symbols(self):
         if self.explicit_symbols:
