@@ -192,7 +192,8 @@ class MockExchange:
         for row in self.orders:
             if row["orderId"] == order["orderId"]:
                 row["status"] = "CANCELED"
-        return copy.deepcopy(order)
+                return copy.deepcopy(row)
+        raise RuntimeError("mock order disappeared during cancellation")
 
     def set_price(self, symbol, price):
         self.prices[symbol] = float(price)
