@@ -373,6 +373,97 @@ def extract_ntd_ao_signal_specs(
     )]
 
 
+def extract_ntd_ac_signal_specs(
+    symbol: str,
+    ind: pd.DataFrame,
+    *,
+    side: str,
+    timeframe: str,
+    tick_size: float,
+    max_age_bars: int = 10,
+) -> list[SignalSpec]:
+    """Extract New Trading Dimensions AC acceleration entries.
+
+    AC zero is not treated as a standalone signal. It changes the required
+    number of same-direction AC bars: two when AC is with the trade (positive
+    for LONG, negative for SHORT), three when it is against the trade. The
+    sequence must begin after an opposite-colour AC bar.
+    """
+    direction = str(side or "").upper()
+    if direction not in {"LONG", "SHORT"} or ind is None or len(ind) < 4:
+        return []
+    required = {"ac", "high", "low", "close"}
+    if not required.issubset(ind.columns):
+        return []
+
+    ac = pd.to_numeric(ind["ac"], errors="coerce").to_numpy(dtype=float)
+    if not math.isfinite(ac[-1]):
+        return []
+    green = [False] * len(ac)
+    red = [False] * len(ac)
+    for i in range(1, len(ac)):
+        if math.isfinite(ac[i]) and math.isfinite(ac[i - 1]):
+            green[i] = ac[i] > ac[i - 1]
+            red[i] = ac[i] < ac[i - 1]
+
+    is_long = direction == "LONG"
+    order_side = "BUY" if is_long else "SELL"
+    start = max(1, len(ind) - max(2, int(max_age_bars)))
+    candidates: list[tuple[int, int]] = []
+
+    for i in range(len(ind) - 1, start - 1, -1):
+        same = green if is_long else red
+        opposite = red if is_long else green
+        if not same[i]:
+            continue
+        with_momentum = ac[i] > 0 if is_long else ac[i] < 0
+        needed = 2 if with_momentum else 3
+        run = 0
+        j = i
+        while j >= 0 and same[j]:
+            run += 1
+            j -= 1
+        # The required sequence must follow a visible acceleration reversal.
+        if run >= needed and j >= 0 and opposite[j]:
+            candidates.append((i, needed))
+
+    if not candidates:
+        return []
+    signal_i, _ = candidates[0]
+    row = ind.iloc[signal_i]
+    current = ind.iloc[-1]
+    tick = max(float(tick_size), 1e-12)
+    high = float(row["high"])
+    low = float(row["low"])
+    current_close = float(current["close"])
+    trigger = high + tick if is_long else low - tick
+    if trigger <= 0 or (is_long and current_close >= trigger) or (not is_long and current_close <= trigger):
+        return []
+
+    signal_time = _row_time_ms(row)
+    return [SignalSpec.new(
+        symbol=symbol,
+        side=order_side,
+        signal_type=SignalType.AC_SIGNAL,
+        role=SignalRole.ENTRY,
+        timeframe=timeframe,
+        signal_bar_time_ms=signal_time,
+        trigger_price=trigger,
+        protective_reference=low if is_long else high,
+        trigger_buffer_ticks=1,
+        teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
+        alligator_bullish=bool(row.get("bullish_alligator", False)),
+        alligator_awake=bool(row.get("alligator_awake", False)),
+        reason=(
+            "NTD AC acceleration signal; "
+            + ("BUY STOP above" if is_long else "SELL STOP below")
+            + " the signal bar"
+        ),
+        source_candle_index=signal_i,
+        expires_at_ms=_expiry(signal_time, timeframe, max_age_bars),
+    )]
+
+
 def extract_long_signal_specs(
     symbol: str,
     ind: pd.DataFrame,
