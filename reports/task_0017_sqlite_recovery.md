@@ -22,3 +22,10 @@
 - Campaign exposure/protection consistency across runtimes.
 
 Android SQLite and Python SQLite are distinct stores without a common atomic transaction. A successful write to one does not guarantee the other was written. P0 remains open.
+
+## TASK 001.12 exact-HEAD addendum
+
+- At SHA `4e7ad93990b4b9d3b5291bed9d83909fbfac3bcf`, production `db.py` uses `BEGIN IMMEDIATE` for the migration transaction, serializing schema inspection/ALTER operations before applying column migrations and schema-version update. Migration failure rolls back that transaction; constructor closes the connection and re-raises.
+- FI-13B repeats 12 independent temporary-database initialization races and checks worker termination, zero recorded exceptions, both successes, `PRAGMA integrity_check='ok'`, and integrity after reopen. Campaign Python tests passed 262/262 on run [38341931762](https://github.com/19wolfalone92/Williams/actions/runs/38341931762).
+- FI-13 repeats 12 same-process/two-thread claims using independent connections; exactly one claim and one exchange observation are asserted, with zero fake mutations and persisted order identity.
+- Remaining gaps: true multi-process races, process termination during each migration DDL/DML boundary, explicit preservation assertions for populated legacy tables under interrupted migration, lock-timeout/non-lock SQLite error injection, and lease expiry/loss while reconciliation is in flight. P0 remains open.
