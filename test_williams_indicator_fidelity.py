@@ -125,3 +125,26 @@ def test_wm3_consumers_use_actual_confirmation_and_whole_plateau_stop():
     assert specs[0].signal_bar_time_ms == ind.iloc[6]["open_time_ms"]
     assert specs[0].trigger_price == 12.1
     assert specs[0].protective_reference == 10.0
+
+
+def test_balance_line_and_profitunity_macd_components_are_explicit():
+    highs = [100 + (i * 0.05) ** 2 + 1 for i in range(80)]
+    lows = [h - 2.0 for h in highs]
+    ind = calculate_indicators(make_frame(highs, lows), config_from_env({}))
+    pd.testing.assert_series_equal(
+        ind["balance_line"], ind["jaw_shifted"], check_names=False
+    )
+    pd.testing.assert_series_equal(
+        ind["profitunity_macd_line"], ind["ao"], check_names=False
+    )
+    pd.testing.assert_series_equal(
+        ind["profitunity_macd_histogram"], ind["ac"], check_names=False
+    )
+    pd.testing.assert_series_equal(
+        ind["profitunity_macd_line"] - ind["profitunity_macd_signal"],
+        ind["profitunity_macd_histogram"],
+        check_names=False,
+    )
+    assert set(ind["balance_line_side"].unique()) <= {
+        "ABOVE", "BELOW", "ON", "UNKNOWN"
+    }
