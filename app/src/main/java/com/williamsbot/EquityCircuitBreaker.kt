@@ -3,13 +3,20 @@ package com.williamsbot
 /**
  * Hard daily equity-loss gate.
  *
- * It blocks new autonomous entries once equity is down by the configured
- * percentage from the UTC start-of-day baseline. It does NOT liquidate
- * protected positions automatically; existing OCO protection remains active.
+ * The UTC-day baseline and trip latch are persisted by the caller. A process
+ * restart must never reset a daily loss circuit breaker inside the same day.
  */
 class EquityCircuitBreaker(
-    private val maxDrawdownPct: Double = 0.03
+    private val maxDrawdownPct: Double = 0.03,
+    loadState: (() -> PersistedState)? = null,
+    private val saveState: ((PersistedState) -> Boolean)? = null
 ) {
+    data class PersistedState(
+        val dayKey: String,
+        val startEquity: Double,
+        val tripped: Boolean
+    )
+
     data class Snapshot(
         val equity: Double,
         val startEquity: Double,
@@ -21,10 +28,39 @@ class EquityCircuitBreaker(
     private var startEquity = 0.0
     private var tripped = false
 
+    init {
+        require(maxDrawdownPct.isFinite() && maxDrawdownPct in 0.0..1.0) {
+            "maxDrawdownPct must be finite and in [0, 1]"
+        }
+        val saved = loadState?.invoke()
+        if (saved != null) {
+            require(saved.startEquity.isFinite() && saved.startEquity >= 0.0) {
+                "persisted daily start equity is invalid"
+            }
+            dayKey = saved.dayKey
+            startEquity = saved.startEquity
+            tripped = saved.tripped
+        }
+    }
+
+    private fun persistOrTrip() {
+        val saver = saveState ?: return
+        try {
+            val committed = saver(PersistedState(dayKey, startEquity, tripped))
+            if (!committed) throw IllegalStateException("daily breaker state commit failed")
+        } catch (error: Exception) {
+            // Do not admit new risk if the daily baseline/latch cannot be saved.
+            tripped = true
+            throw IllegalStateException("daily breaker persistence unavailable", error)
+        }
+    }
+
     @Synchronized
     fun observe(equity: Double, nowMs: Long = System.currentTimeMillis()): Snapshot {
         if (!equity.isFinite() || equity <= 0.0) {
-            return Snapshot(equity, startEquity, 0.0, tripped)
+            tripped = true
+            persistOrTrip()
+            return Snapshot(equity, startEquity, 0.0, true)
         }
 
         val day = java.time.Instant.ofEpochMilli(nowMs)
@@ -45,6 +81,7 @@ class EquityCircuitBreaker(
             tripped = true
         }
 
+        persistOrTrip()
         return Snapshot(
             equity = equity,
             startEquity = startEquity,
@@ -54,15 +91,8 @@ class EquityCircuitBreaker(
     }
 
     @Synchronized
-    fun reset(equity: Double, nowMs: Long = System.currentTimeMillis()) {
-        dayKey = java.time.Instant.ofEpochMilli(nowMs)
-            .atZone(java.time.ZoneOffset.UTC)
-            .toLocalDate()
-            .toString()
-        startEquity = equity.coerceAtLeast(0.0)
-        tripped = false
-    }
+    fun isTripped(): Boolean = tripped
 
     @Synchronized
-    fun isTripped(): Boolean = tripped
+    fun persistedState(): PersistedState = PersistedState(dayKey, startEquity, tripped)
 }
