@@ -43,7 +43,56 @@ class BinanceUsdMFuturesApi(
         require(apiSecret.isNotBlank()) { "Futures API secret is required" }
     }
 
+    fun ping(): JSONObject = requestObject("GET", "/fapi/v1/ping")
+
+    fun serverTime(): JSONObject = requestObject("GET", "/fapi/v1/time")
+
+    fun exchangeInfo(symbol: String? = null): JSONObject {
+        val params = if (symbol.isNullOrBlank()) emptyMap() else mapOf("symbol" to symbol.uppercase())
+        return requestObject("GET", "/fapi/v1/exchangeInfo", params)
+    }
+
+    fun tickerPrice(symbol: String): JSONObject =
+        requestObject("GET", "/fapi/v1/ticker/price", mapOf("symbol" to symbol.uppercase()))
+
+    fun klines(symbol: String, interval: String, limit: Int = 200): JSONArray {
+        require(limit in 1..1500) { "Futures kline limit must be in [1, 1500]" }
+        return requestArray(
+            "GET", "/fapi/v1/klines",
+            mapOf("symbol" to symbol.uppercase(), "interval" to interval, "limit" to limit.toString())
+        )
+    }
+
     fun account(): JSONObject = requestObject("GET", "/fapi/v2/account", signed = true)
+
+    fun positionMode(): JSONObject =
+        requestObject("GET", "/fapi/v1/positionSide/dual", signed = true)
+
+    fun changeLeverage(symbol: String, leverage: Int): JSONObject {
+        require(leverage in 1..125) { "Futures leverage must be in [1, 125]" }
+        return requestObject(
+            "POST", "/fapi/v1/leverage",
+            mapOf("symbol" to symbol.uppercase(), "leverage" to leverage.toString()),
+            signed = true
+        )
+    }
+
+    fun changeMarginType(symbol: String, marginType: String): JSONObject {
+        val mode = marginType.uppercase()
+        require(mode in setOf("ISOLATED", "CROSSED")) { "Margin type must be ISOLATED or CROSSED" }
+        return requestObject(
+            "POST", "/fapi/v1/marginType",
+            mapOf("symbol" to symbol.uppercase(), "marginType" to mode),
+            signed = true
+        )
+    }
+
+    fun userTrades(symbol: String, orderId: Long? = null, limit: Int = 1000): JSONArray {
+        require(limit in 1..1000) { "Futures user-trades limit must be in [1, 1000]" }
+        val params = linkedMapOf("symbol" to symbol.uppercase(), "limit" to limit.toString())
+        if (orderId != null) params["orderId"] = orderId.toString()
+        return requestArray("GET", "/fapi/v1/userTrades", params, signed = true)
+    }
 
     fun positionRisk(symbol: String? = null): JSONArray {
         val params = if (symbol.isNullOrBlank()) emptyMap() else mapOf("symbol" to symbol.uppercase())
