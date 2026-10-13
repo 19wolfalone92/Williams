@@ -256,6 +256,7 @@ class ExecutionBarrier:
                 "CAMPAIGN_EMERGENCY_EXIT",
                 "CAMPAIGN_EXIT_CANCEL_PROTECTION",
                 "CAMPAIGN_PROTECTION_CANCEL",
+                "CAMPAIGN_ENTRY_CANCEL",
                 "CAMPAIGN_PROTECTION",
                 "PROTECTION",
             }
