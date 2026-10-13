@@ -35,6 +35,8 @@ def main() -> None:
         "execution_barrier.py",
         "williams_signals.py",
         "test_testnet_release_gate.py",
+        "risk_engine.py",
+        "test_risk_engine.py",
     )
     for path in core_files:
         ast.parse(read(path), filename=path)
@@ -107,6 +109,16 @@ def main() -> None:
         "def arm_add_on",
     ):
         must(engine, needle, "campaign_engine.py")
+
+    risk = read("risk_engine.py")
+    must(
+        risk,
+        "structural invalidation stop is required; ATR fallback is forbidden",
+        "risk_engine.py",
+    )
+    must(risk, "stop_price = structural_stop", "risk_engine.py")
+    must_not(risk, "entry - fallback_stop_distance", "risk_engine.py")
+    must_not(risk, "entry + fallback_stop_distance", "risk_engine.py")
 
     strategy = read("strategy.py")
     for needle in (
