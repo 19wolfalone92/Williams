@@ -163,3 +163,31 @@ def test_daily_risk_gate_runs_before_pending_entry_adoption():
         if isinstance(item, tuple) and item[0] == "pending_recovery"
     )
     assert ("pending_recovery", "DAILY_RISK_GATE_BLOCKED") in events
+
+
+def test_missing_same_day_baseline_fails_closed_without_clearing_trip_latch():
+    db = _DB(start_equity=1000.0, realized=0.0)
+    db.state["daily_loss_tripped"] = "1"
+    del db.state["daily_start_equity"]
+
+    allowed, reason = EquityCircuitBreaker(0.03).check(
+        db, current_equity_quote=1200.0
+    )
+
+    assert allowed is False
+    assert "baseline unavailable" in reason
+    assert db.state["daily_loss_tripped"] == "1"
+
+
+def test_trip_latch_without_day_key_fails_closed():
+    db = _DB(start_equity=1000.0, realized=0.0)
+    db.state.pop("daily_risk_day", None)
+    db.state["daily_loss_tripped"] = "1"
+
+    allowed, reason = EquityCircuitBreaker(0.03).check(
+        db, current_equity_quote=1200.0
+    )
+
+    assert allowed is False
+    assert "baseline unavailable" in reason
+    assert db.state["daily_loss_tripped"] == "1"
