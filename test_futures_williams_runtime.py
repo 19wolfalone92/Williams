@@ -493,3 +493,13 @@ def test_dry_run_still_scans_market_data_but_never_arms_orders():
     assert runtime.db.events[-1][1] == "futures_dry_run_cycle"
     assert "no strategy orders or exits submitted" in runtime.db.events[-1][2]
 
+
+
+def test_tc2_wm1_is_not_blocked_by_directional_htf_confirmation_policy():
+    from futures_williams_runtime import _requires_directional_htf_confirmation
+
+    # WM1 is the early reversal signal. Requiring an already-aligned HTF trend
+    # would turn it into a late confirmation entry rather than the book's WM1.
+    assert _requires_directional_htf_confirmation(SignalType.REVERSAL) is False
+    assert _requires_directional_htf_confirmation(SignalType.SUPER_AO) is True
+    assert _requires_directional_htf_confirmation(SignalType.FRACTAL) is True
