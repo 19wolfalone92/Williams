@@ -1,5 +1,6 @@
 import os
 import json, sqlite3
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -16,7 +17,7 @@ class Database:
         try:
             self.conn.row_factory = sqlite3.Row
             self.conn.execute('PRAGMA busy_timeout=20000')
-            self.conn.execute('PRAGMA journal_mode=WAL')
+            self._enable_wal_with_retry()
             self.conn.execute('PRAGMA synchronous=NORMAL')
             self._transaction_active = False
             self.init()
@@ -24,6 +25,36 @@ class Database:
             # Do not leak a connection/lock when schema initialization fails.
             self.conn.close()
             raise
+
+    def _enable_wal_with_retry(self, timeout_seconds=20.0):
+        """Enable WAL safely when multiple processes initialize the same DB.
+
+        SQLite may return SQLITE_BUSY/SQLITE_LOCKED immediately for the
+        journal-mode transition even when busy_timeout is configured. Retry
+        only those transient lock errors; propagate all other failures and
+        fail initialization rather than silently running with an unknown mode.
+        """
+        deadline = time.monotonic() + float(timeout_seconds)
+        delay = 0.025
+        while True:
+            try:
+                row = self.conn.execute('PRAGMA journal_mode=WAL').fetchone()
+                if row is None or str(row[0]).lower() != 'wal':
+                    raise sqlite3.OperationalError(
+                        f"SQLite did not enable WAL mode (reported {None if row is None else row[0]!r})"
+                    )
+                return
+            except sqlite3.OperationalError as exc:
+                message = str(exc).lower()
+                if not any(token in message for token in ('database is locked', 'database is busy', 'database table is locked')):
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise sqlite3.OperationalError(
+                        f"timed out enabling SQLite WAL after {timeout_seconds:.1f}s due to concurrent database access"
+                    ) from exc
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, 0.5)
 
     @contextmanager
     def transaction(self):
