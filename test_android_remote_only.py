@@ -58,6 +58,21 @@ def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
     assert "https://demo-fapi.binance.com" in runtime
 
 
+def test_android_reconcile_and_kill_latches_are_sqlite_durable():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    store = _read(ANDROID / "java/com/williamsbot/FuturesExecutionStore.kt")
+
+    assert 'executionStore.readState("reconcile_required")' in runtime
+    assert 'executionStore.readState("kill_latched")' in runtime
+    assert 'persistSafetyFlag("reconcile_required", true)' in runtime
+    assert 'persistSafetyFlag("kill_latched", true)' in runtime
+    assert "SQLite safety-latch write failed" in runtime
+    assert 'check(persistSafetyFlag("kill_latched", false))' in runtime
+    assert 'check(persistSafetyFlag("reconcile_required", !ok))' in runtime
+    assert '"reconcile_required"' in runtime and '"kill_latched"' in runtime
+    assert "CREATE TABLE IF NOT EXISTS runtime_state" in store
+
+
 def test_android_campaign_and_intents_are_sqlite_backed():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
