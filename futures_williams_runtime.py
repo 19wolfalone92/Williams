@@ -25,7 +25,11 @@ import uuid
 from db import Database
 from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache
-from strategy import calculate_indicators, config_from_env
+from strategy import (
+    calculate_indicators,
+    canonical_indicator_config_from_env,
+    config_from_env,
+)
 from williams_signals import (
     extract_long_signal_specs,
     extract_short_signal_specs,
@@ -149,7 +153,7 @@ class FuturesWilliamsScanner:
         self.client = client
         self.interval = str(interval).lower()
         self.htf_interval = str(htf_interval).lower()
-        self.config = config_from_env()
+        self.config = canonical_indicator_config_from_env()
         self.symbols: list[str] = []
         self.configured_symbols = len(DEFAULT_FUTURES_SYMBOLS)
         self.last_scan_status: dict = {
@@ -2319,7 +2323,7 @@ class FuturesWilliamsRuntime:
             ntd_profile = profile == "NTD_FIVE_DIMENSIONS"
 
             if ntd_profile and {"high", "low", "close"}.issubset(closed.columns) and len(closed) >= 40:
-                indicator_frame = calculate_indicators(closed, config_from_env())
+                indicator_frame = calculate_indicators(closed, canonical_indicator_config_from_env())
                 last = indicator_frame.iloc[-1]
                 close_price = float(last.get("close", 0.0) or 0.0)
                 teeth_price = float(last.get("teeth_shifted", 0.0) or 0.0)
