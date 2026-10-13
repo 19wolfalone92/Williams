@@ -6556,6 +6556,55 @@ private class NativeEngine(
         return out.distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
     }
 
+    /**
+     * Bearish mirror of the confirmed Williams entry families.
+     *
+     * Reflecting OHLC around a fixed positive constant reverses price direction while
+     * preserving candle geometry and indicator ordering. We reuse the same confirmed
+     * fractal / AO / Alligator implementation, then map trigger and invalidation levels
+     * back to real prices. This is signal generation only: the legacy Spot execution
+     * path is deliberately not allowed to submit these or any other orders.
+     */
+    private fun shortCampaignSignals(
+        symbol: String,
+        candles: List<CandleN>,
+        frame: String,
+        tick: Double
+    ): List<CampaignSignalN> {
+        if (candles.size < 45 || tick <= 0.0) return emptyList()
+        val reflection = candles.maxOf { it.h } + candles.minOf { it.l }
+        if (!reflection.isFinite() || reflection <= 0.0) return emptyList()
+        val reflected = candles.map { candle ->
+            CandleN(
+                t = candle.t,
+                o = reflection - candle.o,
+                h = reflection - candle.l,
+                l = reflection - candle.h,
+                c = reflection - candle.c,
+                v = candle.v
+            )
+        }
+        return longCampaignSignals(symbol, reflected, frame, tick).mapNotNull { signal ->
+            val trigger = reflection - signal.triggerPrice
+            val stop = reflection - signal.protectivePrice
+            // A short entry must trigger below current price and its protective stop
+            // must be above entry. Invalid reflected levels are rejected, never guessed.
+            val current = candles.last().c
+            if (!trigger.isFinite() || !stop.isFinite() ||
+                trigger <= 0.0 || stop <= trigger || trigger >= current
+            ) return@mapNotNull null
+            signal.copy(
+                signalId = signal.signalId.replace(":",
+                    ":SHORT:", ignoreCase = false),
+                type = "SHORT_" + signal.type,
+                triggerPrice = trigger,
+                protectivePrice = stop,
+                invalidationPrice = stop,
+                reason = "Bearish mirror of confirmed Williams setup: " + signal.reason
+            )
+        }.distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
+    }
+
     private fun analyseBase(
         symbol: String,
         candles: List<CandleN>,
@@ -6600,12 +6649,22 @@ private class NativeEngine(
         val campaignRules = runCatching { symbolFilters(symbol) }.getOrNull()
         val campaignTick = campaignRules?.tick ?: 0.0
         val campaignSignals = if (campaignEngineEnabled && campaignTick > 0.0) {
-            longCampaignSignals(
-                symbol = symbol,
-                candles = workCandles,
-                frame = campaignExecutionTimeframe,
-                tick = campaignTick
-            )
+            // Build both directional hypotheses from the same closed H1 series.
+            // Execution remains fail-closed until the native Futures campaign path,
+            // risk sizing, reconciliation and protective-order lifecycle are integrated.
+            (
+                longCampaignSignals(
+                    symbol = symbol,
+                    candles = workCandles,
+                    frame = campaignExecutionTimeframe,
+                    tick = campaignTick
+                ) + shortCampaignSignals(
+                    symbol = symbol,
+                    candles = workCandles,
+                    frame = campaignExecutionTimeframe,
+                    tick = campaignTick
+                )
+            ).distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
         } else {
             emptyList()
         }
