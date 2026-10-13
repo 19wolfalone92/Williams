@@ -29,3 +29,8 @@ P0 remains open. No live credentials or orders used.
 - FI-13 code repeats 12 fresh SQLite databases with two independent SQLite connections and two threads. Its assertions include exactly one claim, one exchange observation, zero fake-exchange mutations, expected persisted order ID and terminal durable state. This is thread-level, same-process evidence, not a multi-process proof.
 - Recovery validation still rejects conflicting persisted exchange order IDs, incomplete trade evidence and unsupported compound cancel/cancel-replace operations. Unknown outcomes remain unresolved; these cases are fail-closed, not fully implemented compound recovery.
 - Not yet proven: lease expiry during a live reconciliation, process kill across all transaction boundaries, active/partial/terminal cases under true multiprocessing, or Android/Python cross-runtime atomicity. No live Binance mutation was used.
+
+
+## TASK 001.12 Android evidence correction
+
+At code SHA `b6d43d439a1c49c577570d36332bbe1c60ff7477`, Campaign Android job 115116130632 in [run 38342390656](https://github.com/19wolfalone92/Williams/actions/runs/38342390656) succeeded, including unit tests and lint. The exact APK hash is `e9ce68cfeac340c09979463aa5a2e0b1a346d08d19403e163a2d99589f254ac6`; provenance matches `b6d43d439a1c49c577570d36332bbe1c60ff7477`. This validates build/runtime tests, not the missing cross-process recovery matrix. Recovery unknown states remain fail-closed; compound cancel/cancel-replace remains unsupported. A later report-only HEAD requires its own exact-HEAD verification.
