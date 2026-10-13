@@ -228,7 +228,7 @@ def extract_long_signal_specs(
     max_reversal_age_bars: int = 20,
     point_zero_confirmed: bool = False,
     point_zero_score: int = 0,
-    require_point_zero_for_reversal: bool = True,
+    require_point_zero_for_reversal: bool = False,
 ) -> list[SignalSpec]:
     """Extract all presently armable LONG signals from closed candles."""
     if ind is None or ind.empty:
@@ -280,7 +280,7 @@ def extract_long_signal_specs(
                     point_zero_confirmed=bool(point_zero_confirmed),
                     point_zero_score=int(point_zero_score),
                     context_versions=versions,
-                    reason="WM1 bullish reversal + increasing angulation + Point Zero; BUY STOP above signal bar",
+                    reason="WM1 bullish reversal + increasing angulation; BUY STOP above signal bar",
                     source_candle_index=i,
                     expires_at_ms=_expiry(_row_time_ms(row), timeframe, max_reversal_age_bars),
                 )
@@ -418,7 +418,7 @@ def extract_short_signal_specs(
                     wave_exhaustion_risk=float(wave_exhaustion_risk),
                     htf_confirmed=bool(htf_confirmed),
                     context_versions=versions,
-                    reason="WM1 bearish reversal + increasing angulation + Point Zero; SELL STOP below signal bar",
+                    reason="WM1 bearish reversal + increasing angulation; SELL STOP below signal bar",
                     source_candle_index=i,
                     expires_at_ms=_expiry(_row_time_ms(row), timeframe, 20),
                 )
