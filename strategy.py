@@ -55,10 +55,10 @@ def calculate_indicators(df, cfg):
     if x.empty:
         return x
 
-    # Binance Spot exposes traded volume rather than the historical
-    # tick-count volume used in Williams' original MFI. Therefore the
-    # market-facilitation field below is explicitly a proxy and is never an
-    # execution requirement by itself.
+    # Binance kline volume/trade-count fields are not automatically identical
+    # to the historical tick-volume input in Williams' original MFI. The
+    # market-facilitation field below is therefore explicitly a proxy and is
+    # never an execution requirement by itself.
     median = (x["high"] + x["low"]) / 2
 
     # Williams Alligator: 13/8, 8/5, 5/3 smoothed displaced lines.
