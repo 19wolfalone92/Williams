@@ -149,7 +149,7 @@ class FuturesWilliamsScanner:
         self.last_scan_status: dict = {
             "state": "NOT_RUN",
             "reason": None,
-            "configured_symbols": 0,
+            "configured_symbols": self.configured_symbols,
             "evaluated_symbols": 0,
             "symbols": [],
             "failures": {},
@@ -440,7 +440,7 @@ class FuturesWilliamsScanner:
                 "state": "BLOCKED",
                 "reason": "INVALID_WILLIAMS_SIGNAL_PROFILE",
                 "signal_profile": profile,
-                "configured_symbols": 10,
+                "configured_symbols": self.configured_symbols,
                 "evaluated_symbols": 0,
             }
             return []
