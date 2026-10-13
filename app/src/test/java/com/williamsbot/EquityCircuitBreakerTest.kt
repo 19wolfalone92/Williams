@@ -37,4 +37,47 @@ class EquityCircuitBreakerTest {
     }
 
 
+
+    @Test
+    fun dailyBaselineAndTripLatchSurviveRuntimeRecreation() {
+        var saved: EquityCircuitBreaker.PersistedState? = null
+        val first = EquityCircuitBreaker(
+            maxDrawdownPct = 0.03,
+            loadState = { saved ?: EquityCircuitBreaker.PersistedState("", 0.0, false) },
+            saveState = { state -> saved = state; true }
+        )
+        first.observe(1000.0, 1_000L)
+        assertTrue(first.observe(970.0, 2_000L).tripped)
+
+        val restarted = EquityCircuitBreaker(
+            maxDrawdownPct = 0.03,
+            loadState = { saved ?: error("state not persisted") },
+            saveState = { state -> saved = state; true }
+        )
+        assertTrue(restarted.observe(995.0, 3_000L).tripped)
+        assertTrue(saved!!.tripped)
+        assertTrue(saved!!.startEquity == 1000.0)
+    }
+
+    @Test
+    fun persistenceFailureTripsBreakerAndThrows() {
+        val breaker = EquityCircuitBreaker(
+            maxDrawdownPct = 0.03,
+            loadState = { EquityCircuitBreaker.PersistedState("", 0.0, false) },
+            saveState = { false }
+        )
+        try {
+            breaker.observe(1000.0, 1_000L)
+            throw AssertionError("Expected persistence failure")
+        } catch (expected: IllegalStateException) {
+            assertTrue(breaker.isTripped())
+        }
+    }
+
+    @Test
+    fun invalidEquityFailsClosed() {
+        val breaker = EquityCircuitBreaker()
+        assertTrue(breaker.observe(Double.NaN, 1_000L).tripped)
+        assertTrue(breaker.isTripped())
+    }
 }
