@@ -593,60 +593,64 @@ def test_fi_13_concurrent_recovery_workers_do_not_duplicate_exchange_observation
 
 
 def test_fi_13b_concurrent_database_initialization_is_diagnostic_and_durable(tmp_path):
-    """Concurrent schema initialization must either succeed or report full errors."""
+    """Repeated concurrent schema initialization must serialize durably."""
     import threading
     import traceback
 
-    path = str(tmp_path / "fi13-concurrent-init.sqlite3")
-    start = threading.Barrier(3)
-    successes = []
-    failures = []
-    lock = threading.Lock()
+    for attempt in range(12):
+        path = str(tmp_path / f"fi13-concurrent-init-{attempt}.sqlite3")
+        start = threading.Barrier(3)
+        successes = []
+        failures = []
+        lock = threading.Lock()
 
-    def initialize(owner):
-        stage = "worker-start"
-        try:
-            stage = "start-barrier"
-            start.wait(timeout=10)
-            stage = "database-init"
-            db = Database(path)
+        def initialize(owner):
+            stage = "worker-start"
             try:
-                stage = "integrity-check"
-                integrity = db.conn.execute("PRAGMA integrity_check").fetchone()[0]
-                assert integrity == "ok", f"unexpected SQLite integrity result: {integrity!r}"
+                stage = "start-barrier"
+                start.wait(timeout=10)
+                stage = "database-init"
+                db = Database(path)
+                try:
+                    stage = "integrity-check"
+                    integrity = db.conn.execute("PRAGMA integrity_check").fetchone()[0]
+                    assert integrity == "ok", f"unexpected SQLite integrity result: {integrity!r}"
+                    with lock:
+                        successes.append(owner)
+                finally:
+                    db.close()
+            except Exception as exc:
                 with lock:
-                    successes.append(owner)
-            finally:
-                db.close()
-        except Exception as exc:
-            with lock:
-                failures.append({
-                    "owner": owner,
-                    "stage": stage,
-                    "type": type(exc).__name__,
-                    "message": str(exc),
-                    "traceback": traceback.format_exc(),
-                })
-    
-    first = threading.Thread(target=initialize, args=("init-a",), daemon=True)
-    second = threading.Thread(target=initialize, args=("init-b",), daemon=True)
-    first.start()
-    second.start()
-    try:
-        start.wait(timeout=10)
-    except threading.BrokenBarrierError:
-        pass
-    first.join(timeout=10)
-    second.join(timeout=10)
+                    failures.append({
+                        "attempt": attempt,
+                        "owner": owner,
+                        "stage": stage,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                        "traceback": traceback.format_exc(),
+                    })
 
-    assert not first.is_alive() and not second.is_alive(), (
-        f"database initialization workers did not terminate; failures={failures!r}"
-    )
-    assert failures == [], f"concurrent database initialization failed: {failures!r}"
-    assert sorted(successes) == ["init-a", "init-b"]
-    with Database(path) as verify:
-        assert verify.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        first = threading.Thread(target=initialize, args=("init-a",), daemon=True)
+        second = threading.Thread(target=initialize, args=("init-b",), daemon=True)
+        first.start()
+        second.start()
+        try:
+            start.wait(timeout=10)
+        except threading.BrokenBarrierError:
+            pass
+        first.join(timeout=10)
+        second.join(timeout=10)
 
+        assert not first.is_alive() and not second.is_alive(), (
+            f"database initialization workers did not terminate on attempt {attempt}; "
+            f"failures={failures!r}"
+        )
+        assert failures == [], (
+            f"concurrent database initialization failed on attempt {attempt}: {failures!r}"
+        )
+        assert sorted(successes) == ["init-a", "init-b"]
+        with Database(path) as verify:
+            assert verify.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 def test_recovery_refuses_conflicting_exchange_order_id_without_mutation(tmp_path):
     """A persisted exchange order ID is immutable evidence, not a hint."""
