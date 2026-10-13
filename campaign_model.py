@@ -61,6 +61,8 @@ class SignalType(str, Enum):
     AO_ZERO_LINE = "AO_ZERO_LINE"
     AO_TWIN_PEAKS = "AO_TWIN_PEAKS"
     AC_SIGNAL = "AC_SIGNAL"
+    # NTD Zones are continuation/add-on events, not standalone initial entries.
+    ZONE_ADD_ON = "ZONE_ADD_ON"
 
 
 class SignalRole(str, Enum):
