@@ -57,15 +57,20 @@ class Database:
                 delay = min(delay * 2, 0.5)
 
     @contextmanager
-    def transaction(self):
-        """Atomic transaction for multi-step DB operations."""
+    def transaction(self, *, immediate=False):
+        """Atomic transaction for multi-step DB operations.
+
+        Schema migration uses BEGIN IMMEDIATE so competing initializers
+        serialize before inspecting/altering schema. A deferred BEGIN allows
+        both initializers to read the same old schema and race on ALTER TABLE.
+        """
         if self._transaction_active:
             yield self
             return
 
         self._transaction_active = True
         try:
-            self.conn.execute('BEGIN')
+            self.conn.execute('BEGIN IMMEDIATE' if immediate else 'BEGIN')
             yield self
             self.conn.commit()
         except Exception:
@@ -310,7 +315,7 @@ class Database:
         ''')
         # Schema migration and version marker are one transaction. A failure
         # halfway through ALTER TABLE operations must leave the old schema intact.
-        with self.transaction():
+        with self.transaction(immediate=True):
             self._migrate_trade_columns()
             self._migrate_execution_intent_columns()
             self.state_set('schema_version', self.SCHEMA_VERSION)
