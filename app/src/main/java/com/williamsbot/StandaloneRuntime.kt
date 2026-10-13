@@ -569,8 +569,8 @@ private class NativeEngine(
     private val primarySymbol = "BTCUSDT"
     private val interval = "1h"
 
-    // Legacy native engine is not authoritative; keep its diagnostic universe aligned with the
-    // remote USDⓈ-M Futures backend so no stale five-symbol contract leaks into the UI.
+    // This on-device USD-M Futures Runtime owns the approved ten-contract universe.
+    // The remote backend is optional and is not in the order-execution path.
     private val coreSymbols = listOf(
         "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
         "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
