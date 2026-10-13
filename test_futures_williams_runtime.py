@@ -629,8 +629,7 @@ def test_futures_universe_uses_the_configured_default_ten_when_env_is_absent(mon
 
 
 def test_futures_universe_rejects_duplicates_and_exchange_ineligible_symbols(monkeypatch):
-    symbols = ["AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT", "EEEUSDT",
-               "FFFUSDT", "GGGUSDT", "HHHUSDT", "IIIUSDT", "JJJUSDT"]
+    symbols = list(DEFAULT_FUTURES_SYMBOLS)
     monkeypatch.setenv("FUTURES_APPROVED_SYMBOLS", ",".join(symbols[:-1] + [symbols[0]]))
 
     class Client:
@@ -666,8 +665,7 @@ def test_futures_universe_rejects_duplicates_and_exchange_ineligible_symbols(mon
 
 
 def test_futures_universe_returns_exact_approved_ten_without_dynamic_additions(monkeypatch):
-    symbols = ["AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT", "EEEUSDT",
-               "FFFUSDT", "GGGUSDT", "HHHUSDT", "IIIUSDT", "JJJUSDT"]
+    symbols = list(DEFAULT_FUTURES_SYMBOLS)
     monkeypatch.setenv("FUTURES_APPROVED_SYMBOLS", ",".join(symbols))
     rows = [{
         "symbol": symbol,
@@ -1201,3 +1199,19 @@ def test_futures_config_keeps_fixed_ten_symbols_even_when_auto_alias_is_used():
     })
     assert config.symbols == DEFAULT_FUTURES_SYMBOLS
     assert len(config.symbols) == 10
+
+
+def test_futures_universe_rejects_unapproved_ten_symbol_substitution(monkeypatch):
+    substituted = [
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "NOTLTCUSDT",
+    ]
+    monkeypatch.setenv("FUTURES_APPROVED_SYMBOLS", ",".join(substituted))
+
+    class Client:
+        def exchange_info(self):
+            raise AssertionError("substituted universe must be rejected before exchange lookup")
+
+    scanner = FuturesWilliamsScanner(Client(), interval="1h")
+    assert scanner.universe() == []
+    assert "canonical ten-symbol" in scanner.last_universe_error
