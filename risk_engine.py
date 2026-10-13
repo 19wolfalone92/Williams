@@ -131,11 +131,27 @@ class RiskEngine:
             return self._blocked(symbol, side, entry, "invalid stop distance")
 
         structural_stop = float(invalidation_price or 0.0)
+        # A caller-provided structural invalidation is authoritative. If it is
+        # on the wrong side of entry, silently substituting an ATR stop would
+        # turn an invalid trade thesis into a different trade and can conceal
+        # an upstream signal/price bug. Fail closed instead.
+        if structural_stop != 0.0:
+            if side == "LONG" and not (0.0 < structural_stop < entry):
+                return self._blocked(
+                    symbol, side, entry,
+                    "structural invalidation stop must be below entry for LONG",
+                )
+            if side == "SHORT" and not (structural_stop > entry):
+                return self._blocked(
+                    symbol, side, entry,
+                    "structural invalidation stop must be above entry for SHORT",
+                )
+
         if side == "LONG":
-            stop_price = structural_stop if 0.0 < structural_stop < entry else entry - fallback_stop_distance
+            stop_price = structural_stop if structural_stop > 0.0 else entry - fallback_stop_distance
             take_profit_price = entry + target_distance
         else:
-            stop_price = structural_stop if structural_stop > entry else entry + fallback_stop_distance
+            stop_price = structural_stop if structural_stop > 0.0 else entry + fallback_stop_distance
             take_profit_price = entry - target_distance
 
         if stop_price <= 0 or take_profit_price <= 0:
