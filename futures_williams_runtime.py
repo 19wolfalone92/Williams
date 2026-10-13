@@ -2187,14 +2187,40 @@ class FuturesWilliamsRuntime:
                     if crossed_teeth:
                         return self._exit_market(campaign, "TEETH_CLOSE_EXIT")
 
+            # NTD profit-taking rule: after five consecutive same-colour
+            # completed price bars, trail beneath/above every later completed
+            # bar regardless of its colour. Persist activation on the campaign.
+            tags = getattr(campaign, "tags", None)
+            if isinstance(tags, dict) and {"open", "close", "high", "low"}.issubset(closed.columns):
+                last_five = closed.tail(5)
+                if len(last_five) == 5 and not tags.get("ntd_five_colour_trail_active", False):
+                    green_five = bool((last_five["close"] > last_five["open"]).all())
+                    red_five = bool((last_five["close"] < last_five["open"]).all())
+                    if (campaign.side == "BUY" and green_five) or (campaign.side == "SELL" and red_five):
+                        tags["ntd_five_colour_trail_active"] = True
+                        tags["ntd_five_colour_trail_started_at_ms"] = _row_time_ms(last_five.iloc[-1])
+                        if hasattr(self, "db") and hasattr(campaign, "campaign_id"):
+                            self.db.save_campaign(campaign)
+
+            ntd_trail_active = bool(
+                isinstance(tags, dict) and tags.get("ntd_five_colour_trail_active", False)
+            )
             if campaign.side == "BUY":
                 recent = [float(x) for x in closed["low"].tail(window) if float(x) > 0]
                 proposed = min(recent) - tick if recent else 0.0
+                if ntd_trail_active and not closed.empty:
+                    latest_low = float(closed.iloc[-1]["low"] or 0.0)
+                    if latest_low > 0:
+                        proposed = max(proposed, latest_low - tick)
                 if proposed > campaign.current_stop_price and proposed < current_price:
                     self._replace_protection(campaign, proposed)
             else:
                 recent = [float(x) for x in closed["high"].tail(window) if float(x) > 0]
                 proposed = max(recent) + tick if recent else 0.0
+                if ntd_trail_active and not closed.empty:
+                    latest_high = float(closed.iloc[-1]["high"] or 0.0)
+                    if latest_high > 0:
+                        proposed = min(proposed, latest_high + tick)
                 if proposed < campaign.current_stop_price and proposed > current_price:
                     self._replace_protection(campaign, proposed)
         except Exception as exc:
