@@ -43,3 +43,16 @@ Status: `PARTIALLY IMPLEMENTED — P0 OPEN`. No live credentials or live orders 
 - Campaign run [38341931762](https://github.com/19wolfalone92/Williams/actions/runs/38341931762), Python job 115114648003: SUCCESS, `262 passed, 4 warnings in 6.10s`. Android job 115114647875 was still running at report time; build/unit tests and APK proof were not yet complete.
 - Separate APK workflow [38341932569](https://github.com/19wolfalone92/Williams/actions/runs/38341932569): `startup_failure`, zero jobs/artifacts. Available Actions data exposes no cause. This is not evidence of a Gradle or application failure.
 - Do not infer current-SHA APK evidence from the older artifact built from SHA `51ca573ee2366065ce7d75af6699e25ae3ac94a3`. Exact-HEAD Android evidence remains pending.
+
+
+## TASK 001.12 Android result correction — build source SHA `b6d43d439a1c49c577570d36332bbe1c60ff7477`
+
+Campaign run [38342390656](https://github.com/19wolfalone92/Williams/actions/runs/38342390656), Android job **115116130632**: SUCCESS. Gradle wrapper verification, `:app:testDebugUnitTest`, `:app:lintDebug`, `:app:assembleDebug`, APK checksum/provenance verification, package identity gate, and artifact uploads all completed successfully. Job log: https://github.com/19wolfalone92/Williams/actions/runs/38342390656/job/115116130632.
+
+- APK: `app-debug.apk`; SHA-256 `e9ce68cfeac340c09979463aa5a2e0b1a346d08d19403e163a2d99589f254ac6`.
+- Package `com.williamsbot.debug`, version `4.25.0-debug`, target SDK 36.
+- apksigner: V2 signature verified; one Android Debug signer; certificate SHA-256 `1b9ce8b9b27681575d86a20890590b4ad79550316f099f8873fff4e5760e58d5`.
+- Build-generated provenance source SHA matches `b6d43d439a1c49c577570d36332bbe1c60ff7477`.
+- APK artifact [williams-debug-apk, ID 11787686242](https://github.com/19wolfalone92/Williams/actions/runs/38342390656/artifacts/11787686242); uploaded artifact ZIP SHA-256 `a34c5122e1501fc2c5565f315b0cf4bd947afe02dc5fbb412626ac43290e292e`. Lint artifact [ID 11787626329](https://github.com/19wolfalone92/Williams/actions/runs/38342390656/artifacts/11787626329).
+- Separate Build Android APK [38342391326](https://github.com/19wolfalone92/Williams/actions/runs/38342391326) still ended `startup_failure` with zero jobs/artifacts and no exposed cause; Campaign CI independently completed Android verification successfully.
+- Subsequent commits for this addendum modify reports only. Re-run exact-HEAD CI after the final report commit; the APK above is proven for `b6d43d439a1c49c577570d36332bbe1c60ff7477`, not automatically for a later report-only HEAD.
