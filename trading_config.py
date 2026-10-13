@@ -90,10 +90,11 @@ class TradingConfig:
     initial_entry_risk_pct: float = 0.002
     campaign_risk_limit_pct: float = 0.006
     max_total_risk_pct: float = 0.006
-    max_daily_loss_pct: float = 0.03
-    max_consecutive_losses: int = 3
+    # Canonical project policy: stop opening new campaigns at 1% daily loss.
+    max_daily_loss_pct: float = 0.01
+    max_consecutive_losses: int = 2
     cooldown_minutes: int = 30
-    max_open_positions: int = 5
+    max_open_positions: int = 1
 
     min_risk_reward: float = 1.5
     atr_period: int = 14
@@ -147,7 +148,7 @@ class TradingConfig:
             # Legacy Spot mode retains its own market-specific configuration.
             symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
 
-        max_positions = min(5, max(1, _int(source, "MAX_OPEN_POSITIONS", 5)))
+        max_positions = min(1, max(1, _int(source, "MAX_OPEN_POSITIONS", 1)))
         risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
         risk = max(0.0, min(0.0025, _float(source, risk_key, 0.0025)))
         initial_entry_risk = max(0.0, min(risk, 0.0025, _float(source, "INITIAL_ENTRY_RISK_PCT", 0.002)))
@@ -187,8 +188,8 @@ class TradingConfig:
             initial_entry_risk_pct=initial_entry_risk,
             campaign_risk_limit_pct=campaign_risk,
             max_total_risk_pct=max(total_risk, risk),
-            max_daily_loss_pct=max(0.0, min(0.03, _float(source, "MAX_DAILY_LOSS_PCT", 0.03))),
-            max_consecutive_losses=max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 3)),
+            max_daily_loss_pct=max(0.0, min(0.01, _float(source, "MAX_DAILY_LOSS_PCT", 0.01))),
+            max_consecutive_losses=min(2, max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 2))),
             cooldown_minutes=max(0, _int(source, "COOLDOWN_MINUTES", 30)),
             max_open_positions=max_positions,
             min_risk_reward=max(0.0, _float(source, "MIN_RISK_REWARD", 1.5)),
