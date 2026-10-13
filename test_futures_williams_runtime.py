@@ -6,7 +6,12 @@ import pandas as pd
 
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingSignal, SignalRole, SignalSpec, SignalState, SignalType, stop_only_reduces_risk
-from futures_williams_runtime import FuturesWilliamsRuntime, FuturesWilliamsScanner, _pending_entry_preflight_reason
+from futures_williams_runtime import (
+    FuturesWilliamsRuntime,
+    FuturesWilliamsScanner,
+    _pending_entry_preflight_reason,
+    _signal_profile_entry_block_reason,
+)
 from trading_config import TradingConfig, DEFAULT_SYMBOLS, DEFAULT_FUTURES_SYMBOLS
 from williams_signals import (
     extract_long_signal_specs, extract_short_signal_specs,
@@ -1279,3 +1284,12 @@ def test_futures_config_rejects_noncanonical_execution_or_structure_timeframes()
             "EXECUTION_TIMEFRAME": "1h",
             "STRUCTURAL_TIMEFRAMES": "4h,1h,15m,5m",
         })
+
+
+def test_incomplete_ntd_five_dimension_profile_is_blocked_for_new_entries():
+    assert _signal_profile_entry_block_reason("TC2_THREE_WISE_MEN") == ""
+    reason = _signal_profile_entry_block_reason("NTD_FIVE_DIMENSIONS")
+    assert "Balance Line trade engine is missing/unverified" in reason
+    assert _signal_profile_entry_block_reason("UNKNOWN_PROFILE").startswith(
+        "WILLIAMS_SIGNAL_PROFILE must be TC2_THREE_WISE_MEN"
+    )
