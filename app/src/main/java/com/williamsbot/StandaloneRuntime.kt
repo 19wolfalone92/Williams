@@ -3778,7 +3778,16 @@ private class NativeEngine(
         )
         val result = futuresCampaignCoordinator.submitPendingEntry(plan)
         lastOrder = result
-        if (!result.optBoolean("accepted", false)) lastError = result.optString("blocker", result.optString("error"))
+        if (!result.optBoolean("accepted", false)) {
+            lastError = result.optString("blocker", result.optString("error"))
+            if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED) {
+                reconcileRequired = true
+                prefs.edit().putBoolean("reconcile_required", true).commit()
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures submission unresolved")
+            }
+        } else {
+            stateMachine.force(TradingState.ENTRY_PENDING, "Futures conditional entry submitted; waiting for exchange fill")
+        }
     }
 
     private fun performCampaignScan() {
@@ -3845,14 +3854,14 @@ private class NativeEngine(
             .mapNotNull { futuresCampaignCoordinator.positionsSnapshot().optJSONObject(it) }
             .filter { kotlin.math.abs(it.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0 }
             .map { it.optString("symbol") }.toSet()
-        ranked.asSequence()
+        for (candidate in ranked
             .filter { it.campaignReady && it.symbol !in openSymbols }
             .sortedWith(compareByDescending<BaseAnalysis> { it.score }.thenBy { it.wave.exhaustionRisk })
-            .forEach { candidate ->
-                submitNativeFuturesCampaignEntry(candidate)
-                if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.ENTRY_PENDING ||
-                    futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED) return@forEach
-            }
+        ) {
+            submitNativeFuturesCampaignEntry(candidate)
+            if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.ENTRY_PENDING ||
+                futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED) break
+        }
     }
 
     private fun performScan() {
