@@ -260,18 +260,33 @@ class FuturesWilliamsScanner:
         return (ask - bid) / bid
 
     def _htf(self, symbol: str) -> tuple[bool, bool]:
+        """D1 macro airbag + H4 directional context; H1 remains the decision TF."""
         if not _env_bool("REQUIRE_HTF_CONFIRMATION", True):
             return True, True
-        frame = fetch_klines(self.client, symbol, self.htf_interval, limit=180)
-        if len(frame) < 90:
+
+        def closed_context(frame_name: str):
+            frame = fetch_klines(self.client, symbol, frame_name, limit=180)
+            if len(frame) < 90:
+                return None
+            closed = frame.iloc[:-1].copy() if len(frame) > 1 else frame.copy()
+            if len(closed) < 45:
+                return None
+            indicators = calculate_indicators(closed, self.config)
+            last = indicators.iloc[-1]
+            bullish = bool(last.get("bullish_alligator", False)) and float(last.get("ao", 0) or 0) > 0
+            bearish = bool(last.get("bearish_alligator", False)) and float(last.get("ao", 0) or 0) < 0
+            return bullish, bearish
+
+        daily = closed_context("1d")
+        four_hour = closed_context("4h")
+        # Missing context is not bullish or bearish evidence: block both directions.
+        if daily is None or four_hour is None:
             return False, False
-        closed = frame.iloc[:-1].copy() if len(frame) > 1 else frame
-        ind = calculate_indicators(closed, self.config)
-        last = ind.iloc[-1]
-        return (
-            bool(last.get("bullish_alligator", False)) and float(last.get("ao", 0) or 0) > 0,
-            bool(last.get("bearish_alligator", False)) and float(last.get("ao", 0) or 0) < 0,
-        )
+        d1_bull, d1_bear = daily
+        h4_bull, h4_bear = four_hour
+        # D1 is an airbag, not an entry trigger. H4 must support the direction,
+        # while a clear opposite D1 trend vetoes the trade. No M15/M5 entry path.
+        return h4_bull and not d1_bear, h4_bear and not d1_bull
 
     def analyse(self, symbol: str) -> list[FuturesCandidate]:
         symbol = str(symbol).upper()
