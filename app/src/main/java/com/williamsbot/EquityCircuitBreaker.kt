@@ -53,13 +53,37 @@ class EquityCircuitBreaker(
         )
     }
 
+    /**
+     * Restore the same UTC day's baseline and latched trip after process restart.
+     * The caller must verify the persisted day key before restoring this state.
+     */
     @Synchronized
-    fun reset(equity: Double, nowMs: Long = System.currentTimeMillis()) {
+    fun restore(
+        startEquity: Double,
+        wasTripped: Boolean,
+        nowMs: Long = System.currentTimeMillis()
+    ) {
+        require(startEquity.isFinite() && startEquity > 0.0) {
+            "persisted daily equity baseline is invalid"
+        }
         dayKey = java.time.Instant.ofEpochMilli(nowMs)
             .atZone(java.time.ZoneOffset.UTC)
             .toLocalDate()
             .toString()
-        startEquity = equity.coerceAtLeast(0.0)
+        this.startEquity = startEquity
+        tripped = wasTripped
+    }
+
+    @Synchronized
+    fun reset(equity: Double, nowMs: Long = System.currentTimeMillis()) {
+        require(equity.isFinite() && equity > 0.0) {
+            "cannot establish daily equity baseline from invalid equity"
+        }
+        dayKey = java.time.Instant.ofEpochMilli(nowMs)
+            .atZone(java.time.ZoneOffset.UTC)
+            .toLocalDate()
+            .toString()
+        startEquity = equity
         tripped = false
     }
 
