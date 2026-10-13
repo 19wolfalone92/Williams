@@ -1,5 +1,6 @@
 import math
 import os
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -623,6 +624,7 @@ def test_futures_universe_uses_the_configured_default_ten_when_env_is_absent(mon
 
     scanner = FuturesWilliamsScanner(Client(), interval="5m")
     assert scanner.universe() == approved
+    assert scanner.symbols == approved
     assert scanner.last_universe_error is None
 
 
@@ -1142,3 +1144,33 @@ def test_final_entry_preflight_blocks_expired_or_already_crossed_williams_trigge
         short_pending, short_intent, 199.9, now_ms=2000
     )
     assert _pending_entry_preflight_reason(short_pending, short_intent, 203.1, now_ms=2000) == "short_setup_invalidated_before_trigger"
+
+
+def test_scanner_reports_all_ten_evaluated_symbols_and_both_directions(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "TC2_THREE_WISE_MEN")
+    scanner = FuturesWilliamsScanner(object(), interval="1h")
+    symbols = list(DEFAULT_FUTURES_SYMBOLS)
+    scanner.universe = lambda limit=10: symbols
+    scanner.analyse = lambda symbol: [
+        SimpleNamespace(
+            symbol=symbol,
+            side="LONG",
+            signal=SimpleNamespace(signal_bar_time_ms=100),
+            score=60.0,
+        ),
+        SimpleNamespace(
+            symbol=symbol,
+            side="SHORT",
+            signal=SimpleNamespace(signal_bar_time_ms=101),
+            score=61.0,
+        ),
+    ]
+
+    candidates = scanner.scan()
+
+    assert len(scanner.symbols) == 10
+    assert scanner.last_scan_status["state"] == "COMPLETE"
+    assert scanner.last_scan_status["configured_symbols"] == 10
+    assert scanner.last_scan_status["evaluated_symbols"] == 10
+    assert {candidate.side for candidate in candidates} == {"LONG", "SHORT"}
+    assert len(candidates) == 20
