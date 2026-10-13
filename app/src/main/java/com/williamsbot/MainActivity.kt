@@ -112,7 +112,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 // Williams 4.24.0 autonomous Futures Testnet runtime.
-// The VPS/backend is authoritative; Android never starts a trading runtime.
+// The phone owns the autonomous USD-M Futures Testnet runtime.
 // CI compile-log capture enabled
 // Diagnostic contract v2: runtime self-tests are exposed through /api/v1/diagnostics.
 class MainActivity : ComponentActivity() {
@@ -206,16 +206,16 @@ data class Status(
     val pnlPct: Double? = null,
     val error: String? = null,
     val binanceConfigured: Boolean = false,
-    val riskPerTrade: Double = 0.005,
-    val maxDailyLoss: Double = 0.03,
+    val riskPerTrade: Double = 0.0025,
+    val maxDailyLoss: Double = 0.01,
     val tradesToday: Int = 0,
     val consecutiveLosses: Int = 0,
     val dailyPnlUsdt: Double = 0.0,
     val tradingMode: String = "ACTIVE",
     val openPositions: Int = 0,
-    val maxOpenPositions: Int = 5,
+    val maxOpenPositions: Int = 1,
     val reservedRiskPct: Double = 0.0,
-    val maxTotalRiskPct: Double = 0.01,
+    val maxTotalRiskPct: Double = 0.006,
     val reconcileRequired: Boolean = false,
     val positions: List<PositionView> = emptyList(),
     val scannerScanning: Boolean = false,
