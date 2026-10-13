@@ -170,7 +170,7 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
     runtime.client = Client(160.0)
     runtime._trail(long_campaign)
     assert calls[-1][0] == "BUY"
-    assert calls[-1][1] == 154.0
+    assert calls[-1][1] == 153.0  # five closed-bar low minus one tick
     assert calls[-1][2] == {}
 
     short_campaign = type("C", (), {
@@ -180,7 +180,7 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
     runtime.client = Client(90.0)
     runtime._trail(short_campaign)
     assert calls[-1][0] == "SELL"
-    assert calls[-1][1] == 180.0
+    assert calls[-1][1] == 179.0  # five closed-bar high plus one tick
     assert calls[-1][2] == {}
 
 
