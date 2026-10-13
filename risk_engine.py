@@ -61,9 +61,21 @@ class RiskEngine:
         slippage_buffer_pct: float = 0.0015,
     ):
         self.balance = float(balance_quote)
-        self.risk_per_trade_pct = float(risk_per_trade_pct)
-        self.max_position_fraction = float(max_position_fraction)
-        self.max_daily_loss_pct = max(0.0, min(0.01, float(max_daily_loss_pct)))
+        raw_trade_risk = float(risk_per_trade_pct)
+        self.risk_per_trade_pct = (
+            max(0.0, min(0.0025, raw_trade_risk))
+            if math.isfinite(raw_trade_risk) else raw_trade_risk
+        )
+        raw_position_fraction = float(max_position_fraction)
+        self.max_position_fraction = (
+            max(0.0, min(0.25, raw_position_fraction))
+            if math.isfinite(raw_position_fraction) else raw_position_fraction
+        )
+        raw_daily_loss = float(max_daily_loss_pct)
+        self.max_daily_loss_pct = (
+            max(0.0, min(0.01, raw_daily_loss))
+            if math.isfinite(raw_daily_loss) else raw_daily_loss
+        )
         self.min_rr = float(min_rr)
         self.max_atr_pct = float(max_atr_pct)
         self.fee_buffer_per_side_pct = max(0.0, float(fee_buffer_per_side_pct))
@@ -166,7 +178,13 @@ class RiskEngine:
 
         # Maximum money we are allowed to lose on this trade. Size against the
         # protective stop plus bounded fee/slippage reserve.
-        effective_risk_pct = self.risk_per_trade_pct if risk_pct_override is None else float(risk_pct_override)
+        # An override may allocate less risk for an entry/add-on, never more
+        # than the engine's hard 0.25% per-order ceiling.
+        effective_risk_pct = (
+            self.risk_per_trade_pct
+            if risk_pct_override is None
+            else min(self.risk_per_trade_pct, max(0.0, float(risk_pct_override)))
+        )
         if effective_risk_pct <= 0:
             return self._blocked(symbol, side, entry, "risk allocation is zero")
         risk_quote = self.balance * effective_risk_pct
