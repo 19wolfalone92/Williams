@@ -23,14 +23,14 @@ class BinanceFuturesAPIError(RuntimeError):
 
 
 class BinanceUsdMFuturesClient:
-    product = "USD_M_FUTURES"
-
     """Small, fail-closed USDⓈ-M Futures REST client.
 
     demo=True uses Binance Demo Trading (not the retired Futures testnet).
     Mutating requests are never blindly retried after transport/server errors;
     callers must reconcile by the stable client order ID.
     """
+
+    product = "USD_M_FUTURES"
 
     def __init__(self, api_key, api_secret, demo=True, recv_window=5000, timeout=15, session=None):
         if not api_key or not api_secret:
