@@ -697,7 +697,11 @@ class CampaignExecutionService:
                             self.db.set_campaign_signal_state(
                                 signal_id, SignalState.CANCEL_REQUESTED.value
                             )
-                            self._execute_cancel(campaign, int(order_id), f"STALE_SIGNAL_{stale_reason}")
+                            self._execute_cancel(
+                        campaign,
+                        int(order_id),
+                        f"CAMPAIGN_ENTRY_CANCEL_STALE_SIGNAL_{stale_reason}",
+                    )
                             refreshed = self.client.get_order(
                                 symbol, orig_client_order_id=client_id
                             )
