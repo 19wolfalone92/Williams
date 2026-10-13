@@ -54,6 +54,7 @@ class SignalType(str, Enum):
     REVERSAL = "REVERSAL"
     SUPER_AO = "SUPER_AO"
     FRACTAL = "FRACTAL"
+    THREE_GREEN_BARS = "THREE_GREEN_BARS"
 
 
 class SignalRole(str, Enum):
