@@ -625,6 +625,7 @@ private class NativeEngine(
     private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.03)
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
+    @Volatile private var equityCircuitBreakerPersistenceReady = false
     private val feeBufferPerSidePct = 0.001
     @Volatile private var serverTimeOffsetMs = 0L
     private val BINANCE_RECV_WINDOW_MS = 60000L
@@ -783,6 +784,7 @@ private class NativeEngine(
             restAccountReady &&
             historyReady &&
             stateMachine.executionAllowed() &&
+            equityCircuitBreakerPersistenceReady &&
             !equityCircuitBreaker.isTripped()
 
     private fun executionBlockers(): List<String> =
@@ -798,6 +800,7 @@ private class NativeEngine(
             if (!restAccountReady) add("rest_account_not_ready")
             if (!historyReady) add("history_not_ready")
             if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
+            if (!equityCircuitBreakerPersistenceReady) add("equity_circuit_breaker_persistence_not_ready")
             if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
         }
 
@@ -5528,11 +5531,13 @@ private class NativeEngine(
         snapshot: EquityCircuitBreaker.Snapshot,
         nowMs: Long
     ) {
-        prefs.edit()
+        val saved = prefs.edit()
             .putString("equity_circuit_day_key", utcEquityDayKey(nowMs))
             .putString("equity_circuit_start_equity", snapshot.startEquity.toString())
             .putBoolean("equity_circuit_tripped", snapshot.tripped)
-            .apply()
+            .commit()
+        equityCircuitBreakerPersistenceReady = saved
+        check(saved) { "failed to persist daily equity circuit breaker" }
     }
 
     private fun restoreEquityCircuitBreaker(
