@@ -227,4 +227,4 @@ def test_post_submit_event_failure_is_ambiguous_and_never_retries():
         )
 
     assert submitted == [True]
-    assert any(status == "AMBIGUOUS" for status, _ in db.intents)
+    assert any(row[0] == "AMBIGUOUS" for row in db.intents)
