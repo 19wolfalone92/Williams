@@ -145,8 +145,8 @@ class RiskEngine:
             return self._blocked(symbol, side, entry, "ATR multipliers must be > 0")
         if numeric_inputs["invalidation_price"] < 0.0 or numeric_inputs["min_notional"] < 0.0:
             return self._blocked(symbol, side, entry, "invalid invalidation/minimum-notional input")
-        if risk_pct_override is not None and float(risk_pct_override) < 0.0:
-            return self._blocked(symbol, side, entry, "risk allocation cannot be negative")
+        if risk_pct_override is not None and not 0.0 <= float(risk_pct_override) <= 1.0:
+            return self._blocked(symbol, side, entry, "risk allocation must be in [0, 1]")
 
         if side not in {"LONG", "SHORT"}:
             return self._blocked(symbol, side, entry, "unsupported side")
@@ -173,10 +173,20 @@ class RiskEngine:
 
         structural_stop = float(invalidation_price or 0.0)
         if side == "LONG":
-            stop_price = structural_stop if 0.0 < structural_stop < entry else entry - fallback_stop_distance
+            if structural_stop > 0.0 and structural_stop >= entry:
+                return self._blocked(
+                    symbol, side, entry,
+                    "structural invalidation for LONG must be below the trigger",
+                )
+            stop_price = structural_stop if structural_stop > 0.0 else entry - fallback_stop_distance
             take_profit_price = entry + target_distance
         else:
-            stop_price = structural_stop if structural_stop > entry else entry + fallback_stop_distance
+            if structural_stop > 0.0 and structural_stop <= entry:
+                return self._blocked(
+                    symbol, side, entry,
+                    "structural invalidation for SHORT must be above the trigger",
+                )
+            stop_price = structural_stop if structural_stop > 0.0 else entry + fallback_stop_distance
             take_profit_price = entry - target_distance
 
         if stop_price <= 0 or take_profit_price <= 0:
