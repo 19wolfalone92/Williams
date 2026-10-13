@@ -10,9 +10,13 @@ from wise_men import WiseMenPhase, WiseMenStateMachine
 class MemoryIntentDB:
     def __init__(self):
         self.intents = {}
+        self.events = []
 
     def save_execution_intent(self, intent, status, reason=""):
         self.intents[intent.intent_id] = (status, reason)
+
+    def save_execution_event(self, intent_id, event, payload):
+        self.events.append((intent_id, event, payload))
 
 
 def context(symbol="BTCUSDT", interval="1h", allow_long=True, allow_short=False):
@@ -126,6 +130,9 @@ def test_execution_barrier_fails_closed_when_pending_intent_cannot_be_persisted(
         def save_execution_intent(self, intent, status, reason=""):
             raise OSError("simulated disk failure")
 
+        def save_execution_event(self, intent_id, event, payload):
+            return None
+
     cache = ContextCache()
     cache.publish(context())
     barrier = ExecutionBarrier(cache, FailingDB())
@@ -179,11 +186,15 @@ def test_execution_barrier_flags_failure_to_persist_submission_after_one_submit(
     class FailsOnSubmittedDB:
         def __init__(self):
             self.statuses = []
+            self.events = []
 
         def save_execution_intent(self, intent, status, reason=""):
             self.statuses.append(status)
             if status == "SUBMITTED":
                 raise OSError("simulated failure after exchange response")
+
+        def save_execution_event(self, intent_id, event, payload):
+            self.events.append((intent_id, event, payload))
 
     cache = ContextCache()
     cache.publish(context())
@@ -211,7 +222,7 @@ def test_execution_barrier_flags_failure_to_persist_submission_after_one_submit(
         raise AssertionError("post-submit persistence failure must be surfaced")
 
     assert calls == ["sent"]
-    assert db.statuses == ["PENDING", "SUBMITTED"]
+    assert db.statuses == ["PENDING", "SUBMITTING", "SUBMITTED", "AMBIGUOUS"]
 
 
 
