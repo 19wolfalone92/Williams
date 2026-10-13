@@ -13,7 +13,7 @@ from feature_store import FeatureStore, build_market_feature_vector
 from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
 from williams_signals import extract_long_signal_specs
 from shadow_execution import ShadowExecutionSimulator
-from trading_config import DEFAULT_SYMBOLS, TradingConfig
+from trading_config import TradingConfig
 
 
 log = logging.getLogger("williams-scanner")
