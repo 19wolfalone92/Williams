@@ -436,3 +436,46 @@ def test_futures_universe_returns_exact_approved_ten_without_dynamic_additions(m
     assert len(scanner.universe()) == 10
     assert len(set(scanner.universe())) == 10
     assert scanner.last_universe_error is None
+
+def test_dry_run_still_scans_market_data_but_never_arms_orders():
+    candidate = object()
+
+    class Scanner:
+        last_scan_status = {
+            "state": "COMPLETE",
+            "configured_symbols": 10,
+            "evaluated_symbols": 10,
+        }
+
+        def __init__(self):
+            self.calls = 0
+
+        def scan(self):
+            self.calls += 1
+            return [candidate]
+
+    class DB:
+        def __init__(self):
+            self.events = []
+
+        def log_event(self, *args):
+            self.events.append(args)
+
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime.preflight_report = {"ready": True}
+    runtime.recovered = True
+    runtime.dry_run = True
+    runtime.scanner = Scanner()
+    runtime.db = DB()
+    runtime._reconcile_pending = lambda: None
+    runtime._arm_entry = lambda *_: (_ for _ in ()).throw(
+        AssertionError("DRY_RUN must never arm an entry")
+    )
+
+    result = runtime.process()
+
+    assert result == [candidate]
+    assert runtime.scanner.calls == 1
+    assert runtime.db.events[-1][1] == "futures_dry_run_cycle"
+    assert "no strategy orders or exits submitted" in runtime.db.events[-1][2]
+
