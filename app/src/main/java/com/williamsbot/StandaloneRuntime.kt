@@ -1299,8 +1299,17 @@ private class NativeEngine(
         userStreamConnected = false
 
         val errors = mutableListOf<String>()
-        runCatching { futuresCampaignCoordinator.cancelPendingEntries("KILL_SWITCH") }
-            .onFailure { errors += "pending entries: " + (it.message ?: it.javaClass.simpleName) }
+        val cancellation = runCatching {
+            futuresCampaignCoordinator.cancelPendingEntries("KILL_SWITCH")
+        }.getOrElse {
+            JSONObject().put("ok", false).put("error", it.message ?: it.javaClass.simpleName)
+        }
+        if (!cancellation.optBoolean("ok", false)) {
+            errors += "pending entry cancellation unresolved: " +
+                cancellation.optString("blocker", cancellation.optString("error", "unknown exchange state"))
+            reconcileRequired = true
+            prefs.edit().putBoolean("reconcile_required", true).commit()
+        }
         val rows = runCatching { futuresCampaignCoordinator.positionsSnapshot() }.getOrElse {
             errors += "Futures position query: " + (it.message ?: it.javaClass.simpleName)
             JSONArray()
