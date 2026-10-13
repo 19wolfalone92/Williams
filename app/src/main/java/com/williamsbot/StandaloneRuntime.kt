@@ -6615,7 +6615,7 @@ private class NativeEngine(
             emptyList()
         }
 
-        val alligator = alligator(closes)
+        val alligator = alligator(workCandles)
         val bullish =
             alligator.lips > alligator.teeth &&
                 alligator.teeth > alligator.jaw &&
@@ -7106,11 +7106,12 @@ private class NativeEngine(
     }
 
     private fun alligator(
-        closes: List<Double>
+        candles: List<CandleN>
     ): TripleValues {
-        val jaw = smma(closes, 13).lastOrNull() ?: 0.0
-        val teeth = smma(closes, 8).lastOrNull() ?: 0.0
-        val lips = smma(closes, 5).lastOrNull() ?: 0.0
+        val medians = medianPrices(candles)
+        val jaw = smma(medians, 13).lastOrNull() ?: 0.0
+        val teeth = smma(medians, 8).lastOrNull() ?: 0.0
+        val lips = smma(medians, 5).lastOrNull() ?: 0.0
         return TripleValues(jaw, teeth, lips)
     }
 
@@ -7316,7 +7317,7 @@ private class NativeEngine(
             }
 
         val alligatorValues =
-            alligator(candles.map { it.c })
+            alligator(candles)
 
         val bullish =
             alligatorValues.lips >
@@ -7921,11 +7922,12 @@ private class NativeEngine(
         val output = JSONArray()
         val prices =
             sourceCandles.map { it.c }
+        val medians = medianPrices(sourceCandles)
 
         if (prices.isNotEmpty()) {
-            val jaw = smma(prices, 13)
-            val teeth = smma(prices, 8)
-            val lips = smma(prices, 5)
+            val jaw = smma(medians, 13)
+            val teeth = smma(medians, 8)
+            val lips = smma(medians, 5)
 
             val start =
                 max(0, sourceCandles.size - 120)
@@ -7962,7 +7964,7 @@ private class NativeEngine(
                             "long_signal",
                             i >= 40 &&
                                 alligator(
-                                    prices.subList(
+                                    sourceCandles.subList(
                                         0,
                                         i + 1
                                     )
