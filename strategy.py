@@ -76,7 +76,7 @@ def calculate_indicators(df, cfg):
     # a GROUP of equal extreme bars. Equal extremes do not count as one of the
     # two required lower/higher bars on either side. Confirmation is timestamped
     # at the bar that supplies the second qualifying right-side bar; no future
-    # bar is read at runtime. The first bar of an adjacent equal-extreme group
+    # bar is read at runtime. The last bar of an adjacent equal-extreme group
     # is used as the deterministic group anchor; price level is shared by the
     # whole group. This anchor is implementation provenance, not a new signal rule.
     left = max(2, int(cfg["fractal_left"]))
