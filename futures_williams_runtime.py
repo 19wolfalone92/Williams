@@ -491,7 +491,7 @@ class FuturesWilliamsRuntime:
         self.config = TradingConfig.from_env()
         self.symbol = os.getenv("SYMBOL", self.config.symbols[0]).upper()
         self.interval = self.config.execution_timeframe
-        self.htf_interval = os.getenv("HTF_INTERVAL", "1h")
+        self.htf_interval = os.getenv("HTF_INTERVAL", "4h")
         self.position_fraction = float(os.getenv("FUTURES_MAX_MARGIN_FRACTION", "0.25"))
         self.stop_pct = 0.02
         self.target_pct = 0.0
@@ -530,8 +530,8 @@ class FuturesWilliamsRuntime:
 
         self.engine = CampaignEngine(
             self.db,
-            portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
-            campaign_risk_limit_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005")),
+            portfolio_risk_limit_pct=self.config.max_total_risk_pct,
+            campaign_risk_limit_pct=self.config.risk_per_trade_pct,
             initial_risk_fraction_of_campaign=1.0 / 15.0,
         )
         self.scanner = FuturesWilliamsScanner(
@@ -541,9 +541,9 @@ class FuturesWilliamsRuntime:
         )
         self.auto_scan_symbols = []
         self.symbols = list(self.config.symbols)
-        self.max_open_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
-        self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))))
-        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))))
+        self.max_open_positions = self.config.max_open_positions
+        self.max_total_risk_pct = self.config.max_total_risk_pct
+        self.max_risk_per_trade_pct = self.config.risk_per_trade_pct
         self.scan_workers = 1
         self.wave_top_n = 0
         self.liquidity_preselect = int(os.getenv("FUTURES_SCAN_TOP_N", "40"))
@@ -2479,7 +2479,7 @@ class FuturesWilliamsRuntime:
                 continue
             if candidate.signal.role != SignalRole.ENTRY:
                 continue
-            if len(self.open_positions()) >= int(os.getenv("MAX_OPEN_POSITIONS", "5")):
+            if len(self.open_positions()) >= self.max_open_positions:
                 break
             if candidate.symbol in pending_symbols or candidate.symbol in self._locks:
                 continue
