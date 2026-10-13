@@ -163,18 +163,22 @@ def _latest_confirmed_fractal(
     if level_col not in ind.columns or fractal_col not in ind.columns:
         return None
 
-    right = 2
+    center_col = "confirmed_up_center_index" if side == "LONG" else "confirmed_down_center_index"
     start = max(0, len(ind) - max(3, int(max_age_bars)))
     for confirmation_i in range(len(ind) - 1, start - 1, -1):
         row = ind.iloc[confirmation_i]
         level = row.get(level_col)
-        if level is None or pd.isna(level):
+        center_value = row.get(center_col)
+        if level is None or pd.isna(level) or center_value is None or pd.isna(center_value):
             continue
-        center_i = confirmation_i - right
-        if center_i < 0 or not bool(ind.iloc[center_i].get(fractal_col, False)):
+        center_i = int(center_value)
+        if center_i < 0 or center_i >= len(ind) or not bool(ind.iloc[center_i].get(fractal_col, False)):
             continue
         center = ind.iloc[center_i]
-        trigger_base = float(center["high"] if side == "LONG" else center["low"])
+        # Use the confirmed pattern level rather than assuming the signal
+        # candle is exactly two bars before confirmation. Equal-extreme groups
+        # can require more than two right-side bars before confirmation.
+        trigger_base = float(level)
         protective = float(center["low"] if side == "LONG" else center["high"])
         teeth = float(row.get("teeth_shifted", 0.0) or 0.0)
         return confirmation_i, center_i, trigger_base, protective, teeth
