@@ -1263,3 +1263,19 @@ def test_futures_config_rejects_cross_margin_and_hedge_mode():
             "BINANCE_MARKET": "futures_usdt",
             "FUTURES_FORCE_ONE_WAY": "false",
         })
+
+
+def test_futures_config_rejects_noncanonical_execution_or_structure_timeframes():
+    import pytest
+
+    with pytest.raises(ValueError, match="EXECUTION_TIMEFRAME"):
+        TradingConfig.from_env({
+            "BINANCE_MARKET": "futures_usdt",
+            "EXECUTION_TIMEFRAME": "5m",
+        })
+    with pytest.raises(ValueError, match="STRUCTURAL_TIMEFRAMES"):
+        TradingConfig.from_env({
+            "BINANCE_MARKET": "futures_usdt",
+            "EXECUTION_TIMEFRAME": "1h",
+            "STRUCTURAL_TIMEFRAMES": "4h,1h,15m,5m",
+        })
