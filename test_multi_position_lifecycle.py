@@ -546,7 +546,7 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
     trader = _make_trader(client, db, symbols=["BTCUSDT"])
     result = trader.manual_sell("BTCUSDT")
 
-    assert result["sold"] is True, result
+    assert result["sold"] is True, result.get("error", result)
     assert result["partial"] is True
     assert abs(float(result["residual_quantity"]) - 0.4) < 1e-9
     trade = db.open_trade("BTCUSDT")
