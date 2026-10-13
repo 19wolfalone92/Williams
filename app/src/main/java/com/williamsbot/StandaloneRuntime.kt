@@ -1458,7 +1458,22 @@ private class NativeEngine(
 
     fun pause(): JSONObject {
         paused = true
-        return JSONObject().put("paused", true)
+        val pendingBefore = synchronized(pendingEntries) { pendingEntries.size }
+        runCatching {
+            cancelRestingCampaignEntriesForDailyRisk("PAUSED")
+        }.onFailure {
+            lastError = "Pause pending-entry cancellation unresolved: " +
+                (it.message ?: it.javaClass.simpleName)
+            reconcileRequired = true
+            prefs.edit().putBoolean("reconcile_required", true).apply()
+        }
+        val pendingAfter = synchronized(pendingEntries) { pendingEntries.size }
+        return JSONObject()
+            .put("paused", true)
+            .put("pending_entries_before", pendingBefore)
+            .put("pending_entries_after", pendingAfter)
+            .put("pending_entry_cancellation_resolved", pendingAfter == 0)
+            .put("state", stateName())
     }
 
     fun resume(): JSONObject {
