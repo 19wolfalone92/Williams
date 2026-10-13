@@ -3642,9 +3642,14 @@ private class NativeEngine(
         for (i in 0 until positions.length()) {
             val row = positions.optJSONObject(i) ?: continue
             val symbol = row.optString("symbol").uppercase(Locale.US)
-            if (symbol !in coreSymbols) continue
-            val signedQty = row.optString("positionAmt").toDoubleOrNull() ?: 0.0
+            val signedQty = row.optString("positionAmt").toDoubleOrNull()
+                ?: throw IllegalStateException("Malformed Futures position amount for $symbol")
             if (signedQty == 0.0) continue
+            if (symbol !in coreSymbols) {
+                throw IllegalStateException(
+                    "Unmanaged live Futures position outside the approved ten-symbol universe: $symbol"
+                )
+            }
             val direction = if (signedQty > 0.0) "LONG" else "SHORT"
             val intent = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.lastOrNull {
                 it.optString("intent_role", "ENTRY") == "ENTRY" &&
