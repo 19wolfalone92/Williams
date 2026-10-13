@@ -13,6 +13,7 @@ from feature_store import FeatureStore, build_market_feature_vector
 from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
 from williams_signals import extract_long_signal_specs
 from shadow_execution import ShadowExecutionSimulator
+from trading_config import DEFAULT_SYMBOLS
 
 
 log = logging.getLogger("williams-scanner")
@@ -135,15 +136,17 @@ class MarketScanner:
         # `None` means resolve the configured/default universe. An explicit []
         # remains a genuine empty test universe and does not fall back to all.
         self.explicit_symbols = symbols is not None
-        self.symbols = (
+        allowed_symbols = set(DEFAULT_SYMBOLS)
+        requested_symbols = (
             [str(x).upper().strip() for x in symbols if str(x).strip()]
             if symbols is not None
             else self._load_symbols()
         )
+        self.symbols = [x for x in requested_symbols if x in allowed_symbols]
 
-        self.scan_all_usdt = (
-            os.getenv("SCAN_ALL_USDT", "true").lower() == "true"
-        )  # dynamically discover Spot/USDT pairs
+        # Dynamic universe discovery is intentionally disabled for the Williams
+        # Spot runtime: scanner and execution must share the same five-pair allowlist.
+        self.scan_all_usdt = False
         self.scan_max_symbols = max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "0")))
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
@@ -217,13 +220,11 @@ class MarketScanner:
 
     def _load_symbols(self):
         raw = os.getenv("SCAN_SYMBOLS", "").strip()
-        # An explicit AUTO/ALL/* selection means dynamic Spot/USDT discovery.
-        # Otherwise an explicit list remains supported for deterministic tests.
-        if raw.upper() in {"ALL", "AUTO", "*"}:
-            return []
-        if raw:
-            return [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
-        return []
+        # ALL/AUTO/* means the fixed native Spot allowlist, never every exchange pair.
+        if not raw or raw.upper() in {"ALL", "AUTO", "*"}:
+            return list(DEFAULT_SYMBOLS)
+        requested = [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
+        return [x for x in requested if x in DEFAULT_SYMBOLS]
     def _atr(df, period):
         prev = df["close"].shift(1)
         tr = pd.concat(
@@ -346,14 +347,10 @@ class MarketScanner:
             return list(self.symbols)
 
         configured = self._load_symbols()
-        if configured:
-            self.symbols = list(configured)
-            return list(configured)
-
-        if self.scan_all_usdt:
-            return self._discover_usdt_symbols()
-
-        return list(self.symbols)
+        self.symbols = list(configured)
+        # Empty/invalid configuration fails closed; it must not fall back to
+        # dynamic exchange-wide discovery.
+        return list(configured)
 
     def _htf_confirmation(self, symbol):
         if not self.require_htf_confirmation:
