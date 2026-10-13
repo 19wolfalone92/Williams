@@ -307,11 +307,15 @@ class MultiPositionTrader:
                 continue
             try:
                 mark = float(self.client.ticker_price(symbol)["price"])
-            except Exception:
-                # A missing mark must never create extra risk capacity.
-                continue
-            if mark > 0:
-                equity += qty * mark
+            except Exception as exc:
+                raise RuntimeError(
+                    f"daily risk snapshot unavailable: mark missing for {symbol}"
+                ) from exc
+            if not math.isfinite(mark) or mark <= 0:
+                raise RuntimeError(
+                    f"daily risk snapshot unavailable: invalid mark for {symbol}"
+                )
+            equity += qty * mark
         return max(0.0, equity)
 
     def _balance(self):
@@ -1806,30 +1810,35 @@ class MultiPositionTrader:
     def _daily_entry_guard(self):
         """Block new entries on daily loss, trade count, streak or cooldown."""
         from datetime import datetime, timezone
-        account = self.client.account()
-        equity = self._portfolio_equity_quote(account)
-        unrealized = 0.0
-        for trade in self.open_trades():
-            symbol = str(trade["symbol"]).upper()
-            try:
+        try:
+            account = self.client.account()
+            equity = self._portfolio_equity_quote(account)
+            unrealized = 0.0
+            for trade in self.open_trades():
+                symbol = str(trade["symbol"]).upper()
                 mark = float(self.client.ticker_price(symbol)["price"])
-            except Exception:
-                continue
-            qty = float(trade.get("quantity", 0) or 0)
-            unrealized += (mark - float(trade.get("entry_price", 0) or 0)) * qty
+                if not math.isfinite(mark) or mark <= 0:
+                    raise RuntimeError(f"invalid mark for {symbol}")
+                qty = float(trade.get("quantity", 0) or 0)
+                entry = float(trade.get("entry_price", 0) or 0)
+                if qty < 0 or entry <= 0:
+                    raise RuntimeError(f"invalid open trade data for {symbol}")
+                unrealized += (mark - entry) * qty
 
-        realized = float(self.db.conn.execute(
-            "SELECT COALESCE(SUM(pnl),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
-        ).fetchone()[0] or 0.0)
-        fees = float(self.db.conn.execute(
-            "SELECT COALESCE(SUM(fees),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
-        ).fetchone()[0] or 0.0)
-        trades_today = int(self.db.conn.execute(
-            "SELECT COUNT(*) FROM trades WHERE entry_time >= date('now')"
-        ).fetchone()[0])
-        recent = self.db.conn.execute(
-            "SELECT pnl, exit_time FROM trades WHERE exit_time IS NOT NULL ORDER BY id DESC LIMIT 20"
-        ).fetchall()
+            fees = float(self.db.conn.execute(
+                "SELECT COALESCE(SUM(fees),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
+            ).fetchone()[0] or 0.0)
+            trades_today = int(self.db.conn.execute(
+                "SELECT COUNT(*) FROM trades WHERE entry_time >= date('now')"
+            ).fetchone()[0])
+            recent = self.db.conn.execute(
+                "SELECT pnl, exit_time FROM trades WHERE exit_time IS NOT NULL ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+        except Exception as exc:
+            return False, (
+                "DAILY_RISK_UNAVAILABLE: cannot verify account equity, open-position marks, "
+                f"or risk ledger ({type(exc).__name__})"
+            )
 
         if self.max_trades_per_day and trades_today >= self.max_trades_per_day:
             return False, f"MAX_TRADES_PER_DAY reached: {trades_today}"
