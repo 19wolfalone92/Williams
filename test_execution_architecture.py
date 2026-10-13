@@ -72,3 +72,35 @@ def test_market_context_persistence(tmp_path: Path):
     ).fetchone()
     assert row["version"] == 3
     assert '"long_probability": 0.7' in row["context_json"]
+
+
+
+def test_execution_barrier_fails_closed_when_durable_intent_persistence_fails():
+    from threading import RLock
+    from execution_barrier import ExecutionBarrier, OrderIntent
+
+    class Context:
+        execution_lock = RLock()
+
+        def snapshot(self):
+            raise AssertionError("context must not be read after failed durable persistence")
+
+    class BrokenDB:
+        def save_execution_intent(self, intent, status, reason=""):
+            raise OSError("simulated sqlite disk-full")
+
+        def log_event(self, *args, **kwargs):
+            pass
+
+    called = []
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_MARKET", {},
+        purpose="CAMPAIGN_ENTRY",
+        campaign_id="campaign-test",
+    )
+    result = ExecutionBarrier(Context(), BrokenDB()).execute(
+        intent, lambda: called.append("submitted")
+    )
+    assert result.accepted is False
+    assert "durable_intent_persistence_failed" in result.reason
+    assert called == []
