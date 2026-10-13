@@ -2131,6 +2131,18 @@ class MultiPositionTrader:
                 ]
             return self.execute_campaign(selections)
 
+        # The legacy market-BUY path bypasses the canonical campaign
+        # contracts and ExecutionBarrier. Never let an environment toggle
+        # re-enable it; unresolved configuration is BLOCKED, not discretionary.
+        return [
+            {
+                "symbol": selection.candidate.symbol,
+                "status": "BLOCKED",
+                "reason": "Legacy direct-market entry disabled; enable the canonical CampaignEngine path",
+            }
+            for selection in selections
+        ]
+
         if self.dry_run:
             return [
                 {
