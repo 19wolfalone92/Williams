@@ -153,6 +153,9 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
             return {"price": str(self.price)}
 
     runtime = object.__new__(FuturesWilliamsRuntime)
+    # Bypass the documented DRY_RUN short-circuit because this test exercises
+    # structural stop proposals, not the execution-mode gate.
+    runtime.dry_run = False
     runtime._tick = lambda symbol: 1.0
 
     calls = []
