@@ -110,6 +110,9 @@ def main() -> None:
 
     strategy = read("strategy.py")
     for needle in (
+        "def canonical_indicator_config_from_env(env=os.environ)",
+        "CANONICAL_WILLIAMS_INDICATOR_PARAMS",
+        "Non-canonical Williams indicator parameters are blocked",
         "def _profitunity_window(volume_up, mfi_up, valid=None)",
         '"fractal_up_confirmed"',
         '"confirmed_up_center_index"',
@@ -141,6 +144,7 @@ def main() -> None:
         must(signals, needle, "williams_signals.py")
 
     futures = read("futures_williams_runtime.py")
+    must(futures, "canonical_indicator_config_from_env()", "futures_williams_runtime.py")
     must(futures, "default_symbols = DEFAULT_FUTURES_SYMBOLS", "futures_williams_runtime.py")
     must(futures, "tuple(approved) != DEFAULT_FUTURES_SYMBOLS", "futures_williams_runtime.py")
     must(futures, '("LONG", long_specs, long_htf)', "futures_williams_runtime.py")
