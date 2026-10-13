@@ -791,6 +791,7 @@ private class NativeEngine(
     }
 
     private fun loadPersistedState() {
+        var persistedStateCorrupt = false
         synchronized(positions) {
             positions.clear()
             runCatching {
@@ -824,6 +825,10 @@ private class NativeEngine(
                         protectiveOrderId = item.optString("protective_order_id", "")
                     )
                 }
+            }.onFailure { failure ->
+                persistedStateCorrupt = true
+                lastError = "Persisted Futures positions are unreadable: " +
+                    (failure.message ?: failure.javaClass.simpleName)
             }
         }
 
@@ -857,6 +862,10 @@ private class NativeEngine(
                         signalType = item.optString("signal_type", "REVERSAL")
                     )
                 }
+            }.onFailure { failure ->
+                persistedStateCorrupt = true
+                lastError = "Persisted Futures pending entries are unreadable: " +
+                    (failure.message ?: failure.javaClass.simpleName)
             }
         }
 
@@ -866,6 +875,14 @@ private class NativeEngine(
         killLatched =
             (executionStore.readState("kill_latched")?.toBooleanStrictOrNull()
                 ?: prefs.getBoolean("kill_latched", false))
+        if (persistedStateCorrupt) {
+            reconcileRequired = true
+            persistSafetyFlag("reconcile_required", true)
+            stateMachine.force(
+                TradingState.RECONCILE_REQUIRED,
+                lastError ?: "Persisted Futures state is corrupt"
+            )
+        }
     }
 
     /**
