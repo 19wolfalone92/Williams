@@ -95,6 +95,14 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     fun setOneWayMode(): JSONObject =
         request("POST", "/fapi/v1/positionSide/dual", mapOf("dualSidePosition" to "false"), signed = true)
 
+    /** Fail closed if the account is in Hedge Mode; order methods use BOTH semantics. */
+    fun requireOneWayMode() {
+        val dualSide = positionMode().optBoolean("dualSidePosition", true)
+        check(!dualSide) {
+            "Futures account is in Hedge Mode; expected One-way Mode (dualSidePosition=false)"
+        }
+    }
+
     fun setIsolatedMargin(symbol: String): JSONObject {
         requireSymbol(symbol)
         return request("POST", "/fapi/v1/marginType", mapOf("symbol" to symbol, "marginType" to "ISOLATED"), signed = true)
@@ -183,6 +191,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         require(side == "BUY" || side == "SELL") { "Order side must be BUY or SELL" }
         require(quantity.toBigDecimalOrNull()?.signum() == 1) { "Quantity must be positive" }
         require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client order id" }
+        requireOneWayMode()
         val params = linkedMapOf(
             "symbol" to symbol,
             "side" to side,
@@ -215,6 +224,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             ?: throw IllegalArgumentException("Stop price must be numeric")
         require(stop.signum() > 0) { "Stop price must be positive" }
         require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client algo id" }
+        requireOneWayMode()
 
         // Validate trigger orientation against the current mark price. A stale or
         // unavailable mark price throws and therefore fails closed before mutation.
