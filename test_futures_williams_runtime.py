@@ -229,6 +229,7 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
 
 
 def test_teeth_close_exit_uses_only_closed_bars_for_long(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "NTD_FIVE_DIMENSIONS")
     # Rising trend followed by a completed close below the chart-aligned Teeth.
     n = 55
     close = [100.0 + i for i in range(n)]
@@ -268,6 +269,7 @@ def test_teeth_close_exit_uses_only_closed_bars_for_long(monkeypatch):
 
 
 def test_teeth_close_exit_uses_only_closed_bars_for_short(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "NTD_FIVE_DIMENSIONS")
     # Falling trend followed by a completed close above the chart-aligned Teeth.
     n = 55
     close = [200.0 - i for i in range(n)]
@@ -307,6 +309,7 @@ def test_teeth_close_exit_uses_only_closed_bars_for_short(monkeypatch):
 
 
 def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "NTD_FIVE_DIMENSIONS")
     n = 55
     close = [100.0 + i for i in range(n)]
     frame = pd.DataFrame({
@@ -343,6 +346,45 @@ def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypa
     # Five green bars activate the NTD rule: trail below the latest completed bar,
     # tighter than the older 3/5-bar structural minimum in this monotonic test.
     assert math.isclose(proposed[-1], float(frame.iloc[-2]["low"]) - 0.1)
+
+
+def test_tc2_profile_does_not_apply_ntd_teeth_close_exit(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "TC2_THREE_WISE_MEN")
+    n = 55
+    close = [100.0 + i for i in range(n)]
+    close[-2] = 90.0
+    frame = pd.DataFrame({
+        "open": [x + 0.2 for x in close],
+        "high": [x + 1.0 for x in close],
+        "low": [x - 1.0 for x in close],
+        "close": close,
+        "volume": [1000.0] * n,
+    })
+
+    class Client:
+        def ticker_price(self, symbol):
+            return {"price": "91"}
+
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime.dry_run = False
+    runtime.client = Client()
+    runtime._tick = lambda symbol: 0.1
+    proposed = []
+    runtime._replace_protection = lambda campaign, price, **kwargs: proposed.append(price) or True
+    runtime._exit_market = lambda campaign, reason: (_ for _ in ()).throw(
+        AssertionError("NTD-specific Teeth exit leaked into TC2")
+    )
+    monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *args, **kwargs: frame)
+    campaign = type("C", (), {
+        "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 80.0,
+        "execution_timeframe": "1h", "state": CampaignState.TREND_ACTIVE,
+        "tags": {},
+    })()
+
+    result = runtime._trail(campaign)
+    assert result.get("reason") != "TEETH_CLOSE_EXIT"
+    assert "ntd_five_colour_trail_active" not in campaign.tags
+    assert proposed
 
 
 def test_pending_signal_rejects_illegal_backward_transition():
