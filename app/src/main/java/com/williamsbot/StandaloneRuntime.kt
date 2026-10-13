@@ -3624,7 +3624,32 @@ private class NativeEngine(
             scannerError = reconciliation.optString("blocker", "Futures reconciliation failed")
             reconcileRequired = true
             prefs.edit().putBoolean("reconcile_required", true).commit()
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, scannerError ?: "Futures reconciliation failed")
             return false
+        }
+        reconcileRequired = false
+        prefs.edit().putBoolean("reconcile_required", false).commit()
+        when (futuresCampaignCoordinator.state) {
+            NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED ->
+                stateMachine.force(TradingState.PROTECTED, "Exchange confirms Futures position protected")
+            NativeFuturesCampaignCoordinator.State.ENTRY_PENDING ->
+                stateMachine.force(TradingState.ENTRY_PENDING, "Futures entry intent pending exchange fill")
+            NativeFuturesCampaignCoordinator.State.READY ->
+                stateMachine.force(TradingState.READY_FLAT, "Futures account reconciled and flat")
+            NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
+            NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED -> {
+                reconcileRequired = true
+                prefs.edit().putBoolean("reconcile_required", true).commit()
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, futuresCampaignCoordinator.lastBlocker ?: "Futures protection missing")
+                return false
+            }
+            NativeFuturesCampaignCoordinator.State.EXIT_PENDING,
+            NativeFuturesCampaignCoordinator.State.UNINITIALIZED -> {
+                reconcileRequired = true
+                prefs.edit().putBoolean("reconcile_required", true).commit()
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, "Futures coordinator not in a tradable reconciled state")
+                return false
+            }
         }
         val positions = futuresCampaignCoordinator.positionsSnapshot()
         val intents = futuresCampaignCoordinator.intentsSnapshot()
