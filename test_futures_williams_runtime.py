@@ -5,7 +5,7 @@ import pandas as pd
 
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingSignal, SignalRole, SignalSpec, SignalState, SignalType, stop_only_reduces_risk
-from futures_williams_runtime import FuturesWilliamsRuntime, FuturesWilliamsScanner
+from futures_williams_runtime import FuturesWilliamsRuntime, FuturesWilliamsScanner, _pending_entry_preflight_reason
 from trading_config import TradingConfig, DEFAULT_SYMBOLS, DEFAULT_FUTURES_SYMBOLS
 from williams_signals import (
     extract_long_signal_specs, extract_short_signal_specs,
@@ -1102,3 +1102,39 @@ def test_default_config_keeps_intraday_h1_and_market_specific_universes():
     spot = TradingConfig.from_env({"BINANCE_MARKET": "spot"})
     assert spot.symbols == DEFAULT_SYMBOLS
     assert len(spot.symbols) == 5
+
+
+
+def test_final_entry_preflight_blocks_expired_or_already_crossed_williams_triggers():
+    from types import SimpleNamespace
+
+    intent = SimpleNamespace(signal_id="BTCUSDT:1h:FRACTAL:1000", side="BUY")
+    pending = {
+        "state": "VALIDATED",
+        "signal": {
+            "signal_id": intent.signal_id,
+            "side": "BUY",
+            "trigger_price": 100.0,
+            "expires_at_ms": 5000,
+        },
+    }
+    assert _pending_entry_preflight_reason(pending, intent, 99.9, now_ms=2000) == ""
+    assert "already_crossed" in _pending_entry_preflight_reason(
+        pending, intent, 100.0, now_ms=2000
+    )
+    assert _pending_entry_preflight_reason(pending, intent, 99.9, now_ms=5000) == "pending_signal_expired"
+
+    short_intent = SimpleNamespace(signal_id="ETHUSDT:1h:SUPER_AO:1000", side="SELL")
+    short_pending = {
+        "state": "VALIDATED",
+        "signal": {
+            "signal_id": short_intent.signal_id,
+            "side": "SELL",
+            "trigger_price": 200.0,
+            "expires_at_ms": 5000,
+        },
+    }
+    assert _pending_entry_preflight_reason(short_pending, short_intent, 200.1, now_ms=2000) == ""
+    assert "already_crossed" in _pending_entry_preflight_reason(
+        short_pending, short_intent, 199.9, now_ms=2000
+    )
