@@ -793,6 +793,11 @@ def test_ntd_external_fractal_is_initial_entry_and_requires_untriggered_breakout
     assert extract_ntd_fractal_signal_specs(
         "BTCUSDT", ind, side="LONG", timeframe="5m", tick_size=0.1
     ) == []
+    ind.loc[7, "high"] = 104.2
+    ind.loc[6, "high"] = 105.2  # The second right-hand bar crossed before confirmation.
+    assert extract_ntd_fractal_signal_specs(
+        "BTCUSDT", ind, side="LONG", timeframe="5m", tick_size=0.1
+    ) == []
 
 
 def test_ntd_ao_saucer_is_an_explicit_conditional_entry():
