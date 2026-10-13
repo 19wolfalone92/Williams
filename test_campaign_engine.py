@@ -125,7 +125,9 @@ def test_campaign_entry_arm_rejects_expired_signal_even_if_called_directly():
         make_signal(SignalType.REVERSAL, bar=now_ms - 120_000),
         expires_at_ms=now_ms - 1,
     )
-    engine = CampaignEngine(None)
-    campaign = engine.create_campaign(expired, initial_risk_pct=0.001)
-    with pytest.raises(ValueError, match="expired Williams entry signal"):
-        engine.arm_entry(campaign, expired)
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "expired-signal.sqlite3"))
+        engine = CampaignEngine(db)
+        campaign = engine.create_campaign(expired, initial_risk_pct=0.001)
+        with pytest.raises(ValueError, match="expired Williams entry signal"):
+            engine.arm_entry(campaign, expired)
