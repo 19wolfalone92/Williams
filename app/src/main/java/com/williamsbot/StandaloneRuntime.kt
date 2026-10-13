@@ -7780,26 +7780,28 @@ private class NativeEngine(
         }
 
         var balance: Double? = liveUsdtBalance.takeIf { it > 0.0 }
+        // Dashboard positions/PnL must come from the Futures exchange snapshot,
+        // never the retired Spot PositionState cache.
+        val futuresPositions = runCatching { futuresPositionSnapshot() }.getOrDefault(JSONArray())
+        val firstPosition = futuresPositions.optJSONObject(0)
         var livePnl = 0.0
-        var livePnlPct = 0.0
-
-        positionList().forEach { position ->
-            val mark = (
-                livePrices[position.symbol]
-                    ?: if (position.symbol == primarySymbol) {
-                        primaryCandles.lastOrNull()?.c
-                    } else {
-                        null
-                    }
-                ) ?: 0.0
-            if (mark > 0.0) {
-                livePnl += (mark - position.entry) * position.qty
-            }
+        var totalEntryNotional = 0.0
+        for (i in 0 until futuresPositions.length()) {
+            val row = futuresPositions.optJSONObject(i) ?: continue
+            livePnl += row.optDouble("unrealized_pnl_usdt", 0.0)
+            val entry = row.optDouble("entry", 0.0)
+            val qty = row.optDouble("qty", 0.0)
+            if (entry > 0.0 && qty > 0.0) totalEntryNotional += entry * qty
         }
-        val totalEntryNotional =
-            positionList().sumOf { it.entry * it.qty }
-        if (totalEntryNotional > 0.0) {
-            livePnlPct = livePnl / totalEntryNotional
+        val livePnlPct = if (totalEntryNotional > 0.0) livePnl / totalEntryNotional else 0.0
+        val futuresIntents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
+        val futuresReservedRiskPct = (0 until futuresIntents.length()).sumOf { i ->
+            val intent = futuresIntents.optJSONObject(i) ?: return@sumOf 0.0
+            val status = intent.optString("exchange_status").uppercase(Locale.US)
+            if (intent.optString("intent_role", "ENTRY") == "ENTRY" && status in setOf(
+                "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN",
+                "ACCEPTED", "TRIGGERED", "OPEN_PROTECTED", "POSITION_OPEN"
+            )) intent.optDouble("risk_pct", 0.0) else 0.0
         }
 
         if (!fast && key().isNotBlank() && secret().isNotBlank() && !restAccountReady) {
@@ -7813,7 +7815,6 @@ private class NativeEngine(
         }
 
         val dailyGuard = dailyTradeGuard()
-        val futuresPositions = runCatching { futuresPositionSnapshot() }.getOrDefault(JSONArray())
         val futuresRuntimeStatus = runCatching { futuresCampaignCoordinator.status() }
             .getOrElse { JSONObject().put("state", "RECONCILE_REQUIRED").put("blocker", it.message ?: it.javaClass.simpleName) }
 
