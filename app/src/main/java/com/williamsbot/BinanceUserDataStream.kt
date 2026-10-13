@@ -73,10 +73,20 @@ class BinanceUserDataStream(
 
             try {
                 val listenKey = createListenKey(apiKey)
-                // USDⓈ-M Futures user streams identify the listen key in the URL path.
-                // Do not reuse the Spot WS API signed-subscription protocol or query shape.
-                val streamUrl = endpoint.trimEnd('/') + "/" +
+                // Put the listen key in the path while preserving the Futures endpoint's
+                // event-filter query. Appending after '?' would corrupt the query value.
+                val baseUri = java.net.URI(endpoint)
+                val streamPath = baseUri.path.trimEnd('/') + "/" +
                     URLEncoder.encode(listenKey, "UTF-8")
+                val streamUrl = java.net.URI(
+                    baseUri.scheme,
+                    baseUri.userInfo,
+                    baseUri.host,
+                    baseUri.port,
+                    streamPath,
+                    baseUri.query,
+                    baseUri.fragment
+                ).toASCIIString()
                 val request = Request.Builder().url(streamUrl).build()
 
                 socket = http.newWebSocket(
