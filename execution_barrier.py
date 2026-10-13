@@ -137,13 +137,19 @@ class ExecutionBarrier:
             if age > intent.max_age_ms:
                 return f"stale intent age={age}ms"
 
-        # Campaign orders may be armed from a freshly constructed signal before
-        # the context service has assigned persistent versions.  They still
-        # require at least one live snapshot; the campaign pre-submit validator
-        # is responsible for the exact strategy/risk re-check.
-        if not intent.required_context_versions:
-            if not intent.purpose.upper().startswith("CAMPAIGN_"):
-                return "missing required_context_versions"
+        purpose = str(intent.purpose or "").upper()
+        entry_purposes = {
+            "ENTRY",
+            "CAMPAIGN_ENTRY",
+            "CAMPAIGN_ADD_ON",
+            "ADD_ON",
+        }
+        # New exposure must carry versioned context and pass the operative
+        # timeframe permission check at the final execution boundary. A
+        # campaign-specific pre-submit callback is supplementary, not a
+        # substitute for the canonical admission contract.
+        if purpose in entry_purposes and not intent.required_context_versions:
+            return "missing required_context_versions"
         for tf, required in intent.required_context_versions.items():
             ctx = snapshot.context(intent.symbol, tf)
             if ctx is None:
@@ -155,10 +161,9 @@ class ExecutionBarrier:
         if not direction:
             return f"unsupported side {intent.side}"
 
-        # All declared TFs are version dependencies, but the permission
-        # decision belongs to one operative/entry timeframe. Higher TFs provide
-        # structural context and must not be required to emit a duplicate trigger.
-        if intent.purpose.upper() == "ENTRY":
+        # Permission applies to exposure-increasing entry/add-on intents. Do not
+        # apply entry-direction permission to SELL exits or protective repairs.
+        if purpose in entry_purposes:
             permission_tf = (intent.permission_interval or "").lower()
             permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
             if permission_ctx is None:
