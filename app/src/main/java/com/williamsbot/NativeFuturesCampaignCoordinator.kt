@@ -423,6 +423,26 @@ internal class NativeFuturesCampaignCoordinator(
                 val status = intent.optString("exchange_status").uppercase(Locale.US)
                 if (status !in activeStatuses) continue
                 val clientId = intent.optString("client_id")
+                if (status == "CANCEL_SUBMISSION_UNKNOWN") {
+                    // A previous cancellation may have reached Binance before process death.
+                    // Query the exchange; never issue the same cancel again blindly.
+                    val observed = when (intent.optString("kind")) {
+                        EntryKind.LIMIT.name -> runCatching { adapter.order(symbol, clientId) }.getOrNull()
+                        EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name ->
+                            runCatching { adapter.queryAlgoOrder(symbol, clientId) }.getOrNull()
+                        else -> throw IllegalStateException("Unknown pending-entry type; cannot reconcile cancellation")
+                    }
+                    val observedStatus = observed?.optString("status", observed.optString("algoStatus", ""))
+                        ?.uppercase(Locale.US).orEmpty()
+                    if (observedStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED", "FINISHED")) {
+                        intent.put("exchange_status", "CANCELED")
+                            .put("cancel_reconciled_status", observedStatus)
+                            .put("canceled_at_ms", System.currentTimeMillis())
+                        saveIntents(all)
+                        continue
+                    }
+                    throw IOException("Cancellation outcome for $clientId remains ambiguous; no repeated cancel sent")
+                }
                 intent.put("exchange_status", "CANCEL_SUBMISSION_UNKNOWN")
                     .put("cancel_reason", reason)
                     .put("cancel_attempt_at_ms", System.currentTimeMillis())
