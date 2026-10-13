@@ -3793,6 +3793,16 @@ private class NativeEngine(
     }
 
     private fun submitNativeFuturesCampaignEntry(candidate: BaseAnalysis) {
+        // Re-check equity immediately before any order mutation. The periodic
+        // worker check is not sufficient because a manual scan can race it.
+        val dailyLossAllowsEntry = runCatching { checkFuturesDailyLoss() }.getOrElse { failure ->
+            paused = true
+            prefs.edit().putBoolean("auto_run", false).commit()
+            lastError = "FUTURES_DAILY_LOSS_CHECK_FAILED: " +
+                (failure.message ?: failure.javaClass.simpleName)
+            false
+        }
+        if (!dailyLossAllowsEntry) return
         if (!executionReady() || !candidate.campaignReady) return
         if (candidate.spreadPct !in 0.0..maxSpreadPct) return
         val signal = campaignEntryCandidate(candidate) ?: return
