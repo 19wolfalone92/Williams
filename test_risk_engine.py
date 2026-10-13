@@ -16,6 +16,7 @@ def test_good_trade():
         signal_strength=1.0,
         htf_confirmed=True,
         spread_pct=0.0003,
+        invalidation_price=98000,
     )
 
     assert result.allowed is True
@@ -42,6 +43,7 @@ def test_risk_based_position_size():
         signal_strength=1.0,
         htf_confirmed=True,
         spread_pct=0.0002,
+        invalidation_price=4900,
     )
 
     # ATR = 1% of price.
@@ -103,6 +105,7 @@ def test_bad_rr_is_blocked():
         signal_strength=1.0,
         htf_confirmed=True,
         spread_pct=0.0002,
+        invalidation_price=980,
         stop_atr_multiplier=2.0,
         target_atr_multiplier=4.0,
     )
@@ -122,6 +125,8 @@ def test_score_prefers_stronger_setup():
         signal_strength=1.0,
         htf_confirmed=True,
         spread_pct=0.0002,
+        invalidation_price=99000,
+        invalidation_price=99000,
     )
 
     weak = engine.analyse(
@@ -131,6 +136,7 @@ def test_score_prefers_stronger_setup():
         signal_strength=0.5,
         htf_confirmed=False,
         spread_pct=0.0012,
+        invalidation_price=4400,
     )
 
     assert strong.allowed is True
@@ -203,6 +209,7 @@ def test_default_risk_is_half_percent():
         signal_strength=1.0,
         htf_confirmed=True,
         spread_pct=0.0002,
+        invalidation_price=99000,
     )
     assert result.allowed is True
     assert result.risk_quote == 50
@@ -284,4 +291,18 @@ def test_valid_structural_invalidation_is_used_for_both_directions():
     assert long_result.stop_price == 99000
     assert short_result.allowed is True
     assert short_result.stop_price == 101000
+
+
+def test_missing_structural_invalidation_blocks_without_atr_fallback():
+    engine = RiskEngine(balance_quote=10000)
+    result = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100000,
+        atr=500,
+        side="LONG",
+    )
+    assert result.allowed is False
+    assert result.stop_price == 0.0
+    assert result.position_quote == 0.0
+    assert "structural invalidation stop is required" in result.reason
 
