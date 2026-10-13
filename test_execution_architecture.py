@@ -156,3 +156,64 @@ def test_execution_barrier_allows_wm1_before_directional_context_turns_but_honor
         signal_type="REVERSAL", client_order_id="wm1-entry-2",
     )
     assert "D1 macro context vetoes" in barrier._validate(refreshed, cache.snapshot())
+
+
+def test_futures_execution_barrier_blocks_when_admission_audit_persistence_fails():
+    class FailingAuditDB:
+        def __init__(self):
+            self.intents = []
+
+        def state_get(self, key, default=None):
+            return default
+
+        def save_execution_intent(self, intent, status, reason=""):
+            self.intents.append((status, reason))
+
+        def save_execution_event(self, intent_id, event, payload):
+            raise OSError("simulated audit store failure")
+
+    db = FailingAuditDB()
+    barrier = ExecutionBarrier(ContextCache(), db)
+    submissions = []
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "MARKET", {},
+        purpose="EXIT", client_order_id="futures-exit-audit-fail",
+    )
+    result = barrier.execute(intent, lambda: submissions.append(True))
+    assert not result.accepted
+    assert "ADMISSION_STARTED" in result.reason
+    assert submissions == []
+
+
+def test_futures_execution_barrier_marks_post_submit_audit_failure_ambiguous():
+    class FailingFinalAuditDB:
+        def __init__(self):
+            self.intents = []
+
+        def state_get(self, key, default=None):
+            return default
+
+        def save_execution_intent(self, intent, status, reason=""):
+            self.intents.append((status, reason))
+
+        def save_execution_event(self, intent_id, event, payload):
+            if event == "BINANCE_SUBMITTED":
+                raise OSError("simulated final audit store failure")
+
+    db = FailingFinalAuditDB()
+    barrier = ExecutionBarrier(ContextCache(), db)
+    submissions = []
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "MARKET", {},
+        purpose="EXIT", client_order_id="futures-exit-final-audit-fail",
+    )
+    try:
+        barrier.execute(
+            intent,
+            lambda: submissions.append(True) or {"status": "NEW", "orderId": 321},
+        )
+        assert False, "expected reconciliation error after exchange submission"
+    except RuntimeError as exc:
+        assert "BINANCE_SUBMITTED event persistence failed" in str(exc)
+    assert submissions == [True]
+    assert any(status == "AMBIGUOUS" for status, _ in db.intents)
