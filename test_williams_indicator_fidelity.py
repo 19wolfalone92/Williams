@@ -131,12 +131,24 @@ def test_wm3_consumers_use_actual_confirmation_and_whole_plateau_stop():
     assert specs[0].protective_reference == 10.0
 
 
+def test_alligator_decision_lines_are_current_not_chart_displaced():
+    highs = [100 + (i * 0.05) ** 2 + 1 for i in range(80)]
+    lows = [h - 2.0 for h in highs]
+    ind = calculate_indicators(make_frame(highs, lows), config_from_env({}))
+    pd.testing.assert_series_equal(ind["jaw_current"], ind["jaw"], check_names=False)
+    pd.testing.assert_series_equal(ind["teeth_current"], ind["teeth"], check_names=False)
+    pd.testing.assert_series_equal(ind["lips_current"], ind["lips"], check_names=False)
+    pd.testing.assert_series_equal(ind["balance_line"], ind["jaw"], check_names=False)
+    # Legacy displaced columns remain available but must not feed decision aliases.
+    assert not ind["jaw_current"].equals(ind["jaw_shifted"])
+
+
 def test_balance_line_and_profitunity_macd_components_are_explicit():
     highs = [100 + (i * 0.05) ** 2 + 1 for i in range(80)]
     lows = [h - 2.0 for h in highs]
     ind = calculate_indicators(make_frame(highs, lows), config_from_env({}))
     pd.testing.assert_series_equal(
-        ind["balance_line"], ind["jaw_shifted"], check_names=False
+        ind["balance_line"], ind["jaw_current"], check_names=False
     )
     pd.testing.assert_series_equal(
         ind["profitunity_macd_line"], ind["ao"], check_names=False
