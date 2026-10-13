@@ -2252,34 +2252,37 @@ class MultiPositionTrader:
 
 
     def scan_and_execute(self):
-        recovery = self.recover()
-        if not recovery["ok"]:
+        """Run one canonical campaign cycle without repeating full startup recovery."""
+        if not self.campaign_engine_enabled:
+            return {
+                "status": "BLOCKED",
+                "results": [],
+                "reason": "Legacy direct-market entry disabled; canonical CampaignEngine is required",
+            }
+
+        # Reconcile ambiguous exchange mutations first, then continue managing
+        # existing campaigns even if another symbol remains unresolved.
+        pending_recovery = self.campaign_execution.reconcile_pending_entries()
+        active_recovery = self.campaign_execution.reconcile_active_campaigns()
+        campaign_monitor = self.campaign_monitor.monitor_all()
+        unresolved = self.unresolved_symbols()
+        pending_entries = self._pending_entries()
+        recovery = {
+            "ok": not unresolved and not pending_entries,
+            "unresolved_symbols": unresolved,
+            "pending_entries": [row[0] for row in pending_entries],
+            "results": pending_recovery + active_recovery,
+        }
+        if unresolved or pending_entries:
             return {
                 "status": "BLOCKED",
                 "recovery": recovery,
+                "pending_recovery": pending_recovery,
+                "active_recovery": active_recovery,
+                "campaign_monitor": campaign_monitor,
                 "results": [],
+                "reason": "campaign reconciliation required",
             }
-
-        if self.campaign_engine_enabled:
-            pending_recovery = self.campaign_execution.reconcile_pending_entries()
-            active_recovery = self.campaign_execution.reconcile_active_campaigns()
-            # Manage open campaigns before looking for new opportunities. If a
-            # protection mutation becomes ambiguous, the whole execution path
-            # stays fail-closed.
-            campaign_monitor = self.campaign_monitor.monitor_all()
-            # A resolved/verified pending campaign is now represented by the
-            # campaign state; unresolved mutation remains a hard global block.
-            unresolved = self.unresolved_symbols()
-            if unresolved:
-                return {
-                    "status": "BLOCKED",
-                    "recovery": recovery,
-                    "pending_recovery": pending_recovery,
-                    "active_recovery": active_recovery,
-                    "campaign_monitor": campaign_monitor,
-                    "results": [],
-                    "reason": "campaign reconciliation required",
-                }
 
         allowed, risk_reason = self._daily_entry_guard()
         if not allowed:
