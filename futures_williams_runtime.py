@@ -289,12 +289,32 @@ class FuturesWilliamsScanner:
 
     def scan(self) -> list[FuturesCandidate]:
         result: list[FuturesCandidate] = []
-        for symbol in self.universe(int(os.getenv("FUTURES_SCAN_TOP_N", "40"))):
+        symbols = self.universe()
+        if len(symbols) != 10:
+            self.last_scan_status = {
+                "state": "BLOCKED",
+                "reason": self.last_universe_error or "FUTURES_UNIVERSE_NOT_EXACTLY_TEN",
+                "configured_symbols": len(symbols),
+                "evaluated_symbols": 0,
+            }
+            return []
+        evaluated = []
+        failures = {}
+        for symbol in symbols:
             try:
                 result.extend(self.analyse(symbol))
-            except Exception:
-                continue
+                evaluated.append(symbol)
+            except Exception as exc:
+                failures[symbol] = type(exc).__name__
         result.sort(key=lambda c: (c.signal.signal_bar_time_ms, -c.score))
+        self.last_scan_status = {
+            "state": "COMPLETE" if len(evaluated) == 10 else "PARTIAL",
+            "reason": None if len(evaluated) == 10 else "ONE_OR_MORE_SYMBOL_EVALUATIONS_FAILED",
+            "configured_symbols": len(symbols),
+            "evaluated_symbols": len(evaluated),
+            "symbols": evaluated,
+            "failures": failures,
+        }
         return result
 
 
@@ -2161,6 +2181,15 @@ class FuturesWilliamsRuntime:
             self.db.log_event("INFO", "futures_dry_run_cycle", "DRY_RUN=true; no strategy orders or exits submitted")
             return []
         candidates = self.scanner.scan()
+        scan_status = getattr(self.scanner, "last_scan_status", {})
+        if scan_status.get("state") != "COMPLETE":
+            self.db.log_event(
+                "ERROR",
+                "futures_scanner_blocked",
+                str(scan_status.get("reason") or "FUTURES_SCANNER_NOT_COMPLETE"),
+                scan_status,
+            )
+            return []
         by_symbol = {}
         for c in candidates:
             by_symbol.setdefault(c.symbol, []).append(c)
