@@ -109,6 +109,13 @@ def calculate_indicators(df, cfg):
     x["jaw_shifted"] = x["jaw"].shift(cfg["jaw_shift"])
     x["teeth_shifted"] = x["teeth"].shift(cfg["teeth_shift"])
     x["lips_shifted"] = x["lips"].shift(cfg["lips_shift"])
+    # Keep both semantic domains explicit: *_shifted is a legacy/display
+    # alignment column; executable decisions use the current-time SMMA values.
+    # The Alligator's forward chart displacement is not a licence to compare
+    # today's price against an eight/five/three-bar-old line.
+    x["jaw_current"] = x["jaw"]
+    x["teeth_current"] = x["teeth"]
+    x["lips_current"] = x["lips"]
 
     # Gator Oscillator: display-only convergence/divergence of displaced
     # Alligator lines. Its bars are diagnostics, never an extra entry gate.
@@ -146,7 +153,7 @@ def calculate_indicators(df, cfg):
 
     # NTD names the current-timeframe blue Jaw line the Balance Line. Teeth
     # remains the red Balance Line one degree lower when used as a fractal gate.
-    x["balance_line"] = x["jaw_shifted"]
+    x["balance_line"] = x["jaw_current"]
     x["balance_line_distance_pct"] = (
         (x["close"] - x["balance_line"]) / x["close"].replace(0, np.nan)
     )
@@ -280,16 +287,16 @@ def calculate_indicators(df, cfg):
     x["last_down_level"] = x["confirmed_down_level"].ffill()
 
     # Alligator direction / awake state.
-    mouth_values = x[["jaw_shifted", "teeth_shifted", "lips_shifted"]]
+    mouth_values = x[["jaw_current", "teeth_current", "lips_current"]]
     x["bullish_alligator"] = (
-        (x["lips_shifted"] > x["teeth_shifted"])
-        & (x["teeth_shifted"] > x["jaw_shifted"])
-        & (x["close"] > x["lips_shifted"])
+        (x["lips_current"] > x["teeth_current"])
+        & (x["teeth_current"] > x["jaw_current"])
+        & (x["close"] > x["lips_current"])
     )
     x["bearish_alligator"] = (
-        (x["lips_shifted"] < x["teeth_shifted"])
-        & (x["teeth_shifted"] < x["jaw_shifted"])
-        & (x["close"] < x["lips_shifted"])
+        (x["lips_current"] < x["teeth_current"])
+        & (x["teeth_current"] < x["jaw_current"])
+        & (x["close"] < x["lips_current"])
     )
     spread = (
         mouth_values.max(axis=1) - mouth_values.min(axis=1)
@@ -301,13 +308,13 @@ def calculate_indicators(df, cfg):
     # when its peak is above the red Balance Line (Teeth); sells are mirrored.
     x["long_fractal_outside"] = (
         x["last_up_level"].notna()
-        & x["teeth_shifted"].notna()
-        & (x["last_up_level"] > x["teeth_shifted"])
+        & x["teeth_current"].notna()
+        & (x["last_up_level"] > x["teeth_current"])
     )
     x["short_fractal_outside"] = (
         x["last_down_level"].notna()
         & x["teeth_shifted"].notna()
-        & (x["last_down_level"] < x["teeth_shifted"])
+        & (x["last_down_level"] < x["teeth_current"])
     )
 
     # Fractal breakout triggers.
@@ -336,14 +343,14 @@ def calculate_indicators(df, cfg):
     x["bullish_reversal_bar"] = (
         (x["low"] < prior_low)
         & (close_location >= 0.50)
-        & x["jaw_shifted"].notna()
-        & (x["low"] < x[["jaw_shifted", "teeth_shifted", "lips_shifted"]].min(axis=1))
+        & x["jaw_current"].notna()
+        & (x["low"] < x[["jaw_current", "teeth_current", "lips_current"]].min(axis=1))
     )
     x["bearish_reversal_bar"] = (
         (x["high"] > prior_high)
         & (close_location <= 0.50)
         & x["jaw_shifted"].notna()
-        & (x["high"] > x[["jaw_shifted", "teeth_shifted", "lips_shifted"]].max(axis=1))
+        & (x["high"] > x[["jaw_current", "teeth_current", "lips_current"]].max(axis=1))
     )
     x["long_reversal_signal"] = x["bullish_reversal_bar"]
     x["short_reversal_signal"] = x["bearish_reversal_bar"]
