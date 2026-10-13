@@ -127,6 +127,7 @@ class ControlState:
         self.paused = False
         self.last_error = None
         self.desired_running = False
+        self.explicit_rearm_requested = False
         self.api_key = ''
         self.api_secret = ''
         self.testnet = True
@@ -238,10 +239,25 @@ class ControlState:
 
     def loop(self):
         t = self.ensure_trader()
+        explicit_rearm = bool(self.explicit_rearm_requested)
         try:
+            latched = str(t.db.state_get('kill_switch_latched', 'false')).lower() == 'true'
+            if latched and not explicit_rearm:
+                raise RuntimeError(
+                    'KILL_SWITCH_LATCHED: automatic startup cannot re-arm the trading runtime'
+                )
+
             t.setup()
-            # A successful explicit START is the controlled re-arm after KILL.
-            t.db.state_set('kill_switch_latched', 'false')
+            multi = self.ensure_multi()
+            if latched:
+                # t.setup() runs the canonical exchange/SQLite recovery gate.
+                # Clear the latch only after that recovery has completed cleanly.
+                if multi.unresolved_symbols() or multi._pending_entries():
+                    raise RuntimeError(
+                        'KILL_SWITCH_LATCHED: explicit re-arm blocked by unresolved exchange state'
+                    )
+                t.db.state_set('kill_switch_latched', 'false')
+            self.explicit_rearm_requested = False
             with self.lock:
                 self.running = True
                 self.desired_running = True
@@ -281,10 +297,11 @@ class ControlState:
             except Exception:
                 pass
         finally:
+            self.explicit_rearm_requested = False
             with self.lock:
                 self.running = False
 
-    def start(self):
+    def start(self, explicit_rearm=False):
         with self.lock:
             blocker = execution_start_blocker(
                 os.environ,
@@ -296,11 +313,20 @@ class ControlState:
                 self.last_error = blocker
                 self.desired_running = False
                 return False
-            if (
-                self.thread is not None
-                and self.thread.is_alive()
-            ):
+            if self.thread is not None and self.thread.is_alive():
                 return False
+
+            t = self.ensure_trader()
+            latched = str(t.db.state_get('kill_switch_latched', 'false')).lower() == 'true'
+            if latched and not explicit_rearm:
+                self.last_error = (
+                    'KILL_SWITCH_LATCHED: automatic startup is blocked; '
+                    'use explicit START after exchange reconciliation'
+                )
+                self.desired_running = False
+                return False
+
+            self.explicit_rearm_requested = bool(explicit_rearm)
             self.paused = False
             self.thread = threading.Thread(
                 target=self.loop,
@@ -1317,7 +1343,9 @@ def market_snapshot(symbol: Optional[str] = None, depth: int = 20, trades: int =
 
 @app.post('/api/v1/control/start', dependencies=[Depends(auth)])
 def start():
-    return {'started': state.start()}
+    # An authenticated operator action may request re-arm, but the loop only
+    # clears the latch after canonical exchange/SQLite recovery succeeds.
+    return {'started': state.start(explicit_rearm=True)}
 
 
 @app.post('/api/v1/control/stop', dependencies=[Depends(auth)])
