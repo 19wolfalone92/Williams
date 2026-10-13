@@ -7807,6 +7807,19 @@ private class NativeEngine(
                 "ACCEPTED", "TRIGGERED", "OPEN_PROTECTED", "POSITION_OPEN"
             )) intent.optDouble("risk_pct", 0.0) else 0.0
         }
+        val utcDayStart = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val futuresTradesToday = (0 until futuresIntents.length()).count { i ->
+            val intent = futuresIntents.optJSONObject(i) ?: return@count false
+            intent.optString("intent_role") == "EXIT" &&
+                intent.optLong("created_at_ms", 0L) >= utcDayStart
+        }
+        val futuresDailyPnl = prefs.getString("futures_daily_pnl_usdt", "0")
+            ?.toDoubleOrNull() ?: 0.0
 
         if (!fast && key().isNotBlank() && secret().isNotBlank() && !restAccountReady) {
             runCatching {
@@ -7887,10 +7900,17 @@ private class NativeEngine(
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
-            .put("trades_today", dailyGuard.optInt("trades_today", 0))
-            .put("daily_pnl_usdt", dailyGuard.optDouble("daily_pnl_usdt", 0.0))
-            .put("consecutive_losses", dailyGuard.optInt("consecutive_losses", 0))
-            .put("trading_mode", dailyGuard.optString("mode", "ACTIVE"))
+            .put("trades_today", futuresTradesToday)
+            .put("daily_pnl_usdt", futuresDailyPnl)
+            .put("consecutive_losses", JSONObject.NULL)
+            .put("consecutive_losses_available", false)
+            .put("trading_mode", when {
+                killLatched -> "KILL_SWITCH_LATCHED"
+                reconcileRequired -> "RECONCILE_REQUIRED"
+                paused -> "PAUSED"
+                running -> "ACTIVE"
+                else -> "STOPPED"
+            })
             .put("server_time", System.currentTimeMillis())
             .put("market_ws_connected", marketSocketConnected)
             .put("user_ws_connected", userStreamConnected)
