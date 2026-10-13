@@ -184,6 +184,84 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
     assert calls[-1][2] == {}
 
 
+def test_teeth_close_exit_uses_only_closed_bars_for_long(monkeypatch):
+    # Rising trend followed by a completed close below the chart-aligned Teeth.
+    n = 55
+    close = [100.0 + i for i in range(n)]
+    close[-2] = 90.0
+    frame = pd.DataFrame({
+        "open": [x + 0.2 for x in close],
+        "high": [x + 1.0 for x in close],
+        "low": [x - 1.0 for x in close],
+        "close": close,
+        "volume": [1000.0] * n,
+    })
+
+    class Client:
+        def ticker_price(self, symbol):
+            return {"price": "91"}
+
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime.dry_run = False
+    runtime.client = Client()
+    runtime._tick = lambda symbol: 0.1
+    runtime._replace_protection = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("trail should not run after Teeth exit")
+    )
+    exits = []
+    runtime._exit_market = lambda campaign, reason: exits.append(reason) or {
+        "state": "EXIT_SIGNALLED", "reason": reason
+    }
+    monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *args, **kwargs: frame)
+    campaign = type("C", (), {
+        "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 80.0,
+        "execution_timeframe": "1h", "state": CampaignState.TREND_ACTIVE,
+    })()
+
+    result = runtime._trail(campaign)
+    assert result["reason"] == "TEETH_CLOSE_EXIT"
+    assert exits == ["TEETH_CLOSE_EXIT"]
+
+
+def test_teeth_close_exit_uses_only_closed_bars_for_short(monkeypatch):
+    # Falling trend followed by a completed close above the chart-aligned Teeth.
+    n = 55
+    close = [200.0 - i for i in range(n)]
+    close[-2] = 210.0
+    frame = pd.DataFrame({
+        "open": [x - 0.2 for x in close],
+        "high": [x + 1.0 for x in close],
+        "low": [x - 1.0 for x in close],
+        "close": close,
+        "volume": [1000.0] * n,
+    })
+
+    class Client:
+        def ticker_price(self, symbol):
+            return {"price": "209"}
+
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime.dry_run = False
+    runtime.client = Client()
+    runtime._tick = lambda symbol: 0.1
+    runtime._replace_protection = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("trail should not run after Teeth exit")
+    )
+    exits = []
+    runtime._exit_market = lambda campaign, reason: exits.append(reason) or {
+        "state": "EXIT_SIGNALLED", "reason": reason
+    }
+    monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *args, **kwargs: frame)
+    campaign = type("C", (), {
+        "symbol": "BTCUSDT", "side": "SELL", "current_stop_price": 220.0,
+        "execution_timeframe": "1h", "state": CampaignState.TREND_ACTIVE,
+    })()
+
+    result = runtime._trail(campaign)
+    assert result["reason"] == "TEETH_CLOSE_EXIT"
+    assert exits == ["TEETH_CLOSE_EXIT"]
+
+
 def test_pending_signal_rejects_illegal_backward_transition():
     signal = SignalSpec.new(
         symbol="BTCUSDT", side="SELL", signal_type=SignalType.FRACTAL,
