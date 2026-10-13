@@ -220,12 +220,11 @@ class CampaignEngine:
             0.0,
             campaign_capacity - float(campaign_reserved_risk_quote),
         )
-        weight = reverse_pyramid_risk_weight(tranche_index)
-        # 1:5:4:3:2 is retained as a risk-allocation bias only. The hard
-        # campaign cap always dominates the historical ratio.
-        total_weight = 1 + 5 + 4 + 3 + 2
-        weighted = self.campaign_risk_limit_pct * (weight / total_weight)
-        return min(remaining / equity_quote, weighted)
+        # The historical 1:5:4:3:2 reverse-pyramid example is not a mandatory
+        # sizing rule. Each add-on is independently capped; the persisted
+        # campaign budget remains the controlling hard limit.
+        _ = tranche_index  # retained for call compatibility; it does not set risk
+        return min(remaining / equity_quote, 0.0025)
 
     # ------------------------------------------------------------------
     # State decisions
