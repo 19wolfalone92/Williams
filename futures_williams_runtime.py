@@ -82,6 +82,15 @@ class FuturesCandidate:
         }
 
 
+def _requires_directional_htf_confirmation(signal_type: SignalType) -> bool:
+    """TC2 WM1 is an early reversal; aligned HTF trend is context, not its entry prerequisite.
+
+    WM2/WM3 continuation-style entries retain the configured directional HTF gate.
+    Exchange/risk/trigger/protection gates still apply to every signal.
+    """
+    return signal_type != SignalType.REVERSAL
+
+
 class FuturesWilliamsScanner:
     def __init__(self, client, *, interval: str, htf_interval: str = "1h"):
         self.client = client
@@ -949,6 +958,7 @@ class FuturesWilliamsRuntime:
 
         if (
             self.config.require_htf_confirmation
+            and _requires_directional_htf_confirmation(signal.signal_type)
             and not candidate.htf_confirmed
         ):
             raise RuntimeError("HTF confirmation gate blocked initial campaign")
