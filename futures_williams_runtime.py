@@ -2266,7 +2266,10 @@ class FuturesWilliamsRuntime:
 
             latest = int(campaign.tags.get("last_signal_time_ms", 0) or 0)
             eligible = []
-            allow_reversal = os.getenv("CAMPAIGN_ALLOW_REVERSAL_ADD", "false").lower() == "true"
+            # TC2 campaign management admits later valid same-direction Wise-Men
+            # signals as additions. A reversal add may be disabled explicitly as
+            # a risk overlay, but must not be silently excluded by default.
+            allow_reversal = os.getenv("CAMPAIGN_ALLOW_REVERSAL_ADD", "true").lower() == "true"
             for candidate in symbol_candidates:
                 signals = list(getattr(candidate, "all_signals", ()) or ())
                 if not signals:
