@@ -65,6 +65,9 @@ class FakeClient:
             ]
         }
 
+    def ticker_price(self, symbol):
+        return {"symbol": symbol, "price": "200"}
+
     def all_orders(self, symbol, limit=1000):
         return list(self.orders_by_symbol.get(symbol.upper(), []))[-limit:]
 
@@ -480,7 +483,12 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
 
         def cancel_oco(self, symbol, order_list_id=None, list_client_order_id=None):
             self.cancelled = True
-            return {"orderListId": order_list_id or 10}
+            return {
+                "orderListId": order_list_id or 10,
+                "listStatusType": "ALL_DONE",
+                "listOrderStatus": "ALL_DONE",
+                "orders": [{"status": "CANCELED"}, {"status": "CANCELED"}],
+            }
 
         def order_safe(self, symbol, side, type_, *, quantity=None, new_client_order_id=None, **kwargs):
             assert side == "SELL"
