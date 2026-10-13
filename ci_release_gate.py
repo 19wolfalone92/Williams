@@ -85,6 +85,8 @@ def main() -> None:
     must(runtime, "EquityCircuitBreaker(maxDrawdownPct = 0.03)", "StandaloneRuntime.kt")
     must(runtime, "restoreEquityCircuitBreaker(estimateManagedEquity())", "StandaloneRuntime.kt")
     must(runtime, "persistEquityCircuitBreaker(snapshot, now)", "StandaloneRuntime.kt")
+    must(runtime, "equityCircuitBreakerPersistenceReady", "StandaloneRuntime.kt")
+    must(runtime, 'put("equity_circuit_breaker_daily_limit_pct", 0.03)', "StandaloneRuntime.kt")
     must(runtime, "private val maxSlippagePct = 0.0015", "StandaloneRuntime.kt")
     must(runtime, "control/self-heal", "StandaloneRuntime.kt")
     must(runtime, "activeHistoryTasks", "StandaloneRuntime.kt")
