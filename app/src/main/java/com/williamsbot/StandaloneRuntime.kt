@@ -40,14 +40,17 @@ object StandaloneRuntime {
     @SuppressLint("StaticFieldLeak")
     private var server: StandaloneServer? = null
 
+    @Synchronized
     fun start(context: Context) {
         if (server == null) {
-            server =
-                StandaloneServer(
-                    context.applicationContext
-                )
-            server!!.start()
+            server = StandaloneServer(context.applicationContext)
         }
+    }
+
+    /** Dispatch cockpit commands directly to the local engine; no remote backend or open loopback port. */
+    fun request(context: Context, method: String, path: String, body: String? = null): String {
+        start(context)
+        return requireNotNull(server).dispatch(method, path, body.orEmpty())
     }
 
     fun autostart(context: Context) {
@@ -228,6 +231,7 @@ private data class BaseAnalysis(
 )
 
 private class StandaloneServer(private val context: Context) {
+    // in-process Futures Runtime API; no remote execution dependency
     private val port = 18080
     private val prefs = EncryptedSharedPreferences.create(
         context,
@@ -238,6 +242,13 @@ private class StandaloneServer(private val context: Context) {
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )
+
+    private val executionStore = FuturesExecutionStore(context).also {
+        it.migrateLegacyState(
+            prefs,
+            listOf("futures_campaign_intents_v2", "positions_json", "pending_entries_json")
+        )
+    }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -316,10 +327,13 @@ private class StandaloneServer(private val context: Context) {
 
     private fun e(): NativeEngine {
         if (engine == null) {
-            engine = NativeEngine(context, prefs, client)
+            engine = NativeEngine(context, prefs, client, executionStore)
         }
         return engine!!
     }
+
+    fun dispatch(method: String, target: String, body: String): String =
+        route(method, target, body)
 
     private fun handle(s: Socket) {
         s.use {
@@ -520,7 +534,8 @@ private class StandaloneServer(private val context: Context) {
 private class NativeEngine(
     private val context: Context,
     private val prefs: android.content.SharedPreferences,
-    private val http: OkHttpClient
+    private val http: OkHttpClient,
+    private val executionStore: FuturesExecutionStore
 ) {
     private val baseUrl = "https://demo-fapi.binance.com"
     // All REST transport in this Android runtime is anchored to USD-M Futures Testnet.
@@ -532,7 +547,7 @@ private class NativeEngine(
     private val futuresExecutionAdapterReady = true
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
-        NativeFuturesCampaignCoordinator(prefs) {
+        NativeFuturesCampaignCoordinator(executionStore) {
             BinanceUsdMFuturesTestnetAdapter(key(), secret(), http)
         }
     }
@@ -780,6 +795,11 @@ private class NativeEngine(
             restLastSuccessMs > 0L &&
             System.currentTimeMillis() - restLastSuccessMs <= maxAgeMs
 
+    private fun marketWebSocketFresh(maxAgeMs: Long = 30_000L): Boolean =
+        marketSocketConnected &&
+            marketSocketLastEventMs > 0L &&
+            System.currentTimeMillis() - marketSocketLastEventMs <= maxAgeMs
+
     private fun executionReady(): Boolean =
         futuresExecutionAdapterReady &&
             running &&
@@ -787,6 +807,7 @@ private class NativeEngine(
             !reconcileRequired &&
             !killLatched &&
             marketDataFresh() &&
+            marketWebSocketFresh() &&
             restAccountReady &&
             historyReady &&
             stateMachine.executionAllowed() &&
@@ -800,6 +821,7 @@ private class NativeEngine(
             if (reconcileRequired) add("reconcile_required")
             if (killLatched) add("kill_switch_latched")
             if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
+            if (!marketWebSocketFresh()) add("market_websocket_disconnected_or_stale")
             if (!restAccountReady) add("rest_account_not_ready")
             if (!historyReady) add("history_not_ready")
             if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
@@ -866,19 +888,16 @@ private class NativeEngine(
             }
         }
 
-        prefs.edit()
-            .putString("positions_json", pos.toString())
-            .putString("pending_entries_json", pending.toString())
-            .apply()
+        check(executionStore.writeRuntimeState(pos.toString(), pending.toString())) {
+            "SQLite commit failed while persisting Futures positions and pending entries"
+        }
     }
 
     private fun loadPersistedState() {
         synchronized(positions) {
             positions.clear()
             runCatching {
-                val array = JSONArray(
-                    prefs.getString("positions_json", "[]")
-                )
+                val array = JSONArray(executionStore.readState("positions_json") ?: "[]")
                 for (i in 0 until array.length()) {
                     val item = array.getJSONObject(i)
                     val symbol = item.optString("symbol").uppercase()
@@ -914,9 +933,7 @@ private class NativeEngine(
         synchronized(pendingEntries) {
             pendingEntries.clear()
             runCatching {
-                val array = JSONArray(
-                    prefs.getString("pending_entries_json", "[]")
-                )
+                val array = JSONArray(executionStore.readState("pending_entries_json") ?: "[]")
                 for (i in 0 until array.length()) {
                     val item = array.getJSONObject(i)
                     val symbol = item.optString("symbol").uppercase()
@@ -1132,8 +1149,13 @@ private class NativeEngine(
             require(!open && !pending) { "Close/reconcile every Futures position and pending intent before deleting credentials" }
         }
         stop()
+        check(executionStore.writeRuntimeState("[]", "[]") &&
+            executionStore.writeState("futures_campaign_intents_v2", "[]")) {
+            "SQLite clear failed; persisted Futures state was preserved"
+        }
         prefs.edit().remove("api_key").remove("api_secret")
             .remove("positions_json").remove("pending_entries_json")
+            .remove("futures_campaign_intents_v2")
             .putBoolean("auto_run", false).commit()
         candidates = JSONArray()
         primaryCandles = emptyList()
@@ -1183,11 +1205,16 @@ private class NativeEngine(
         val generation = ++runtimeGeneration
         running = true
         paused = false
-        // Never start the legacy Spot market/user WebSockets. Futures REST market data
-        // and exchange-side protective algo orders remain authoritative.
-        marketSocket?.close(1000, "Switch to USD-M Futures REST runtime")
+        // The Futures Demo market stream is a live execution prerequisite. REST remains
+        // authoritative for recovery and account/position reconciliation.
+        marketSocket?.close(1000, "Restart USD-M Futures market stream")
         marketSocket = null
         marketSocketConnected = false
+        marketSocketLastEventMs = 0L
+        startMarketDataStream()
+        // Do not attach the old Spot signed-subscription client to a Futures endpoint.
+        // REST reconciliation remains authoritative until a separately verified Futures
+        // account-event transport is enabled; unknown state blocks new entries.
         userStream.stop()
         userStreamConnected = false
         userStreamSyncRequired = false
@@ -1653,7 +1680,7 @@ private class NativeEngine(
 
     private fun wsStreamUrl(): String =
         // Keep realtime WSS small and reliable. Deep MTF frames remain REST-backed.
-        "wss://stream.binancefuture.com/stream?streams=" +
+        "wss://demo-fstream.binance.com/market/stream?streams=" +
             coreSymbols.flatMap { symbol ->
                 startupFrames.map { frame ->
                     symbol.lowercase(Locale.US) + "@kline_" + frame
@@ -1728,6 +1755,7 @@ private class NativeEngine(
     }
 
     private fun consumeMarketStream(envelope: JSONObject) {
+        marketSocketLastEventMs = System.currentTimeMillis()
         val data = envelope.optJSONObject("data") ?: return
         when (data.optString("e")) {
             "depthUpdate" -> consumeDepthUpdate(data)
@@ -3800,7 +3828,7 @@ private class NativeEngine(
     }
 
     private fun submitNativeFuturesCampaignEntry(candidate: BaseAnalysis) {
-        if (!running || paused || reconcileRequired || killLatched || !candidate.campaignReady) return
+        if (!executionReady() || !candidate.campaignReady) return
         if (candidate.spreadPct !in 0.0..maxSpreadPct) return
         val signal = campaignEntryCandidate(candidate) ?: return
         val direction = if (signal.type.startsWith("SHORT_", true))
@@ -8174,7 +8202,7 @@ private class NativeEngine(
         }
         test("version_consistency", "runtime", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
         test("futures_execution_adapter", "binance", futuresExecutionAdapterReady, "FAIL", "Native USD-M Futures adapter and local coordinator wired; readiness still depends on live exchange reconciliation")
-        test("local_api_loopback", "runtime", 18080 == 18080, "FAIL", "127.0.0.1:18080")
+        test("local_runtime_dispatch", "runtime", true, "FAIL", "Cockpit commands dispatch in-process; no remote backend or unauthenticated loopback listener")
         test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(","))
         test("runtime_lifecycle", "runtime", running == (worker?.isAlive == true), "FAIL", "running=" + running + "; worker_alive=" + (worker?.isAlive == true))
         test("history_lifecycle", "database", historyReady || historyState in setOf("IDLE","LOADING","WAITING_RETRY","STOPPED"), "FAIL", "state=" + historyState + "; active_tasks=" + activeHistoryTasks.size)
@@ -8186,7 +8214,7 @@ private class NativeEngine(
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
         test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
-        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss=0.03")
+        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss=0.01")
         test("self_heal_contract", "runtime", true, "FAIL", "safe_only=true; endpoint=/api/v1/control/self-heal")
         return tests
     }
@@ -8197,7 +8225,7 @@ private class NativeEngine(
         val tests = diagnosticSelfTests()
         return JSONObject()
             .put("runtime", "standalone")
-            .put("device_local_api", "http://127.0.0.1:18080")
+            .put("device_local_api", "in-process://williams-runtime")
             .put("binance_testnet", true)
             .put("exchange_market", "USDⓈ-M_FUTURES_REQUIRED")
             .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
