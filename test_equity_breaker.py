@@ -60,3 +60,20 @@ def test_latch_persistence_failure_blocks_entries():
     allowed, reason = breaker.check(db, 9_700.0)
     assert not allowed
     assert "latch persistence failed" in reason
+
+
+class MissingDailyPnLDB:
+    def __init__(self):
+        self.state = {}
+
+    def state_get(self, key):
+        return self.state.get(key)
+
+    def state_set(self, key, value):
+        self.state[key] = value
+
+
+def test_missing_global_daily_pnl_fails_closed():
+    allowed, reason = EquityCircuitBreaker().check(MissingDailyPnLDB(), 10_000.0)
+    assert not allowed
+    assert "daily PnL unavailable" in reason
