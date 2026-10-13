@@ -12,6 +12,12 @@ import java.nio.charset.StandardCharsets
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
+class BinanceFuturesApiException(
+    message: String,
+    val unknownExecution: Boolean,
+    val statusCode: Int? = null
+) : IOException(message)
+
 /**
  * Separate USDⓈ-M Futures REST transport.
  *
@@ -199,17 +205,30 @@ class BinanceUsdMFuturesApi(
             "POST" -> builder.post("".toRequestBody(null))
             else -> throw IllegalArgumentException("Unsupported Futures HTTP method: $method")
         }
-        client.newCall(builder.build()).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                // A server/transport error on POST/DELETE is ambiguous. The
-                // caller must reconcile by clientOrderId and must not retry.
-                throw IOException(
-                    "Binance Futures HTTP ${response.code} for $method $path; " +
-                        "mutation outcome may be unknown; reconcile before retry. body=$body"
-                )
+        try {
+            client.newCall(builder.build()).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    val ambiguous = method.uppercase() in setOf("POST", "PUT", "DELETE") &&
+                        (response.code == 408 || response.code >= 500)
+                    throw BinanceFuturesApiException(
+                        "Binance Futures HTTP ${response.code} for $method $path; " +
+                            (if (ambiguous) "mutation outcome may be unknown; reconcile before retry. " else "") +
+                            "body=$body",
+                        unknownExecution = ambiguous,
+                        statusCode = response.code
+                    )
+                }
+                return body
             }
-            return body
+        } catch (e: BinanceFuturesApiException) {
+            throw e
+        } catch (e: IOException) {
+            throw BinanceFuturesApiException(
+                "Binance Futures transport failure for $method $path; " +
+                    "reconcile before retry if this was a mutation",
+                unknownExecution = method.uppercase() in setOf("POST", "PUT", "DELETE")
+            ).also { it.initCause(e) }
         }
     }
 
