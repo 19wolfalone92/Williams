@@ -46,6 +46,9 @@ def main() -> None:
         "TESTNET=true",
         "ALLOW_LIVE=false",
         "DRY_RUN=true",
+        "MAX_DAILY_LOSS_PCT=0.01",
+        "RISK_PER_TRADE_PCT=0.0025",
+        "MAX_CONSECUTIVE_LOSSES=2",
         "BINANCE_MARKET=futures_usdt",
         "FUTURES_LEVERAGE=2",
         "FUTURES_MARGIN_TYPE=ISOLATED",
@@ -58,9 +61,9 @@ def main() -> None:
         "ALLOW_SHORT=true",
         "TAKE_PROFIT_PCT=0.0",
         "CAMPAIGN_TRAIL_BARS=5",
-        "MAX_OPEN_POSITIONS=5",
-        "MAX_TOTAL_RISK_PCT=0.01",
-        "MAX_RISK_PER_TRADE_PCT=0.005",
+        "MAX_OPEN_POSITIONS=1",
+        "MAX_TOTAL_RISK_PCT=0.006",
+        "MAX_RISK_PER_TRADE_PCT=0.0025",
     ):
         must(env, needle, ".env.example")
 
@@ -72,7 +75,7 @@ def main() -> None:
     must(cfg, "min(2, _int(source, \"FUTURES_LEVERAGE\", 2))", "trading_config.py")
     must(cfg, 'FUTURES_MARGIN_TYPE must be ISOLATED', "trading_config.py")
     must(cfg, 'FUTURES_FORCE_ONE_WAY must remain enabled', "trading_config.py")
-    must(cfg, 'max_daily_loss_pct=max(0.0, min(0.03,', "trading_config.py")
+    must(cfg, 'max_daily_loss_pct=max(0.0, min(0.01,', "trading_config.py")
     must(cfg, "futures_leverage=futures_leverage", "trading_config.py")
     must(cfg, "futures_margin_type=futures_margin_type", "trading_config.py")
     must(cfg, "futures_force_one_way=futures_force_one_way", "trading_config.py")
@@ -85,7 +88,7 @@ def main() -> None:
         "allow_short: bool = True",
         'market = str(source.get("BINANCE_MARKET", "futures_usdt"))',
         'risk_key = "MAX_RISK_PER_TRADE_PCT"',
-        "min(0.005",
+        "min(0.0025",
         "min(0.01",
     ):
         must(cfg, needle, "trading_config.py")
@@ -170,7 +173,7 @@ def main() -> None:
     must(futures, "self.config.futures_leverage", "futures_williams_runtime.py")
     must(futures, "self.config.futures_margin_type", "futures_williams_runtime.py")
     must(futures, "portfolio_risk_limit_pct=self.config.max_total_risk_pct", "futures_williams_runtime.py")
-    must(futures, "campaign_risk_limit_pct=self.config.risk_per_trade_pct", "futures_williams_runtime.py")
+    must(futures, "campaign_risk_limit_pct=self.config.campaign_risk_limit_pct", "futures_williams_runtime.py")
     must(futures, "self.max_open_positions = self.config.max_open_positions", "futures_williams_runtime.py")
     must(futures, 'self.htf_interval = os.getenv("HTF_INTERVAL", "4h").strip().lower()', "futures_williams_runtime.py")
     must(futures, 'HTF_INTERVAL must be H4 for the canonical Williams campaign', "futures_williams_runtime.py")
@@ -224,49 +227,43 @@ def main() -> None:
     legacy_runtime = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
     must(legacy_runtime, '"DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"', "StandaloneRuntime.kt")
     must(legacy_runtime, "private val maxScanSymbols = 10", "StandaloneRuntime.kt")
-    must(legacy_runtime, "Legacy native Spot runtime is disabled; authoritative trading is remote USDⓈ-M Futures Testnet", "StandaloneRuntime.kt")
+    must(legacy_runtime, "in-process Futures Runtime API; no remote execution dependency", "StandaloneRuntime.kt")
+    must(legacy_runtime, "private val executionStore = FuturesExecutionStore(context)", "StandaloneRuntime.kt")
+    must(legacy_runtime, "wss://demo-fstream.binance.com/market/stream?streams=", "StandaloneRuntime.kt")
+    must(legacy_runtime, "marketWebSocketFresh()", "StandaloneRuntime.kt")
 
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
     for needle in (
         f"Williams {EXPECTED_VERSION}",
-        "class BackendApi",
-        "https://",
-        'putString("backend_url"',
-        'putString("mobile_token"',
+        "class LocalRuntimeApi",
+        "StandaloneRuntime.request",
+        "TradingForegroundService.ACTION_START",
     ):
         must(android, needle, "MainActivity.kt")
-    must_not(android, "StandaloneRuntime.start(this)", "MainActivity.kt")
+    must_not(android, "class BackendApi", "MainActivity.kt")
+    must_not(android, "https://", "MainActivity.kt")
     must_not(android, 'putString("api_key"', "MainActivity.kt")
     must_not(android, 'putString("api_secret"', "MainActivity.kt")
-    must_not(android, "http://127.0.0.1:18080", "MainActivity.kt")
-    must_not(android, "http://localhost:18080", "MainActivity.kt")
-    for needle in (
-        "scannerConfiguredSymbols",
-        "scannerUniverse",
-        "Approved Futures universe",
-        "scannerLongCandidates",
-        "scannerShortCandidates",
-        "status.allowLong",
-        "status.allowShort",
-        "futuresForceOneWay",
-        '"BLOCKED" ->',
-        '"PARTIAL" ->',
-    ):
-        must(android, needle, "MainActivity.kt")
+    must_not(android, "Backend URL", "MainActivity.kt")
 
     service = read("app/src/main/java/com/williamsbot/TradingForegroundService.kt")
-    for needle in ("legacy native Spot runtime", "remote Futures backend"):
-        must(service, needle, "TradingForegroundService.kt")
-    must_not(service, "StandaloneRuntime.start(this)", "TradingForegroundService.kt")
-
-    remote = read("test_android_remote_only.py")
     for needle in (
-        "test_android_has_remote_cockpit_runtime",
-        "test_android_remote_backend_requires_https",
-        "test_android_does_not_start_native_spot_runtime",
-        "test_active_backend_uses_futures_and_legacy_spot_is_not_authoritative",
+        "StandaloneRuntime.start(applicationContext)",
+        "StandaloneRuntime.autostart(applicationContext)",
+        "StandaloneRuntime.stopTrading()",
     ):
-        must(remote, needle, "Android remote contract")
+        must(service, needle, "TradingForegroundService.kt")
+    must_not(service, "remote Futures backend", "TradingForegroundService.kt")
+    must_not(service, "legacy native Spot runtime", "TradingForegroundService.kt")
+
+    android_contract = read("test_android_remote_only.py")
+    for needle in (
+        "test_android_starts_native_futures_runtime_from_foreground_service",
+        "test_android_ui_routes_directly_to_local_runtime_without_remote_backend",
+        "test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries",
+        "test_android_campaign_and_intents_are_sqlite_backed",
+    ):
+        must(android_contract, needle, "Android autonomous runtime contract")
 
     testnet = read("test_testnet_release_gate.py")
     for needle in (
@@ -286,6 +283,15 @@ def main() -> None:
     ):
         workflow = read(path)
         must(workflow, "ci_release_gate.py", path)
+
+    for path in (".github/workflows/python-ci.yml", ".github/workflows/campaign-ci.yml"):
+        workflow = read(path)
+        for test_path in (
+            "tests/test_futures_campaign_risk_defaults.py",
+            "tests/test_futures_risk_policy_contract.py",
+            "tests/test_risk_engine_daily_loss_cap.py",
+        ):
+            must(workflow, test_path, path)
     workflow = read(".github/workflows/python-ci.yml")
     must(workflow, "futures_williams_runtime.py", ".github/workflows/python-ci.yml")
     must(workflow, "python -m py_compile", ".github/workflows/python-ci.yml")
