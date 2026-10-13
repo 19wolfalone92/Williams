@@ -93,3 +93,35 @@ def test_trading_config_cannot_raise_daily_loss_above_three_percent():
 
     config = TradingConfig.from_env({"MAX_DAILY_LOSS_PCT": "0.10"})
     assert config.max_daily_loss_pct == pytest.approx(0.03)
+
+
+def test_daily_loss_trip_stays_latched_after_pnl_recovers_same_day():
+    db = _DB(start_equity=1000.0, realized=-35.0)
+    breaker = EquityCircuitBreaker(0.03)
+
+    allowed, reason = breaker.check(db, current_equity_quote=965.0)
+    assert allowed is False
+    assert "tripped" in reason
+    assert db.state["daily_loss_tripped"] == "1"
+
+    # Later unrealized/realized PnL recovery must not reopen entry admission
+    # during the same UTC day.
+    db.realized = 0.0
+    allowed, reason = breaker.check(db, current_equity_quote=1000.0)
+    assert allowed is False
+    assert "remains latched" in reason
+
+
+def test_daily_loss_latch_resets_only_when_new_utc_day_is_established():
+    db = _DB(start_equity=1000.0, realized=0.0)
+    db.state["daily_risk_day"] = "2000-01-01"
+    db.state["daily_loss_tripped"] = "1"
+
+    allowed, reason = EquityCircuitBreaker(0.03).check(
+        db, current_equity_quote=1200.0
+    )
+
+    assert allowed is True
+    assert reason == "ok"
+    assert db.state["daily_loss_tripped"] == "0"
+    assert db.state["daily_start_equity"] == "1200.0"
