@@ -1102,6 +1102,10 @@ def test_default_config_keeps_intraday_h1_and_market_specific_universes():
     assert futures.structural_timeframes == ("1d", "4h", "1h", "15m")
     assert futures.symbols == DEFAULT_FUTURES_SYMBOLS
     assert len(futures.symbols) == 10
+    assert futures.market == "futures_usdt"
+    assert futures.futures_leverage == 2
+    assert futures.futures_margin_type == "ISOLATED"
+    assert futures.futures_force_one_way is True
 
     spot = TradingConfig.from_env({"BINANCE_MARKET": "spot"})
     assert spot.symbols == DEFAULT_SYMBOLS
