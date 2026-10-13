@@ -75,6 +75,7 @@ jobs:
           set -o pipefail
           python -m pytest -q \
             test_production_architecture.py \
+            test_kill_latch_startup.py \
             tests/test_execution_barrier_persistence_fail_closed.py \
             tests/test_equity_breaker_daily_limit.py \
             tests/test_williams_fractal_confirmation.py \
