@@ -1600,22 +1600,44 @@ private class NativeEngine(
                     .build()
             }
             rateGuard.beforeRequest()
-            http.newCall(request).execute().use { response ->
-                rateGuard.observe(response.headers, response.code)
-                lastBody = response.body?.string() ?: "{}"
-                auditStore.recordRestCall(
-                    method,
-                    path,
-                    response.code,
-                    params.ifBlank { null },
-                    lastBody
-                )
-                if (response.isSuccessful) return JSONObject(lastBody)
-                if (attempt == 0 && lastBody.contains("-1021")) {
-                    runCatching { syncServerTime() }
-                    return@use
+            // Durable write-ahead record for every signed exchange mutation.
+            // If this insert/read-back fails, no POST/DELETE is sent.
+            val mutationId = if (method == "POST" || method == "DELETE") {
+                auditStore.beginMutation(method, path, params)
+            } else null
+            try {
+                http.newCall(request).execute().use { response ->
+                    rateGuard.observe(response.headers, response.code)
+                    lastBody = response.body?.string() ?: "{}"
+                    if (mutationId != null) {
+                        auditStore.completeMutation(mutationId, response.code, lastBody)
+                    }
+                    auditStore.recordRestCall(
+                        method,
+                        path,
+                        response.code,
+                        params.ifBlank { null },
+                        lastBody
+                    )
+                    if (response.isSuccessful) return JSONObject(lastBody)
+                    if (attempt == 0 && lastBody.contains("-1021")) {
+                        runCatching { syncServerTime() }
+                        return@use
+                    }
+                    error("Binance " + response.code + ": " + lastBody)
                 }
-                error("Binance " + response.code + ": " + lastBody)
+            } catch (error: Exception) {
+                if (mutationId != null) {
+                    // A transport or persistence failure after admission is
+                    // ambiguous. Persist UNKNOWN when possible; never retry here.
+                    runCatching {
+                        auditStore.markMutationUnknown(
+                            mutationId,
+                            error.message ?: error.javaClass.simpleName
+                        )
+                    }
+                }
+                throw error
             }
         }
         error("Binance timestamp retry failed: " + lastBody)
