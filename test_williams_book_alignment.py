@@ -90,3 +90,20 @@ def test_reversal_bar_needs_followup_extreme_breakout():
     out = calculate_indicators(df, config_from_env())
     assert bool(out['bullish_reversal_bar'].iloc[70]) is True
     assert bool(out['long_wise_reversal_entry'].iloc[70]) is False
+
+
+def test_tc2_wm1_does_not_require_legacy_point_zero_by_default():
+    import inspect
+    from williams_signals import (
+        extract_long_signal_specs,
+        extract_short_signal_specs,
+    )
+
+    # Point Zero / Five Magic Bullets belong to earlier Profitunity material;
+    # they must not silently become a mandatory TC2 Three Wise Men entry gate.
+    assert inspect.signature(
+        extract_long_signal_specs
+    ).parameters["require_point_zero_for_reversal"].default is False
+    assert inspect.signature(
+        extract_short_signal_specs
+    ).parameters["require_point_zero_for_reversal"].default is False
