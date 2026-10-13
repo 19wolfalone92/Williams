@@ -57,6 +57,25 @@ def calculate_indicators(df, cfg):
     if x.empty:
         return x
 
+    # Normalize raw candle numerics before indicator math. Invalid high/low
+    # bars must not become artificial pivots or zero-valued median prices.
+    for column in ("high", "low", "close"):
+        if column not in x.columns:
+            raise ValueError(f"required OHLC column missing: {column}")
+        x[column] = pd.to_numeric(x[column], errors="coerce")
+    high_values = x["high"].to_numpy(dtype=float)
+    low_values = x["low"].to_numpy(dtype=float)
+    valid_range = (
+        np.isfinite(high_values)
+        & np.isfinite(low_values)
+        & (high_values > 0.0)
+        & (low_values > 0.0)
+        & (high_values >= low_values)
+    )
+    x.loc[~valid_range, ["high", "low"]] = np.nan
+    close_values = x["close"].to_numpy(dtype=float)
+    x.loc[~np.isfinite(close_values) | (close_values <= 0.0), "close"] = np.nan
+
     # Binance Spot exposes traded volume rather than the historical
     # tick-count volume used in Williams' original MFI. Therefore the
     # market-facilitation field below is explicitly a proxy and is never an
