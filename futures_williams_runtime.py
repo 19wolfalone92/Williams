@@ -2161,13 +2161,23 @@ class FuturesWilliamsRuntime:
             if {"high", "low", "close"}.issubset(closed.columns) and len(closed) >= 40:
                 indicator_frame = calculate_indicators(closed, config_from_env())
                 last = indicator_frame.iloc[-1]
+                previous = indicator_frame.iloc[-2]
                 close_price = float(last.get("close", 0.0) or 0.0)
                 teeth_price = float(last.get("teeth_shifted", 0.0) or 0.0)
-                if close_price > 0 and teeth_price > 0:
+                previous_close = float(previous.get("close", 0.0) or 0.0)
+                previous_teeth = float(previous.get("teeth_shifted", 0.0) or 0.0)
+                if min(close_price, teeth_price, previous_close, previous_teeth) > 0:
+                    # "Through Teeth" means a close-to-close crossing, not
+                    # simply being on the wrong side (important for TC2 WM1
+                    # counter-trend entries that can begin outside the mouth).
                     crossed_teeth = (
-                        campaign.side == "BUY" and close_price < teeth_price
+                        campaign.side == "BUY"
+                        and previous_close >= previous_teeth
+                        and close_price < teeth_price
                     ) or (
-                        campaign.side == "SELL" and close_price > teeth_price
+                        campaign.side == "SELL"
+                        and previous_close <= previous_teeth
+                        and close_price > teeth_price
                     )
                     if crossed_teeth:
                         return self._exit_market(campaign, "TEETH_CLOSE_EXIT")
