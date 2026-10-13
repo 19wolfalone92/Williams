@@ -5763,14 +5763,21 @@ private class NativeEngine(
         return vwap to slippage
     }
 
-    private fun estimateManagedEquity(): Double {
-        var equity = liveUsdtBalance.coerceAtLeast(0.0)
+    private fun estimateManagedEquity(requireLiveMarks: Boolean = false): Double {
+        var equity = liveUsdtBalance.coerceAtLeast(0.0) +
+            liveUsdtLockedBalance.coerceAtLeast(0.0)
         positionList().forEach { position ->
             val mark = livePrices[position.symbol]
                 ?: if (position.symbol == primarySymbol) {
-                    primaryCandles.lastOrNull()?.c ?: 0.0
-                } else 0.0
-            if (mark > 0.0) equity += position.qty * mark
+                    primaryCandles.lastOrNull()?.c
+                } else null
+            if (mark == null || !mark.isFinite() || mark <= 0.0) {
+                if (requireLiveMarks) {
+                    error("DAILY_RISK_MARK_UNAVAILABLE: " + position.symbol)
+                }
+                return@forEach
+            }
+            equity += position.qty * mark
         }
         return equity
     }
@@ -5784,24 +5791,30 @@ private class NativeEngine(
         runCatching {
             val account = signedAccount()
             val balances = account.getJSONArray("balances")
-            var usdt = 0.0
+            var usdtFree = 0.0
+            var usdtLocked = 0.0
+            var foundUsdt = false
             for (i in 0 until balances.length()) {
                 val b = balances.getJSONObject(i)
                 if (b.optString("asset") == "USDT") {
-                    usdt = b.optString("free").toDoubleOrNull() ?: 0.0
+                    usdtFree = b.optString("free").toDoubleOrNull() ?: 0.0
+                    usdtLocked = b.optString("locked").toDoubleOrNull() ?: 0.0
+                    foundUsdt = true
                     break
                 }
             }
-            liveUsdtBalance = usdt
+            check(foundUsdt) { "DAILY_RISK_ACCOUNT_UNAVAILABLE: USDT balance missing" }
+            liveUsdtBalance = usdtFree
+            liveUsdtLockedBalance = usdtLocked
 
             val snapshot = equityCircuitBreaker.observe(
-                estimateManagedEquity(),
+                estimateManagedEquity(requireLiveMarks = true),
                 now
             )
+            dailyRiskMonitorHealthy = true
             if (snapshot.tripped) {
-                // Daily loss is an entry-admission breaker, not the emergency
-                // kill switch. Do not cancel protection or force market sells:
-                // normal and emergency exit/reduction paths must remain usable.
+                // Daily loss blocks new risk only. Existing protection and
+                // emergency reductions remain available.
                 lastError =
                     "DAILY_LOSS_LIMIT: new entries blocked; managed equity drawdown " +
                         "%.2f%%".format(
@@ -5810,8 +5823,9 @@ private class NativeEngine(
                         )
             }
         }.onFailure {
+            dailyRiskMonitorHealthy = false
             lastError =
-                "equity monitor: " +
+                "DAILY_RISK_UNAVAILABLE: " +
                     (it.message ?: it.javaClass.simpleName)
         }
     }
