@@ -760,6 +760,18 @@ class CampaignExecutionService:
         import math
         return math.floor(float(value) / step + 1e-12) * step
 
+    @staticmethod
+    def _ceil(value: float, step: float) -> float:
+        """Round a conditional BUY trigger upward to the exchange tick grid."""
+        if step <= 0:
+            return float(value)
+        from decimal import ROUND_CEILING
+        value_d = Decimal(str(value))
+        step_d = Decimal(str(step))
+        return float(
+            (value_d / step_d).to_integral_value(rounding=ROUND_CEILING) * step_d
+        )
+
     def _normalize_qty(self, symbol: str, quantity: float) -> float:
         filters = self._rules(symbol)
         lot = filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE") or {}
@@ -803,6 +815,17 @@ class CampaignExecutionService:
         if tick <= 0:
             raise CampaignExecutionError(f"{symbol}: PRICE_FILTER.tickSize unavailable")
         return self._floor(price, tick)
+
+    def _normalize_trigger_price(self, symbol: str, price: float) -> float:
+        """Normalize breakout triggers upward; never silently lower the trigger."""
+        filters = self._rules(symbol)
+        pf = filters.get("PRICE_FILTER") or {}
+        tick = float(pf.get("tickSize", "0") or 0)
+        if tick <= 0:
+            raise CampaignExecutionError(
+                f"{symbol}: PRICE_FILTER.tickSize unavailable for trigger"
+            )
+        return self._ceil(price, tick)
 
     def _check_buy_position_capacity(self, symbol: str, quantity: float) -> None:
         filters = self._rules(symbol)
@@ -943,7 +966,7 @@ class CampaignExecutionService:
             raise CampaignExecutionError("No portfolio risk capacity for campaign entry")
 
         current = self._current_price(signal.symbol)
-        trigger = self._normalize_price(signal.symbol, signal.trigger_price)
+        trigger = self._normalize_trigger_price(signal.symbol, signal.trigger_price)
         stop = self._normalize_price(
             signal.symbol,
             float(signal.protective_reference) - max(
@@ -1817,7 +1840,7 @@ class CampaignExecutionService:
             raise CampaignExecutionError("campaign risk budget exhausted")
 
         current = self._current_price(signal.symbol)
-        trigger = self._normalize_price(signal.symbol, signal.trigger_price)
+        trigger = self._normalize_trigger_price(signal.symbol, signal.trigger_price)
         if trigger <= current:
             raise CampaignExecutionError(
                 f"{signal.symbol}: add-on trigger already crossed; no market substitution"
