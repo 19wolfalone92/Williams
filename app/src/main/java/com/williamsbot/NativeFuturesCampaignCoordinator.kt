@@ -100,6 +100,8 @@ internal class NativeFuturesCampaignCoordinator(
                 if (status in activeStatuses || status in setOf("OPEN_PROTECTED", "POSITION_OPEN")) {
                     item.optString("protection_client_id").takeIf { it.isNotBlank() }
                         ?.let { activeProtectionClientIds += it }
+                    item.optString("previous_protection_client_id").takeIf { it.isNotBlank() }
+                        ?.let { activeProtectionClientIds += it }
                 }
             }
             // A manual or orphaned order can create exposure without any local intent.
@@ -570,6 +572,7 @@ internal class NativeFuturesCampaignCoordinator(
         val previous = (0 until before.length()).mapNotNull { before.optJSONObject(it) }
             .filter { isProtectiveStop(it, direction.name) }
         intent.put("previous_protective_stop", oldStop.toPlainString())
+            .put("previous_protection_client_id", intent.optString("protection_client_id"))
             .put("protective_stop", proposed.stripTrailingZeros().toPlainString())
             .put("protection_client_id", clientAlgoId)
             .put("protection_status", "SUBMISSION_UNKNOWN")
