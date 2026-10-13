@@ -2068,6 +2068,39 @@ class MultiPositionTrader:
         if not selections:
             return []
 
+        # Defense in depth: this is the canonical order-admission method and
+        # may be called without scan_and_execute(). Never trust a caller to have
+        # checked the daily breaker. This blocks both initial entries and
+        # campaign add-ons; exits are managed through separate risk-reducing
+        # paths.
+        allowed, risk_reason = self._daily_entry_guard()
+        if not allowed:
+            self.db.log_event("WARNING", "daily_entry_blocked", risk_reason)
+            try:
+                cancellation = self.campaign_execution.reconcile_pending_entries(
+                    force_cancel_reason="DAILY_RISK_GATE_BLOCKED"
+                )
+                unresolved = any(
+                    str(row.get("state", "")).upper() == "RECONCILE_REQUIRED"
+                    for row in cancellation
+                )
+            except Exception as exc:
+                unresolved = True
+                cancellation = [{
+                    "state": "RECONCILE_REQUIRED",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }]
+            return [
+                {
+                    "symbol": str(getattr(getattr(s, "candidate", None), "symbol", "")).upper(),
+                    "status": "RISK_BLOCKED",
+                    "reason": risk_reason,
+                    "pending_entry_cancellation": cancellation,
+                    "pending_entry_cancellation_reconciled": not unresolved,
+                }
+                for s in selections
+            ]
+
         results = []
         equity = self._balance()
         if equity <= 0:
