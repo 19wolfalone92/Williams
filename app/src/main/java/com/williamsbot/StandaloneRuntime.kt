@@ -693,7 +693,7 @@ private class NativeEngine(
 
     private val userStream = BinanceUserDataStream(
         http = http,
-        endpoint = "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE",
+        endpoint = "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/listenKeyExpired",
         apiKeyProvider = { key() },
         apiSecretProvider = { secret() },
         timestampProvider = { signedTimestamp() },
@@ -4662,8 +4662,13 @@ private class NativeEngine(
         }
 
         when (eventType) {
-            "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE" -> {
+            "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
+            "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT" -> {
                 scheduleFuturesStreamReconciliation(eventType)
+                return
+            }
+            "listenKeyExpired" -> {
+                setReconcileRequired("Futures listenKey expired; reconcile before any new entry")
                 return
             }
             "executionReport" -> {
