@@ -1,6 +1,10 @@
 import pandas as pd
 
-from strategy import calculate_indicators, config_from_env
+from strategy import (
+    calculate_indicators,
+    canonical_indicator_config_from_env,
+    config_from_env,
+)
 from williams_signals import _latest_confirmed_fractal, extract_ntd_fractal_signal_specs
 
 
@@ -169,3 +173,19 @@ def test_gator_oscillator_uses_alligator_line_differences_and_is_diagnostic_only
     }
     # No Gator state is promoted into the TC2 signal boolean by this layer.
     assert "gator_state" not in {"long_signal", "short_signal"}
+
+
+def test_futures_canonical_indicator_contract_rejects_period_drift():
+    cfg = canonical_indicator_config_from_env({})
+    assert cfg["jaw"] == 13
+    assert cfg["teeth"] == 8
+    assert cfg["lips"] == 5
+    assert (cfg["jaw_shift"], cfg["teeth_shift"], cfg["lips_shift"]) == (8, 5, 3)
+    assert (cfg["ao_fast"], cfg["ao_slow"], cfg["ac_period"]) == (5, 34, 5)
+    assert (cfg["fractal_left"], cfg["fractal_right"], cfg["super_ao_bars"]) == (2, 2, 3)
+
+    import pytest
+    with pytest.raises(ValueError, match="Non-canonical Williams indicator parameters"):
+        canonical_indicator_config_from_env({"AO_FAST": "3"})
+    with pytest.raises(ValueError, match="Non-canonical Williams indicator parameters"):
+        canonical_indicator_config_from_env({"ALLIGATOR_JAW": "10"})
