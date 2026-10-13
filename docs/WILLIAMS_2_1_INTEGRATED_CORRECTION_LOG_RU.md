@@ -15,8 +15,10 @@
 
 ### Independent Wise-Man events
 - `strategy.py`: removed the legacy same-candle “minimum N of 3” quorum from `long_signal`/`short_signal`. A valid reversal, Super AO, or fractal-breakout event can independently be the presenting Wise-Man event, subject to operative Alligator context and downstream risk/execution gates.
-- Super AO is now a one-shot event on the configured Nth same-direction AO bar rather than a persistent true state after the threshold. `williams_signals.py` uses the same `SUPER_AO_BARS` threshold.
+- Super AO is now a one-shot event on the configured Nth same-direction AO bar rather than a persistent true state after the threshold. `williams_signals.py` uses the same `SUPER_AO_BARS` threshold; regression tests were added but have not been executed by a confirmed CI run.
 - Removed a redundant stacked `@staticmethod` decorator in `campaign_engine.py`.
+- Android's WM2 scanner no longer requires a prior WM3 fractal to emit Super AO, correcting a direct Python/Kotlin strategy disagreement.
+- Android's central signed-request path now rejects BUY-side order mutations whenever `executionReady()` is false. Because the durable mutation contract remains unverified, this keeps all new BUY exposure blocked even if a legacy call path bypasses campaign admission; SELL exits/protection and DELETE cancellation paths are not blocked by this specific backstop.
 - The legacy count remains diagnostic/ranking data; it is no longer the entry Boolean's same-bar prerequisite.
 
 **Important limitation:** source-specific differences between TC1, NTD, and TC2 still require profile separation. This change does not assert that every historical signal from every edition should be enabled simultaneously.
@@ -39,8 +41,8 @@
 | WM3 fractal | PARTIAL | Equal-extreme grouping and dynamic confirmation indices have been implemented. All consumers, backtest replay, wave pivots, persistence, and Android still require cross-path parity proof. |
 | Three Wise Men chronology | PARTIAL | Signals are no longer required to coincide on one candle. First-presenting signal vs later add-on must still be demonstrated through campaign state and live order intent. |
 | Stop / exit | PARTIAL | Risk engine now requires structural invalidation and no longer invents a fixed target by default. Python campaign and Android stop/exit implementations still need mode-by-mode parity. |
-| Platform parity | UNVERIFIED | Python and Kotlin implement independent indicators/signals; no same-vector golden replay evidence has been produced in this pass. |
-| Execution durability | BLOCKED | Android still contains `androidDurableMutationContractVerified = false`. This gate must remain false until durable mutation intent, restart recovery, exchange reconciliation, and protection are proven. |
+| Platform parity | UNVERIFIED | Android WM2 no longer depends on WM3, but Android fractals still use strict five-bar inequalities while Python handles equal-extreme groups; no same-vector golden replay evidence or Android build/test proof has been produced. |
+| Execution durability | BLOCKED | Android still contains `androidDurableMutationContractVerified = false`. The central signed-request backstop blocks BUY-side mutations while execution is not ready. This flag must remain false until durable mutation intent, restart recovery, exchange reconciliation, and protection are proven. The gate is a defensive backstop, not proof that all order paths have passed fault-injection testing. |
 | CI / build | UNVERIFIED | GitHub status endpoint returned no status checks and no workflow runs associated with the latest correction commit at inspection time. No claim of passing tests/build is made. |
 
 ## 3. Non-negotiable safety interpretation
