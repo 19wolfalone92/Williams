@@ -7786,7 +7786,20 @@ private class NativeEngine(
         var balance: Double? = liveUsdtBalance.takeIf { it > 0.0 }
         // Dashboard positions/PnL must come from the Futures exchange snapshot,
         // never the retired Spot PositionState cache.
-        val futuresPositions = runCatching { futuresPositionSnapshot() }.getOrDefault(JSONArray())
+        val credentialsConfigured = key().isNotBlank() && secret().isNotBlank()
+        var futuresPositionSnapshotError: String? = null
+        val futuresPositions = if (credentialsConfigured) {
+            runCatching { futuresPositionSnapshot() }.getOrElse { failure ->
+                futuresPositionSnapshotError = failure.message ?: failure.javaClass.simpleName
+                reconcileRequired = true
+                prefs.edit().putBoolean("reconcile_required", true).commit()
+                lastError = "Futures position snapshot unavailable; trading blocked: " + futuresPositionSnapshotError
+                JSONArray()
+            }
+        } else {
+            JSONArray()
+        }
+        val futuresPositionsSnapshotOk = credentialsConfigured && futuresPositionSnapshotError == null
         val firstPosition = futuresPositions.optJSONObject(0)
         var livePnl = 0.0
         var totalEntryNotional = 0.0
@@ -7887,8 +7900,10 @@ private class NativeEngine(
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
-            .put("pnl", if (futuresPositions.length() == 0) JSONObject.NULL else livePnl)
-            .put("pnl_pct", if (futuresPositions.length() == 0) JSONObject.NULL else livePnlPct)
+            .put("positions_snapshot_ok", futuresPositionsSnapshotOk)
+            .put("positions_snapshot_error", futuresPositionSnapshotError ?: JSONObject.NULL)
+            .put("pnl", if (futuresPositions.length() == 0 || !futuresPositionsSnapshotOk) JSONObject.NULL else livePnl)
+            .put("pnl_pct", if (futuresPositions.length() == 0 || !futuresPositionsSnapshotOk) JSONObject.NULL else livePnlPct)
             .put(
                 "take_profit_price",
                 if (campaignEngineEnabled) JSONObject.NULL
