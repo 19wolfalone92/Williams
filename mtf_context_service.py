@@ -100,10 +100,10 @@ class MultiTimeframeContextService:
         prev = ind.iloc[-2] if len(ind) > 1 else last
         atr = self._atr(closed, self.config.atr_period)
         price = float(last["close"])
-        jaw = float(last.get("jaw_shifted", last.get("jaw", 0.0)) or 0.0)
-        teeth = float(last.get("teeth_shifted", last.get("teeth", 0.0)) or 0.0)
-        lips = float(last.get("lips_shifted", last.get("lips", 0.0)) or 0.0)
-        prev_jaw = float(prev.get("jaw_shifted", prev.get("jaw", jaw)) or jaw)
+        jaw = float(last.get("jaw_current", last.get("jaw", 0.0)) or 0.0)
+        teeth = float(last.get("teeth_current", last.get("teeth", 0.0)) or 0.0)
+        lips = float(last.get("lips_current", last.get("lips", 0.0)) or 0.0)
+        prev_jaw = float(prev.get("jaw_current", prev.get("jaw", jaw)) or jaw)
         prev_price = float(prev.get("close", price))
         price_move_atr = (price - prev_price) / atr if atr > 0 else 0.0
         jaw_move_atr = (jaw - prev_jaw) / atr if atr > 0 else 0.0
