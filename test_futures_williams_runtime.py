@@ -794,6 +794,38 @@ def test_conditional_williams_trigger_is_not_rearmed_after_intrabar_touch():
     )
 
 
+def test_tc2_fractal_signal_time_is_confirmation_time_not_pivot_time():
+    n = 9
+    times = [1_700_000_000_000 + i * 300_000 for i in range(n)]
+    ind = pd.DataFrame({
+        "open_time_ms": times,
+        "open": [99.0, 100.0, 101.0, 102.0, 103.0, 102.5, 103.0, 103.8, 104.0],
+        "high": [100.0, 101.0, 102.0, 103.0, 105.0, 103.5, 104.0, 104.2, 104.7],
+        "low": [98.0, 99.0, 100.0, 101.0, 99.0, 101.0, 102.0, 102.5, 103.0],
+        "close": [99.0, 100.0, 101.0, 102.0, 103.0, 102.5, 103.0, 103.8, 104.5],
+        "teeth_shifted": [98.0, 98.5, 99.0, 100.0, 101.0, 102.0, 104.0, 104.0, 104.1],
+        "fractal_up": [False, False, False, False, True, False, False, False, False],
+        "confirmed_up_level": [float("nan")] * 6 + [105.0, float("nan"), float("nan")],
+        "ao_green": [False] * n,
+        "ao_red": [False] * n,
+        "ao_green_streak": [0] * n,
+        "ao_red_streak": [0] * n,
+        "bullish_reversal_bar": [False] * n,
+        "bearish_reversal_bar": [False] * n,
+        "bullish_alligator": [True] * n,
+        "bearish_alligator": [False] * n,
+        "alligator_awake": [True] * n,
+    })
+    signals = extract_long_signal_specs(
+        "BTCUSDT", ind, timeframe="5m", tick_size=0.1
+    )
+    fractals = [s for s in signals if s.signal_type == SignalType.FRACTAL]
+    assert len(fractals) == 1
+    assert fractals[0].source_candle_index == 4
+    assert fractals[0].signal_bar_time_ms == times[6]
+    assert fractals[0].expires_at_ms == times[6] + 80 * 300_000
+
+
 def test_ntd_external_fractal_is_initial_entry_and_requires_untriggered_breakout():
     n = 9
     times = [1_700_000_000_000 + i * 300_000 for i in range(n)]
