@@ -2067,7 +2067,7 @@ private class NativeEngine(
         }
     }
 
-    private fun candleSeriesCurrent(candles: List<CandleN>, frame: String, nowMs: Long = System.currentTimeMillis()): Boolean {
+    private fun candleSeriesCurrent(candles: List<CandleN>, frame: String, nowMs: Long = futuresMarketData.exchangeNowMs()): Boolean {
         val last = candles.lastOrNull() ?: return false
         val durationMs = frameSeconds(frame).coerceAtLeast(60L) * 1000L
         // CandleN.t is the candle open time. The last closed candle remains current
@@ -2145,7 +2145,7 @@ private class NativeEngine(
         val array = JSONArray(body)
         val source = ArrayList<CandleN>(array.length())
         val sourcePersistent = ArrayList<MarketHistoryStore.Candle>(array.length())
-        val fetchedAt = System.currentTimeMillis()
+        val fetchedAt = futuresMarketData.exchangeNowMs()
 
         for (i in 0 until array.length()) {
             val row = array.getJSONArray(i)
