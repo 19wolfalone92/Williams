@@ -68,6 +68,20 @@ def calculate_indicators(df, cfg):
     x["jaw_shifted"] = x["jaw"].shift(cfg["jaw_shift"])
     x["teeth_shifted"] = x["teeth"].shift(cfg["teeth_shift"])
     x["lips_shifted"] = x["lips"].shift(cfg["lips_shift"])
+    # NTD names the current-timeframe blue Jaw line the Balance Line. Teeth
+    # remains the red Balance Line one degree lower when used as a fractal gate.
+    x["balance_line"] = x["jaw_shifted"]
+    x["balance_line_distance_pct"] = (
+        (x["close"] - x["balance_line"]) / x["close"].replace(0, np.nan)
+    )
+    x["balance_line_side"] = "UNKNOWN"
+    x.loc[x["close"] > x["balance_line"], "balance_line_side"] = "ABOVE"
+    x.loc[x["close"] < x["balance_line"], "balance_line_side"] = "BELOW"
+    x.loc[
+        x["close"].notna() & x["balance_line"].notna()
+        & (x["close"] == x["balance_line"]),
+        "balance_line_side",
+    ] = "ON"
 
     # Awesome Oscillator: SMA(5, median) - SMA(34, median).
     x["ao"] = median.rolling(cfg["ao_fast"]).mean() - median.rolling(cfg["ao_slow"]).mean()
