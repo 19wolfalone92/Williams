@@ -58,6 +58,17 @@ def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
     assert "https://demo-fapi.binance.com" in runtime
 
 
+def test_android_corrupt_persisted_campaign_state_fails_closed():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+
+    assert "var persistedStateCorrupt = false" in runtime
+    assert "Persisted Futures positions are unreadable" in runtime
+    assert "Persisted Futures pending entries are unreadable" in runtime
+    assert "if (persistedStateCorrupt)" in runtime
+    assert 'persistSafetyFlag("reconcile_required", true)' in runtime
+    assert "TradingState.RECONCILE_REQUIRED" in runtime
+
+
 def test_android_reconcile_and_kill_latches_are_sqlite_durable():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     store = _read(ANDROID / "java/com/williamsbot/FuturesExecutionStore.kt")
