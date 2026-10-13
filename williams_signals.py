@@ -375,7 +375,7 @@ def extract_short_signal_specs(
     max_reversal_age_bars: int = 20,
     point_zero_confirmed: bool = False,
     point_zero_score: int = 0,
-    require_point_zero_for_reversal: bool = True,
+    require_point_zero_for_reversal: bool = False,
 ) -> list[SignalSpec]:
     """Extract currently armable SHORT Williams signals from closed candles."""
     if ind is None or ind.empty:
