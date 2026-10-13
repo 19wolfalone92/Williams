@@ -341,7 +341,7 @@ def test_missing_oco_is_restored_from_persisted_position(tmp_path: Path):
         "time": 100,
     }]
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = _make_trader(client, db)
     result = multi.reconcile_open_positions()
 
     assert result[0]["trade_id"] == trade_id
@@ -382,7 +382,7 @@ def test_filled_pending_buy_is_recovered_into_its_own_position(tmp_path: Path):
         "ENTRY_PENDING",
     )
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = _make_trader(client, db)
     result = multi.recover_pending_entries()
 
     assert result[0]["symbol"] == "SOLUSDT"
@@ -602,7 +602,7 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
         risk_pct=0.5,
     )
     db.state_set("position_state:BTCUSDT", "OPEN")
-    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    trader = _make_trader(client, db, symbols=["BTCUSDT"])
     trader.dry_run = False
     result = trader._emergency_market_sell("BTCUSDT", 1.0, trade_id, "TEST_PARTIAL")
 
