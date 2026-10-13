@@ -1254,11 +1254,17 @@ private class NativeEngine(
         } else {
             JSONObject().put("ok", false).put("error", "Futures credentials unavailable; exchange cancellation cannot be confirmed")
         }
-        if (!cancellation.optBoolean("ok", false)) {
+        if (!cancellation.optBoolean("ok", false) ||
+            cancellation.optString("state") == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED.name
+        ) {
             reconcileRequired = true
             prefs.edit().putBoolean("reconcile_required", true).commit()
-            lastError = "Stop completed locally, but pending Futures entry cancellation is unconfirmed: " +
-                cancellation.optString("error", cancellation.optString("blocker", "unknown cancellation state"))
+            lastError = if (!cancellation.optBoolean("ok", false)) {
+                "Stop completed locally, but pending Futures entry cancellation is unconfirmed: " +
+                    cancellation.optString("error", cancellation.optString("blocker", "unknown cancellation state"))
+            } else {
+                "Pending entries canceled; existing Futures positions require reconciliation before restart"
+            }
         }
         marketSocket?.close(1000, "Williams stopped")
         marketSocket = null
