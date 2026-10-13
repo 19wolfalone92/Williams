@@ -186,6 +186,11 @@ class FuturesWilliamsScanner:
         if any(not item.isalnum() or not item.endswith("USDT") for item in approved):
             self.last_universe_error = "FUTURES_APPROVED_SYMBOLS contains an invalid USDⓈ-M USDT symbol"
             return []
+        if tuple(approved) != DEFAULT_FUTURES_SYMBOLS:
+            self.last_universe_error = (
+                "FUTURES_APPROVED_SYMBOLS must match the canonical ten-symbol Futures universe"
+            )
+            return []
 
         info = self.client.exchange_info()
         rows = info.get("symbols", []) if isinstance(info, dict) else []
