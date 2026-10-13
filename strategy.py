@@ -68,6 +68,41 @@ def calculate_indicators(df, cfg):
     x["jaw_shifted"] = x["jaw"].shift(cfg["jaw_shift"])
     x["teeth_shifted"] = x["teeth"].shift(cfg["teeth_shift"])
     x["lips_shifted"] = x["lips"].shift(cfg["lips_shift"])
+
+    # Gator Oscillator: display-only convergence/divergence of displaced
+    # Alligator lines. Its bars are diagnostics, never an extra entry gate.
+    x["gator_upper"] = (x["jaw_shifted"] - x["teeth_shifted"]).abs()
+    x["gator_lower"] = -(x["teeth_shifted"] - x["lips_shifted"]).abs()
+    x["gator_upper_expanding"] = (
+        x["gator_upper"] > x["gator_upper"].shift(1)
+    ).fillna(False).astype(bool)
+    x["gator_lower_expanding"] = (
+        x["gator_lower"].abs() > x["gator_lower"].shift(1).abs()
+    ).fillna(False).astype(bool)
+    x["gator_state"] = "UNKNOWN"
+    gator_state = "UNKNOWN"
+    for i in range(len(x)):
+        upper = x["gator_upper"].iloc[i]
+        lower = x["gator_lower"].iloc[i]
+        if i == 0 or not (
+            np.isfinite(upper) and np.isfinite(lower)
+            and np.isfinite(x["gator_upper"].iloc[i - 1])
+            and np.isfinite(x["gator_lower"].iloc[i - 1])
+        ):
+            gator_state = "UNKNOWN"
+        else:
+            upper_expanding = bool(x["gator_upper_expanding"].iloc[i])
+            lower_expanding = bool(x["gator_lower_expanding"].iloc[i])
+            if not upper_expanding and not lower_expanding:
+                gator_state = "SLEEPING"
+            elif upper_expanding and lower_expanding:
+                gator_state = "EATING"
+            elif gator_state in {"EATING", "SATIATED"}:
+                gator_state = "SATIATED"
+            else:
+                gator_state = "AWAKENING"
+        x.iloc[i, x.columns.get_loc("gator_state")] = gator_state
+
     # NTD names the current-timeframe blue Jaw line the Balance Line. Teeth
     # remains the red Balance Line one degree lower when used as a fractal gate.
     x["balance_line"] = x["jaw_shifted"]
