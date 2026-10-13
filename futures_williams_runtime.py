@@ -50,6 +50,7 @@ from campaign_model import (
 from data import fetch_klines
 from binance_client import BinanceAPIError
 from binance_futures_client import BinanceFuturesClient
+from trading_config import DEFAULT_FUTURES_SYMBOLS
 
 
 @dataclass(frozen=True)
@@ -159,10 +160,7 @@ class FuturesWilliamsScanner:
     def universe(self, limit: int = 10) -> list[str]:
         # Never auto-discover or rank an unrestricted contract list for trading.
         # The approved ten-symbol list is a separate, explicit acceptance input.
-        default_symbols = (
-            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-            "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
-        )
+        default_symbols = DEFAULT_FUTURES_SYMBOLS
         raw = os.getenv("FUTURES_APPROVED_SYMBOLS", "").strip()
         approved = (
             [item.strip().upper() for item in raw.split(",")]
