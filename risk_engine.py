@@ -181,7 +181,7 @@ class RiskEngine:
         # Score components.
         #
         # Signal strength: 30
-        # R:R:             25
+        # Optional legacy R:R: 25 (zero in Williams Core without a fixed target)
         # Risk efficiency: 20
         # HTF:             15
         # Spread:          5
@@ -193,10 +193,14 @@ class RiskEngine:
             1.0,
         )
 
-        rr_score = 25.0 * self._clamp(
-            (rr - self.min_rr) / max(3.0 - self.min_rr, 0.0001),
-            0.0,
-            1.0,
+        rr_score = (
+            25.0 * self._clamp(
+                (rr - self.min_rr) / max(3.0 - self.min_rr, 0.0001),
+                0.0,
+                1.0,
+            )
+            if take_profit_price > 0
+            else 0.0
         )
 
         risk_efficiency = self._clamp(
