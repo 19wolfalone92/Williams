@@ -493,7 +493,8 @@ class Trader:
         )
         equity = usdt
         unrealized = 0.0
-        for trade in self.db.open_trades():
+        open_trades = self.db.open_trades()
+        for trade in open_trades:
             symbol = str(trade.get('symbol', '')).upper()
             qty = float(trade.get('quantity', 0) or 0)
             entry = float(trade.get('entry_price', 0) or 0)
@@ -504,10 +505,9 @@ class Trader:
                 raise RuntimeError('daily risk blocked: fresh mark unavailable for ' + symbol)
             equity += qty * mark
             unrealized += (mark - entry) * qty
-        fees = float(self.db.conn.execute(
-            "SELECT COALESCE(SUM(fees),0) FROM trades "
-            "WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
-        ).fetchone()[0] or 0.0)
+        # Closed-trade pnl is net of fees; subtract only fees on open trades
+        # that have not yet been booked into realized pnl.
+        fees = sum(float(trade.get("fees", 0) or 0) for trade in open_trades)
         if not all(math.isfinite(value) for value in (equity, unrealized, fees)):
             raise RuntimeError('daily risk blocked: non-finite portfolio snapshot')
         return equity, unrealized, fees
