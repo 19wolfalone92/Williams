@@ -42,7 +42,11 @@ def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
 
     assert "wss://demo-fstream.binance.com/market/stream?streams=" in runtime
+    assert "wss://demo-fstream.binance.com/public/stream?streams=" in runtime
+    assert "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE" in runtime
     assert "startMarketDataStream()" in runtime
+    assert "startPublicDataStream()" in runtime
+    assert "publicWebSocketFresh()" in runtime
     assert "marketSocketLastEventMs = System.currentTimeMillis()" in runtime
     assert "private fun marketWebSocketFresh" in runtime
     assert "marketWebSocketFresh() &&" in runtime
