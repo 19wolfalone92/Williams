@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from portfolio_controller import PortfolioController
 from db import Database
+from execution_barrier import OrderIntent
 from equity_breaker import EquityCircuitBreaker
 from l2_slippage import L2SlippageGuard
 from execution_accumulator import ExecutionSummary, accumulate_order
@@ -707,6 +708,42 @@ class MultiPositionTrader:
     # Protection
     # ------------------------------------------------------------------
 
+    def _submit_risk_reducing_order(
+        self,
+        symbol,
+        order_type,
+        purpose,
+        submit,
+        *,
+        quantity="",
+        client_order_id="",
+        pre_submit_checks=None,
+    ):
+        """Route protective exits/cancellations through the durable barrier."""
+        if self.execution_barrier is None:
+            raise RuntimeError(
+                "risk-reducing exchange mutation blocked: ExecutionBarrier is unavailable"
+            )
+        intent = OrderIntent.new(
+            str(symbol).upper(),
+            "SELL",
+            str(order_type).upper(),
+            required_context_versions={},
+            quantity=str(quantity or ""),
+            client_order_id=str(client_order_id or ""),
+            purpose=str(purpose).upper(),
+        )
+        result = self.execution_barrier.execute(
+            intent,
+            submit,
+            pre_submit_checks=pre_submit_checks,
+        )
+        if not result.accepted:
+            raise RuntimeError(
+                f"{symbol}: ExecutionBarrier blocked {purpose}: {result.reason}"
+            )
+        return result.response
+
     def _emergency_market_sell(self, symbol, qty, trade_id, reason):
         """Close a just-filled/unprotected Spot position if protection is already breached."""
         if self.dry_run:
@@ -724,12 +761,29 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
+
+        def _validate_emergency_sell(_snapshot):
+            latest = self.client.account()
+            latest_free = self._asset_balance(symbol, account=latest)
+            if latest_free + 1e-12 < sell_qty:
+                raise RuntimeError(
+                    f"{symbol}: free inventory changed before emergency SELL"
+                )
+
+        sell = self._submit_risk_reducing_order(
             symbol,
-            "SELL",
             "MARKET",
+            "CAMPAIGN_EMERGENCY_EXIT",
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
             quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+            client_order_id=client_id,
+            pre_submit_checks=_validate_emergency_sell,
         )
         self.db.save_order(sell)
 
@@ -1659,11 +1713,21 @@ class MultiPositionTrader:
             )
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
-                if cancel is not None:
-                    if list_id:
+                if cancel is None:
+                    raise RuntimeError(
+                        f"{symbol}: OCO cancellation API is unavailable"
+                    )
+                self._submit_risk_reducing_order(
+                    symbol,
+                    "CANCEL_OCO",
+                    "CAMPAIGN_EXIT_CANCEL_PROTECTION",
+                    lambda: (
                         cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                        if list_id
+                        else cancel(symbol, list_client_order_id=list_client)
+                    ),
+                    client_order_id=str(list_client or list_id),
+                )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1680,12 +1744,30 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
+            manual_client_id = f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}"
+
+            def _validate_manual_sell(_snapshot):
+                latest = self.client.account()
+                latest_free = self._asset_balance(symbol, account=latest)
+                if latest_free + 1e-12 < sell_qty:
+                    raise RuntimeError(
+                        f"{symbol}: free inventory changed before manual SELL"
+                    )
+
+            sell = self._submit_risk_reducing_order(
                 symbol,
-                "SELL",
                 "MARKET",
+                "CAMPAIGN_EXIT",
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=manual_client_id,
+                ),
                 quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+                client_order_id=manual_client_id,
+                pre_submit_checks=_validate_manual_sell,
             )
             self.db.save_order(sell)
 
