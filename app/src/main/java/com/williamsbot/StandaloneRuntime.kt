@@ -674,7 +674,7 @@ private class NativeEngine(
 
     private val userStream = BinanceUserDataStream(
         http = http,
-        endpoint = "wss://ws-api.testnet.binance.vision/ws-api/v3",
+        endpoint = "wss://ws-fapi.binancefuture.com/ws-fapi/v1",
         apiKeyProvider = { key() },
         apiSecretProvider = { secret() },
         timestampProvider = { signedTimestamp() },
@@ -1617,7 +1617,7 @@ private class NativeEngine(
 
     private fun wsStreamUrl(): String =
         // Keep realtime WSS small and reliable. Deep MTF frames remain REST-backed.
-        "wss://stream.testnet.binance.vision/stream?streams=" +
+        "wss://stream.binancefuture.com/stream?streams=" +
             coreSymbols.flatMap { symbol ->
                 startupFrames.map { frame ->
                     symbol.lowercase(Locale.US) + "@kline_" + frame
