@@ -24,7 +24,8 @@ class EquityCircuitBreaker(
     @Synchronized
     fun observe(equity: Double, nowMs: Long = System.currentTimeMillis()): Snapshot {
         if (!equity.isFinite() || equity <= 0.0) {
-            return Snapshot(equity, startEquity, 0.0, tripped)
+            tripped = true
+            return Snapshot(equity, startEquity, Double.POSITIVE_INFINITY, tripped)
         }
 
         val day = java.time.Instant.ofEpochMilli(nowMs)
