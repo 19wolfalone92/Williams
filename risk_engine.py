@@ -52,7 +52,7 @@ class RiskEngine:
     def __init__(
         self,
         balance_quote: float,
-        risk_per_trade_pct: float = 0.005,
+        risk_per_trade_pct: float = 0.0025,
         max_position_fraction: float = 0.25,
         max_daily_loss_pct: float = 0.03,
         min_rr: float = 1.5,
