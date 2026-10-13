@@ -383,3 +383,10 @@ def test_persisted_signal_rejects_ambiguous_boolean_fields():
     }
     with pytest.raises(ValueError, match="not an unambiguous boolean"):
         signal_spec_from_dict(raw)
+
+
+def test_risk_policy_environment_cannot_raise_daily_loss_above_three_percent():
+    from trading_config import TradingConfig
+
+    cfg = TradingConfig.from_env({"MAX_DAILY_LOSS_PCT": "0.10"})
+    assert cfg.max_daily_loss_pct == pytest.approx(0.03)
