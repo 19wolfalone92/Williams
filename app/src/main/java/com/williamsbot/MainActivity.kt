@@ -13,8 +13,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -106,10 +104,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -117,19 +111,21 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
-// Williams 4.24.0 remote Futures cockpit.
+// Williams 4.24.0 autonomous Futures Testnet runtime.
 // The VPS/backend is authoritative; Android never starts a trading runtime.
 // CI compile-log capture enabled
 // Diagnostic contract v2: runtime self-tests are exposed through /api/v1/diagnostics.
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Williams Android app is a remote cockpit only. The authoritative
-        // trading engine runs on the VPS/backend; no native Spot trading loop
-        // is started from the UI process. Legacy TradingForegroundService
-        // remains present only as a compatibility shell and never starts trading.
-        // Historical localhost endpoint is intentionally unused; production
-        // control is HTTPS to the Williams Futures backend.
+        // The phone owns the Futures Testnet runtime. Keep it alive in a foreground
+        // service; cockpit commands execute in-process and never send Binance
+        // credentials to a remote backend.
+        ContextCompat.startForegroundService(
+            this,
+            Intent(this, TradingForegroundService::class.java)
+                .setAction(TradingForegroundService.ACTION_START)
+        )
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
                 this,
@@ -368,93 +364,23 @@ data class PositionView(
     val ocoListClientId: String = ""
 )
 
-private class BackendApi(context: Context) {
-    private val securePrefs = EncryptedSharedPreferences.create(
-        context,
-        "williams_backend_connection",
-        MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+private class LocalRuntimeApi(context: Context) {
+    private val appContext = context.applicationContext
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .build()
+    fun get(path: String): String =
+        StandaloneRuntime.request(appContext, "GET", path, null)
 
-    val backendUrl: String
-        get() = securePrefs.getString("backend_url", "")?.trimEnd('/') ?: ""
-            ?.trimEnd('/')
-            ?: ""
+    fun post(path: String, body: String? = null): String =
+        StandaloneRuntime.request(appContext, "POST", path, body)
 
-    val mobileToken: String
-        get() = securePrefs.getString("mobile_token", "")?.trim() ?: ""
-
-    fun saveConnection(url: String, token: String) {
-        val normalized = url.trim().trimEnd('/')
-        require(normalized.isNotBlank()) { "Backend URL не задан" }
-        require(normalized.startsWith("https://")) {
-            "Williams Futures Backend URL должен использовать HTTPS."
-        }
-        require(token.trim().length >= 32) {
-            "Для удалённого Backend нужен Mobile API Token (минимум 32 символа)."
-        }
-        securePrefs.edit {
-            putString("backend_url", normalized)
-            putString("mobile_token", token.trim())
-        }
-    }
-
-    fun get(path: String): String = request("GET", path, null)
-    fun post(path: String, body: String? = null): String = request("POST", path, body)
-    fun delete(path: String): String = request("DELETE", path, null)
-
-    private fun request(
-        method: String,
-        path: String,
-        body: String?
-    ): String {
-        require(backendUrl.startsWith("https://")) {
-            "Укажите HTTPS Backend URL для Williams Futures."
-        }
-        require(mobileToken.isNotBlank()) {
-            "Сначала укажите Mobile API Token."
-        }
-        val requestBuilder = Request.Builder()
-            .url(backendUrl + path)
-        if (mobileToken.isNotBlank()) {
-            requestBuilder.header("Authorization", "Bearer " + mobileToken)
-        }
-        val builder = requestBuilder
-
-        val requestBody =
-            body?.toRequestBody("application/json".toMediaType())
-
-        val request = builder.method(
-            method,
-            if (method == "POST") {
-                requestBody ?: "".toRequestBody(null)
-            } else {
-                null
-            }
-        ).build()
-
-        client.newCall(request).execute().use { response ->
-            val text = response.body?.string() ?: "{}"
-            if (!response.isSuccessful) {
-                error("HTTP " + response.code + ": " + text)
-            }
-            return text
-        }
-    }
+    fun delete(path: String): String =
+        StandaloneRuntime.request(appContext, "DELETE", path, null)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WilliamsApp(context: Context) {
-    val api = remember { BackendApi(context) }
+    val api = remember { LocalRuntimeApi(context) }
     val scope = rememberCoroutineScope()
 
     var tab by remember { mutableIntStateOf(0) }
@@ -468,9 +394,7 @@ fun WilliamsApp(context: Context) {
     var logs by remember { mutableStateOf(emptyList<String>()) }
     var apiKey by remember { mutableStateOf("") }
     var apiSecret by remember { mutableStateOf("") }
-    var backendUrl by remember { mutableStateOf(api.backendUrl) }
-    var mobileToken by remember { mutableStateOf(api.mobileToken) }
-    var message by remember { mutableStateOf("Williams Futures: remote cockpit") }
+    var message by remember { mutableStateOf("Williams Futures: локальный автономный Runtime") }
     var refreshing by remember { mutableStateOf(false) }
     var backupPassword by remember { mutableStateOf("") }
     var backupMessage by remember { mutableStateOf("") }
@@ -596,15 +520,6 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    fun saveBackendConnection() {
-        try {
-            api.saveConnection(backendUrl, mobileToken)
-            message = "Backend URL и Mobile API token сохранены"
-        } catch (e: Exception) {
-            message = e.message ?: "Не удалось сохранить Backend"
-        }
-    }
-
     fun saveCredentials() {
         scope.launch(Dispatchers.IO) {
             try {
@@ -631,9 +546,9 @@ fun WilliamsApp(context: Context) {
                     diagnosticsMessage = ""
                     message = when {
                         configured && testnet && executionEnabled ->
-                            "Binance Futures Testnet подключён; backend готов"
+                            "Binance Futures Testnet подтверждён; локальный Runtime готов"
                         configured && testnet ->
-                            "Binance Futures Testnet подключён; execution пока заблокирован safety/reconcile gate"
+                            "Futures Testnet подтверждён; входы заблокированы проверками безопасности или сверки"
                         configured ->
                             "Ключи сохранены, но runtime не подтвердил TESTNET"
                         else ->
@@ -656,7 +571,7 @@ fun WilliamsApp(context: Context) {
                 val verified = JSONObject(api.get("/api/v1/status?fast=true"))
                 withContext(Dispatchers.Main) {
                     status = parseStatus(verified)
-                    message = "Binance-ключи удалены. Можно ввести новые ключи."
+                    message = "Локальные Binance Futures Testnet ключи удалены."
                     apiKey = ""
                     apiSecret = ""
                 }
@@ -717,7 +632,7 @@ fun WilliamsApp(context: Context) {
 
                     withContext(Dispatchers.Main) {
                         backupMessage =
-                            "Backend-подключение восстановлено. Binance-ключи на телефон не возвращаются."
+                            "Настройки восстановлены. Binance-ключи не импортируются; Futures-аккаунт будет заново сверён напрямую с Binance."
                         backupPassword = ""
                     }
 
@@ -829,6 +744,7 @@ fun WilliamsApp(context: Context) {
     }
 
     LaunchedEffect(Unit) {
+        delay(700L)
         loadAll(false)
         while (isActive) {
             delay(15_000L)
@@ -877,7 +793,7 @@ fun WilliamsApp(context: Context) {
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                "BACKEND CONTROL • Android is dashboard only",
+                                "AUTONOMOUS FUTURES • Execution on device",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AppColors.textMuted
                             )
@@ -1014,11 +930,6 @@ fun WilliamsApp(context: Context) {
             else -> SettingsScreen(
                 padding = padding,
                 status = status,
-                backendUrl = backendUrl,
-                mobileToken = mobileToken,
-                onBackendUrl = { backendUrl = it },
-                onMobileToken = { mobileToken = it },
-                onSaveBackend = ::saveBackendConnection,
                 apiKey = apiKey,
                 apiSecret = apiSecret,
                 onApiKey = { apiKey = it },
@@ -2353,11 +2264,6 @@ private fun HistoryScreen(
 private fun SettingsScreen(
     padding: PaddingValues,
     status: Status,
-    backendUrl: String,
-    mobileToken: String,
-    onBackendUrl: (String) -> Unit,
-    onMobileToken: (String) -> Unit,
-    onSaveBackend: () -> Unit,
     apiKey: String,
     apiSecret: String,
     onApiKey: (String) -> Unit,
@@ -2406,38 +2312,14 @@ private fun SettingsScreen(
                     }
 
                     Text(
-                        "Автономный режим: торговый движок и связь с Binance работают прямо на телефоне. Удалённый Backend — опционально.",
+                        "Автономный режим: торговая логика работает на телефоне; API-ключи передаются только локальному движку и Binance Futures Testnet.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = AppColors.textMuted
                     )
 
-                    OutlinedTextField(
-                        value = backendUrl,
-                        onValueChange = onBackendUrl,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Backend URL") },
-                        singleLine = true
-                    )
-
-                    OutlinedTextField(
-                        value = mobileToken,
-                        onValueChange = onMobileToken,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Mobile API token") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation()
-                    )
-
-                    Button(
-                        onClick = onSaveBackend,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Сохранить подключение")
-                    }
-
                     InfoRow("Execution authority", "Автономный телефон • Binance напрямую")
-                    InfoRow("Scanner universe", "Native Spot USDT universe")
-                    InfoRow("MTF", "Full native Binance timeframes")
+                    InfoRow("Scanner universe", "USDⓈ-M Futures • 10 USDT contracts")
+                    InfoRow("MTF", "D1/H4 context • H1 decisions • M15 monitoring")
                 }
             }
         }
@@ -2530,8 +2412,8 @@ private fun SettingsScreen(
                     InfoRow("Risk / trade", fmt(status.riskPerTrade * 100, 1) + "%")
                     InfoRow("Daily loss", fmt(status.maxDailyLoss * 100, 1) + "%")
                     InfoRow("Trade limit", "динамический")
-                    InfoRow("Loss guard", "3 подряд → пауза")
-                    InfoRow("Scanner cadence", "90 sec")
+                    InfoRow("Loss guard", "2 подряд → пауза")
+                    InfoRow("Scanner cadence", "10 sec")
                     InfoRow("Wave top N", "8")
                 }
             }
@@ -2557,7 +2439,7 @@ private fun SettingsScreen(
                     }
 
                     Text(
-                        "Зашифрованный backup переносит только Backend URL и Mobile API token. Binance API credentials никогда не записываются в backup. Открытые позиции и ордера в файл не записываются.",
+                        "Зашифрованный backup не содержит Binance API key/secret, открытые позиции или ордера. После восстановления локальный Futures Runtime сверяет фактическое состояние напрямую с Binance.",
                         style = MaterialTheme.typography.bodySmall,
                         color = AppColors.textMuted
                     )
