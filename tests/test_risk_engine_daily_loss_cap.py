@@ -33,3 +33,28 @@ def test_risk_override_cannot_increase_position_risk():
     )
     assert result.allowed
     assert result.risk_quote <= 25.0
+
+
+def test_non_finite_risk_configuration_fails_closed():
+    engine = RiskEngine(
+        balance_quote=10_000,
+        risk_per_trade_pct=float("nan"),
+        max_position_fraction=float("inf"),
+        max_daily_loss_pct=float("inf"),
+    )
+    assert engine.risk_per_trade_pct == 0.0
+    assert engine.max_position_fraction == 0.0
+    assert engine.max_daily_loss_pct == 0.0
+
+
+def test_non_finite_risk_override_cannot_create_a_trade():
+    engine = RiskEngine(balance_quote=10_000, risk_per_trade_pct=0.0025)
+    result = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100.0,
+        atr=1.0,
+        side="LONG",
+        invalidation_price=98.0,
+        risk_pct_override=float("nan"),
+    )
+    assert not result.allowed
