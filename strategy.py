@@ -272,22 +272,28 @@ def calculate_indicators(df, cfg):
     x["short_ac_negative"] = x["ac"] < 0
     x["short_fractal_ready"] = x["last_down_level"].notna()
 
-    # Strict entry: conservative Williams gate + at least one valid Wise-Man
-    # trigger. Fractal breakouts, Super AO continuation and reversal bars are
-    # separate triggers; they are not incorrectly ANDed together.
-    min_wise = int(cfg["min_wise_men_confirmations"])
+    # A Wise-Man event is a distinct event, not a same-candle Boolean
+    # quorum. In particular WM2/Super AO may be the first presenting signal;
+    # it must not be vetoed by the absence of a WM3 fractal or by a configurable
+    # "2 of 3 on this candle" counter. Operative context and safety admission
+    # remain separate downstream gates.
     x["long_signal"] = (
-        # Williams' first gate: no downstream Wise-Man signal is actionable
-        # until a confirmed fractal has formed outside the Teeth/balance line.
-        x["long_fractal_outside"]
-        & x["long_bullish"]
+        x["long_bullish"]
         & x["long_awake"]
-        & x["long_wise_man_count"].ge(min_wise)
+        & (
+            x["long_wise_reversal_entry"]
+            | x["long_super_ao_signal"]
+            | x["long_fractal_signal"]
+        )
     )
     x["short_signal"] = (
         x["short_bearish"]
         & x["short_awake"]
-        & x["short_wise_man_count"].ge(min_wise)
+        & (
+            x["short_wise_reversal_entry"]
+            | x["short_super_ao_signal"]
+            | x["short_fractal_signal"]
+        )
     )
 
     def _family(row, side):
