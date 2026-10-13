@@ -3616,9 +3616,13 @@ private class NativeEngine(
         }
         val baseline = prefs.getString(baselineKey, null)?.toDoubleOrNull() ?: 0.0
         require(baseline > 0.0 && baseline.isFinite()) { "Futures daily equity baseline is invalid" }
+        val dailyPnlQuote = equity - baseline
         val lossPct = ((baseline - equity) / baseline).coerceAtLeast(0.0)
-        check(prefs.edit().putString("futures_daily_loss_pct", lossPct.toString()).commit()) {
-            "Could not persist daily loss measurement"
+        check(prefs.edit()
+            .putString("futures_daily_loss_pct", lossPct.toString())
+            .putString("futures_daily_pnl_usdt", dailyPnlQuote.toString())
+            .commit()) {
+            "Could not persist daily Futures equity/PnL measurement"
         }
         if (lossPct >= 0.03) {
             paused = true
