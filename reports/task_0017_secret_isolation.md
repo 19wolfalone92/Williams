@@ -26,3 +26,8 @@ Only synthetic sentinel values were used. No real credentials were read or emitt
 - This is a targeted test, not a completed exhaustive scan of every log, traceback, DecisionTrace, Android/Python database, recovery output, CI artifact and APK build report. Do not mark BL-004 fully closed.
 - Android secret-redaction and audit-store tests exist in the repository, but exact-HEAD Android unit-test results were pending at the time of this report. The standalone APK workflow [38341932569](https://github.com/19wolfalone92/Williams/actions/runs/38341932569) failed at startup with zero jobs/artifacts; its cause is not exposed.
 - Only synthetic markers were used in the described test; no real credentials were used.
+
+
+## TASK 001.12 Android evidence correction
+
+At code SHA `b6d43d439a1c49c577570d36332bbe1c60ff7477`, Android job 115116130632 in [run 38342390656](https://github.com/19wolfalone92/Williams/actions/runs/38342390656) succeeded. APK identity: `com.williamsbot.debug`, target SDK 36; APK SHA-256 `e9ce68cfeac340c09979463aa5a2e0b1a346d08d19403e163a2d99589f254ac6`; V2 signature verified. BL-004 remains only partially verified: the synthetic sentinel test covers a temporary SQLite database and public exception, not every log, DecisionTrace, diagnostic, recovery output and artifact. APK artifact ID 11787686242; lint artifact ID 11787626329. No real credentials were used.
