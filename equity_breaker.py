@@ -14,10 +14,18 @@ class EquityCircuitBreaker:
         self.max_daily_loss_pct = min(0.03, pct)
 
     def _today_start_equity(self, db, current_equity_quote: float) -> float:
-        from datetime import datetime, timezone
-        today = datetime.now(timezone.utc).date().isoformat()
+        from datetime import date, datetime, timezone
+        today_date = datetime.now(timezone.utc).date()
+        today = today_date.isoformat()
         stored_day = db.state_get("daily_risk_day")
         stored_equity = db.state_get("daily_start_equity")
+        if stored_day is not None:
+            try:
+                stored_date = date.fromisoformat(str(stored_day))
+            except (TypeError, ValueError):
+                raise ValueError("persisted daily risk day key is invalid")
+            if stored_date > today_date:
+                raise ValueError("persisted daily risk day is in the future")
         if stored_day == today and stored_equity is None:
             # Same-day state corruption must not silently establish a fresh
             # baseline and erase a potentially tripped breaker.
