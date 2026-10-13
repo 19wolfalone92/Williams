@@ -892,6 +892,7 @@ def extract_long_signal_specs(
         current_trigger_valid = trigger > max(current_teeth, 0.0)
         if current_close < trigger and current_trigger_valid:
             row = ind.iloc[center_i]
+            confirmation_time = _row_time_ms(ind.iloc[confirmation_i])
             specs.append(
                 SignalSpec.new(
                     symbol=symbol,
@@ -899,7 +900,9 @@ def extract_long_signal_specs(
                     signal_type=SignalType.FRACTAL,
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
-                    signal_bar_time_ms=_row_time_ms(row),
+                    # The pivot candle is the formation; the signal becomes
+                    # knowable only when the second right-hand bar closes.
+                    signal_bar_time_ms=confirmation_time,
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -913,7 +916,7 @@ def extract_long_signal_specs(
                     context_versions=versions,
                     reason="WM3 buy fractal; trigger only while price/trigger remains above Teeth",
                     source_candle_index=center_i,
-                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 80),
+                    expires_at_ms=_expiry(confirmation_time, timeframe, 80),
                 )
             )
 
@@ -1055,6 +1058,7 @@ def extract_short_signal_specs(
         current_trigger_valid = current_teeth > 0 and trigger < current_teeth
         if current_close > trigger and current_trigger_valid:
             row = ind.iloc[center_i]
+            confirmation_time = _row_time_ms(ind.iloc[confirmation_i])
             specs.append(
                 SignalSpec.new(
                     symbol=symbol,
@@ -1062,7 +1066,9 @@ def extract_short_signal_specs(
                     signal_type=SignalType.FRACTAL,
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
-                    signal_bar_time_ms=_row_time_ms(row),
+                    # Order chronology uses confirmation time, never the pivot's
+                    # earlier timestamp, so Wise-Men sequencing cannot look ahead.
+                    signal_bar_time_ms=confirmation_time,
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -1076,7 +1082,7 @@ def extract_short_signal_specs(
                     context_versions=versions,
                     reason="WM3 sell fractal; trigger only while price/trigger remains below Teeth",
                     source_candle_index=center_i,
-                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 80),
+                    expires_at_ms=_expiry(confirmation_time, timeframe, 80),
                 )
             )
 
