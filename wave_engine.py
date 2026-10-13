@@ -861,9 +861,9 @@ class MultiTimeframeWaveEngine:
 
     def _phase(self, last: pd.Series, direction: str) -> Tuple[str, float, str]:
         price = self._safe_float(last.get("close"))
-        jaw = self._safe_float(last.get("jaw_shifted"), np.nan)
-        teeth = self._safe_float(last.get("teeth_shifted"), np.nan)
-        lips = self._safe_float(last.get("lips_shifted"), np.nan)
+        jaw = self._safe_float(last.get("jaw_current", last.get("jaw_shifted")), np.nan)
+        teeth = self._safe_float(last.get("teeth_current", last.get("teeth_shifted")), np.nan)
+        lips = self._safe_float(last.get("lips_current", last.get("lips_shifted")), np.nan)
         spread = self._safe_float(last.get("alligator_spread_pct"))
         awake = bool(last.get("alligator_awake", False))
         ao = self._safe_float(last.get("ao"))
