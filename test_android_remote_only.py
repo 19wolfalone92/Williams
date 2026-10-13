@@ -102,6 +102,8 @@ def test_android_campaign_and_intents_are_sqlite_backed():
     assert "CREATE TABLE IF NOT EXISTS runtime_state" in store
     assert "db.beginTransaction()" in store
     assert "migrateLegacyState" in store
+    assert "legacy.all[key]?.toString()" in store
+    assert "legacy.getString(key, null)" not in store
     assert "prefs.getString(intentsKey" not in coordinator
     assert "prefs.edit().putString(intentsKey" not in coordinator
 
