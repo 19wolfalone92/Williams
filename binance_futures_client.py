@@ -363,7 +363,13 @@ class BinanceFuturesClient:
         )
 
     def api_restrictions(self):
-        # This endpoint is account-wide and remains on the Wallet API host.
+        # Testnet credentials must never be sent to the live Wallet API host.
+        # The Wallet SAPI permission endpoint is not part of the Futures Demo API.
+        if self.testnet:
+            raise BinanceAPIError(
+                "API restrictions cannot be queried with Futures Testnet credentials; "
+                "live Wallet API access is blocked in Testnet mode"
+            )
         original = self.base_url
         try:
             self.base_url = os.getenv("BINANCE_SPOT_WALLET_URL", "https://api.binance.com")
@@ -377,6 +383,12 @@ class BinanceFuturesClient:
             self.base_url = original
 
     def api_trading_status(self):
+        # Do not leak a Testnet API key to the live Wallet API host.
+        if self.testnet:
+            raise BinanceAPIError(
+                "API trading status cannot be queried with Futures Testnet credentials; "
+                "live Wallet API access is blocked in Testnet mode"
+            )
         original = self.base_url
         try:
             self.base_url = os.getenv("BINANCE_SPOT_WALLET_URL", "https://api.binance.com")
