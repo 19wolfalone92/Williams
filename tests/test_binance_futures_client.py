@@ -134,3 +134,25 @@ def test_spot_portfolio_trader_rejects_futures_client_before_initialization():
 
     with pytest.raises(ValueError, match="Spot-only"):
         MultiPositionTrader(FuturesClientMarker())
+
+
+def test_ambiguous_submission_reconciled_as_canceled_is_not_reported_as_success():
+    c, session = client([
+        Response({"msg": "gateway timeout"}, status_code=504),
+        Response({"symbol": "BTCUSDT", "clientOrderId": "wb21-entry-003", "status": "CANCELED"}),
+    ])
+    with pytest.raises(BinanceFuturesAPIError, match="confirmed terminal"):
+        c.order_safe(
+            "BTCUSDT", "BUY", "MARKET", quantity="0.01",
+            new_client_order_id="wb21-entry-003",
+        )
+    assert len(session.calls) == 2
+
+
+def test_success_response_with_missing_order_status_is_blocked_as_unknown():
+    c, _ = client([Response({"symbol": "BTCUSDT", "orderId": 99})])
+    with pytest.raises(BinanceFuturesAPIError, match="unknown status"):
+        c.order_safe(
+            "BTCUSDT", "BUY", "MARKET", quantity="0.01",
+            new_client_order_id="wb21-entry-004",
+        )
