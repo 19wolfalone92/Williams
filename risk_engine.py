@@ -62,19 +62,21 @@ class RiskEngine:
     ):
         self.balance = float(balance_quote)
         raw_trade_risk = float(risk_per_trade_pct)
+        # Invalid numeric configuration must fail closed. NaN/inf must never
+        # disable a cap through comparison semantics or leak into position sizing.
         self.risk_per_trade_pct = (
             max(0.0, min(0.0025, raw_trade_risk))
-            if math.isfinite(raw_trade_risk) else raw_trade_risk
+            if math.isfinite(raw_trade_risk) else 0.0
         )
         raw_position_fraction = float(max_position_fraction)
         self.max_position_fraction = (
             max(0.0, min(0.25, raw_position_fraction))
-            if math.isfinite(raw_position_fraction) else raw_position_fraction
+            if math.isfinite(raw_position_fraction) else 0.0
         )
         raw_daily_loss = float(max_daily_loss_pct)
         self.max_daily_loss_pct = (
             max(0.0, min(0.01, raw_daily_loss))
-            if math.isfinite(raw_daily_loss) else raw_daily_loss
+            if math.isfinite(raw_daily_loss) else 0.0
         )
         self.min_rr = float(min_rr)
         self.max_atr_pct = float(max_atr_pct)
