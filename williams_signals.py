@@ -254,6 +254,125 @@ def _latest_confirmed_fractal(
     return None
 
 
+def extract_ntd_ao_signal_specs(
+    symbol: str,
+    ind: pd.DataFrame,
+    *,
+    side: str,
+    timeframe: str,
+    tick_size: float,
+    max_age_bars: int = 30,
+) -> list[SignalSpec]:
+    """Extract the three New Trading Dimensions AO entry formations.
+
+    This is an edition-specific profile, not an extra Boolean gate on TC2.
+    It consumes closed-bar indicator data and emits a conditional stop beyond
+    the signal candle. A caller must explicitly select the NTD profile.
+    """
+    direction = str(side or "").upper()
+    if direction not in {"LONG", "SHORT"} or ind is None or len(ind) < 3:
+        return []
+    required = {"ao", "ao_green", "ao_red", "high", "low", "close"}
+    if not required.issubset(ind.columns):
+        return []
+
+    ao = pd.to_numeric(ind["ao"], errors="coerce").to_numpy(dtype=float)
+    if len(ao) < 3 or not all(math.isfinite(v) for v in ao[-3:]):
+        return []
+    current_i = len(ind) - 1
+    current = ind.iloc[current_i]
+    tick = max(float(tick_size), 1e-12)
+    current_time = _row_time_ms(current)
+    high = float(current["high"])
+    low = float(current["low"])
+    close = float(current["close"])
+    if not all(math.isfinite(v) and v > 0 for v in (high, low, close)) or high < low:
+        return []
+
+    is_long = direction == "LONG"
+    order_side = "BUY" if is_long else "SELL"
+    trigger = high + tick if is_long else low - tick
+    protective = low if is_long else high
+    if trigger <= 0 or (is_long and close >= trigger) or (not is_long and close <= trigger):
+        return []
+
+    green = ind["ao_green"].fillna(False).astype(bool).to_numpy()
+    red = ind["ao_red"].fillna(False).astype(bool).to_numpy()
+    matches: list[tuple[SignalType, str]] = []
+
+    # AO Saucer: three consecutive bars form green-red-green above zero
+    # for LONG, mirrored red-green-red below zero for SHORT.
+    last3 = ao[-3:]
+    if is_long:
+        if all(v > 0 for v in last3) and green[-3] and red[-2] and green[-1]:
+            matches.append((SignalType.AO_SAUCER, "NTD AO Saucer above zero; BUY STOP above signal-bar high"))
+        # AO Zero-line Cross: a closed bar crosses from non-positive to positive.
+        if ao[-2] <= 0 < ao[-1]:
+            matches.append((SignalType.AO_ZERO_LINE, "NTD AO crossed above zero; BUY STOP above crossing-bar high"))
+        # AO Twin Peaks: two confirmed troughs below zero; second is higher,
+        # no zero-line crossing between them, and current AO turns green.
+        if green[-1]:
+            peaks = [
+                i for i in range(max(1, current_i - max(3, int(max_age_bars))), current_i)
+                if math.isfinite(ao[i - 1]) and math.isfinite(ao[i + 1])
+                and ao[i] < 0 and ao[i] < ao[i - 1] and ao[i] < ao[i + 1]
+            ]
+            if peaks and peaks[-1] == current_i - 1:
+                second = peaks[-1]
+                prior = [i for i in peaks[:-1] if ao[i] < ao[second]]
+                if prior:
+                    first = prior[-1]
+                    if all(v < 0 for v in ao[first:second + 1]) and ao[second] > ao[first]:
+                        matches.append((SignalType.AO_TWIN_PEAKS, "NTD bullish AO Twin Peaks below zero; BUY STOP above signal-bar high"))
+    else:
+        if all(v < 0 for v in last3) and red[-3] and green[-2] and red[-1]:
+            matches.append((SignalType.AO_SAUCER, "NTD AO Saucer below zero; SELL STOP below signal-bar low"))
+        if ao[-2] >= 0 > ao[-1]:
+            matches.append((SignalType.AO_ZERO_LINE, "NTD AO crossed below zero; SELL STOP below crossing-bar low"))
+        if red[-1]:
+            peaks = [
+                i for i in range(max(1, current_i - max(3, int(max_age_bars))), current_i)
+                if math.isfinite(ao[i - 1]) and math.isfinite(ao[i + 1])
+                and ao[i] > 0 and ao[i] > ao[i - 1] and ao[i] > ao[i + 1]
+            ]
+            if peaks and peaks[-1] == current_i - 1:
+                second = peaks[-1]
+                prior = [i for i in peaks[:-1] if ao[i] > ao[second]]
+                if prior:
+                    first = prior[-1]
+                    if all(v > 0 for v in ao[first:second + 1]) and ao[second] < ao[first]:
+                        matches.append((SignalType.AO_TWIN_PEAKS, "NTD bearish AO Twin Peaks above zero; SELL STOP below signal-bar low"))
+
+    # One candle cannot authorize duplicate entries from multiple AO families.
+    # The NTD rules are distinct formations; if more than one coincides, retain
+    # the most specific twin-peaks/saucer formation ahead of a zero-line cross.
+    priority = {
+        SignalType.AO_TWIN_PEAKS: 0,
+        SignalType.AO_SAUCER: 1,
+        SignalType.AO_ZERO_LINE: 2,
+    }
+    if not matches:
+        return []
+    signal_type, reason = min(matches, key=lambda item: priority[item[0]])
+    return [SignalSpec.new(
+        symbol=symbol,
+        side=order_side,
+        signal_type=signal_type,
+        role=SignalRole.ENTRY,
+        timeframe=timeframe,
+        signal_bar_time_ms=current_time,
+        trigger_price=trigger,
+        protective_reference=protective,
+        trigger_buffer_ticks=1,
+        teeth_at_detection=float(current.get("teeth_shifted", 0.0) or 0.0),
+        alligator_bullish=bool(current.get("bullish_alligator", False)),
+        alligator_awake=bool(current.get("alligator_awake", False)),
+        reason=reason,
+        source_candle_index=current_i,
+        expires_at_ms=_expiry(current_time, timeframe, max_age_bars),
+    )]
+
+
 def extract_long_signal_specs(
     symbol: str,
     ind: pd.DataFrame,
