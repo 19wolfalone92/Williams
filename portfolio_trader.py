@@ -732,6 +732,7 @@ class MultiPositionTrader:
             quantity=str(quantity or ""),
             client_order_id=str(client_order_id or ""),
             purpose=str(purpose).upper(),
+            max_age_ms=60_000,
         )
         result = self.execution_barrier.execute(
             intent,
