@@ -18,10 +18,12 @@ from feature_store import FeatureStore
 from binance_client import BinanceSpotClient
 from digital_williams_core import DigitalWilliamsCore
 from diagnostics import DiagnosticManager
+from version_contract import APP_VERSION
+from trading_config import execution_start_blocker
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
-VERSION = '4.25.0'
+VERSION = APP_VERSION
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
@@ -113,7 +115,7 @@ def prometheus_metrics():
 class CredentialPayload(BaseModel):
     api_key: str
     api_secret: str
-    testnet: bool = True
+    testnet: bool
 
 
 class ControlState:
@@ -136,12 +138,19 @@ class ControlState:
             self.api_secret = stored['api_secret']
             self.testnet = stored['testnet']
 
-    def configure(self, key, secret, testnet=True):
+    def configure(self, key, secret, testnet):
         key = key.strip()
         secret = secret.strip()
-        testnet = bool(testnet)
-        if not key or not secret:
-            raise RuntimeError('Binance API key and secret are required.')
+        if not isinstance(testnet, bool):
+            raise RuntimeError('TESTNET mode must be an explicit boolean.')
+        blocker = execution_start_blocker(
+            os.environ,
+            api_key=key,
+            api_secret=secret,
+            configured_testnet=testnet,
+        )
+        if blocker:
+            raise RuntimeError(blocker)
 
         # Validate the exact Spot credentials before persisting them. This prevents
         # the backend from storing a broken/expired key and only discovering it
@@ -277,6 +286,16 @@ class ControlState:
 
     def start(self):
         with self.lock:
+            blocker = execution_start_blocker(
+                os.environ,
+                api_key=self.api_key or os.getenv('BINANCE_API_KEY', ''),
+                api_secret=self.api_secret or os.getenv('BINANCE_API_SECRET', ''),
+                configured_testnet=self.testnet,
+            )
+            if blocker:
+                self.last_error = blocker
+                self.desired_running = False
+                return False
             if (
                 self.thread is not None
                 and self.thread.is_alive()
@@ -717,6 +736,10 @@ def health():
         'open_positions': len(open_positions),
         'execution_enabled': execution_enabled,
         'testnet': t.client.testnet,
+        'exchange_type': 'SPOT',
+        'environment': 'TESTNET' if t.client.testnet else 'MAINNET',
+        'allow_live': os.getenv('ALLOW_LIVE', 'false').strip().lower() == 'true',
+        'dry_run': bool(t.dry_run),
     }
 
 @app.get('/api/v1/williams/core', dependencies=[Depends(auth)])
@@ -977,6 +1000,10 @@ def status():
         'symbol': t.symbol,
         'interval': t.interval,
         'testnet': t.client.testnet,
+        'exchange_type': 'SPOT',
+        'environment': 'TESTNET' if t.client.testnet else 'MAINNET',
+        'allow_live': os.getenv('ALLOW_LIVE', 'false').strip().lower() == 'true',
+        'dry_run': bool(t.dry_run),
         'running': state.running,
         'paused': state.paused,
         'state': execution_state,
@@ -1492,6 +1519,10 @@ def settings():
         'require_htf_confirmation': t.require_htf_confirmation,
         'htf_interval': t.htf_interval,
         'testnet': t.client.testnet,
+        'exchange_type': 'SPOT',
+        'environment': 'TESTNET' if t.client.testnet else 'MAINNET',
+        'allow_live': os.getenv('ALLOW_LIVE', 'false').strip().lower() == 'true',
+        'dry_run': bool(t.dry_run),
         'alligator': config_from_env(),
         'strategy_name': 'Williams Profitunity Conservative',
         'binance_configured': bool(
