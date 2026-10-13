@@ -47,9 +47,9 @@ def main() -> None:
 
     scanner = read("market_scanner.py")
     for needle in (
-        "from trading_config import DEFAULT_SYMBOLS",
-        "allowed_symbols = set(DEFAULT_SYMBOLS)",
-        "return [x for x in requested if x in DEFAULT_SYMBOLS]",
+        "from trading_config import TradingConfig",
+        "allowed_symbols = set(TradingConfig.from_env().symbols)",
+        "return [x for x in requested if x in allowed]",
         'os.getenv("SCAN_WORKERS", "4")',
     ):
         must(scanner, needle, "market_scanner.py")
