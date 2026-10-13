@@ -60,6 +60,7 @@ class SignalType(str, Enum):
     AO_SAUCER = "AO_SAUCER"
     AO_ZERO_LINE = "AO_ZERO_LINE"
     AO_TWIN_PEAKS = "AO_TWIN_PEAKS"
+    AC_SIGNAL = "AC_SIGNAL"
 
 
 class SignalRole(str, Enum):
