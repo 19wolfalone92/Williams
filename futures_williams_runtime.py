@@ -145,6 +145,7 @@ class FuturesWilliamsScanner:
         self.htf_interval = str(htf_interval).lower()
         self.config = config_from_env()
         self.symbols: list[str] = []
+        self.configured_symbols = len(DEFAULT_FUTURES_SYMBOLS)
         self.last_scan_status: dict = {
             "state": "NOT_RUN",
             "reason": None,
@@ -177,6 +178,7 @@ class FuturesWilliamsScanner:
         )
         self.last_universe_error = None
         self.symbols = []
+        self.configured_symbols = len(approved)
         if len(approved) != 10 or any(not item for item in approved):
             self.last_universe_error = "FUTURES_APPROVED_SYMBOLS must contain exactly 10 unique symbols"
             return []
@@ -447,7 +449,7 @@ class FuturesWilliamsScanner:
             self.last_scan_status = {
                 "state": "BLOCKED",
                 "reason": self.last_universe_error or "FUTURES_UNIVERSE_NOT_EXACTLY_TEN",
-                "configured_symbols": len(symbols),
+                "configured_symbols": self.configured_symbols,
                 "evaluated_symbols": 0,
             }
             return []
