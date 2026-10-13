@@ -60,8 +60,32 @@ internal class BinanceUsdMFuturesTestnetAdapter(
 
     fun account(): JSONObject = request("GET", "/fapi/v2/account", emptyMap(), signed = true)
 
+    /** Must be checked before trading; the adapter assumes one-way mode (BOTH). */
+    fun positionMode(): JSONObject =
+        request("GET", "/fapi/v1/positionSide/dual", emptyMap(), signed = true)
+
+    fun setOneWayMode(): JSONObject =
+        request("POST", "/fapi/v1/positionSide/dual", mapOf("dualSidePosition" to "false"), signed = true)
+
+    fun setIsolatedMargin(symbol: String): JSONObject {
+        requireSymbol(symbol)
+        return request("POST", "/fapi/v1/marginType", mapOf("symbol" to symbol, "marginType" to "ISOLATED"), signed = true)
+    }
+
+    fun setLeverage(symbol: String, leverage: Int): JSONObject {
+        requireSymbol(symbol)
+        require(leverage in 1..20) { "Leverage outside explicitly supported safety range" }
+        return request("POST", "/fapi/v1/leverage", mapOf("symbol" to symbol, "leverage" to leverage.toString()), signed = true)
+    }
+
     fun positions(): JSONArray =
         JSONArray(requestRaw("GET", "/fapi/v2/positionRisk", emptyMap(), signed = true))
+
+    fun order(symbol: String, clientOrderId: String): JSONObject {
+        requireSymbol(symbol)
+        require(clientOrderId.isNotBlank())
+        return request("GET", "/fapi/v1/order", mapOf("symbol" to symbol, "origClientOrderId" to clientOrderId), signed = true)
+    }
 
     fun openOrders(symbol: String): JSONArray {
         requireSymbol(symbol)
@@ -98,6 +122,31 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         return JSONObject(requestRaw("DELETE", "/fapi/v1/order", mapOf(
             "symbol" to symbol, "origClientOrderId" to clientOrderId
         ), signed = true))
+    }
+
+    /**
+     * Exchange-side protective stop. Uses STOP_MARKET + closePosition so a
+     * partial fill/quantity rounding cannot leave an oversized exit quantity.
+     * LONG protection is SELL below market; SHORT protection is BUY above market.
+     */
+    fun placeProtectiveStop(symbol: String, positionDirection: String, stopPrice: String, clientOrderId: String): JSONObject {
+        requireSymbol(symbol)
+        require(positionDirection == "LONG" || positionDirection == "SHORT")
+        val stop = stopPrice.toBigDecimalOrNull()
+            ?: throw IllegalArgumentException("Stop price must be numeric")
+        require(stop.signum() > 0) { "Stop price must be positive" }
+        require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client order id" }
+        val params = linkedMapOf(
+            "symbol" to symbol,
+            "side" to if (positionDirection == "LONG") "SELL" else "BUY",
+            "type" to "STOP_MARKET",
+            "stopPrice" to stop.stripTrailingZeros().toPlainString(),
+            "closePosition" to "true",
+            "workingType" to "MARK_PRICE",
+            "priceProtect" to "TRUE",
+            "newClientOrderId" to clientOrderId
+        )
+        return JSONObject(requestRaw("POST", "/fapi/v1/order", params, signed = true))
     }
 
     private fun request(method: String, path: String, params: Map<String, String>, signed: Boolean): JSONObject =
