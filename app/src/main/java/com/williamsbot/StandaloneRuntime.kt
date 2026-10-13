@@ -3482,7 +3482,7 @@ private class NativeEngine(
                 }
 
                 if (prefs.getBoolean("campaign_exit_on_teeth", false)) {
-                    val teeth = smma(candles.map { it.c }, 8).lastOrNull() ?: 0.0
+                    val teeth = smma(medianPrices(candles), 8).lastOrNull() ?: 0.0
                     if (teeth > 0.0 && candles.last().c < teeth) {
                         campaignExitMarket(
                             positions[stored.symbol] ?: current,
@@ -4007,7 +4007,7 @@ private class NativeEngine(
 
             val prices = candles.map { it.c }
             val teeth =
-                smma(prices, 8).last()
+                smma(medianPrices(candles), 8).last()
             val lastClosed =
                 candles.last()
 
@@ -5420,7 +5420,7 @@ private class NativeEngine(
         val candles = candidate.candles
         if (candles.size < 20) return (candidate.atrPct * 2.0).coerceIn(0.01, 0.08)
         val prices = candles.map { it.c }
-        val teeth = smma(prices, 8).lastOrNull() ?: prices.last()
+        val teeth = smma(medianPrices(candles), 8).lastOrNull() ?: prices.last()
         var swingLow = Double.POSITIVE_INFINITY
         for (i in max(2, candles.lastIndex - 30)..candles.lastIndex - 2) {
             if (isDownFractal(candles, i)) swingLow = min(swingLow, candles[i].l)
@@ -6627,7 +6627,7 @@ private class NativeEngine(
         val fractalIndex = latestConfirmedUpFractal(workCandles, i)
         val fractalHigh =
             fractalIndex?.let { workCandles[it].h }
-        val teethSeries = smma(closes, 8)
+        val teethSeries = smma(medianPrices(workCandles), 8)
         val fractalTeeth =
             fractalIndex?.let { teethSeries.getOrNull(it) }
         val externalFractal =
@@ -7119,6 +7119,9 @@ private class NativeEngine(
         val teeth: Double,
         val lips: Double
     )
+
+    private fun medianPrices(candles: List<CandleN>): List<Double> =
+        candles.map { (it.h + it.l) / 2.0 }
 
     private fun smma(
         values: List<Double>,
