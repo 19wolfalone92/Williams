@@ -240,7 +240,13 @@ private class StandaloneServer(private val context: Context) {
     private val executionStore = FuturesExecutionStore(context).also {
         it.migrateLegacyState(
             prefs,
-            listOf("futures_campaign_intents_v2", "positions_json", "pending_entries_json")
+            listOf(
+                "futures_campaign_intents_v2",
+                "positions_json",
+                "pending_entries_json",
+                "futures_daily_loss_pct",
+                "futures_daily_pnl_usdt"
+            ) + prefs.all.keys.filter { it.startsWith("futures_day_start_equity_") }
         )
     }
 
@@ -3606,20 +3612,20 @@ private class NativeEngine(
         utc.set(java.util.Calendar.SECOND, 0)
         utc.set(java.util.Calendar.MILLISECOND, 0)
         val baselineKey = "futures_day_start_equity_" + utc.timeInMillis
-        if (!prefs.contains(baselineKey)) {
-            check(prefs.edit().putString(baselineKey, equity.toString()).commit()) {
-                "Could not persist Futures daily equity baseline"
+        if (executionStore.readState(baselineKey) == null) {
+            check(executionStore.writeState(baselineKey, equity.toString())) {
+                "SQLite commit failed while persisting Futures daily equity baseline"
             }
         }
-        val baseline = prefs.getString(baselineKey, null)?.toDoubleOrNull() ?: 0.0
+        val baseline = executionStore.readState(baselineKey)?.toDoubleOrNull() ?: 0.0
         require(baseline > 0.0 && baseline.isFinite()) { "Futures daily equity baseline is invalid" }
         val dailyPnlQuote = equity - baseline
         val lossPct = ((baseline - equity) / baseline).coerceAtLeast(0.0)
-        check(prefs.edit()
-            .putString("futures_daily_loss_pct", lossPct.toString())
-            .putString("futures_daily_pnl_usdt", dailyPnlQuote.toString())
-            .commit()) {
-            "Could not persist daily Futures equity/PnL measurement"
+        check(
+            executionStore.writeState("futures_daily_loss_pct", lossPct.toString()) &&
+                executionStore.writeState("futures_daily_pnl_usdt", dailyPnlQuote.toString())
+        ) {
+            "SQLite commit failed while persisting daily Futures equity/PnL measurement"
         }
         if (lossPct >= 0.01) {
             paused = true
@@ -7921,7 +7927,7 @@ private class NativeEngine(
             intent.optString("intent_role") == "EXIT" &&
                 intent.optLong("created_at_ms", 0L) >= utcDayStart
         }
-        val futuresDailyPnl = prefs.getString("futures_daily_pnl_usdt", "0")
+        val futuresDailyPnl = executionStore.readState("futures_daily_pnl_usdt") ?: "0"
             ?.toDoubleOrNull() ?: 0.0
 
         if (!fast && key().isNotBlank() && secret().isNotBlank() && !restAccountReady) {
