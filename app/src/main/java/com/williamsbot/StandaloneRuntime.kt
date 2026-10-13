@@ -523,6 +523,9 @@ private class NativeEngine(
     private val http: OkHttpClient
 ) {
     private val baseUrl = "https://testnet.binance.vision"
+    // Futures-native public market data; the legacy Spot account/order transport remains
+    // hard-disabled below until every remaining market/execution path is migrated.
+    private val futuresMarketData = BinanceUsdMFuturesMarketData(http)
     // SAFETY BLOCKER: this native adapter still speaks Spot /api/v3 (Spot account, OCO,
     // and BUY-only campaign execution). It is NOT a USDⓈ-M Futures adapter. Never permit
     // order mutation until the Futures REST + position/protection/recovery contract is wired.
@@ -2151,11 +2154,11 @@ private class NativeEngine(
                 ).coerceAtMost(1000)
         }
 
-        val body = getBody(
-            "/api/v3/klines?symbol=" + normalizedSymbol +
-                "&interval=" + sourceFrame +
-                "&limit=" + sourceLimit
-        )
+        val body = futuresMarketData.klines(
+            normalizedSymbol,
+            sourceFrame,
+            sourceLimit
+        ).toString()
         val array = JSONArray(body)
         val source = ArrayList<CandleN>(array.length())
         val sourcePersistent = ArrayList<MarketHistoryStore.Candle>(array.length())
@@ -2307,11 +2310,12 @@ private class NativeEngine(
             val pageLimit = maxPages.coerceIn(1, 100)
             try {
                 while (page++ < pageLimit) {
-                    val body = getBody(
-                        "/api/v3/klines?symbol=" + normalizedSymbol +
-                            "&interval=" + frame +
-                            "&limit=1000&endTime=" + endTime
-                    )
+                    val body = futuresMarketData.klines(
+                        normalizedSymbol,
+                        frame,
+                        1000,
+                        endTime = endTime
+                    ).toString()
                     val array = JSONArray(body)
                     if (array.length() == 0) {
                         reachedHistoryBeginning = true
@@ -2384,12 +2388,12 @@ private class NativeEngine(
                 normalizedSymbol,
                 frame
             )
-            val body = getBody(
-                "/api/v3/klines?symbol=" + normalizedSymbol +
-                    "&interval=" + frame +
-                    "&limit=3&startTime=" +
-                    newest.coerceAtLeast(0L)
-            )
+            val body = futuresMarketData.klines(
+                normalizedSymbol,
+                frame,
+                3,
+                startTime = newest.coerceAtLeast(0L)
+            ).toString()
             val array = JSONArray(body)
             val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
 
