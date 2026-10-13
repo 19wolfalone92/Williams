@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 
-DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT")
+DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
+DEFAULT_FUTURES_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT")
 DEFAULT_STRUCTURAL_TFS = ("1d", "4h", "1h", "15m")
 
 
@@ -72,7 +73,7 @@ def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class TradingConfig:
-    symbols: tuple[str, ...] = DEFAULT_SYMBOLS
+    symbols: tuple[str, ...] = DEFAULT_FUTURES_SYMBOLS
     structural_timeframes: tuple[str, ...] = DEFAULT_STRUCTURAL_TFS
     execution_timeframe: str = "1h"
     market: str = "futures_usdt"
@@ -110,11 +111,17 @@ class TradingConfig:
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "TradingConfig":
         source = os.environ if env is None else env
-        symbols = _csv(source, "WILLIAMS_SYMBOLS", DEFAULT_SYMBOLS)
-        # ALL/AUTO/* means "use the autonomous Spot/USDT scanner"; keep a real
-        # seed symbol for legacy status/chart paths instead of treating ALL as a symbol.
+        market = str(source.get("BINANCE_MARKET", "futures_usdt")).strip().lower()
+        if market in {"futures", "usdm", "usd_m", "usd-m"}:
+            market = "futures_usdt"
+        elif market not in {"futures_usdt", "spot"}:
+            market = "futures_usdt"
+        default_symbols = DEFAULT_FUTURES_SYMBOLS if market == "futures_usdt" else DEFAULT_SYMBOLS
+        symbols = _csv(source, "WILLIAMS_SYMBOLS", default_symbols)
+        # ALL/AUTO/* means use the market-specific autonomous scanner universe.
+        # Keep a real seed symbol for legacy status/chart paths instead of treating ALL as a symbol.
         if len(symbols) == 1 and symbols[0].upper() in {"ALL", "AUTO", "*"}:
-            symbols = DEFAULT_SYMBOLS
+            symbols = default_symbols
         # AUTO_SCAN_SYMBOLS remains a backwards-compatible override.
         if str(source.get("AUTO_SCAN_SYMBOLS", "")).strip():
             symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
@@ -125,11 +132,6 @@ class TradingConfig:
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
         execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", source.get("INTERVAL", "1h"))).lower()
-        market = str(source.get("BINANCE_MARKET", "futures_usdt")).strip().lower()
-        if market in {"futures", "usdm", "usd_m", "usd-m"}:
-            market = "futures_usdt"
-        elif market not in {"futures_usdt", "spot"}:
-            market = "futures_usdt"
         futures_leverage = max(1, min(20, _int(source, "FUTURES_LEVERAGE", 2)))
         futures_margin_type = str(source.get("FUTURES_MARGIN_TYPE", "ISOLATED")).strip().upper()
         if futures_margin_type not in {"ISOLATED", "CROSSED"}:
