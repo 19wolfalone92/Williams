@@ -101,33 +101,54 @@ class FuturesWilliamsScanner:
         }
         return float((filters.get("PRICE_FILTER") or {}).get("tickSize", "0") or 0)
 
-    def universe(self, limit: int = 40) -> list[str]:
+    def universe(self, limit: int = 10) -> list[str]:
+        # Never auto-discover or rank an unrestricted contract list for trading.
+        # The approved ten-symbol list is a separate, explicit acceptance input.
+        raw = os.getenv("FUTURES_APPROVED_SYMBOLS", "").strip()
+        approved = [item.strip().upper() for item in raw.split(",")] if raw else []
+        self.last_universe_error = None
+        if len(approved) != 10 or any(not item for item in approved):
+            self.last_universe_error = "FUTURES_APPROVED_SYMBOLS must contain exactly 10 approved symbols; list unresolved"
+            return []
+        if len(set(approved)) != 10:
+            self.last_universe_error = "FUTURES_APPROVED_SYMBOLS contains duplicate symbols"
+            return []
+        if any(not item.isalnum() or not item.endswith("USDT") for item in approved):
+            self.last_universe_error = "FUTURES_APPROVED_SYMBOLS contains an invalid USDⓈ-M USDT symbol"
+            return []
+
         info = self.client.exchange_info()
         rows = info.get("symbols", []) if isinstance(info, dict) else []
-        valid = []
-        for row in rows:
-            if str(row.get("status", "")).upper() != "TRADING":
-                continue
-            if str(row.get("quoteAsset", "")).upper() != "USDT":
-                continue
-            if str(row.get("contractType", "")).upper() != "PERPETUAL":
-                continue
-            symbol = str(row.get("symbol", "")).upper()
-            if symbol:
-                valid.append(symbol)
-
-        try:
-            tickers = self.client.ticker_24hr()
-            volume = {
-                str(row.get("symbol", "")).upper():
-                float(row.get("quoteVolume", 0) or 0)
-                for row in tickers or []
-                if isinstance(row, dict)
+        exchange = {
+            str(row.get("symbol", "")).upper(): row
+            for row in rows
+            if isinstance(row, dict)
+        }
+        for symbol in approved:
+            row = exchange.get(symbol)
+            if row is None:
+                self.last_universe_error = f"Approved symbol is absent from USDⓈ-M exchangeInfo: {symbol}"
+                return []
+            if (
+                str(row.get("status", "")).upper() != "TRADING"
+                or str(row.get("quoteAsset", "")).upper() != "USDT"
+                or str(row.get("contractType", "")).upper() != "PERPETUAL"
+            ):
+                self.last_universe_error = f"Approved symbol is not a trading USDⓈ-M USDT perpetual: {symbol}"
+                return []
+            filters = {
+                str(item.get("filterType", "")).upper(): item
+                for item in row.get("filters", [])
+                if isinstance(item, dict)
             }
-            valid.sort(key=lambda s: volume.get(s, 0.0), reverse=True)
-        except Exception:
-            valid.sort()
-        return valid[: max(1, int(limit))]
+            if not filters.get("PRICE_FILTER") or not filters.get("LOT_SIZE") or not (
+                filters.get("MIN_NOTIONAL") or filters.get("NOTIONAL")
+            ):
+                self.last_universe_error = f"Required exchange filters are missing for {symbol}"
+                return []
+
+        # Keep approved order stable; the limit argument can never add or remove symbols.
+        return approved
 
     def _spread(self, symbol: str) -> float:
         row = self.client.book_ticker(symbol)
