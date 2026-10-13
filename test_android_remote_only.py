@@ -66,6 +66,9 @@ def test_android_campaign_and_intents_are_sqlite_backed():
     assert "private val executionStore = FuturesExecutionStore(context)" in runtime
     assert "NativeFuturesCampaignCoordinator(executionStore)" in runtime
     assert "executionStore.writeRuntimeState" in runtime
+    assert 'executionStore.writeState("futures_daily_loss_pct", lossPct.toString())' in runtime
+    assert 'executionStore.writeState("futures_daily_pnl_usdt", dailyPnlQuote.toString())' in runtime
+    assert 'executionStore.readState("futures_daily_pnl_usdt")' in runtime
     assert "executionStore.readState" in runtime
     assert "private val executionStore: FuturesExecutionStore" in coordinator
     assert "executionStore.writeState(intentsKey, array.toString())" in coordinator
