@@ -2,7 +2,7 @@ name: Python backend tests
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, futures-williams-campaign]
     paths:
       - "*.py"
       - "tests/**"
