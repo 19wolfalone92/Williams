@@ -692,7 +692,7 @@ private class NativeEngine(
 
     private val userStream = BinanceUserDataStream(
         http = http,
-        endpoint = "wss://demo-fstream.binance.com/private/ws",
+        endpoint = "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE",
         apiKeyProvider = { key() },
         apiSecretProvider = { secret() },
         timestampProvider = { signedTimestamp() },
@@ -1830,7 +1830,7 @@ private class NativeEngine(
         Thread {
             try {
                 Thread.sleep(23L * 60L * 60L * 1000L)
-                if (running && if (publicStream) publicSocket === webSocket else marketSocket === webSocket) {
+                if (running && (if (publicStream) publicSocket === webSocket else marketSocket === webSocket)) {
                     webSocket.close(1000, "planned_24h_reconnect")
                 }
             } catch (_: InterruptedException) {
