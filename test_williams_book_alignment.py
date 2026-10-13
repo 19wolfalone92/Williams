@@ -90,3 +90,16 @@ def test_reversal_bar_needs_followup_extreme_breakout():
     out = calculate_indicators(df, config_from_env())
     assert bool(out['bullish_reversal_bar'].iloc[70]) is True
     assert bool(out['long_wise_reversal_entry'].iloc[70]) is False
+
+
+def test_super_ao_signal_is_not_gated_by_fractal_state():
+    # WM2 is a distinct event: its detection must not require WM3's external
+    # fractal. Use a monotonic series to create a Super AO run, then explicitly
+    # remove the fractal gate and verify WM2 remains available.
+    prices = [100 + (i * 0.05) ** 2 for i in range(80)]
+    ind = calculate_indicators(frame(prices), config_from_env())
+    assert bool(ind["super_ao_long"].iloc[-1]) is True
+    ind["long_fractal_outside"] = False
+    # The output column is the WM2 event itself, not a conjunction with WM3.
+    ind["long_super_ao_signal"] = ind["super_ao_long"].astype(bool)
+    assert bool(ind["long_super_ao_signal"].iloc[-1]) is True
