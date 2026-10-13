@@ -313,7 +313,7 @@ def calculate_indicators(df, cfg):
     )
     x["short_fractal_outside"] = (
         x["last_down_level"].notna()
-        & x["teeth_shifted"].notna()
+        & x["teeth_current"].notna()
         & (x["last_down_level"] < x["teeth_current"])
     )
 
@@ -349,7 +349,7 @@ def calculate_indicators(df, cfg):
     x["bearish_reversal_bar"] = (
         (x["high"] > prior_high)
         & (close_location <= 0.50)
-        & x["jaw_shifted"].notna()
+        & x["jaw_current"].notna()
         & (x["high"] > x[["jaw_current", "teeth_current", "lips_current"]].max(axis=1))
     )
     x["long_reversal_signal"] = x["bullish_reversal_bar"]
