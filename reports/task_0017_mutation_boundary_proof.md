@@ -27,3 +27,8 @@ Status: PARTIAL — P0 OPEN.
 - Campaign Python suite passed 262 tests on [run 38341931762](https://github.com/19wolfalone92/Williams/actions/runs/38341931762). Android job 115114647875 had not yet completed unit tests, lint or APK proof when this addendum was written.
 - Android source has durable mutation identity/evidence checks and rejects a conflicting previously persisted exchange order ID. Python recovery rejects compound cancel/cancel-replace/list cancellation when a single-order lookup cannot prove the complete outcome.
 - This is source review plus Python tests, not complete dynamic proof that every Android order-create/cancel/replace entry point is reachable only through one boundary. Android tests and a full call-site inventory remain required; P0 remains open.
+
+
+## TASK 001.12 Android evidence correction
+
+At source SHA `b6d43d439a1c49c577570d36332bbe1c60ff7477`, Campaign Android job 115116130632 in [run 38342390656](https://github.com/19wolfalone92/Williams/actions/runs/38342390656) passed unit tests, lint and debug APK build. APK package `com.williamsbot.debug`, target SDK 36; APK SHA-256 `e9ce68cfeac340c09979463aa5a2e0b1a346d08d19403e163a2d99589f254ac6`; V2 signature verified, signer certificate SHA-256 `1b9ce8b9b27681575d86a20890590b4ad79550316f099f8873fff4e5760e58d5`. Provenance matches `b6d43d439a1c49c577570d36332bbe1c60ff7477`. Artifact ID 11787686242; lint artifact ID 11787626329. This does not by itself prove every mutation entry point is dynamically contained or cross-process safe.
