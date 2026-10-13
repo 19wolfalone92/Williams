@@ -119,8 +119,8 @@ def calculate_indicators(df, cfg):
 
     # Gator Oscillator: display-only convergence/divergence of displaced
     # Alligator lines. Its bars are diagnostics, never an extra entry gate.
-    x["gator_upper"] = (x["jaw_shifted"] - x["teeth_shifted"]).abs()
-    x["gator_lower"] = -(x["teeth_shifted"] - x["lips_shifted"]).abs()
+    x["gator_upper"] = (x["jaw_current"] - x["teeth_current"]).abs()
+    x["gator_lower"] = -(x["teeth_current"] - x["lips_current"]).abs()
     x["gator_upper_expanding"] = (
         x["gator_upper"] > x["gator_upper"].shift(1)
     ).fillna(False).astype(bool)
