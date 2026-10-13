@@ -6542,8 +6542,9 @@ private class NativeEngine(
             }
         }
 
-        // WM2: three consecutive rising AO histogram bars, with the previously
-        // valid buy-fractal/Balance-Line context still present.
+        // WM2: three consecutive rising AO histogram bars. It is independent
+        // of WM3 and can be the first presenting Wise-Man event; bullish
+        // Alligator context and the conditional price trigger still apply.
         var streak = 0
         for (i in candles.lastIndex downTo 35) {
             val a = ao(candles, i)
@@ -6554,7 +6555,7 @@ private class NativeEngine(
                 // previously confirmed WM3 fractal here; that incorrectly
                 // converts the second Wise Man into a WM3 prerequisite.
                 val trigger = candles[i].h + tick
-                if (candles[current].c < trigger) {
+                if (candles[current].c < trigger && bullishAlligator(current)) {
                     out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
                         type = "SUPER_AO",
