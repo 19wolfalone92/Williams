@@ -432,7 +432,8 @@ internal class NativeFuturesCampaignCoordinator(
                             runCatching { adapter.queryAlgoOrder(symbol, clientId) }.getOrNull()
                         else -> throw IllegalStateException("Unknown pending-entry type; cannot reconcile cancellation")
                     }
-                    val observedStatus = observed?.optString("status", observed.optString("algoStatus", ""))
+                    val observedStatus = observed
+                        ?.let { it.optString("status", it.optString("algoStatus", "")) }
                         ?.uppercase(Locale.US).orEmpty()
                     if (observedStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED", "FINISHED")) {
                         intent.put("exchange_status", "CANCELED")
