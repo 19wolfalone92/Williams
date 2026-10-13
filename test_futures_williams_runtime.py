@@ -1173,4 +1173,5 @@ def test_scanner_reports_all_ten_evaluated_symbols_and_both_directions(monkeypat
     assert scanner.last_scan_status["configured_symbols"] == 10
     assert scanner.last_scan_status["evaluated_symbols"] == 10
     assert {candidate.side for candidate in candidates} == {"LONG", "SHORT"}
+    assert candidates[0].score == 61.0
     assert len(candidates) == 20
