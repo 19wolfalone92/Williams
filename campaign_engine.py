@@ -33,7 +33,7 @@ class CampaignEngine:
         db,
         *,
         portfolio_risk_limit_pct: float = 0.01,
-        campaign_risk_limit_pct: float = 0.005,
+        campaign_risk_limit_pct: float = 0.006,
         initial_risk_fraction_of_campaign: float = 0.40,
     ) -> None:
         self.db = db
