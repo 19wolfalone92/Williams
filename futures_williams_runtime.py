@@ -28,7 +28,6 @@ from market_context import ContextCache
 from strategy import (
     calculate_indicators,
     canonical_indicator_config_from_env,
-    config_from_env,
 )
 from williams_signals import (
     extract_long_signal_specs,
