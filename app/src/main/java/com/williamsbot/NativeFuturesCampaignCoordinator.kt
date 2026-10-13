@@ -99,9 +99,20 @@ internal class NativeFuturesCampaignCoordinator(
                 intent.put("last_reconciled_ms", System.currentTimeMillis())
             }
             saveIntents(persisted)
+            val hasActivePendingIntent = (0 until persisted.length()).any { index ->
+                val intent = persisted.optJSONObject(index) ?: return@any true
+                intent.optString("exchange_status").uppercase(Locale.US) in setOf(
+                    "NEW", "PENDING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN", "ACCEPTED"
+                )
+            }
             if (anyUnprotectedPosition) {
                 state = State.POSITION_UNPROTECTED
                 lastBlocker = "open_futures_position_without_confirmed_close_position_stop"
+            } else if (hasActivePendingIntent) {
+                // A persisted live/ambiguous entry must remain visible as pending after
+                // restart; reconciliation success is not permission to submit another entry.
+                state = State.ENTRY_PENDING
+                lastBlocker = "exchange_confirmed_pending_entry_or_fill_not_yet_resolved"
             } else {
                 state = if (anyOpenPosition) State.OPEN_PROTECTED else State.READY
                 lastBlocker = null
@@ -111,6 +122,7 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("state", state.name)
                 .put("positions_checked", positions.length())
                 .put("pending_intents_checked", persisted.length())
+                .put("active_pending_intent", hasActivePendingIntent)
                 .put("blocker", lastBlocker ?: JSONObject.NULL)
         } catch (failure: Exception) {
             state = State.RECONCILE_REQUIRED
@@ -207,7 +219,7 @@ internal class NativeFuturesCampaignCoordinator(
     fun status(): JSONObject = JSONObject()
         .put("engine", "USD_M_FUTURES_TESTNET")
         .put("state", state.name)
-        .put("ready_for_new_entry", state == State.READY)
+        .put("ready_for_new_entry", state == State.READY || state == State.OPEN_PROTECTED)
         .put("blocker", lastBlocker ?: JSONObject.NULL)
         .put("pending_intents", intents().length())
         .put("testnet_only", true)
