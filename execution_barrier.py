@@ -333,6 +333,8 @@ class ExecutionBarrier:
             # validation and precedes the irreversible network boundary.
             self._claim_signal_once(intent)
             order_fsm.transition(OrderState.SUBMITTING)
+            if str(intent.order_type or "").strip().upper() in {"CANCEL", "CANCEL_OCO"}:
+                order_fsm.transition(OrderState.CANCEL_PENDING)
             # Record the irreversible boundary before touching the network.
             # A restart seeing SUBMITTING without an authoritative result must reconcile,
             # never infer that the request was not sent.
@@ -414,7 +416,7 @@ class ExecutionBarrier:
                     raise RuntimeError(
                         "ExecutionBarrier: OCO cancellation outcome requires reconciliation"
                     )
-                order_fsm.state = OrderState.CANCELED
+                order_fsm.transition(OrderState.CANCELED)
             elif response_type in {"OCO", "ORDER_LIST"}:
                 list_id = response.get("orderListId") if isinstance(response, dict) else None
                 list_status = str(
@@ -430,17 +432,24 @@ class ExecutionBarrier:
                     for row in reports if isinstance(row, dict)
                 ]
                 accepted_reports = bool(report_statuses) and all(
-                    status in {"NEW", "PARTIALLY_FILLED", "FILLED"}
+                    status in {"NEW", "PARTIALLY_FILLED"}
                     for status in report_statuses
                 )
-                accepted_list_status = list_status in {"EXECUTING", "EXEC_STARTED"}
+                accepted_list_status = (
+                    list_status in {"EXECUTING", "EXEC_STARTED"}
+                    and bool(reports)
+                    and all(
+                        str(row.get("status", "")).upper() in {"NEW", "PARTIALLY_FILLED"}
+                        for row in reports if isinstance(row, dict)
+                    )
+                )
                 if list_id is None or not (accepted_reports or accepted_list_status):
                     order_fsm.state = OrderState.RECONCILE_REQUIRED
                     self._persist(intent, "AMBIGUOUS", "OCO creation response lacks authoritative order-list state")
                     raise RuntimeError(
                         "ExecutionBarrier: OCO creation response lacks authoritative order-list state"
                     )
-                order_fsm.state = OrderState.OPEN
+                order_fsm.transition(OrderState.OPEN)
             elif response_status:
                 order_fsm.observe_exchange_status(
                     response_status,
