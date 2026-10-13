@@ -174,7 +174,12 @@ class ExecutionBarrier:
         if not claimed:
             raise RuntimeError("duplicate signal blocked: durable signal was already claimed")
 
-    def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot) -> str:
+    def _validate(
+        self,
+        intent: OrderIntent,
+        snapshot: MarketStateSnapshot,
+        pre_submit_checks: Callable[[MarketStateSnapshot], None] | None = None,
+    ) -> str:
         # H1 is an owner-approved execution contract, not a Williams book rule.
         # Enforce it at the last admission boundary for campaign entries so
         # callers cannot bypass the scanner or TradingConfig validation.
@@ -244,8 +249,26 @@ class ExecutionBarrier:
                 return f"context {permission_tf} does not allow SHORT"
 
         if self.db is not None and hasattr(self.db, "state_get"):
+            purpose = intent.purpose.upper()
+            risk_reducing_purposes = {
+                "EXIT",
+                "CAMPAIGN_EXIT",
+                "CAMPAIGN_EMERGENCY_EXIT",
+                "CAMPAIGN_EXIT_CANCEL_PROTECTION",
+                "CAMPAIGN_PROTECTION_CANCEL",
+                "CAMPAIGN_PROTECTION",
+                "PROTECTION",
+            }
+            # Reconciliation blocks new exposure. A narrowly scoped reduction,
+            # cancellation, or protection repair may proceed only with an
+            # explicit last-moment validator that rechecks exchange state.
+            recovery_mutation_allowed = (
+                purpose in risk_reducing_purposes
+                and callable(pre_submit_checks)
+                and intent.side == "SELL"
+            )
             state = str(self.db.state_get("position_state", "FLAT"))
-            if state == "RECONCILE_REQUIRED":
+            if state == "RECONCILE_REQUIRED" and not recovery_mutation_allowed:
                 return "RECONCILE_REQUIRED"
             campaign_state = str(
                 self.db.state_get(
@@ -253,7 +276,7 @@ class ExecutionBarrier:
                     "CLEAN"
                 )
             ) if intent.campaign_id else "CLEAN"
-            if campaign_state == "RECONCILE_REQUIRED":
+            if campaign_state == "RECONCILE_REQUIRED" and not recovery_mutation_allowed:
                 return "campaign_reconcile_required"
 
         return ""
@@ -276,7 +299,7 @@ class ExecutionBarrier:
                 dict(intent.required_context_versions),
             )
             snapshot = self.context_cache.snapshot()
-            reason = self._validate(intent, snapshot)
+            reason = self._validate(intent, snapshot, pre_submit_checks=pre_submit_checks)
             if (
                 not reason
                 and str(intent.purpose or "").strip().upper()
