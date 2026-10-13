@@ -82,3 +82,7 @@ def test_database_reports_realized_pnl_across_all_symbols(tmp_path):
         assert db.pnl_today("BTCUSDT") == pytest.approx(-12.0)
     finally:
         db.conn.close()
+
+
+def test_daily_loss_configuration_cannot_widen_the_hard_three_percent_cap():
+    assert EquityCircuitBreaker(0.10).max_daily_loss_pct == pytest.approx(0.03)
