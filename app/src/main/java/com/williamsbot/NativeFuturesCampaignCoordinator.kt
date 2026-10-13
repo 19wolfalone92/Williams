@@ -416,6 +416,7 @@ internal class NativeFuturesCampaignCoordinator(
             }
         }
         try {
+            val failures = mutableListOf<String>()
             for (i in 0 until all.length()) {
                 val intent = all.optJSONObject(i) ?: continue
                 if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
@@ -423,6 +424,7 @@ internal class NativeFuturesCampaignCoordinator(
                 val status = intent.optString("exchange_status").uppercase(Locale.US)
                 if (status !in activeStatuses) continue
                 val clientId = intent.optString("client_id")
+                try {
                 if (status == "CANCEL_SUBMISSION_UNKNOWN") {
                     // A previous cancellation may have reached Binance before process death.
                     // Query the exchange; never issue the same cancel again blindly.
@@ -457,6 +459,20 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("cancel_result", result.toString())
                     .put("canceled_at_ms", System.currentTimeMillis())
                 saveIntents(all)
+                } catch (failure: Exception) {
+                    val detail = "$symbol/$clientId: " + (failure.message ?: failure.javaClass.simpleName)
+                    failures += detail
+                    intent.put("exchange_status", "CANCEL_SUBMISSION_UNKNOWN")
+                        .put("cancel_error", detail)
+                    saveIntents(all)
+                }
+            }
+            if (failures.isNotEmpty()) {
+                state = State.RECONCILE_REQUIRED
+                lastBlocker = "one_or_more_pending_Futures_entries_have_unresolved_cancellation"
+                return@synchronized JSONObject().put("ok", false).put("state", state.name)
+                    .put("reason", reason).put("blocker", lastBlocker)
+                    .put("errors", JSONArray().apply { failures.forEach { put(it) } })
             }
             state = if (openSymbols.isEmpty()) State.READY else State.RECONCILE_REQUIRED
             lastBlocker = if (openSymbols.isEmpty()) null
