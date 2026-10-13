@@ -240,7 +240,12 @@ internal class NativeFuturesCampaignCoordinator(
                         it.optString("intent_role", "ENTRY") == "ENTRY" &&
                             it.optString("symbol").uppercase(Locale.US) == symbol &&
                             it.optString("direction") == direction &&
-                            it.optString("protective_stop").toDoubleOrNull()?.let { p -> p > 0.0 } == true
+                            run {
+                                val entry = it.optString("entry_price").toBigDecimalOrNull()
+                                val stop = it.optString("protective_stop").toBigDecimalOrNull()
+                                entry != null && stop != null && entry.signum() > 0 && stop.signum() > 0 &&
+                                    if (direction == "LONG") stop < entry else stop > entry
+                            }
                     }
                 var protective = findProtectiveStop(
                     algos, direction,
