@@ -104,11 +104,18 @@ class FuturesWilliamsScanner:
     def universe(self, limit: int = 10) -> list[str]:
         # Never auto-discover or rank an unrestricted contract list for trading.
         # The approved ten-symbol list is a separate, explicit acceptance input.
+        default_symbols = (
+            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+            "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+        )
         raw = os.getenv("FUTURES_APPROVED_SYMBOLS", "").strip()
-        approved = [item.strip().upper() for item in raw.split(",")] if raw else []
+        approved = (
+            [item.strip().upper() for item in raw.split(",")]
+            if raw else list(default_symbols)
+        )
         self.last_universe_error = None
         if len(approved) != 10 or any(not item for item in approved):
-            self.last_universe_error = "FUTURES_APPROVED_SYMBOLS must contain exactly 10 approved symbols; list unresolved"
+            self.last_universe_error = "FUTURES_APPROVED_SYMBOLS must contain exactly 10 unique symbols"
             return []
         if len(set(approved)) != 10:
             self.last_universe_error = "FUTURES_APPROVED_SYMBOLS contains duplicate symbols"
