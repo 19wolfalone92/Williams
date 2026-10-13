@@ -6,6 +6,12 @@
 
 ## 1. Corrections committed
 
+### Execution admission / fail-closed persistence
+- `execution_barrier.py`: confirmed that durable `SUBMITTING` persistence raises `ExecutionPersistenceError` before the submit callback when the store is unavailable or rejects the write. Added a regression test with a failing durable store to assert the exchange callback is never invoked.
+- `execution_barrier.py`: campaign entry/add-on purposes now require non-empty versioned context and the operative timeframe's direction permission at the final barrier. The campaign-specific pre-submit callback is supplementary, not a substitute for admission context.
+- Added `tests/test_campaign_entry_context_gate.py` for empty context, denied LONG permission, matching version/permission, and exit permission separation.
+- **Operational consequence:** signal extraction that supplies empty `context_versions` will now be blocked at the barrier. That is intentional fail-closed behavior until the context-version handoff is wired; it must not be bypassed with a compatibility exception.
+
 ### Fractal formation and causal timing
 - `strategy.py`: introduced equal-extreme group handling and explicit pivot/confirmation indices. Equal highs/lows do not count as strictly lower/higher bars; confirmation is placed on the bar that completes the required qualifying right side.
 - `williams_signals.py`: WM3 now consumes explicit confirmation and center indices instead of assuming confirmation is always pivot + 2.
@@ -19,6 +25,7 @@
 - Removed a redundant stacked `@staticmethod` decorator in `campaign_engine.py`.
 - Android's WM2 scanner no longer requires a prior WM3 fractal to emit Super AO, correcting a direct Python/Kotlin strategy disagreement.
 - Android's central signed-request path now rejects BUY-side order mutations whenever `executionReady()` is false. Because the durable mutation contract remains unverified, this keeps all new BUY exposure blocked even if a legacy call path bypasses campaign admission; SELL exits/protection and DELETE cancellation paths are not blocked by this specific backstop.
+- Rechecked the version contract in this branch: `ci_release_gate.py`, `server.py`, and `app/build.gradle.kts` all currently declare `4.25.0`; the older 4.24.0 mismatch in a prior audit snapshot is not present in this branch snapshot.
 - The legacy count remains diagnostic/ranking data; it is no longer the entry Boolean's same-bar prerequisite.
 
 **Important limitation:** source-specific differences between TC1, NTD, and TC2 still require profile separation. This change does not assert that every historical signal from every edition should be enabled simultaneously.
@@ -42,8 +49,8 @@
 | Three Wise Men chronology | PARTIAL | Signals are no longer required to coincide on one candle. First-presenting signal vs later add-on must still be demonstrated through campaign state and live order intent. |
 | Stop / exit | PARTIAL | Risk engine now requires structural invalidation and no longer invents a fixed target by default. Python campaign and Android stop/exit implementations still need mode-by-mode parity. |
 | Platform parity | UNVERIFIED | Android WM2 no longer depends on WM3, but Android fractals still use strict five-bar inequalities while Python handles equal-extreme groups; no same-vector golden replay evidence or Android build/test proof has been produced. |
-| Execution durability | BLOCKED | Android still contains `androidDurableMutationContractVerified = false`. The central signed-request backstop blocks BUY-side mutations while execution is not ready. This flag must remain false until durable mutation intent, restart recovery, exchange reconciliation, and protection are proven. The gate is a defensive backstop, not proof that all order paths have passed fault-injection testing. |
-| CI / build | UNVERIFIED | GitHub status endpoint returned no status checks and no workflow runs associated with the latest correction commit at inspection time. No claim of passing tests/build is made. |
+| Execution durability | BLOCKED | Python's final barrier fails closed if durable `SUBMITTING` intent cannot be persisted, and new campaign exposure requires versioned context/permission. Android still contains `androidDurableMutationContractVerified = false`; its central signed-request backstop blocks BUY-side mutations while execution is not ready. These code changes are not a substitute for executing fault-injection/recovery tests or proving all mutation paths. |
+| CI / build | UNVERIFIED | New regression tests have been committed but not executed in this session. No confirmed status checks/workflow results are available for the final SHA; no claim of passing tests/build is made. |
 
 ## 3. Non-negotiable safety interpretation
 
