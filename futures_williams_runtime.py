@@ -30,6 +30,7 @@ from williams_signals import (
     extract_long_signal_specs,
     extract_short_signal_specs,
     extract_ntd_ao_signal_specs,
+    extract_ntd_ac_signal_specs,
 )
 from campaign_engine import CampaignEngine
 from equity_breaker import EquityCircuitBreaker
@@ -262,11 +263,21 @@ class FuturesWilliamsScanner:
         elif profile == "NTD_FIVE_DIMENSIONS":
             # Keep New Trading Dimensions AO entries edition-specific. Do not
             # silently blend these with TC2's sequential Three Wise Men flow.
-            long_specs = extract_ntd_ao_signal_specs(
-                symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
+            long_specs = (
+                extract_ntd_ao_signal_specs(
+                    symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
+                )
+                + extract_ntd_ac_signal_specs(
+                    symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
+                )
             )
-            short_specs = extract_ntd_ao_signal_specs(
-                symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
+            short_specs = (
+                extract_ntd_ao_signal_specs(
+                    symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
+                )
+                + extract_ntd_ac_signal_specs(
+                    symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
+                )
             )
         else:
             self.last_signal_profile_error = (
@@ -313,6 +324,7 @@ class FuturesWilliamsScanner:
                 SignalType.AO_TWIN_PEAKS: 3.0,
                 SignalType.AO_SAUCER: 2.0,
                 SignalType.AO_ZERO_LINE: 1.0,
+                SignalType.AC_SIGNAL: 1.5,
             }.get(signal.signal_type, 0.0)
             score = 60.0 + freshness * 20.0 + type_bonus
             if signal.alligator_awake:
