@@ -86,3 +86,10 @@ def test_database_reports_realized_pnl_across_all_symbols(tmp_path):
 
 def test_daily_loss_configuration_cannot_widen_the_hard_three_percent_cap():
     assert EquityCircuitBreaker(0.10).max_daily_loss_pct == pytest.approx(0.03)
+
+
+def test_trading_config_cannot_raise_daily_loss_above_three_percent():
+    from trading_config import TradingConfig
+
+    config = TradingConfig.from_env({"MAX_DAILY_LOSS_PCT": "0.10"})
+    assert config.max_daily_loss_pct == pytest.approx(0.03)
