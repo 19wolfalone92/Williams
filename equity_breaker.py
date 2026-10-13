@@ -9,7 +9,9 @@ class EquityCircuitBreaker:
         pct = float(max_daily_loss_pct)
         if not math.isfinite(pct) or not 0.0 <= pct <= 1.0:
             raise ValueError("max_daily_loss_pct must be finite and in [0, 1]")
-        self.max_daily_loss_pct = pct
+        # The project-wide hard cap is 3%; callers may tighten it but
+        # configuration must never widen the loss boundary.
+        self.max_daily_loss_pct = min(0.03, pct)
 
     def _today_start_equity(self, db, current_equity_quote: float) -> float:
         from datetime import datetime, timezone
