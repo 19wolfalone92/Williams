@@ -763,6 +763,37 @@ def test_ntd_red_zone_add_on_is_mirrored_and_gray_zone_is_blocked():
     ) == []
 
 
+def test_conditional_williams_trigger_is_not_rearmed_after_intrabar_touch():
+    from williams_signals import _trigger_still_pending
+
+    long_frame = pd.DataFrame({
+        "high": [101.0, 105.2, 104.8],
+        "low": [99.0, 103.0, 102.0],
+        "close": [100.0, 104.0, 104.5],
+    })
+    assert not _trigger_still_pending(
+        long_frame, 0, side="BUY", trigger_price=105.1
+    )
+
+    short_frame = pd.DataFrame({
+        "high": [101.0, 100.0, 100.5],
+        "low": [99.0, 94.8, 95.2],
+        "close": [100.0, 96.0, 96.5],
+    })
+    assert not _trigger_still_pending(
+        short_frame, 0, side="SELL", trigger_price=94.9
+    )
+
+    untouched = pd.DataFrame({
+        "high": [101.0, 104.0, 104.5],
+        "low": [99.0, 100.0, 100.5],
+        "close": [100.0, 103.0, 104.0],
+    })
+    assert _trigger_still_pending(
+        untouched, 0, side="BUY", trigger_price=105.1
+    )
+
+
 def test_ntd_external_fractal_is_initial_entry_and_requires_untriggered_breakout():
     n = 9
     times = [1_700_000_000_000 + i * 300_000 for i in range(n)]
