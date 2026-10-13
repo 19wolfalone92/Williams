@@ -91,7 +91,7 @@ internal class NativeFuturesCampaignCoordinator(
                 if (order == null) {
                     throw IllegalStateException("Cannot reconcile persisted order $clientId; no resubmission allowed")
                 }
-                val statusValue = order.optString("status").uppercase(Locale.US)
+                val statusValue = order.optString("status", order.optString("algoStatus", "")).uppercase(Locale.US)
                 if (statusValue.isBlank()) {
                     throw IllegalStateException("Order $clientId has unknown exchange status")
                 }
@@ -134,8 +134,8 @@ internal class NativeFuturesCampaignCoordinator(
         val currentIntents = intents()
         check((0 until currentIntents.length()).none { i ->
             val row = currentIntents.optJSONObject(i) ?: return@none false
-            row.optString("symbol") == plan.symbol &&
-                row.optString("exchange_status").uppercase(Locale.US) in setOf("NEW", "PENDING", "PARTIALLY_FILLED")
+            row.optString("exchange_status").uppercase(Locale.US) in
+                setOf("NEW", "PENDING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN")
         }) { "An entry order is already pending for ${plan.symbol}" }
 
         val adapter = adapterFactory()
