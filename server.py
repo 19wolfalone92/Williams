@@ -374,6 +374,8 @@ scanner_cache = {
     "duration_ms": 0,
     "symbols_scanned": 0,
     "symbols_configured": 0,
+    "long_candidates": 0,
+    "short_candidates": 0,
     "scan_status": {},
 }
 
@@ -413,10 +415,14 @@ def _scanner_snapshot():
         else:
             state_name = "NOT_RUN"
         return {
-            "cached": bool(scanner_cache["data"]),
+            "cached": bool(scanner_cache["time"]),
+            "has_candidates": bool(scanner_cache["data"]),
+            "candidate_count": len(scanner_cache["data"]),
             "duration_ms": int(scanner_cache["duration_ms"]),
             "symbols_scanned": int(scanner_cache["symbols_scanned"]),
             "symbols_configured": int(scanner_cache["symbols_configured"]),
+            "long_candidates": int(scanner_cache["long_candidates"]),
+            "short_candidates": int(scanner_cache["short_candidates"]),
             "scan_status": dict(scanner_cache["scan_status"]),
             "scanner_symbols": int(scanner_cache["symbols_scanned"]),
             "fresh": fresh,
@@ -445,6 +451,15 @@ def _scanner_worker():
     try:
         with scanner_lock:
             scanner_cache["last_error"] = None
+            scanner_cache["scan_status"] = {
+                "state": "RUNNING",
+                "reason": None,
+                "configured_symbols": int(scanner_cache.get("symbols_configured", 0)),
+                "evaluated_symbols": 0,
+            }
+            scanner_cache["symbols_scanned"] = 0
+            scanner_cache["long_candidates"] = 0
+            scanner_cache["short_candidates"] = 0
 
         started = time.monotonic()
         scanner = state.ensure_scanner()
@@ -467,6 +482,14 @@ def _scanner_worker():
             )
             scanner_cache["symbols_scanned"] = int(
                 scan_status.get("evaluated_symbols", 0) or 0
+            )
+            scanner_cache["long_candidates"] = sum(
+                1 for candidate in data
+                if str(candidate.get("side", "")).upper() == "LONG"
+            )
+            scanner_cache["short_candidates"] = sum(
+                1 for candidate in data
+                if str(candidate.get("side", "")).upper() == "SHORT"
             )
 
     except Exception as exc:
@@ -1049,6 +1072,10 @@ def status():
         'futures_margin_type': os.getenv('FUTURES_MARGIN_TYPE', 'ISOLATED').upper(),
         'scanner_scanning': bool(_scanner_snapshot()['scanning']),
         'scanner_symbols': int(_scanner_snapshot()['symbols_scanned']),
+        'scanner_configured_symbols': int(_scanner_snapshot()['symbols_configured']),
+        'scanner_long_candidates': int(_scanner_snapshot()['long_candidates']),
+        'scanner_short_candidates': int(_scanner_snapshot()['short_candidates']),
+        'scanner_scan_status': dict(_scanner_snapshot()['scan_status']),
         'scanner_duration_ms': int(_scanner_snapshot()['duration_ms']),
         'scanner_state': _scanner_snapshot()['scanner_state'],
         'scanner_error': _scanner_snapshot()['scanner_error'],
