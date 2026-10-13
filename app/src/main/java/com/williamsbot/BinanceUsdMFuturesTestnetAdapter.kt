@@ -137,6 +137,14 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         return JSONArray(requestRaw("GET", "/fapi/v1/openAlgoOrders", mapOf("symbol" to symbol), signed = true))
     }
 
+    fun queryAlgoOrder(symbol: String, clientAlgoId: String): JSONObject {
+        requireSymbol(symbol)
+        require(clientAlgoId.isNotBlank())
+        return request("GET", "/fapi/v1/algoOrder", mapOf(
+            "symbol" to symbol, "clientAlgoId" to clientAlgoId
+        ), signed = true)
+    }
+
     fun cancelAlgoOrder(symbol: String, clientAlgoId: String): JSONObject {
         requireSymbol(symbol)
         require(clientAlgoId.isNotBlank())
