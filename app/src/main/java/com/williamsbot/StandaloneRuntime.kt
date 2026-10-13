@@ -1087,7 +1087,8 @@ private class NativeEngine(
             futures.serverTime()
             val account = futures.account()
             futures.requireOneWayMode()
-            restAccountReady = account.has("assets")
+            restAccountReady = account.has("availableBalance") &&
+                account.has("totalWalletBalance") && account.has("totalMarginBalance")
             restLastError = null
             JSONObject()
                 .put("configured", true)
@@ -1097,7 +1098,7 @@ private class NativeEngine(
                 .put("validation", "FUTURES_CREDENTIALS_AND_ONE_WAY_MODE_PASS")
                 .put("read_back_verified", key() == newKey && secret() == newSecret)
                 .put("execution_enabled", false)
-                .put("execution_blocker", "futures_campaign_runtime_not_yet_integrated")
+                .put("execution_blocker", "start_required_for_local_Futures_reconciliation_and_scanner")
         } catch (x: Exception) {
             prefs.edit()
                 .putString("api_key", oldKey)
@@ -6235,178 +6236,7 @@ private class NativeEngine(
         )
     }
 
-    fun sell(symbolInput: String): JSONObject {
-        val symbol = symbolInput.uppercase().trim()
-        require(symbol.isNotBlank()) {
-            "symbol is required"
-        }
-
-        val stored =
-            synchronized(positions) {
-                positions[symbol]
-            }
-
-        if (stored == null) {
-            // The OCO may have already closed the position.
-            recover()
-            return JSONObject()
-                .put("sold", false)
-                .put("symbol", symbol)
-                .put("state", stateName())
-                .put(
-                    "reason",
-                    "position_not_found; recovery_checked"
-                )
-        }
-
-        if (stored.campaignId.isNotBlank()) {
-            campaignExitMarket(stored, "MANUAL_SELL")
-            return JSONObject()
-                .put("sold", positionList().none { it.symbol == symbol })
-                .put("symbol", symbol)
-                .put("campaign_id", stored.campaignId)
-                .put("state", stateName())
-                .put("campaign_exit", true)
-        }
-
-        val rules = symbolFilters(symbol)
-
-        stateMachine.transition(
-            TradingState.EXIT_PENDING,
-            "manual SELL requested"
-        )
-
-        return try {
-            // Cancel only the bot-owned OCO. Never cancel unrelated
-            // orders that happen to belong to the same symbol.
-            if (stored.ocoListId.isNotBlank()) {
-                signedDelete(
-                    "/api/v3/orderList",
-                    "symbol=" + symbol +
-                        "&orderListId=" + stored.ocoListId
-                )
-            } else if (stored.ocoListClientId.isNotBlank()) {
-                signedDelete(
-                    "/api/v3/orderList",
-                    "symbol=" + symbol +
-                        "&listClientOrderId=" +
-                        stored.ocoListClientId
-                )
-            } else {
-                setReconcileRequired(
-                    "Manual SELL refused: missing managed OCO identifier for " +
-                        symbol
-                )
-                return JSONObject()
-                    .put("sold", false)
-                    .put("symbol", symbol)
-                    .put("state", "RECONCILE_REQUIRED")
-                    .put("reason", "managed OCO identifier missing")
-            }
-
-            val account = signedAccount()
-            val balances =
-                account.getJSONArray("balances")
-            val asset =
-                symbol.removeSuffix("USDT")
-
-            var free = 0.0
-            for (i in 0 until balances.length()) {
-                val b = balances.getJSONObject(i)
-                if (b.optString("asset") == asset) {
-                    free =
-                        b.optString("free")
-                            .toDoubleOrNull() ?: 0.0
-                    break
-                }
-            }
-
-            val qty =
-                floorStep(
-                    min(stored.qty, free),
-                    rules.step
-                )
-
-            if (qty <= 0.0 || qty < rules.minQty) {
-                reconcilePositionsWithExchange()
-                return JSONObject()
-                    .put("sold", false)
-                    .put("symbol", symbol)
-                    .put(
-                        "reason",
-                        "position already closed or quantity unavailable"
-                    )
-                    .put("state", stateName())
-            }
-
-            val sell =
-                signedPost(
-                    "/api/v3/order",
-                    "symbol=" + symbol +
-                        "&side=SELL&type=MARKET" +
-                        "&quantity=" +
-                        fmtQty(
-                            qty,
-                            rules.decimals
-                        )
-                )
-
-            val exitPrice =
-                sell.optString("cummulativeQuoteQty")
-                    .toDoubleOrNull()
-                    ?.let { quote -> if (qty > 0.0) quote / qty else 0.0 }
-                    ?.takeIf { it > 0.0 }
-                    ?: runCatching {
-                        JSONObject(
-                            getBody("/api/v3/ticker/price?symbol=" + symbol)
-                        ).optString("price").toDoubleOrNull() ?: stored.entry
-                    }.getOrDefault(stored.entry)
-            TradeJournal.close(
-                prefs = prefs,
-                symbol = symbol,
-                exitPrice = exitPrice,
-                reason = "MANUAL_SELL",
-                order = sell
-            )
-            recordCompletedTrade(
-                stored = stored,
-                exitPrice = exitPrice,
-                reason = "MANUAL_SELL",
-                raw = sell
-            )
-            synchronized(positions) {
-                positions.remove(symbol)
-            }
-            stateMachine.force(
-                TradingState.READY_FLAT,
-                "manual SELL filled"
-            )
-            savePersistedState()
-
-            JSONObject()
-                .put("sold", true)
-                .put("symbol", symbol)
-                .put("quantity", qty)
-                .put("order", sell)
-                .put("state", stateName())
-        } catch (x: Exception) {
-            setReconcileRequired(
-                "Manual SELL failed for " +
-                    symbol +
-                    ": " +
-                    (x.message ?: x.javaClass.simpleName)
-            )
-
-            JSONObject()
-                .put("sold", false)
-                .put("symbol", symbol)
-                .put("state", "RECONCILE_REQUIRED")
-                .put(
-                    "error",
-                    x.message ?: x.javaClass.simpleName
-                )
-        }
-    }
+    fun sell(symbolInput: String): JSONObject = sellFuturesPosition(symbolInput)
 
     private fun signedDelete(
         path: String,
@@ -7842,22 +7672,12 @@ private class NativeEngine(
 
         if (!fast && key().isNotBlank() && secret().isNotBlank() && !restAccountReady) {
             runCatching {
-                val balances =
-                    signedAccount().getJSONArray("balances")
-                for (i in 0 until balances.length()) {
-                    val item = balances.getJSONObject(i)
-                    if (item.optString("asset") == "USDT") {
-                        balance =
-                            item.optString("free")
-                                .toDoubleOrNull()
-                        liveUsdtBalance = balance ?: 0.0
-                        break
-                    }
-                }
-            }.onFailure {
-                lastError =
-                    it.message ?: it.javaClass.simpleName
-            }
+                val account = futuresCampaignCoordinator.accountSnapshot()
+                balance = account.optString("availableBalance").toDoubleOrNull()
+                liveUsdtBalance = balance ?: 0.0
+                restAccountReady = balance != null &&
+                    account.has("totalWalletBalance") && account.has("totalMarginBalance")
+            }.onFailure { lastError = "Futures account status: " + (it.message ?: it.javaClass.simpleName) }
         }
 
         val dailyGuard = dailyTradeGuard()
@@ -7985,6 +7805,18 @@ private class NativeEngine(
             .put("rest_last_latency_ms", restLastLatencyMs)
             .put("rest_last_error", restLastError ?: JSONObject.NULL)
             .put("rest_ticker_price", if (restLastTickerPrice > 0.0) restLastTickerPrice else JSONObject.NULL)
+            .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
+            .put("execution_mode", "AUTONOMOUS_ANDROID")
+            .put("decision_timeframe", "1h")
+            .put("max_daily_loss_pct", 0.03)
+            .put("futures_runtime", futuresCampaignCoordinator.status())
+            .put("futures_positions", futuresPositionSnapshot())
+            .put("positions", futuresPositionSnapshot())
+            .put("open_positions", futuresPositionSnapshot().length())
+            .put("position_symbol", futuresPositionSnapshot().optJSONObject(0)?.optString("symbol") ?: JSONObject.NULL)
+            .put("position", futuresPositionSnapshot().optJSONObject(0) ?: JSONObject.NULL)
+            .put("position_qty", futuresPositionSnapshot().optJSONObject(0)?.optDouble("qty") ?: JSONObject.NULL)
+            .put("position_entry", futuresPositionSnapshot().optJSONObject(0)?.optDouble("entry") ?: JSONObject.NULL)
     }
 
     fun historyStatus(): JSONObject =
@@ -8102,110 +7934,39 @@ private class NativeEngine(
             .put("symbols", JSONArray(coreSymbols)).put("pairs", pairs)
     }
 
-    private fun futuresPositionSnapshot(): JSONArray {
-        val out = JSONArray()
-        if (key().isBlank() || secret().isBlank()) return out
-        val rows = futuresCampaignCoordinator.positionsSnapshot()
-        val intents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
-        for (i in 0 until rows.length()) {
-            val row = rows.optJSONObject(i) ?: continue
-            val symbol = row.optString("symbol").uppercase(Locale.US)
-            if (symbol !in coreSymbols) continue
-            val signedQty = row.optString("positionAmt").toDoubleOrNull() ?: 0.0
-            if (signedQty == 0.0) continue
-            val direction = if (signedQty > 0.0) "LONG" else "SHORT"
-            val entry = row.optString("entryPrice").toDoubleOrNull() ?: 0.0
-            val mark = row.optString("markPrice").toDoubleOrNull() ?: runCatching { futuresMarketData.markPrice(symbol) }.getOrDefault(0.0)
-            val intent = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.lastOrNull {
-                it.optString("intent_role", "ENTRY") == "ENTRY" && it.optString("symbol") == symbol &&
-                    it.optString("direction") == direction && it.optString("exchange_status") == "OPEN_PROTECTED"
-            }
-            out.put(JSONObject().put("symbol", symbol).put("direction", direction).put("side", direction)
-                .put("qty", kotlin.math.abs(signedQty)).put("positionAmt", signedQty).put("entry", entry)
-                .put("entryPrice", entry).put("mark_price", mark)
-                .put("stop", intent?.optString("protective_stop")?.toDoubleOrNull() ?: JSONObject.NULL)
-                .put("risk_pct", intent?.optDouble("risk_pct", 0.0) ?: 0.0)
-                .put("unrealized_pnl_usdt", row.optString("unRealizedProfit").toDoubleOrNull() ?: 0.0)
-                .put("margin_type", row.optString("marginType")).put("leverage", row.optString("leverage"))
-                .put("exchange_confirmed", true))
-        }
-        return out
-    }
-
     fun portfolio(): JSONObject {
         val configured = key().isNotBlank() && secret().isNotBlank()
-        val statusJson = status()
-        val positions = JSONArray()
-        val sourcePositions = statusJson.optJSONArray("positions") ?: JSONArray()
-        var totalPositionValue = 0.0
-        for (i in 0 until sourcePositions.length()) {
-            val p = sourcePositions.optJSONObject(i) ?: continue
-            val symbol = p.optString("symbol", "")
-            val qty = p.optDouble("qty", 0.0)
-            val entry = p.optDouble("entry", p.optDouble("avg_entry_price", 0.0))
-            val current = statusJson.optJSONObject("live_prices")
-                ?.optDouble(symbol, 0.0)
-                ?.takeIf { it > 0.0 }
-                ?: entry
-            val value = qty * current
-            totalPositionValue += value
-            positions.put(
-                JSONObject()
-                    .put("symbol", symbol)
-                    .put("qty", qty)
-                    .put("avg_entry_price", entry)
-                    .put("stop_loss", p.optDouble("stop", 0.0))
-                    .put("take_profit", p.optDouble("take", 0.0))
-                    .put("risk_pct", p.optDouble("risk_pct", 0.0))
-                    .put("current_price", current)
-                    .put("position_value_usdt", value)
-                    .put("allocation_pct", 0.0)
-                    .put("unrealized_pnl_usdt", (current - entry) * qty)
-                    .put("unrealized_pnl_pct", if (entry > 0.0) (current - entry) / entry else 0.0)
-                    .put("oco_list_id", p.optString("oco_list_id", ""))
-                    .put("oco_list_client_id", p.optString("oco_list_client_id", ""))
-            )
+        if (!configured) {
+            return JSONObject().put("configured", false)
+                .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
+                .put("positions", JSONArray()).put("assets", JSONArray())
         }
-
-        val assets = JSONArray()
-        var totalEquity = statusJson.optDouble("quote_balance", 0.0)
-        if (configured) {
-            runCatching {
-                val balances = signedAccount().getJSONArray("balances")
-                for (i in 0 until balances.length()) {
-                    val b = balances.getJSONObject(i)
-                    val free = b.optString("free").toDoubleOrNull() ?: 0.0
-                    val locked = b.optString("locked").toDoubleOrNull() ?: 0.0
-                    val total = free + locked
-                    if (total <= 0.0) continue
-                    val asset = b.optString("asset")
-                    if (asset == "USDT") {
-                        totalEquity = total
-                    }
-                    assets.put(
-                        JSONObject()
-                            .put("asset", asset)
-                            .put("free", free)
-                            .put("locked", locked)
-                            .put("total", total)
-                            .put("price_usdt", if (asset == "USDT") 1.0 else JSONObject.NULL)
-                            .put("value_usdt", if (asset == "USDT") total else 0.0)
-                            .put("allocation_pct", 0.0)
-                    )
-                }
-            }
+        val account = futuresCampaignCoordinator.accountSnapshot()
+        val wallet = account.optString("totalWalletBalance").toDoubleOrNull() ?: 0.0
+        val unrealized = account.optString("totalUnrealizedProfit").toDoubleOrNull() ?: 0.0
+        val equity = account.optString("totalMarginBalance").toDoubleOrNull() ?: wallet + unrealized
+        val available = account.optString("availableBalance").toDoubleOrNull() ?: 0.0
+        val positions = futuresPositionSnapshot()
+        var notional = 0.0
+        var posPnl = 0.0
+        for (i in 0 until positions.length()) {
+            val p = positions.optJSONObject(i) ?: continue
+            notional += p.optDouble("qty", 0.0) * p.optDouble("mark_price", 0.0)
+            posPnl += p.optDouble("unrealized_pnl_usdt", 0.0)
         }
-
-        val freeEquity = statusJson.optDouble("quote_balance", totalEquity)
-        return JSONObject()
-            .put("configured", configured)
-            .put("total_equity_usdt", totalEquity + totalPositionValue)
-            .put("free_equity_usdt", freeEquity)
-            .put("locked_equity_usdt", 0.0)
-            .put("realized_pnl_usdt", 0.0)
-            .put("unrealized_pnl_usdt", statusJson.optDouble("pnl", 0.0))
-            .put("assets", assets)
-            .put("positions", positions)
+        val assets = JSONArray().put(
+            JSONObject().put("asset", "USDT").put("free", available)
+                .put("total", wallet).put("value_usdt", wallet)
+                .put("allocation_pct", if (equity > 0.0) wallet / equity * 100.0 else 0.0)
+        )
+        return JSONObject().put("configured", true)
+            .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
+            .put("account_type", "USD_M_FUTURES")
+            .put("total_equity_usdt", equity).put("free_equity_usdt", available)
+            .put("locked_equity_usdt", (wallet - available).coerceAtLeast(0.0))
+            .put("wallet_balance_usdt", wallet).put("unrealized_pnl_usdt", unrealized)
+            .put("position_notional_usdt", notional).put("positions_unrealized_pnl_usdt", posPnl)
+            .put("assets", assets).put("positions", positions)
     }
 
     fun trades(): JSONArray = TradeJournal.trades(prefs)
@@ -8222,9 +7983,9 @@ private class NativeEngine(
                     if (reconcileRequired) {
                         "Recovery required; trading is blocked"
                     } else if (scanning) {
-                        "Standalone scanner is running; USD-M Futures execution BLOCKED until native Futures adapter is integrated and verified"
+                        "USD-M Futures scanner is running locally on Android"
                     } else {
-                        "Standalone native engine active; USD-M Futures execution BLOCKED until native Futures adapter is integrated and verified"
+                        "USD-M Futures runtime idle or waiting for H1 history/reconciliation"
                     }
                 )
         )
@@ -8242,7 +8003,7 @@ private class NativeEngine(
             )
         }
         test("version_consistency", "runtime", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
-        test("futures_execution_adapter", "binance", futuresExecutionAdapterReady, "FAIL", "FAIL-CLOSED: native runtime still uses Spot /api/v3 and OCO; USDⓈ-M Futures LONG/SHORT adapter is not wired")
+        test("futures_execution_adapter", "binance", futuresExecutionAdapterReady, "FAIL", "Native USD-M Futures adapter and local coordinator wired; readiness still depends on live exchange reconciliation")
         test("local_api_loopback", "runtime", 18080 == 18080, "FAIL", "127.0.0.1:18080")
         test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(","))
         test("runtime_lifecycle", "runtime", running == (worker?.isAlive == true), "FAIL", "running=" + running + "; worker_alive=" + (worker?.isAlive == true))
@@ -8255,7 +8016,7 @@ private class NativeEngine(
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
         test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
-        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.005 && maxTotalRiskPct <= 0.01, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct)
+        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss=0.03")
         test("self_heal_contract", "runtime", true, "FAIL", "safe_only=true; endpoint=/api/v1/control/self-heal")
         return tests
     }
@@ -8307,63 +8068,42 @@ private class NativeEngine(
         val before = status(fast = true)
         val actions = JSONArray()
         val reasons = JSONArray(executionBlockers())
-
         if (killLatched || reconcileRequired) {
             actions.put("blocked_by_safety_barrier")
-            return JSONObject()
-                .put("changed", false)
-                .put("safe_only", true)
-                .put("actions", actions)
-                .put("execution_ready", executionReady())
-                .put("execution_blockers", reasons)
-                .put("before", before)
-                .put("after", before)
+            return JSONObject().put("changed", false).put("safe_only", true)
+                .put("actions", actions).put("execution_ready", executionReady())
+                .put("execution_blockers", reasons).put("before", before).put("after", before)
         }
-
         lastSelfHealMs = System.currentTimeMillis()
         selfHealCount++
-
         if (running) {
             if (!historyReady && !historyWarmupRunning) {
                 historyState = "RECOVERY_REQUESTED"
                 warmCoreHistoryAsync(runtimeGeneration)
-                actions.put("history_reload_requested")
+                actions.put("futures_history_reload_requested")
             }
-            if (marketSocket == null || !marketSocketConnected) {
-                startMarketDataStream()
-                actions.put("market_ws_reconnect_requested")
+            val reconciliation = runCatching { futuresCampaignCoordinator.reconcile() }.getOrNull()
+            if (reconciliation?.optBoolean("ok", false) == true) {
+                actions.put("futures_exchange_reconciliation")
+            } else if (reconciliation != null) {
+                reconcileRequired = true
+                prefs.edit().putBoolean("reconcile_required", true).commit()
+                actions.put("futures_reconciliation_blocked")
             }
-            if (!userStreamConnected) {
-                userStream.start()
-                actions.put("user_ws_reconnect_requested")
-            }
-            if (historyReady && !scanning) {
+            if (historyReady && !scanning && !paused) {
                 requestScan()
-                actions.put("scanner_reconnect_requested")
+                actions.put("futures_scanner_reconnect_requested")
             }
-            if (
-                !userStreamConnected &&
-                positionList().isNotEmpty() &&
-                System.currentTimeMillis() - lastRestReconcileMs >= 60_000L
-            ) {
-                lastRestReconcileMs = System.currentTimeMillis()
-                runCatching { reconcilePositionsWithExchange() }
-                    .onSuccess { actions.put("rest_reconciliation") }
-                    .onFailure { actions.put("rest_reconciliation_failed") }
+            if (paused) {
+                runCatching { manageNativeFuturesPositions() }
+                    .onSuccess { actions.put("futures_position_monitor") }
+                    .onFailure { actions.put("futures_position_monitor_failed") }
             }
-        } else {
-            actions.put("runtime_not_started")
-        }
-
+        } else actions.put("runtime_not_started")
         val after = status(fast = true)
-        return JSONObject()
-            .put("changed", actions.length() > 0)
-            .put("safe_only", true)
-            .put("actions", actions)
-            .put("execution_ready", executionReady())
-            .put("execution_blockers", JSONArray(executionBlockers()))
-            .put("before", before)
-            .put("after", after)
+        return JSONObject().put("changed", actions.length() > 0).put("safe_only", true)
+            .put("actions", actions).put("execution_ready", executionReady())
+            .put("execution_blockers", JSONArray(executionBlockers())).put("before", before).put("after", after)
     }
 
     fun settings(): JSONObject =
