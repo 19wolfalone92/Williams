@@ -1,6 +1,8 @@
 """Backend equity/daily-loss circuit breaker with a durable UTC-day latch."""
 from __future__ import annotations
 
+import math
+
 
 class EquityCircuitBreaker:
     def __init__(self, max_daily_loss_pct: float = 0.03):
@@ -68,7 +70,14 @@ class EquityCircuitBreaker:
 
         # Fees are a real loss and must be included even if legacy trade PnL
         # records were written before fee accounting was enabled.
-        net_daily_pnl = realized + float(unrealized_pnl_quote) - abs(float(fees_quote))
+        try:
+            unrealized = float(unrealized_pnl_quote)
+            fees = float(fees_quote)
+        except (TypeError, ValueError):
+            return False, "daily PnL inputs are invalid"
+        if not all(math.isfinite(value) for value in (realized, unrealized, fees)):
+            return False, "daily PnL inputs are non-finite"
+        net_daily_pnl = realized + unrealized - abs(fees)
         loss_limit = start_equity * self.max_daily_loss_pct
 
         if net_daily_pnl <= -loss_limit:
