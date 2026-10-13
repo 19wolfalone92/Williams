@@ -1740,6 +1740,18 @@ class MultiPositionTrader:
                     raise RuntimeError(
                         f"{symbol}: OCO cancellation API is unavailable"
                     )
+                def _validate_oco_cancel(_snapshot):
+                    # Verify authenticated exchange state immediately before
+                    # cancellation; the response must still confirm terminal
+                    # OCO status before any subsequent market SELL is allowed.
+                    latest_account = self.client.account()
+                    if not isinstance(latest_account, dict) or not isinstance(
+                        latest_account.get("balances"), list
+                    ):
+                        raise RuntimeError(
+                            f"{symbol}: account state unavailable before OCO cancellation"
+                        )
+
                 self._submit_risk_reducing_order(
                     symbol,
                     "CANCEL_OCO",
@@ -1750,6 +1762,7 @@ class MultiPositionTrader:
                         else cancel(symbol, list_client_order_id=list_client)
                     ),
                     client_order_id=str(list_client or list_id),
+                    pre_submit_checks=_validate_oco_cancel,
                 )
 
             account = self.client.account()
