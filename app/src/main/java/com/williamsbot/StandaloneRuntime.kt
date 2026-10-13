@@ -2527,9 +2527,9 @@ private class NativeEngine(
     }
 
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
-        candidate.campaignSignals
-            .sortedBy { it.signalBarTimeMs }
-            .firstOrNull()
+        // Select the most recent still-valid confirmed setup, never the oldest one
+        // returned by a historical scan.
+        candidate.campaignSignals.sortedByDescending { it.signalBarTimeMs }.firstOrNull()
 
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
@@ -3524,127 +3524,309 @@ private class NativeEngine(
         }
     }
 
-    private fun performCampaignScan() {
-        if (reconcileRequired) return
-
-        for (open in positionList()) {
-            runCatching {
-                TradeJournal.updateExcursion(
-                    prefs,
-                    open.symbol,
-                    currentCampaignPrice(open.symbol)
-                )
+    private fun checkFuturesDailyLoss(): Boolean {
+        val account = futuresCampaignCoordinator.accountSnapshot()
+        val wallet = account.optString("totalWalletBalance").toDoubleOrNull() ?: 0.0
+        val unrealized = account.optString("totalUnrealizedProfit").toDoubleOrNull() ?: 0.0
+        val equity = account.optString("totalMarginBalance").toDoubleOrNull() ?: (wallet + unrealized)
+        require(equity.isFinite() && equity > 0.0) { "Futures equity is unavailable/non-positive" }
+        val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        utc.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        utc.set(java.util.Calendar.MINUTE, 0)
+        utc.set(java.util.Calendar.SECOND, 0)
+        utc.set(java.util.Calendar.MILLISECOND, 0)
+        val baselineKey = "futures_day_start_equity_" + utc.timeInMillis
+        if (!prefs.contains(baselineKey)) {
+            check(prefs.edit().putString(baselineKey, equity.toString()).commit()) {
+                "Could not persist Futures daily equity baseline"
             }
         }
+        val baseline = prefs.getString(baselineKey, null)?.toDoubleOrNull() ?: 0.0
+        require(baseline > 0.0 && baseline.isFinite()) { "Futures daily equity baseline is invalid" }
+        val lossPct = ((baseline - equity) / baseline).coerceAtLeast(0.0)
+        check(prefs.edit().putString("futures_daily_loss_pct", lossPct.toString()).commit()) {
+            "Could not persist daily loss measurement"
+        }
+        if (lossPct >= 0.03) {
+            paused = true
+            prefs.edit().putBoolean("auto_run", false).commit()
+            lastError = "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"
+            runCatching { futuresCampaignCoordinator.cancelPendingEntries("DAILY_LOSS_LIMIT") }
+            return false
+        }
+        return true
+    }
 
-        runCatching { recoverCampaignPendingEntries() }
-            .onFailure {
-                if (!killLatched) {
-                    setReconcileRequired(
-                        "Campaign pending recovery: " +
-                            (it.message ?: it.javaClass.simpleName)
-                    )
-                }
+    private fun futuresPositionSnapshot(): JSONArray {
+        val out = JSONArray()
+        if (key().isBlank() || secret().isBlank()) return out
+        val positions = futuresCampaignCoordinator.positionsSnapshot()
+        val intents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
+        for (i in 0 until positions.length()) {
+            val row = positions.optJSONObject(i) ?: continue
+            val symbol = row.optString("symbol").uppercase(Locale.US)
+            if (symbol !in coreSymbols) continue
+            val signedQty = row.optString("positionAmt").toDoubleOrNull() ?: 0.0
+            if (signedQty == 0.0) continue
+            val direction = if (signedQty > 0.0) "LONG" else "SHORT"
+            val intent = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.lastOrNull {
+                it.optString("intent_role", "ENTRY") == "ENTRY" &&
+                    it.optString("symbol") == symbol && it.optString("direction") == direction &&
+                    it.optString("exchange_status") == "OPEN_PROTECTED"
             }
-        if (reconcileRequired) return
+            val entry = row.optString("entryPrice").toDoubleOrNull() ?: 0.0
+            val mark = row.optString("markPrice").toDoubleOrNull()
+                ?: runCatching { futuresMarketData.markPrice(symbol) }.getOrDefault(0.0)
+            val qty = kotlin.math.abs(signedQty)
+            val pnl = row.optString("unRealizedProfit").toDoubleOrNull() ?: 0.0
+            out.put(JSONObject()
+                .put("symbol", symbol).put("direction", direction).put("side", direction)
+                .put("positionAmt", signedQty).put("qty", qty).put("entry", entry).put("entryPrice", entry)
+                .put("mark_price", mark).put("stop", intent?.optString("protective_stop")?.toDoubleOrNull() ?: JSONObject.NULL)
+                .put("risk_pct", intent?.optDouble("risk_pct", 0.0) ?: 0.0)
+                .put("unrealized_pnl_usdt", pnl).put("margin_type", row.optString("marginType"))
+                .put("leverage", row.optString("leverage")).put("exchange_confirmed", true))
+        }
+        return out
+    }
 
-        runCatching { reconcileCampaignPositions() }
-        if (reconcileRequired) return
+    private fun sellFuturesPosition(symbolInput: String): JSONObject {
+        val symbol = symbolInput.trim().uppercase(Locale.US)
+        require(symbol in coreSymbols) { "Symbol is outside the approved Futures universe: " + symbol }
+        val rows = futuresCampaignCoordinator.positionsSnapshot()
+        val row = (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.firstOrNull {
+            it.optString("symbol") == symbol &&
+                kotlin.math.abs(it.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0
+        } ?: run {
+            val rec = futuresCampaignCoordinator.reconcile()
+            return JSONObject().put("sold", false).put("symbol", symbol)
+                .put("reason", "exchange_position_not_found").put("reconciliation", rec)
+        }
+        val signedQty = row.optString("positionAmt").toDouble()
+        val direction = if (signedQty > 0.0) NativeFuturesCampaignCoordinator.Direction.LONG
+            else NativeFuturesCampaignCoordinator.Direction.SHORT
+        val rules = symbolFilters(symbol)
+        val step = if (rules.marketStep > 0.0) rules.marketStep else rules.step
+        val qty = floorStep(kotlin.math.abs(signedQty), step)
+        require(qty >= rules.minQty) { "Futures close quantity below minimum for " + symbol }
+        val clientId = ("W2X_" + symbol.take(8) + "_" + System.nanoTime().toString(16).takeLast(12)).take(36)
+        val result = futuresCampaignCoordinator.closePosition(symbol, direction, fmtQty(qty, rules.decimals), clientId, "MANUAL_EXIT")
+        if (!result.optBoolean("ok", false)) lastError = result.optString("blocker", result.optString("error"))
+        return JSONObject().put("sold", result.optBoolean("ok", false)).put("symbol", symbol)
+            .put("direction_closed", direction.name).put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
+            .put("result", result)
+    }
 
-        runCatching { manageCampaignPositions() }
-        if (reconcileRequired) return
+    private fun manageNativeFuturesPositions(): Boolean {
+        val reconciliation = futuresCampaignCoordinator.reconcile()
+        if (!reconciliation.optBoolean("ok", false)) {
+            scannerError = reconciliation.optString("blocker", "Futures reconciliation failed")
+            reconcileRequired = true
+            prefs.edit().putBoolean("reconcile_required", true).commit()
+            return false
+        }
+        val positions = futuresCampaignCoordinator.positionsSnapshot()
+        val intents = futuresCampaignCoordinator.intentsSnapshot()
+        for (i in 0 until positions.length()) {
+            val row = positions.optJSONObject(i) ?: continue
+            val symbol = row.optString("symbol").uppercase(Locale.US)
+            if (symbol !in coreSymbols) continue
+            val signedQty = row.optString("positionAmt").toDoubleOrNull() ?: 0.0
+            if (signedQty == 0.0) continue
+            val direction = if (signedQty > 0.0) NativeFuturesCampaignCoordinator.Direction.LONG
+                else NativeFuturesCampaignCoordinator.Direction.SHORT
+            val dir = direction.name
+            val candles = fetchCandles(symbol, "1h", 180)
+            if (candles.size < 45) throw IllegalStateException(symbol + " needs at least 45 closed H1 candles")
+            val latest = candles.last()
+            val teeth = alligator(candles, candles.lastIndex).teeth
+            val rules = symbolFilters(symbol)
+            val mark = futuresMarketData.markPrice(symbol)
+            val structuralExit = teeth > 0.0 && (
+                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) latest.c < teeth
+                else latest.c > teeth
+            )
+            val newerBarCutoff = latest.t - 60L * 60L * 1000L
+            val opposing = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
+                shortCampaignSignals(symbol, candles, "1h", rules.tick).any { it.signalBarTimeMs >= newerBarCutoff }
+            } else {
+                longCampaignSignals(symbol, candles, "1h", rules.tick).any { it.signalBarTimeMs >= newerBarCutoff }
+            }
+            if (structuralExit || opposing) {
+                val step = if (rules.marketStep > 0.0) rules.marketStep else rules.step
+                val qty = floorStep(kotlin.math.abs(signedQty), step)
+                require(qty >= rules.minQty) { "Futures exit qty below filter for " + symbol }
+                val clientId = ("W2O_" + symbol.take(8) + "_" + System.nanoTime().toString(16).takeLast(12)).take(36)
+                val result = futuresCampaignCoordinator.closePosition(
+                    symbol, direction, fmtQty(qty, rules.decimals), clientId,
+                    if (structuralExit) "H1_CLOSE_CROSSED_ALLIGATOR_TEETH" else "OPPOSITE_WILLIAMS_SIGNAL"
+                )
+                if (!result.optBoolean("ok", false)) throw IllegalStateException(result.optString("blocker", result.optString("error")))
+                continue
+            }
+            val intent = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.lastOrNull {
+                it.optString("intent_role", "ENTRY") == "ENTRY" &&
+                    it.optString("symbol") == symbol && it.optString("direction") == dir &&
+                    it.optString("exchange_status") == "OPEN_PROTECTED"
+            } ?: throw IllegalStateException(symbol + " has no exchange-confirmed structural stop intent")
+            val oldStop = intent.optString("protective_stop").toDoubleOrNull()
+                ?: throw IllegalStateException(symbol + " structural stop is missing")
+            val trail = candles.takeLast(campaignTrailBars)
+            val proposed = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
+                normalizePrice((trail.minOfOrNull { it.l } ?: oldStop) - rules.tick, rules.tick)
+            } else {
+                normalizeTriggerPrice((trail.maxOfOrNull { it.h } ?: oldStop) + rules.tick, rules.tick)
+            }
+            val tighter = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) proposed > oldStop && proposed < mark
+                else proposed < oldStop && proposed > mark
+            if (tighter) {
+                val clientId = ("W2T_" + symbol.take(8) + "_" + latest.t.toString(16)).take(36)
+                val result = futuresCampaignCoordinator.trailProtectiveStop(symbol, direction, fmtPrice(proposed, rules.tick), clientId)
+                if (!result.optBoolean("ok", false)) throw IllegalStateException(result.optString("blocker", result.optString("error")))
+            }
+        }
+        return true
+    }
 
+    private fun submitNativeFuturesCampaignEntry(candidate: BaseAnalysis) {
+        if (!running || paused || reconcileRequired || killLatched || !candidate.campaignReady) return
+        if (candidate.spreadPct !in 0.0..maxSpreadPct) return
+        val signal = campaignEntryCandidate(candidate) ?: return
+        val direction = if (signal.type.startsWith("SHORT_", true))
+            NativeFuturesCampaignCoordinator.Direction.SHORT else NativeFuturesCampaignCoordinator.Direction.LONG
+        val symbol = candidate.symbol
+        val entries = futuresCampaignCoordinator.intentsSnapshot()
+        val clientId = ("W2E_" + symbol.take(7) + "_" + signal.type.take(4) + "_" + signal.signalBarTimeMs.toString(36)).take(36)
+        if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId }) return
+
+        val exchangePositions = futuresCampaignCoordinator.positionsSnapshot()
+        val openPositions = (0 until exchangePositions.length()).mapNotNull { exchangePositions.optJSONObject(it) }
+            .filter { kotlin.math.abs(it.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0 }
+        if (openPositions.size >= maxOpenPositions || openPositions.any { it.optString("symbol") == symbol }) return
+
+        val riskUsed = (0 until entries.length()).mapNotNull { entries.optJSONObject(it) }.sumOf { intent ->
+            val status = intent.optString("exchange_status").uppercase(Locale.US)
+            if (intent.optString("intent_role", "ENTRY") == "ENTRY" && status in setOf(
+                "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN",
+                "ACCEPTED", "TRIGGERED", "OPEN_PROTECTED", "POSITION_OPEN"
+            )) intent.optDouble("risk_pct", 0.0) else 0.0
+        }
+        val riskPct = min(campaignInitialRiskPct, min(maxRiskPerTradePct, maxTotalRiskPct - riskUsed))
+        if (riskPct <= 0.0) return
+        val account = futuresCampaignCoordinator.accountSnapshot()
+        val wallet = account.optString("totalWalletBalance").toDoubleOrNull() ?: 0.0
+        val equity = account.optString("totalMarginBalance").toDoubleOrNull()
+            ?: wallet + (account.optString("totalUnrealizedProfit").toDoubleOrNull() ?: 0.0)
+        val available = account.optString("availableBalance").toDoubleOrNull() ?: 0.0
+        if (equity <= 0.0 || available <= 0.0) return
+        val mark = futuresMarketData.markPrice(symbol)
+        val rules = symbolFilters(symbol)
+        val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
+            normalizeTriggerPrice(signal.triggerPrice, rules.tick) else normalizePrice(signal.triggerPrice, rules.tick)
+        val stop = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
+            normalizePrice(signal.protectivePrice, rules.tick) else normalizeTriggerPrice(signal.protectivePrice, rules.tick)
+        if (trigger <= 0.0 || stop <= 0.0) return
+        if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
+            if (trigger <= mark || stop >= trigger) return
+        } else {
+            if (trigger >= mark || stop <= trigger) return
+        }
+        val stopFraction = kotlin.math.abs(trigger - stop) / trigger
+        if (!stopFraction.isFinite() || stopFraction <= 0.0) return
+        val effectiveLoss = stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct
+        val maxRiskQuote = equity * riskPct
+        val notional = min(equity * 0.25, min(available * 2.0 * 0.95, maxRiskQuote / effectiveLoss))
+        val qty = floorStep(notional / trigger, rules.step)
+        if (!qty.isFinite() || qty < rules.minQty || qty > rules.maxQty ||
+            qty * trigger < rules.minNotional || qty * trigger > rules.maxNotional) return
+
+        val plan = NativeFuturesCampaignCoordinator.EntryPlan(
+            symbol = symbol,
+            direction = direction,
+            kind = NativeFuturesCampaignCoordinator.EntryKind.STOP,
+            quantity = fmtQty(qty, rules.decimals),
+            entryPrice = fmtPrice(trigger, rules.tick),
+            protectiveStop = fmtPrice(stop, rules.tick),
+            clientId = clientId,
+            riskPct = riskPct
+        )
+        val result = futuresCampaignCoordinator.submitPendingEntry(plan)
+        lastOrder = result
+        if (!result.optBoolean("accepted", false)) lastError = result.optString("blocker", result.optString("error"))
+    }
+
+    private fun performCampaignScan() {
+        if (!running || paused || reconcileRequired || killLatched) return
+        if (!checkFuturesDailyLoss()) {
+            runCatching { manageNativeFuturesPositions() }
+            return
+        }
+        if (!manageNativeFuturesPositions()) {
+            scannerState = "BLOCKED_FUTURES_RECONCILIATION"
+            scannerError = scannerError ?: "Futures position reconciliation/protection incomplete"
+            return
+        }
         val universe = loadUniverse()
         scanSymbols = universe.first.toMutableList()
         val volumes = universe.second
         val spreads = universe.third
-
         val futures = scanSymbols.map { symbol ->
-            scanExecutor.submit(
-                Callable {
-                    try {
-                        val candles = fetchCandles(
-                            symbol,
-                            campaignExecutionTimeframe,
-                            150
-                        )
-                        val result = analyseBase(
-                            symbol = symbol,
-                            candles = candles,
-                            spread = spreads[symbol] ?: 0.0,
-                            volume = volumes[symbol] ?: 0.0
-                        )
-                        markScanProgress()
-                        result
-                    } catch (x: Exception) {
-                        markScanProgress()
-                        scannerError =
-                            symbol + ": " +
-                                (x.message ?: x.javaClass.simpleName)
-                        null
-                    }
+            scanExecutor.submit(Callable {
+                try {
+                    val candles = fetchCandles(symbol, "1h", 180)
+                    if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
+                    val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
+                    markScanProgress()
+                    result
+                } catch (x: Exception) {
+                    markScanProgress()
+                    scannerError = symbol + ": " + (x.message ?: x.javaClass.simpleName)
+                    null
                 }
-            )
+            })
         }
-
-        val preliminary = mutableListOf<BaseAnalysis>()
-        futures.forEach { future ->
-            runCatching {
-                future.get(30L, TimeUnit.SECONDS)
-            }.getOrElse {
+        val ranked = mutableListOf<BaseAnalysis>()
+        for (future in futures) {
+            runCatching { future.get(30L, TimeUnit.SECONDS) }.getOrElse {
                 future.cancel(true)
-                scannerError =
-                    scannerError ?: "campaign scanner task timeout: " +
-                    (it.message ?: it.javaClass.simpleName)
+                scannerError = scannerError ?: "Futures H1 scanner timeout: " + (it.message ?: it.javaClass.simpleName)
                 null
-            }.let {
-                if (it is BaseAnalysis) preliminary.add(it)
-            }
+            }?.let { if (it is BaseAnalysis) ranked.add(it) }
         }
-
-        if (preliminary.isEmpty()) {
-            scannerState = "WAITING_FOR_HISTORY"
-            scannerError = "Campaign scanner received no market data"
+        candidates = JSONArray().apply {
+            ranked.sortedWith(compareByDescending<BaseAnalysis> { it.campaignReady }
+                .thenByDescending { it.score }.thenBy { it.wave.exhaustionRisk }.thenBy { it.spreadPct })
+                .take(20).forEach { put(toJson(it)) }
+        }
+        lastSymbolsScanned = ranked.size
+        lastScanAt = System.currentTimeMillis()
+        scanRunId = "futures-" + lastScanAt
+        scannerState = if (ranked.size == coreSymbols.size) "READY" else "PARTIAL"
+        runCatching { PositionsWidgetProvider.refresh(context) }
+        runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 180) }
+        if (ranked.isEmpty()) {
+            scannerError = scannerError ?: "Futures scanner received no usable symbols"
+            scannerState = "FAILED"
             return
         }
-
-        val ranked = preliminary
-            .map { candidate ->
-                runCatching { enrichWithMtf(candidate) }
-                    .getOrElse { candidate }
-            }
-            .sortedWith(
-                compareByDescending<BaseAnalysis> { it.campaignReady }
-                    .thenByDescending { it.score }
-                    .thenBy { it.wave.exhaustionRisk }
+        if (!restAccountReady || !marketDataFresh()) return
+        if (futuresCampaignCoordinator.state !in setOf(
+                NativeFuturesCampaignCoordinator.State.READY,
+                NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED
             )
-
-        candidates = JSONArray().apply {
-            ranked.take(20).forEach { put(toJson(it)) }
-        }
-        lastSymbolsScanned = scanSymbols.size
-        scannerState = "READY"
-        lastScanAt = System.currentTimeMillis()
-
-        if (
-            key().isBlank() ||
-            secret().isBlank() ||
-            !restAccountReady
         ) return
-
-        val guard = dailyTradeGuard()
-        if (!guard.optBoolean("allow", true)) return
-
-        val active = positionList().associateBy { it.symbol }
-        for (candidate in ranked) {
-            if (!candidate.campaignReady) continue
-            val position = active[candidate.symbol]
-            if (position != null) {
-                submitCampaignAddOn(candidate, position)
-            } else {
-                submitCampaignEntry(candidate)
+        val openSymbols = (0 until futuresCampaignCoordinator.positionsSnapshot().length())
+            .mapNotNull { futuresCampaignCoordinator.positionsSnapshot().optJSONObject(it) }
+            .filter { kotlin.math.abs(it.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0 }
+            .map { it.optString("symbol") }.toSet()
+        ranked.asSequence()
+            .filter { it.campaignReady && it.symbol !in openSymbols }
+            .sortedWith(compareByDescending<BaseAnalysis> { it.score }.thenBy { it.wave.exhaustionRisk })
+            .forEach { candidate ->
+                submitNativeFuturesCampaignEntry(candidate)
+                if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.ENTRY_PENDING ||
+                    futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED) return@forEach
             }
-        }
     }
 
     private fun performScan() {
