@@ -14,7 +14,7 @@ from campaign_model import (
 from db import Database
 
 
-def make_signal(signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY, trigger=101.0, bar=1):
+def make_signal(signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY, trigger=101.0, bar=1, confirmed=0):
     return SignalSpec.new(
         symbol="BTCUSDT",
         side="BUY",
@@ -26,6 +26,7 @@ def make_signal(signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY, trigger=
         protective_reference=97.0,
         htf_confirmed=True,
         expires_at_ms=int(time.time() * 1000) + 60_000,
+        confirmation_bar_time_ms=confirmed,
     )
 
 
@@ -68,6 +69,15 @@ def test_first_available_signal_starts_campaign():
         make_signal(SignalType.SUPER_AO, bar=20),
     ]
     assert CampaignEngine.choose_initial_signal(signals).signal_type == SignalType.REVERSAL
+
+
+def test_initial_signal_order_uses_fractal_confirmation_time_not_pivot_time():
+    wm3 = make_signal(SignalType.FRACTAL, bar=10, confirmed=30)
+    wm2 = make_signal(SignalType.SUPER_AO, bar=20, confirmed=20)
+
+    assert wm3.signal_bar_time_ms < wm2.signal_bar_time_ms
+    assert wm3.event_time_ms > wm2.event_time_ms
+    assert CampaignEngine.choose_initial_signal([wm3, wm2]) == wm2
 
 
 def test_wise_men_can_be_later_adds_not_two_of_three_gate():
