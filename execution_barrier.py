@@ -83,9 +83,10 @@ class ExecutionBarrier:
     def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
         """Persist execution state or raise; callers must never treat a failed write as success."""
         if self.db is None:
-            # Non-persistent barriers are allowed for pure validation/test use only.
-            # Production campaign paths are expected to inject the durable DB.
-            return
+            # Every exchange mutation, including exits and cancellations, must
+            # have a durable intent record. Validation-only code must not call
+            # execute(); a missing DB is a hard stop at the mutation boundary.
+            raise RuntimeError("required execution-intent persistence unavailable: database is not configured")
         writer = getattr(self.db, "save_execution_intent", None)
         if not callable(writer):
             raise RuntimeError("required execution-intent persistence is unavailable")
@@ -99,7 +100,7 @@ class ExecutionBarrier:
     def _persist_event_required(self, intent: OrderIntent, event: str, payload=None) -> None:
         """Required audit event: a failure before submit blocks mutation."""
         if self.db is None:
-            return
+            raise RuntimeError("required execution-event persistence unavailable: database is not configured")
         writer = getattr(self.db, "save_execution_event", None)
         if not callable(writer):
             raise RuntimeError("required execution-event persistence is unavailable")
