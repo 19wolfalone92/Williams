@@ -781,7 +781,33 @@ class Trader:
         if open_trade:
             expected_qty=self._trade_remaining_qty(open_trade,all_orders)
             tolerance=max(self._min_qty(),expected_qty*float(os.getenv('BALANCE_TOLERANCE_PCT','0.002')))
-            if expected_qty < self._min_qty(): self._recover_closed_trade(open_trade,all_orders); self._set_state('FLAT')
+            if expected_qty < self._min_qty():
+                if bot_position_qty >= self._min_qty():
+                    self._set_state('RECONCILE_REQUIRED')
+                    self.db.log_event(
+                        'ERROR',
+                        'recovery_inventory_history_conflict',
+                        'Order history says FLAT but Binance still reports managed inventory',
+                        {
+                            'symbol': self.symbol,
+                            'history_expected_qty': expected_qty,
+                            'exchange_managed_qty': bot_position_qty,
+                        },
+                    )
+                    self.recovered = True
+                    return
+                if self._recover_closed_trade(open_trade, all_orders):
+                    self._set_state('FLAT')
+                else:
+                    self._set_state('RECONCILE_REQUIRED')
+                    self.db.log_event(
+                        'ERROR',
+                        'recovery_close_unproven',
+                        'Could not prove a complete exit with authoritative SELL fills and fees',
+                        {'symbol': self.symbol, 'trade_id': open_trade.get('id')},
+                    )
+                    self.recovered = True
+                    return
             elif abs(bot_position_qty-expected_qty)>tolerance:
                 self._set_state('RECONCILE_REQUIRED'); self.notify(f'RECOVERY BLOCKED\nExpected Williams {expected_qty:.8f} {self.base_asset}; actual Williams balance {bot_position_qty:.8f}. Total account balance={position_qty:.8f}; foreign baseline={position_qty-bot_position_qty:.8f}. Manual reconciliation required.'); self.recovered=True; return
             else:
@@ -825,16 +851,163 @@ class Trader:
                 self._set_state('FLAT')
         self.recovered=True; self.db.log_event('INFO','recovery_complete','Exchange/SQLite reconciliation complete',{'position_qty':position_qty,'bot_trade':bool(open_trade),'open_oco_ids':sorted(open_oco_ids),'state':self.state()})
 
-    def _recover_closed_trade(self,trade,all_orders):
-        entry_id=str(trade.get('entry_order_id') or ''); entry_time=int(next((b.get('time',b.get('transactTime',0)) for b in all_orders if str(b.get('orderId'))==entry_id),0) or 0)
-        sells=[o for o in all_orders if o.get('side')=='SELL' and o.get('status')=='FILLED' and int(o.get('time',0) or 0)>=entry_time and self._sell_belongs_to_bot(o,all_orders)]
-        if not sells:return
-        # Prefer the trade's recorded OCO list; otherwise use the latest bot-owned exit execution.
-        target_lid=str(trade.get('exit_order_list_id') or '')
-        if target_lid:sells=[o for o in sells if str(o.get('orderListId'))==target_lid] or sells
-        sell=max(sells,key=lambda x:int(x.get('time',x.get('transactTime',0)) or 0)); qty=float(sell.get('executedQty',0) or 0); proceeds=float(sell.get('cummulativeQuoteQty',0) or 0); exit_price=proceeds/qty if qty else float(sell.get('price',0) or 0)
-        entry=float(trade['entry_price']); pnl=(exit_price-entry)*min(qty,float(trade['quantity'])); pct=(exit_price/entry-1) if entry else 0
-        self.db.close_trade(trade['id'],datetime.fromtimestamp(int(sell.get('transactTime',sell.get('time',0)))/1000,tz=timezone.utc).isoformat(),exit_price,pnl,pct,'TAKE_PROFIT/STOP_LOSS (recovered)',sell.get('orderListId')); self.notify(f'RECOVERY\nPosition closed offline\nexit≈{exit_price:.8f}\nPnL≈{pnl:.8f} ({pct:.2%})')
+    def _fee_quote_for_asset(self, asset, trade_price=0.0):
+        asset = str(asset or "").upper()
+        if asset in {"USDT", "USDC", "FDUSD", "BUSD"}:
+            return 1.0
+        if asset == str(self.base_asset or "").upper() and trade_price > 0:
+            return float(trade_price)
+        try:
+            return float(self.client.ticker_price(asset + "USDT")["price"])
+        except Exception:
+            pass
+        try:
+            cross = float(self.client.ticker_price(asset + "BTC")["price"])
+            btc = float(self.client.ticker_price("BTCUSDT")["price"])
+            return cross * btc
+        except Exception as exc:
+            raise RuntimeError(
+                f"{asset}: cannot value recovered commission in USDT"
+            ) from exc
+
+    def _recovered_exit_fee_quote(self, sell):
+        order_id = sell.get("orderId")
+        fills = list(sell.get("fills") or [])
+        if not fills and order_id is not None and hasattr(self.client, "my_trades"):
+            try:
+                fills = list(
+                    self.client.my_trades(
+                        self.symbol,
+                        order_id=order_id,
+                        limit=1000,
+                    ) or []
+                )
+            except Exception as exc:
+                self.db.log_event(
+                    "ERROR",
+                    "recovery_exit_fee_lookup_failed",
+                    "Cannot verify recovered exit commissions; position stays in reconciliation",
+                    {"symbol": self.symbol, "order_id": order_id, "error": str(exc)},
+                )
+                return None
+        if not fills:
+            return None
+
+        total_fee = 0.0
+        known_quote_assets = {"USDT", "USDC", "FDUSD", "BUSD"}
+        base_asset = str(self.base_asset or "").upper()
+        for fill in fills:
+            commission = float(fill.get("commission", 0) or 0)
+            if commission <= 0:
+                continue
+            asset = str(fill.get("commissionAsset", "")).upper()
+            price = float(fill.get("price", sell.get("price", 0)) or 0)
+            try:
+                if asset in known_quote_assets:
+                    total_fee += commission
+                elif asset == base_asset:
+                    if price <= 0:
+                        return None
+                    total_fee += commission * price
+                else:
+                    total_fee += commission * self._fee_quote_for_asset(asset, price)
+            except Exception as exc:
+                self.db.log_event(
+                    "ERROR",
+                    "recovery_exit_fee_conversion_failed",
+                    "Cannot value recovered exit commission; position stays in reconciliation",
+                    {"symbol": self.symbol, "order_id": order_id, "asset": asset, "error": str(exc)},
+                )
+                return None
+        return total_fee
+
+    def _recover_closed_trade(self, trade, all_orders):
+        entry_id = str(trade.get("entry_order_id") or "")
+        entry_order = next(
+            (row for row in all_orders if str(row.get("orderId")) == entry_id),
+            None,
+        )
+        entry_time = int(
+            (entry_order or {}).get("time", (entry_order or {}).get("transactTime", 0))
+            or 0
+        )
+        sells = [
+            row for row in all_orders
+            if str(row.get("side", "")).upper() == "SELL"
+            and str(row.get("status", "")).upper() in {"FILLED", "PARTIALLY_FILLED"}
+            and int(row.get("time", row.get("transactTime", 0)) or 0) >= entry_time
+            and float(row.get("executedQty", 0) or 0) > 0
+            and self._sell_belongs_to_bot(row, all_orders)
+        ]
+        target_list_id = str(trade.get("exit_order_list_id") or "")
+        if target_list_id:
+            matching = [
+                row for row in sells
+                if str(row.get("orderListId", "")) == target_list_id
+            ]
+            if matching:
+                sells = matching
+        if not sells:
+            return False
+
+        total_qty = sum(float(row.get("executedQty", 0) or 0) for row in sells)
+        total_quote = sum(
+            float(row.get("cummulativeQuoteQty", 0) or 0)
+            or float(row.get("price", 0) or 0) * float(row.get("executedQty", 0) or 0)
+            for row in sells
+        )
+        last_exit = max(
+            sells,
+            key=lambda row: int(row.get("time", row.get("transactTime", 0)) or 0),
+        )
+        original_qty = float(
+            (entry_order or {}).get("executedQty", 0) or trade.get("quantity", 0) or 0
+        )
+        tolerance = max(self._min_qty(), original_qty * float(os.getenv("BALANCE_TOLERANCE_PCT", "0.002")))
+        if original_qty <= 0 or total_qty + tolerance < original_qty or total_quote <= 0:
+            self.db.log_event(
+                "WARNING",
+                "recovery_exit_not_complete",
+                "Recovered SELL history does not prove the whole managed position closed",
+                {
+                    "symbol": self.symbol,
+                    "original_qty": original_qty,
+                    "executed_sell_qty": total_qty,
+                    "tolerance": tolerance,
+                },
+            )
+            return False
+
+        exit_fee_quote = 0.0
+        for sell in sells:
+            fee = self._recovered_exit_fee_quote(sell)
+            if fee is None:
+                return False
+            exit_fee_quote += fee
+
+        exit_price = total_quote / total_qty
+        entry = float(trade.get("entry_price") or 0)
+        entry_fee_quote = float(trade.get("fees") or 0)
+        pnl = total_quote - entry * original_qty - entry_fee_quote - exit_fee_quote
+        pnl_pct = (exit_price / entry - 1.0) if entry > 0 else 0.0
+        self.db.close_trade(
+            trade["id"],
+            datetime.fromtimestamp(
+                int(last_exit.get("transactTime", last_exit.get("time", 0)) or 0) / 1000,
+                tz=timezone.utc,
+            ).isoformat(),
+            exit_price,
+            pnl,
+            pnl_pct,
+            "TAKE_PROFIT/STOP_LOSS (recovered)",
+            last_exit.get("orderListId"),
+            fees=entry_fee_quote + exit_fee_quote,
+        )
+        self.notify(
+            f"RECOVERY\\nPosition closed offline\\nexit≈{exit_price:.8f}\\n"
+            f"PnL≈{pnl:.8f} ({pnl_pct:.2%})"
+        )
+        return True
 
     def _spread_pct(self):
         b=self.client.book_ticker(self.symbol); bid=float(b['bidPrice']); ask=float(b['askPrice']); mid=(bid+ask)/2
