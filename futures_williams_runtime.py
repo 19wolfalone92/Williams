@@ -116,6 +116,7 @@ def _pending_entry_preflight_reason(pending, intent, current_price: float, now_m
     try:
         expires_at = int(signal.get("expires_at_ms", 0) or 0)
         trigger = float(signal.get("trigger_price", 0) or 0)
+        protective = float(signal.get("protective_reference", 0) or 0)
         price = float(current_price)
     except (TypeError, ValueError):
         return "pending_signal_price_or_expiry_invalid"
@@ -123,8 +124,12 @@ def _pending_entry_preflight_reason(pending, intent, current_price: float, now_m
         return "pending_signal_expiry_missing"
     if now >= expires_at:
         return "pending_signal_expired"
-    if trigger <= 0 or price <= 0:
-        return "pending_signal_trigger_or_market_price_invalid"
+    if trigger <= 0 or protective <= 0 or price <= 0:
+        return "pending_signal_trigger_stop_or_market_price_invalid"
+    if side == "BUY" and price <= protective:
+        return "long_setup_invalidated_before_trigger"
+    if side == "SELL" and price >= protective:
+        return "short_setup_invalidated_before_trigger"
     if side == "BUY" and price >= trigger:
         return "long_trigger_already_crossed; late entry blocked"
     if side == "SELL" and price <= trigger:
