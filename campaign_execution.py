@@ -941,6 +941,16 @@ class CampaignExecutionService:
                 )
         return response
 
+    @staticmethod
+    def _validate_signal_freshness(signal: SignalSpec) -> None:
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        if int(signal.signal_bar_time_ms or 0) <= 0:
+            raise CampaignExecutionError("signal has no valid source-candle timestamp")
+        if int(signal.expires_at_ms or 0) <= 0:
+            raise CampaignExecutionError("signal has no explicit expiry; refusing stale/ambiguous entry")
+        if now_ms >= int(signal.expires_at_ms):
+            raise CampaignExecutionError("signal expired before exchange admission")
+
     def arm_initial_entry(
         self,
         signal: SignalSpec,
@@ -953,6 +963,8 @@ class CampaignExecutionService:
         self._ensure_recovered()
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
+
+        self._validate_signal_freshness(signal)
 
         reserved = self.engine.portfolio_reserved_risk_quote()
         capacity = max(0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct)
@@ -1823,6 +1835,7 @@ class CampaignExecutionService:
             raise CampaignExecutionError(f"{signal.symbol}: no active campaign for add-on")
         if signal.signal_bar_time_ms <= 0:
             raise CampaignExecutionError("add-on signal time is invalid")
+        self._validate_signal_freshness(signal)
         if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
             raise CampaignExecutionError("signal is not newer than current campaign signal")
 
