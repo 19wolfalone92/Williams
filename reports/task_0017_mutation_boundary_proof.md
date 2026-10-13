@@ -20,3 +20,10 @@
 - Android and Python SQLite are separate stores, not a shared atomic transaction.
 
 Status: PARTIAL — P0 OPEN.
+
+## TASK 001.12 exact-HEAD addendum
+
+- At SHA `4e7ad93990b4b9d3b5291bed9d83909fbfac3bcf`, source inspection covered `app/src/main/java/com/williamsbot/StandaloneRuntime.kt`, `DurableMutationLedger.kt`, `BinanceTradeEvidence.kt`, `ExecutionGate.kt`, and Python `execution_barrier.py` / `execution_recovery.py`.
+- Campaign Python suite passed 262 tests on [run 38341931762](https://github.com/19wolfalone92/Williams/actions/runs/38341931762). Android job 115114647875 had not yet completed unit tests, lint or APK proof when this addendum was written.
+- Android source has durable mutation identity/evidence checks and rejects a conflicting previously persisted exchange order ID. Python recovery rejects compound cancel/cancel-replace/list cancellation when a single-order lookup cannot prove the complete outcome.
+- This is source review plus Python tests, not complete dynamic proof that every Android order-create/cancel/replace entry point is reachable only through one boundary. Android tests and a full call-site inventory remain required; P0 remains open.
