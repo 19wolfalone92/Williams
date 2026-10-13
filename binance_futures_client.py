@@ -61,7 +61,7 @@ class BinanceUsdMFuturesClient:
             response = self.session.request(
                 method, self.base_url + path, params=values, timeout=self.timeout
             )
-        except (requests.Timeout, requests.ConnectionError) as exc:
+        except requests.RequestException as exc:
             raise BinanceFuturesAPIError(
                 f"Futures transport failure on {method} {path}; reconcile before retry",
                 unknown_execution=method in {"POST", "PUT", "DELETE"},
@@ -185,9 +185,11 @@ class BinanceUsdMFuturesClient:
                 raise ValueError("closePosition is supported only for STOP_MARKET/TAKE_PROFIT_MARKET")
             if quantity is not None:
                 raise ValueError("closePosition=true must not be combined with quantity")
-            if str(reduce_only).lower() == "true":
+            if reduce_only is not None:
                 raise ValueError("closePosition cannot be combined with reduceOnly")
-            params["closePosition"] = str(bool(close_position)).lower()
+            if close_position is not True:
+                raise ValueError("close_position must be true when supplied")
+            params["closePosition"] = "true"
         if working_type is not None:
             wt = str(working_type).upper()
             if wt not in {"MARK_PRICE", "CONTRACT_PRICE"}:
