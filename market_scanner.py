@@ -7,7 +7,11 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 from data import fetch_klines
-from strategy import calculate_indicators, config_from_env
+from strategy import (
+    calculate_indicators,
+    config_from_env,
+    canonical_williams_parameter_blockers,
+)
 from wave_engine import DIRECTION_NEUTRAL, MultiTimeframeWaveEngine
 from feature_store import FeatureStore, build_market_feature_vector
 from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
@@ -384,6 +388,19 @@ class MarketScanner:
     def _analyse_base(self, symbol, metadata=None) -> Optional[Tuple[Candidate, pd.DataFrame]]:
         symbol = str(symbol).upper()
         try:
+            # M15 is execution/fill monitoring and M5 is diagnostic/replay only.
+            # They must never create a canonical Williams entry candidate.
+            requested_execution_tf = _normalize_interval(os.getenv("EXECUTION_TIMEFRAME", "1h"))
+            if self.interval != "1h" or requested_execution_tf != "1h":
+                log.warning(
+                    "canonical Williams entries blocked: scanner_interval=%s execution_timeframe=%s",
+                    self.interval, requested_execution_tf,
+                )
+                return None
+            parameter_blockers = canonical_williams_parameter_blockers(config_from_env())
+            if parameter_blockers:
+                log.error("canonical Williams profile blocked: %s", "; ".join(parameter_blockers))
+                return None
             if not self._symbol_is_valid(symbol, metadata):
                 return None
 
@@ -394,11 +411,11 @@ class MarketScanner:
             else:
                 df = fetch_klines(self.client, symbol, self.interval, limit=self.scan_kline_limit)
                 self._kline_cache[symbol] = (time.monotonic(), df.copy())
-            if len(df) < 100:
+            if len(df) < 141:
                 return None
 
             closed = df.iloc[:-1].copy()
-            if len(closed) < 100:
+            if len(closed) < 140:
                 return None
 
             indicators = calculate_indicators(closed, config_from_env())
@@ -550,21 +567,20 @@ class MarketScanner:
         candidate, closed = result
         try:
             enriched = self._apply_wave(candidate, closed)
-            if candidate.signal and self.require_htf_confirmation and not enriched.htf_confirmed:
-                return None
-            if candidate.signal and not enriched.wave_entry_allowed:
-                return None
+            # TC2 campaign eligibility is the independent Wise-Man conditional
+            # signal, not the Wave/Elliott scoring profile. Higher-TF context
+            # remains attached to the trace; it is not a hard veto until a
+            # separately specified owner policy resolves its exact meaning.
             return enriched
         except Exception as exc:
-            log.warning("Wave analysis unavailable for %s: %s", candidate.symbol, exc)
-            if candidate.signal and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true":
-                return None
-            if candidate.signal and self.require_htf_confirmation:
-                if not self._htf_confirmation(candidate.symbol):
-                    return None
+            log.warning("Wave/context diagnostics unavailable for %s: %s", candidate.symbol, exc)
+            # Failure of optional Elliott-wave diagnostics must not rewrite an
+            # already-qualified H1 TC2 signal's identity. Core market/risk/
+            # execution gates remain fail-closed independently.
             return replace(
                 candidate,
                 wave_reason=f"Wave analysis unavailable: {type(exc).__name__}: {exc}",
+                campaign_ready=bool(candidate.campaign_ready),
             )
 
     def _apply_wave(self, candidate: Candidate, closed: pd.DataFrame) -> Candidate:
@@ -665,10 +681,14 @@ class MarketScanner:
                     role=SignalRole(str(raw["role"])),
                     timeframe=str(raw["timeframe"]),
                     signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
+                    confirmation_time_ms=int(raw.get("confirmation_time_ms", 0) or 0),
                     trigger_price=float(raw["trigger_price"]),
                     protective_reference=float(raw["protective_reference"]),
                     trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
-                    invalidation_price=float(frame_setup.invalidation_price if frame_setup else raw.get("invalidation_price", 0.0) or 0.0),
+                    # Preserve the signal's own structural invalidation. Elliott
+                    # Wave invalidation is stored separately on Candidate and
+                    # must not overwrite the source-qualified WM1/WM2/WM3 level.
+                    invalidation_price=float(raw.get("invalidation_price", 0.0) or 0.0),
                     teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
                     alligator_bullish=bool(raw.get("alligator_bullish", False)),
                     alligator_awake=bool(raw.get("alligator_awake", False)),
@@ -727,7 +747,9 @@ class MarketScanner:
             wave_scenario_primary=(setup.scenario_primary if setup else ""),
             wave_scenario_alternative=(setup.scenario_alternative if setup else ""),
             wave_operative_interval=report.operative_interval,
-            campaign_ready=bool(candidate.campaign_ready and htf_confirmed),
+            # Higher-frame context is retained as evidence; no numeric hard-veto
+            # policy has been established by the cited books for this H1 profile.
+            campaign_ready=bool(candidate.campaign_ready),
             entry_signal_type=(
                 enriched_signal_specs[0].get("signal_type", "") if enriched_signal_specs else candidate.entry_signal_type
             ),
@@ -865,33 +887,28 @@ class MarketScanner:
 
         for candidate, enriched_candidate, exc in wave_results:
             if enriched_candidate is not None:
-                if candidate.signal and self.require_htf_confirmation and not enriched_candidate.htf_confirmed:
-                    log.info("AUTO-SCAN HTF BLOCK: %s strict signal has no bullish HTF confirmation", candidate.symbol)
-                    blocked_symbols.add(candidate.symbol)
-                    continue
-                if candidate.signal and not enriched_candidate.wave_entry_allowed:
-                    log.info("AUTO-SCAN WAVE BLOCK: %s %s", candidate.symbol, enriched_candidate.wave_block_reason)
-                    blocked_symbols.add(candidate.symbol)
-                    continue
-                enriched.append(enriched_candidate)
+                # A confirmed H1 TC2 signal is not AND-gated by this separate
+                # Elliott-wave profile or a non-source-defined HTF score. Keep
+                # those facts in the trace; risk, stale-trigger, exchange and
+                # execution barriers remain independent hard gates.
+                enriched.append(
+                    replace(
+                        enriched_candidate,
+                        campaign_ready=bool(candidate.campaign_ready),
+                    )
+                )
                 continue
 
-            log.warning("Wave analysis failed for %s: %s", candidate.symbol, exc)
-            if candidate.signal and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true":
-                blocked_symbols.add(candidate.symbol)
-                continue
+            log.warning("Wave/context diagnostics unavailable for %s: %s", candidate.symbol, exc)
+            # Failure of optional Wave/HTF diagnostics must not change the
+            # identity of a source-qualified TC2 event.
             neutral = replace(
                 candidate,
-                htf_confirmed=(
-                    self._htf_confirmation(candidate.symbol)
-                    if candidate.signal and self.require_htf_confirmation
-                    else False
-                ),
-                wave_reason=f"Wave analysis unavailable: {type(exc).__name__}: {exc}",
+                htf_confirmed=False,
+                wave_entry_allowed=True,
+                wave_reason=f"Wave/context diagnostics unavailable: {type(exc).__name__}: {exc}",
+                campaign_ready=bool(candidate.campaign_ready),
             )
-            if candidate.signal and self.require_htf_confirmation and not neutral.htf_confirmed:
-                blocked_symbols.add(candidate.symbol)
-                continue
             enriched.append(neutral)
 
         enriched_by_symbol = {c.symbol: c for c in enriched}

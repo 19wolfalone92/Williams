@@ -18,10 +18,12 @@ from feature_store import FeatureStore
 from binance_client import BinanceSpotClient
 from digital_williams_core import DigitalWilliamsCore
 from diagnostics import DiagnosticManager
+from version_contract import APP_VERSION
+from trading_config import execution_start_blocker
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
-VERSION = '4.25.0'
+VERSION = APP_VERSION
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
@@ -113,7 +115,7 @@ def prometheus_metrics():
 class CredentialPayload(BaseModel):
     api_key: str
     api_secret: str
-    testnet: bool = True
+    testnet: bool
 
 
 class ControlState:
@@ -125,6 +127,7 @@ class ControlState:
         self.paused = False
         self.last_error = None
         self.desired_running = False
+        self.explicit_rearm_requested = False
         self.api_key = ''
         self.api_secret = ''
         self.testnet = True
@@ -136,12 +139,19 @@ class ControlState:
             self.api_secret = stored['api_secret']
             self.testnet = stored['testnet']
 
-    def configure(self, key, secret, testnet=True):
+    def configure(self, key, secret, testnet):
         key = key.strip()
         secret = secret.strip()
-        testnet = bool(testnet)
-        if not key or not secret:
-            raise RuntimeError('Binance API key and secret are required.')
+        if not isinstance(testnet, bool):
+            raise RuntimeError('TESTNET mode must be an explicit boolean.')
+        blocker = execution_start_blocker(
+            os.environ,
+            api_key=key,
+            api_secret=secret,
+            configured_testnet=testnet,
+        )
+        if blocker:
+            raise RuntimeError(blocker)
 
         # Validate the exact Spot credentials before persisting them. This prevents
         # the backend from storing a broken/expired key and only discovering it
@@ -229,10 +239,25 @@ class ControlState:
 
     def loop(self):
         t = self.ensure_trader()
+        explicit_rearm = bool(self.explicit_rearm_requested)
         try:
+            latched = str(t.db.state_get('kill_switch_latched', 'false')).lower() == 'true'
+            if latched and not explicit_rearm:
+                raise RuntimeError(
+                    'KILL_SWITCH_LATCHED: automatic startup cannot re-arm the trading runtime'
+                )
+
             t.setup()
-            # A successful explicit START is the controlled re-arm after KILL.
-            t.db.state_set('kill_switch_latched', 'false')
+            multi = self.ensure_multi()
+            if latched:
+                # t.setup() runs the canonical exchange/SQLite recovery gate.
+                # Clear the latch only after that recovery has completed cleanly.
+                if multi.unresolved_symbols() or multi._pending_entries():
+                    raise RuntimeError(
+                        'KILL_SWITCH_LATCHED: explicit re-arm blocked by unresolved exchange state'
+                    )
+                t.db.state_set('kill_switch_latched', 'false')
+            self.explicit_rearm_requested = False
             with self.lock:
                 self.running = True
                 self.desired_running = True
@@ -272,16 +297,36 @@ class ControlState:
             except Exception:
                 pass
         finally:
+            self.explicit_rearm_requested = False
             with self.lock:
                 self.running = False
 
-    def start(self):
+    def start(self, explicit_rearm=False):
         with self.lock:
-            if (
-                self.thread is not None
-                and self.thread.is_alive()
-            ):
+            blocker = execution_start_blocker(
+                os.environ,
+                api_key=self.api_key or os.getenv('BINANCE_API_KEY', ''),
+                api_secret=self.api_secret or os.getenv('BINANCE_API_SECRET', ''),
+                configured_testnet=self.testnet,
+            )
+            if blocker:
+                self.last_error = blocker
+                self.desired_running = False
                 return False
+            if self.thread is not None and self.thread.is_alive():
+                return False
+
+            t = self.ensure_trader()
+            latched = str(t.db.state_get('kill_switch_latched', 'false')).lower() == 'true'
+            if latched and not explicit_rearm:
+                self.last_error = (
+                    'KILL_SWITCH_LATCHED: automatic startup is blocked; '
+                    'use explicit START after exchange reconciliation'
+                )
+                self.desired_running = False
+                return False
+
+            self.explicit_rearm_requested = bool(explicit_rearm)
             self.paused = False
             self.thread = threading.Thread(
                 target=self.loop,
@@ -717,6 +762,10 @@ def health():
         'open_positions': len(open_positions),
         'execution_enabled': execution_enabled,
         'testnet': t.client.testnet,
+        'exchange_type': 'SPOT',
+        'environment': 'TESTNET' if t.client.testnet else 'MAINNET',
+        'allow_live': os.getenv('ALLOW_LIVE', 'false').strip().lower() == 'true',
+        'dry_run': bool(t.dry_run),
     }
 
 @app.get('/api/v1/williams/core', dependencies=[Depends(auth)])
@@ -977,6 +1026,10 @@ def status():
         'symbol': t.symbol,
         'interval': t.interval,
         'testnet': t.client.testnet,
+        'exchange_type': 'SPOT',
+        'environment': 'TESTNET' if t.client.testnet else 'MAINNET',
+        'allow_live': os.getenv('ALLOW_LIVE', 'false').strip().lower() == 'true',
+        'dry_run': bool(t.dry_run),
         'running': state.running,
         'paused': state.paused,
         'state': execution_state,
@@ -1290,7 +1343,9 @@ def market_snapshot(symbol: Optional[str] = None, depth: int = 20, trades: int =
 
 @app.post('/api/v1/control/start', dependencies=[Depends(auth)])
 def start():
-    return {'started': state.start()}
+    # An authenticated operator action may request re-arm, but the loop only
+    # clears the latch after canonical exchange/SQLite recovery succeeds.
+    return {'started': state.start(explicit_rearm=True)}
 
 
 @app.post('/api/v1/control/stop', dependencies=[Depends(auth)])
@@ -1492,6 +1547,10 @@ def settings():
         'require_htf_confirmation': t.require_htf_confirmation,
         'htf_interval': t.htf_interval,
         'testnet': t.client.testnet,
+        'exchange_type': 'SPOT',
+        'environment': 'TESTNET' if t.client.testnet else 'MAINNET',
+        'allow_live': os.getenv('ALLOW_LIVE', 'false').strip().lower() == 'true',
+        'dry_run': bool(t.dry_run),
         'alligator': config_from_env(),
         'strategy_name': 'Williams Profitunity Conservative',
         'binance_configured': bool(

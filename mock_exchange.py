@@ -192,7 +192,8 @@ class MockExchange:
         for row in self.orders:
             if row["orderId"] == order["orderId"]:
                 row["status"] = "CANCELED"
-        return copy.deepcopy(order)
+                return copy.deepcopy(row)
+        raise RuntimeError("mock order disappeared during cancellation")
 
     def set_price(self, symbol, price):
         self.prices[symbol] = float(price)
@@ -300,14 +301,25 @@ class MockExchange:
         return [{"p": str(price), "q": "0.01", "m": False, "T": int(time.time() * 1000)} for _ in range(min(limit, 10))]
 
     def klines(self, symbol, interval="1h", limit=220):
-        now = int(time.time())
-        step = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}.get(interval, 3600)
+        """Return deterministic synthetic Binance-shaped OHLCV rows for offline tests."""
+        step_ms = {
+            "1m": 60_000, "5m": 300_000, "15m": 900_000,
+            "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
+        }.get(str(interval).lower(), 3_600_000)
+        now_ms = int(time.time() * 1000)
+        last_closed_open = (now_ms // step_ms) * step_ms - step_ms
         rows = []
         price = self.prices[symbol]
-        for i in range(max(2, limit)):
-            t = (now - (limit - i) * step) * 1000
+        for i in range(max(2, int(limit))):
+            t = last_closed_open - (max(2, int(limit)) - 1 - i) * step_ms
             p = price * (1.0 + 0.0002 * ((i % 7) - 3))
-            rows.append([t, str(p), str(p*1.002), str(p*0.998), str(p*1.0005), "10", t + step*1000 - 1])
+            high = p * 1.002
+            low = p * 0.998
+            close = p * 1.0005
+            rows.append([
+                t, str(p), str(high), str(low), str(close), "10",
+                t + step_ms - 1, "1000", 10, "5", "500", "0",
+            ])
         return rows
 
     def sync_time(self):

@@ -11,12 +11,48 @@ from typing import Mapping, Sequence
 
 
 DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
-DEFAULT_STRUCTURAL_TFS = ("1d", "4h", "1h", "15m")
+DEFAULT_STRUCTURAL_TFS = ("1d", "4h", "1h", "15m", "5m")
+CANONICAL_EXECUTION_TIMEFRAME = "1h"
+
+
+def execution_timeframe_blocker(env: Mapping[str, str]) -> str | None:
+    """Fail closed when runtime config requests a non-canonical signal timeframe."""
+    requested = str(env.get("EXECUTION_TIMEFRAME", CANONICAL_EXECUTION_TIMEFRAME)).strip().lower()
+    if requested != CANONICAL_EXECUTION_TIMEFRAME:
+        return (
+            f"EXECUTION_TIMEFRAME={requested or '<empty>'} is not permitted; "
+            "canonical Williams signals require H1 (1h)."
+        )
+    return None
 
 
 def _bool(env: Mapping[str, str], key: str, default: bool) -> bool:
     value = str(env.get(key, str(default))).strip().lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def execution_start_blocker(
+    env: Mapping[str, str],
+    *,
+    api_key: str | None,
+    api_secret: str | None,
+    configured_testnet: bool,
+) -> str | None:
+    """Fail closed unless exchange mode and credentials are explicit and coherent."""
+    mode = str(env.get("TESTNET", "")).strip().lower()
+    if mode not in {"true", "false"}:
+        return "TESTNET must be explicitly configured as true or false before trading can start."
+    selected_testnet = mode == "true"
+    if selected_testnet != bool(configured_testnet):
+        return "Configured Binance environment does not match the explicit TESTNET setting."
+    if not str(api_key or "").strip() or not str(api_secret or "").strip():
+        return "Binance API key and secret are required before trading can start."
+    if not selected_testnet:
+        if str(env.get("ALLOW_LIVE", "false")).strip().lower() != "true":
+            return "Mainnet is blocked unless ALLOW_LIVE=true is explicitly configured."
+        if str(env.get("DRY_RUN", "true")).strip().lower() != "false":
+            return "Mainnet is blocked unless DRY_RUN=false is explicitly configured."
+    return None
 
 
 def _float(env: Mapping[str, str], key: str, default: float) -> float:
@@ -57,7 +93,7 @@ def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
         "5m": ("1d", "4h", "1h", "15m", "5m"),
         "15m": ("1d", "4h", "1h", "15m"),
         "30m": ("1d", "4h", "1h", "30m", "15m"),
-        "1h": ("1d", "4h", "1h", "15m"),
+        "1h": ("1d", "4h", "1h", "15m", "5m"),
         "2h": ("1w", "1d", "4h", "2h", "1h"),
         "4h": ("1w", "1d", "4h", "1h"),
         "6h": ("1w", "1d", "6h", "4h"),
@@ -74,7 +110,7 @@ def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
 class TradingConfig:
     symbols: tuple[str, ...] = DEFAULT_SYMBOLS
     structural_timeframes: tuple[str, ...] = DEFAULT_STRUCTURAL_TFS
-    execution_timeframe: str = "5m"
+    execution_timeframe: str = "1h"
 
     allow_long: bool = True
     allow_short: bool = False
@@ -120,7 +156,7 @@ class TradingConfig:
         risk = max(0.0, min(0.005, _float(source, risk_key, 0.005)))
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
-        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "5m")).lower()
+        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "1h")).lower()
 
         return cls(
             symbols=symbols,
@@ -132,7 +168,7 @@ class TradingConfig:
             no_trade_when_uncertain=_bool(source, "NO_TRADE_WHEN_UNCERTAIN", True),
             risk_per_trade_pct=risk,
             max_total_risk_pct=max(total_risk, risk),
-            max_daily_loss_pct=max(0.0, _float(source, "MAX_DAILY_LOSS_PCT", 0.03)),
+            max_daily_loss_pct=min(0.03, max(0.0, _float(source, "MAX_DAILY_LOSS_PCT", 0.03))),
             max_consecutive_losses=max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 3)),
             cooldown_minutes=max(0, _int(source, "COOLDOWN_MINUTES", 30)),
             max_open_positions=max_positions,

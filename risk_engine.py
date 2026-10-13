@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 
 
 @dataclass
@@ -59,14 +60,43 @@ class RiskEngine:
         fee_buffer_per_side_pct: float = 0.001,
         slippage_buffer_pct: float = 0.0015,
     ):
+        values = {
+            "balance_quote": balance_quote,
+            "risk_per_trade_pct": risk_per_trade_pct,
+            "max_position_fraction": max_position_fraction,
+            "max_daily_loss_pct": max_daily_loss_pct,
+            "min_rr": min_rr,
+            "max_atr_pct": max_atr_pct,
+            "fee_buffer_per_side_pct": fee_buffer_per_side_pct,
+            "slippage_buffer_pct": slippage_buffer_pct,
+        }
+        if any(not math.isfinite(float(value)) for value in values.values()):
+            raise ValueError("RiskEngine configuration values must be finite")
+        if float(balance_quote) < 0:
+            raise ValueError("balance_quote must be >= 0")
+        if not 0.0 <= float(risk_per_trade_pct) <= 1.0:
+            raise ValueError("risk_per_trade_pct must be in [0, 1]")
+        if not 0.0 < float(max_position_fraction) <= 1.0:
+            raise ValueError("max_position_fraction must be in (0, 1]")
+        if not 0.0 <= float(max_daily_loss_pct) <= 1.0:
+            raise ValueError("max_daily_loss_pct must be in [0, 1]")
+        if float(min_rr) < 0.0:
+            raise ValueError("min_rr must be >= 0")
+        if float(max_atr_pct) <= 0.0:
+            raise ValueError("max_atr_pct must be > 0")
+        if float(fee_buffer_per_side_pct) < 0.0 or float(slippage_buffer_pct) < 0.0:
+            raise ValueError("fee and slippage buffers must be >= 0")
         self.balance = float(balance_quote)
         self.risk_per_trade_pct = float(risk_per_trade_pct)
         self.max_position_fraction = float(max_position_fraction)
-        self.max_daily_loss_pct = float(max_daily_loss_pct)
+        # Compatibility/configuration only. Daily PnL enforcement belongs to
+        # EquityCircuitBreaker at the final portfolio entry-admission boundary.
+        # Report the same project-wide ceiling as the authoritative breaker.
+        self.max_daily_loss_pct = min(0.03, float(max_daily_loss_pct))
         self.min_rr = float(min_rr)
         self.max_atr_pct = float(max_atr_pct)
-        self.fee_buffer_per_side_pct = max(0.0, float(fee_buffer_per_side_pct))
-        self.slippage_buffer_pct = max(0.0, float(slippage_buffer_pct))
+        self.fee_buffer_per_side_pct = float(fee_buffer_per_side_pct)
+        self.slippage_buffer_pct = float(slippage_buffer_pct)
 
     @staticmethod
     def _clamp(value, low, high):
@@ -89,9 +119,35 @@ class RiskEngine:
         min_notional: float = 0.0,
     ) -> RiskAnalysis:
 
-        entry = float(entry_price)
-        atr = float(atr)
         side = str(side or "LONG").upper()
+        try:
+            entry = float(entry_price)
+            atr = float(atr)
+            numeric_inputs = {
+                "entry_price": entry,
+                "atr": atr,
+                "signal_strength": float(signal_strength),
+                "spread_pct": float(spread_pct),
+                "max_spread_pct": float(max_spread_pct),
+                "stop_atr_multiplier": float(stop_atr_multiplier),
+                "target_atr_multiplier": float(target_atr_multiplier),
+                "invalidation_price": float(invalidation_price or 0.0),
+                "min_notional": float(min_notional),
+            }
+            if risk_pct_override is not None:
+                numeric_inputs["risk_pct_override"] = float(risk_pct_override)
+        except (TypeError, ValueError, OverflowError):
+            return self._blocked(symbol, side, 0.0, "non-numeric risk input")
+        if any(not math.isfinite(value) for value in numeric_inputs.values()):
+            return self._blocked(symbol, side, entry, "non-finite risk input")
+        if numeric_inputs["spread_pct"] < 0.0 or numeric_inputs["max_spread_pct"] < 0.0:
+            return self._blocked(symbol, side, entry, "invalid spread input")
+        if numeric_inputs["stop_atr_multiplier"] <= 0.0 or numeric_inputs["target_atr_multiplier"] <= 0.0:
+            return self._blocked(symbol, side, entry, "ATR multipliers must be > 0")
+        if numeric_inputs["invalidation_price"] < 0.0 or numeric_inputs["min_notional"] < 0.0:
+            return self._blocked(symbol, side, entry, "invalid invalidation/minimum-notional input")
+        if risk_pct_override is not None and not 0.0 <= float(risk_pct_override) <= 1.0:
+            return self._blocked(symbol, side, entry, "risk allocation must be in [0, 1]")
 
         if side not in {"LONG", "SHORT"}:
             return self._blocked(symbol, side, entry, "unsupported side")
@@ -118,10 +174,20 @@ class RiskEngine:
 
         structural_stop = float(invalidation_price or 0.0)
         if side == "LONG":
-            stop_price = structural_stop if 0.0 < structural_stop < entry else entry - fallback_stop_distance
+            if structural_stop > 0.0 and structural_stop >= entry:
+                return self._blocked(
+                    symbol, side, entry,
+                    "structural invalidation for LONG must be below the trigger",
+                )
+            stop_price = structural_stop if structural_stop > 0.0 else entry - fallback_stop_distance
             take_profit_price = entry + target_distance
         else:
-            stop_price = structural_stop if structural_stop > entry else entry + fallback_stop_distance
+            if structural_stop > 0.0 and structural_stop <= entry:
+                return self._blocked(
+                    symbol, side, entry,
+                    "structural invalidation for SHORT must be above the trigger",
+                )
+            stop_price = structural_stop if structural_stop > 0.0 else entry + fallback_stop_distance
             take_profit_price = entry - target_distance
 
         if stop_price <= 0 or take_profit_price <= 0:

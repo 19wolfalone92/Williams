@@ -121,3 +121,22 @@ test_best_prefers_higher_score_when_both_strict()
 test_candidate_serialization()
 
 print("MARKET SCANNER TESTS: PASS")
+
+
+
+def test_scanner_blocks_non_h1_interval_before_market_data(monkeypatch):
+    monkeypatch.delenv("EXECUTION_TIMEFRAME", raising=False)
+    scanner = MarketScanner(FakeClient(), symbols=["BTCUSDT"], interval="5m")
+    assert scanner._analyse_base("BTCUSDT") is None
+
+
+def test_scanner_blocks_non_h1_execution_config_even_if_scanner_interval_is_h1(monkeypatch):
+    monkeypatch.setenv("EXECUTION_TIMEFRAME", "15m")
+    scanner = MarketScanner(FakeClient(), symbols=["BTCUSDT"], interval="1h")
+    assert scanner._analyse_base("BTCUSDT") is None
+
+
+def test_scanner_blocks_empty_execution_config(monkeypatch):
+    monkeypatch.setenv("EXECUTION_TIMEFRAME", "")
+    scanner = MarketScanner(FakeClient(), symbols=["BTCUSDT"], interval="1h")
+    assert scanner._analyse_base("BTCUSDT") is None

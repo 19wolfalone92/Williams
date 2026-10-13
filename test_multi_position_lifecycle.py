@@ -9,7 +9,18 @@ def _legacy_campaign_mode(monkeypatch):
 
 
 from db import Database
+from execution_barrier import ExecutionBarrier
+from market_context import ContextCache
 from portfolio_trader import MultiPositionTrader
+
+
+def _make_trader(client, db, **kwargs):
+    return MultiPositionTrader(
+        client,
+        db=db,
+        execution_barrier=ExecutionBarrier(ContextCache(), db=db),
+        **kwargs,
+    )
 
 
 class FakeClient:
@@ -53,6 +64,9 @@ class FakeClient:
                 ],
             ]
         }
+
+    def ticker_price(self, symbol):
+        return {"symbol": symbol, "price": "200"}
 
     def all_orders(self, symbol, limit=1000):
         return list(self.orders_by_symbol.get(symbol.upper(), []))[-limit:]
@@ -287,7 +301,7 @@ def test_multiple_positions_are_independent_and_exit_is_mapped_to_one_symbol(tmp
         },
     ]
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = _make_trader(client, db)
     result = multi.reconcile_open_positions()
 
     assert any(x.get("closed") and x.get("symbol") == "BTCUSDT" for x in result)
@@ -330,7 +344,7 @@ def test_missing_oco_is_restored_from_persisted_position(tmp_path: Path):
         "time": 100,
     }]
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = _make_trader(client, db)
     result = multi.reconcile_open_positions()
 
     assert result[0]["trade_id"] == trade_id
@@ -371,7 +385,7 @@ def test_filled_pending_buy_is_recovered_into_its_own_position(tmp_path: Path):
         "ENTRY_PENDING",
     )
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = _make_trader(client, db)
     result = multi.recover_pending_entries()
 
     assert result[0]["symbol"] == "SOLUSDT"
@@ -394,9 +408,9 @@ def test_recover_clears_stale_reconcile_barrier_when_exchange_is_clean(tmp_path:
     db.state_set("position_state", "RECONCILE_REQUIRED")
     db.state_set("position_state:BTCUSDT", "RECONCILE_REQUIRED")
 
-    multi = MultiPositionTrader(
+    multi = _make_trader(
         client,
-        db=db,
+        db,
         symbols=["BTCUSDT"],
     )
 
@@ -443,7 +457,7 @@ def test_recover_keeps_reconcile_barrier_for_unresolved_exchange_position(tmp_pa
     }
     db.state_set("position_state:SOLUSDT", "RECONCILE_REQUIRED")
 
-    multi = MultiPositionTrader(client, db=db, symbols=["SOLUSDT"])
+    multi = _make_trader(client, db, symbols=["SOLUSDT"])
     result = multi.recover()
 
     assert result["ok"] is False
@@ -458,18 +472,24 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
             super().__init__()
             self.cancelled = False
             self.manual_order = None
+            self.base_free = 1.0
 
         def account(self):
             return {
                 "balances": [
                     {"asset": "USDT", "free": "9400", "locked": "0"},
-                    {"asset": "BTC", "free": "0.4", "locked": "0"},
+                    {"asset": "BTC", "free": str(self.base_free), "locked": "0"},
                 ],
             }
 
         def cancel_oco(self, symbol, order_list_id=None, list_client_order_id=None):
             self.cancelled = True
-            return {"orderListId": order_list_id or 10}
+            return {
+                "orderListId": order_list_id or 10,
+                "listStatusType": "ALL_DONE",
+                "listOrderStatus": "ALL_DONE",
+                "orders": [{"status": "CANCELED"}, {"status": "CANCELED"}],
+            }
 
         def order_safe(self, symbol, side, type_, *, quantity=None, new_client_order_id=None, **kwargs):
             assert side == "SELL"
@@ -484,6 +504,7 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
                 "executedQty": "0.6",
                 "cummulativeQuoteQty": "60",
             }
+            self.base_free = max(0.0, self.base_free - 0.6)
             return self.manual_order
 
         def all_orders(self, symbol, limit=1000):
@@ -524,10 +545,10 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
         risk_pct=0.5,
     )
     db.state_set("position_state:BTCUSDT", "OPEN")
-    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    trader = _make_trader(client, db, symbols=["BTCUSDT"])
     result = trader.manual_sell("BTCUSDT")
 
-    assert result["sold"] is True
+    assert result["sold"] is True, result.get("error", result)
     assert result["partial"] is True
     assert abs(float(result["residual_quantity"]) - 0.4) < 1e-9
     trade = db.open_trade("BTCUSDT")
@@ -547,7 +568,7 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
             return {
                 "balances": [
                     {"asset": "USDT", "free": "9400", "locked": "0"},
-                    {"asset": "BTC", "free": "0.4", "locked": "0"},
+                    {"asset": "BTC", "free": "1.0", "locked": "0"},
                 ],
             }
 
@@ -591,7 +612,7 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
         risk_pct=0.5,
     )
     db.state_set("position_state:BTCUSDT", "OPEN")
-    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    trader = _make_trader(client, db, symbols=["BTCUSDT"])
     trader.dry_run = False
     result = trader._emergency_market_sell("BTCUSDT", 1.0, trade_id, "TEST_PARTIAL")
 

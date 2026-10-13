@@ -1,5 +1,6 @@
 import os
 import json, sqlite3
+import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -17,6 +18,7 @@ class Database:
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.execute('PRAGMA synchronous=NORMAL')
         self._transaction_active = False
+        self._claim_lock = threading.RLock()
         self.init()
 
     @contextmanager
@@ -315,6 +317,67 @@ class Database:
             self.conn.commit()
         return cur.rowcount == 1
 
+    def claim_signal_once(self, signal_id, canonical_payload) -> str:
+        """Atomically and durably claim a canonical signal identity.
+
+        Returns CLAIMED, DUPLICATE, or CONFLICT. The claim is committed and
+        read back before CLAIMED is returned, so callers can safely place the
+        network mutation after this method. Any SQLite error raises; callers
+        must fail closed. Claims are never removed by this method.
+        """
+        signal_id = str(signal_id or "").strip()
+        if not signal_id:
+            raise ValueError("signal_id is required")
+        canonical = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        key = f"consumed_signal:{signal_id}"
+
+        with self._claim_lock:
+            # A nested caller transaction cannot prove the claim is committed
+            # before a network mutation. Reject rather than returning early.
+            if self._transaction_active or self.conn.in_transaction:
+                raise RuntimeError("signal claim requires an independent durable transaction")
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self._transaction_active = True
+                cur = self.conn.execute(
+                    "INSERT OR IGNORE INTO bot_state(key,value) VALUES(?,?)",
+                    (key, canonical),
+                )
+                row = self.conn.execute(
+                    "SELECT value FROM bot_state WHERE key=?",
+                    (key,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError("signal claim read-before-commit returned no row")
+                stored = str(row["value"])
+                inserted = cur.rowcount == 1
+                self.conn.commit()
+                self._transaction_active = False
+
+                # Post-commit read-back is deliberate. Failure here means the
+                # caller must block mutation even though the claim may exist.
+                verify = self.conn.execute(
+                    "SELECT value FROM bot_state WHERE key=?",
+                    (key,),
+                ).fetchone()
+                if verify is None:
+                    raise RuntimeError("signal claim post-commit read-back returned no row")
+                if str(verify["value"]) != stored:
+                    raise RuntimeError("signal claim post-commit read-back mismatch")
+                if inserted:
+                    return "CLAIMED"
+                return "DUPLICATE" if stored == canonical else "CONFLICT"
+            except Exception:
+                if self.conn.in_transaction:
+                    try:
+                        self.conn.rollback()
+                    except Exception:
+                        # Preserve the original failure; caller must fail closed.
+                        pass
+                raise
+            finally:
+                self._transaction_active = False
+
     def state_delete(self, key):
         self.conn.execute(
             'DELETE FROM bot_state WHERE key=?',
@@ -324,27 +387,86 @@ class Database:
             self.conn.commit()
 
     def save_execution_intent(self, intent, status, reason=''):
-        self.conn.execute(
-            '''INSERT OR REPLACE INTO execution_intents(
-                intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
-            (
-                intent.intent_id,
-                intent.symbol,
-                intent.side,
-                intent.order_type,
-                intent.purpose,
-                json.dumps(dict(intent.required_context_versions), sort_keys=True),
-                intent.hypothesis_id,
-                float(intent.invalidation_level or 0.0),
-                status,
-                reason,
-                getattr(intent, 'client_order_id', ''),
-            ),
+        """Persist intent state without ever replacing immutable operation identity.
+
+        The intent ID identifies one immutable semantic request. Only lifecycle
+        fields (status/reason) may change for an existing identical intent.
+        A conflicting payload is a hard failure before any network mutation.
+        """
+        immutable = (
+            str(intent.symbol),
+            str(intent.side),
+            str(intent.order_type),
+            str(intent.purpose),
+            json.dumps(dict(intent.required_context_versions), sort_keys=True, separators=(',', ':')),
+            str(intent.hypothesis_id or ''),
+            float(intent.invalidation_level or 0.0),
+            str(getattr(intent, 'client_order_id', '') or ''),
         )
-        if not self._transaction_active:
-            self.conn.commit()
+        # A caller-owned open transaction is not a durable intent. Refuse
+        # rather than allow the execution barrier to mistake an uncommitted row
+        # for a write-ahead record before network I/O.
+        if self._transaction_active:
+            raise RuntimeError(
+                "execution intent cannot be persisted inside an uncommitted caller transaction"
+            )
+        owns_transaction = True
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = self.conn.execute(
+                '''SELECT symbol,side,order_type,purpose,
+                          required_context_versions_json,hypothesis_id,
+                          invalidation_level,client_order_id
+                   FROM execution_intents WHERE intent_id=?''',
+                (str(intent.intent_id),),
+            ).fetchone()
+            if existing is None:
+                self.conn.execute(
+                    '''INSERT INTO execution_intents(
+                        intent_id,symbol,side,order_type,purpose,
+                        required_context_versions_json,hypothesis_id,invalidation_level,
+                        status,reason,client_order_id
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                    (
+                        str(intent.intent_id), immutable[0], immutable[1], immutable[2],
+                        immutable[3], immutable[4], immutable[5], immutable[6],
+                        str(status), str(reason or ''), immutable[7],
+                    ),
+                )
+            else:
+                stored = (
+                    str(existing['symbol']),
+                    str(existing['side']),
+                    str(existing['order_type']),
+                    str(existing['purpose']),
+                    json.dumps(json.loads(existing['required_context_versions_json']),
+                               sort_keys=True, separators=(',', ':')),
+                    str(existing['hypothesis_id'] or ''),
+                    float(existing['invalidation_level'] or 0.0),
+                    str(existing['client_order_id'] or ''),
+                )
+                if stored != immutable:
+                    raise ValueError(
+                        "execution intent identity conflict: intent_id already exists "
+                        "with a different immutable payload"
+                    )
+                self.conn.execute(
+                    '''UPDATE execution_intents SET status=?, reason=?
+                       WHERE intent_id=?''',
+                    (str(status), str(reason or ''), str(intent.intent_id)),
+                )
+            if owns_transaction:
+                self.conn.commit()
+        except Exception:
+            if owns_transaction:
+                try:
+                    self.conn.rollback()
+                except sqlite3.Error:
+                    # Commit outcome can be ambiguous on storage failure. The
+                    # caller must stop before network mutation and reconcile
+                    # durable state on restart; never assume the row is absent.
+                    pass
+            raise
 
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
@@ -1046,6 +1168,14 @@ class Database:
             "WHERE symbol=? AND exit_time IS NOT NULL "
             "AND exit_time >= date('now')",
             (str(symbol).upper(),)
+        ).fetchone()
+        return float(r['pnl'] or 0)
+
+    def pnl_today_all(self):
+        """Return realized PnL for all symbols closed since the UTC day boundary."""
+        r = self.conn.execute(
+            "SELECT COALESCE(SUM(pnl),0) AS pnl FROM trades "
+            "WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
         ).fetchone()
         return float(r['pnl'] or 0)
 

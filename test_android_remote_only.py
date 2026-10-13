@@ -77,22 +77,27 @@ def test_binance_client_has_ambiguous_execution_barrier():
     assert "X-MBX-ORDER-COUNT-10S" in client
 
 
-def test_spot_testnet_endpoints_and_no_futures_execution():
-    client = _read(ROOT / "binance_client.py")
+def test_spot_and_usdm_futures_clients_are_explicitly_separated():
+    spot = _read(ROOT / "binance_client.py")
     data = _read(ROOT / "data.py")
     ws = _read(ROOT / "ws_hub.py")
-    assert "https://testnet.binance.vision" in client
+    futures = _read(ROOT / "binance_futures_client.py")
+    trader = _read(ROOT / "portfolio_trader.py")
+    assert "https://testnet.binance.vision" in spot
     assert "testnet.binance.vision" in data
     assert "wss://stream.testnet.binance.vision" in ws
     assert "wss://ws-api.testnet.binance.vision/ws-api/v3" in ws
-    for path in ROOT.rglob("*.py"):
-        if any(part in {".git", "__pycache__"} for part in path.parts):
-            continue
-        if path == ROOT / "test_android_remote_only.py":
-            continue
-        text = path.read_text(errors="replace")
-        assert "/fapi/" not in text, f"Futures REST endpoint found in {path}"
-        assert "binancefuture.com" not in text, f"Futures Testnet host found in {path}"
+    # Futures REST is a separate client and must never be routed through the
+    # Spot OCO portfolio trader. The Android runtime is still Spot-only until
+    # its Futures position/protection lifecycle is implemented and integrated.
+    assert 'product = "SPOT"' in spot
+    assert 'product = "USD_M_FUTURES"' in futures
+    assert "https://demo-fapi.binance.com" in futures
+    assert '"/fapi/v1/order"' in futures
+    assert "Spot-only" in trader
+    assert "/fapi/" not in spot
+    assert "/fapi/" not in data
+    assert "/fapi/" not in ws
 
 
 def test_environment_secrets_are_gitignored():

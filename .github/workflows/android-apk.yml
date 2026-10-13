@@ -5,6 +5,11 @@ on:
     branches: [main, master]
     paths:
       - 'app/**'
+      - '*.py'
+      - 'VERSION'
+      - '.env.example'
+      - 'README.md'
+      - 'docs/RELEASE_CONTRACT.md'
       - '*.gradle.kts'
       - 'gradle.properties'
       - 'gradle/**'
@@ -13,6 +18,11 @@ on:
   pull_request:
     paths:
       - 'app/**'
+      - '*.py'
+      - 'VERSION'
+      - '.env.example'
+      - 'README.md'
+      - 'docs/RELEASE_CONTRACT.md'
       - '*.gradle.kts'
       - 'gradle.properties'
       - 'gradle/**'
@@ -140,6 +150,10 @@ jobs:
           RELEASE_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
           test -f "$DEBUG_APK"
           test -f "$RELEASE_APK"
+      - name: Verify debug APK version against canonical source
+        run: python3 verify_apk_version.py --apk app/build/outputs/apk/debug/app-debug.apk --variant debug
+      - name: Verify release APK version against canonical source
+        run: python3 verify_apk_version.py --apk app/build/outputs/apk/release/app-release-unsigned.apk --variant release
       - name: Inspect APK metadata
         run: |
           set -euo pipefail

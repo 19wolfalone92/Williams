@@ -208,3 +208,53 @@ def test_default_risk_is_half_percent():
     assert result.risk_quote == 50
     assert result.risk_pct == 0.5
     print("[PASS] default per-trade risk is 0.5%")
+
+
+def test_non_finite_entry_and_spread_are_blocked():
+    engine = RiskEngine(balance_quote=10000)
+    bad_entry = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=float("nan"),
+        atr=500,
+    )
+    bad_spread = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100000,
+        atr=500,
+        spread_pct=float("inf"),
+    )
+    assert bad_entry.allowed is False
+    assert "non-finite" in bad_entry.reason
+    assert bad_spread.allowed is False
+    assert "non-finite" in bad_spread.reason
+
+
+def test_invalid_risk_engine_configuration_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError, match="finite"):
+        RiskEngine(balance_quote=float("nan"))
+    with pytest.raises(ValueError, match="max_position_fraction"):
+        RiskEngine(balance_quote=10000, max_position_fraction=1.5)
+
+
+def test_invalid_structural_invalidation_is_not_replaced_with_atr_stop():
+    engine = RiskEngine(balance_quote=10000)
+    long_result = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100000,
+        atr=500,
+        side="LONG",
+        invalidation_price=100100,
+    )
+    short_result = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100000,
+        atr=500,
+        side="SHORT",
+        invalidation_price=99900,
+    )
+    assert long_result.allowed is False
+    assert "structural invalidation" in long_result.reason
+    assert short_result.allowed is False
+    assert "structural invalidation" in short_result.reason

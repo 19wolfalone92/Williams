@@ -69,11 +69,16 @@ t.db.state_set("position_state","FLAT")
 # before opening a managed position.
 t.db.state_set("foreign_base_balance:BTCUSDT", 0.0)
 
-print("1) BUY")
-order,qty,entry=t.market_buy(100)
-assert qty>0 and entry>0
-print("[PASS] BUY FILLED:",qty,entry)
-assert t.state()=="ENTRY_PENDING"
+print("1) SYNTHETIC PRE-EXISTING FILL")
+# This test covers OCO-failure recovery, not signal admission. Seed the fake
+# exchange fill directly so the test cannot bypass the production H1 gate.
+order = t.client.order("BTCUSDT", "BUY", "MARKET", quote_order_qty="100.0")
+qty = float(order["executedQty"])
+entry = float(order["cummulativeQuoteQty"]) / qty
+assert qty > 0 and entry > 0
+t._set_state("ENTRY_PENDING")
+print("[PASS] synthetic fill seeded:", qty, entry)
+assert t.state() == "ENTRY_PENDING"
 
 print("2) SAVE TRADE")
 tid=t.db.save_trade(symbol="BTCUSDT",entry_price=entry,quantity=qty,entry_order_id=str(order["orderId"]))

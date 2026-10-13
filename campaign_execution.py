@@ -7,12 +7,15 @@ from typing import Any
 import json
 import os
 import uuid
+import time
 
 from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
 from decision_trace import DecisionTrace
+from pending_signal import PendingSignal
 from execution_barrier import ExecutionBarrier, OrderIntent
+from trading_config import execution_timeframe_blocker
 
 
 class CampaignExecutionError(RuntimeError):
@@ -158,6 +161,66 @@ class CampaignExecutionService:
             raise CampaignExecutionError(f"{symbol}: invalid current market price")
         return price
 
+    def _validate_h1_signal_market_state(self, signal: SignalSpec):
+        """Independently revalidate source/confirmation candles at the final entry gate."""
+        try:
+            import pandas as pd
+            from data import fetch_klines
+
+            history = fetch_klines(self.client, signal.symbol, "1h", limit=160)
+            if history is None or history.empty:
+                raise CampaignExecutionError("H1 source history unavailable")
+            history = history.copy()
+            history.index = pd.to_datetime(history.index, utc=True, errors="coerce")
+            history = history.loc[~history.index.isna()].sort_index()
+            if history.empty:
+                raise CampaignExecutionError("H1 source history has no valid UTC timestamps")
+            now = pd.Timestamp.now(tz="UTC")
+            frame = pd.Timedelta(hours=1)
+            closed = history.loc[history.index + frame <= now]
+            if closed.empty:
+                raise CampaignExecutionError("No closed H1 candles available")
+            latest_close = closed.index[-1] + frame
+            if now - latest_close > 2 * frame:
+                raise CampaignExecutionError("H1 market data is stale")
+            source_time = pd.to_datetime(int(signal.signal_bar_time_ms), unit="ms", utc=True)
+            if source_time not in closed.index:
+                raise CampaignExecutionError("Signal source H1 candle is unavailable or not closed")
+            confirmation_ms = int(signal.confirmation_time_ms or 0)
+            if (
+                confirmation_ms < int(signal.signal_bar_time_ms) + 3_600_000
+                or confirmation_ms > int(now.timestamp() * 1000)
+            ):
+                raise CampaignExecutionError("Signal confirmation is premature or future-dated")
+            source = closed.loc[source_time]
+            source_high = float(source["high"])
+            source_low = float(source["low"])
+            if (
+                not pd.notna(source_high) or not pd.notna(source_low)
+                or source_low <= 0 or source_high < source_low
+                or float(signal.trigger_price) <= source_high
+                or float(signal.invalidation_price or 0) <= 0
+            ):
+                raise CampaignExecutionError("Signal source candle/trigger/invalidation is invalid")
+            # Use explicit UTC epoch-ms comparisons rather than relying on
+            # pandas index dtype coercion at the confirmation boundary.
+            for candle_open, candle in closed.loc[closed.index > source_time].iterrows():
+                candle_close_ms = int((candle_open + frame).timestamp() * 1000)
+                if candle_close_ms <= confirmation_ms:
+                    continue
+                low = float(candle["low"])
+                if not pd.notna(low) or low <= float(signal.invalidation_price):
+                    raise CampaignExecutionError(
+                        "Signal was structurally invalidated after confirmation"
+                    )
+            return closed
+        except CampaignExecutionError:
+            raise
+        except Exception as exc:
+            raise CampaignExecutionError(
+                f"H1 signal revalidation failed closed: {type(exc).__name__}: {exc}"
+            ) from exc
+
     def _check_algo_capacity(self, symbol: str, additional: int = 1) -> None:
         filters = self._rules(symbol)
         open_orders = self.client.open_orders(symbol)
@@ -200,6 +263,21 @@ class CampaignExecutionService:
     ) -> dict[str, Any]:
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
+        config_blocker = execution_timeframe_blocker(os.environ)
+        if config_blocker:
+            raise CampaignExecutionError(config_blocker)
+        if signal.timeframe.strip().lower() != "1h":
+            raise CampaignExecutionError("Canonical Spot campaign entries require H1 signals")
+        now_ms = int(time.time() * 1000)
+        if (
+            signal.signal_bar_time_ms <= 0
+            or signal.confirmation_time_ms <= signal.signal_bar_time_ms
+            or signal.expires_at_ms <= now_ms
+            or signal.protective_reference <= 0
+        ):
+            raise CampaignExecutionError(
+                "Signal candle/confirmation/protection is missing, invalid, or expired; UNRESOLVED = BLOCKED"
+            )
 
         reserved = self.engine.portfolio_reserved_risk_quote()
         capacity = max(0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct)
@@ -262,6 +340,9 @@ class CampaignExecutionService:
         campaign.tags["signal_role"] = signal.role.value
         campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
         campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
+        campaign.tags["pending_signal"] = PendingSignal.from_spec(
+            signal, campaign_id=campaign.campaign_id, state=SignalState.ARMED
+        ).to_dict()
         campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
@@ -287,6 +368,10 @@ class CampaignExecutionService:
             client_order_id=client_id,
             purpose="CAMPAIGN_ENTRY",
             permission_interval=signal.timeframe,
+            signal_timeframe=signal.timeframe,
+            signal_bar_time_ms=int(signal.signal_bar_time_ms or 0),
+            confirmation_time_ms=int(signal.confirmation_time_ms or 0),
+            expires_at_ms=int(signal.expires_at_ms or 0),
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
             risk_quote=risk_quote,
@@ -303,25 +388,18 @@ class CampaignExecutionService:
                     f"{signal.symbol}: trigger already crossed at {now_price:.12g}"
                 )
 
-            # For the fractal signal, validity is specifically evaluated at
-            # trigger time relative to Teeth. At arm time we require trigger
-            # to remain above the latest Teeth as an early sanity check.
+            closed_h1 = self._validate_h1_signal_market_state(signal)
+
+            # WM3 also requires the current H1 Teeth relationship. This remains
+            # separate from the generic source-candle and structural checks.
             if signal.signal_type == SignalType.FRACTAL:
                 try:
-                    from data import fetch_klines
                     from strategy import calculate_indicators, config_from_env
-                    df = fetch_klines(
-                        self.client,
-                        signal.symbol,
-                        signal.timeframe,
-                        limit=160,
-                    )
-                    closed = df.iloc[:-1].copy() if len(df) > 1 else df
-                    ind = calculate_indicators(closed, config_from_env())
+                    ind = calculate_indicators(closed_h1, config_from_env())
                     teeth = float(ind.iloc[-1].get("teeth_shifted", 0.0) or 0.0)
-                    if teeth > 0 and trigger <= teeth:
+                    if teeth <= 0 or trigger <= teeth:
                         raise CampaignExecutionError(
-                            f"{signal.symbol}: fractal trigger {trigger:.12g} is now not above Teeth {teeth:.12g}"
+                            f"{signal.symbol}: fractal trigger is not valid above current H1 Teeth"
                         )
                 except CampaignExecutionError:
                     raise
@@ -417,8 +495,17 @@ class CampaignExecutionService:
                 return self.engine.load_campaign(str(item["campaign_id"]))
         return None
 
-    def reconcile_pending_entries(self) -> list[dict[str, Any]]:
-        """Adopt conditional BUYs after triggers, partial fills, restart or crash."""
+    def reconcile_pending_entries(
+        self,
+        *,
+        force_cancel_reason: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Adopt conditional BUYs after triggers, partial fills, restart or crash.
+
+        A portfolio-wide risk gate may force-cancel still-unfilled conditional
+        entries. This never cancels protective exits and never assumes a cancel
+        succeeded without an authoritative terminal exchange response.
+        """
         rows = self.db.conn.execute(
             "SELECT key,value FROM bot_state "
             "WHERE key LIKE 'entry_client_order_id:%' "
@@ -485,15 +572,231 @@ class CampaignExecutionService:
                     except Exception:
                         pass
 
-                if status in {"NEW", "PENDING_NEW"} and executed <= 0:
-                    # Still waiting for the conditional trigger.
-                    results.append({
-                        "symbol": symbol,
-                        "campaign_id": campaign.campaign_id,
-                        "state": "ENTRY_PENDING",
-                        "order_status": status,
-                    })
-                    continue
+                if (
+                    (status in {"NEW", "PENDING_NEW"} and executed <= 0)
+                    or (
+                        force_cancel_reason
+                        and status == "PARTIALLY_FILLED"
+                    )
+                ):
+                    # Conditional entries must remain causally valid while
+                    # waiting at Binance. Expiry/cancellation is a System
+                    # Safety/Implementation rule; it is not attributed to the
+                    # books. Unknown provenance blocks and cancels fail-closed.
+                    pending_data = campaign.tags.get("pending_signal")
+                    stale_reason: str | None = (
+                        str(force_cancel_reason).strip().upper()
+                        if force_cancel_reason else None
+                    )
+                    now_ms = int(time.time() * 1000)
+                    if stale_reason is not None:
+                        # A fail-closed portfolio risk gate takes precedence
+                        # over signal freshness: a resting BUY must not trigger
+                        # after daily risk is blocked.
+                        pass
+                    elif not isinstance(pending_data, dict):
+                        stale_reason = "REVALIDATION_UNAVAILABLE"
+                    else:
+                        try:
+                            confirm_ms = int(pending_data.get("confirmation_time_ms", 0) or 0)
+                            signal_bar_ms = int(pending_data.get("signal_bar_time_ms", 0) or 0)
+                            expires_ms = int(pending_data.get("expires_at_ms", 0) or 0)
+                            trigger = float(pending_data.get("trigger_price", 0) or 0)
+                            invalidation = float(pending_data.get("invalidation_price", 0) or 0)
+                            signal_type = str(pending_data.get("signal_type", "")).upper()
+                        except (TypeError, ValueError, OverflowError):
+                            confirm_ms = signal_bar_ms = expires_ms = 0
+                            trigger = invalidation = 0.0
+                            signal_type = ""
+                        if (
+                            confirm_ms <= 0 or signal_bar_ms <= 0 or expires_ms <= 0
+                            or trigger <= 0 or invalidation <= 0
+                            or signal_type not in {"REVERSAL", "SUPER_AO", "FRACTAL"}
+                        ):
+                            stale_reason = "REVALIDATION_UNAVAILABLE"
+                        elif now_ms >= expires_ms:
+                            stale_reason = "EXPIRED"
+                        else:
+                            try:
+                                import pandas as pd
+                                from data import fetch_klines
+                                from strategy import calculate_indicators, config_from_env
+
+                                history = fetch_klines(
+                                    self.client, symbol, "1h", limit=200
+                                )
+                                if history is None or history.empty:
+                                    raise CampaignExecutionError("H1 revalidation returned no candles")
+                                history = history.copy()
+                                history.index = pd.to_datetime(history.index, utc=True, errors="coerce")
+                                history = history.loc[~history.index.isna()].sort_index()
+                                now_utc = pd.Timestamp.now(tz="UTC")
+                                closed = history.loc[
+                                    history.index + pd.Timedelta(hours=1) <= now_utc
+                                ].copy()
+                                if len(closed) < 140:
+                                    raise CampaignExecutionError(
+                                        f"Only {len(closed)} closed H1 candles for pending-signal revalidation"
+                                    )
+                                ind = calculate_indicators(closed, config_from_env())
+                                confirm_dt = pd.to_datetime(confirm_ms, unit="ms", utc=True)
+                                post_confirmation = ind.loc[ind.index >= confirm_dt]
+                                if not post_confirmation.empty:
+                                    high_values = pd.to_numeric(
+                                        post_confirmation["high"], errors="coerce"
+                                    ).to_numpy(dtype=float)
+                                    low_values = pd.to_numeric(
+                                        post_confirmation["low"], errors="coerce"
+                                    ).to_numpy(dtype=float)
+                                    import math
+                                    if (
+                                        not all(math.isfinite(float(x)) for x in high_values)
+                                        or not all(math.isfinite(float(x)) for x in low_values)
+                                    ):
+                                        raise CampaignExecutionError("Non-finite H1 revalidation candles")
+                                    if (high_values >= trigger).any():
+                                        stale_reason = "TRIGGER_ALREADY_TRADED"
+                                    elif (low_values <= invalidation).any():
+                                        stale_reason = "STRUCTURAL_INVALIDATION"
+                                    elif signal_type == "FRACTAL":
+                                        # A newly formed WM3 supersedes the old
+                                        # candidate even if its own trigger was
+                                        # never activated.
+                                        event_rows = ind.loc[
+                                            ind.get("fractal_up", False).astype(bool)
+                                        ] if "fractal_up" in ind.columns else ind.iloc[0:0]
+                                        for event_time, event in event_rows.iterrows():
+                                            try:
+                                                center_i = int(event.get("confirmed_up_center_index", -1))
+                                            except (TypeError, ValueError, OverflowError):
+                                                continue
+                                            if (
+                                                center_i in range(len(ind))
+                                                and int(ind.index[center_i].timestamp() * 1000) > signal_bar_ms
+                                            ):
+                                                stale_reason = "NEWER_FRACTAL"
+                                                break
+                            except Exception:
+                                # Do not leave a conditional order live forever
+                                # when it cannot be revalidated deterministically.
+                                stale_reason = stale_reason or "REVALIDATION_UNAVAILABLE"
+
+                    if stale_reason is not None:
+                        order_id = order.get("orderId")
+                        if order_id is None:
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"{symbol}: stale conditional entry has no exchange orderId ({stale_reason})",
+                            )
+                            results.append({
+                                "symbol": symbol, "campaign_id": campaign.campaign_id,
+                                "state": "RECONCILE_REQUIRED", "reason": stale_reason,
+                            })
+                            continue
+                        try:
+                            self.db.set_campaign_signal_state(
+                                signal_id, SignalState.CANCEL_REQUESTED.value
+                            )
+                            self._execute_cancel(
+                        campaign,
+                        int(order_id),
+                        f"CAMPAIGN_ENTRY_CANCEL_STALE_SIGNAL_{stale_reason}",
+                    )
+                            refreshed = self.client.get_order(
+                                symbol, orig_client_order_id=client_id
+                            )
+                            self.db.save_order(refreshed)
+                            order = refreshed
+                            status = str(order.get("status", "")).upper()
+                            executed = float(order.get("executedQty", 0) or 0)
+                            quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+                            if quote <= 0 and executed > 0 and hasattr(self.client, "my_trades"):
+                                fills = self.client.my_trades(
+                                    symbol, order_id=order.get("orderId"), limit=1000
+                                ) or []
+                                quote = sum(
+                                    float(x.get("price", 0) or 0) *
+                                    float(x.get("qty", x.get("executedQty", 0)) or 0)
+                                    for x in fills
+                                )
+                            if status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED"}:
+                                self.engine.mark_reconcile_required(
+                                    campaign,
+                                    f"{symbol}: stale entry cancellation not terminal ({status}; {stale_reason})",
+                                )
+                                results.append({
+                                    "symbol": symbol, "campaign_id": campaign.campaign_id,
+                                    "state": "RECONCILE_REQUIRED", "reason": stale_reason,
+                                    "order_status": status,
+                                })
+                                continue
+                            if executed <= 0 and status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                                target_signal_state = (
+                                    SignalState.EXPIRED.value if stale_reason == "EXPIRED"
+                                    else SignalState.INVALIDATED.value if stale_reason in {
+                                        "TRIGGER_ALREADY_TRADED", "STRUCTURAL_INVALIDATION", "NEWER_FRACTAL"
+                                    }
+                                    else SignalState.CANCELLED.value
+                                )
+                                self.db.set_campaign_signal_state(signal_id, target_signal_state)
+                                if purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING:
+                                    try:
+                                        campaign.transition(
+                                            CampaignState.TREND_ACTIVE,
+                                            reason=f"pending add-on cancelled: {stale_reason}",
+                                        )
+                                    except ValueError:
+                                        campaign.state = CampaignState.TREND_ACTIVE
+                                else:
+                                    campaign.state = CampaignState.CLOSED
+                                    campaign.next_action = "WAIT"
+                                campaign.pending_risk_quote = 0.0
+                                campaign.capital_reserved_quote = 0.0
+                                campaign.tags["pending_signal_cancel_reason"] = stale_reason
+                                campaign.tags.pop("pending_signal", None)
+                                campaign.tags.pop("pending_add_signal_id", None)
+                                campaign.tags.pop("pending_order_id", None)
+                                self.db.state_delete(f"entry_client_order_id:{symbol}")
+                                self.db.state_set(
+                                    f"position_state:{symbol}",
+                                    "OPEN" if self.db.open_trade(symbol) else "FLAT",
+                                )
+                                self.db.save_campaign(campaign)
+                                results.append({
+                                    "symbol": symbol, "campaign_id": campaign.campaign_id,
+                                    "state": "ENTRY_CANCELLED_STALE", "reason": stale_reason,
+                                    "order_status": status,
+                                })
+                                continue
+                            if status not in {"FILLED", "PARTIALLY_FILLED"} and executed <= 0:
+                                self.engine.mark_reconcile_required(
+                                    campaign,
+                                    f"{symbol}: unexpected terminal status after stale cancellation: {status}",
+                                )
+                                results.append({
+                                    "symbol": symbol, "campaign_id": campaign.campaign_id,
+                                    "state": "RECONCILE_REQUIRED", "reason": stale_reason,
+                                    "order_status": status,
+                                })
+                                continue
+                        except Exception as exc:
+                            self.engine.mark_reconcile_required(
+                                campaign, f"{symbol}: stale entry cancel/reconcile failed: {exc}"
+                            )
+                            results.append({
+                                "symbol": symbol, "campaign_id": campaign.campaign_id,
+                                "state": "RECONCILE_REQUIRED", "reason": stale_reason,
+                                "error": str(exc),
+                            })
+                            continue
+                    else:
+                        results.append({
+                            "symbol": symbol,
+                            "campaign_id": campaign.campaign_id,
+                            "state": "ENTRY_PENDING",
+                            "order_status": status,
+                        })
+                        continue
 
                 if status == "PARTIALLY_FILLED" and order.get("orderId") is not None:
                     cancel = getattr(self.client, "cancel_order", None)
@@ -947,10 +1250,23 @@ class CampaignExecutionService:
         campaign = self._active_campaign_for_symbol(signal.symbol)
         if campaign is None or campaign.position_qty <= 0:
             raise CampaignExecutionError(f"{signal.symbol}: no active campaign for add-on")
-        if signal.signal_bar_time_ms <= 0:
-            raise CampaignExecutionError("add-on signal time is invalid")
-        if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
-            raise CampaignExecutionError("signal is not newer than current campaign signal")
+        if signal.side != "BUY" or signal.side != campaign.side:
+            raise CampaignExecutionError("Spot add-ons may only increase the managed LONG inventory")
+        if signal.timeframe.strip().lower() != "1h":
+            raise CampaignExecutionError("Canonical campaign add-ons require H1 signals")
+        now_ms = int(time.time() * 1000)
+        if signal.signal_bar_time_ms <= 0 or signal.confirmation_time_ms <= 0:
+            raise CampaignExecutionError("add-on event/confirmation time is invalid")
+        if signal.expires_at_ms <= now_ms:
+            raise CampaignExecutionError("Add-on signal expired; UNRESOLVED = BLOCKED")
+        latest_event = int(
+            campaign.tags.get("last_signal_confirmation_time_ms", 0)
+            or campaign.tags.get("last_signal_time_ms", 0)
+            or 0
+        )
+        signal_event = int(signal.confirmation_time_ms or signal.signal_bar_time_ms)
+        if signal_event <= latest_event:
+            raise CampaignExecutionError("signal confirmation is not newer than current campaign signal")
 
         reserved = float(campaign.open_risk_quote or 0) + float(campaign.pending_risk_quote or 0)
         campaign_capacity = float(equity_quote) * self.engine.campaign_risk_limit_pct
@@ -1000,7 +1316,12 @@ class CampaignExecutionService:
             raise CampaignExecutionError("signal is already active or filled for this campaign")
         self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.DETECTED.value)
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
+        campaign.tags["last_signal_confirmation_time_ms"] = int(signal.confirmation_time_ms or signal.signal_bar_time_ms)
         campaign.tags["pending_add_signal_id"] = signal.signal_id
+        campaign.tags["pending_signal"] = PendingSignal.from_spec(
+            signal, campaign_id=campaign.campaign_id, state=SignalState.ARMED
+        ).to_dict()
+        campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
         campaign.pending_risk_quote = requested
         campaign.capital_reserved_quote = qty * trigger
         self.engine.arm_add_on(
@@ -1040,6 +1361,11 @@ class CampaignExecutionService:
             quantity=self.client.decimal_format(qty),
             client_order_id=cid,
             purpose="CAMPAIGN_ADD_ON",
+            permission_interval=signal.timeframe,
+            signal_timeframe=signal.timeframe,
+            signal_bar_time_ms=int(signal.signal_bar_time_ms or 0),
+            confirmation_time_ms=int(signal.confirmation_time_ms or 0),
+            expires_at_ms=int(signal.expires_at_ms or 0),
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
             risk_quote=requested,

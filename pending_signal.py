@@ -33,24 +33,49 @@ _TF_MS = {
 
 
 def _bar_ms(timeframe: str) -> int:
-    return _TF_MS.get(str(timeframe), 300_000)
+    # Unknown timeframes must fail closed; never silently assign the M5 TTL.
+    return _TF_MS.get(str(timeframe), 0)
+
+
+def _configured_ttl_bars(env_name: str, default: int) -> int:
+    """Return a configured positive TTL; malformed/non-positive values fail closed."""
+    raw = os.getenv(env_name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError, AttributeError):
+        return 0
+    return value if value > 0 else 0
 
 
 def default_expiry_ms(signal: SignalSpec) -> int:
-    if signal.expires_at_ms > signal.created_at_ms:
-        return signal.expires_at_ms
+    # Respect an explicit expiry even when it is already in the past; never
+    # revive an expired signal by falling back to a fresh TTL.
+    if signal.expires_at_ms > 0:
+        return int(signal.expires_at_ms)
+    # An unknown confirmation time cannot be assigned a source-correct TTL.
+    if signal.confirmation_time_ms <= 0:
+        return 0
 
     if signal.signal_type.value == "REVERSAL":
-        bars = max(1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2")))
+        bars = _configured_ttl_bars("WILLIAMS_PENDING_REVERSAL_BARS", 2)
     elif signal.signal_type.value == "SUPER_AO":
-        bars = max(1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2")))
+        bars = _configured_ttl_bars("WILLIAMS_PENDING_SUPER_AO_BARS", 2)
     else:
-        bars = max(1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8")))
+        bars = _configured_ttl_bars("WILLIAMS_PENDING_FRACTAL_BARS", 8)
+    if bars <= 0:
+        return 0
 
-    return max(
-        signal.created_at_ms + _bar_ms(signal.timeframe) * bars,
-        signal.signal_bar_time_ms + _bar_ms(signal.timeframe) * bars,
-    )
+    # An unknown timeframe has no approved duration. Return no expiry so
+    # PendingSignal.actionable() fails closed instead of silently using M5.
+    bar_ms = _bar_ms(signal.timeframe)
+    if bar_ms <= 0:
+        return 0
+
+    # TTL begins after the signal becomes confirmed/actionable, not at the
+    # historical center candle nor at processing time.
+    return int(signal.confirmation_time_ms + bar_ms * bars)
 
 
 @dataclass(frozen=True)
@@ -67,6 +92,8 @@ class PendingSignal:
     protective_reference: float
     created_at_ms: int
     expires_at_ms: int
+    confirmation_time_ms: int = 0
+    invalidation_price: float = 0.0
     state: str = SignalState.DETECTED.value
     replacement_of: str = ""
 
@@ -88,8 +115,10 @@ class PendingSignal:
             role=signal.role.value,
             timeframe=signal.timeframe,
             signal_bar_time_ms=signal.signal_bar_time_ms,
+            confirmation_time_ms=int(signal.confirmation_time_ms or 0),
             trigger_price=float(signal.trigger_price),
             protective_reference=float(signal.protective_reference),
+            invalidation_price=float(signal.invalidation_price or 0.0),
             created_at_ms=int(signal.created_at_ms),
             expires_at_ms=default_expiry_ms(signal),
             state=state.value,
@@ -98,7 +127,8 @@ class PendingSignal:
 
     def is_expired(self, now_ms: int | None = None) -> bool:
         now = int(now_ms if now_ms is not None else time.time() * 1000)
-        return self.expires_at_ms > 0 and now >= self.expires_at_ms
+        # Missing expiry is not interpreted as "never expires".
+        return self.expires_at_ms <= 0 or now >= self.expires_at_ms
 
     def actionable(self, now_ms: int | None = None) -> bool:
         return (
@@ -106,6 +136,8 @@ class PendingSignal:
                 SignalState.DETECTED.value,
                 SignalState.ARMED.value,
             }
+            and self.confirmation_time_ms > 0
+            and self.expires_at_ms > 0
             and not self.is_expired(now_ms)
             and self.trigger_price > 0
             and self.protective_reference > 0
@@ -122,7 +154,13 @@ def should_replace(old: PendingSignal, new: PendingSignal, min_price_delta: floa
         return True
     if old.is_expired() and not new.is_expired():
         return True
+    old_event_time = old.confirmation_time_ms or old.signal_bar_time_ms
+    new_event_time = new.confirmation_time_ms or new.signal_bar_time_ms
+    # A newer confirmed fractal supersedes the older WM3 candidate even when
+    # its trigger price is near the previous one.
+    if old.signal_type == "FRACTAL" and new.signal_type == "FRACTAL" and new_event_time > old_event_time:
+        return True
     return (
-        new.signal_bar_time_ms > old.signal_bar_time_ms
+        new_event_time > old_event_time
         and abs(new.trigger_price - old.trigger_price) >= max(0.0, min_price_delta)
     )

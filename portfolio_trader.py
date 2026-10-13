@@ -1,10 +1,12 @@
 import os
+import math
 import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
 
 from portfolio_controller import PortfolioController
 from db import Database
+from execution_barrier import OrderIntent
 from equity_breaker import EquityCircuitBreaker
 from l2_slippage import L2SlippageGuard
 from execution_accumulator import ExecutionSummary, accumulate_order
@@ -43,6 +45,11 @@ class MultiPositionTrader:
     MANUAL_PREFIX = "WILLV4_MANUAL_"
 
     def __init__(self, client, db=None, symbols=None, execution_barrier=None):
+        if getattr(client, "product", "SPOT") != "SPOT":
+            raise ValueError(
+                "MultiPositionTrader is Spot-only; USD-M Futures must use a dedicated "
+                "position/margin/protection engine, never the Spot OCO lifecycle"
+            )
         self.client = client
         self.db = db or Database()
         if symbols is not None:
@@ -307,11 +314,15 @@ class MultiPositionTrader:
                 continue
             try:
                 mark = float(self.client.ticker_price(symbol)["price"])
-            except Exception:
-                # A missing mark must never create extra risk capacity.
-                continue
-            if mark > 0:
-                equity += qty * mark
+            except Exception as exc:
+                raise RuntimeError(
+                    f"daily risk snapshot unavailable: mark missing for {symbol}"
+                ) from exc
+            if not math.isfinite(mark) or mark <= 0:
+                raise RuntimeError(
+                    f"daily risk snapshot unavailable: invalid mark for {symbol}"
+                )
+            equity += qty * mark
         return max(0.0, equity)
 
     def _balance(self):
@@ -702,6 +713,43 @@ class MultiPositionTrader:
     # Protection
     # ------------------------------------------------------------------
 
+    def _submit_risk_reducing_order(
+        self,
+        symbol,
+        order_type,
+        purpose,
+        submit,
+        *,
+        quantity="",
+        client_order_id="",
+        pre_submit_checks=None,
+    ):
+        """Route protective exits/cancellations through the durable barrier."""
+        if self.execution_barrier is None:
+            raise RuntimeError(
+                "risk-reducing exchange mutation blocked: ExecutionBarrier is unavailable"
+            )
+        intent = OrderIntent.new(
+            str(symbol).upper(),
+            "SELL",
+            str(order_type).upper(),
+            required_context_versions={},
+            quantity=str(quantity or ""),
+            client_order_id=str(client_order_id or ""),
+            purpose=str(purpose).upper(),
+            max_age_ms=60_000,
+        )
+        result = self.execution_barrier.execute(
+            intent,
+            submit,
+            pre_submit_checks=pre_submit_checks,
+        )
+        if not result.accepted:
+            raise RuntimeError(
+                f"{symbol}: ExecutionBarrier blocked {purpose}: {result.reason}"
+            )
+        return result.response
+
     def _emergency_market_sell(self, symbol, qty, trade_id, reason):
         """Close a just-filled/unprotected Spot position if protection is already breached."""
         if self.dry_run:
@@ -719,12 +767,29 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
+
+        def _validate_emergency_sell(_snapshot):
+            latest = self.client.account()
+            latest_free = self._asset_balance(symbol, account=latest)
+            if latest_free + 1e-12 < sell_qty:
+                raise RuntimeError(
+                    f"{symbol}: free inventory changed before emergency SELL"
+                )
+
+        sell = self._submit_risk_reducing_order(
             symbol,
-            "SELL",
             "MARKET",
+            "CAMPAIGN_EMERGENCY_EXIT",
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
             quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+            client_order_id=client_id,
+            pre_submit_checks=_validate_emergency_sell,
         )
         self.db.save_order(sell)
 
@@ -933,13 +998,35 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
+
+        def _validate_oco_submission(_snapshot):
+            latest_price = float(self.client.ticker_price(symbol).get("price", 0) or 0)
+            if latest_price <= 0 or not (tp > latest_price > sl):
+                raise RuntimeError(
+                    f"{symbol}: market moved outside valid OCO price ordering before submit"
+                )
+            latest_account = self.client.account()
+            latest_free = self._asset_balance(symbol, account=latest_account)
+            if latest_free + 1e-12 < qty:
+                raise RuntimeError(
+                    f"{symbol}: free inventory changed before protective OCO submit"
+                )
+
+        result = self._submit_risk_reducing_order(
             symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+            "OCO",
+            "CAMPAIGN_PROTECTION",
+            lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
+            quantity=self.client.decimal_format(qty),
+            client_order_id=client_id,
+            pre_submit_checks=_validate_oco_submission,
         )
 
         for leg in result.get("orderReports", []):
@@ -1654,11 +1741,34 @@ class MultiPositionTrader:
             )
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
-                if cancel is not None:
-                    if list_id:
+                if cancel is None:
+                    raise RuntimeError(
+                        f"{symbol}: OCO cancellation API is unavailable"
+                    )
+                def _validate_oco_cancel(_snapshot):
+                    # Verify authenticated exchange state immediately before
+                    # cancellation; the response must still confirm terminal
+                    # OCO status before any subsequent market SELL is allowed.
+                    latest_account = self.client.account()
+                    if not isinstance(latest_account, dict) or not isinstance(
+                        latest_account.get("balances"), list
+                    ):
+                        raise RuntimeError(
+                            f"{symbol}: account state unavailable before OCO cancellation"
+                        )
+
+                self._submit_risk_reducing_order(
+                    symbol,
+                    "CANCEL_OCO",
+                    "CAMPAIGN_EXIT_CANCEL_PROTECTION",
+                    lambda: (
                         cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                        if list_id
+                        else cancel(symbol, list_client_order_id=list_client)
+                    ),
+                    client_order_id=str(list_client or list_id),
+                    pre_submit_checks=_validate_oco_cancel,
+                )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1675,12 +1785,30 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
+            manual_client_id = f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}"
+
+            def _validate_manual_sell(_snapshot):
+                latest = self.client.account()
+                latest_free = self._asset_balance(symbol, account=latest)
+                if latest_free + 1e-12 < sell_qty:
+                    raise RuntimeError(
+                        f"{symbol}: free inventory changed before manual SELL"
+                    )
+
+            sell = self._submit_risk_reducing_order(
                 symbol,
-                "SELL",
                 "MARKET",
+                "CAMPAIGN_EXIT",
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=manual_client_id,
+                ),
                 quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+                client_order_id=manual_client_id,
+                pre_submit_checks=_validate_manual_sell,
             )
             self.db.save_order(sell)
 
@@ -1806,30 +1934,37 @@ class MultiPositionTrader:
     def _daily_entry_guard(self):
         """Block new entries on daily loss, trade count, streak or cooldown."""
         from datetime import datetime, timezone
-        account = self.client.account()
-        equity = self._portfolio_equity_quote(account)
-        unrealized = 0.0
-        for trade in self.open_trades():
-            symbol = str(trade["symbol"]).upper()
-            try:
+        try:
+            account = self.client.account()
+            equity = self._portfolio_equity_quote(account)
+            unrealized = 0.0
+            for trade in self.open_trades():
+                symbol = str(trade["symbol"]).upper()
                 mark = float(self.client.ticker_price(symbol)["price"])
-            except Exception:
-                continue
-            qty = float(trade.get("quantity", 0) or 0)
-            unrealized += (mark - float(trade.get("entry_price", 0) or 0)) * qty
+                if not math.isfinite(mark) or mark <= 0:
+                    raise RuntimeError(f"invalid mark for {symbol}")
+                qty = float(trade.get("quantity", 0) or 0)
+                entry = float(trade.get("entry_price", 0) or 0)
+                if qty < 0 or entry <= 0:
+                    raise RuntimeError(f"invalid open trade data for {symbol}")
+                unrealized += (mark - entry) * qty
 
-        realized = float(self.db.conn.execute(
-            "SELECT COALESCE(SUM(pnl),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
-        ).fetchone()[0] or 0.0)
-        fees = float(self.db.conn.execute(
-            "SELECT COALESCE(SUM(fees),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
-        ).fetchone()[0] or 0.0)
-        trades_today = int(self.db.conn.execute(
-            "SELECT COUNT(*) FROM trades WHERE entry_time >= date('now')"
-        ).fetchone()[0])
-        recent = self.db.conn.execute(
-            "SELECT pnl, exit_time FROM trades WHERE exit_time IS NOT NULL ORDER BY id DESC LIMIT 20"
-        ).fetchall()
+            # Closed-trade pnl is already net of fees. Only entry fees on
+            # still-open positions remain unbooked in unrealized PnL.
+            fees = float(self.db.conn.execute(
+                "SELECT COALESCE(SUM(fees),0) FROM trades WHERE exit_time IS NULL"
+            ).fetchone()[0] or 0.0)
+            trades_today = int(self.db.conn.execute(
+                "SELECT COUNT(*) FROM trades WHERE entry_time >= date('now')"
+            ).fetchone()[0])
+            recent = self.db.conn.execute(
+                "SELECT pnl, exit_time FROM trades WHERE exit_time IS NOT NULL ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+        except Exception as exc:
+            return False, (
+                "DAILY_RISK_UNAVAILABLE: cannot verify account equity, open-position marks, "
+                f"or risk ledger ({type(exc).__name__})"
+            )
 
         if self.max_trades_per_day and trades_today >= self.max_trades_per_day:
             return False, f"MAX_TRADES_PER_DAY reached: {trades_today}"
@@ -1872,6 +2007,7 @@ class MultiPositionTrader:
                         role=SignalRole(str(raw["role"])),
                         timeframe=str(raw["timeframe"]),
                         signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
+                        confirmation_time_ms=int(raw.get("confirmation_time_ms", 0) or 0),
                         trigger_price=float(raw["trigger_price"]),
                         protective_reference=float(raw["protective_reference"]),
                         trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
@@ -1910,6 +2046,7 @@ class MultiPositionTrader:
                         role=SignalRole(str(raw["role"])),
                         timeframe=str(raw["timeframe"]),
                         signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
+                        confirmation_time_ms=int(raw.get("confirmation_time_ms", 0) or 0),
                         trigger_price=float(raw["trigger_price"]),
                         protective_reference=float(raw["protective_reference"]),
                         trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
@@ -1936,6 +2073,39 @@ class MultiPositionTrader:
         if not selections:
             return []
 
+        # Defense in depth: this is the canonical order-admission method and
+        # may be called without scan_and_execute(). Never trust a caller to have
+        # checked the daily breaker. This blocks both initial entries and
+        # campaign add-ons; exits are managed through separate risk-reducing
+        # paths.
+        allowed, risk_reason = self._daily_entry_guard()
+        if not allowed:
+            self.db.log_event("WARNING", "daily_entry_blocked", risk_reason)
+            try:
+                cancellation = self.campaign_execution.reconcile_pending_entries(
+                    force_cancel_reason="DAILY_RISK_GATE_BLOCKED"
+                )
+                unresolved = any(
+                    str(row.get("state", "")).upper() == "RECONCILE_REQUIRED"
+                    for row in cancellation
+                )
+            except Exception as exc:
+                unresolved = True
+                cancellation = [{
+                    "state": "RECONCILE_REQUIRED",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }]
+            return [
+                {
+                    "symbol": str(getattr(getattr(s, "candidate", None), "symbol", "")).upper(),
+                    "status": "RISK_BLOCKED",
+                    "reason": risk_reason,
+                    "pending_entry_cancellation": cancellation,
+                    "pending_entry_cancellation_reconciled": not unresolved,
+                }
+                for s in selections
+            ]
+
         results = []
         equity = self._balance()
         if equity <= 0:
@@ -1959,7 +2129,8 @@ class MultiPositionTrader:
             # countertrend risk; this is explicitly configurable.
             if campaign is not None and campaign.position_qty > 0:
                 latest_time = int(
-                    campaign.tags.get("last_signal_time_ms", 0)
+                    campaign.tags.get("last_signal_confirmation_time_ms", 0)
+                    or campaign.tags.get("last_signal_time_ms", 0)
                     or campaign.tags.get("signal_bar_time_ms", 0)
                     or 0
                 )
@@ -1969,7 +2140,7 @@ class MultiPositionTrader:
                 )
                 eligible = [
                     s for s in specs
-                    if s.signal_bar_time_ms > latest_time
+                    if (s.confirmation_time_ms or s.signal_bar_time_ms) > latest_time
                     and (
                         s.signal_type in {SignalType.SUPER_AO, SignalType.FRACTAL}
                         or (
@@ -1982,7 +2153,7 @@ class MultiPositionTrader:
                     continue
                 signal = min(
                     eligible,
-                    key=lambda s: (s.signal_bar_time_ms, s.created_at_ms),
+                    key=lambda s: (s.confirmation_time_ms or s.signal_bar_time_ms, s.created_at_ms),
                 )
                 add_signal = __import__(
                     "dataclasses"
@@ -2118,260 +2289,88 @@ class MultiPositionTrader:
                 ]
             return self.execute_campaign(selections)
 
-        if self.dry_run:
-            return [
-                {
-                    "symbol": selection.candidate.symbol,
-                    "risk_pct": selection.risk.risk_pct,
-                    "dry_run": True,
-                }
-                for selection in selections
-            ]
+        # The legacy market-BUY path bypasses the canonical campaign
+        # contracts and ExecutionBarrier. Never let an environment toggle
+        # re-enable it; unresolved configuration is BLOCKED, not discretionary.
+        return [
+            {
+                "symbol": selection.candidate.symbol,
+                "status": "BLOCKED",
+                "reason": "Legacy direct-market entry disabled; enable the canonical CampaignEngine path",
+            }
+            for selection in selections
+        ]
 
-        results = []
-        for selection in selections:
-            symbol = selection.candidate.symbol.upper()
-            if not self._can_enter(symbol):
-                continue
-
-            balance = self._balance()
-            if balance <= 0:
-                break
-
-            open_risk = self.reserved_risk_quote()
-            total_risk_quote = balance * self.max_total_risk_pct
-            remaining_risk_quote = max(
-                0.0,
-                total_risk_quote - open_risk,
-            )
-            requested_risk_pct = min(
-                self.max_risk_per_trade_pct,
-                max(
-                    0.0,
-                    float(selection.risk.risk_pct) / 100.0,
-                ),
-                remaining_risk_quote / max(balance, 1e-9),
-            )
-
-            stop_fraction = (
-                float(selection.risk.stop_distance_pct) / 100.0
-            )
-            target_fraction = (
-                float(selection.risk.take_profit_pct) / 100.0
-            )
-
-            if (
-                requested_risk_pct <= 0
-                or stop_fraction <= 0
-                or target_fraction <= 0
-            ):
-                continue
-
-            quote = self._allocation_quote(
-                balance,
-                requested_risk_pct,
-                stop_fraction,
-            )
-            quote = min(
-                quote,
-                self._quote_free(),
-            )
-            if quote < self._min_notional(symbol):
-                continue
-
-            self._locks.add(symbol)
-            client_id = (
-                f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
-            )
-            self.set_state(
-                symbol,
-                "ENTRY_PENDING",
-            )
-            # The pending-entry key is a durable cross-thread/process
-            # mutex. A second execution loop must not generate a second BUY.
-            claimed = False
-            try:
-                claim = getattr(self.db, "try_claim_state", None)
-                claimed = (
-                    claim(self._pending_key(symbol), client_id)
-                    if claim is not None
-                    else False
-                )
-            except Exception:
-                claimed = False
-            if not claimed:
-                self.set_state(symbol, "ENTRY_PENDING")
-                self._locks.discard(symbol)
-                continue
-
-            try:
-                # Last-moment market-depth protection. A MARKET BUY is admitted
-                # only when the requested quote amount can be filled within the
-                # configured L2 slippage budget.
-                self.l2_guard.check_buy_quote(
-                    self.client,
-                    symbol,
-                    float(quote),
-                )
-
-                order = self.client.order_safe(
-                    symbol,
-                    "BUY",
-                    "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
-                )
-                self.db.save_order(order)
-
-                # Confirm the exchange state immediately after submission.
-                order_id = order.get("orderId")
-                confirmed = self.client.get_order(
-                    symbol,
-                    order_id=order_id,
-                    orig_client_order_id=client_id if order_id is None else None,
-                )
-                if str(confirmed.get("status", "")).upper() != "FILLED":
-                    raise RuntimeError(
-                        f"{symbol}: BUY is not fully filled: "
-                        f"{confirmed.get('status', 'UNKNOWN')}"
-                    )
-                if not confirmed.get("fills") and order.get("fills"):
-                    confirmed = dict(confirmed)
-                    confirmed["fills"] = order.get("fills")
-                order = confirmed
-
-                execution = self._authoritative_execution(symbol, order)
-                qty = float(execution.net_base_qty)
-                spent = float(execution.quote_qty)
-                if qty <= 0 or spent <= 0:
-                    raise RuntimeError(
-                        f"{symbol}: BUY returned invalid authoritative fill"
-                    )
-
-                entry = float(execution.avg_price)
-                trade_id = self.db.save_trade(
-                    entry_time=datetime.now(timezone.utc).isoformat(),
-                    symbol=symbol,
-                    side="LONG",
-                    entry_price=entry,
-                    quantity=qty,
-                    entry_order_id=str(order.get("orderId")),
-                    entry_client_order_id=client_id,
-                    stop_price=self._normalize_price(
-                        symbol,
-                        entry * (1.0 - stop_fraction),
-                    ),
-                    take_profit_price=self._normalize_price(
-                        symbol,
-                        entry * (1.0 + target_fraction),
-                    ),
-                    risk_pct=requested_risk_pct * 100.0,
-                    fees=float(execution.fee_quote_equivalent),
-                )
-
-                self.db.state_delete(
-                    self._pending_key(symbol)
-                )
-
-                oco_result = self._create_oco(
-                    symbol,
-                    qty,
-                    entry,
-                    trade_id,
-                    stop_fraction=stop_fraction,
-                    target_fraction=target_fraction,
-                    risk_pct=requested_risk_pct * 100.0,
-                )
-
-                if isinstance(oco_result, dict) and oco_result.get("emergency_exit"):
-                    results.append(
-                        {
-                            "symbol": symbol,
-                            "trade_id": trade_id,
-                            "risk_pct": requested_risk_pct * 100.0,
-                            "entry_price": entry,
-                            "quantity": qty,
-                            **oco_result,
-                        }
-                    )
-                    continue
-
-                self.set_state(
-                    symbol,
-                    "OPEN",
-                )
-                results.append(
-                    {
-                        "symbol": symbol,
-                        "trade_id": trade_id,
-                        "risk_pct": requested_risk_pct * 100.0,
-                        "entry_price": entry,
-                        "quantity": qty,
-                    }
-                )
-            except Exception as exc:
-                # Do NOT issue an emergency SELL here. The durable entry
-                # intent remains on disk and startup/next cycle recovery
-                # will inspect the exact Binance clientOrderId.
-                self.set_state(
-                    symbol,
-                    "RECONCILE_REQUIRED",
-                )
-                self.db.log_event(
-                    "ERROR",
-                    "multi_position_entry_error",
-                    str(exc),
-                    {
-                        "symbol": symbol,
-                        "clientOrderId": client_id,
-                    },
-                )
-                results.append(
-                    {
-                        "symbol": symbol,
-                        "error": str(exc),
-                        "reconcile_required": True,
-                    }
-                )
-            finally:
-                self._locks.discard(symbol)
-
-        return results
 
     def scan_and_execute(self):
-        recovery = self.recover()
-        if not recovery["ok"]:
+        """Run one canonical campaign cycle without repeating full startup recovery."""
+        if not self.campaign_engine_enabled:
             return {
                 "status": "BLOCKED",
-                "recovery": recovery,
                 "results": [],
+                "reason": "Legacy direct-market entry disabled; canonical CampaignEngine is required",
             }
 
-        if self.campaign_engine_enabled:
-            pending_recovery = self.campaign_execution.reconcile_pending_entries()
-            active_recovery = self.campaign_execution.reconcile_active_campaigns()
-            # Manage open campaigns before looking for new opportunities. If a
-            # protection mutation becomes ambiguous, the whole execution path
-            # stays fail-closed.
-            campaign_monitor = self.campaign_monitor.monitor_all()
-            # A resolved/verified pending campaign is now represented by the
-            # campaign state; unresolved mutation remains a hard global block.
-            unresolved = self.unresolved_symbols()
-            if unresolved:
-                return {
-                    "status": "BLOCKED",
-                    "recovery": recovery,
-                    "pending_recovery": pending_recovery,
-                    "active_recovery": active_recovery,
-                    "campaign_monitor": campaign_monitor,
-                    "results": [],
-                    "reason": "campaign reconciliation required",
-                }
+        # First reconcile/manage already-open campaigns so risk gating never
+        # suppresses exits. Then evaluate the portfolio-wide daily loss gate
+        # BEFORE adopting resting conditional BUYs: those orders can still fill
+        # at Binance even when this process refuses to create a new order.
+        active_recovery = self.campaign_execution.reconcile_active_campaigns()
+        campaign_monitor = self.campaign_monitor.monitor_all()
 
         allowed, risk_reason = self._daily_entry_guard()
         if not allowed:
             self.db.log_event("WARNING", "daily_entry_blocked", risk_reason)
-            return {"status": "RISK_BLOCKED", "results": [], "reason": risk_reason}
+            try:
+                cancelled_pending = self.campaign_execution.reconcile_pending_entries(
+                    force_cancel_reason="DAILY_RISK_GATE_BLOCKED"
+                )
+            except Exception as exc:
+                cancelled_pending = [{
+                    "state": "RECONCILE_REQUIRED",
+                    "reason": f"pending-entry cancellation failed: {type(exc).__name__}: {exc}",
+                }]
+                self.db.log_event(
+                    "ERROR",
+                    "daily_risk_pending_entry_cancel_failed",
+                    "Daily risk gate blocked entries but resting conditional orders could not be fully reconciled",
+                    cancelled_pending,
+                )
+            unresolved_cancels = [
+                row for row in cancelled_pending
+                if str(row.get("state", "")).upper() == "RECONCILE_REQUIRED"
+            ]
+            return {
+                "status": "RISK_BLOCKED",
+                "results": [],
+                "reason": risk_reason,
+                "active_recovery": active_recovery,
+                "campaign_monitor": campaign_monitor,
+                "pending_entry_cancellation": cancelled_pending,
+                "pending_entry_cancellation_reconciled": not unresolved_cancels,
+            }
+
+        # Only after daily risk admission is confirmed may normal pending-entry
+        # adoption/revalidation run.
+        pending_recovery = self.campaign_execution.reconcile_pending_entries()
+        unresolved = self.unresolved_symbols()
+        pending_entries = self._pending_entries()
+        recovery = {
+            "ok": not unresolved and not pending_entries,
+            "unresolved_symbols": unresolved,
+            "pending_entries": [row[0] for row in pending_entries],
+            "results": pending_recovery + active_recovery,
+        }
+        if unresolved or pending_entries:
+            return {
+                "status": "BLOCKED",
+                "recovery": recovery,
+                "pending_recovery": pending_recovery,
+                "active_recovery": active_recovery,
+                "campaign_monitor": campaign_monitor,
+                "results": [],
+                "reason": "campaign reconciliation required",
+            }
 
         balance = self._balance()
         if balance <= 0:

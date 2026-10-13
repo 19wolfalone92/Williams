@@ -4,17 +4,30 @@ import pandas as pd
 
 
 def smma(series, period):
-    out = pd.Series(index=series.index, dtype=float)
+    """Wilder-style recursive SMMA with an explicit SMA seed.
+
+    Missing/non-finite seed values block the entire series. Once a gap occurs
+    after the seed, the recursive line remains unavailable; silently reseeding
+    later would create cross-runtime disagreement about the Alligator state.
+    """
+    out = pd.Series(np.nan, index=series.index, dtype=float)
     period = int(period)
     if period <= 0:
         raise ValueError("SMMA period must be positive")
     if len(series) < period:
         return out
-    out.iloc[period - 1] = series.iloc[:period].mean()
+    values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+    seed = values[:period]
+    if not np.isfinite(seed).all():
+        return out
+    out.iloc[period - 1] = float(seed.mean())
     for i in range(period, len(series)):
-        out.iloc[i] = (
-            (out.iloc[i - 1] * (period - 1) + series.iloc[i]) / period
-        )
+        previous = float(out.iloc[i - 1])
+        current = float(values[i])
+        if not np.isfinite(previous) or not np.isfinite(current):
+            out.iloc[i] = np.nan
+        else:
+            out.iloc[i] = (previous * (period - 1) + current) / period
     return out
 
 
@@ -44,6 +57,25 @@ def calculate_indicators(df, cfg):
     if x.empty:
         return x
 
+    # Normalize raw candle numerics before indicator math. Invalid high/low
+    # bars must not become artificial pivots or zero-valued median prices.
+    for column in ("high", "low", "close"):
+        if column not in x.columns:
+            raise ValueError(f"required OHLC column missing: {column}")
+        x[column] = pd.to_numeric(x[column], errors="coerce")
+    high_values = x["high"].to_numpy(dtype=float)
+    low_values = x["low"].to_numpy(dtype=float)
+    valid_range = (
+        np.isfinite(high_values)
+        & np.isfinite(low_values)
+        & (high_values > 0.0)
+        & (low_values > 0.0)
+        & (high_values >= low_values)
+    )
+    x.loc[~valid_range, ["high", "low"]] = np.nan
+    close_values = x["close"].to_numpy(dtype=float)
+    x.loc[~np.isfinite(close_values) | (close_values <= 0.0), "close"] = np.nan
+
     # Binance Spot exposes traded volume rather than the historical
     # tick-count volume used in Williams' original MFI. Therefore the
     # market-facilitation field below is explicitly a proxy and is never an
@@ -64,40 +96,84 @@ def calculate_indicators(df, cfg):
     x["ao_red"] = x["ao"] < x["ao"].shift(1)
     x["ao_green_streak"] = _streak(x["ao_green"])
     x["ao_red_streak"] = _streak(x["ao_red"])
-    x["super_ao_long"] = x["ao_green_streak"] >= int(cfg["super_ao_bars"])
-    x["super_ao_short"] = x["ao_red_streak"] >= int(cfg["super_ao_bars"])
+    # The Wise-Man event is the third bar in the same-colour run, not
+    # every subsequent bar while momentum keeps rising/falling.
+    x["super_ao_long"] = x["ao_green_streak"].eq(int(cfg["super_ao_bars"]))
+    x["super_ao_short"] = x["ao_red_streak"].eq(int(cfg["super_ao_bars"]))
     x["ao_momentum_rising"] = x["ao_green"]
     x["ao_momentum_falling"] = x["ao_red"]
 
     # Accelerator/Decelerator: AO minus its 5-period SMA.
     x["ac"] = x["ao"] - x["ao"].rolling(cfg["ac_period"]).mean()
 
-    # Fractals. The center must be strictly higher/lower than the two bars
-    # on each side; equality therefore does not create a false fractal.
-    left = cfg["fractal_left"]
-    right = cfg["fractal_right"]
+    # Fractals use a centre plus two strictly qualifying bars on each side.
+    # Equal right-side extremes do not count as lower/higher bars; they extend
+    # confirmation. A strict new extreme cancels the candidate. The centre flag
+    # is structural metadata only: actionability begins at the recorded
+    # confirmation row. Consumers must never backdate confirmation to center+2.
+    left = int(cfg["fractal_left"])
+    right = int(cfg["fractal_right"])
+    if left < 1 or right < 1:
+        raise ValueError("Fractal left/right confirmation windows must be positive")
+    x["fractal_right_bars"] = right
     x["fractal_up"] = False
     x["fractal_down"] = False
-    for i in range(left, len(x) - right):
-        if (
-            x["high"].iloc[i] > x["high"].iloc[i-left:i].max()
-            and x["high"].iloc[i] > x["high"].iloc[i+1:i+right+1].max()
-        ):
-            x.iloc[i, x.columns.get_loc("fractal_up")] = True
-        if (
-            x["low"].iloc[i] < x["low"].iloc[i-left:i].min()
-            and x["low"].iloc[i] < x["low"].iloc[i+1:i+right+1].min()
-        ):
-            x.iloc[i, x.columns.get_loc("fractal_down")] = True
-
     x["confirmed_up_level"] = np.nan
     x["confirmed_down_level"] = np.nan
-    for i in range(left + right, len(x)):
-        fi = i - right
-        if bool(x["fractal_up"].iloc[fi]):
-            x.iloc[i, x.columns.get_loc("confirmed_up_level")] = x["high"].iloc[fi]
-        if bool(x["fractal_down"].iloc[fi]):
-            x.iloc[i, x.columns.get_loc("confirmed_down_level")] = x["low"].iloc[fi]
+    x["confirmed_up_center_index"] = -1
+    x["confirmed_down_center_index"] = -1
+
+    highs = pd.to_numeric(x["high"], errors="coerce").to_numpy(dtype=float)
+    lows = pd.to_numeric(x["low"], errors="coerce").to_numpy(dtype=float)
+    up_flag_col = x.columns.get_loc("fractal_up")
+    down_flag_col = x.columns.get_loc("fractal_down")
+    up_level_col = x.columns.get_loc("confirmed_up_level")
+    down_level_col = x.columns.get_loc("confirmed_down_level")
+    up_center_col = x.columns.get_loc("confirmed_up_center_index")
+    down_center_col = x.columns.get_loc("confirmed_down_center_index")
+
+    for center_i in range(left, len(x)):
+        center_high = highs[center_i]
+        prior_highs = highs[center_i-left:center_i]
+        if (
+            np.isfinite(center_high)
+            and np.isfinite(prior_highs).all()
+            and center_high > prior_highs.max()
+        ):
+            lower_count = 0
+            for confirmation_i in range(center_i + 1, len(x)):
+                right_high = highs[confirmation_i]
+                if not np.isfinite(right_high) or right_high > center_high:
+                    break
+                if right_high < center_high:
+                    lower_count += 1
+                if lower_count == right:
+                    # Event time is the confirmation row, never the
+                    # historical center row; the latter would leak future data.
+                    x.iloc[confirmation_i, up_flag_col] = True
+                    x.iloc[confirmation_i, up_level_col] = center_high
+                    x.iloc[confirmation_i, up_center_col] = center_i
+                    break
+
+        center_low = lows[center_i]
+        prior_lows = lows[center_i-left:center_i]
+        if (
+            np.isfinite(center_low)
+            and np.isfinite(prior_lows).all()
+            and center_low < prior_lows.min()
+        ):
+            higher_count = 0
+            for confirmation_i in range(center_i + 1, len(x)):
+                right_low = lows[confirmation_i]
+                if not np.isfinite(right_low) or right_low < center_low:
+                    break
+                if right_low > center_low:
+                    higher_count += 1
+                if higher_count == right:
+                    x.iloc[confirmation_i, down_flag_col] = True
+                    x.iloc[confirmation_i, down_level_col] = center_low
+                    x.iloc[confirmation_i, down_center_col] = center_i
+                    break
 
     x["last_up_level"] = x["confirmed_up_level"].ffill()
     x["last_down_level"] = x["confirmed_down_level"].ffill()
@@ -181,30 +257,27 @@ def calculate_indicators(df, cfg):
         x["low"].where(x["bearish_reversal_bar"]).ffill().shift(1)
     )
 
-    # Second Wise Man: Super AO. We use Williams' histogram color definition
-    # (green = current AO above previous AO, red = below), not merely AO > 0.
-    x["long_super_ao_signal"] = (
-        x["super_ao_long"]
-        & x["long_fractal_outside"].shift(1).eq(True)
-    )
-    x["short_super_ao_signal"] = (
-        x["super_ao_short"]
-        & x["short_fractal_outside"].shift(1).eq(True)
-    )
+    # Second Wise Man: the third same-colour AO histogram bar identifies
+    # WM2 independently. The conditional price trigger and wider context are
+    # handled by the campaign-entry path; a prior WM3 fractal is not a WM2 gate.
+    x["long_super_ao_signal"] = x["super_ao_long"].fillna(False)
+    x["short_super_ao_signal"] = x["super_ao_short"].fillna(False)
 
     # Conservative execution overlay. The counter-trend Wise-Man signals from
     # the book are retained as diagnostics, but disabled for the long-only
     # autonomous entry path unless explicitly enabled.
     countertrend = bool(cfg["allow_countertrend_wise_man"])
+    # A reversal bar can be the first Wise Man; requiring the Alligator
+    # already to be aligned suppresses the very reversal it is meant to detect.
+    # These booleans are candidate diagnostics only, not permission for a
+    # MARKET order; live entries must use a causal conditional SignalSpec.
     x["long_wise_reversal_entry"] = (
         x["last_bullish_reversal_high"].notna()
         & (x["close"] > x["last_bullish_reversal_high"])
-        & (x["bullish_alligator"] | countertrend)
     )
     x["short_wise_reversal_entry"] = (
         x["last_bearish_reversal_low"].notna()
         & (x["close"] < x["last_bearish_reversal_low"])
-        & (x["bearish_alligator"] | countertrend)
     )
 
     # Canonical Wise-Men count. This is confirmation/ranking information in our
@@ -230,22 +303,20 @@ def calculate_indicators(df, cfg):
     x["short_ac_negative"] = x["ac"] < 0
     x["short_fractal_ready"] = x["last_down_level"].notna()
 
-    # Strict entry: conservative Williams gate + at least one valid Wise-Man
-    # trigger. Fractal breakouts, Super AO continuation and reversal bars are
-    # separate triggers; they are not incorrectly ANDed together.
-    min_wise = int(cfg["min_wise_men_confirmations"])
+    # One independently qualified Wise-Man may be the first event in a
+    # flat campaign. Do not impose a synthetic "two Wise Men plus WM3" AND gate.
+    # The column is a strategy-candidate diagnostic. Live order creation is
+    # disabled in the legacy Trader path and remains the campaign engine's
+    # responsibility because the book's triggers are conditional price levels.
     x["long_signal"] = (
-        # Williams' first gate: no downstream Wise-Man signal is actionable
-        # until a confirmed fractal has formed outside the Teeth/balance line.
-        x["long_fractal_outside"]
-        & x["long_bullish"]
-        & x["long_awake"]
-        & x["long_wise_man_count"].ge(min_wise)
+        x["long_wise_reversal_entry"]
+        | x["long_super_ao_signal"]
+        | x["long_fractal_signal"]
     )
     x["short_signal"] = (
-        x["short_bearish"]
-        & x["short_awake"]
-        & x["short_wise_man_count"].ge(min_wise)
+        x["short_wise_reversal_entry"]
+        | x["short_super_ao_signal"]
+        | x["short_fractal_signal"]
     )
 
     def _family(row, side):
@@ -298,6 +369,61 @@ def calculate_indicators(df, cfg):
     x["squatting_bar"] = x["profitunity_window"] == "SQUAT"
 
     return x
+
+
+def canonical_williams_parameter_blockers(cfg):
+    """Return exact-profile blockers for live TC2 execution.
+
+    Research/backtest helpers may explore another configuration, but a live
+    canonical engine must not silently call changed indicator constants
+    "Williams". Unresolved profile constants are blocked.
+    """
+    expected = {
+        "jaw": 13, "teeth": 8, "lips": 5,
+        "jaw_shift": 8, "teeth_shift": 5, "lips_shift": 3,
+        "ao_fast": 5, "ao_slow": 34, "ac_period": 5,
+        "fractal_left": 2, "fractal_right": 2, "super_ao_bars": 3,
+    }
+    blockers = []
+    for key, value in expected.items():
+        try:
+            actual = int(cfg[key])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            blockers.append(f"invalid {key}: expected {value}")
+            continue
+        if actual != value:
+            blockers.append(f"noncanonical {key}={actual}; expected {value}")
+    return blockers
+
+
+def canonical_williams_environment_blockers(env=None):
+    """Validate raw live environment values without crashing on malformed input."""
+    source = os.environ if env is None else env
+    names = {
+        "ALLIGATOR_JAW": ("jaw", 13), "ALLIGATOR_TEETH": ("teeth", 8),
+        "ALLIGATOR_LIPS": ("lips", 5), "JAW_SHIFT": ("jaw_shift", 8),
+        "TEETH_SHIFT": ("teeth_shift", 5), "LIPS_SHIFT": ("lips_shift", 3),
+        "AO_FAST": ("ao_fast", 5), "AO_SLOW": ("ao_slow", 34),
+        "AC_PERIOD": ("ac_period", 5), "FRACTAL_LEFT": ("fractal_left", 2),
+        "FRACTAL_RIGHT": ("fractal_right", 2), "SUPER_AO_BARS": ("super_ao_bars", 3),
+    }
+    blockers = []
+    requested_timeframe = str(source.get("EXECUTION_TIMEFRAME", "1h")).strip().lower()
+    if requested_timeframe != "1h":
+        blockers.append(
+            f"EXECUTION_TIMEFRAME={requested_timeframe or '<empty>'}; canonical Williams signals require H1 (1h)"
+        )
+    for name, (key, expected) in names.items():
+        if name not in source or str(source.get(name, "")).strip() == "":
+            continue
+        try:
+            actual = int(source[name])
+        except (TypeError, ValueError, OverflowError):
+            blockers.append(f"invalid {name}={source.get(name)!r}; expected {expected}")
+            continue
+        if actual != expected:
+            blockers.append(f"noncanonical {name}={actual}; expected {expected}")
+    return blockers
 
 
 def config_from_env(env=os.environ):

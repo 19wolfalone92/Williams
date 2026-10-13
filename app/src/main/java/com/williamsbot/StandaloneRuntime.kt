@@ -153,7 +153,15 @@ private data class PendingEntry(
     val capitalReservedQuote: Double = 0.0,
     val campaignId: String = "",
     val signalId: String = "",
-    val signalType: String = "REVERSAL"
+    val signalType: String = "REVERSAL",
+    val signalBarTimeMs: Long = 0L,
+    val signalConfirmationTimeMs: Long = 0L,
+    val signalExpiresAtMs: Long = 0L,
+    val invalidationPrice: Double = 0.0,
+    // Open time of the latest closed H1 bar already checked against invalidation.
+    val lastSignalValidationCandleTimeMs: Long = 0L,
+    // Missing/legacy persisted timeframe is intentionally invalid and fails closed.
+    val signalTimeframe: String = ""
 )
 
 private data class ExecutionResult(
@@ -205,7 +213,10 @@ private data class CampaignSignalN(
     val protectivePrice: Double,
     val teethAtDetection: Double,
     val invalidationPrice: Double,
-    val reason: String
+    val reason: String,
+    val confirmationTimeMs: Long = signalBarTimeMs,
+    val expiresAtMs: Long = 0L,
+    val timeframe: String = ""
 )
 
 private data class BaseAnalysis(
@@ -609,22 +620,43 @@ private class NativeEngine(
     // aggregate risk remains capped separately at 1%.
     private val maxOpenPositions: Int
         get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
+    // Canonical autonomous runtime is the campaign runner. Legacy signal-to-market
+    // entry is not allowed to switch this path off.
     private val campaignEngineEnabled: Boolean
-        get() = prefs.getBoolean("campaign_engine_enabled", true)
+        get() = true
+    // H1 is the only canonical decision timeframe. Stale persisted M5/M15
+    // preferences are ignored; those frames are monitoring/diagnostics only.
     private val campaignExecutionTimeframe: String
-        get() = prefs.getString("campaign_execution_timeframe", "5m") ?: "5m"
+        get() = WilliamsTimeframeContract.CANONICAL_DECISION
     private val campaignRiskLimitPct = 0.005
     private val campaignInitialRiskPct = 0.002
     private val campaignAddRiskCapPct = 0.002
     private val campaignTrailBars: Int
-        get() = prefs.getInt("campaign_trail_bars", 5).coerceIn(3, 5)
+        get() = prefs.getInt("campaign_trail_bars", 3).coerceIn(3, 5)
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
-    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+    private val equityCircuitBreaker = EquityCircuitBreaker(
+        maxDrawdownPct = 0.03,
+        loadState = {
+            EquityCircuitBreaker.PersistedState(
+                dayKey = prefs.getString("daily_risk_day", "") ?: "",
+                startEquity = prefs.getString("daily_start_equity", "0")
+                    ?.toDoubleOrNull() ?: 0.0,
+                tripped = prefs.getBoolean("daily_loss_tripped", false)
+            )
+        },
+        saveState = { state ->
+            prefs.edit()
+                .putString("daily_risk_day", state.dayKey)
+                .putString("daily_start_equity", state.startEquity.toString())
+                .putBoolean("daily_loss_tripped", state.tripped)
+                .commit()
+        }
+    )
     @Volatile private var lastEquityCheckMs = 0L
-    @Volatile private var circuitBreakerTripInProgress = false
+    @Volatile private var dailyRiskMonitorHealthy = false
     private val feeBufferPerSidePct = 0.001
     @Volatile private var serverTimeOffsetMs = 0L
     private val BINANCE_RECV_WINDOW_MS = 60000L
@@ -635,7 +667,8 @@ private class NativeEngine(
     @Volatile private var userStreamConnected = false
     @Volatile private var userStreamSyncRequired = true
     @Volatile private var lastUserEventMs = 0L
-    @Volatile private var liveUsdtBalance = 0.0
+    @Volatile private var liveUsdtBalance = 0.0 // free USDT available for new entries
+    @Volatile private var liveUsdtLockedBalance = 0.0 // locked USDT still counts toward equity
     @Volatile private var restMarketReady = false
     @Volatile private var restAccountReady = false
     @Volatile private var restLastSuccessMs = 0L
@@ -776,6 +809,7 @@ private class NativeEngine(
             restAccountReady &&
             historyReady &&
             stateMachine.executionAllowed() &&
+            dailyRiskMonitorHealthy &&
             !equityCircuitBreaker.isTripped()
 
     private fun executionBlockers(): List<String> =
@@ -788,6 +822,7 @@ private class NativeEngine(
             if (!restAccountReady) add("rest_account_not_ready")
             if (!historyReady) add("history_not_ready")
             if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
+            if (!dailyRiskMonitorHealthy) add("daily_risk_monitor_unhealthy")
             if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
         }
 
@@ -847,6 +882,12 @@ private class NativeEngine(
                         .put("campaign_id", it.campaignId)
                         .put("signal_id", it.signalId)
                         .put("signal_type", it.signalType)
+                        .put("signal_bar_time_ms", it.signalBarTimeMs)
+                        .put("signal_confirmation_time_ms", it.signalConfirmationTimeMs)
+                        .put("signal_timeframe", it.signalTimeframe)
+                        .put("signal_expires_at_ms", it.signalExpiresAtMs)
+                        .put("invalidation_price", it.invalidationPrice)
+                        .put("last_signal_validation_candle_time_ms", it.lastSignalValidationCandleTimeMs)
                 )
             }
         }
@@ -925,7 +966,13 @@ private class NativeEngine(
                         capitalReservedQuote = item.optDouble("capital_reserved_quote", 0.0),
                         campaignId = item.optString("campaign_id", ""),
                         signalId = item.optString("signal_id", ""),
-                        signalType = item.optString("signal_type", "REVERSAL")
+                        signalType = item.optString("signal_type", "REVERSAL"),
+                        signalBarTimeMs = item.optLong("signal_bar_time_ms", 0L),
+                        signalConfirmationTimeMs = item.optLong("signal_confirmation_time_ms", 0L),
+                        signalTimeframe = item.optString("signal_timeframe", ""),
+                        signalExpiresAtMs = item.optLong("signal_expires_at_ms", 0L),
+                        invalidationPrice = item.optDouble("invalidation_price", 0.0),
+                        lastSignalValidationCandleTimeMs = item.optLong("last_signal_validation_candle_time_ms", 0L)
                     )
                 }
             }
@@ -1165,18 +1212,16 @@ private class NativeEngine(
             recoverPendingEntries()
             reconcilePositionsWithExchange()
             auditManagedOpenOrders()
-            liveUsdtBalance = signedAccount()
-                .getJSONArray("balances")
-                .let { balances ->
-                    (0 until balances.length())
-                        .asSequence()
-                        .map { balances.getJSONObject(it) }
-                        .firstOrNull { it.optString("asset") == "USDT" }
-                        ?.optString("free")
-                        ?.toDoubleOrNull()
-                        ?: 0.0
-                }
-            equityCircuitBreaker.reset(estimateManagedEquity())
+            val startupBalances = signedAccount().getJSONArray("balances")
+            val startupUsdt = (0 until startupBalances.length())
+                .asSequence()
+                .map { startupBalances.getJSONObject(it) }
+                .firstOrNull { it.optString("asset") == "USDT" }
+            liveUsdtBalance = startupUsdt?.optString("free")?.toDoubleOrNull() ?: 0.0
+            liveUsdtLockedBalance = startupUsdt?.optString("locked")?.toDoubleOrNull() ?: 0.0
+            // Never reset the UTC-day baseline on process start.
+            // Entry admission stays blocked until a fresh equity observation succeeds.
+            dailyRiskMonitorHealthy = false
         } catch (x: Exception) {
             setReconcileRequired(
                 "startup exchange synchronization failed: " +
@@ -1196,6 +1241,26 @@ private class NativeEngine(
 
         worker = Thread {
             while (running && generation == runtimeGeneration) {
+                // Resting conditional BUYs can still trigger while the scanner
+                // is paused or a daily-risk monitor has failed. Cancel them
+                // independently of scan eligibility; never cancel protective exits.
+                if (
+                    !dailyRiskMonitorHealthy ||
+                    equityCircuitBreaker.isTripped()
+                ) {
+                    runCatching {
+                        cancelRestingCampaignEntriesForDailyRisk(
+                            if (equityCircuitBreaker.isTripped()) {
+                                "DAILY_LOSS_LIMIT"
+                            } else {
+                                "DAILY_RISK_UNAVAILABLE"
+                            }
+                        )
+                    }.onFailure {
+                        lastError = "Pending-entry risk cancellation: " +
+                            (it.message ?: it.javaClass.simpleName)
+                    }
+                }
                 if (!paused) {
                     try {
                         if (!historyReady) {
@@ -1393,7 +1458,22 @@ private class NativeEngine(
 
     fun pause(): JSONObject {
         paused = true
-        return JSONObject().put("paused", true)
+        val pendingBefore = synchronized(pendingEntries) { pendingEntries.size }
+        runCatching {
+            cancelRestingCampaignEntriesForDailyRisk("PAUSED")
+        }.onFailure {
+            lastError = "Pause pending-entry cancellation unresolved: " +
+                (it.message ?: it.javaClass.simpleName)
+            reconcileRequired = true
+            prefs.edit().putBoolean("reconcile_required", true).apply()
+        }
+        val pendingAfter = synchronized(pendingEntries) { pendingEntries.size }
+        return JSONObject()
+            .put("paused", true)
+            .put("pending_entries_before", pendingBefore)
+            .put("pending_entries_after", pendingAfter)
+            .put("pending_entry_cancellation_resolved", pendingAfter == 0)
+            .put("state", stateName())
     }
 
     fun resume(): JSONObject {
@@ -1555,22 +1635,44 @@ private class NativeEngine(
                     .build()
             }
             rateGuard.beforeRequest()
-            http.newCall(request).execute().use { response ->
-                rateGuard.observe(response.headers, response.code)
-                lastBody = response.body?.string() ?: "{}"
-                auditStore.recordRestCall(
-                    method,
-                    path,
-                    response.code,
-                    params.ifBlank { null },
-                    lastBody
-                )
-                if (response.isSuccessful) return JSONObject(lastBody)
-                if (attempt == 0 && lastBody.contains("-1021")) {
-                    runCatching { syncServerTime() }
-                    return@use
+            // Durable write-ahead record for every signed exchange mutation.
+            // If this insert/read-back fails, no POST/DELETE is sent.
+            val mutationId = if (method == "POST" || method == "DELETE") {
+                auditStore.beginMutation(method, path, params)
+            } else null
+            try {
+                http.newCall(request).execute().use { response ->
+                    rateGuard.observe(response.headers, response.code)
+                    lastBody = response.body?.string() ?: "{}"
+                    if (mutationId != null) {
+                        auditStore.completeMutation(mutationId, response.code, lastBody)
+                    }
+                    auditStore.recordRestCall(
+                        method,
+                        path,
+                        response.code,
+                        params.ifBlank { null },
+                        lastBody
+                    )
+                    if (response.isSuccessful) return JSONObject(lastBody)
+                    if (attempt == 0 && lastBody.contains("-1021")) {
+                        runCatching { syncServerTime() }
+                        return@use
+                    }
+                    error("Binance " + response.code + ": " + lastBody)
                 }
-                error("Binance " + response.code + ": " + lastBody)
+            } catch (error: Exception) {
+                if (mutationId != null) {
+                    // A transport or persistence failure after admission is
+                    // ambiguous. Persist UNKNOWN when possible; never retry here.
+                    runCatching {
+                        auditStore.markMutationUnknown(
+                            mutationId,
+                            error.message ?: error.javaClass.simpleName
+                        )
+                    }
+                }
+                throw error
             }
         }
         error("Binance timestamp retry failed: " + lastBody)
@@ -1901,31 +2003,50 @@ private class NativeEngine(
         }
     }
 
-    private fun buildIndicatorSnapshot(candles: List<CandleN>, symbol: String, frame: String): JSONObject {
+    private fun buildIndicatorSnapshot(inputCandles: List<CandleN>, symbol: String, frame: String): JSONObject {
+        val frameMs = frameSeconds(frame) * 1000L
+        val nowMs = System.currentTimeMillis()
+        val candles = inputCandles.filter { it.t + frameMs <= nowMs }
+        // Indicator snapshots are historical/closed-bar diagnostics, not live
+        // intra-candle signal candidates.
         if (candles.size < 40) return JSONObject().put("symbol", symbol).put("interval", frame).put("ready", false)
-        val prices = candles.map { it.c }
-        val jaw = smma(prices, 13)
-        val teeth = smma(prices, 8)
-        val lips = smma(prices, 5)
         val i = candles.lastIndex
-        val aoNow = ao(candles, i)
-        val aoPrev = ao(candles, i - 1)
-        val acNow = aoNow - (0 until 5).map { ao(candles, i - it) }.average()
-        val acPrev = aoPrev - (0 until 5).map { ao(candles, i - 1 - it) }.average()
+        val alligator = WilliamsAlligatorMath.calculate(
+            highs = candles.map { it.h },
+            lows = candles.map { it.l }
+        )
+        if (!alligator.validAt(i)) {
+            return JSONObject().put("symbol", symbol).put("interval", frame).put("ready", false)
+        }
+        val medians = candles.map { (it.h + it.l) / 2.0 }
+        val aoValues = WilliamsOscillatorMath.aoSeries(medians)
+        val acValues = WilliamsOscillatorMath.acSeries(medians)
+        val aoNow = aoValues[i]
+        val aoPrev = aoValues[i - 1]
+        val acNow = acValues[i]
+        val acPrev = acValues[i - 1]
+        if (!aoNow.isFinite() || !aoPrev.isFinite() || !acNow.isFinite() || !acPrev.isFinite()) {
+            return JSONObject().put("symbol", symbol).put("interval", frame).put("ready", false)
+        }
         val greenZone = aoNow > aoPrev && acNow > acPrev
         val redZone = aoNow < aoPrev && acNow < acPrev
         val range = max(1e-12, candles[i].h - candles[i].l)
+        // Binance base volume is not assumed equivalent to original tick-count volume.
         val mfiProxy = range / max(candles[i].v, 1e-12)
         val previousRange = max(1e-12, candles[i - 1].h - candles[i - 1].l)
         val previousMfiProxy = previousRange / max(candles[i - 1].v, 1e-12)
         val mfiUp = mfiProxy > previousMfiProxy
-        val upFractal = latestConfirmedUpFractal(candles, i)
-        val downFractal = if (i >= 4 && isDownFractal(candles, i - 2)) i - 2 else null
+        val upFractal = WilliamsFractalMath.latestUp(
+            highs = candles.map { it.h }, throughIndex = i, lookbackBars = 80
+        )
+        val downFractal = WilliamsFractalMath.latestDown(
+            lows = candles.map { it.l }, throughIndex = i, lookbackBars = 80
+        )
         return JSONObject()
             .put("symbol", symbol).put("interval", frame).put("ready", true)
             .put("time", candles[i].t).put("price", candles[i].c)
-            .put("jaw", jaw[i]).put("teeth", teeth[i]).put("lips", lips[i])
-            .put("alligator_bullish", lips[i] > teeth[i] && teeth[i] > jaw[i])
+            .put("jaw", alligator.jaw[i]).put("teeth", alligator.teeth[i]).put("lips", alligator.lips[i])
+            .put("alligator_bullish", alligator.lips[i] > alligator.teeth[i] && alligator.teeth[i] > alligator.jaw[i])
             .put("ao", aoNow).put("ao_previous", aoPrev)
             .put("ao_cross_up", aoPrev <= 0.0 && aoNow > 0.0)
             .put("ac", acNow).put("ac_positive", acNow > 0.0)
@@ -1934,8 +2055,10 @@ private class NativeEngine(
             .put("red_zone", redZone)
             .put("mfi_proxy", mfiProxy)
             .put("mfi_up", mfiUp)
-            .put("fractal_up_index", upFractal ?: JSONObject.NULL)
-            .put("fractal_down_index", downFractal ?: JSONObject.NULL)
+            .put("fractal_up_index", upFractal?.centerIndex ?: JSONObject.NULL)
+            .put("fractal_up_confirmation_index", upFractal?.confirmationIndex ?: JSONObject.NULL)
+            .put("fractal_down_index", downFractal?.centerIndex ?: JSONObject.NULL)
+            .put("fractal_down_confirmation_index", downFractal?.confirmationIndex ?: JSONObject.NULL)
             .put("ao_bullish_divergence", aoBullishDivergence(candles))
             .put("ao_bearish_divergence", aoBearishDivergence(candles))
             .put("wave", waveInfo(candles, frame).path)
@@ -2574,15 +2697,66 @@ private class NativeEngine(
         }
     }
 
+    private fun validateNewCampaignEntryAtMutation(symbol: String, purpose: String) {
+        if (purpose != "CAMPAIGN_ENTRY" && purpose != "CAMPAIGN_ADD_ON") return
+        checkAutomaticCircuitBreaker(force = true)
+        require(dailyRiskMonitorHealthy) {
+            "DAILY_RISK_UNAVAILABLE: entry blocked until equity and daily PnL are verified"
+        }
+        require(!equityCircuitBreaker.isTripped()) {
+            "DAILY_LOSS_LIMIT: new entries are blocked"
+        }
+        val intent = synchronized(pendingEntries) { pendingEntries[symbol] }
+            ?: error("ENTRY_REVALIDATION_UNAVAILABLE: no persisted pending signal")
+        val nowMs = System.currentTimeMillis()
+        val frameMs = frameSeconds(WilliamsTimeframeContract.CANONICAL_DECISION) * 1000L
+        val provenanceBlocker = WilliamsTimeframeContract.entryProvenanceBlocker(
+            timeframe = intent.signalTimeframe,
+            signalBarTimeMs = intent.signalBarTimeMs,
+            confirmationTimeMs = intent.signalConfirmationTimeMs,
+            expiresAtMs = intent.signalExpiresAtMs,
+            nowMs = nowMs,
+            symbolMatches = intent.symbol == symbol,
+            signalIdPresent = intent.signalId.isNotBlank(),
+            campaignIdPresent = intent.campaignId.isNotBlank(),
+            triggerPrice = intent.triggerPrice,
+            invalidationPrice = intent.invalidationPrice
+        )
+        require(provenanceBlocker == null) {
+            (provenanceBlocker ?: "ENTRY_PROVENANCE_BLOCKED") +
+                ": missing, non-H1, future-dated, or expired signal"
+        }
+        require(marketDataFresh()) { "ENTRY_MARKET_DATA_STALE" }
+        val history = fetchCandles(symbol, WilliamsTimeframeContract.CANONICAL_DECISION, 151)
+        val closed = history.filter { it.t + frameMs <= nowMs }.sortedBy { it.t }
+        require(closed.isNotEmpty()) { "ENTRY_H1_HISTORY_UNAVAILABLE" }
+        require(closed.any { it.t == intent.signalBarTimeMs }) {
+            "ENTRY_SOURCE_CANDLE_UNAVAILABLE"
+        }
+        require(nowMs - (closed.last().t + frameMs) <= 2L * frameMs) {
+            "ENTRY_H1_MARKET_DATA_STALE"
+        }
+        require(!closed.any {
+            it.t > intent.signalBarTimeMs &&
+                it.t + frameMs <= nowMs &&
+                it.l <= intent.invalidationPrice
+        }) { "ENTRY_STRUCTURALLY_INVALIDATED" }
+        require(currentCampaignPrice(symbol) < intent.triggerPrice) {
+            "ENTRY_TRIGGER_ALREADY_CROSSED"
+        }
+    }
+
     private fun withCampaignMutation(
         symbol: String,
         purpose: String,
         block: () -> JSONObject
     ): JSONObject {
         if (!running) error("Runtime is not running")
-        if (paused) error("Runtime is paused")
-        if (reconcileRequired) error("RECONCILE_REQUIRED")
-        if (killLatched) error("KILL_SWITCH_LATCHED")
+        val isEntryCancellation = purpose.startsWith("CAMPAIGN_ENTRY_CANCEL_")
+        if (paused && !isEntryCancellation) error("Runtime is paused")
+        if (reconcileRequired && !isEntryCancellation) error("RECONCILE_REQUIRED")
+        if (killLatched && !isEntryCancellation) error("KILL_SWITCH_LATCHED")
+        if (!isEntryCancellation) validateNewCampaignEntryAtMutation(symbol, purpose)
         require(executionGate.tryReserve(symbol)) {
             "Campaign execution already reserved for " + symbol
         }
@@ -2602,18 +2776,54 @@ private class NativeEngine(
     }
 
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
-        candidate.campaignSignals
-            .sortedBy { it.signalBarTimeMs }
-            .firstOrNull()
+        candidate.campaignSignals.minWithOrNull(
+            compareBy<CampaignSignalN> { it.confirmationTimeMs }
+                .thenBy { it.signalBarTimeMs }
+                .thenBy { it.type }
+        )
 
+    private fun claimCampaignSignalOnce(
+        symbol: String,
+        signal: CampaignSignalN
+    ) {
+        require(signal.signalId.isNotBlank()) { "Campaign signal id is missing" }
+        val canonical = JSONObject()
+            .put("symbol", symbol.trim().uppercase(Locale.US))
+            .put("side", "BUY")
+            .put("timeframe", signal.timeframe.trim().lowercase(Locale.US))
+            .put("signal_bar_time_ms", signal.signalBarTimeMs)
+            .put("confirmation_time_ms", signal.confirmationTimeMs)
+            .put("signal_type", signal.type)
+            .put("strategy_version", BuildConfig.VERSION_NAME)
+            .toString()
+        when (auditStore.claimSignalOnce(signal.signalId, canonical)) {
+            "CLAIMED" -> Unit
+            "DUPLICATE" -> error("DUPLICATE_SIGNAL_BLOCKED: " + signal.signalId)
+            "CONFLICT" -> error("SIGNAL_IDENTITY_CONFLICT: " + signal.signalId)
+            else -> error("SIGNAL_CLAIM_UNKNOWN_RESULT: " + signal.signalId)
+        }
+    }
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
         if (reconcileRequired || paused || killLatched) return
+        checkAutomaticCircuitBreaker(force = true)
+        if (!dailyRiskMonitorHealthy) {
+            lastError = "DAILY_RISK_UNAVAILABLE: new entries blocked until equity and daily PnL are verified"
+            return
+        }
+        if (equityCircuitBreaker.isTripped()) {
+            lastError = "DAILY_LOSS_LIMIT: new entries blocked; existing position exits remain enabled"
+            return
+        }
         if (positionList().any { it.symbol == candidate.symbol }) return
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
         if (positionList().size >= maxOpenPositions) return
 
         val signal = campaignEntryCandidate(candidate) ?: return
+        if (!WilliamsTimeframeContract.canCreateCanonicalSignal(signal.timeframe)) {
+            lastError = "BLOCKED_ENTRY_TIMEFRAME: expected H1, got " + signal.timeframe
+            return
+        }
         val equity = estimateManagedEquity()
         val remainingRisk = campaignRemainingRiskPct(equity)
         val riskPct = min(
@@ -2667,7 +2877,14 @@ private class NativeEngine(
             capitalReservedQuote = qty * trigger,
             campaignId = campaignId,
             signalId = signal.signalId,
-            signalType = signal.type
+            signalType = signal.type,
+            signalBarTimeMs = signal.signalBarTimeMs,
+            signalTimeframe = signal.timeframe,
+            signalConfirmationTimeMs = signal.confirmationTimeMs,
+            signalExpiresAtMs = signal.expiresAtMs,
+            invalidationPrice = signal.invalidationPrice,
+            lastSignalValidationCandleTimeMs = signal.confirmationTimeMs -
+                frameSeconds(WilliamsTimeframeContract.CANONICAL_DECISION) * 1000L
         )
         synchronized(pendingEntries) {
             pendingEntries[candidate.symbol] = pending
@@ -2694,6 +2911,8 @@ private class NativeEngine(
                     ) {
                         error("Binance MAX_POSITION would be exceeded")
                     }
+                    // Durable signal claim must commit before the signed POST.
+                    claimCampaignSignalOnce(candidate.symbol, signal)
                     signedPost(
                         "/api/v3/order",
                         "symbol=" + candidate.symbol +
@@ -2934,6 +3153,80 @@ private class NativeEngine(
                 val executed = order.optString("executedQty").toDoubleOrNull() ?: 0.0
                 val quote = order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
 
+                if (status == "NEW" || status == "PENDING_NEW") {
+                    val nowMs = System.currentTimeMillis()
+                    val frameMs = frameSeconds(WilliamsTimeframeContract.CANONICAL_DECISION) * 1000L
+                    val expired =
+                        intent.signalExpiresAtMs <= 0L || nowMs >= intent.signalExpiresAtMs
+                    var invalidated = false
+                    var supersededByNewerFractal = false
+                    var validationUnavailable = false
+
+                    if (!expired) {
+                        val cursor = intent.lastSignalValidationCandleTimeMs
+                        if (
+                            !WilliamsTimeframeContract.canCreateCanonicalSignal(intent.signalTimeframe) ||
+                            intent.signalBarTimeMs <= 0L ||
+                            intent.signalConfirmationTimeMs < intent.signalBarTimeMs + frameMs ||
+                            intent.signalConfirmationTimeMs > nowMs ||
+                            intent.invalidationPrice <= 0.0 ||
+                            cursor <= 0L
+                        ) {
+                            validationUnavailable = true
+                        } else if (nowMs >= cursor + 2L * frameMs) {
+                            val history = runCatching {
+                                fetchCandles(intent.symbol, WilliamsTimeframeContract.CANONICAL_DECISION, 151)
+                            }.getOrNull()
+                            if (history == null) {
+                                validationUnavailable = true
+                            } else {
+                                val newlyClosed = history.filter {
+                                    it.t > cursor && it.t + frameMs <= nowMs
+                                }
+                                if (newlyClosed.isEmpty()) {
+                                    // No confirmed H1 candle to revalidate despite the
+                                    // expected close: keep the exchange order fail-closed.
+                                    validationUnavailable = true
+                                } else {
+                                    invalidated = newlyClosed.any { it.l <= intent.invalidationPrice }
+                                    if (intent.signalType.equals("FRACTAL", ignoreCase = true)) {
+                                        val latest = WilliamsFractalMath.latestUp(
+                                            highs = history.map { it.h },
+                                            throughIndex = history.lastIndex,
+                                            lookbackBars = 80
+                                        )
+                                        supersededByNewerFractal =
+                                            latest != null &&
+                                                latest.centerIndex in history.indices &&
+                                                history[latest.centerIndex].t > intent.signalBarTimeMs
+                                        if (supersededByNewerFractal) invalidated = true
+                                    }
+                                    val newCursor = newlyClosed.maxOf { it.t }
+                                    synchronized(pendingEntries) {
+                                        val stored = pendingEntries[intent.symbol]
+                                        if (stored?.clientOrderId == intent.clientOrderId) {
+                                            pendingEntries[intent.symbol] =
+                                                stored.copy(lastSignalValidationCandleTimeMs = newCursor)
+                                        }
+                                    }
+                                    savePersistedState()
+                                }
+                            }
+                        }
+                    }
+
+                    if (expired || invalidated || validationUnavailable) {
+                        val reason = when {
+                            expired -> "EXPIRED"
+                            supersededByNewerFractal -> "NEWER_FRACTAL"
+                            invalidated -> "STRUCTURAL_INVALIDATION"
+                            else -> "REVALIDATION_UNAVAILABLE"
+                        }
+                        cancelCampaignEntryAndReconcile(intent, order, reason)
+                        continue
+                    }
+                }
+
                 when {
                     status == "NEW" || status == "PENDING_NEW" -> Unit
 
@@ -3019,10 +3312,113 @@ private class NativeEngine(
         }
     }
 
+    /**
+     * Expired or structurally invalidated conditional BUYs are cancelled only
+     * after a REST read proved the exchange order is still NEW/PENDING_NEW.
+     * After DELETE, fetch again: a race-to-fill becomes a protected position,
+     * never a silently discarded fill.
+     */
+    /**
+     * Cancel only resting campaign-entry orders when the daily equity monitor
+     * is tripped or unavailable. The exchange order is re-read first and every
+     * cancellation is followed by a terminal-state reconciliation.
+     */
+    @Suppress("ApplySharedPref")
+    private fun cancelRestingCampaignEntriesForDailyRisk(reason: String) {
+        val pending = synchronized(pendingEntries) {
+            pendingEntries.values.toList()
+        }
+        for (intent in pending) {
+            try {
+                val observed = signedGet(
+                    "/api/v3/order",
+                    "symbol=" + intent.symbol +
+                        "&origClientOrderId=" + intent.clientOrderId
+                )
+                val status = observed.optString("status", "").uppercase(Locale.US)
+                val executed = observed.optString("executedQty").toDoubleOrNull() ?: 0.0
+                when {
+                    status in setOf("NEW", "PENDING_NEW") && executed <= 0.0 ->
+                        cancelCampaignEntryAndReconcile(intent, observed, reason)
+                    status == "PARTIALLY_FILLED" ->
+                        cancelCampaignEntryAndReconcile(intent, observed, reason)
+                    status == "FILLED" ->
+                        recoverCampaignPendingEntries()
+                    status in setOf("CANCELED", "EXPIRED", "REJECTED") && executed > 0.0 ->
+                        recoverCampaignPendingEntries()
+                    status in setOf("CANCELED", "EXPIRED", "REJECTED") ->
+                        clearCampaignPending(intent.symbol)
+                    else -> setReconcileRequired(
+                        intent.symbol + ": daily-risk cancellation cannot prove order state: " + status
+                    )
+                }
+            } catch (x: Throwable) {
+                lastError = intent.symbol + ": daily-risk cancellation unresolved: " +
+                    (x.message ?: x.javaClass.simpleName)
+                // Keep the pending intent persisted and retry reconciliation on
+                // the next worker cycle. No new entry is allowed meanwhile.
+                reconcileRequired = true
+                prefs.edit().putBoolean("reconcile_required", true).commit()
+            }
+        }
+    }
+
+    private fun cancelCampaignEntryAndReconcile(
+        intent: PendingEntry,
+        observedOrder: JSONObject,
+        reason: String
+    ) {
+        val orderId = observedOrder.optLong("orderId", -1L)
+        withCampaignMutation(intent.symbol, "CAMPAIGN_ENTRY_CANCEL_$reason") {
+            if (orderId > 0L) {
+                signedDelete(
+                    "/api/v3/order",
+                    "symbol=" + intent.symbol + "&orderId=" + orderId
+                )
+            } else {
+                signedDelete(
+                    "/api/v3/order",
+                    "symbol=" + intent.symbol +
+                        "&origClientOrderId=" + intent.clientOrderId
+                )
+            }
+        }
+        val finalOrder = signedGet(
+            "/api/v3/order",
+            "symbol=" + intent.symbol + "&origClientOrderId=" + intent.clientOrderId
+        )
+        lastOrder = finalOrder
+        val finalStatus = finalOrder.optString("status", "").uppercase(Locale.US)
+        val executed = finalOrder.optString("executedQty").toDoubleOrNull() ?: 0.0
+        val quote = finalOrder.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
+        when {
+            finalStatus == "FILLED" -> {
+                require(executed > 0.0 && quote > 0.0) {
+                    intent.symbol + ": filled entry after cancel lacks confirmed fill values"
+                }
+                applyCampaignFill(intent, finalOrder, executed, quote)
+            }
+            finalStatus in setOf("CANCELED", "EXPIRED", "REJECTED") -> {
+                if (executed > 0.0) {
+                    require(quote > 0.0) {
+                        intent.symbol + ": terminal partial fill lacks quote after cancellation"
+                    }
+                    applyCampaignFill(intent, finalOrder, executed, quote)
+                } else {
+                    clearCampaignPending(intent.symbol)
+                }
+            }
+            else -> setReconcileRequired(
+                intent.symbol + ": conditional-entry cancel not terminal after " + reason +
+                    "; observed=" + finalStatus
+            )
+        }
+    }
+
     private fun clearCampaignPending(symbol: String) {
         synchronized(pendingEntries) { pendingEntries.remove(symbol) }
         savePersistedState()
-        if (positionList().isEmpty()) {
+        if (positionList().isEmpty() && !reconcileRequired && !killLatched) {
             stateMachine.force(
                 TradingState.READY_FLAT,
                 "Campaign conditional entry cleared"
@@ -3401,7 +3797,8 @@ private class NativeEngine(
                     campaignExecutionTimeframe,
                     80
                 )
-                val candles = if (raw.size >= 2) raw.dropLast(1) else emptyList()
+                val now = System.currentTimeMillis()
+                val candles = raw.filter { it.t + frameSeconds(campaignExecutionTimeframe) * 1000L <= now }
                 if (candles.size < 20) continue
 
                 val rules = symbolFilters(stored.symbol)
@@ -3456,8 +3853,12 @@ private class NativeEngine(
                 }
 
                 if (prefs.getBoolean("campaign_exit_on_teeth", false)) {
-                    val teeth = smma(candles.map { it.c }, 8).lastOrNull() ?: 0.0
-                    if (teeth > 0.0 && candles.last().c < teeth) {
+                    val lines = WilliamsAlligatorMath.calculate(
+                        highs = candles.map { it.h },
+                        lows = candles.map { it.l }
+                    )
+                    val teeth = lines.teeth.lastOrNull() ?: Double.NaN
+                    if (teeth.isFinite() && teeth > 0.0 && candles.last().c < teeth) {
                         campaignExitMarket(
                             positions[stored.symbol] ?: current,
                             "CLOSE_BELOW_TEETH"
@@ -3478,19 +3879,31 @@ private class NativeEngine(
         position: PositionState
     ) {
         if (!campaignEngineEnabled || position.campaignId.isBlank()) return
+        if (reconcileRequired || paused || killLatched) return
 
-        val latestSignalTime =
-            position.signalId.substringAfterLast(':').toLongOrNull()
-                ?: position.openedAt
+        // Add-ons are later confirmed events, not merely newer center bars.
         val signal = candidate.campaignSignals
             .filter {
                 it.type in setOf("SUPER_AO", "FRACTAL") &&
-                    it.signalBarTimeMs > latestSignalTime
+                    it.confirmationTimeMs > position.openedAt
             }
-            .sortedBy { it.signalBarTimeMs }
-            .firstOrNull()
+            .minWithOrNull(
+                compareBy<CampaignSignalN> { it.confirmationTimeMs }
+                    .thenBy { it.signalBarTimeMs }
+            )
             ?: return
 
+        if (!WilliamsTimeframeContract.canCreateCanonicalSignal(signal.timeframe)) {
+            lastError = "BLOCKED_ADD_ON_TIMEFRAME: expected H1, got " + signal.timeframe
+            return
+        }
+        if (signal.signalBarTimeMs <= 0L ||
+            signal.confirmationTimeMs < signal.signalBarTimeMs + frameSeconds(WilliamsTimeframeContract.CANONICAL_DECISION) * 1000L ||
+            signal.confirmationTimeMs > System.currentTimeMillis() ||
+            signal.expiresAtMs <= System.currentTimeMillis()) {
+            lastError = "BLOCKED_ADD_ON_PROVENANCE: invalid or expired H1 signal"
+            return
+        }
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
 
         val equity = estimateManagedEquity()
@@ -3554,7 +3967,14 @@ private class NativeEngine(
             capitalReservedQuote = qty * trigger,
             campaignId = position.campaignId,
             signalId = signal.signalId,
-            signalType = signal.type
+            signalType = signal.type,
+            signalBarTimeMs = signal.signalBarTimeMs,
+            signalConfirmationTimeMs = signal.confirmationTimeMs,
+            signalTimeframe = signal.timeframe,
+            signalExpiresAtMs = signal.expiresAtMs,
+            invalidationPrice = signal.invalidationPrice,
+            lastSignalValidationCandleTimeMs = signal.confirmationTimeMs -
+                frameSeconds(WilliamsTimeframeContract.CANONICAL_DECISION) * 1000L
         )
         synchronized(pendingEntries) {
             pendingEntries[candidate.symbol] = pending
@@ -3571,6 +3991,9 @@ private class NativeEngine(
                         "Add-on trigger already crossed"
                     }
                     checkCampaignOrderCapacity(candidate.symbol, 1)
+                    // The stable signal ID, not the per-attempt client order ID,
+                    // owns the durable replay guard for add-on entries as well.
+                    claimCampaignSignalOnce(candidate.symbol, signal)
                     signedPost(
                         "/api/v3/order",
                         "symbol=" + candidate.symbol +
@@ -3970,18 +4393,17 @@ private class NativeEngine(
 
             // Binance klines include the currently forming candle. Williams'
             // close-based decisions must be made on a completed bar.
-            val candles =
-                if (rawCandles.size >= 2) {
-                    rawCandles.dropLast(1)
-                } else {
-                    emptyList()
-                }
+            val nowMs = System.currentTimeMillis()
+            val candles = rawCandles.filter { it.t + frameSeconds("1h") * 1000L <= nowMs }
 
             if (candles.size < 40) continue
 
-            val prices = candles.map { it.c }
             val teeth =
-                smma(prices, 8).last()
+                WilliamsAlligatorMath.calculate(
+                    highs = candles.map { it.h },
+                    lows = candles.map { it.l }
+                ).teeth.lastOrNull() ?: Double.NaN
+            if (!teeth.isFinite() || teeth <= 0.0) continue
             val lastClosed =
                 candles.last()
 
@@ -4001,37 +4423,11 @@ private class NativeEngine(
                 continue
             }
 
-            var consecutiveGreen = 0
-            var trailingLow = Double.POSITIVE_INFINITY
-            for (
-                i in candles.lastIndex downTo
-                    max(5, candles.lastIndex - 9)
-            ) {
-                val aoNow = ao(candles, i)
-                val aoPrev = ao(candles, i - 1)
-                val acWindowStart = max(0, i - 4)
-                val acNow =
-                    aoNow -
-                        (acWindowStart..i)
-                            .map { ao(candles, it) }
-                            .average()
-                val acPrevWindowStart = max(0, i - 5)
-                val acPrev =
-                    aoPrev -
-                        (acPrevWindowStart until i)
-                            .map { ao(candles, it) }
-                            .average()
-
-                val green =
-                    aoNow > aoPrev &&
-                        acNow > acPrev
-
-                if (!green) break
-
-                consecutiveGreen++
-                trailingLow = min(trailingLow, candles[i].l)
-                if (consecutiveGreen >= 5) break
-            }
+            // Structural campaign trailing: use the last configured 3–5
+            // CLOSED H1 bars. Do not invent a five-green AO/AC exit condition
+            // in the TC2 campaign engine.
+            val trailingLow = candles.takeLast(campaignTrailBars)
+                .minOfOrNull { it.l } ?: Double.NaN
 
             val tick =
                 runCatching {
@@ -4042,14 +4438,8 @@ private class NativeEngine(
 
             var desiredStop = stored.stop
 
-            if (consecutiveGreen >= 5 &&
-                trailingLow.isFinite()
-            ) {
-                desiredStop =
-                    max(
-                        desiredStop,
-                        trailingLow - tick
-                    )
+            if (trailingLow.isFinite()) {
+                desiredStop = max(desiredStop, trailingLow - tick)
             }
 
             // A stop can be tightened toward the current Teeth only while it
@@ -4478,7 +4868,8 @@ private class NativeEngine(
                             val locked =
                                 row.optString("l").toDoubleOrNull()
                                     ?: row.optDouble("l", 0.0)
-                            liveUsdtBalance = free + locked
+                            liveUsdtBalance = free
+                            liveUsdtLockedBalance = locked
                         }
                     }
                 }
@@ -5409,7 +5800,13 @@ private class NativeEngine(
         val candles = candidate.candles
         if (candles.size < 20) return (candidate.atrPct * 2.0).coerceIn(0.01, 0.08)
         val prices = candles.map { it.c }
-        val teeth = smma(prices, 8).lastOrNull() ?: prices.last()
+        val teeth = WilliamsAlligatorMath.calculate(
+            highs = candles.map { it.h },
+            lows = candles.map { it.l }
+        ).teeth.lastOrNull() ?: Double.NaN
+        if (!teeth.isFinite() || teeth <= 0.0) {
+            return (candidate.atrPct * 2.0).coerceIn(0.01, 0.08)
+        }
         var swingLow = Double.POSITIVE_INFINITY
         for (i in max(2, candles.lastIndex - 30)..candles.lastIndex - 2) {
             if (isDownFractal(candles, i)) swingLow = min(swingLow, candles[i].l)
@@ -5472,64 +5869,69 @@ private class NativeEngine(
         return vwap to slippage
     }
 
-    private fun estimateManagedEquity(): Double {
-        var equity = liveUsdtBalance.coerceAtLeast(0.0)
+    private fun estimateManagedEquity(requireLiveMarks: Boolean = false): Double {
+        var equity = liveUsdtBalance.coerceAtLeast(0.0) +
+            liveUsdtLockedBalance.coerceAtLeast(0.0)
         positionList().forEach { position ->
             val mark = livePrices[position.symbol]
                 ?: if (position.symbol == primarySymbol) {
-                    primaryCandles.lastOrNull()?.c ?: 0.0
-                } else 0.0
-            if (mark > 0.0) equity += position.qty * mark
+                    primaryCandles.lastOrNull()?.c
+                } else null
+            if (mark == null || !mark.isFinite() || mark <= 0.0) {
+                if (requireLiveMarks) {
+                    error("DAILY_RISK_MARK_UNAVAILABLE: " + position.symbol)
+                }
+                return@forEach
+            }
+            equity += position.qty * mark
         }
         return equity
     }
 
-    private fun checkAutomaticCircuitBreaker() {
-        if (!running || paused || killLatched || circuitBreakerTripInProgress) return
+    private fun checkAutomaticCircuitBreaker(force: Boolean = false) {
+        if (!running || paused || killLatched) return
         val now = System.currentTimeMillis()
-        if (now - lastEquityCheckMs < 60_000L) return
+        if (!force && now - lastEquityCheckMs < 60_000L) return
         lastEquityCheckMs = now
 
         runCatching {
             val account = signedAccount()
             val balances = account.getJSONArray("balances")
-            var usdt = 0.0
+            var usdtFree = 0.0
+            var usdtLocked = 0.0
+            var foundUsdt = false
             for (i in 0 until balances.length()) {
                 val b = balances.getJSONObject(i)
                 if (b.optString("asset") == "USDT") {
-                    usdt = b.optString("free").toDoubleOrNull() ?: 0.0
+                    usdtFree = b.optString("free").toDoubleOrNull() ?: 0.0
+                    usdtLocked = b.optString("locked").toDoubleOrNull() ?: 0.0
+                    foundUsdt = true
                     break
                 }
             }
-            liveUsdtBalance = usdt
+            check(foundUsdt) { "DAILY_RISK_ACCOUNT_UNAVAILABLE: USDT balance missing" }
+            liveUsdtBalance = usdtFree
+            liveUsdtLockedBalance = usdtLocked
 
             val snapshot = equityCircuitBreaker.observe(
-                estimateManagedEquity(),
+                estimateManagedEquity(requireLiveMarks = true),
                 now
             )
+            dailyRiskMonitorHealthy = true
             if (snapshot.tripped) {
-                circuitBreakerTripInProgress = true
+                // Daily loss blocks new risk only. Existing protection and
+                // emergency reductions remain available.
                 lastError =
-                    "AUTOMATIC CIRCUIT BREAKER: managed equity drawdown " +
+                    "DAILY_LOSS_LIMIT: new entries blocked; managed equity drawdown " +
                         "%.2f%%".format(
                             Locale.US,
                             snapshot.drawdownPct * 100.0
                         )
-                Thread {
-                    try {
-                        kill()
-                    } finally {
-                        circuitBreakerTripInProgress = false
-                    }
-                }.apply {
-                    isDaemon = true
-                    name = "williams-equity-circuit-breaker"
-                    start()
-                }
             }
         }.onFailure {
+            dailyRiskMonitorHealthy = false
             lastError =
-                "equity monitor: " +
+                "DAILY_RISK_UNAVAILABLE: " +
                     (it.message ?: it.javaClass.simpleName)
         }
     }
@@ -6390,93 +6792,80 @@ private class NativeEngine(
         frame: String,
         tick: Double
     ): List<CampaignSignalN> {
-        if (candles.size < 45 || tick <= 0.0) return emptyList()
+        // This is a canonical live-entry path, not a chart diagnostic. Require
+        // a complete closed H1 history and fail closed on malformed math inputs.
+        if (frame != WilliamsTimeframeContract.CANONICAL_DECISION ||
+            candles.size < 140 || !tick.isFinite() || tick <= 0.0
+        ) return emptyList()
 
-        val medians = candles.map { (it.h + it.l) / 2.0 }
-        val jaw = smma(medians, 13)
-        val teeth = smma(medians, 8)
-        val lips = smma(medians, 5)
-        val jawS = shiftedSeries(jaw, 8)
-        val teethS = shiftedSeries(teeth, 5)
-        val lipsS = shiftedSeries(lips, 3)
+        val highs = candles.map { it.h }
+        val lows = candles.map { it.l }
+        val medians = candles.indices.map { (candles[it].h + candles[it].l) / 2.0 }
+        val alligator = WilliamsAlligatorMath.calculate(highs, lows)
+        val jawS = alligator.jaw
+        val teethS = alligator.teeth
+        val lipsS = alligator.lips
+        val current = candles.lastIndex
+        if (!alligator.validAt(current)) return emptyList()
 
-        fun bullishAlligator(i: Int): Boolean =
-            i in candles.indices &&
-                jawS[i].isFinite() &&
-                teethS[i].isFinite() &&
-                lipsS[i].isFinite() &&
-                lipsS[i] > teethS[i] &&
-                teethS[i] > jawS[i] &&
-                candles[i].c > lipsS[i]
+        fun latestUpFractal(throughIndex: Int): WilliamsFractalConfirmation? =
+            WilliamsFractalMath.latestUp(
+                highs = highs,
+                throughIndex = throughIndex,
+                lookbackBars = 80
+            )
 
-        fun upFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].h > candles[i - 1].h &&
-                candles[i].h > candles[i - 2].h &&
-                candles[i].h > candles[i + 1].h &&
-                candles[i].h > candles[i + 2].h
-        }
-
-        fun downFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].l < candles[i - 1].l &&
-                candles[i].l < candles[i - 2].l &&
-                candles[i].l < candles[i + 1].l &&
-                candles[i].l < candles[i + 2].l
-        }
-
-        fun latestUpFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (upFractal(i)) return i
-            }
-            return null
-        }
-
-        fun latestDownFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (downFractal(i)) return i
-            }
-            return null
-        }
-
+        // Source descriptions of "good angulation" are qualitative; this
+        // numeric slope/separation score is an approximation and stays blocked
+        // unless a tester explicitly opts it in for research/replay.
         fun angulationScore(i: Int): Double {
             val start = max(0, i - 4)
-            if (i - start < 2 || !jawS[i].isFinite()) return 0.0
+            if (i - start < 2 || !jawS[i].isFinite() || !candles[i].c.isFinite() || candles[i].c <= 0.0) {
+                return 0.0
+            }
+            if (!jawS[start].isFinite()) return 0.0
             val now = max(0.0, jawS[i] - candles[i].l)
-            val then = if (jawS[start].isFinite()) {
-                max(0.0, jawS[start] - candles[start].l)
-            } else 0.0
+            val then = max(0.0, jawS[start] - candles[start].l)
             return max(0.0, now - then) / max(candles[i].c, 1e-9) * 100.0
         }
 
-        fun lastValidFractalLevel(at: Int): Pair<Int, Double>? {
-            val center = latestUpFractal(max(2, at - 2)) ?: return null
-            return center to candles[center].h
-        }
+        fun actionable(signalIndex: Int, trigger: Double): Boolean =
+            candles[current].c < trigger &&
+                WilliamsSignalMath.isLongSignalStillActionable(
+                    signalIndex = signalIndex,
+                    currentIndex = current,
+                    highs = highs,
+                    lows = lows,
+                    trigger = trigger
+                )
 
-        val current = candles.lastIndex
+        val frameMs = frameSeconds(frame) * 1000L
         val out = mutableListOf<CampaignSignalN>()
 
-        // WM1: bullish reversal bar. It is the context bar; execution waits
-        // for a break above its high. Countertrend WM1 is intentionally allowed.
-        val reversalStart = max(2, candles.lastIndex - 20)
-        for (i in candles.lastIndex downTo reversalStart) {
+        // WM1: reversal bar may be the first Wise Man, even while the
+        // Alligator is not yet in bullish alignment. Conditional entry only.
+        val wm1TtlBars = max(1, prefs.getInt("pending_reversal_bars", 2))
+        val reversalStart = max(2, current - 20)
+        for (i in current downTo reversalStart) {
             val priorLow = min(candles[i - 1].l, candles[i - 2].l)
             val range = max(candles[i].h - candles[i].l, 1e-12)
             val closeLocation = (candles[i].c - candles[i].l) / range
+            val mouthValues = listOf(jawS[i], teethS[i], lipsS[i])
             val belowMouth =
-                jawS[i].isFinite() &&
-                    teethS[i].isFinite() &&
-                    lipsS[i].isFinite() &&
-                    candles[i].l < min(jawS[i], min(teethS[i], lipsS[i]))
+                mouthValues.all { it.isFinite() } &&
+                    candles[i].l < mouthValues.minOrNull()!!
+            val approximateAngulationOptedIn =
+                prefs.getBoolean("allow_approximate_wm1_angulation", false)
             if (
                 candles[i].l < priorLow &&
                 closeLocation >= 0.50 &&
                 belowMouth &&
-                angulationScore(i) > 0.0
+                angulationScore(i) > 0.0 &&
+                approximateAngulationOptedIn
             ) {
                 val trigger = candles[i].h + tick
-                if (candles[current].c < trigger) {
+                val ageBars = current - i
+                if (ageBars < wm1TtlBars && actionable(i, trigger)) {
                     out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "REVERSAL", candles[i].t),
                         type = "REVERSAL",
@@ -6484,70 +6873,96 @@ private class NativeEngine(
                         signalBarTimeMs = candles[i].t,
                         triggerPrice = trigger,
                         protectivePrice = candles[i].l - tick,
-                        teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                        invalidationPrice = candles[i].l - tick,
-                        reason = "WM1 bullish reversal; waiting above signal-bar high"
+                        teethAtDetection = teethS[i],
+                        invalidationPrice = candles[i].l,
+                        reason = "WM1 reversal candidate; approximate angulation explicitly opted in; conditional trigger above signal bar",
+                        confirmationTimeMs = candles[i].t + frameMs,
+                        expiresAtMs = candles[i].t + frameMs * (1L + wm1TtlBars),
+                        timeframe = frame
                     )
                 }
+                // A newer reversal supersedes this search even when it is no
+                // longer actionable; never revive an older stale candidate.
                 break
             }
         }
 
-        // WM2: three consecutive rising AO histogram bars, with the previously
-        // valid buy-fractal/Balance-Line context still present.
-        var streak = 0
-        for (i in candles.lastIndex downTo 35) {
-            val a = ao(candles, i)
-            val p = ao(candles, i - 1)
-            if (a > p) streak++ else break
-            if (streak == 3) {
-                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { (center, level) ->
-                    teethS[center + 2].isFinite() && level > teethS[center + 2]
-                } ?: false
-                if (priorFractalValid) {
-                    val trigger = candles[i].h + tick
-                    if (candles[current].c < trigger) {
-                        out += CampaignSignalN(
-                            signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
-                            type = "SUPER_AO",
-                            role = "ENTRY",
-                            signalBarTimeMs = candles[i].t,
-                            triggerPrice = trigger,
-                            protectivePrice = candles[i].l - tick,
-                            teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                            invalidationPrice = candles[i].l - tick,
-                            reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
-                        )
-                    }
-                }
-                break
-            }
-        }
-
-        // WM3: most recent confirmed buy fractal. The signal is persistent,
-        // but the trigger is armable only while it remains above current Teeth.
-        val fractalCenter = latestUpFractal(candles.lastIndex - 2)
-        if (fractalCenter != null) {
-            val trigger = candles[fractalCenter].h + tick
-            val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
-            if (candles[current].c < trigger && trigger > currentTeeth) {
+        // WM2: three consecutive same-colour AO changes. It is independent of
+        // a prior fractal. The price-bar high supplies a conditional BUY STOP.
+        val aoSeries = WilliamsOscillatorMath.aoSeries(medians)
+        val wm2TtlBars = max(1, prefs.getInt("pending_super_ao_bars", 2))
+        val superAoIndex = (max(3, current - 80)..current)
+            .lastOrNull { WilliamsOscillatorMath.isThirdSameColorAoBar(aoSeries, it, "LONG") }
+        if (superAoIndex != null && current - superAoIndex < wm2TtlBars) {
+            val i = superAoIndex
+            val trigger = candles[i].h + tick
+            if (actionable(i, trigger)) {
                 out += CampaignSignalN(
-                    signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[fractalCenter].t),
-                    type = "FRACTAL",
+                    signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
+                    type = "SUPER_AO",
                     role = "ENTRY",
-                    signalBarTimeMs = candles[fractalCenter].t,
+                    signalBarTimeMs = candles[i].t,
                     triggerPrice = trigger,
-                    protectivePrice = candles[fractalCenter].l - tick,
-                    teethAtDetection = currentTeeth,
-                    invalidationPrice = candles[fractalCenter].l - tick,
-                    reason = "WM3 confirmed buy fractal; trigger must remain above Teeth"
+                    protectivePrice = candles[i].l - tick,
+                    teethAtDetection = teethS[i],
+                    invalidationPrice = candles[i].l,
+                    reason = "WM2 Super AO: third rising AO bar; independent of fractal; conditional trigger above corresponding price bar",
+                    confirmationTimeMs = candles[i].t + frameMs,
+                    expiresAtMs = candles[i].t + frameMs * (1L + wm2TtlBars),
+                    timeframe = frame
                 )
             }
         }
 
-        // Keep at most one signal per family, ordered by formation time. The
-        // campaign engine chooses the earliest still-valid first-entry signal.
-        return out.distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
+        // WM3: a confirmed fractal is valid only against Teeth at confirmation
+        // and remains armable only if its trigger is still outside current Teeth.
+        val wm3TtlBars = max(1, prefs.getInt("pending_fractal_bars", 8))
+        val fractal = latestUpFractal(current)
+        if (fractal != null && current - fractal.confirmationIndex < wm3TtlBars) {
+            val center = fractal.centerIndex
+            val confirmation = fractal.confirmationIndex
+            val trigger = fractal.level + tick
+            val confirmationTeeth = teethS.getOrNull(confirmation) ?: Double.NaN
+            val currentTeeth = teethS[current]
+            val stopWindowStart = max(0, current - campaignTrailBars + 1)
+            val protectiveStop = lows.subList(stopWindowStart, current + 1).minOrNull()
+                ?.minus(tick) ?: Double.NaN
+            val teethValid =
+                confirmationTeeth.isFinite() && confirmationTeeth > 0.0 &&
+                    fractal.level > confirmationTeeth &&
+                    currentTeeth.isFinite() && currentTeeth > 0.0 &&
+                    trigger > currentTeeth
+            if (
+                teethValid &&
+                protectiveStop.isFinite() &&
+                protectiveStop > 0.0 &&
+                protectiveStop < candles[current].c &&
+                actionable(center, trigger)
+            ) {
+                out += CampaignSignalN(
+                    signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[center].t),
+                    type = "FRACTAL",
+                    role = "ENTRY",
+                    signalBarTimeMs = candles[center].t,
+                    triggerPrice = trigger,
+                    protectivePrice = protectiveStop,
+                    teethAtDetection = confirmationTeeth,
+                    invalidationPrice = candles[center].l,
+                    reason = "WM3 confirmed fractal; Teeth validated at confirmation and at current activation; stop provenance kept separate from fractal invalidation",
+                    confirmationTimeMs = candles[confirmation].t + frameMs,
+                    expiresAtMs = candles[confirmation].t + frameMs * (1L + wm3TtlBars),
+                    timeframe = frame
+                )
+            }
+        }
+
+        // Campaign chronology is based on when each signal became confirmed,
+        // not the historical centre bar used to draw a fractal.
+        return out.distinctBy { it.signalId }.sortedWith(
+            compareBy<CampaignSignalN> { it.confirmationTimeMs }
+                .thenBy { it.signalBarTimeMs }
+                .thenBy { it.type }
+        )
     }
 
     private fun analyseBase(
@@ -6556,25 +6971,24 @@ private class NativeEngine(
         spread: Double,
         volume: Double
     ): BaseAnalysis {
-        val workCandles =
-            if (campaignEngineEnabled &&
-                campaignExecutionTimeframe != interval
-            ) {
-                runCatching {
-                    fetchCandles(symbol, campaignExecutionTimeframe, 150)
-                }.getOrElse { candles }
-            } else {
-                candles
-            }
+        // The canonical engine always fetches H1 itself. Do not fall back to
+        // a caller's M5/M15 candles if the H1 request fails. Only fully closed
+        // candles participate in indicator, trigger, or campaign decisions.
+        val rawWorkCandles = runCatching {
+            fetchCandles(symbol, WilliamsTimeframeContract.CANONICAL_DECISION, 151)
+        }.getOrElse { emptyList() }
+        val nowMs = System.currentTimeMillis()
+        val frameMs = frameSeconds(WilliamsTimeframeContract.CANONICAL_DECISION) * 1000L
+        val workCandles = rawWorkCandles.filter { it.t + frameMs <= nowMs }
         val i = workCandles.lastIndex
-        if (i < 40) {
+        if (i < 139) {
             return BaseAnalysis(
                 symbol = symbol,
                 candles = workCandles,
                 score = 0.0,
                 signal = false,
                 htfCandidate = false,
-                wave = neutralWave(workCandles),
+                wave = neutralWave(workCandles, WilliamsTimeframeContract.CANONICAL_DECISION),
                 atrPct = 0.0,
                 riskPct = 0.0,
                 riskReward = 0.0,
@@ -6582,7 +6996,7 @@ private class NativeEngine(
                 breakoutDistancePct = 0.0,
                 obi = null,
                 tradeFlowImbalance = null,
-                reason = "Недостаточно свечей: " + workCandles.size + "/40"
+                reason = "Недостаточно закрытых H1-свечей: " + workCandles.size + "/140"
             )
         }
 
@@ -6604,25 +7018,42 @@ private class NativeEngine(
             emptyList()
         }
 
-        val alligator = alligator(closes)
+        val alligatorLines = WilliamsAlligatorMath.calculate(
+            highs = workCandles.map { it.h },
+            lows = workCandles.map { it.l }
+        )
+        if (!alligatorLines.validAt(i)) {
+            return BaseAnalysis(
+                symbol = symbol, candles = workCandles, score = 0.0, signal = false,
+                htfCandidate = false, wave = neutralWave(workCandles, WilliamsTimeframeContract.CANONICAL_DECISION),
+                atrPct = 0.0, riskPct = 0.0, riskReward = 0.0, spreadPct = spread,
+                breakoutDistancePct = 0.0, obi = null, tradeFlowImbalance = null,
+                reason = "Alligator not ready: invalid history or warm-up"
+            )
+        }
+        val alligator = TripleValues(
+            alligatorLines.jaw[i], alligatorLines.teeth[i], alligatorLines.lips[i]
+        )
         val bullish =
             alligator.lips > alligator.teeth &&
                 alligator.teeth > alligator.jaw &&
                 closes[i] > alligator.lips
 
         val aoValue = ao(workCandles, i)
-        val aoPositive = aoValue > 0.0
+        val aoPositive = aoValue.isFinite() && aoValue > 0.0
 
-        val fractalIndex = latestConfirmedUpFractal(workCandles, i)
-        val fractalHigh =
-            fractalIndex?.let { workCandles[it].h }
-        val teethSeries = smma(closes, 8)
-        val fractalTeeth =
-            fractalIndex?.let { teethSeries.getOrNull(it) }
+        val latestUp = WilliamsFractalMath.latestUp(
+            highs = workCandles.map { it.h }, throughIndex = i, lookbackBars = 80
+        )
+        val fractalIndex = latestUp?.centerIndex
+        val fractalHigh = latestUp?.level
+        val fractalTeeth = latestUp?.let { alligatorLines.teeth.getOrNull(it.confirmationIndex) }
         val externalFractal =
             fractalHigh != null &&
-                fractalTeeth != null &&
-                fractalHigh > fractalTeeth
+                fractalTeeth != null && fractalTeeth.isFinite() && fractalTeeth > 0.0 &&
+                fractalHigh > fractalTeeth &&
+                alligatorLines.teeth[i].isFinite() &&
+                (fractalHigh + (campaignRules?.tick ?: 0.0)) > alligatorLines.teeth[i]
         val breakoutDistance =
             if (fractalHigh != null && fractalHigh > 0.0) {
                 (closes[i] - fractalHigh) / fractalHigh
@@ -6662,7 +7093,7 @@ private class NativeEngine(
                 else -> 1.0
             }
 
-        val preliminaryWave = waveInfo(workCandles, campaignExecutionTimeframe)
+        val preliminaryWave = waveInfo(workCandles, WilliamsTimeframeContract.CANONICAL_DECISION)
         var score =
             trendScore +
                 aoScore +
@@ -6981,7 +7412,11 @@ private class NativeEngine(
                 countertrendCorrectionImpulse = countertrendCorrectionImpulse
             ),
             reason = reason,
-            campaignReady = campaignEngineEnabled && finalSignal
+            // MTF/Elliott-wave labels and heuristic scores are context
+            // diagnostics, not a substitute gate for a source-qualified TC2
+            // Wise-Man event. Higher-timeframe permission remains a separate
+            // contract; do not erase a canonical H1 candidate here.
+            campaignReady = campaignEngineEnabled && baseCandidate.campaignReady
         )
     }
 
@@ -7041,6 +7476,8 @@ private class NativeEngine(
                                 .put("type", s.type)
                                 .put("role", s.role)
                                 .put("signal_bar_time_ms", s.signalBarTimeMs)
+                                .put("confirmation_time_ms", s.confirmationTimeMs)
+                                .put("expires_at_ms", s.expiresAtMs)
                                 .put("trigger_price", s.triggerPrice)
                                 .put("protective_price", s.protectivePrice)
                                 .put("teeth_at_detection", s.teethAtDetection)
@@ -7094,13 +7531,20 @@ private class NativeEngine(
         return count.coerceIn(0, 3)
     }
 
-    private fun alligator(
-        closes: List<Double>
-    ): TripleValues {
-        val jaw = smma(closes, 13).lastOrNull() ?: 0.0
-        val teeth = smma(closes, 8).lastOrNull() ?: 0.0
-        val lips = smma(closes, 5).lastOrNull() ?: 0.0
-        return TripleValues(jaw, teeth, lips)
+    private fun alligator(candles: List<CandleN>): TripleValues {
+        if (candles.isEmpty()) {
+            return TripleValues(Double.NaN, Double.NaN, Double.NaN)
+        }
+        val lines = WilliamsAlligatorMath.calculate(
+            highs = candles.map { it.h },
+            lows = candles.map { it.l }
+        )
+        val last = candles.lastIndex
+        return TripleValues(
+            lines.jaw.getOrNull(last) ?: Double.NaN,
+            lines.teeth.getOrNull(last) ?: Double.NaN,
+            lines.lips.getOrNull(last) ?: Double.NaN
+        )
     }
 
     private data class TripleValues(
@@ -7130,18 +7574,8 @@ private class NativeEngine(
         candles: List<CandleN>,
         index: Int
     ): Double {
-        if (index < 34) return 0.0
-
-        val medians =
-            candles.map { (it.h + it.l) / 2.0 }
-
-        val fast =
-            medians.subList(index - 4, index + 1).average()
-
-        val slow =
-            medians.subList(index - 34, index + 1).average()
-
-        return fast - slow
+        val medians = candles.map { (it.h + it.l) / 2.0 }
+        return WilliamsOscillatorMath.ao(medians, index)
     }
 
     private fun aoBearishDivergence(candles: List<CandleN>): Boolean {
@@ -7173,49 +7607,51 @@ private class NativeEngine(
         candles: List<CandleN>,
         currentIndex: Int
     ): Int? {
-        val lastConfirmedCenter =
-            currentIndex - 2
+        if (currentIndex !in candles.indices) return null
+        return WilliamsFractalMath.latestUp(
+            highs = candles.map { it.h },
+            throughIndex = currentIndex,
+            lookbackBars = 40
+        )?.centerIndex
+    }
 
-        if (lastConfirmedCenter < 2) return null
+    private fun isUpFractal(candles: List<CandleN>, i: Int): Boolean {
+        if (i !in candles.indices) return false
+        return WilliamsFractalMath.confirmUp(
+            highs = candles.map { it.h },
+            centerIndex = i,
+            throughIndex = candles.lastIndex
+        ) != null
+    }
 
-        val start =
-            max(2, lastConfirmedCenter - 40)
+    private fun isDownFractal(candles: List<CandleN>, i: Int): Boolean {
+        if (i !in candles.indices) return false
+        return WilliamsFractalMath.confirmDown(
+            lows = candles.map { it.l },
+            centerIndex = i,
+            throughIndex = candles.lastIndex
+        ) != null
+    }
 
-        for (i in lastConfirmedCenter downTo start) {
-            if (isUpFractal(candles, i)) {
-                return i
+    private fun fractalConfirmationAt(
+        candles: List<CandleN>,
+        confirmationIndex: Int,
+        bullish: Boolean
+    ): WilliamsFractalConfirmation? {
+        if (confirmationIndex !in candles.indices) return null
+        val through = confirmationIndex
+        val prices = if (bullish) candles.map { it.h } else candles.map { it.l }
+        val earliestCenter = 2
+        for (center in through downTo earliestCenter) {
+            if (center >= through) continue
+            val result = if (bullish) {
+                WilliamsFractalMath.confirmUp(prices, center, throughIndex = through)
+            } else {
+                WilliamsFractalMath.confirmDown(prices, center, throughIndex = through)
             }
+            if (result?.confirmationIndex == confirmationIndex) return result
         }
-
         return null
-    }
-
-    private fun isUpFractal(
-        candles: List<CandleN>,
-        i: Int
-    ): Boolean {
-        if (i < 2 || i + 2 >= candles.size) {
-            return false
-        }
-
-        return candles[i].h > candles[i - 1].h &&
-            candles[i].h > candles[i - 2].h &&
-            candles[i].h > candles[i + 1].h &&
-            candles[i].h > candles[i + 2].h
-    }
-
-    private fun isDownFractal(
-        candles: List<CandleN>,
-        i: Int
-    ): Boolean {
-        if (i < 2 || i + 2 >= candles.size) {
-            return false
-        }
-
-        return candles[i].l < candles[i - 1].l &&
-            candles[i].l < candles[i - 2].l &&
-            candles[i].l < candles[i + 1].l &&
-            candles[i].l < candles[i + 2].l
     }
 
     private fun fractalPivots(
@@ -7223,15 +7659,20 @@ private class NativeEngine(
     ): List<PivotN> {
         if (candles.size < 10) return emptyList()
 
+        // A wave pivot becomes knowable on its confirmation bar, which may be
+        // later than centre+2 when right-side extremes tie.
         val pivots = mutableListOf<PivotN>()
-        for (i in 2 until candles.size - 2) {
-            val up = isUpFractal(candles, i)
-            val down = isDownFractal(candles, i)
-
-            if (up && !down) {
-                pivots.add(PivotN("UP", candles[i].h, i + 2))
-            } else if (down && !up) {
-                pivots.add(PivotN("DOWN", candles[i].l, i + 2))
+        for (confirmation in 0 until candles.size) {
+            val up = fractalConfirmationAt(candles, confirmation, bullish = true)
+            val down = fractalConfirmationAt(candles, confirmation, bullish = false)
+            when {
+                up != null && down == null ->
+                    pivots.add(PivotN("UP", up.level, up.confirmationIndex))
+                down != null && up == null ->
+                    pivots.add(PivotN("DOWN", down.level, down.confirmationIndex))
+                // Two direction pivots confirming on the same bar is ambiguous
+                // for wave alternation; keep neither rather than infer direction.
+                else -> Unit
             }
         }
 
@@ -7302,7 +7743,7 @@ private class NativeEngine(
             }
 
         val alligatorValues =
-            alligator(candles.map { it.c })
+            alligator(candles)
 
         val bullish =
             alligatorValues.lips >
@@ -7629,15 +8070,18 @@ private class NativeEngine(
                         lastAccountProbe = System.currentTimeMillis()
                         val balances = signedAccount().optJSONArray("balances") ?: JSONArray()
                         var usdt = 0.0
+                        var usdtLocked = 0.0
                         var foundUsdt = false
                         for (i in 0 until balances.length()) {
                             val row = balances.optJSONObject(i) ?: continue
                             if (row.optString("asset") == "USDT") {
                                 usdt = row.optString("free").toDoubleOrNull() ?: 0.0
+                                usdtLocked = row.optString("locked").toDoubleOrNull() ?: 0.0
                                 foundUsdt = true
                             }
                         }
                         liveUsdtBalance = usdt
+                        liveUsdtLockedBalance = usdtLocked
                         restAccountReady = foundUsdt
                     } else if (key().isBlank() || secret().isBlank()) {
                         restAccountReady = false
@@ -7739,6 +8183,8 @@ private class NativeEngine(
                             item.optString("free")
                                 .toDoubleOrNull()
                         liveUsdtBalance = balance ?: 0.0
+                        liveUsdtLockedBalance =
+                            item.optString("locked").toDoubleOrNull() ?: 0.0
                         break
                     }
                 }
@@ -7905,19 +8351,25 @@ private class NativeEngine(
         }
 
         val output = JSONArray()
-        val prices =
-            sourceCandles.map { it.c }
+        val prices = sourceCandles.map { it.c }
+        val lines = WilliamsAlligatorMath.calculate(
+            highs = sourceCandles.map { it.h },
+            lows = sourceCandles.map { it.l }
+        )
+        val start = max(0, sourceCandles.size - 120)
 
         if (prices.isNotEmpty()) {
-            val jaw = smma(prices, 13)
-            val teeth = smma(prices, 8)
-            val lips = smma(prices, 5)
-
-            val start =
-                max(0, sourceCandles.size - 120)
+            
 
             for (i in start until sourceCandles.size) {
                 val c = sourceCandles[i]
+                val candleIsClosed =
+                    c.t + frameSeconds(selectedInterval) * 1000L <= System.currentTimeMillis()
+                val upFractalEvent =
+                    if (candleIsClosed) fractalConfirmationAt(sourceCandles, i, bullish = true) else null
+                val downFractalEvent =
+                    if (candleIsClosed) fractalConfirmationAt(sourceCandles, i, bullish = false) else null
+                val aoValue = ao(sourceCandles, i)
                 output.put(
                     JSONObject()
                         .put("time", c.t)
@@ -7925,48 +8377,20 @@ private class NativeEngine(
                         .put("high", c.h)
                         .put("low", c.l)
                         .put("close", c.c)
-                        .put(
-                            "jaw",
-                            jaw.getOrNull(i)
-                                ?: JSONObject.NULL
-                        )
-                        .put(
-                            "teeth",
-                            teeth.getOrNull(i)
-                                ?: JSONObject.NULL
-                        )
-                        .put(
-                            "lips",
-                            lips.getOrNull(i)
-                                ?: JSONObject.NULL
-                        )
-                        .put(
-                            "ao",
-                            ao(sourceCandles, i)
-                        )
-                        .put(
-                            "long_signal",
-                            i >= 40 &&
-                                alligator(
-                                    prices.subList(
-                                        0,
-                                        i + 1
-                                    )
-                                ).let { values ->
-                                    values.lips > values.teeth &&
-                                        values.teeth > values.jaw &&
-                                        prices[i] > values.lips &&
-                                        ao(sourceCandles, i) > 0.0
-                                }
-                        )
-                        .put(
-                            "fractal_up",
-                            isUpFractal(sourceCandles, i)
-                        )
-                        .put(
-                            "fractal_down",
-                            isDownFractal(sourceCandles, i)
-                        )
+                        .put("jaw", lines.jaw.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("teeth", lines.teeth.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("lips", lines.lips.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("ao", aoValue.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("closed_bar", candleIsClosed)
+                        // The chart endpoint is diagnostic-only. It must not
+                        // synthesize a tradeable entry from Alligator/AO booleans.
+                        .put("long_signal", false)
+                        .put("signal_role", "DIAGNOSTIC_ONLY")
+                        .put("canonical_entry_path", "CampaignEngine")
+                        .put("fractal_up", upFractalEvent != null)
+                        .put("fractal_down", downFractalEvent != null)
+                        .put("fractal_up_center_index", upFractalEvent?.centerIndex ?: JSONObject.NULL)
+                        .put("fractal_down_center_index", downFractalEvent?.centerIndex ?: JSONObject.NULL)
                 )
             }
         }

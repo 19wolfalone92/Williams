@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from binance_client import BinanceAPIError, BinanceSpotClient
 from data import fetch_klines
 from db import Database
-from strategy import calculate_indicators, config_from_env
+from strategy import calculate_indicators, config_from_env, canonical_williams_environment_blockers
 from telegram_bot import Telegram
 from portfolio_controller import PortfolioController
 from portfolio_trader import MultiPositionTrader
@@ -477,6 +477,41 @@ class Trader:
         a=self.client.account()
         return next((float(b['free'])+float(b['locked']) for b in a.get('balances',[]) if b.get('asset')==self.base_asset),0.0)
 
+    def _daily_risk_inputs(self):
+        """Build a portfolio-wide daily-risk snapshot; missing marks block entries."""
+        import math
+
+        account = self.client.account()
+        balances = account.get('balances', [])
+        usdt = next(
+            (
+                float(b.get('free', 0) or 0) + float(b.get('locked', 0) or 0)
+                for b in balances
+                if str(b.get('asset', '')).upper() == 'USDT'
+            ),
+            0.0,
+        )
+        equity = usdt
+        unrealized = 0.0
+        open_trades = self.db.open_trades()
+        for trade in open_trades:
+            symbol = str(trade.get('symbol', '')).upper()
+            qty = float(trade.get('quantity', 0) or 0)
+            entry = float(trade.get('entry_price', 0) or 0)
+            if not symbol or qty <= 0 or entry <= 0:
+                raise RuntimeError('daily risk blocked: invalid managed open-trade record')
+            mark = float(self.client.ticker_price(symbol).get('price', 0) or 0)
+            if not math.isfinite(mark) or mark <= 0:
+                raise RuntimeError('daily risk blocked: fresh mark unavailable for ' + symbol)
+            equity += qty * mark
+            unrealized += (mark - entry) * qty
+        # Closed-trade pnl is net of fees; subtract only fees on open trades
+        # that have not yet been booked into realized pnl.
+        fees = sum(float(trade.get("fees", 0) or 0) for trade in open_trades)
+        if not all(math.isfinite(value) for value in (equity, unrealized, fees)):
+            raise RuntimeError('daily risk blocked: non-finite portfolio snapshot')
+        return equity, unrealized, fees
+
     def bot_base_balance(self, total_balance=None):
         if total_balance is None:
             total_balance=self.base_balance_total()
@@ -746,7 +781,33 @@ class Trader:
         if open_trade:
             expected_qty=self._trade_remaining_qty(open_trade,all_orders)
             tolerance=max(self._min_qty(),expected_qty*float(os.getenv('BALANCE_TOLERANCE_PCT','0.002')))
-            if expected_qty < self._min_qty(): self._recover_closed_trade(open_trade,all_orders); self._set_state('FLAT')
+            if expected_qty < self._min_qty():
+                if bot_position_qty >= self._min_qty():
+                    self._set_state('RECONCILE_REQUIRED')
+                    self.db.log_event(
+                        'ERROR',
+                        'recovery_inventory_history_conflict',
+                        'Order history says FLAT but Binance still reports managed inventory',
+                        {
+                            'symbol': self.symbol,
+                            'history_expected_qty': expected_qty,
+                            'exchange_managed_qty': bot_position_qty,
+                        },
+                    )
+                    self.recovered = True
+                    return
+                if self._recover_closed_trade(open_trade, all_orders):
+                    self._set_state('FLAT')
+                else:
+                    self._set_state('RECONCILE_REQUIRED')
+                    self.db.log_event(
+                        'ERROR',
+                        'recovery_close_unproven',
+                        'Could not prove a complete exit with authoritative SELL fills and fees',
+                        {'symbol': self.symbol, 'trade_id': open_trade.get('id')},
+                    )
+                    self.recovered = True
+                    return
             elif abs(bot_position_qty-expected_qty)>tolerance:
                 self._set_state('RECONCILE_REQUIRED'); self.notify(f'RECOVERY BLOCKED\nExpected Williams {expected_qty:.8f} {self.base_asset}; actual Williams balance {bot_position_qty:.8f}. Total account balance={position_qty:.8f}; foreign baseline={position_qty-bot_position_qty:.8f}. Manual reconciliation required.'); self.recovered=True; return
             else:
@@ -790,16 +851,163 @@ class Trader:
                 self._set_state('FLAT')
         self.recovered=True; self.db.log_event('INFO','recovery_complete','Exchange/SQLite reconciliation complete',{'position_qty':position_qty,'bot_trade':bool(open_trade),'open_oco_ids':sorted(open_oco_ids),'state':self.state()})
 
-    def _recover_closed_trade(self,trade,all_orders):
-        entry_id=str(trade.get('entry_order_id') or ''); entry_time=int(next((b.get('time',b.get('transactTime',0)) for b in all_orders if str(b.get('orderId'))==entry_id),0) or 0)
-        sells=[o for o in all_orders if o.get('side')=='SELL' and o.get('status')=='FILLED' and int(o.get('time',0) or 0)>=entry_time and self._sell_belongs_to_bot(o,all_orders)]
-        if not sells:return
-        # Prefer the trade's recorded OCO list; otherwise use the latest bot-owned exit execution.
-        target_lid=str(trade.get('exit_order_list_id') or '')
-        if target_lid:sells=[o for o in sells if str(o.get('orderListId'))==target_lid] or sells
-        sell=max(sells,key=lambda x:int(x.get('time',x.get('transactTime',0)) or 0)); qty=float(sell.get('executedQty',0) or 0); proceeds=float(sell.get('cummulativeQuoteQty',0) or 0); exit_price=proceeds/qty if qty else float(sell.get('price',0) or 0)
-        entry=float(trade['entry_price']); pnl=(exit_price-entry)*min(qty,float(trade['quantity'])); pct=(exit_price/entry-1) if entry else 0
-        self.db.close_trade(trade['id'],datetime.fromtimestamp(int(sell.get('transactTime',sell.get('time',0)))/1000,tz=timezone.utc).isoformat(),exit_price,pnl,pct,'TAKE_PROFIT/STOP_LOSS (recovered)',sell.get('orderListId')); self.notify(f'RECOVERY\nPosition closed offline\nexit≈{exit_price:.8f}\nPnL≈{pnl:.8f} ({pct:.2%})')
+    def _fee_quote_for_asset(self, asset, trade_price=0.0):
+        asset = str(asset or "").upper()
+        if asset in {"USDT", "USDC", "FDUSD", "BUSD"}:
+            return 1.0
+        if asset == str(self.base_asset or "").upper() and trade_price > 0:
+            return float(trade_price)
+        try:
+            return float(self.client.ticker_price(asset + "USDT")["price"])
+        except Exception:
+            pass
+        try:
+            cross = float(self.client.ticker_price(asset + "BTC")["price"])
+            btc = float(self.client.ticker_price("BTCUSDT")["price"])
+            return cross * btc
+        except Exception as exc:
+            raise RuntimeError(
+                f"{asset}: cannot value recovered commission in USDT"
+            ) from exc
+
+    def _recovered_exit_fee_quote(self, sell):
+        order_id = sell.get("orderId")
+        fills = list(sell.get("fills") or [])
+        if not fills and order_id is not None and hasattr(self.client, "my_trades"):
+            try:
+                fills = list(
+                    self.client.my_trades(
+                        self.symbol,
+                        order_id=order_id,
+                        limit=1000,
+                    ) or []
+                )
+            except Exception as exc:
+                self.db.log_event(
+                    "ERROR",
+                    "recovery_exit_fee_lookup_failed",
+                    "Cannot verify recovered exit commissions; position stays in reconciliation",
+                    {"symbol": self.symbol, "order_id": order_id, "error": str(exc)},
+                )
+                return None
+        if not fills:
+            return None
+
+        total_fee = 0.0
+        known_quote_assets = {"USDT", "USDC", "FDUSD", "BUSD"}
+        base_asset = str(self.base_asset or "").upper()
+        for fill in fills:
+            commission = float(fill.get("commission", 0) or 0)
+            if commission <= 0:
+                continue
+            asset = str(fill.get("commissionAsset", "")).upper()
+            price = float(fill.get("price", sell.get("price", 0)) or 0)
+            try:
+                if asset in known_quote_assets:
+                    total_fee += commission
+                elif asset == base_asset:
+                    if price <= 0:
+                        return None
+                    total_fee += commission * price
+                else:
+                    total_fee += commission * self._fee_quote_for_asset(asset, price)
+            except Exception as exc:
+                self.db.log_event(
+                    "ERROR",
+                    "recovery_exit_fee_conversion_failed",
+                    "Cannot value recovered exit commission; position stays in reconciliation",
+                    {"symbol": self.symbol, "order_id": order_id, "asset": asset, "error": str(exc)},
+                )
+                return None
+        return total_fee
+
+    def _recover_closed_trade(self, trade, all_orders):
+        entry_id = str(trade.get("entry_order_id") or "")
+        entry_order = next(
+            (row for row in all_orders if str(row.get("orderId")) == entry_id),
+            None,
+        )
+        entry_time = int(
+            (entry_order or {}).get("time", (entry_order or {}).get("transactTime", 0))
+            or 0
+        )
+        sells = [
+            row for row in all_orders
+            if str(row.get("side", "")).upper() == "SELL"
+            and str(row.get("status", "")).upper() in {"FILLED", "PARTIALLY_FILLED"}
+            and int(row.get("time", row.get("transactTime", 0)) or 0) >= entry_time
+            and float(row.get("executedQty", 0) or 0) > 0
+            and self._sell_belongs_to_bot(row, all_orders)
+        ]
+        target_list_id = str(trade.get("exit_order_list_id") or "")
+        if target_list_id:
+            matching = [
+                row for row in sells
+                if str(row.get("orderListId", "")) == target_list_id
+            ]
+            if matching:
+                sells = matching
+        if not sells:
+            return False
+
+        total_qty = sum(float(row.get("executedQty", 0) or 0) for row in sells)
+        total_quote = sum(
+            float(row.get("cummulativeQuoteQty", 0) or 0)
+            or float(row.get("price", 0) or 0) * float(row.get("executedQty", 0) or 0)
+            for row in sells
+        )
+        last_exit = max(
+            sells,
+            key=lambda row: int(row.get("time", row.get("transactTime", 0)) or 0),
+        )
+        original_qty = float(
+            (entry_order or {}).get("executedQty", 0) or trade.get("quantity", 0) or 0
+        )
+        tolerance = max(self._min_qty(), original_qty * float(os.getenv("BALANCE_TOLERANCE_PCT", "0.002")))
+        if original_qty <= 0 or total_qty + tolerance < original_qty or total_quote <= 0:
+            self.db.log_event(
+                "WARNING",
+                "recovery_exit_not_complete",
+                "Recovered SELL history does not prove the whole managed position closed",
+                {
+                    "symbol": self.symbol,
+                    "original_qty": original_qty,
+                    "executed_sell_qty": total_qty,
+                    "tolerance": tolerance,
+                },
+            )
+            return False
+
+        exit_fee_quote = 0.0
+        for sell in sells:
+            fee = self._recovered_exit_fee_quote(sell)
+            if fee is None:
+                return False
+            exit_fee_quote += fee
+
+        exit_price = total_quote / total_qty
+        entry = float(trade.get("entry_price") or 0)
+        entry_fee_quote = float(trade.get("fees") or 0)
+        pnl = total_quote - entry * original_qty - entry_fee_quote - exit_fee_quote
+        pnl_pct = (exit_price / entry - 1.0) if entry > 0 else 0.0
+        self.db.close_trade(
+            trade["id"],
+            datetime.fromtimestamp(
+                int(last_exit.get("transactTime", last_exit.get("time", 0)) or 0) / 1000,
+                tz=timezone.utc,
+            ).isoformat(),
+            exit_price,
+            pnl,
+            pnl_pct,
+            "TAKE_PROFIT/STOP_LOSS (recovered)",
+            last_exit.get("orderListId"),
+            fees=entry_fee_quote + exit_fee_quote,
+        )
+        self.notify(
+            f"RECOVERY\\nPosition closed offline\\nexit≈{exit_price:.8f}\\n"
+            f"PnL≈{pnl:.8f} ({pnl_pct:.2%})"
+        )
+        return True
 
     def _spread_pct(self):
         b=self.client.book_ticker(self.symbol); bid=float(b['bidPrice']); ask=float(b['askPrice']); mid=(bid+ask)/2
@@ -1061,7 +1269,10 @@ class Trader:
                 raise RuntimeError('BUY blocked: another entry intent is already reserved')
             if self.db.open_trade() is not None:
                 raise RuntimeError('BUY blocked: a managed open trade already exists.')
-            equity_ok, equity_reason = self.equity_breaker.check(self.db, self.available_quote(), self.symbol)
+            equity, unrealized, fees = self._daily_risk_inputs()
+            equity_ok, equity_reason = self.equity_breaker.check(
+                self.db, equity, None, unrealized, fees
+            )
             if not equity_ok:
                 raise RuntimeError(equity_reason)
             if not (os.getenv("WILLIAMS_TEST_DB") and not hasattr(self.client, "book_ticker")):
@@ -1140,11 +1351,6 @@ class Trader:
                 )
             raise
 
-    def _oco_equity_check(self):
-        ok, reason = self.equity_breaker.check(self.db, self.available_quote(), self.symbol)
-        if not ok:
-            raise RuntimeError(reason)
-
     def place_oco(self, qty, entry_price, trade_id=None):
         if self.symbol_rules is None:
             raise RuntimeError('Symbol rules are not loaded')
@@ -1197,18 +1403,39 @@ class Trader:
             if not OrderMath.validate_notional(actual_qty, sl_d, self.symbol_rules, buffer_pct):
                 raise RuntimeError('OCO SL notional is below protected minimum')
 
-            self.refresh_execution_context(self.symbol)
-            snap = self.context_cache.snapshot()
-            required_versions = {tf: snap.context(self.symbol, tf).version for tf in self.config.structural_timeframes}
+            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
             intent = OrderIntent.new(
                 self.symbol,
                 'SELL',
                 'OCO',
-                required_context_versions=required_versions,
-                purpose='EXIT',
+                required_context_versions={},
+                purpose='CAMPAIGN_PROTECTION',
                 quantity=self.client.decimal_format(actual_qty),
+                client_order_id=cid,
+                max_age_ms=60_000,
             )
-            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
+            def _validate_oco_before_submit(_snapshot):
+                current = D(self.client.ticker_price(self.symbol).get('price', '0'))
+                if not (tp_d > current > sl_d):
+                    raise RuntimeError(
+                        f'OCO protection price ordering invalid at submit: '
+                        f'current={current}, tp={tp_d}, sl={sl_d}'
+                    )
+                latest_account = self.client.account()
+                latest_free = next(
+                    (
+                        D(balance.get('free', '0'))
+                        for balance in latest_account.get('balances', [])
+                        if balance.get('asset') == self.base_asset
+                    ),
+                    D('0'),
+                )
+                if latest_free < actual_qty:
+                    raise RuntimeError(
+                        f'OCO protection quantity no longer available: '
+                        f'free={latest_free}, required={actual_qty}'
+                    )
+
             self._set_state('EXIT_PENDING')
             result = self.execution_barrier.execute(
                 intent,
@@ -1220,7 +1447,7 @@ class Trader:
                     self.client.decimal_format(sl_limit_d),
                     cid,
                 ),
-                pre_submit_checks=lambda _snapshot: self._oco_equity_check(),
+                pre_submit_checks=_validate_oco_before_submit,
             )
             if not result.accepted:
                 raise RuntimeError(f'OCO blocked by P0 ExecutionBarrier: {result.reason}')
@@ -1299,6 +1526,21 @@ class Trader:
         if self.state() != 'FLAT':
             return
 
+        # Legacy Trader has only a boolean-indicator -> MARKET BUY path. It
+        # cannot preserve Williams' conditional BUY_STOP trigger or durable
+        # campaign intent, so it is intentionally fail-closed until migrated
+        # to CampaignEngine / ExecutionBarrier.
+        if str(getattr(self, "interval", "")).lower() != "1h":
+            self.db.log_event("WARN", "canonical_timeframe_block",
+                              "legacy Trader cannot create canonical signals outside H1",
+                              {"symbol": self.symbol, "interval": getattr(self, "interval", None)})
+            return
+        blockers = canonical_williams_environment_blockers()
+        if blockers:
+            self.db.log_event("ERROR", "canonical_williams_profile_blocked",
+                              "; ".join(blockers), {"symbol": self.symbol})
+            return
+
         df = fetch_klines(
             self.client,
             self.symbol,
@@ -1330,6 +1572,17 @@ class Trader:
                 last_time,
             )
             return
+
+        # Fail closed: a boolean indicator is not a persisted conditional
+        # campaign intent. Never turn it into an immediate MARKET BUY here.
+        self.db.log_event(
+            "WARN",
+            "legacy_indicator_market_entry_blocked",
+            "Use the canonical campaign SignalSpec/conditional-trigger path",
+            {"symbol": self.symbol, "candle": last_time},
+        )
+        self.db.state_set(candle_key, last_time)
+        return
 
         allowed, reason = self._risk_gate(closed)
 

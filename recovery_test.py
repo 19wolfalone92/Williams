@@ -47,6 +47,24 @@ class FakeClient:
     def all_orders(self,symbol,limit=1000):return list(self.orders)
     def open_order_lists(self,symbol=None):return list(self.open_ocos)
     def book_ticker(self,symbol):return {'bidPrice':str(self.price-0.02),'askPrice':str(self.price+0.02)}
+    def ticker_price(self,symbol):return {'symbol':symbol,'price':str(self.price)}
+    def my_trades(self,symbol,order_id=None,limit=1000):
+        return [
+            {
+                'symbol': symbol,
+                'orderId': order_id,
+                'price': str(order.get('price', self.price)),
+                'qty': str(order.get('executedQty', 0)),
+                'commission': '0',
+                'commissionAsset': 'USDT',
+                'isBuyer': False,
+                'time': int(order.get('time', order.get('transactTime', 0)) or 0),
+            }
+            for order in self.orders
+            if str(order.get('orderId')) == str(order_id)
+            and str(order.get('side', '')).upper() == 'SELL'
+            and str(order.get('status', '')).upper() == 'FILLED'
+        ]
     def create_oco_sell(self,symbol,quantity,take_profit_price,stop_price,stop_limit_price,list_client_order_id=None):
         lid=self.next_list_id;self.next_list_id+=1;qty=float(quantity);tp=float(take_profit_price);sl=float(stop_price);slp=float(stop_limit_price);a=self.next_order_id;self.next_order_id+=2
         legs=[{'symbol':symbol,'side':'SELL','type':'TAKE_PROFIT_LIMIT','orderId':a,'orderListId':lid,'clientOrderId':f'WILLV4_OCO_{a}-tp','status':'NEW','price':str(tp),'stopPrice':str(tp),'origQty':str(qty),'time':2000+self.created_oco_count},{'symbol':symbol,'side':'SELL','type':'STOP_LOSS_LIMIT','orderId':a+1,'orderListId':lid,'clientOrderId':f'WILLV4_OCO_{a}-sl','status':'NEW','price':str(slp),'stopPrice':str(sl),'origQty':str(qty),'time':2000+self.created_oco_count}]

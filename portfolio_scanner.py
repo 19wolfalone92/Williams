@@ -34,7 +34,9 @@ class PortfolioScanner:
             risk_per_trade_pct=min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005")))),
             max_position_fraction=0.25,
             max_daily_loss_pct=0.03,
-            min_rr=1.5,
+            # CampaignEngine owns structural invalidation and exits; a
+            # synthetic ATR target must not veto a Williams campaign signal.
+            min_rr=0.0,
             max_atr_pct=0.08,
         )
 
@@ -60,10 +62,10 @@ class PortfolioScanner:
         if not risk.allowed:
             return None
 
-        final_score = (
-            candidate.score * 0.60
-            + risk.score * 0.40
-        )
+        # Do not rank canonical campaigns by the RiskEngine's synthetic
+        # ATR take-profit/R:R estimate. It is only a spread/volatility safety
+        # prefilter here; the campaign trigger and structural stop own sizing.
+        final_score = candidate.score
 
         return PortfolioCandidate(
             candidate=candidate,

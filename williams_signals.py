@@ -30,7 +30,7 @@ def _timeframe_ms(timeframe: str) -> int:
         "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000,
         "3d": 259_200_000, "1w": 604_800_000, "1M": 2_592_000_000,
     }
-    return int(values.get(str(timeframe), 300_000))
+    return int(values.get(str(timeframe), 0))
 
 def _tick_buffer(tick_size: float, ticks: int = 1) -> float:
     return max(float(tick_size), 0.0) * max(int(ticks), 1)
@@ -103,12 +103,62 @@ def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[floa
     return float(max(score, 0.0)), bool(valid)
 
 
+def _invalidation_intact(
+    ind: pd.DataFrame,
+    source_index: int,
+    *,
+    side: str,
+    protective_level: float,
+) -> bool:
+    """Fail closed if a later closed candle breached the signal's structural extreme."""
+    if source_index < 0 or source_index >= len(ind):
+        return False
+    if side not in {"LONG", "SHORT"} or not math.isfinite(float(protective_level)) or protective_level <= 0:
+        return False
+    later = ind.iloc[source_index + 1:]
+    if later.empty:
+        return True
+    column = "low" if side == "LONG" else "high"
+    values = pd.to_numeric(later[column], errors="coerce").to_numpy(dtype=float)
+    if not all(math.isfinite(float(v)) for v in values):
+        return False
+    return bool((values > protective_level).all()) if side == "LONG" else bool((values < protective_level).all())
+
+
+def _trigger_unbroken(
+    ind: pd.DataFrame,
+    source_index: int,
+    *,
+    side: str,
+    trigger_price: float,
+) -> bool:
+    """A conditional stop is not re-armed after any later candle traded through it."""
+    if source_index < 0 or source_index >= len(ind):
+        return False
+    if side not in {"LONG", "SHORT"} or not math.isfinite(float(trigger_price)) or trigger_price <= 0:
+        return False
+    later = ind.iloc[source_index + 1:]
+    if later.empty:
+        return True
+    column = "high" if side == "LONG" else "low"
+    values = pd.to_numeric(later[column], errors="coerce").to_numpy(dtype=float)
+    if not all(math.isfinite(float(v)) for v in values):
+        return False
+    return bool((values < trigger_price).all()) if side == "LONG" else bool((values > trigger_price).all())
+
+
 def _latest_reversal(
     ind: pd.DataFrame,
     *,
     side: str,
     max_age_bars: int = 20,
 ) -> tuple[int, float, float] | None:
+    # "Good angulation" is described qualitatively, while the available
+    # editions do not provide a deterministic threshold proving this linear
+    # separation approximation author-exact. Default to blocked; the explicit
+    # flag is for research/replay only until the source rule is resolved.
+    if str(os.getenv("WILLIAMS_ALLOW_APPROXIMATE_WM1_ANGULATION", "false")).lower() != "true":
+        return None
     column = "bullish_reversal_bar" if side == "LONG" else "bearish_reversal_bar"
     if column not in ind.columns:
         return None
@@ -142,16 +192,9 @@ def _latest_super_ao(
             streak = int(row.get(streak_col, 0) or 0)
         except (TypeError, ValueError):
             streak = 0
-        # The book's third same-colour bar is the specific signal bar.
-        # Williams' Super AO is a continuation signal inside an established
-        # structure, so retain the existing valid fractal/Balance-Line gate.
-        fractal_gate_col = "long_fractal_outside" if side == "LONG" else "short_fractal_outside"
-        gate_i = max(0, i - 1)
-        gate_ok = (
-            fractal_gate_col not in ind.columns
-            or bool(ind.iloc[gate_i].get(fractal_gate_col, False))
-        )
-        if streak == 3 and gate_ok:
+        # WM2 is identified by the third bar independently of WM3. Campaign
+        # context and the conditional price trigger are checked downstream.
+        if streak == 3:
             trigger_base = float(row["high"] if side == "LONG" else row["low"])
             protective = float(row["low"] if side == "LONG" else row["high"])
             return i, trigger_base, protective
@@ -169,7 +212,17 @@ def _latest_confirmed_fractal(
     if level_col not in ind.columns or fractal_col not in ind.columns:
         return None
 
-    right = 2
+    right_value = ind.iloc[-1].get("fractal_right_bars", 2)
+    try:
+        right = int(right_value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if right < 1 or (isinstance(right_value, float) and not right_value.is_integer()):
+        return None
+    center_index_col = (
+        "confirmed_up_center_index" if side == "LONG" else "confirmed_down_center_index"
+    )
+    has_center_metadata = center_index_col in ind.columns
     start = max(0, len(ind) - max(3, int(max_age_bars)))
     for confirmation_i in range(len(ind) - 1, start - 1, -1):
         row = ind.iloc[confirmation_i]
@@ -177,11 +230,23 @@ def _latest_confirmed_fractal(
         if level is None or pd.isna(level):
             continue
         center_i = confirmation_i - right
-        if center_i < 0 or not bool(ind.iloc[center_i].get(fractal_col, False)):
+        if has_center_metadata:
+            try:
+                stored_center = int(row.get(center_index_col, -1))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if stored_center >= 0:
+                center_i = stored_center
+        if center_i < 0 or center_i >= len(ind):
+            continue
+        # Fractal event is stamped on its actual confirmation row, never on
+        # the historical center row as an actionable event.
+        if not bool(row.get(fractal_col, False)):
             continue
         center = ind.iloc[center_i]
         trigger_base = float(center["high"] if side == "LONG" else center["low"])
         protective = float(center["low"] if side == "LONG" else center["high"])
+        # Teeth belongs to the actual confirmation row, not center+2.
         teeth = float(row.get("teeth_shifted", 0.0) or 0.0)
         return confirmation_i, center_i, trigger_base, protective, teeth
     return None
@@ -200,8 +265,14 @@ def extract_long_signal_specs(
     context_versions: dict[str, int] | None = None,
     max_reversal_age_bars: int = 20,
 ) -> list[SignalSpec]:
-    """Extract all presently armable LONG signals from closed candles."""
-    if ind is None or ind.empty:
+    """Extract all presently armable LONG signals from closed canonical H1 candles."""
+    if ind is None or ind.empty or str(timeframe).strip().lower() != "1h" or len(ind) < 140:
+        return []
+    # The live caller should already supply only closed candles. Enforce the
+    # invariant again at this public boundary so a second caller cannot build
+    # a canonical signal from an unfinished H1 candle or unknown timestamp.
+    last_open_ms = _row_time_ms(ind.iloc[-1])
+    if last_open_ms <= 0 or last_open_ms + _timeframe_ms("1h") > int(pd.Timestamp.now(tz='UTC').timestamp() * 1000):
         return []
 
     specs: list[SignalSpec] = []
@@ -225,7 +296,14 @@ def extract_long_signal_specs(
     if reversal is not None:
         i, trigger_base, protective = reversal
         trigger = trigger_base + tick
-        if current_close < trigger:
+        ttl_bars = max(1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2")))
+        age_bars = len(ind) - 1 - i
+        if (
+            current_close < trigger
+            and age_bars < ttl_bars
+            and _trigger_unbroken(ind, i, side="LONG", trigger_price=trigger)
+            and _invalidation_intact(ind, i, side="LONG", protective_level=protective)
+        ):
             row = ind.iloc[i]
             score, _ = _angulation(ind, i)
             specs.append(
@@ -236,6 +314,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_time_ms=_row_time_ms(row) + _timeframe_ms(timeframe),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -252,8 +331,8 @@ def extract_long_signal_specs(
                     source_candle_index=i,
                     expires_at_ms=(
                         _row_time_ms(row)
-                        + _timeframe_ms(timeframe) * max(
-                            1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2"))
+                        + _timeframe_ms(timeframe) * (
+                            1 + max(1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2")))
                         )
                     ),
                 )
@@ -263,7 +342,14 @@ def extract_long_signal_specs(
     if super_ao is not None:
         i, trigger_base, protective = super_ao
         trigger = trigger_base + tick
-        if current_close < trigger:
+        ttl_bars = max(1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2")))
+        age_bars = len(ind) - 1 - i
+        if (
+            current_close < trigger
+            and age_bars < ttl_bars
+            and _trigger_unbroken(ind, i, side="LONG", trigger_price=trigger)
+            and _invalidation_intact(ind, i, side="LONG", protective_level=protective)
+        ):
             row = ind.iloc[i]
             specs.append(
                 SignalSpec.new(
@@ -273,6 +359,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_time_ms=_row_time_ms(row) + _timeframe_ms(timeframe),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -288,8 +375,8 @@ def extract_long_signal_specs(
                     source_candle_index=i,
                     expires_at_ms=(
                         _row_time_ms(row)
-                        + _timeframe_ms(timeframe) * max(
-                            1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2"))
+                        + _timeframe_ms(timeframe) * (
+                            1 + max(1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2")))
                         )
                     ),
                 )
@@ -297,12 +384,39 @@ def extract_long_signal_specs(
 
     fractal = _latest_confirmed_fractal(ind, side="LONG")
     if fractal is not None:
-        confirmation_i, center_i, trigger_base, protective, teeth = fractal
-        # Formation can be anywhere; trigger validity belongs to current
-        # price/Teeth.  At arm time the trigger must still be above Teeth.
+        confirmation_i, center_i, trigger_base, invalidation_level, teeth = fractal
+        # The source assigns activation to a conditional price break; keep the
+        # opposite structural extreme and protective trailing stop as separate
+        # values. The 3–5 bar stop window is an explicit bot campaign policy.
         trigger = trigger_base + tick
-        current_trigger_valid = trigger > max(current_teeth, 0.0)
-        if current_close < trigger and current_trigger_valid:
+        ttl_bars = max(1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8")))
+        try:
+            trail_bars = int(os.getenv("WILLIAMS_TC2_TRAILING_BARS", "3"))
+        except (TypeError, ValueError, OverflowError):
+            trail_bars = 0
+        # UNRESOLVED/noncanonical stop windows block rather than being silently
+        # converted into a different trading rule.
+        if trail_bars not in {3, 4, 5}:
+            return specs
+        recent_lows = pd.to_numeric(ind["low"].iloc[-trail_bars:], errors="coerce").to_numpy(dtype=float)
+        # Keep the raw trailing low here. The Python execution adapter applies the single exchange tick buffer when it builds the protective STOP_LOSS.
+        protective_stop = float(recent_lows.min()) if len(recent_lows) == trail_bars and all(math.isfinite(float(v)) for v in recent_lows) else float("nan")
+        age_bars = len(ind) - 1 - confirmation_i
+        current_trigger_valid = (
+            math.isfinite(current_teeth) and current_teeth > 0.0
+            and math.isfinite(teeth) and teeth > 0.0
+            and math.isfinite(invalidation_level) and invalidation_level > 0.0
+            and trigger_base > teeth
+            and trigger > current_teeth
+            and math.isfinite(protective_stop) and 0.0 < protective_stop < current_close
+        )
+        if (
+            current_close < trigger
+            and current_trigger_valid
+            and age_bars < ttl_bars
+            and _trigger_unbroken(ind, center_i, side="LONG", trigger_price=trigger)
+            and _invalidation_intact(ind, center_i, side="LONG", protective_level=invalidation_level)
+        ):
             row = ind.iloc[center_i]
             specs.append(
                 SignalSpec.new(
@@ -312,10 +426,11 @@ def extract_long_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_time_ms=_row_time_ms(ind.iloc[confirmation_i]) + _timeframe_ms(timeframe),
                     trigger_price=trigger,
-                    protective_reference=protective,
+                    protective_reference=protective_stop,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(invalidation_level),
                     teeth_at_detection=float(teeth),
                     alligator_bullish=bool(current.get("bullish_alligator", False)),
                     alligator_awake=bool(current.get("alligator_awake", False)),
@@ -323,13 +438,11 @@ def extract_long_signal_specs(
                     wave_exhaustion_risk=float(wave_exhaustion_risk),
                     htf_confirmed=bool(htf_confirmed),
                     context_versions=versions,
-                    reason="WM3 buy fractal; trigger only while price/trigger remains above Teeth",
+                    reason="WM3 buy fractal; Teeth valid at confirmation/current activation; separate structural invalidation and 3–5 bar protective stop",
                     source_candle_index=center_i,
                     expires_at_ms=(
-                        _row_time_ms(row)
-                        + _timeframe_ms(timeframe) * max(
-                            1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8"))
-                        )
+                        _row_time_ms(ind.iloc[confirmation_i])
+                        + _timeframe_ms(timeframe) * (1 + ttl_bars)
                     ),
                 )
             )

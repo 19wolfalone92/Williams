@@ -129,6 +129,8 @@ class SignalSpec:
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     expires_at_ms: int = 0
     source_candle_index: int = -1
+    # Actual confirmation close; for a fractal this is later than its center bar.
+    confirmation_time_ms: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
