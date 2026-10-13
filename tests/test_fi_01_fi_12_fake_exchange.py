@@ -509,88 +509,101 @@ def test_fi_09_contradictory_or_incomplete_trade_fields_fail_closed(tmp_path, tr
 
 
 def test_fi_13_concurrent_recovery_workers_do_not_duplicate_exchange_observation_or_mutation(tmp_path):
-    """Two initialized, independent SQLite connections compete for one recovery lease."""
+    """Repeated two-connection lease races permit one recovery owner per intent."""
     import threading
     import traceback
 
-    path = str(tmp_path / "fi13-concurrent.sqlite3")
-    exchange = DeterministicFakeExchange()
-    intent = _new_intent(client_id="fi13-concurrent-client")
-    exchange.orders[intent.client_order_id] = {
-        "symbol": "BTCUSDT", "side": "BUY", "orderId": "713",
-        "clientOrderId": intent.client_order_id, "status": "NEW",
-        "origQty": "0.010", "executedQty": "0", "price": "0", "avgPrice": "0",
-    }
-    with Database(path) as seed:
-        _persist_ambiguous(seed, intent)
+    # Repeat the independent-connection race on fresh durable state. This tests
+    # the actual lease claim, not just concurrent schema initialization.
+    for attempt in range(12):
+        path = str(tmp_path / f"fi13-concurrent-{attempt}.sqlite3")
+        exchange = DeterministicFakeExchange()
+        intent = _new_intent(client_id=f"fi13-concurrent-client-{attempt}")
+        exchange.orders[intent.client_order_id] = {
+            "symbol": "BTCUSDT", "side": "BUY", "orderId": str(713 + attempt),
+            "clientOrderId": intent.client_order_id, "status": "NEW",
+            "origQty": "0.010", "executedQty": "0", "price": "0", "avgPrice": "0",
+        }
+        with Database(path) as seed:
+            _persist_ambiguous(seed, intent)
 
-    # Keep schema creation/migrations out of the lease race. Each connection is
-    # independently opened against the same SQLite file before the barrier.
-    # Concurrent initialization is exercised by the companion test below.
-    db1 = Database(path)
-    db2 = Database(path)
-    start = threading.Barrier(3)
-    outcomes = []
-    failures = []
-    outcome_lock = threading.Lock()
+        # Open separate connections before synchronizing workers, keeping the
+        # migration race isolated in FI-13B.
+        db1 = Database(path)
+        db2 = Database(path)
+        start = threading.Barrier(3)
+        outcomes = []
+        failures = []
+        outcome_lock = threading.Lock()
 
-    def recover(db, owner):
-        stage = "worker-start"
-        try:
-            worker = ExecutionRecoveryWorker(
-                db, exchange, base_retry_seconds=5, owner=owner
-            )
-            stage = "barrier-wait"
-            start.wait(timeout=10)
-            stage = "run_once"
-            result = worker.run_once(now=time.time() + 10)
-            with outcome_lock:
-                outcomes.append(result)
-        except Exception as exc:
-            with outcome_lock:
-                failures.append({
-                    "owner": owner,
-                    "stage": stage,
-                    "type": type(exc).__name__,
-                    "message": str(exc),
-                    "traceback": traceback.format_exc(),
-                })
+        def recover(db, owner):
+            stage = "worker-start"
             try:
-                start.abort()
-            except Exception:
-                pass
+                worker = ExecutionRecoveryWorker(
+                    db, exchange, base_retry_seconds=5, owner=owner
+                )
+                stage = "barrier-wait"
+                start.wait(timeout=10)
+                stage = "run_once"
+                result = worker.run_once(now=time.time() + 10)
+                with outcome_lock:
+                    outcomes.append(result)
+            except Exception as exc:
+                with outcome_lock:
+                    failures.append({
+                        "attempt": attempt,
+                        "owner": owner,
+                        "stage": stage,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                        "traceback": traceback.format_exc(),
+                    })
+                try:
+                    start.abort()
+                except Exception:
+                    pass
 
-    first = threading.Thread(target=recover, args=(db1, "fi13-worker-a"), daemon=True)
-    second = threading.Thread(target=recover, args=(db2, "fi13-worker-b"), daemon=True)
-    try:
-        first.start()
-        second.start()
-        try:
-            start.wait(timeout=10)
-        except threading.BrokenBarrierError:
-            pass
-        first.join(timeout=10)
-        second.join(timeout=10)
-
-        assert not first.is_alive() and not second.is_alive(), (
-            f"recovery workers did not terminate; failures={failures!r}"
+        first = threading.Thread(
+            target=recover, args=(db1, f"fi13-worker-a-{attempt}"), daemon=True
         )
-        assert failures == [], f"worker failure details: {failures!r}"
-        assert len(outcomes) == 2, f"expected both worker outcomes, got {outcomes!r}"
-        assert sum(int(result.get("claimed", 0)) for result in outcomes) == 1
-        assert sum(int(result.get("active", 0)) for result in outcomes) == 1
-        assert exchange.mutation_count == 0
-        assert exchange.lookup_count == 1
+        second = threading.Thread(
+            target=recover, args=(db2, f"fi13-worker-b-{attempt}"), daemon=True
+        )
+        try:
+            first.start()
+            second.start()
+            try:
+                start.wait(timeout=10)
+            except threading.BrokenBarrierError:
+                pass
+            first.join(timeout=10)
+            second.join(timeout=10)
 
-        with Database(path) as final_db:
-            final_row = _row(final_db, intent)
-            assert final_row["status"] == "SUBMITTED"
-            assert final_row["order_id"] == "713"
-            assert not final_db.has_unresolved_execution_intents()
-    finally:
-        for db in (db1, db2):
-            db.close()
+            assert not first.is_alive() and not second.is_alive(), (
+                f"recovery workers did not terminate on attempt {attempt}; "
+                f"failures={failures!r}"
+            )
+            assert failures == [], (
+                f"worker failure on attempt {attempt}: {failures!r}"
+            )
+            assert len(outcomes) == 2, (
+                f"expected both worker outcomes on attempt {attempt}, got {outcomes!r}"
+            )
+            assert sum(int(result.get("claimed", 0)) for result in outcomes) == 1, (
+                f"lease claim count was not exactly one on attempt {attempt}: {outcomes!r}"
+            )
+            assert sum(int(result.get("active", 0)) for result in outcomes) == 1
+            assert exchange.mutation_count == 0
+            assert exchange.lookup_count == 1
 
+            with Database(path) as final_db:
+                final_row = _row(final_db, intent)
+                assert final_row["status"] == "SUBMITTED"
+                assert final_row["order_id"] == str(713 + attempt)
+                assert not final_db.has_unresolved_execution_intents()
+        finally:
+            for db in (db1, db2):
+                db.close()
 
 def test_fi_13b_concurrent_database_initialization_is_diagnostic_and_durable(tmp_path):
     """Repeated concurrent schema initialization must serialize durably."""
