@@ -459,6 +459,9 @@ class ExecutionBarrier:
                     "exchange_response_received_but_SUBMITTED_state_persistence_failed; "
                     "reconcile by stable client_order_id before any further mutation"
                 )
+                # The exchange call already happened. Attempt to leave an
+                # explicit reconciliation marker; never retry the mutation.
+                self._persist(intent, "AMBIGUOUS", reason)
                 self._record(
                     "ERROR",
                     "execution_submission_persistence_failed",
