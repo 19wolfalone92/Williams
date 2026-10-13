@@ -2300,7 +2300,36 @@ class MultiPositionTrader:
         allowed, risk_reason = self._daily_entry_guard()
         if not allowed:
             self.db.log_event("WARNING", "daily_entry_blocked", risk_reason)
-            return {"status": "RISK_BLOCKED", "results": [], "reason": risk_reason}
+            # A conditional BUY resting at Binance is still capable of opening
+            # new exposure after the breaker trips. Cancel only pending entry
+            # intents through the canonical barrier; protective OCO exits remain
+            # untouched and emergency reductions remain available.
+            try:
+                cancelled_pending = self.campaign_execution.reconcile_pending_entries(
+                    force_cancel_reason="DAILY_RISK_GATE_BLOCKED"
+                )
+            except Exception as exc:
+                cancelled_pending = [{
+                    "state": "RECONCILE_REQUIRED",
+                    "reason": f"pending-entry cancellation failed: {type(exc).__name__}: {exc}",
+                }]
+                self.db.log_event(
+                    "ERROR",
+                    "daily_risk_pending_entry_cancel_failed",
+                    "Daily risk gate blocked entries but resting conditional orders could not be fully reconciled",
+                    cancelled_pending,
+                )
+            unresolved_cancels = [
+                row for row in cancelled_pending
+                if str(row.get("state", "")).upper() == "RECONCILE_REQUIRED"
+            ]
+            return {
+                "status": "RISK_BLOCKED",
+                "results": [],
+                "reason": risk_reason,
+                "pending_entry_cancellation": cancelled_pending,
+                "pending_entry_cancellation_reconciled": not unresolved_cancels,
+            }
 
         balance = self._balance()
         if balance <= 0:
