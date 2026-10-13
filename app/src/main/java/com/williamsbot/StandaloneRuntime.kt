@@ -522,9 +522,10 @@ private class NativeEngine(
     private val prefs: android.content.SharedPreferences,
     private val http: OkHttpClient
 ) {
-    private val baseUrl = "https://testnet.binance.vision"
-    // Futures-native public market data; the legacy Spot account/order transport remains
-    // hard-disabled below until every remaining market/execution path is migrated.
+    private val baseUrl = "https://demo-fapi.binance.com"
+    // All REST transport in this Android runtime is anchored to USD-M Futures Testnet.
+    // Spot-shaped signed routes are rejected; legacy public reads are translated only
+    // to their Futures market-data equivalents by getBody().
     private val futuresMarketData = BinanceUsdMFuturesMarketData(http)
     // Runtime execution is routed through the local USD-M Futures adapter/coordinator below.
     // Any leftover signed Spot mutation is blocked at the signedRequest boundary.
