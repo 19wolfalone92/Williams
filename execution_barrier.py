@@ -326,6 +326,34 @@ class ExecutionBarrier:
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 
             order_fsm.transition(OrderState.SUBMITTING)
+            submitting_persisted = self._persist(intent, "SUBMITTING")
+            if not submitting_persisted and (
+                self.db is not None or self.require_durable_intent
+            ):
+                reason = (
+                    "execution_intent_persistence_failed: submission aborted; "
+                    "durable SUBMITTING state could not be confirmed"
+                )
+                self._record("ERROR", "execution_intent_persistence_failed", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
+            submit_event_persisted = self._persist_event_required(
+                intent,
+                "SUBMIT_ATTEMPT_STARTED",
+                {
+                    "symbol": intent.symbol,
+                    "side": intent.side,
+                    "purpose": intent.purpose,
+                    "client_order_id": intent.client_order_id,
+                },
+            )
+            if not submit_event_persisted:
+                reason = (
+                    "required SUBMIT_ATTEMPT_STARTED event persistence failed; "
+                    "submission aborted before Binance mutation"
+                )
+                self._persist(intent, "BLOCKED", reason)
+                self._record("ERROR", "execution_event_persistence_failed", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
             self._record(
                 "INFO",
                 "execution_admitted",
@@ -439,11 +467,19 @@ class ExecutionBarrier:
                     {"intent_id": intent.intent_id, "client_order_id": intent.client_order_id},
                 )
                 raise RuntimeError(f"ExecutionBarrier: {reason}")
-            if self.db is not None and hasattr(self.db, "save_execution_event"):
-                try:
-                    self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
-                except Exception:
-                    pass
+            submitted_event_persisted = self._persist_event_required(
+                intent,
+                "BINANCE_SUBMITTED",
+                {"symbol": intent.symbol, "side": intent.side},
+            )
+            if not submitted_event_persisted:
+                reason = (
+                    "exchange response received but required BINANCE_SUBMITTED event "
+                    "persistence failed; reconcile by stable client_order_id"
+                )
+                self._persist(intent, "AMBIGUOUS", reason)
+                self._record("ERROR", "execution_submission_persistence_failed", intent, reason)
+                raise RuntimeError(f"ExecutionBarrier: {reason}")
             self._record("INFO", "execution_submitted", intent, "Binance accepted request", {
                 "intent_id": intent.intent_id,
             })
