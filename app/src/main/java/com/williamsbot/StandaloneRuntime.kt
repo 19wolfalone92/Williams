@@ -3721,6 +3721,31 @@ private class NativeEngine(
         val direction = if (signal.type.startsWith("SHORT_", true))
             NativeFuturesCampaignCoordinator.Direction.SHORT else NativeFuturesCampaignCoordinator.Direction.LONG
         val symbol = candidate.symbol
+        val decisionBarTime = candidate.candles.lastOrNull()?.t ?: return
+        val signalAgeMs = decisionBarTime - signal.signalBarTimeMs
+        if (signalAgeMs < 0L || signalAgeMs > 5L * 60L * 60L * 1000L) return
+
+        // Macro D1 is an airbag; H4 supplies context; H1 is the only decision/entry TF.
+        // M15/M5 are deliberately not read here and cannot create an entry.
+        val d1 = fetchCandles(symbol, "1d", 90)
+        val h4 = fetchCandles(symbol, "4h", 120)
+        if (d1.size < 45 || h4.size < 45) return
+        val d1Line = alligator(d1, d1.lastIndex)
+        val h4Line = alligator(h4, h4.lastIndex)
+        val d1Bull = d1Line.lips > d1Line.teeth && d1Line.teeth > d1Line.jaw &&
+            d1.last().c > d1Line.lips && ao(d1, d1.lastIndex) > 0.0
+        val d1Bear = d1Line.lips < d1Line.teeth && d1Line.teeth < d1Line.jaw &&
+            d1.last().c < d1Line.lips && ao(d1, d1.lastIndex) < 0.0
+        val h4Bull = h4Line.lips > h4Line.teeth && h4Line.teeth > h4Line.jaw &&
+            h4.last().c > h4Line.lips && ao(h4, h4.lastIndex) > 0.0
+        val h4Bear = h4Line.lips < h4Line.teeth && h4Line.teeth < h4Line.jaw &&
+            h4.last().c < h4Line.lips && ao(h4, h4.lastIndex) < 0.0
+        val contextAllowed = when (direction) {
+            NativeFuturesCampaignCoordinator.Direction.LONG -> h4Bull && !d1Bear
+            NativeFuturesCampaignCoordinator.Direction.SHORT -> h4Bear && !d1Bull
+        }
+        if (!contextAllowed) return
+
         val entries = futuresCampaignCoordinator.intentsSnapshot()
         val clientId = ("W2E_" + symbol.take(7) + "_" + signal.type.take(4) + "_" + signal.signalBarTimeMs.toString(36)).take(36)
         if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId }) return
@@ -3839,9 +3864,10 @@ private class NativeEngine(
         scannerState = if (ranked.size == coreSymbols.size) "READY" else "PARTIAL"
         runCatching { PositionsWidgetProvider.refresh(context) }
         runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 180) }
-        if (ranked.isEmpty()) {
-            scannerError = scannerError ?: "Futures scanner received no usable symbols"
-            scannerState = "FAILED"
+        if (ranked.size != coreSymbols.size) {
+            val missing = coreSymbols - ranked.map { it.symbol }.toSet()
+            scannerError = "Futures entry blocked; all ten contracts need H1 data. Missing: " + missing.joinToString(",")
+            scannerState = if (ranked.isEmpty()) "FAILED" else "PARTIAL_BLOCKED"
             return
         }
         if (!restAccountReady || !marketDataFresh()) return
