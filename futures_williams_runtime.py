@@ -273,9 +273,11 @@ class FuturesWilliamsScanner:
             ]
             if not signal_pool:
                 continue
-            # Campaign entry is the first valid presenting Wise Man. Do not
-            # require multiple simultaneous Wise-Men confirmations.
-            signal = min(signal_pool, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
+            # A flat campaign may start only from a Wise-Man ENTRY signal.
+            # TC2 three-price-bar setups are continuation add-ons and are still
+            # surfaced to an existing campaign, but can never open a new one.
+            initial_pool = [s for s in signal_pool if s.role == SignalRole.ENTRY]
+            signal = min(initial_pool or signal_pool, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
             # Keep both-direction signals visible to the campaign
             # manager. HTF confirmation is an initial-entry gate, not an
             # exit/add-on visibility gate.
@@ -2209,6 +2211,8 @@ class FuturesWilliamsRuntime:
             if not signals:
                 signals = [candidate.signal]
             for signal in signals:
+                if signal.role == SignalRole.ADD_ON:
+                    continue
                 if signal.symbol != campaign.symbol or signal.side != opposite:
                     continue
                 if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
@@ -2300,6 +2304,8 @@ class FuturesWilliamsRuntime:
         active_symbols = {str(r["symbol"]).upper() for r in self.db.open_trades()}
         for candidate in candidates:
             if candidate.symbol in active_symbols:
+                continue
+            if candidate.signal.role != SignalRole.ENTRY:
                 continue
             if len(self.open_positions()) >= int(os.getenv("MAX_OPEN_POSITIONS", "5")):
                 break
