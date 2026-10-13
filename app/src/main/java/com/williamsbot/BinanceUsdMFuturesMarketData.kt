@@ -22,6 +22,27 @@ internal class BinanceUsdMFuturesMarketData(
         .build()
 ) {
     private val base = "https://demo-fapi.binance.com"
+    @Volatile private var serverOffsetMs = 0L
+    @Volatile private var lastServerSyncLocalMs = 0L
+
+    /** Exchange clock is authoritative for candle closure and stale-cache decisions. */
+    fun exchangeNowMs(): Long {
+        val localNow = System.currentTimeMillis()
+        if (localNow - lastServerSyncLocalMs > 30_000L) {
+            synchronized(this) {
+                val before = System.currentTimeMillis()
+                if (before - lastServerSyncLocalMs > 30_000L) {
+                    val remote = getObject("$base/fapi/v1/time").optLong("serverTime", 0L)
+                    val after = System.currentTimeMillis()
+                    if (remote <= 0L) throw IOException("USD-M Futures server time unavailable")
+                    serverOffsetMs = remote - (before + (after - before) / 2L)
+                    lastServerSyncLocalMs = after
+                }
+            }
+        }
+        return System.currentTimeMillis() + serverOffsetMs
+    }
+
     val approvedSymbols: Set<String> = setOf(
         "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
         "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
