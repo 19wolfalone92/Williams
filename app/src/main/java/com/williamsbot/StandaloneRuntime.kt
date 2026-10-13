@@ -2723,6 +2723,10 @@ private class NativeEngine(
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
         if (reconcileRequired || paused || killLatched) return
+        if (equityCircuitBreaker.isTripped()) {
+            lastError = "DAILY_LOSS_LIMIT: new entries blocked; existing position exits remain enabled"
+            return
+        }
         if (positionList().any { it.symbol == candidate.symbol }) return
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
         if (positionList().size >= maxOpenPositions) return
@@ -5767,24 +5771,15 @@ private class NativeEngine(
                 now
             )
             if (snapshot.tripped) {
-                circuitBreakerTripInProgress = true
+                // Daily loss is an entry-admission breaker, not the emergency
+                // kill switch. Do not cancel protection or force market sells:
+                // normal and emergency exit/reduction paths must remain usable.
                 lastError =
-                    "AUTOMATIC CIRCUIT BREAKER: managed equity drawdown " +
+                    "DAILY_LOSS_LIMIT: new entries blocked; managed equity drawdown " +
                         "%.2f%%".format(
                             Locale.US,
                             snapshot.drawdownPct * 100.0
                         )
-                Thread {
-                    try {
-                        kill()
-                    } finally {
-                        circuitBreakerTripInProgress = false
-                    }
-                }.apply {
-                    isDaemon = true
-                    name = "williams-equity-circuit-breaker"
-                    start()
-                }
             }
         }.onFailure {
             lastError =
