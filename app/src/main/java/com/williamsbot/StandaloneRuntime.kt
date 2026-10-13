@@ -600,9 +600,12 @@ private class NativeEngine(
     private val tradeFlow = java.util.concurrent.ConcurrentHashMap<String, ArrayDeque<TradeFlowSample>>()
     private val lastUserEventTimeByType = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private var marketSocket: WebSocket? = null
+    private var publicSocket: WebSocket? = null
     private val orderBookCache = OrderBookCache()
     @Volatile private var marketSocketConnected = false
     @Volatile private var marketSocketLastEventMs = 0L
+    @Volatile private var publicSocketConnected = false
+    @Volatile private var publicSocketLastEventMs = 0L
     @Volatile private var historyWarmupRunning = false
     @Volatile private var historyReady = false
     private val activeHistoryTasks = java.util.concurrent.ConcurrentHashMap.newKeySet<java.util.concurrent.Future<Boolean>>()
@@ -800,6 +803,11 @@ private class NativeEngine(
             marketSocketLastEventMs > 0L &&
             System.currentTimeMillis() - marketSocketLastEventMs <= maxAgeMs
 
+    private fun publicWebSocketFresh(maxAgeMs: Long = 30_000L): Boolean =
+        publicSocketConnected &&
+            publicSocketLastEventMs > 0L &&
+            System.currentTimeMillis() - publicSocketLastEventMs <= maxAgeMs
+
     private fun executionReady(): Boolean =
         futuresExecutionAdapterReady &&
             running &&
@@ -808,6 +816,7 @@ private class NativeEngine(
             !killLatched &&
             marketDataFresh() &&
             marketWebSocketFresh() &&
+            publicWebSocketFresh() &&
             userStreamConnected &&
             !userStreamSyncRequired &&
             restAccountReady &&
@@ -824,6 +833,7 @@ private class NativeEngine(
             if (killLatched) add("kill_switch_latched")
             if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
             if (!marketWebSocketFresh()) add("market_websocket_disconnected_or_stale")
+            if (!publicWebSocketFresh()) add("public_depth_or_bookticker_stream_disconnected_or_stale")
             if (!userStreamConnected || userStreamSyncRequired) add("futures_user_stream_disconnected_or_unsynchronized")
             if (!restAccountReady) add("rest_account_not_ready")
             if (!historyReady) add("history_not_ready")
@@ -1007,6 +1017,8 @@ private class NativeEngine(
             .put("standalone", true)
             .put("websocket", marketSocketConnected)
             .put("market_stream_last_event_ms", marketSocketLastEventMs)
+            .put("public_websocket", publicSocketConnected)
+            .put("public_stream_last_event_ms", publicSocketLastEventMs)
             .put("user_stream_connected", userStreamConnected)
             .put("user_stream_sync_required", userStreamSyncRequired)
             .put("user_stream_last_event_ms", lastUserEventMs)
@@ -1215,7 +1227,12 @@ private class NativeEngine(
         marketSocket = null
         marketSocketConnected = false
         marketSocketLastEventMs = 0L
+        publicSocket?.close(1000, "Restart USD-M Futures public stream")
+        publicSocket = null
+        publicSocketConnected = false
+        publicSocketLastEventMs = 0L
         startMarketDataStream()
+        startPublicDataStream()
         // Restart the Futures private event stream; its onConnection callback
         // reconciles open orders, positions and protection before entries are unlocked.
         userStream.stop()
@@ -1300,6 +1317,9 @@ private class NativeEngine(
         marketSocket?.close(1000, "Williams stopped")
         marketSocket = null
         marketSocketConnected = false
+        publicSocket?.close(1000, "Williams stopped")
+        publicSocket = null
+        publicSocketConnected = false
         userStream.stop()
         userStreamConnected = false
         userStreamSyncRequired = true
@@ -1334,6 +1354,9 @@ private class NativeEngine(
         marketSocket?.close(1000, "USD-M Futures kill switch")
         marketSocket = null
         marketSocketConnected = false
+        publicSocket?.close(1000, "USD-M Futures kill switch")
+        publicSocket = null
+        publicSocketConnected = false
         userStream.stop()
         userStreamConnected = false
         userStreamSyncRequired = true
@@ -1685,15 +1708,20 @@ private class NativeEngine(
     }
 
     private fun wsStreamUrl(): String =
-        // Keep realtime WSS small and reliable. Deep MTF frames remain REST-backed.
+        // Market endpoint carries regular feeds only; depth/bookTicker use /public.
         "wss://demo-fstream.binance.com/market/stream?streams=" +
             coreSymbols.flatMap { symbol ->
                 startupFrames.map { frame ->
                     symbol.lowercase(Locale.US) + "@kline_" + frame
-                } + listOf(
+                } + listOf(symbol.lowercase(Locale.US) + "@aggTrade")
+            }.joinToString("/")
+
+    private fun publicStreamUrl(): String =
+        "wss://demo-fstream.binance.com/public/stream?streams=" +
+            coreSymbols.flatMap { symbol ->
+                listOf(
                     symbol.lowercase(Locale.US) + "@bookTicker",
-                    symbol.lowercase(Locale.US) + "@depth@100ms",
-                    symbol.lowercase(Locale.US) + "@aggTrade"
+                    symbol.lowercase(Locale.US) + "@depth@100ms"
                 )
             }.joinToString("/")
 
@@ -1705,32 +1733,13 @@ private class NativeEngine(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 marketSocketConnected = true
                 lastError = null
-                Thread {
-                    warmOrderBookSnapshots()
-                }.apply {
-                    isDaemon = true
-                    name = "williams-l2-bootstrap"
-                    start()
-                }
-                Thread {
-                    try {
-                        Thread.sleep(23L * 60L * 60L * 1000L)
-                        if (running && marketSocket === webSocket) {
-                            webSocket.close(1000, "planned_24h_reconnect")
-                        }
-                    } catch (_: InterruptedException) {
-                    }
-                }.apply {
-                    isDaemon = true
-                    start()
-                }
+                scheduleMarketReconnect(webSocket)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 marketSocketLastEventMs = System.currentTimeMillis()
-                runCatching { consumeMarketStream(JSONObject(text)) }
+                runCatching { consumeMarketStream(JSONObject(text), publicStream = false) }
                     .onFailure { lastError = "WS market: " + (it.message ?: it.javaClass.simpleName) }
-
                 runCatching {
                     val data = JSONObject(text).optJSONObject("data")
                     if (data?.optString("e") == "serverShutdown") {
@@ -1747,21 +1756,95 @@ private class NativeEngine(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 marketSocketConnected = false
-                marketSocket = null
-                if (running) Thread { Thread.sleep(1500); if (running) startMarketDataStream() }.start()
+                if (marketSocket === webSocket) marketSocket = null
+                if (running) scheduleReconnect("williams-market-reconnect", 1500L) { startMarketDataStream() }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 marketSocketConnected = false
-                marketSocket = null
+                if (marketSocket === webSocket) marketSocket = null
                 lastError = "WS market: " + (t.message ?: t.javaClass.simpleName)
-                if (running) Thread { Thread.sleep(2500); if (running) startMarketDataStream() }.start()
+                if (running) scheduleReconnect("williams-market-retry", 2500L) { startMarketDataStream() }
             }
         })
     }
 
-    private fun consumeMarketStream(envelope: JSONObject) {
-        marketSocketLastEventMs = System.currentTimeMillis()
+    @Synchronized
+    private fun startPublicDataStream() {
+        if (publicSocket != null) return
+        val request = Request.Builder().url(publicStreamUrl()).build()
+        publicSocket = http.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                publicSocketConnected = true
+                Thread {
+                    warmOrderBookSnapshots()
+                }.apply {
+                    isDaemon = true
+                    name = "williams-l2-bootstrap"
+                    start()
+                }
+                scheduleMarketReconnect(webSocket, publicStream = true)
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                publicSocketLastEventMs = System.currentTimeMillis()
+                runCatching { consumeMarketStream(JSONObject(text), publicStream = true) }
+                    .onFailure { lastError = "WS public: " + (it.message ?: it.javaClass.simpleName) }
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                publicSocketConnected = false
+                webSocket.close(code, reason)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                publicSocketConnected = false
+                if (publicSocket === webSocket) publicSocket = null
+                if (running) scheduleReconnect("williams-public-reconnect", 1500L) { startPublicDataStream() }
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                publicSocketConnected = false
+                if (publicSocket === webSocket) publicSocket = null
+                lastError = "WS public: " + (t.message ?: t.javaClass.simpleName)
+                if (running) scheduleReconnect("williams-public-retry", 2500L) { startPublicDataStream() }
+            }
+        })
+    }
+
+    private fun scheduleReconnect(name: String, delayMs: Long, action: () -> Unit) {
+        Thread {
+            try {
+                Thread.sleep(delayMs)
+                if (running) action()
+            } catch (_: InterruptedException) {
+            }
+        }.apply {
+            isDaemon = true
+            this.name = name
+            start()
+        }
+    }
+
+    private fun scheduleMarketReconnect(webSocket: WebSocket, publicStream: Boolean = false) {
+        Thread {
+            try {
+                Thread.sleep(23L * 60L * 60L * 1000L)
+                if (running && if (publicStream) publicSocket === webSocket else marketSocket === webSocket) {
+                    webSocket.close(1000, "planned_24h_reconnect")
+                }
+            } catch (_: InterruptedException) {
+            }
+        }.apply {
+            isDaemon = true
+            name = if (publicStream) "williams-public-planned-reconnect" else "williams-market-planned-reconnect"
+            start()
+        }
+    }
+
+    private fun consumeMarketStream(envelope: JSONObject, publicStream: Boolean = false) {
+        val eventAt = System.currentTimeMillis()
+        if (publicStream) publicSocketLastEventMs = eventAt else marketSocketLastEventMs = eventAt
         val data = envelope.optJSONObject("data") ?: return
         when (data.optString("e")) {
             "depthUpdate" -> consumeDepthUpdate(data)
@@ -7986,6 +8069,8 @@ private class NativeEngine(
             })
             .put("server_time", System.currentTimeMillis())
             .put("market_ws_connected", marketSocketConnected)
+            .put("public_ws_connected", publicSocketConnected)
+            .put("public_stream_last_event_ms", publicSocketLastEventMs)
             .put("user_ws_connected", userStreamConnected)
             .put("user_stream_sync_required", userStreamSyncRequired)
             .put("user_stream_last_event_ms", lastUserEventMs)
@@ -8215,7 +8300,8 @@ private class NativeEngine(
         test("credentials_state", "binance", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
         test("rest_market_data", "binance", restMarketReady, "FAIL", if (restMarketReady) "Ticker REST OK; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market failed: " + (restLastError ?: "pending"))
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT=" + liveUsdtBalance else "Account REST failed: " + (restLastError ?: "pending"))
-        test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market stream connected" else "Market stream disconnected; REST fallback active")
+        test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market kline/aggTrade stream connected" else "Market stream disconnected")
+        test("public_websocket", "websocket", publicSocketConnected && publicWebSocketFresh(), "WARN", if (publicSocketConnected && publicWebSocketFresh()) "Public depth/bookTicker stream connected and fresh" else "Public stream disconnected or stale")
         test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream degraded; REST reconciliation active")
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
         test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
