@@ -150,7 +150,13 @@ class TradingConfig:
         risk = max(0.0, min(0.005, _float(source, risk_key, 0.005)))
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
-        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", source.get("INTERVAL", "1h"))).lower()
+        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", source.get("INTERVAL", "1h"))).strip().lower()
+        structural_timeframes = _tf_chain(execution_timeframe, source)
+        if market == "futures_usdt":
+            if execution_timeframe != "1h":
+                raise ValueError("EXECUTION_TIMEFRAME must be H1 for the canonical Williams campaign")
+            if structural_timeframes != DEFAULT_STRUCTURAL_TFS:
+                raise ValueError("STRUCTURAL_TIMEFRAMES must be D1,H4,H1,M15 for the canonical Williams campaign")
         futures_leverage = max(1, min(2, _int(source, "FUTURES_LEVERAGE", 2)))
         futures_margin_type = str(source.get("FUTURES_MARGIN_TYPE", "ISOLATED")).strip().upper()
         if market == "futures_usdt" and futures_margin_type != "ISOLATED":
@@ -163,7 +169,7 @@ class TradingConfig:
 
         return cls(
             symbols=symbols,
-            structural_timeframes=_tf_chain(execution_timeframe, source),
+            structural_timeframes=structural_timeframes,
             execution_timeframe=execution_timeframe,
             market=market,
             futures_leverage=futures_leverage,
