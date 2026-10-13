@@ -30,13 +30,23 @@ internal class BinanceUsdMFuturesTestnetAdapter(
 ) {
     private val secret = apiSecret.toByteArray(Charsets.UTF_8)
     private val base = "https://demo-fapi.binance.com"
+    @Volatile private var serverOffsetMs: Long = 0L
 
     init {
         require(apiKey.isNotBlank()) { "Futures Testnet API key is missing" }
         require(apiSecret.isNotBlank()) { "Futures Testnet API secret is missing" }
     }
 
-    fun serverTime(): JSONObject = request("GET", "/fapi/v1/time", emptyMap(), signed = false)
+    fun serverTime(): JSONObject {
+        val before = System.currentTimeMillis()
+        val response = request("GET", "/fapi/v1/time", emptyMap(), signed = false)
+        val after = System.currentTimeMillis()
+        val exchangeTime = response.optLong("serverTime", 0L)
+        if (exchangeTime <= 0L) throw IOException("Futures server time response is invalid")
+        // Midpoint estimation avoids bias from the request's one-way network latency.
+        serverOffsetMs = exchangeTime - (before + (after - before) / 2L)
+        return response
+    }
 
     fun exchangeInfo(): JSONObject =
         request("GET", "/fapi/v1/exchangeInfo", emptyMap(), signed = false)
@@ -211,7 +221,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         require(path.startsWith("/fapi/")) { "Only USD-M Futures endpoints are allowed" }
         val all = LinkedHashMap(params)
         if (signed) {
-            all["timestamp"] = System.currentTimeMillis().toString()
+            all["timestamp"] = (System.currentTimeMillis() + serverOffsetMs).toString()
             all["recvWindow"] = "5000"
             all["signature"] = sign(encode(all))
         }
