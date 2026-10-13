@@ -69,9 +69,15 @@ internal class NativeFuturesCampaignCoordinator(
             for (i in 0 until exchangePositions.length()) {
                 val row = exchangePositions.optJSONObject(i) ?: continue
                 val symbol = row.optString("symbol").uppercase(Locale.US)
-                if (symbol !in allowedSymbols) continue
-                val amount = row.optString("positionAmt").toDoubleOrNull() ?: 0.0
-                if (amount != 0.0) openBySymbol[symbol] = row
+                val amount = row.optString("positionAmt").toDoubleOrNull()
+                    ?: throw IllegalStateException("Binance returned a malformed position amount for $symbol")
+                if (amount == 0.0) continue
+                if (symbol !in allowedSymbols) {
+                    throw IllegalStateException(
+                        "Unmanaged live Futures position $symbol detected outside the approved ten-symbol universe; manual reconciliation required"
+                    )
+                }
+                openBySymbol[symbol] = row
             }
 
             val persisted = intents()
