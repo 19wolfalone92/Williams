@@ -1900,11 +1900,13 @@ private class NativeEngine(
 
     private fun buildIndicatorSnapshot(candles: List<CandleN>, symbol: String, frame: String): JSONObject {
         if (candles.size < 40) return JSONObject().put("symbol", symbol).put("interval", frame).put("ready", false)
-        val prices = candles.map { it.c }
-        val jaw = smma(prices, 13)
-        val teeth = smma(prices, 8)
-        val lips = smma(prices, 5)
         val i = candles.lastIndex
+        val jaw = williamsAlligatorLine(candles, 13, 8)
+        val teeth = williamsAlligatorLine(candles, 8, 5)
+        val lips = williamsAlligatorLine(candles, 5, 3)
+        val jawNow = jaw.getOrNull(i) ?: 0.0
+        val teethNow = teeth.getOrNull(i) ?: 0.0
+        val lipsNow = lips.getOrNull(i) ?: 0.0
         val aoNow = ao(candles, i)
         val aoPrev = ao(candles, i - 1)
         val acNow = aoNow - (0 until 5).map { ao(candles, i - it) }.average()
@@ -1921,8 +1923,8 @@ private class NativeEngine(
         return JSONObject()
             .put("symbol", symbol).put("interval", frame).put("ready", true)
             .put("time", candles[i].t).put("price", candles[i].c)
-            .put("jaw", jaw[i]).put("teeth", teeth[i]).put("lips", lips[i])
-            .put("alligator_bullish", lips[i] > teeth[i] && teeth[i] > jaw[i])
+            .put("jaw", jawNow).put("teeth", teethNow).put("lips", lipsNow)
+            .put("alligator_bullish", lipsNow > teethNow && teethNow > jawNow)
             .put("ao", aoNow).put("ao_previous", aoPrev)
             .put("ao_cross_up", aoPrev <= 0.0 && aoNow > 0.0)
             .put("ac", acNow).put("ac_positive", acNow > 0.0)
@@ -3453,7 +3455,7 @@ private class NativeEngine(
                 }
 
                 if (prefs.getBoolean("campaign_exit_on_teeth", false)) {
-                    val teeth = smma(candles.map { it.c }, 8).lastOrNull() ?: 0.0
+                    val teeth = alligator(candles, candles.lastIndex).teeth
                     if (teeth > 0.0 && candles.last().c < teeth) {
                         campaignExitMarket(
                             positions[stored.symbol] ?: current,
@@ -5406,7 +5408,7 @@ private class NativeEngine(
         val candles = candidate.candles
         if (candles.size < 20) return (candidate.atrPct * 2.0).coerceIn(0.01, 0.08)
         val prices = candles.map { it.c }
-        val teeth = smma(prices, 8).lastOrNull() ?: prices.last()
+        val teeth = alligator(candles, candles.lastIndex).teeth
         var swingLow = Double.POSITIVE_INFINITY
         for (i in max(2, candles.lastIndex - 30)..candles.lastIndex - 2) {
             if (isDownFractal(candles, i)) swingLow = min(swingLow, candles[i].l)
@@ -7092,13 +7094,31 @@ private class NativeEngine(
     }
 
     /**
-     * Canonical Williams Alligator at the requested candle index.
-     *
-     * Uses Median Price (H+L)/2, SMMA seeded by the first-period arithmetic
-     * mean, and the canonical plotted displacements Jaw=8, Teeth=5, Lips=3.
-     * The displacement is applied as a historical lookup, never as a read of
-     * future candles. This keeps the native runtime aligned with strategy.py.
+     * Williams Alligator line aligned to the candle on which it is displayed.
+     * Uses Median Price, SMMA seeded by the first-period mean, and a historical
+     * lookup for the forward plot displacement (never future candle data).
      */
+    private fun williamsAlligatorLine(
+        candles: List<CandleN>,
+        period: Int,
+        displacement: Int
+    ): List<Double?> {
+        val median = candles.map { (it.h + it.l) / 2.0 }
+        val raw = MutableList<Double?>(median.size) { null }
+        if (median.size < period) return raw
+        var seed = 0.0
+        for (i in 0 until period) seed += median[i]
+        raw[period - 1] = seed / period
+        for (i in period until median.size) {
+            val previous = raw[i - 1] ?: continue
+            raw[i] = (previous * (period - 1) + median[i]) / period
+        }
+        return List(candles.size) { displayIndex ->
+            val sourceIndex = displayIndex - displacement
+            if (sourceIndex >= 0) raw.getOrNull(sourceIndex) else null
+        }
+    }
+
     private fun alligator(
         candles: List<CandleN>,
         index: Int
@@ -7106,27 +7126,9 @@ private class NativeEngine(
         if (candles.isEmpty() || index !in candles.indices) {
             return TripleValues(0.0, 0.0, 0.0)
         }
-        val median = candles.map { (it.h + it.l) / 2.0 }
-        fun canonicalSmma(period: Int): List<Double> {
-            val values = MutableList(median.size) { Double.NaN }
-            if (median.size < period) return values
-            var seed = 0.0
-            for (i in 0 until period) seed += median[i]
-            values[period - 1] = seed / period
-            for (i in period until median.size) {
-                values[i] = (values[i - 1] * (period - 1) + median[i]) / period
-            }
-            return values
-        }
-        fun displaced(values: List<Double>, shift: Int): Double {
-            val sourceIndex = index - shift
-            if (sourceIndex < 0 || sourceIndex >= values.size) return 0.0
-            val value = values[sourceIndex]
-            return if (value.isFinite()) value else 0.0
-        }
-        val jaw = displaced(canonicalSmma(13), 8)
-        val teeth = displaced(canonicalSmma(8), 5)
-        val lips = displaced(canonicalSmma(5), 3)
+        val jaw = williamsAlligatorLine(candles, 13, 8).getOrNull(index) ?: 0.0
+        val teeth = williamsAlligatorLine(candles, 8, 5).getOrNull(index) ?: 0.0
+        val lips = williamsAlligatorLine(candles, 5, 3).getOrNull(index) ?: 0.0
         return TripleValues(jaw, teeth, lips)
     }
 
@@ -7932,13 +7934,12 @@ private class NativeEngine(
         }
 
         val output = JSONArray()
-        val prices =
-            sourceCandles.map { it.c }
+        val prices = sourceCandles.map { it.c }
 
         if (prices.isNotEmpty()) {
-            val jaw = smma(prices, 13)
-            val teeth = smma(prices, 8)
-            val lips = smma(prices, 5)
+            val jaw = williamsAlligatorLine(sourceCandles, 13, 8)
+            val teeth = williamsAlligatorLine(sourceCandles, 8, 5)
+            val lips = williamsAlligatorLine(sourceCandles, 5, 3)
 
             val start =
                 max(0, sourceCandles.size - 120)
