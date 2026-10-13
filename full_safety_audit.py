@@ -494,18 +494,18 @@ futures_client = read_text(ROOT / "binance_futures_client.py")
 config = read_text(ROOT / "trading_config.py")
 
 finding(
-    "PASS" if "https://" in main_activity
-    and "StandaloneRuntime.start(this)" not in main_activity
-    and "http://127.0.0.1:18080" not in main_activity
-    and "http://localhost:18080" not in main_activity
+    "PASS" if "TradingForegroundService.ACTION_START" in main_activity
+    and "StandaloneRuntime.request" in main_activity
+    and "https://" not in main_activity
     else "FAIL",
-    "Android is remote HTTPS-only and does not start native trading"
+    "Android cockpit starts and commands the local native Futures runtime"
 )
 finding(
-    "PASS" if "remote Futures backend" in service
-    and "StandaloneRuntime.start(this)" not in service
+    "PASS" if "StandaloneRuntime.start(applicationContext)" in service
+    and "StandaloneRuntime.autostart(applicationContext)" in service
+    and "StandaloneRuntime.stopTrading()" in service
     else "FAIL",
-    "Foreground service is a compatibility shell only"
+    "Foreground service owns native runtime startup, autostart, and stop"
 )
 finding(
     "PASS" if "futures_usdt" in config

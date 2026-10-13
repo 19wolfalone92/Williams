@@ -955,7 +955,7 @@ private class NativeEngine(
             .put("state", stateName())
             .put("open_positions", positionList().size)
             .put("max_open_positions", maxOpenPositions)
-            .put("reserved_risk_pct", futuresReservedRiskPct)
+            .put("reserved_risk_pct", reservedRiskPct())
             .put("circuit_breaker_tripped", equityCircuitBreaker.isTripped())
             .put("managed_equity", estimateManagedEquity())
             .put("max_total_risk_pct", maxTotalRiskPct)

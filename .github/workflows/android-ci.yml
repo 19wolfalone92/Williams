@@ -34,16 +34,18 @@ jobs:
           cache: gradle
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: "8.14.6"
+          validate-wrappers: false
 
-      - name: Verify wrapper
-        run: chmod +x ./gradlew
-
+      # Invoke the pinned Gradle distribution directly. The checked-in wrapper JAR
+      # is not in Gradle's trusted checksum set, so CI must not execute it.
       - name: Run unit tests
-        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
+        run: gradle --no-daemon :app:testDebugUnitTest --stacktrace
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: gradle --no-daemon :app:assembleDebug --stacktrace
 
       - name: Upload debug APK
         if: success()

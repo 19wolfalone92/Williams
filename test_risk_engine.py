@@ -24,7 +24,7 @@ def test_good_trade():
     assert result.stop_price == 98000
     assert result.take_profit_price == 104000
     assert result.risk_reward == 2.0
-    assert result.risk_quote == 100
+    assert result.risk_quote == 25
     assert result.position_quote > 0
     assert 0 < result.score <= 100
 
@@ -48,12 +48,11 @@ def test_risk_based_position_size():
 
     # ATR = 1% of price.
     # Stop = 2 ATR = 2%.
-    # Risk = 100 USDT.
-    # Position = 100 / 0.02 = 5000 USDT.
-    # Exposure cap = 2500 USDT.
+    # Futures policy caps risk at 0.25% equity and includes fee/slippage buffers.
+    # A 2% structural stop plus execution buffers yields a smaller safe notional.
     assert result.allowed is True
-    assert result.position_quote == 2500
-    assert result.risk_quote == 100
+    assert result.position_quote == 1063.82978723
+    assert result.risk_quote == 25
 
 
 def test_high_atr_is_blocked():
@@ -212,9 +211,9 @@ def test_default_risk_is_half_percent():
         invalidation_price=99000,
     )
     assert result.allowed is True
-    assert result.risk_quote == 50
-    assert result.risk_pct == 0.5
-    print("[PASS] default per-trade risk is 0.5%")
+    assert result.risk_quote == 25
+    assert result.risk_pct == 0.25
+    print("[PASS] default per-trade risk is capped at 0.25%")
 
 
 def test_non_finite_market_and_risk_inputs_fail_closed():

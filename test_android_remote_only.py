@@ -31,7 +31,7 @@ def test_android_ui_routes_directly_to_local_runtime_without_remote_backend():
     assert "class BackendApi" not in main
     assert "backend_url" not in main
     assert "mobile_token" not in main
-    assert "StandaloneRuntime.request(context: Context" in runtime
+    assert "fun request(context: Context" in runtime
     assert "fun dispatch(method: String, target: String, body: String)" in runtime
     assert "ServerSocket" not in runtime
     assert "InetAddress.getByName(\"127.0.0.1\")" not in runtime
@@ -138,7 +138,8 @@ def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
     assert 'require(path.startsWith("/fapi/"))' in runtime
     assert "Any leftover signed Spot mutation is blocked at the signedRequest boundary." in runtime
     assert '"/api/v3/order"' in runtime  # legacy call sites may remain only as fail-closed dead paths
-    assert '"/fapi/v1/order"' in runtime
+    adapter = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
+    assert '"/fapi/v1/order"' in adapter
     assert "NativeFuturesCampaignCoordinator(executionStore)" in runtime
 
 
@@ -200,7 +201,7 @@ def test_android_diagnostics_do_not_fake_self_heal_readiness():
     assert 'test("self_heal_contract", "runtime", true' not in runtime
     assert 'running && !reconcileRequired && !killLatched' in runtime
     assert '"running=" + running' in runtime
-    assert '"kill_latched=" + killLatched' in runtime
+    assert '"kill_switch_latched", killLatched' in runtime
     assert '.put("testnet_live_execution", executionReady())' in runtime
     assert '.put("testnet_live_execution", false)' not in runtime
 

@@ -240,10 +240,10 @@ def test_portfolio_risk_caps_total_at_one_percent():
     selections = controller.select_portfolio(open_risk_quote=0.0, open_positions=0)
 
     assert len(selections) == 1
-    assert all(s.risk.risk_pct <= 0.5 for s in selections)
-    assert abs(sum(s.risk.risk_pct for s in selections) - 0.5) < 1e-9
+    assert all(s.risk.risk_pct <= 0.25 for s in selections)
+    assert abs(sum(s.risk.risk_pct for s in selections) - 0.25) < 1e-9
     assert [s.candidate.symbol for s in selections] == ["BTCUSDT"]
-    print("[PASS] one-position cap + portfolio risk <= 1%, per trade <= 0.5%")
+    print("[PASS] one-position cap + portfolio risk <= 0.60%, per trade <= 0.25%")
 
 
 def test_portfolio_respects_existing_risk():

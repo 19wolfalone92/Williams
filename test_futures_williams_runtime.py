@@ -1252,7 +1252,7 @@ def test_futures_config_enforces_margin_mode_leverage_and_daily_loss_caps():
     assert config.futures_leverage == 2
     assert config.futures_margin_type == "ISOLATED"
     assert config.futures_force_one_way is True
-    assert config.max_daily_loss_pct == 0.03
+    assert config.max_daily_loss_pct == 0.01
 
 
 def test_futures_config_rejects_cross_margin_and_hedge_mode():
