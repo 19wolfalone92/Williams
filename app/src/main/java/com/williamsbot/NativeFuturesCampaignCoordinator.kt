@@ -380,7 +380,7 @@ internal class NativeFuturesCampaignCoordinator(
                         }
                         val remaining = adapter.openAlgoOrders(symbol)
                         if ((0 until remaining.length()).any { j ->
-                            remaining.optJSONObject(j)?.optString("clientAlgoId") in knownProtectionIds
+                            remaining.optJSONObject(j)?.optString("clientAlgoId")?.let { it in knownProtectionIds } == true
                         }) {
                             throw IOException("Orphaned protective Futures algo remains open for flat $symbol")
                         }
