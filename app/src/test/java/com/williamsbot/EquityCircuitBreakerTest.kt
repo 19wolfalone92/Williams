@@ -40,6 +40,14 @@ class EquityCircuitBreakerTest {
     }
 
     @Test
+    fun invalidEquityFailsClosed() {
+        val breaker = EquityCircuitBreaker(maxDrawdownPct = 0.03)
+        val now = 1_791_878_400_000L
+        breaker.observe(10_000.0, now)
+        assertTrue(breaker.observe(0.0, now + 60_000L).tripped)
+    }
+
+    @Test
     fun newUtcDayEstablishesNewBaseline() {
         val breaker = EquityCircuitBreaker(maxDrawdownPct = 0.03)
         val dayOne = 1_791_878_400_000L
