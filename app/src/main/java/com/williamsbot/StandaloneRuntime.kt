@@ -6670,9 +6670,9 @@ private class NativeEngine(
         val campaignRules = runCatching { symbolFilters(symbol) }.getOrNull()
         val campaignTick = campaignRules?.tick ?: 0.0
         val campaignSignals = if (campaignEngineEnabled && campaignTick > 0.0) {
-            // Build both directional hypotheses from the same closed H1 series.
-            // Execution remains fail-closed until the native Futures campaign path,
-            // risk sizing, reconciliation and protective-order lifecycle are integrated.
+            // Build both directional hypotheses from the same exchange-confirmed
+            // closed H1 series. Candidates reach execution only through the native
+            // Futures coordinator after context, risk, and reconciliation gates pass.
             (
                 longCampaignSignals(
                     symbol = symbol,
