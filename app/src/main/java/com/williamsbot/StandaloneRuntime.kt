@@ -1074,18 +1074,22 @@ private class NativeEngine(
             .apply()
 
         return try {
-            val account = signedAccount()
-            require(account.optString("accountType", "SPOT").equals("SPOT", true)) {
-                "Configured Binance account is not Spot"
-            }
-            restAccountReady = account.has("balances")
+            // Validate credentials against USDⓈ-M Futures Testnet, never Spot /api/v3.
+            val futures = BinanceUsdMFuturesTestnetAdapter(newKey, newSecret, http)
+            futures.serverTime()
+            val account = futures.account()
+            futures.requireOneWayMode()
+            restAccountReady = account.has("assets")
             restLastError = null
             JSONObject()
                 .put("configured", true)
                 .put("testnet", true)
                 .put("standalone", true)
-                .put("validation", "PASS")
+                .put("account_type", "USD_M_FUTURES")
+                .put("validation", "FUTURES_CREDENTIALS_AND_ONE_WAY_MODE_PASS")
                 .put("read_back_verified", key() == newKey && secret() == newSecret)
+                .put("execution_enabled", false)
+                .put("execution_blocker", "futures_campaign_runtime_not_yet_integrated")
         } catch (x: Exception) {
             prefs.edit()
                 .putString("api_key", oldKey)
@@ -1093,7 +1097,7 @@ private class NativeEngine(
                 .apply()
             restAccountReady = false
             throw IllegalStateException(
-                "Binance credentials validation failed: " +
+                "Binance USDⓈ-M Futures Testnet credentials validation failed: " +
                     (x.message ?: x.javaClass.simpleName),
                 x
             )
