@@ -164,6 +164,9 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         return JSONArray(requestRaw("GET", "/fapi/v1/openOrders", mapOf("symbol" to symbol), signed = true))
     }
 
+    fun allOpenOrders(): JSONArray =
+        JSONArray(requestRaw("GET", "/fapi/v1/openOrders", emptyMap(), signed = true))
+
     /**
      * Conditional orders use Binance's Algo Order API. Do not query/cancel these
      * through /fapi/v1/openOrders or /fapi/v1/order.
@@ -172,6 +175,9 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         requireSymbol(symbol)
         return JSONArray(requestRaw("GET", "/fapi/v1/openAlgoOrders", mapOf("symbol" to symbol), signed = true))
     }
+
+    fun allOpenAlgoOrders(): JSONArray =
+        JSONArray(requestRaw("GET", "/fapi/v1/openAlgoOrders", emptyMap(), signed = true))
 
     fun queryAlgoOrder(symbol: String, clientAlgoId: String): JSONObject {
         requireSymbol(symbol)
