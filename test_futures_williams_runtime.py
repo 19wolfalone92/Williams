@@ -9,7 +9,7 @@ from futures_williams_runtime import FuturesWilliamsRuntime, FuturesWilliamsScan
 from williams_signals import (
     extract_long_signal_specs, extract_short_signal_specs,
     extract_ntd_ao_signal_specs, extract_ntd_ac_signal_specs,
-    extract_ntd_fractal_signal_specs,
+    extract_ntd_fractal_signal_specs, extract_ntd_zone_add_on_specs,
     _latest_super_ao, _latest_three_price_bar_signal,
 )
 
@@ -708,6 +708,59 @@ def test_tc2_wm1_is_not_blocked_by_directional_htf_confirmation_policy():
     assert _requires_directional_htf_confirmation(SignalType.SUPER_AO) is True
     assert _requires_directional_htf_confirmation(SignalType.FRACTAL) is True
 
+
+
+def test_ntd_green_zone_add_on_uses_matching_ao_ac_and_price_colours_without_zero_gate():
+    ind = pd.DataFrame({
+        "open_time_ms": [1_700_000_000_000, 1_700_000_300_000],
+        "open": [99.0, 100.0],
+        "high": [100.0, 102.0],
+        "low": [98.0, 99.0],
+        "close": [99.5, 101.5],
+        "ao": [-1.1, -1.0],
+        "ac": [-0.6, -0.5],
+        "teeth_shifted": [99.0, 99.5],
+        "long_fractal_outside": [True, True],
+        "bullish_alligator": [True, True],
+        "alligator_awake": [True, True],
+    })
+    signals = extract_ntd_zone_add_on_specs(
+        "BTCUSDT", ind, side="LONG", timeframe="5m", tick_size=0.1
+    )
+    assert len(signals) == 1
+    assert signals[0].signal_type == SignalType.ZONE_ADD_ON
+    assert signals[0].role == SignalRole.ADD_ON
+    assert signals[0].side == "BUY"
+    assert math.isclose(signals[0].trigger_price, 102.1)
+
+
+def test_ntd_red_zone_add_on_is_mirrored_and_gray_zone_is_blocked():
+    ind = pd.DataFrame({
+        "open_time_ms": [1_700_000_000_000, 1_700_000_300_000],
+        "open": [101.0, 100.0],
+        "high": [102.0, 101.0],
+        "low": [100.0, 98.0],
+        "close": [100.5, 98.5],
+        "ao": [1.1, 1.0],
+        "ac": [0.6, 0.5],
+        "teeth_shifted": [101.0, 100.5],
+        "short_fractal_outside": [True, True],
+        "bearish_alligator": [True, True],
+        "alligator_awake": [True, True],
+    })
+    signals = extract_ntd_zone_add_on_specs(
+        "BTCUSDT", ind, side="SHORT", timeframe="5m", tick_size=0.1
+    )
+    assert len(signals) == 1
+    assert signals[0].signal_type == SignalType.ZONE_ADD_ON
+    assert signals[0].role == SignalRole.ADD_ON
+    assert signals[0].side == "SELL"
+    assert math.isclose(signals[0].trigger_price, 97.9)
+
+    ind.loc[1, "ac"] = 0.7  # AO falls while AC rises: Gray Zone.
+    assert extract_ntd_zone_add_on_specs(
+        "BTCUSDT", ind, side="SHORT", timeframe="5m", tick_size=0.1
+    ) == []
 
 
 def test_ntd_external_fractal_is_initial_entry_and_requires_untriggered_breakout():
