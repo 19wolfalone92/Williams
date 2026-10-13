@@ -1115,6 +1115,7 @@ def test_final_entry_preflight_blocks_expired_or_already_crossed_williams_trigge
             "signal_id": intent.signal_id,
             "side": "BUY",
             "trigger_price": 100.0,
+            "protective_reference": 97.0,
             "expires_at_ms": 5000,
         },
     }
@@ -1122,6 +1123,7 @@ def test_final_entry_preflight_blocks_expired_or_already_crossed_williams_trigge
     assert "already_crossed" in _pending_entry_preflight_reason(
         pending, intent, 100.0, now_ms=2000
     )
+    assert _pending_entry_preflight_reason(pending, intent, 96.9, now_ms=2000) == "long_setup_invalidated_before_trigger"
     assert _pending_entry_preflight_reason(pending, intent, 99.9, now_ms=5000) == "pending_signal_expired"
 
     short_intent = SimpleNamespace(signal_id="ETHUSDT:1h:SUPER_AO:1000", side="SELL")
@@ -1131,6 +1133,7 @@ def test_final_entry_preflight_blocks_expired_or_already_crossed_williams_trigge
             "signal_id": short_intent.signal_id,
             "side": "SELL",
             "trigger_price": 200.0,
+            "protective_reference": 203.0,
             "expires_at_ms": 5000,
         },
     }
@@ -1138,3 +1141,4 @@ def test_final_entry_preflight_blocks_expired_or_already_crossed_williams_trigge
     assert "already_crossed" in _pending_entry_preflight_reason(
         short_pending, short_intent, 199.9, now_ms=2000
     )
+    assert _pending_entry_preflight_reason(short_pending, short_intent, 203.1, now_ms=2000) == "short_setup_invalidated_before_trigger"
