@@ -13,7 +13,7 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
-from trading_config import DEFAULT_SYMBOLS
+from trading_config import DEFAULT_SYMBOLS, TradingConfig
 
 
 POSITION_STATES = {
@@ -51,11 +51,12 @@ class MultiPositionTrader:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
             raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "").strip()
+            allowed_symbols = tuple(TradingConfig.from_env().symbols)
             if not raw_symbols or raw_symbols.upper() in {"ALL", "AUTO", "*"}:
-                self.symbols = list(DEFAULT_SYMBOLS)
+                self.symbols = list(allowed_symbols)
             else:
                 requested = [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
-                self.symbols = [x for x in requested if x in DEFAULT_SYMBOLS]
+                self.symbols = [x for x in requested if x in allowed_symbols]
         self.max_open_positions = max(
             0,
             int(os.getenv("MAX_OPEN_POSITIONS", "5")),
