@@ -345,6 +345,18 @@ class FuturesWilliamsScanner:
 
     def scan(self) -> list[FuturesCandidate]:
         result: list[FuturesCandidate] = []
+        profile = os.getenv(
+            "WILLIAMS_SIGNAL_PROFILE", "TC2_THREE_WISE_MEN"
+        ).strip().upper()
+        if profile not in {"TC2_THREE_WISE_MEN", "NTD_FIVE_DIMENSIONS"}:
+            self.last_scan_status = {
+                "state": "BLOCKED",
+                "reason": "INVALID_WILLIAMS_SIGNAL_PROFILE",
+                "signal_profile": profile,
+                "configured_symbols": 10,
+                "evaluated_symbols": 0,
+            }
+            return []
         symbols = self.universe()
         if len(symbols) != 10:
             self.last_scan_status = {
