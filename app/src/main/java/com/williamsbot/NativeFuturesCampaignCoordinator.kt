@@ -445,11 +445,28 @@ internal class NativeFuturesCampaignCoordinator(
         }
         validatePlan(plan)
         val currentIntents = intents()
+        // This build permits one campaign across the entire Futures account, not one
+        // pending entry per symbol. Unknown or protected intents reserve that slot.
+        val reservedStatuses = activeStatuses + setOf(
+            "OPEN_PROTECTED", "POSITION_OPEN", "SUBMISSION_UNKNOWN", "EXIT_PENDING"
+        )
         check((0 until currentIntents.length()).none { i ->
-            val row = currentIntents.optJSONObject(i) ?: return@none false
-            row.optString("symbol") == plan.symbol &&
-                row.optString("exchange_status").uppercase(Locale.US) in activeStatuses
-        }) { "An entry order is already pending for ${plan.symbol}" }
+            val row = currentIntents.optJSONObject(i)
+                ?: throw IllegalStateException("Persisted Futures intent is malformed")
+            row.optString("exchange_status").uppercase(Locale.US) in reservedStatuses
+        }) { "A Futures campaign is already active or unresolved; one-campaign limit blocks a second entry" }
+
+        // Also inspect exchange authority before writing an entry intent. Any live
+        // position (including manual/unmanaged exposure) blocks a fresh campaign.
+        val preflightAdapter = adapterFactory()
+        val livePositions = preflightAdapter.positions()
+        check((0 until livePositions.length()).none { i ->
+            val row = livePositions.optJSONObject(i)
+                ?: throw IllegalStateException("Binance returned a malformed position row")
+            val amount = row.optString("positionAmt").toBigDecimalOrNull()
+                ?: throw IllegalStateException("Binance returned a malformed position amount")
+            amount.signum() != 0
+        }) { "A live Futures position exists on Binance; reconcile/protect it before opening another campaign" }
 
         val intent = JSONObject()
             .put("intent_role", "ENTRY")
