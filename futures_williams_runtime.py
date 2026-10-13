@@ -144,6 +144,15 @@ class FuturesWilliamsScanner:
         self.interval = str(interval).lower()
         self.htf_interval = str(htf_interval).lower()
         self.config = config_from_env()
+        self.symbols: list[str] = []
+        self.last_scan_status: dict = {
+            "state": "NOT_RUN",
+            "reason": None,
+            "configured_symbols": 0,
+            "evaluated_symbols": 0,
+            "symbols": [],
+            "failures": {},
+        }
 
     @staticmethod
     def _tick(info: dict) -> float:
@@ -167,6 +176,7 @@ class FuturesWilliamsScanner:
             if raw else list(default_symbols)
         )
         self.last_universe_error = None
+        self.symbols = []
         if len(approved) != 10 or any(not item for item in approved):
             self.last_universe_error = "FUTURES_APPROVED_SYMBOLS must contain exactly 10 unique symbols"
             return []
@@ -208,7 +218,10 @@ class FuturesWilliamsScanner:
                 return []
 
         # Keep approved order stable; the limit argument can never add or remove symbols.
-        return approved
+        # Expose the configured universe for diagnostics even when some symbols
+        # have no current entry signal.
+        self.symbols = list(approved)
+        return list(approved)
 
     def _spread(self, symbol: str) -> float:
         row = self.client.book_ticker(symbol)
@@ -401,6 +414,14 @@ class FuturesWilliamsScanner:
 
     def scan(self) -> list[FuturesCandidate]:
         result: list[FuturesCandidate] = []
+        self.last_scan_status = {
+            "state": "RUNNING",
+            "reason": None,
+            "configured_symbols": 0,
+            "evaluated_symbols": 0,
+            "symbols": [],
+            "failures": {},
+        }
         profile = os.getenv(
             "WILLIAMS_SIGNAL_PROFILE", "TC2_THREE_WISE_MEN"
         ).strip().upper()
@@ -422,6 +443,7 @@ class FuturesWilliamsScanner:
                 "evaluated_symbols": 0,
             }
             return []
+        self.symbols = list(symbols)
         evaluated = []
         failures = {}
         for symbol in symbols:
