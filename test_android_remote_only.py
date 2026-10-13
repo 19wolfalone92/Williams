@@ -201,6 +201,8 @@ def test_android_diagnostics_do_not_fake_self_heal_readiness():
     assert 'running && !reconcileRequired && !killLatched' in runtime
     assert '"running=" + running' in runtime
     assert '"kill_latched=" + killLatched' in runtime
+    assert '.put("testnet_live_execution", executionReady())' in runtime
+    assert '.put("testnet_live_execution", false)' not in runtime
 
 
 def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
