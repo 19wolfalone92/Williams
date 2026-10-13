@@ -179,27 +179,109 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         )
     }
 
-    /** New order is intentionally reduce-only capable; strategy must supply side and quantity. */
+    /** Immediate market order. Strategy must explicitly choose immediate versus pending entry. */
     fun newOrder(
         symbol: String,
         side: String,
         quantity: String,
         reduceOnly: Boolean,
         clientOrderId: String
+    ): JSONObject = submitOrder(
+        symbol = symbol,
+        side = side,
+        type = "MARKET",
+        quantity = quantity,
+        reduceOnly = reduceOnly,
+        clientOrderId = clientOrderId
+    )
+
+    /** Native exchange-side pending LIMIT order; never silently converted to MARKET. */
+    fun placeLimitOrder(
+        symbol: String,
+        side: String,
+        quantity: String,
+        limitPrice: String,
+        reduceOnly: Boolean = false,
+        postOnly: Boolean = false,
+        clientOrderId: String
+    ): JSONObject {
+        val price = limitPrice.toBigDecimalOrNull()
+            ?: throw IllegalArgumentException("Limit price must be numeric")
+        require(price.signum() > 0) { "Limit price must be positive" }
+        val params = linkedMapOf(
+            "timeInForce" to if (postOnly) "GTX" else "GTC",
+            "price" to price.stripTrailingZeros().toPlainString()
+        )
+        return submitOrder(
+            symbol, side, "LIMIT", quantity, reduceOnly, clientOrderId, params
+        )
+    }
+
+    /** Pending STOP/TAKE_PROFIT entry using Algo Order API. closePosition stays false for entries. */
+    fun placeConditionalEntry(
+        symbol: String,
+        direction: String,
+        triggerType: String,
+        quantity: String,
+        triggerPrice: String,
+        clientOrderId: String
+    ): JSONObject {
+        requireSymbol(symbol)
+        require(direction == "LONG" || direction == "SHORT")
+        require(triggerType == "STOP" || triggerType == "TAKE_PROFIT")
+        val qty = quantity.toBigDecimalOrNull()
+            ?: throw IllegalArgumentException("Quantity must be numeric")
+        val trigger = triggerPrice.toBigDecimalOrNull()
+            ?: throw IllegalArgumentException("Trigger price must be numeric")
+        require(qty.signum() > 0 && trigger.signum() > 0)
+        require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
+        requireOneWayMode()
+        val mark = java.math.BigDecimal.valueOf(markPrice(symbol))
+        val isBuy = direction == "LONG"
+        val shouldTriggerAbove = (triggerType == "STOP" && isBuy) ||
+            (triggerType == "TAKE_PROFIT" && !isBuy)
+        require(if (shouldTriggerAbove) trigger > mark else trigger < mark) {
+            "Conditional entry trigger is on the wrong side of the current mark price"
+        }
+        val params = linkedMapOf(
+            "algoType" to "CONDITIONAL",
+            "symbol" to symbol,
+            "side" to entrySide(direction),
+            "type" to triggerType,
+            "quantity" to qty.stripTrailingZeros().toPlainString(),
+            "triggerPrice" to trigger.stripTrailingZeros().toPlainString(),
+            "workingType" to "MARK_PRICE",
+            "clientAlgoId" to clientOrderId
+        )
+        return JSONObject(requestRaw("POST", "/fapi/v1/algoOrder", params, signed = true))
+    }
+
+    private fun submitOrder(
+        symbol: String,
+        side: String,
+        type: String,
+        quantity: String,
+        reduceOnly: Boolean,
+        clientOrderId: String,
+        extra: Map<String, String> = emptyMap()
     ): JSONObject {
         requireSymbol(symbol)
         require(side == "BUY" || side == "SELL") { "Order side must be BUY or SELL" }
-        require(quantity.toBigDecimalOrNull()?.signum() == 1) { "Quantity must be positive" }
+        require(type == "MARKET" || type == "LIMIT") { "Unsupported immediate order type" }
+        val qty = quantity.toBigDecimalOrNull()
+            ?: throw IllegalArgumentException("Quantity must be numeric")
+        require(qty.signum() > 0) { "Quantity must be positive" }
         require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client order id" }
         requireOneWayMode()
         val params = linkedMapOf(
             "symbol" to symbol,
             "side" to side,
-            "type" to "MARKET",
-            "quantity" to quantity,
+            "type" to type,
+            "quantity" to qty.stripTrailingZeros().toPlainString(),
             "newClientOrderId" to clientOrderId,
             "newOrderRespType" to "RESULT"
         )
+        params.putAll(extra)
         if (reduceOnly) params["reduceOnly"] = "true"
         return JSONObject(requestRaw("POST", "/fapi/v1/order", params, signed = true))
     }
