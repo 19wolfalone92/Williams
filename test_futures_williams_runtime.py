@@ -6,7 +6,47 @@ import pandas as pd
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingSignal, SignalRole, SignalSpec, SignalState, SignalType, stop_only_reduces_risk
 from futures_williams_runtime import FuturesWilliamsRuntime, FuturesWilliamsScanner
-from williams_signals import extract_short_signal_specs, _latest_super_ao
+from williams_signals import extract_long_signal_specs, extract_short_signal_specs, _latest_super_ao, _latest_three_price_bar_signal
+
+
+def test_tc2_three_bullish_price_bars_create_add_on_not_initial_entry():
+    ind = pd.DataFrame({
+        "open": [100.0, 101.0, 102.0],
+        "high": [101.5, 102.5, 104.0],
+        "low": [99.5, 100.5, 101.5],
+        "close": [101.0, 102.0, 103.5],
+        "ao_green": [True, True, True],
+        "ao_red": [False, False, False],
+        "teeth_shifted": [100.0, 100.5, 101.0],
+        "bullish_alligator": [True, True, True],
+        "alligator_awake": [True, True, True],
+    })
+    specs = extract_long_signal_specs("BTCUSDT", ind, timeframe="5m", tick_size=0.1)
+    add_on = [s for s in specs if s.signal_type == SignalType.THREE_GREEN_BARS]
+    assert len(add_on) == 1
+    assert add_on[0].role == SignalRole.ADD_ON
+    assert add_on[0].side == "BUY"
+    assert math.isclose(add_on[0].trigger_price, 104.1)
+
+
+def test_tc2_three_bearish_price_bars_create_short_add_on():
+    ind = pd.DataFrame({
+        "open": [103.0, 102.0, 101.0],
+        "high": [103.5, 102.5, 101.5],
+        "low": [101.5, 100.5, 99.0],
+        "close": [102.0, 101.0, 99.5],
+        "ao_green": [False, False, False],
+        "ao_red": [True, True, True],
+        "teeth_shifted": [102.0, 101.5, 101.0],
+        "bearish_alligator": [True, True, True],
+        "alligator_awake": [True, True, True],
+    })
+    specs = extract_short_signal_specs("BTCUSDT", ind, timeframe="5m", tick_size=0.1)
+    add_on = [s for s in specs if s.signal_type == SignalType.THREE_GREEN_BARS]
+    assert len(add_on) == 1
+    assert add_on[0].role == SignalRole.ADD_ON
+    assert add_on[0].side == "SELL"
+    assert math.isclose(add_on[0].trigger_price, 98.9)
 
 
 def test_super_ao_recovers_original_third_bar_after_scanner_gap():
