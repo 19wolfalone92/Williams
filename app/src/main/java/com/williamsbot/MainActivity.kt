@@ -3062,8 +3062,7 @@ private fun parseStatus(json: JSONObject): Status {
         error =
             json.optString("last_error")
                 .takeIf { it.isNotBlank() },
-        // Local Futures Runtime exposes the same state as auth_configured;
-        // keep compatibility with backend status payloads that use binance_configured.
+        // Accept the local runtime's canonical credential flag and older status aliases.
         binanceConfigured =
             json.optBoolean(
                 "binance_configured",
@@ -3092,7 +3091,7 @@ private fun parseStatus(json: JSONObject): Status {
         maxOpenPositions =
             json.optInt(
                 "max_open_positions",
-                 0
+                1
             ),
         reservedRiskPct =
             json.optDouble(
@@ -3102,7 +3101,7 @@ private fun parseStatus(json: JSONObject): Status {
         maxTotalRiskPct =
             json.optDouble(
                 "max_total_risk_pct",
-                0.01
+                0.006
             ),
         reconcileRequired =
             json.optBoolean(
