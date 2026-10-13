@@ -491,7 +491,9 @@ class FuturesWilliamsRuntime:
         self.config = TradingConfig.from_env()
         self.symbol = os.getenv("SYMBOL", self.config.symbols[0]).upper()
         self.interval = self.config.execution_timeframe
-        self.htf_interval = os.getenv("HTF_INTERVAL", "4h")
+        self.htf_interval = os.getenv("HTF_INTERVAL", "4h").strip().lower()
+        if self.htf_interval != "4h":
+            raise ValueError("HTF_INTERVAL must be H4 for the canonical Williams campaign")
         self.position_fraction = float(os.getenv("FUTURES_MAX_MARGIN_FRACTION", "0.25"))
         self.stop_pct = 0.02
         self.target_pct = 0.0
