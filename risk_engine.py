@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 
 
 @dataclass
@@ -92,6 +93,19 @@ class RiskEngine:
         entry = float(entry_price)
         atr = float(atr)
         side = str(side or "LONG").upper()
+        if not all(math.isfinite(value) for value in (
+            self.balance, self.risk_per_trade_pct, self.max_position_fraction,
+            self.max_daily_loss_pct, self.min_rr, self.max_atr_pct,
+            self.fee_buffer_per_side_pct, self.slippage_buffer_pct,
+            entry, atr, float(signal_strength), float(spread_pct),
+            float(max_spread_pct), float(stop_atr_multiplier),
+            float(target_atr_multiplier), float(invalidation_price or 0.0),
+            float(min_notional),
+            *(() if risk_pct_override is None else (float(risk_pct_override),)),
+        )):
+            return self._blocked(symbol, side, entry, "non-finite risk input")
+        if self.balance <= 0:
+            return self._blocked(symbol, side, entry, "invalid account equity")
 
         if side not in {"LONG", "SHORT"}:
             return self._blocked(symbol, side, entry, "unsupported side")
