@@ -125,6 +125,83 @@ class BinanceUsdMFuturesApi(
         return requestObject("POST", "/fapi/v1/order", params, signed = true)
     }
 
+    /**
+     * Submit once and reconcile ambiguous exchange outcomes by client order ID.
+     * This method never blindly retries a Futures mutation.
+     */
+    fun placeOrderSafe(
+        symbol: String,
+        side: String,
+        type: String,
+        clientOrderId: String,
+        quantity: String? = null,
+        price: String? = null,
+        stopPrice: String? = null,
+        timeInForce: String? = null,
+        positionSide: String = "BOTH",
+        reduceOnly: Boolean? = null,
+        closePosition: Boolean = false,
+        workingType: String = "MARK_PRICE"
+    ): JSONObject {
+        val result = try {
+            placeOrder(
+                symbol = symbol,
+                side = side,
+                type = type,
+                clientOrderId = clientOrderId,
+                quantity = quantity,
+                price = price,
+                stopPrice = stopPrice,
+                timeInForce = timeInForce,
+                positionSide = positionSide,
+                reduceOnly = reduceOnly,
+                closePosition = closePosition,
+                workingType = workingType
+            )
+        } catch (e: BinanceFuturesApiException) {
+            if (!e.unknownExecution) throw e
+            val existing = try {
+                getOrder(symbol, clientOrderId)
+            } catch (reconcileError: Exception) {
+                throw BinanceFuturesApiException(
+                    "Futures order outcome UNKNOWN for $symbol/$clientOrderId; reconciliation required",
+                    unknownExecution = true,
+                    statusCode = e.statusCode
+                ).also { it.initCause(reconcileError) }
+            }
+            val observedStatus = existing.optString("status", "").uppercase()
+            if (observedStatus in setOf("NEW", "PARTIALLY_FILLED", "FILLED", "PENDING_CANCEL", "PENDING_NEW")) {
+                return existing
+            }
+            if (observedStatus in setOf("REJECTED", "EXPIRED", "CANCELED")) {
+                throw BinanceFuturesApiException(
+                    "Futures order confirmed terminal after ambiguous submission: $observedStatus",
+                    unknownExecution = false,
+                    statusCode = e.statusCode
+                ).also { it.initCause(e) }
+            }
+            throw BinanceFuturesApiException(
+                "Futures order state unresolved for $symbol/$clientOrderId; reconciliation required",
+                unknownExecution = true,
+                statusCode = e.statusCode
+            ).also { it.initCause(e) }
+        }
+        val status = result.optString("status", "").uppercase()
+        if (status in setOf("REJECTED", "EXPIRED", "CANCELED")) {
+            throw BinanceFuturesApiException(
+                "Futures order returned terminal status $status",
+                unknownExecution = false
+            )
+        }
+        if (status !in setOf("NEW", "PARTIALLY_FILLED", "FILLED", "PENDING_CANCEL", "PENDING_NEW")) {
+            throw BinanceFuturesApiException(
+                "Futures order response has unknown status ${status.ifBlank { "<missing>" }}; reconciliation required",
+                unknownExecution = true
+            )
+        }
+        return result
+    }
+
     fun cancelOrder(symbol: String, clientOrderId: String): JSONObject {
         require(symbol.isNotBlank() && clientOrderId.isNotBlank())
         return requestObject(
