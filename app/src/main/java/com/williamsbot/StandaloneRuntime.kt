@@ -1242,6 +1242,10 @@ private class NativeEngine(
     }
 
     fun stop(): JSONObject {
+        // Fence off new local entries before making the cancellation network call.
+        ++runtimeGeneration
+        running = false
+        paused = false
         // Stopping the local worker must not leave an unfilled exchange-side
         // conditional entry armed to open a position after the phone stops.
         val cancellation = if (key().isNotBlank() && secret().isNotBlank()) {
@@ -1256,9 +1260,6 @@ private class NativeEngine(
             lastError = "Stop completed locally, but pending Futures entry cancellation is unconfirmed: " +
                 cancellation.optString("error", cancellation.optString("blocker", "unknown cancellation state"))
         }
-        ++runtimeGeneration
-        running = false
-        paused = false
         marketSocket?.close(1000, "Williams stopped")
         marketSocket = null
         marketSocketConnected = false
