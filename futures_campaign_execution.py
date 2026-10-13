@@ -102,7 +102,7 @@ class FuturesCampaignExecutionService:
         self.campaign_risk_limit_pct = min(0.006, max(0.0, float(campaign_risk_limit_pct)))
         self.max_spread_pct = max(0.0, float(os.getenv("MAX_SPREAD_PCT", "0.0015")))
         self.max_atr_pct = max(0.0, float(os.getenv("MAX_ATR_PCT", "0.08")))
-        self.max_daily_loss_pct = min(0.25, max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03"))))
+        self.max_daily_loss_pct = min(0.03, max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03"))))
         self.fee_buffer_per_side_pct = max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")))
         self.slippage_buffer_pct = max(0.0, float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")))
         self.require_htf_confirmation = os.getenv("REQUIRE_HTF_CONFIRMATION", "true").lower() == "true"
