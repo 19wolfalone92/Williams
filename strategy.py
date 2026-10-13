@@ -64,8 +64,11 @@ def calculate_indicators(df, cfg):
     x["ao_red"] = x["ao"] < x["ao"].shift(1)
     x["ao_green_streak"] = _streak(x["ao_green"])
     x["ao_red_streak"] = _streak(x["ao_red"])
-    x["super_ao_long"] = x["ao_green_streak"] >= int(cfg["super_ao_bars"])
-    x["super_ao_short"] = x["ao_red_streak"] >= int(cfg["super_ao_bars"])
+    # Super AO is a presenting event on the third same-direction AO bar, not a
+    # persistent state on every later bar. Later AO bars may support campaign
+    # management, but must not mint duplicate WM2 entry events.
+    x["super_ao_long"] = x["ao_green_streak"] == int(cfg["super_ao_bars"])
+    x["super_ao_short"] = x["ao_red_streak"] == int(cfg["super_ao_bars"])
     x["ao_momentum_rising"] = x["ao_green"]
     x["ao_momentum_falling"] = x["ao_red"]
 
