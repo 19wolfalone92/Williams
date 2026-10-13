@@ -1078,8 +1078,9 @@ def status():
             timezone.utc
         ).isoformat(),
         'market_mode': 'USD_M_FUTURES',
-        'futures_leverage': int(os.getenv('FUTURES_LEVERAGE', '2')),
-        'futures_margin_type': os.getenv('FUTURES_MARGIN_TYPE', 'ISOLATED').upper(),
+        'futures_leverage': t.config.futures_leverage,
+        'futures_margin_type': t.config.futures_margin_type,
+        'futures_force_one_way': t.config.futures_force_one_way,
         'scanner_scanning': bool(_scanner_snapshot()['scanning']),
         'scanner_symbols': int(_scanner_snapshot()['symbols_scanned']),
         'scanner_configured_symbols': int(_scanner_snapshot()['symbols_configured']),
