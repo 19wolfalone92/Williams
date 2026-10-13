@@ -16,6 +16,9 @@ def test_good_trade():
         signal_strength=1.0,
         htf_confirmed=True,
         spread_pct=0.0003,
+        invalidation_price=98000,
+        stop_atr_multiplier=2.0,
+        target_atr_multiplier=4.0,
     )
 
     assert result.allowed is True
@@ -42,6 +45,7 @@ def test_risk_based_position_size():
         signal_strength=1.0,
         htf_confirmed=True,
         spread_pct=0.0002,
+        invalidation_price=4900,
     )
 
     # ATR = 1% of price.
@@ -105,6 +109,7 @@ def test_bad_rr_is_blocked():
         spread_pct=0.0002,
         stop_atr_multiplier=2.0,
         target_atr_multiplier=4.0,
+        invalidation_price=980.0,
     )
 
     # R:R = 2.0, minimum = 2.5.
@@ -122,6 +127,7 @@ def test_score_prefers_stronger_setup():
         signal_strength=1.0,
         htf_confirmed=True,
         spread_pct=0.0002,
+        invalidation_price=99000,
     )
 
     weak = engine.analyse(
@@ -131,6 +137,7 @@ def test_score_prefers_stronger_setup():
         signal_strength=0.5,
         htf_confirmed=False,
         spread_pct=0.0012,
+        invalidation_price=4700,
     )
 
     assert strong.allowed is True
@@ -148,6 +155,7 @@ def test_to_dict():
         signal_strength=1.0,
         htf_confirmed=True,
         spread_pct=0.0002,
+        invalidation_price=99000,
     )
 
     data = result.to_dict()
@@ -203,6 +211,7 @@ def test_default_risk_is_half_percent():
         signal_strength=1.0,
         htf_confirmed=True,
         spread_pct=0.0002,
+        invalidation_price=99000,
     )
     assert result.allowed is True
     assert result.risk_quote == 50
