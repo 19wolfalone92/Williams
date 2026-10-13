@@ -303,15 +303,47 @@ internal class NativeFuturesCampaignCoordinator(
                 }
 
                 if (matchingIntent != null) {
+                    val confirmedClientId = protective?.optString("clientAlgoId")
+                        ?.takeIf { it.isNotBlank() } ?: matchingIntent.optString("protection_client_id")
                     val confirmedStop = protective?.optString("triggerPrice")?.takeIf { it.isNotBlank() }
                         ?: protective?.optString("stopPrice")?.takeIf { it.isNotBlank() }
                         ?: matchingIntent.optString("protective_stop")
                     matchingIntent.put("exchange_status", "OPEN_PROTECTED")
                         .put("protection_status", "PROTECTED")
-                        .put("protection_client_id", protective?.optString("clientAlgoId")
-                            ?.takeIf { it.isNotBlank() } ?: matchingIntent.optString("protection_client_id"))
+                        .put("protection_client_id", confirmedClientId)
                         .put("protective_stop", confirmedStop)
                         .put("last_reconciled_ms", System.currentTimeMillis())
+
+                    // A crash during stop replacement may leave both the new stop and
+                    // its previously persisted predecessor open. Remove only the known
+                    // predecessor after confirming the replacement; unknown extra stops
+                    // require reconciliation instead of speculative cancellation.
+                    val previousClientId = matchingIntent.optString("previous_protection_client_id")
+                    var unmanagedExtraStop = false
+                    val currentAlgos = adapter.openAlgoOrders(symbol)
+                    for (j in 0 until currentAlgos.length()) {
+                        val old = currentAlgos.optJSONObject(j) ?: continue
+                        if (!isProtectiveStop(old, direction)) continue
+                        val oldClientId = old.optString("clientAlgoId")
+                        if (oldClientId == confirmedClientId) continue
+                        if (previousClientId.isNotBlank() && oldClientId == previousClientId) {
+                            val oldAlgoId = old.optString("algoId")
+                            if (oldAlgoId.isNotBlank()) adapter.cancelAlgoOrderById(symbol, oldAlgoId)
+                            else if (oldClientId.isNotBlank()) adapter.cancelAlgoOrder(symbol, oldClientId)
+                            else throw IOException("Cannot identify predecessor Futures protective stop")
+                        } else {
+                            unmanagedExtraStop = true
+                        }
+                    }
+                    if (unmanagedExtraStop) {
+                        anyUnprotected = true
+                        lastBlocker = "$symbol has an additional unrecognized protective stop; manual reconciliation required"
+                        continue
+                    }
+                    if (previousClientId.isNotBlank()) {
+                        matchingIntent.remove("previous_protection_client_id")
+                        matchingIntent.remove("previous_protective_stop")
+                    }
                 }
             }
 
