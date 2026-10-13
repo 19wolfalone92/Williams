@@ -312,7 +312,7 @@ class ExecutionBarrier:
                 intent, "ADMISSION_STARTED", dict(intent.required_context_versions)
             )
             if not admission_event_persisted:
-                reason = "required ADMISSION_STARTED event persistence failed; submission aborted"
+                reason = "execution_event_persistence_failed: required ADMISSION_STARTED event persistence failed; submission aborted"
                 self._record("ERROR", "execution_event_persistence_failed", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 
