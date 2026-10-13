@@ -1931,9 +1931,9 @@ private class NativeEngine(
         if (candles.size < 40) return JSONObject().put("symbol", symbol).put("interval", frame).put("ready", false)
         val prices = candles.map { it.c }
         val medians = medianPrices(candles)
-        val jaw = smma(medians, 13)
-        val teeth = smma(medians, 8)
-        val lips = smma(medians, 5)
+        val jaw = shiftedSeries(smma(medians, 13), 8)
+        val teeth = shiftedSeries(smma(medians, 8), 5)
+        val lips = shiftedSeries(smma(medians, 5), 3)
         val i = candles.lastIndex
         val aoNow = ao(candles, i)
         val aoPrev = ao(candles, i - 1)
@@ -7110,9 +7110,14 @@ private class NativeEngine(
         candles: List<CandleN>
     ): TripleValues {
         val medians = medianPrices(candles)
-        val jaw = smma(medians, 13).lastOrNull() ?: 0.0
-        val teeth = smma(medians, 8).lastOrNull() ?: 0.0
-        val lips = smma(medians, 5).lastOrNull() ?: 0.0
+        val end = candles.lastIndex
+        val jawSeries = smma(medians, 13)
+        val teethSeries = smma(medians, 8)
+        val lipsSeries = smma(medians, 5)
+        // Match plotted Alligator displacement without reading future bars.
+        val jaw = jawSeries.getOrNull(end - 8) ?: 0.0
+        val teeth = teethSeries.getOrNull(end - 5) ?: 0.0
+        val lips = lipsSeries.getOrNull(end - 3) ?: 0.0
         return TripleValues(jaw, teeth, lips)
     }
 
@@ -7926,9 +7931,9 @@ private class NativeEngine(
         val medians = medianPrices(sourceCandles)
 
         if (prices.isNotEmpty()) {
-            val jaw = smma(medians, 13)
-            val teeth = smma(medians, 8)
-            val lips = smma(medians, 5)
+            val jaw = shiftedSeries(smma(medians, 13), 8)
+            val teeth = shiftedSeries(smma(medians, 8), 5)
+            val lips = shiftedSeries(smma(medians, 5), 3)
 
             val start =
                 max(0, sourceCandles.size - 120)
