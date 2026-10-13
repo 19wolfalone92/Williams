@@ -427,13 +427,13 @@ def extract_ntd_ac_signal_specs(
         # If AC crosses zero on the second or third same-colour bar, that
         # crossing changes the count to two; the crossing bar remains the
         # signal bar, as described in NTD.
-        crossed_with_trade = False
-        if j >= 0:
-            for k in range(j + 1, i + 1):
-                if is_long and ac[k - 1] <= 0 < ac[k]:
-                    crossed_with_trade = True
-                elif not is_long and ac[k - 1] >= 0 > ac[k]:
-                    crossed_with_trade = True
+        crossed_with_trade = (
+            i > 0
+            and (
+                (is_long and ac[i - 1] <= 0 < ac[i])
+                or (not is_long and ac[i - 1] >= 0 > ac[i])
+            )
+        )
         count_ok = run == needed or (
             with_momentum and run in {2, 3} and crossed_with_trade
         )
