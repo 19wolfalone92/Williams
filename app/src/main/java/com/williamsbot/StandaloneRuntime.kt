@@ -541,17 +541,21 @@ private class NativeEngine(
     private val primarySymbol = "BTCUSDT"
     private val interval = "1h"
 
-    // Deep-analysis universe: five core USDT pairs only.
-    private val coreSymbols = listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
+    // Legacy native engine is not authoritative; keep its diagnostic universe aligned with the
+    // remote USDⓈ-M Futures backend so no stale five-symbol contract leaks into the UI.
+    private val coreSymbols = listOf(
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
+    )
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
     // Startup only needs the frames that directly participate in execution.
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
-    private val startupFrames = listOf("15m", "1h", "4h")
+    private val startupFrames = listOf("1d", "4h", "1h", "15m")
     // Fetch enough closed candles for the scanner's 150-candle working set while
     // leaving headroom for the currently forming candle.
     private val startupHistoryLimit = 180
     private val minStartupHistoryCandles = 150
-    private val maxScanSymbols = 5
+    private val maxScanSymbols = 10
     private val waveTopN = 5
     private val scanExecutor = Executors.newFixedThreadPool(12)
     private val historyBackfillExecutor = Executors.newFixedThreadPool(6) { runnable ->
@@ -8137,7 +8141,7 @@ private class NativeEngine(
             )
         }
         test("version_consistency", "runtime", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
-        test("testnet_enabled", "binance", true, "FAIL", "Standalone runtime uses Binance Spot Testnet")
+        test("testnet_enabled", "binance", false, "WARN", "Legacy native Spot runtime is disabled; authoritative trading is remote USDⓈ-M Futures Testnet")
         test("local_api_loopback", "runtime", 18080 == 18080, "FAIL", "127.0.0.1:18080")
         test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(","))
         test("runtime_lifecycle", "runtime", running == (worker?.isAlive == true), "FAIL", "running=" + running + "; worker_alive=" + (worker?.isAlive == true))
