@@ -93,13 +93,15 @@ def test_reversal_bar_needs_followup_extreme_breakout():
 
 
 def test_super_ao_signal_is_not_gated_by_fractal_state():
-    # WM2 is a distinct event: its detection must not require WM3's external
-    # fractal. Use a monotonic series to create a Super AO run, then explicitly
-    # remove the fractal gate and verify WM2 remains available.
-    prices = [100 + (i * 0.05) ** 2 for i in range(80)]
-    ind = calculate_indicators(frame(prices), config_from_env())
-    assert bool(ind["super_ao_long"].iloc[-1]) is True
-    ind["long_fractal_outside"] = False
-    # The output column is the WM2 event itself, not a conjunction with WM3.
-    ind["long_super_ao_signal"] = ind["super_ao_long"].astype(bool)
-    assert bool(ind["long_super_ao_signal"].iloc[-1]) is True
+    # A valid WM2 event must be discoverable without any fractal columns.
+    # This protects the source-level distinction between WM2 and WM3.
+    from williams_signals import _latest_super_ao
+
+    ind = pd.DataFrame({
+        "high": [10.0, 11.0, 12.0, 13.0],
+        "low": [8.0, 9.0, 10.0, 11.0],
+        "ao_green_streak": [0, 1, 2, 3],
+    })
+    signal = _latest_super_ao(ind, side="LONG")
+    assert signal is not None
+    assert signal[0] == 3
