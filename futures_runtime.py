@@ -328,7 +328,7 @@ class FuturesRuntime:
         self.require_htf_confirmation = _env_bool("REQUIRE_HTF_CONFIRMATION", True)
         self.max_open_positions = max(1, int(max_open_positions or self.config.max_open_positions or 5))
         self.max_daily_loss_pct = min(
-            0.25, max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
+            0.03, max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
         )
         self.max_stop_outs_per_utc_day = min(
             100, max(1, int(os.getenv("MAX_STOP_OUTS_PER_UTC_DAY", "2")))
