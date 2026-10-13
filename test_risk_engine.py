@@ -126,7 +126,6 @@ def test_score_prefers_stronger_setup():
         htf_confirmed=True,
         spread_pct=0.0002,
         invalidation_price=99000,
-        invalidation_price=99000,
     )
 
     weak = engine.analyse(
@@ -154,6 +153,7 @@ def test_to_dict():
         signal_strength=1.0,
         htf_confirmed=True,
         spread_pct=0.0002,
+        invalidation_price=99000,
     )
 
     data = result.to_dict()
