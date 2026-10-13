@@ -230,6 +230,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_bar_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -267,6 +268,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_bar_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -306,6 +308,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_bar_time_ms=_row_time_ms(ind.iloc[confirmation_i]),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -320,7 +323,7 @@ def extract_long_signal_specs(
                     reason="WM3 buy fractal; trigger only while price/trigger remains above Teeth",
                     source_candle_index=center_i,
                     expires_at_ms=(
-                        _row_time_ms(row)
+                        _row_time_ms(ind.iloc[confirmation_i])
                         + _timeframe_ms(timeframe) * max(
                             1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8"))
                         )
@@ -340,4 +343,4 @@ def extract_long_signal_specs(
         spec for spec in unique.values()
         if spec.expires_at_ms > current_time
     ]
-    return sorted(active, key=lambda x: (x.signal_bar_time_ms, x.signal_type.value))
+    return sorted(active, key=lambda x: (x.event_time_ms, x.signal_bar_time_ms, x.signal_type.value))
