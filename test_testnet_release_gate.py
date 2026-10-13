@@ -49,7 +49,7 @@ GATE_STEPS = (
     GateStep("P26", "recovery", "Uncertain position/order state fails closed into RECONCILE_REQUIRED", "OFFLINE"),
     GateStep("P27", "exit", "Williams structural exit uses the last 3/5-bar extreme", "OFFLINE"),
     GateStep("P28", "exit", "No fixed take-profit is required by the canonical campaign", "OFFLINE"),
-    GateStep("P29", "android", "Android is a remote HTTPS cockpit and does not start native trading", "OFFLINE"),
+    GateStep("P29", "android", "Android starts the local autonomous Futures runtime from its foreground service; no remote backend is required", "OFFLINE"),
     GateStep("P30", "release", "Only a clean final gate permits controlled Testnet trading", "TESTNET_TRADE"),
 )
 
@@ -121,6 +121,13 @@ def test_gate_manifest_has_all_required_release_steps():
         "TESTNET_READ_ONLY",
         "TESTNET_TRADE",
     }
+
+
+def test_android_release_contract_describes_autonomous_local_runtime():
+    step = next(step for step in GATE_STEPS if step.id == "P29")
+    assert "local autonomous Futures runtime" in step.description
+    assert "no remote backend is required" in step.description
+    assert "remote HTTPS cockpit" not in step.description
 
 
 def test_gate_contains_futures_protection_safety_cases():
