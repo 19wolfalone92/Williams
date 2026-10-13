@@ -406,10 +406,13 @@ def _scanner_snapshot():
         )
         scanning = bool(scanner_cache["scanning"])
         last_error = scanner_cache["last_error"]
+        scan_state = str((scanner_cache.get("scan_status") or {}).get("state", "")).upper()
         if scanning:
             state_name = "RUNNING"
         elif last_error:
             state_name = "ERROR"
+        elif scan_state in {"BLOCKED", "PARTIAL"}:
+            state_name = scan_state
         elif scanner_cache["time"]:
             state_name = "READY"
         else:
@@ -432,7 +435,7 @@ def _scanner_snapshot():
             "age_seconds": age,
             "scanner_age_seconds": age,
             "last_error": last_error,
-            "scanner_error": last_error,
+            "scanner_error": last_error or (scanner_cache.get("scan_status") or {}).get("reason"),
             "started_at": scanner_cache["started_at"],
             "candidates": list(scanner_cache["data"]),
         }
