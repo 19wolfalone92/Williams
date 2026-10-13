@@ -170,6 +170,14 @@ def main() -> None:
     must_not(android, 'putString("api_secret"', "MainActivity.kt")
     must_not(android, "http://127.0.0.1:18080", "MainActivity.kt")
     must_not(android, "http://localhost:18080", "MainActivity.kt")
+    for needle in (
+        "scannerConfiguredSymbols",
+        "scannerLongCandidates",
+        "scannerShortCandidates",
+        '"BLOCKED" ->',
+        '"PARTIAL" ->',
+    ):
+        must(android, needle, "MainActivity.kt")
 
     service = read("app/src/main/java/com/williamsbot/TradingForegroundService.kt")
     for needle in ("legacy native Spot runtime", "remote Futures backend"):
