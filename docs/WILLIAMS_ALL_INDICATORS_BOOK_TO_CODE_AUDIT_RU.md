@@ -86,8 +86,8 @@
 4. `strategy.py`: окна Profitunity не маркируют отсутствующие данные как Fading; невалидные сравнения получают `UNKNOWN`.
 5. `strategy.py`: добавлены явные `profitunity_macd_line/signal/histogram`, `balance_line` (Jaw текущего ТФ) и Gator upper/lower/phase outputs.
 6. Production Futures scanner и exit calculation теперь валидируют канонические параметры Alligator 13/8/5 + shifts 8/5/3, AO 5/34, AC 5, fractal 2/2, Super AO 3. Research callers могут по-прежнему менять конфигурацию, но production не торгует с изменёнными периодами под именем канонического профиля.
-7. Добавлен `test_williams_indicator_fidelity.py`: extended equal-high/equal-low confirmation, no-premature-confirmation и MFI warm-up/proxy checks.
-6. Оба Python CI workflow включают новый регрессионный файл; release gate проверяет наличие новых causal metadata и MFI validity state.
+7. Добавлен `test_williams_indicator_fidelity.py`: extended equal-high/equal-low confirmation, no-premature-confirmation, MFI warm-up/proxy checks, MACD component parity, Balance Line mapping и Gator formula vectors.
+8. Оба Python CI workflow включают новый регрессионный файл; release gate проверяет наличие новых causal metadata, MFI validity state и канонических indicator outputs.
 
 ## 5. Оставшиеся проблемы, которые нельзя честно объявить решёнными
 
