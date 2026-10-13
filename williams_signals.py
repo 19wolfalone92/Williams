@@ -230,14 +230,28 @@ def _latest_confirmed_fractal(
     *,
     side: str,
     max_age_bars: int = 80,
+    current_teeth: float | None = None,
+    current_close: float | None = None,
+    tick_size: float = 0.0,
 ) -> tuple[int, int, float, float, float] | None:
-    level_col = "confirmed_up_level" if side == "LONG" else "confirmed_down_level"
-    fractal_col = "fractal_up" if side == "LONG" else "fractal_down"
+    """Return the newest still-actionable confirmed fractal.
+
+    Do not let a newer fractal inside the Teeth balance line shadow an older
+    confirmed fractal whose conditional trigger remains valid. A formation is
+    not an entry: the trigger must still be ahead of market price and on the
+    valid side of the current Teeth line.
+    """
+    direction = str(side or "").upper()
+    if direction not in {"LONG", "SHORT"}:
+        return None
+    level_col = "confirmed_up_level" if direction == "LONG" else "confirmed_down_level"
+    fractal_col = "fractal_up" if direction == "LONG" else "fractal_down"
     if level_col not in ind.columns or fractal_col not in ind.columns:
         return None
 
     right = 2
     start = max(0, len(ind) - max(3, int(max_age_bars)))
+    tick = max(float(tick_size), 0.0)
     for confirmation_i in range(len(ind) - 1, start - 1, -1):
         row = ind.iloc[confirmation_i]
         level = row.get(level_col)
@@ -247,9 +261,21 @@ def _latest_confirmed_fractal(
         if center_i < 0 or not bool(ind.iloc[center_i].get(fractal_col, False)):
             continue
         center = ind.iloc[center_i]
-        trigger_base = float(center["high"] if side == "LONG" else center["low"])
-        protective = float(center["low"] if side == "LONG" else center["high"])
+        trigger_base = float(center["high"] if direction == "LONG" else center["low"])
+        trigger = trigger_base + tick if direction == "LONG" else trigger_base - tick
+        protective = float(center["low"] if direction == "LONG" else center["high"])
         teeth = float(row.get("teeth_shifted", 0.0) or 0.0)
+
+        if current_teeth is not None:
+            if direction == "LONG" and trigger <= float(current_teeth):
+                continue
+            if direction == "SHORT" and trigger >= float(current_teeth):
+                continue
+        if current_close is not None:
+            if direction == "LONG" and float(current_close) >= trigger:
+                continue
+            if direction == "SHORT" and float(current_close) <= trigger:
+                continue
         return confirmation_i, center_i, trigger_base, protective, teeth
     return None
 
@@ -612,7 +638,7 @@ def extract_long_signal_specs(
                 )
             )
 
-    fractal = _latest_confirmed_fractal(ind, side="LONG")
+    fractal = _latest_confirmed_fractal(ind, side="LONG", current_teeth=current_teeth, current_close=current_close, tick_size=tick)
     if fractal is not None:
         confirmation_i, center_i, trigger_base, protective, teeth = fractal
         # Formation can be anywhere; trigger validity belongs to current
@@ -777,7 +803,7 @@ def extract_short_signal_specs(
                 )
             )
 
-    fractal = _latest_confirmed_fractal(ind, side="SHORT")
+    fractal = _latest_confirmed_fractal(ind, side="SHORT", current_teeth=current_teeth, current_close=current_close, tick_size=tick)
     if fractal is not None:
         confirmation_i, center_i, trigger_base, protective, teeth = fractal
         trigger = trigger_base - tick
