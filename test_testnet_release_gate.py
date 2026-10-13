@@ -6,6 +6,7 @@ mutation is performed by the read-only gate.
 """
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 
@@ -54,6 +55,43 @@ GATE_STEPS = (
 )
 
 
+APPROVED_FUTURES_SYMBOLS = (
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+    "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+)
+
+
+def _validate_symbol_contract(client, symbol: str) -> dict:
+    exchange = client.exchange_info(symbol)
+    rows = (exchange or {}).get("symbols", [])
+    row = next(
+        (item for item in rows if isinstance(item, dict)
+         and str(item.get("symbol", "")).upper() == symbol),
+        None,
+    )
+    if row is None:
+        raise RuntimeError(f"{symbol}: not present in Futures exchangeInfo")
+    if str(row.get("status", "")).upper() != "TRADING":
+        raise RuntimeError(f"{symbol}: Futures contract status is not TRADING")
+    if str(row.get("contractType", "")).upper() != "PERPETUAL":
+        raise RuntimeError(f"{symbol}: contract is not a perpetual")
+    if str(row.get("quoteAsset", "")).upper() != "USDT":
+        raise RuntimeError(f"{symbol}: contract is not USDT-quoted")
+    filters = {
+        str(item.get("filterType", "")).upper()
+        for item in row.get("filters", []) if isinstance(item, dict)
+    }
+    if not {"PRICE_FILTER", "LOT_SIZE"}.issubset(filters):
+        raise RuntimeError(f"{symbol}: PRICE_FILTER or LOT_SIZE missing from exchangeInfo")
+    return {
+        "symbol": symbol,
+        "status": row["status"],
+        "contract_type": row["contractType"],
+        "quote_asset": row["quoteAsset"],
+        "filters": sorted(filters),
+    }
+
+
 def live_e2e_enabled() -> bool:
     return os.getenv("WILLIAMS_TESTNET_E2E", "").strip() == "1"
 
@@ -84,32 +122,41 @@ def run_testnet_read_only(symbol: str = "BTCUSDT") -> dict:
             f"Refusing Futures Demo Gate: unexpected endpoint {client.base_url!r}"
         )
 
+    requested_symbol = symbol.upper()
+    if requested_symbol not in APPROVED_FUTURES_SYMBOLS:
+        raise RuntimeError(f"{requested_symbol}: outside the approved ten-symbol Futures universe")
+
     account = client.account()
-    exchange = client.exchange_info(symbol)
+    if not isinstance(account, dict):
+        raise RuntimeError("Futures Demo account response is malformed")
+    for field in ("availableBalance", "totalWalletBalance", "totalMarginBalance"):
+        try:
+            value = float(account[field])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(f"Futures Demo account field {field} is missing or invalid") from exc
+        if not math.isfinite(value) or value < 0:
+            raise RuntimeError(f"Futures Demo account field {field} is not a finite non-negative number")
+    if float(account["availableBalance"]) <= 0:
+        raise RuntimeError("Futures Demo account has no available balance; fund the Testnet account before trade tests")
+
     position_mode = client.get_position_mode()
     multi_assets = client.get_multi_assets_mode()
-
-    symbols = {
-        str(row.get("symbol", "")).upper()
-        for row in (exchange or {}).get("symbols", [])
-        if isinstance(row, dict)
-    }
-    if symbol.upper() not in symbols:
-        raise RuntimeError(f"{symbol}: not present in Futures exchangeInfo")
-
     if bool((position_mode or {}).get("dualSidePosition")):
         raise RuntimeError("Futures Demo account is in Hedge Mode; Williams requires One-Way mode.")
     if bool((multi_assets or {}).get("multiAssetsMargin")):
         raise RuntimeError("Futures Demo account has Multi-Assets Mode enabled; Williams requires Single-Asset mode.")
 
+    contracts = [_validate_symbol_contract(client, item) for item in APPROVED_FUTURES_SYMBOLS]
     return {
         "ready": True,
-        "account_available": bool(account is not None),
-        "symbol": symbol.upper(),
+        "account_available": True,
+        "available_balance": float(account["availableBalance"]),
+        "symbol": requested_symbol,
         "endpoint": client.base_url,
         "position_mode": position_mode,
         "multi_assets_mode": multi_assets,
-        "exchange_symbol_present": True,
+        "approved_contracts_checked": len(contracts),
+        "contracts": contracts,
     }
 
 
@@ -173,3 +220,95 @@ if __name__ == "__main__":
         result = run_testnet_read_only(os.getenv("TESTNET_SYMBOL", "BTCUSDT"))
         print("FUTURES DEMO READ-ONLY GATE: PASS")
         print(result)
+
+
+
+def test_read_only_gate_checks_all_ten_approved_contracts(monkeypatch):
+    class FakeClient:
+        base_url = "https://demo-fapi.binance.com"
+
+        def __init__(self, *args, **kwargs):
+            self.checked = []
+
+        def account(self):
+            return {
+                "availableBalance": "1000",
+                "totalWalletBalance": "1000",
+                "totalMarginBalance": "1000",
+            }
+
+        def get_position_mode(self):
+            return {"dualSidePosition": False}
+
+        def get_multi_assets_mode(self):
+            return {"multiAssetsMargin": False}
+
+        def exchange_info(self, symbol):
+            self.checked.append(symbol)
+            return {"symbols": [{
+                "symbol": symbol,
+                "status": "TRADING",
+                "contractType": "PERPETUAL",
+                "quoteAsset": "USDT",
+                "filters": [
+                    {"filterType": "PRICE_FILTER"},
+                    {"filterType": "LOT_SIZE"},
+                ],
+            }]}
+
+    monkeypatch.setattr(__import__(__name__), "BinanceFuturesClient", FakeClient)
+    monkeypatch.setenv("WILLIAMS_TESTNET_E2E", "1")
+    monkeypatch.setenv("TESTNET", "true")
+    monkeypatch.setenv("BINANCE_API_KEY", "test-key")
+    monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
+    result = run_testnet_read_only("BTCUSDT")
+    assert result["approved_contracts_checked"] == 10
+    assert {row["symbol"] for row in result["contracts"]} == set(APPROVED_FUTURES_SYMBOLS)
+
+
+def test_read_only_gate_blocks_unfunded_account_before_symbol_checks(monkeypatch):
+    class FakeClient:
+        base_url = "https://demo-fapi.binance.com"
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def account(self):
+            return {
+                "availableBalance": "0",
+                "totalWalletBalance": "0",
+                "totalMarginBalance": "0",
+            }
+
+        def get_position_mode(self):
+            return {"dualSidePosition": False}
+
+        def get_multi_assets_mode(self):
+            return {"multiAssetsMargin": False}
+
+        def exchange_info(self, symbol):
+            raise AssertionError("No contract checks should run for an unfunded account")
+
+    monkeypatch.setattr(__import__(__name__), "BinanceFuturesClient", FakeClient)
+    monkeypatch.setenv("WILLIAMS_TESTNET_E2E", "1")
+    monkeypatch.setenv("TESTNET", "true")
+    monkeypatch.setenv("BINANCE_API_KEY", "test-key")
+    monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
+    with __import__("pytest").raises(RuntimeError, match="no available balance"):
+        run_testnet_read_only("BTCUSDT")
+
+
+def test_read_only_gate_rejects_symbol_outside_approved_universe(monkeypatch):
+    class FakeClient:
+        base_url = "https://demo-fapi.binance.com"
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(__import__(__name__), "BinanceFuturesClient", FakeClient)
+    monkeypatch.setenv("WILLIAMS_TESTNET_E2E", "1")
+    monkeypatch.setenv("TESTNET", "true")
+    monkeypatch.setenv("BINANCE_API_KEY", "test-key")
+    monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
+    with __import__("pytest").raises(RuntimeError, match="outside the approved ten-symbol"):
+        run_testnet_read_only("NOTUSDT")
