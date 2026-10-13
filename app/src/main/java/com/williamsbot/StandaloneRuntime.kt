@@ -7841,7 +7841,7 @@ private class NativeEngine(
             .put("testnet", true)
             .put("running", running)
             .put("paused", paused)
-            .put("recovered", true)
+            .put("recovered", !reconcileRequired && (futuresRuntimeStatus.optString("state") in setOf("READY", "OPEN_PROTECTED", "ENTRY_PENDING")))
             .put("state", stateName())
             .put("execution_enabled", executionReady())
             .put("position_symbol", firstPosition?.optString("symbol") ?: JSONObject.NULL)
