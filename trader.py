@@ -1140,11 +1140,6 @@ class Trader:
                 )
             raise
 
-    def _oco_equity_check(self):
-        ok, reason = self.equity_breaker.check(self.db, self.available_quote(), self.symbol)
-        if not ok:
-            raise RuntimeError(reason)
-
     def place_oco(self, qty, entry_price, trade_id=None):
         if self.symbol_rules is None:
             raise RuntimeError('Symbol rules are not loaded')
@@ -1220,7 +1215,6 @@ class Trader:
                     self.client.decimal_format(sl_limit_d),
                     cid,
                 ),
-                pre_submit_checks=lambda _snapshot: self._oco_equity_check(),
             )
             if not result.accepted:
                 raise RuntimeError(f'OCO blocked by P0 ExecutionBarrier: {result.reason}')
