@@ -214,10 +214,30 @@ class BinanceUsdMFuturesClient:
                     f"Futures order UNKNOWN for {symbol}/{new_client_order_id}; reconciliation required",
                     unknown_execution=True, status_code=exc.status_code, payload=exc.payload,
                 ) from reconcile_exc
-            return existing
+            status = str(existing.get("status", "")).upper()
+            if status in {"NEW", "PARTIALLY_FILLED", "FILLED", "PENDING_CANCEL", "PENDING_NEW"}:
+                return existing
+            if status in {"REJECTED", "EXPIRED", "CANCELED"}:
+                raise BinanceFuturesAPIError(
+                    f"Futures order is confirmed terminal after ambiguous submission: {status}",
+                    status_code=exc.status_code,
+                    payload=existing,
+                ) from exc
+            raise BinanceFuturesAPIError(
+                f"Futures order state is unresolved for {symbol}/{new_client_order_id}; reconciliation required",
+                unknown_execution=True,
+                status_code=exc.status_code,
+                payload=existing,
+            ) from exc
         status = str(result.get("status", "")).upper()
         if status in {"REJECTED", "EXPIRED", "CANCELED"}:
             raise BinanceFuturesAPIError(f"Futures order returned terminal status {status}", payload=result)
+        if status not in {"NEW", "PARTIALLY_FILLED", "FILLED", "PENDING_CANCEL", "PENDING_NEW"}:
+            raise BinanceFuturesAPIError(
+                f"Futures order response has unknown status {status or '<missing>'}; reconciliation required",
+                unknown_execution=True,
+                payload=result,
+            )
         return result
 
     def cancel_order(self, symbol, order_id=None, orig_client_order_id=None):
