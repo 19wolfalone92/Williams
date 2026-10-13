@@ -4033,24 +4033,9 @@ private class NativeEngine(
                 i in candles.lastIndex downTo
                     max(5, candles.lastIndex - 9)
             ) {
-                val aoNow = ao(candles, i)
-                val aoPrev = ao(candles, i - 1)
-                val acWindowStart = max(0, i - 4)
-                val acNow =
-                    aoNow -
-                        (acWindowStart..i)
-                            .map { ao(candles, it) }
-                            .average()
-                val acPrevWindowStart = max(0, i - 5)
-                val acPrev =
-                    aoPrev -
-                        (acPrevWindowStart until i)
-                            .map { ao(candles, it) }
-                            .average()
-
-                val green =
-                    aoNow > aoPrev &&
-                        acNow > acPrev
+                // NTD's five-bar rule counts same-color PRICE bars, not
+                // rising AO/AC bars. Keep this exit distinct from WM2 Super AO.
+                val green = isBullishWilliamsPriceBar(candles[i].o, candles[i].c)
 
                 if (!green) break
 
