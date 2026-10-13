@@ -6513,24 +6513,22 @@ private class NativeEngine(
             val p = ao(candles, i - 1)
             if (a > p) streak++ else break
             if (streak == 3) {
-                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { (center, level) ->
-                    teethS[center + 2].isFinite() && level > teethS[center + 2]
-                } ?: false
-                if (priorFractalValid) {
-                    val trigger = candles[i].h + tick
-                    if (candles[current].c < trigger) {
-                        out += CampaignSignalN(
-                            signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
-                            type = "SUPER_AO",
-                            role = "ENTRY",
-                            signalBarTimeMs = candles[i].t,
-                            triggerPrice = trigger,
-                            protectivePrice = candles[i].l - tick,
-                            teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                            invalidationPrice = candles[i].l - tick,
-                            reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
-                        )
-                    }
+                // WM2 is an independent Wise-Man event. Do not require a
+                // previously confirmed WM3 fractal here; that incorrectly
+                // converts the second Wise Man into a WM3 prerequisite.
+                val trigger = candles[i].h + tick
+                if (candles[current].c < trigger) {
+                    out += CampaignSignalN(
+                        signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
+                        type = "SUPER_AO",
+                        role = "ENTRY",
+                        signalBarTimeMs = candles[i].t,
+                        triggerPrice = trigger,
+                        protectivePrice = candles[i].l - tick,
+                        teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
+                        invalidationPrice = candles[i].l - tick,
+                        reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
+                    )
                 }
                 break
             }
