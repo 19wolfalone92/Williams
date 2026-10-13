@@ -288,6 +288,7 @@ internal class NativeFuturesCampaignCoordinator(
             if (!anyUnprotected) {
                 lastBlocker = when (state) {
                     State.ENTRY_PENDING -> "exchange_confirmed_pending_entry_or_fill_not_yet_resolved"
+                    State.EXIT_PENDING -> "exit_order_status_pending_exchange_confirmation"
                     else -> null
                 }
             }
