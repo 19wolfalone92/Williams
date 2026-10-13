@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from enum import Enum
 
@@ -44,17 +45,26 @@ class WiseMenState:
         phase = str(payload.get("phase", WiseMenPhase.NONE.value))
         try:
             phase_enum = WiseMenPhase(phase)
-        except ValueError:
-            phase_enum = WiseMenPhase.NONE
+        except ValueError as exc:
+            raise ValueError(f"Unknown persisted Wise-Men phase: {phase!r}") from exc
+        levels = {
+            key: float(payload.get(key, 0.0) or 0.0)
+            for key in ("wm1_level", "wm2_level", "wm3_level")
+        }
+        if any(not math.isfinite(value) or value < 0 for value in levels.values()):
+            raise ValueError("Persisted Wise-Men levels must be finite and non-negative")
+        additions = int(payload.get("additions", 0) or 0)
+        if additions < 0:
+            raise ValueError("Persisted Wise-Men additions cannot be negative")
         return cls(
             symbol=symbol,
             side=side,
             phase=phase_enum,
             last_candle=str(payload.get("last_candle", "")),
-            wm1_level=float(payload.get("wm1_level", 0.0) or 0.0),
-            wm2_level=float(payload.get("wm2_level", 0.0) or 0.0),
-            wm3_level=float(payload.get("wm3_level", 0.0) or 0.0),
-            additions=int(payload.get("additions", 0) or 0),
+            wm1_level=levels["wm1_level"],
+            wm2_level=levels["wm2_level"],
+            wm3_level=levels["wm3_level"],
+            additions=additions,
         )
 
 
@@ -71,9 +81,17 @@ class WiseMenStateMachine:
         if not raw:
             return WiseMenState(self.symbol, self.side)
         try:
-            return WiseMenState.from_dict(json.loads(raw), self.symbol, self.side)
-        except Exception:
-            return WiseMenState(self.symbol, self.side)
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ValueError("Persisted Wise-Men state must be a JSON object")
+            return WiseMenState.from_dict(payload, self.symbol, self.side)
+        except Exception as exc:
+            # A corrupted checkpoint is not equivalent to a fresh campaign.
+            # Silently resetting could re-arm a signal whose prior state is unknown.
+            raise RuntimeError(
+                f"Corrupt persisted Wise-Men state for {self.symbol}/{self.side}; "
+                "recovery/reconciliation is required before trading"
+            ) from exc
 
     def _save(self) -> None:
         self.db.state_set(self.key, json.dumps(self.state.to_dict(), sort_keys=True))
@@ -97,6 +115,20 @@ class WiseMenStateMachine:
         if candle_id == self.state.last_candle:
             return self.state
 
+        # Terminal states cannot be revived by a late/replayed signal.
+        # An explicit reset is required after invalidation or exhaustion.
+        if self.state.phase in {WiseMenPhase.INVALIDATED, WiseMenPhase.EXHAUSTION}:
+            return self.state
+
+        # Wise-Men evidence is monotonic within one campaign. A late WM1/WM2
+        # event must not roll an already active trend back to an earlier phase.
+        phase_rank = {
+            WiseMenPhase.NONE: 0,
+            WiseMenPhase.WM1_TRIGGERED: 1,
+            WiseMenPhase.WM2_TRIGGERED: 2,
+            WiseMenPhase.WM3_TRIGGERED: 3,
+            WiseMenPhase.TREND_ACTIVE: 4,
+        }
         next_state = self.state
         if invalidated:
             next_state = WiseMenState(self.symbol, self.side, WiseMenPhase.INVALIDATED, candle_id)
@@ -130,6 +162,14 @@ class WiseMenStateMachine:
                 self.state.wm1_level, self.state.wm2_level, self.state.wm3_level,
                 self.state.additions,
             )
+
+        if next_state.phase in phase_rank and self.state.phase in phase_rank:
+            if phase_rank[next_state.phase] < phase_rank[self.state.phase]:
+                next_state = WiseMenState(
+                    self.symbol, self.side, self.state.phase, candle_id,
+                    self.state.wm1_level, self.state.wm2_level, self.state.wm3_level,
+                    self.state.additions,
+                )
 
         self.state = next_state
         self._save()
