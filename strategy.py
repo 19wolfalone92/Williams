@@ -71,6 +71,15 @@ def calculate_indicators(df, cfg):
 
     # Accelerator/Decelerator: AO minus its 5-period SMA.
     x["ac"] = x["ao"] - x["ao"].rolling(cfg["ac_period"]).mean()
+    x["ac_green"] = x["ac"] > x["ac"].shift(1)
+    x["ac_red"] = x["ac"] < x["ac"].shift(1)
+
+    # New Trading Dimensions zones: AO and AC must accelerate in the same
+    # direction. Zone is context/position-management evidence, not a standalone
+    # entry trigger.
+    x["williams_zone"] = "GRAY"
+    x.loc[x["ao_green"] & x["ac_green"], "williams_zone"] = "GREEN"
+    x.loc[x["ao_red"] & x["ac_red"], "williams_zone"] = "RED"
 
     # Fractals. The center must be strictly higher/lower than the two bars
     # on each side; equality therefore does not create a false fractal.
@@ -276,13 +285,22 @@ def calculate_indicators(df, cfg):
     )
 
     # Williams Market Facilitation Index proxy and four Profitunity windows.
-    # On Binance Spot, this uses traded base volume rather than tick count, so
-    # it is deliberately diagnostic only.
+    # Original MFI uses tick volume. Binance candles expose trade count, not
+    # true tick count, so use trade count when present and explicitly label the
+    # result as a proxy; otherwise fall back to base-asset volume.
     volume = pd.to_numeric(x.get("volume", pd.Series(np.nan, index=x.index)), errors="coerce")
+    trades = pd.to_numeric(x.get("trades", pd.Series(np.nan, index=x.index)), errors="coerce")
     x["volume"] = volume
-    x["mfi_proxy"] = (x["high"] - x["low"]) / volume.replace(0, np.nan)
-    x["volume_up"] = volume > volume.shift(1)
-    x["volume_down"] = volume < volume.shift(1)
+    if trades.notna().all() and (trades > 0).any():
+        mfi_volume = trades
+        x["mfi_proxy_source"] = "BINANCE_TRADE_COUNT_PROXY"
+    else:
+        mfi_volume = volume
+        x["mfi_proxy_source"] = "BASE_VOLUME_PROXY"
+    x["mfi_volume_proxy"] = mfi_volume
+    x["mfi_proxy"] = (x["high"] - x["low"]) / mfi_volume.replace(0, np.nan)
+    x["volume_up"] = mfi_volume > mfi_volume.shift(1)
+    x["volume_down"] = mfi_volume < mfi_volume.shift(1)
     x["mfi_up"] = x["mfi_proxy"] > x["mfi_proxy"].shift(1)
     x["mfi_down"] = x["mfi_proxy"] < x["mfi_proxy"].shift(1)
     x["profitunity_window"] = _profitunity_window(x["volume_up"], x["mfi_up"])
