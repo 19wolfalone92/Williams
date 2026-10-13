@@ -2304,7 +2304,7 @@ class FuturesWilliamsRuntime:
                 indicator_frame = calculate_indicators(closed, canonical_indicator_config_from_env())
                 last = indicator_frame.iloc[-1]
                 close_price = float(last.get("close", 0.0) or 0.0)
-                teeth_price = float(last.get("teeth_shifted", 0.0) or 0.0)
+                teeth_price = float(last.get("teeth_current", last.get("teeth_shifted", 0.0)) or 0.0)
                 if min(close_price, teeth_price) > 0:
                     # NTD uses a close-based stop at the red Teeth line:
                     # intrabar penetration is ignored, but any completed close
