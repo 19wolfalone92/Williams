@@ -1204,8 +1204,8 @@ class MultiTimeframeWaveEngine:
             alternative = "NONE"
         return primary, alternative
 
-    @staticmethod
     def _point_zero_bullets(
+        self,
         ind: pd.DataFrame,
         pivots: Sequence[Pivot],
         direction: str,
