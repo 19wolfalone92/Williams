@@ -2198,7 +2198,7 @@ class FuturesWilliamsRuntime:
                     red_five = bool((last_five["close"] < last_five["open"]).all())
                     if (campaign.side == "BUY" and green_five) or (campaign.side == "SELL" and red_five):
                         tags["ntd_five_colour_trail_active"] = True
-                        tags["ntd_five_colour_trail_started_at_ms"] = _row_time_ms(last_five.iloc[-1])
+                        tags["ntd_five_colour_trail_started_at_ms"] = int(time.time() * 1000)
                         if hasattr(self, "db") and hasattr(campaign, "campaign_id"):
                             self.db.save_campaign(campaign)
 
