@@ -612,17 +612,17 @@ private class NativeEngine(
     private val campaignEngineEnabled: Boolean
         get() = prefs.getBoolean("campaign_engine_enabled", true)
     private val campaignExecutionTimeframe: String
-        get() = prefs.getString("campaign_execution_timeframe", "5m") ?: "5m"
-    private val campaignRiskLimitPct = 0.005
-    private val campaignInitialRiskPct = 0.002
-    private val campaignAddRiskCapPct = 0.002
+        get() = prefs.getString("campaign_execution_timeframe", "1h") ?: "1h"
+    private val campaignRiskLimitPct = 0.006
+    private val campaignInitialRiskPct = 0.005
+    private val campaignAddRiskCapPct = 0.001
     private val campaignTrailBars: Int
         get() = prefs.getInt("campaign_trail_bars", 5).coerceIn(3, 5)
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
-    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.03)
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
@@ -1202,7 +1202,7 @@ private class NativeEngine(
                         ?.toDoubleOrNull()
                         ?: 0.0
                 }
-            equityCircuitBreaker.reset(estimateManagedEquity())
+            restoreEquityCircuitBreaker(estimateManagedEquity())
         } catch (x: Exception) {
             setReconcileRequired(
                 "startup exchange synchronization failed: " +
@@ -5518,6 +5518,46 @@ private class NativeEngine(
         return equity
     }
 
+    private fun utcEquityDayKey(nowMs: Long): String =
+        java.time.Instant.ofEpochMilli(nowMs)
+            .atZone(java.time.ZoneOffset.UTC)
+            .toLocalDate()
+            .toString()
+
+    private fun persistEquityCircuitBreaker(
+        snapshot: EquityCircuitBreaker.Snapshot,
+        nowMs: Long
+    ) {
+        prefs.edit()
+            .putString("equity_circuit_day_key", utcEquityDayKey(nowMs))
+            .putString("equity_circuit_start_equity", snapshot.startEquity.toString())
+            .putBoolean("equity_circuit_tripped", snapshot.tripped)
+            .apply()
+    }
+
+    private fun restoreEquityCircuitBreaker(
+        equity: Double,
+        nowMs: Long = System.currentTimeMillis()
+    ) {
+        require(equity.isFinite() && equity > 0.0) {
+            "cannot establish daily equity baseline from invalid managed equity"
+        }
+        val dayKey = utcEquityDayKey(nowMs)
+        val storedDay = prefs.getString("equity_circuit_day_key", "") ?: ""
+        val storedStart = prefs.getString("equity_circuit_start_equity", "")
+            ?.toDoubleOrNull() ?: 0.0
+        if (storedDay == dayKey && storedStart.isFinite() && storedStart > 0.0) {
+            equityCircuitBreaker.restore(
+                storedStart,
+                prefs.getBoolean("equity_circuit_tripped", false),
+                nowMs
+            )
+        } else {
+            equityCircuitBreaker.reset(equity, nowMs)
+        }
+        persistEquityCircuitBreaker(equityCircuitBreaker.observe(equity, nowMs), nowMs)
+    }
+
     private fun checkAutomaticCircuitBreaker() {
         if (!running || paused || killLatched || circuitBreakerTripInProgress) return
         val now = System.currentTimeMillis()
@@ -5541,6 +5581,7 @@ private class NativeEngine(
                 estimateManagedEquity(),
                 now
             )
+            persistEquityCircuitBreaker(snapshot, now)
             if (snapshot.tripped) {
                 circuitBreakerTripInProgress = true
                 lastError =
