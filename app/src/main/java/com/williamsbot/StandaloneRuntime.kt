@@ -1930,9 +1930,10 @@ private class NativeEngine(
     private fun buildIndicatorSnapshot(candles: List<CandleN>, symbol: String, frame: String): JSONObject {
         if (candles.size < 40) return JSONObject().put("symbol", symbol).put("interval", frame).put("ready", false)
         val prices = candles.map { it.c }
-        val jaw = smma(prices, 13)
-        val teeth = smma(prices, 8)
-        val lips = smma(prices, 5)
+        val medians = medianPrices(candles)
+        val jaw = smma(medians, 13)
+        val teeth = smma(medians, 8)
+        val lips = smma(medians, 5)
         val i = candles.lastIndex
         val aoNow = ao(candles, i)
         val aoPrev = ao(candles, i - 1)
