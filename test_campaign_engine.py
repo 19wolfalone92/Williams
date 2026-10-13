@@ -1,6 +1,7 @@
 import os
 import tempfile
 import time
+import pytest
 from dataclasses import replace
 
 from campaign_engine import CampaignEngine
@@ -115,3 +116,16 @@ def test_expired_signal_cannot_start_or_supersede_a_campaign():
     )
     assert CampaignEngine.choose_initial_signal([expired]) is None
     assert CampaignEngine.choose_initial_signal([expired, valid]) is valid
+
+
+
+def test_campaign_entry_arm_rejects_expired_signal_even_if_called_directly():
+    now_ms = int(time.time() * 1000)
+    expired = replace(
+        make_signal(SignalType.REVERSAL, bar=now_ms - 120_000),
+        expires_at_ms=now_ms - 1,
+    )
+    engine = CampaignEngine(None)
+    campaign = engine.create_campaign(expired, initial_risk_pct=0.001)
+    with pytest.raises(ValueError, match="expired Williams entry signal"):
+        engine.arm_entry(campaign, expired)
