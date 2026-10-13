@@ -2034,6 +2034,14 @@ private class NativeEngine(
         }
     }
 
+    private fun candleSeriesCurrent(candles: List<CandleN>, frame: String, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val last = candles.lastOrNull() ?: return false
+        val durationMs = frameSeconds(frame).coerceAtLeast(60L) * 1000L
+        // CandleN.t is the candle open time. The last closed candle remains current
+        // until the next candle of this timeframe has closed.
+        return last.t > 0L && nowMs < last.t + 2L * durationMs
+    }
+
     private fun fetchCandles(
         symbol: String,
         frame: String,
@@ -2043,37 +2051,29 @@ private class NativeEngine(
         val liveKey = normalizedSymbol + ":" + frame
         liveCandleCache[liveKey]?.let { live ->
             synchronized(live) {
-                if (live.size >= limit) return live.takeLast(limit)
+                if (live.size >= limit && candleSeriesCurrent(live, frame)) {
+                    return live.takeLast(limit)
+                }
             }
         }
 
         val cacheKey = normalizedSymbol + ":" + frame + ":" + limit
-        val persistent = historyStore.loadRecent(
-            normalizedSymbol,
-            frame,
-            limit
-        )
-        if (persistent.size >= limit) {
-            val result = persistent.map {
-                CandleN(
-                    it.openTime,
-                    it.open,
-                    it.high,
-                    it.low,
-                    it.close,
-                    it.volume
-                )
-            }
-            candleCache[cacheKey] = System.currentTimeMillis() to result
-            liveCandleCache[liveKey] = result.toMutableList()
-            return result
+        val persistent = historyStore.loadRecent(normalizedSymbol, frame, limit)
+        val persistentCandles = persistent.map {
+            CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
+        }
+        if (persistent.size >= limit && candleSeriesCurrent(persistentCandles, frame)) {
+            candleCache[cacheKey] = System.currentTimeMillis() to persistentCandles
+            liveCandleCache[liveKey] = persistentCandles.toMutableList()
+            return persistentCandles
         }
 
         val cached = candleCache[cacheKey]
         val now = System.currentTimeMillis()
         if (cached != null &&
             cached.second.size >= limit &&
-            now - cached.first < scanCacheTtlMs
+            now - cached.first < scanCacheTtlMs &&
+            candleSeriesCurrent(cached.second, frame, now)
         ) {
             return cached.second.takeLast(limit)
         }
