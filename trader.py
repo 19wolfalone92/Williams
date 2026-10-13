@@ -1241,6 +1241,28 @@ class Trader:
                 client_order_id=cid,
                 max_age_ms=60_000,
             )
+            def _validate_oco_before_submit(_snapshot):
+                current = D(self.client.ticker_price(self.symbol).get('price', '0'))
+                if not (tp_d > current > sl_d):
+                    raise RuntimeError(
+                        f'OCO protection price ordering invalid at submit: '
+                        f'current={current}, tp={tp_d}, sl={sl_d}'
+                    )
+                latest_account = self.client.account()
+                latest_free = next(
+                    (
+                        D(balance.get('free', '0'))
+                        for balance in latest_account.get('balances', [])
+                        if balance.get('asset') == self.base_asset
+                    ),
+                    D('0'),
+                )
+                if latest_free < actual_qty:
+                    raise RuntimeError(
+                        f'OCO protection quantity no longer available: '
+                        f'free={latest_free}, required={actual_qty}'
+                    )
+
             self._set_state('EXIT_PENDING')
             result = self.execution_barrier.execute(
                 intent,
@@ -1252,6 +1274,7 @@ class Trader:
                     self.client.decimal_format(sl_limit_d),
                     cid,
                 ),
+                pre_submit_checks=_validate_oco_before_submit,
             )
             if not result.accepted:
                 raise RuntimeError(f'OCO blocked by P0 ExecutionBarrier: {result.reason}')
