@@ -1323,15 +1323,31 @@ private class NativeEngine(
         require(!running) {
             "Stop the bot before resetting the kill switch."
         }
-        recover()
-        require(!reconcileRequired) {
-            "Reconciliation is still required."
+        val recovery = recover()
+        require(recovery.optBoolean("recovered", false) && !reconcileRequired) {
+            "Futures exchange reconciliation is still required."
+        }
+        val positions = futuresCampaignCoordinator.positionsSnapshot()
+        val hasOpenPosition = (0 until positions.length()).any { i ->
+            val row = positions.optJSONObject(i) ?: return@any false
+            kotlin.math.abs(row.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0
+        }
+        require(!hasOpenPosition) {
+            "Kill switch reset refused: Binance Futures still reports an open position."
+        }
+        val intents = futuresCampaignCoordinator.intentsSnapshot()
+        val hasPendingOrder = (0 until intents.length()).any { i ->
+            val row = intents.optJSONObject(i) ?: return@any true
+            row.optString("exchange_status").uppercase(Locale.US) in setOf(
+                "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN",
+                "ACCEPTED", "TRIGGERED", "CANCEL_SUBMISSION_UNKNOWN"
+            )
+        }
+        require(!hasPendingOrder && futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.READY) {
+            "Kill switch reset refused: pending or unresolved Futures intent remains."
         }
         killLatched = false
-        stateMachine.force(
-            TradingState.READY_FLAT,
-            "kill switch reset"
-        )
+        stateMachine.force(TradingState.READY_FLAT, "Futures account flat and kill switch reset")
         prefs.edit()
             .putBoolean("kill_latched", false)
             .apply()
