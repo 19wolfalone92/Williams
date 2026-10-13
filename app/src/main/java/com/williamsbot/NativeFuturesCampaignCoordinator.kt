@@ -458,9 +458,12 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("canceled_at_ms", System.currentTimeMillis())
                 saveIntents(all)
             }
-            state = if (openSymbols.isEmpty()) State.READY else State.OPEN_PROTECTED
-            lastBlocker = null
+            state = if (openSymbols.isEmpty()) State.READY else State.RECONCILE_REQUIRED
+            lastBlocker = if (openSymbols.isEmpty()) null
+                else "open_positions_require_protection_reconciliation_after_pending_entry_cancellation"
             JSONObject().put("ok", true).put("state", state.name).put("reason", reason)
+                .put("positions_require_reconciliation", openSymbols.isNotEmpty())
+                .put("blocker", lastBlocker ?: JSONObject.NULL)
         } catch (failure: Exception) {
             state = State.RECONCILE_REQUIRED
             lastBlocker = "ambiguous_pending_entry_cancel_reconcile_required"
