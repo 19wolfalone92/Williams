@@ -384,7 +384,7 @@ def extract_ntd_ao_signal_specs(
         symbol=symbol,
         side=order_side,
         signal_type=signal_type,
-        role=SignalRole.ENTRY,
+        role=SignalRole.ADD_ON,
         timeframe=timeframe,
         signal_bar_time_ms=current_time,
         trigger_price=trigger,
@@ -484,7 +484,7 @@ def extract_ntd_ac_signal_specs(
         symbol=symbol,
         side=order_side,
         signal_type=SignalType.AC_SIGNAL,
-        role=SignalRole.ENTRY,
+        role=SignalRole.ADD_ON,
         timeframe=timeframe,
         signal_bar_time_ms=signal_time,
         trigger_price=trigger,
@@ -501,6 +501,103 @@ def extract_ntd_ac_signal_specs(
         source_candle_index=signal_i,
         expires_at_ms=_expiry(signal_time, timeframe, max_age_bars),
     )]
+
+
+def extract_ntd_fractal_signal_specs(
+    symbol: str,
+    ind: pd.DataFrame,
+    *,
+    side: str,
+    timeframe: str,
+    tick_size: float,
+    max_age_bars: int = 80,
+) -> list[SignalSpec]:
+    """Return the NTD first external-fractal breakout as a conditional entry.
+
+    The fractal must be confirmed by two right-hand closed bars, lie beyond the
+    displaced Teeth/Balance line, and remain untriggered since confirmation.
+    AO/AC NTD formations are add-ons, not substitutes for this initial gate.
+    """
+    direction = str(side or "").upper()
+    if direction not in {"LONG", "SHORT"} or ind is None or len(ind) < 5:
+        return []
+    is_long = direction == "LONG"
+    fractal_col = "fractal_up" if is_long else "fractal_down"
+    required = {fractal_col, "high", "low", "close", "teeth_shifted"}
+    if not required.issubset(ind.columns):
+        return []
+
+    tick = max(float(tick_size), 1e-12)
+    current_close = float(ind.iloc[-1].get("close", 0.0) or 0.0)
+    if not math.isfinite(current_close) or current_close <= 0:
+        return []
+    earliest_center = max(2, len(ind) - max(3, int(max_age_bars)) - 2)
+
+    # Most recent still-pending external fractal is recoverable after restart.
+    # A level that was already crossed after confirmation is deliberately not
+    # re-armed: it may have triggered while the process was offline.
+    for center_i in range(len(ind) - 3, earliest_center - 1, -1):
+        if not bool(ind.iloc[center_i].get(fractal_col, False)):
+            continue
+        confirmation_i = center_i + 2
+        center = ind.iloc[center_i]
+        confirmation = ind.iloc[confirmation_i]
+        level = float(center["high"] if is_long else center["low"])
+        teeth = float(confirmation.get("teeth_shifted", 0.0) or 0.0)
+        if not all(math.isfinite(v) and v > 0 for v in (level, teeth)):
+            continue
+        if is_long and level <= teeth:
+            continue
+        if not is_long and level >= teeth:
+            continue
+
+        trigger = level + tick if is_long else level - tick
+        if trigger <= 0:
+            continue
+        post_confirmation = ind.iloc[confirmation_i + 1:]
+        if is_long:
+            already_crossed = (
+                current_close >= trigger
+                or (not post_confirmation.empty and
+                    bool((pd.to_numeric(post_confirmation["high"], errors="coerce") >= trigger).any()))
+            )
+        else:
+            already_crossed = (
+                current_close <= trigger
+                or (not post_confirmation.empty and
+                    bool((pd.to_numeric(post_confirmation["low"], errors="coerce") <= trigger).any()))
+            )
+        if already_crossed:
+            continue
+
+        signal_time = _row_time_ms(confirmation)
+        if signal_time <= 0:
+            continue
+        protective = float(center["low"] if is_long else center["high"])
+        if not math.isfinite(protective) or protective <= 0:
+            continue
+        return [SignalSpec.new(
+            symbol=symbol,
+            side="BUY" if is_long else "SELL",
+            signal_type=SignalType.FRACTAL,
+            role=SignalRole.ENTRY,
+            timeframe=timeframe,
+            signal_bar_time_ms=signal_time,
+            trigger_price=trigger,
+            protective_reference=protective,
+            trigger_buffer_ticks=1,
+            teeth_at_detection=teeth,
+            alligator_bullish=bool(confirmation.get("bullish_alligator", False)),
+            alligator_awake=bool(confirmation.get("alligator_awake", False)),
+            reason=(
+                "NTD first external confirmed fractal; conditional "
+                + ("BUY STOP above" if is_long else "SELL STOP below")
+                + " the fractal extreme"
+            ),
+            source_candle_index=center_i,
+            expires_at_ms=_expiry(signal_time, timeframe, max_age_bars),
+        )]
+    return []
 
 
 def extract_long_signal_specs(
