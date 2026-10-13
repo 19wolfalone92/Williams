@@ -124,17 +124,21 @@ def test_stop_monotonicity_is_directional():
     assert not stop_only_reduces_risk("SHORT", 100.0, 101.0)
 
 
-def test_futures_risk_sizing_is_independent_of_leverage():
+def test_futures_risk_sizing_is_independent_of_leverage(monkeypatch):
     runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime.config = TradingConfig.from_env({
+        "BINANCE_MARKET": "futures_usdt",
+        "FUTURES_LEVERAGE": "2",
+    })
     runtime._equity = lambda: 10000.0
     runtime._min_notional = lambda symbol: 0.0
     runtime._normalize_qty = lambda symbol, qty: qty
     runtime._filters = lambda symbol: {
         "LOT_SIZE": {"stepSize": "0.001", "minQty": "0", "maxQty": "100000"}
     }
-    os.environ["FUTURES_MAX_MARGIN_FRACTION"] = "0.25"
-    os.environ["MAX_RISK_PER_TRADE_PCT"] = "0.005"
-    os.environ["FUTURES_LEVERAGE"] = "2"
+    monkeypatch.setenv("FUTURES_MAX_MARGIN_FRACTION", "0.25")
+    monkeypatch.setenv("MAX_RISK_PER_TRADE_PCT", "0.005")
+    monkeypatch.setenv("FUTURES_LEVERAGE", "2")
     qty, risk, notional = runtime._size_from_risk("BTCUSDT", 100.0, 98.0, 0.001)
     assert risk == 10.0
     assert notional <= 5000.0 + 1e-9
@@ -1226,3 +1230,32 @@ def test_futures_boolean_parser_matches_configuration_conventions(monkeypatch):
     for value in ("0", "false", "no", "off", ""):
         monkeypatch.setenv("ALLOW_SHORT", value)
         assert _env_bool("ALLOW_SHORT", True) is False
+
+
+def test_futures_config_enforces_margin_mode_leverage_and_daily_loss_caps():
+    config = TradingConfig.from_env({
+        "BINANCE_MARKET": "futures_usdt",
+        "FUTURES_LEVERAGE": "20",
+        "FUTURES_MARGIN_TYPE": "ISOLATED",
+        "FUTURES_FORCE_ONE_WAY": "true",
+        "MAX_DAILY_LOSS_PCT": "0.20",
+    })
+    assert config.futures_leverage == 2
+    assert config.futures_margin_type == "ISOLATED"
+    assert config.futures_force_one_way is True
+    assert config.max_daily_loss_pct == 0.03
+
+
+def test_futures_config_rejects_cross_margin_and_hedge_mode():
+    import pytest
+
+    with pytest.raises(ValueError, match="FUTURES_MARGIN_TYPE"):
+        TradingConfig.from_env({
+            "BINANCE_MARKET": "futures_usdt",
+            "FUTURES_MARGIN_TYPE": "CROSSED",
+        })
+    with pytest.raises(ValueError, match="FUTURES_FORCE_ONE_WAY"):
+        TradingConfig.from_env({
+            "BINANCE_MARKET": "futures_usdt",
+            "FUTURES_FORCE_ONE_WAY": "false",
+        })
