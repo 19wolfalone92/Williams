@@ -689,7 +689,7 @@ private class NativeEngine(
 
     private val userStream = BinanceUserDataStream(
         http = http,
-        endpoint = "wss://ws-fapi.binancefuture.com/ws-fapi/v1",
+        endpoint = "wss://demo-fstream.binance.com/private/ws",
         apiKeyProvider = { key() },
         apiSecretProvider = { secret() },
         timestampProvider = { signedTimestamp() },
@@ -808,6 +808,8 @@ private class NativeEngine(
             !killLatched &&
             marketDataFresh() &&
             marketWebSocketFresh() &&
+            userStreamConnected &&
+            !userStreamSyncRequired &&
             restAccountReady &&
             historyReady &&
             stateMachine.executionAllowed() &&
@@ -822,6 +824,7 @@ private class NativeEngine(
             if (killLatched) add("kill_switch_latched")
             if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
             if (!marketWebSocketFresh()) add("market_websocket_disconnected_or_stale")
+            if (!userStreamConnected || userStreamSyncRequired) add("futures_user_stream_disconnected_or_unsynchronized")
             if (!restAccountReady) add("rest_account_not_ready")
             if (!historyReady) add("history_not_ready")
             if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
@@ -1213,15 +1216,12 @@ private class NativeEngine(
         marketSocketConnected = false
         marketSocketLastEventMs = 0L
         startMarketDataStream()
-        // Do not attach the old Spot signed-subscription client to a Futures endpoint.
-        // REST reconciliation remains authoritative until a separately verified Futures
-        // account-event transport is enabled; unknown state blocks new entries.
+        // Restart the Futures private event stream; its onConnection callback
+        // reconciles open orders, positions and protection before entries are unlocked.
         userStream.stop()
         userStreamConnected = false
-        // The legacy Spot subscription protocol is deliberately not treated as a
-        // Futures account stream. REST reconciliation remains active, but diagnostics
-        // must continue to report the missing Futures user stream.
         userStreamSyncRequired = true
+        userStream.start()
         historyReady = false
         historyState = "LOADING"
         historyLastError = null
@@ -1302,6 +1302,7 @@ private class NativeEngine(
         marketSocketConnected = false
         userStream.stop()
         userStreamConnected = false
+        userStreamSyncRequired = true
         prefs.edit()
             .putBoolean("auto_run", false)
             .apply()
@@ -1335,6 +1336,7 @@ private class NativeEngine(
         marketSocketConnected = false
         userStream.stop()
         userStreamConnected = false
+        userStreamSyncRequired = true
 
         val errors = mutableListOf<String>()
         val cancellation = runCatching {
