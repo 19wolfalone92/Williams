@@ -1,10 +1,13 @@
 import os
 import hashlib
 import tempfile
+from dataclasses import replace
 from datetime import datetime, timezone
 
+import pytest
+
 from campaign_engine import CampaignEngine
-from campaign_execution import CampaignExecutionService
+from campaign_execution import CampaignExecutionError, CampaignExecutionService
 from campaign_model import CampaignState, SignalRole, SignalSpec, SignalType
 from execution_barrier import ExecutionBarrier
 from mock_exchange import MockExchange
@@ -44,6 +47,7 @@ def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101
         protective_reference=97,
         context_versions={},
         htf_confirmed=True,
+        expires_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000) + 3_600_000,
     )
 
 
@@ -54,6 +58,42 @@ def service(db, client):
     ).hexdigest()
     barrier = ExecutionBarrier(FakeCache(), db)
     return CampaignExecutionService(client, db, barrier)
+
+
+def test_expired_signal_is_rejected_before_order_submission():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        expired = replace(
+            signal(),
+            expires_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000) - 1,
+        )
+
+        with pytest.raises(CampaignExecutionError, match="expired"):
+            svc.arm_initial_entry(
+                expired,
+                equity_quote=10_000,
+                candidate_risk_pct=0.004,
+            )
+
+        assert client.open_orders("BTCUSDT") == []
+
+
+def test_signal_without_expiry_is_rejected_before_order_submission():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+
+        with pytest.raises(CampaignExecutionError, match="explicit expiry"):
+            svc.arm_initial_entry(
+                replace(signal(), expires_at_ms=0),
+                equity_quote=10_000,
+                candidate_risk_pct=0.004,
+            )
+
+        assert client.open_orders("BTCUSDT") == []
 
 
 def test_conditional_buy_trigger_rounds_up_to_tick():
