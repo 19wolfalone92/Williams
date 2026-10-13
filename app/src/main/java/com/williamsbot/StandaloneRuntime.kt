@@ -7867,7 +7867,7 @@ private class NativeEngine(
             .put("positions", futuresPositions)
             .put("open_positions", futuresPositions.length())
             .put("max_open_positions", maxOpenPositions)
-            .put("reserved_risk_pct", reservedRiskPct())
+            .put("reserved_risk_pct", futuresReservedRiskPct)
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
@@ -7879,7 +7879,7 @@ private class NativeEngine(
                 else JSONObject.NULL
             )
             .put("stop_loss_price", firstPosition?.opt("stop") ?: JSONObject.NULL)
-            .put("stop_loss_pct", 0.02)
+            .put("stop_loss_pct", if (firstPosition == null || firstPosition.optString("stop").toDoubleOrNull()?.let { it > 0.0 } != true) JSONObject.NULL else kotlin.math.abs((firstPosition.optString("entry").toDoubleOrNull() ?: 0.0) - (firstPosition.optString("stop").toDoubleOrNull() ?: 0.0)) / (firstPosition.optString("entry").toDoubleOrNull() ?: 1.0))
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
@@ -7924,12 +7924,6 @@ private class NativeEngine(
             .put("max_daily_loss_pct", 0.03)
             .put("futures_runtime", futuresRuntimeStatus)
             .put("futures_positions", futuresPositions)
-            .put("positions", futuresPositions)
-            .put("open_positions", futuresPositions.length())
-            .put("position_symbol", futuresPositions.optJSONObject(0)?.optString("symbol") ?: JSONObject.NULL)
-            .put("position", futuresPositions.optJSONObject(0) ?: JSONObject.NULL)
-            .put("position_qty", futuresPositions.optJSONObject(0)?.optDouble("qty") ?: JSONObject.NULL)
-            .put("position_entry", futuresPositions.optJSONObject(0)?.optDouble("entry") ?: JSONObject.NULL)
     }
 
     fun historyStatus(): JSONObject =
