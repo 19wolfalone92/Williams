@@ -126,6 +126,11 @@ def main() -> None:
     must(futures, 'result.sort(key=lambda c: (-c.score, -c.signal.signal_bar_time_ms, c.symbol, c.side))', "futures_williams_runtime.py")
     must(futures, "self.config.futures_leverage", "futures_williams_runtime.py")
     must(futures, "self.config.futures_margin_type", "futures_williams_runtime.py")
+    must(futures, "portfolio_risk_limit_pct=self.config.max_total_risk_pct", "futures_williams_runtime.py")
+    must(futures, "campaign_risk_limit_pct=self.config.risk_per_trade_pct", "futures_williams_runtime.py")
+    must(futures, "self.max_open_positions = self.config.max_open_positions", "futures_williams_runtime.py")
+    must(futures, 'self.htf_interval = os.getenv("HTF_INTERVAL", "4h")', "futures_williams_runtime.py")
+    must_not(futures, 'int(os.getenv("MAX_OPEN_POSITIONS"', "futures_williams_runtime.py")
     must_not(futures, 'os.getenv("FUTURES_LEVERAGE"', "futures_williams_runtime.py")
     must_not(futures, 'os.getenv("FUTURES_MARGIN_TYPE"', "futures_williams_runtime.py")
     for needle in (
