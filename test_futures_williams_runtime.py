@@ -348,19 +348,33 @@ def test_five_magic_bullets_core_math():
     assert state.all_five
 
 
-def test_futures_universe_fails_closed_without_recovered_approved_ten(monkeypatch):
+def test_futures_universe_uses_the_configured_default_ten_when_env_is_absent(monkeypatch):
     monkeypatch.delenv("FUTURES_APPROVED_SYMBOLS", raising=False)
+    approved = [
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+    ]
 
     class Client:
         def exchange_info(self):
-            raise AssertionError("exchange discovery must not replace the approved list")
+            return {"symbols": [
+                {
+                    "symbol": symbol,
+                    "status": "TRADING",
+                    "quoteAsset": "USDT",
+                    "contractType": "PERPETUAL",
+                    "filters": [
+                        {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                        {"filterType": "LOT_SIZE", "stepSize": "0.001"},
+                        {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                    ],
+                }
+                for symbol in approved
+            ]}
 
     scanner = FuturesWilliamsScanner(Client(), interval="5m")
-    assert scanner.universe() == []
-    assert "exactly 10 approved symbols" in scanner.last_universe_error
-    assert scanner.scan() == []
-    assert scanner.last_scan_status["state"] == "BLOCKED"
-    assert scanner.last_scan_status["evaluated_symbols"] == 0
+    assert scanner.universe() == approved
+    assert scanner.last_universe_error is None
 
 
 def test_futures_universe_rejects_duplicates_and_exchange_ineligible_symbols(monkeypatch):
