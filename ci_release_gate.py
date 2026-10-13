@@ -65,6 +65,13 @@ def main() -> None:
     cfg = read("trading_config.py")
     must(cfg, "WILLIAMS_SYMBOLS must match the approved ten-symbol Futures universe", "trading_config.py")
     must(cfg, "AUTO_SCAN_SYMBOLS cannot override the fixed Futures universe", "trading_config.py")
+    must(cfg, "min(2, _int(source, \"FUTURES_LEVERAGE\", 2))", "trading_config.py")
+    must(cfg, 'FUTURES_MARGIN_TYPE must be ISOLATED', "trading_config.py")
+    must(cfg, 'FUTURES_FORCE_ONE_WAY must remain enabled', "trading_config.py")
+    must(cfg, 'max_daily_loss_pct=max(0.0, min(0.03,', "trading_config.py")
+    must(cfg, "futures_leverage=futures_leverage", "trading_config.py")
+    must(cfg, "futures_margin_type=futures_margin_type", "trading_config.py")
+    must(cfg, "futures_force_one_way=futures_force_one_way", "trading_config.py")
     for needle in (
         'market: str = "futures_usdt"',
         "futures_leverage: int = 2",
@@ -148,6 +155,8 @@ def main() -> None:
     must(server, '"symbols_configured": int(scanner_cache["symbols_configured"])', "server.py")
     must(server, '"long_candidates": int(scanner_cache["long_candidates"])', "server.py")
     must(server, '"short_candidates": int(scanner_cache["short_candidates"])', "server.py")
+    must(server, "'futures_leverage': t.config.futures_leverage", "server.py")
+    must(server, "'futures_margin_type': t.config.futures_margin_type", "server.py")
     for needle in (
         "FuturesWilliamsRuntime",
         "BinanceFuturesClient",
