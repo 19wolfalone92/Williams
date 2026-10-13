@@ -2177,9 +2177,9 @@ class FuturesWilliamsRuntime:
             self.recovered = True
 
         self._reconcile_pending()
-        if self.dry_run:
-            self.db.log_event("INFO", "futures_dry_run_cycle", "DRY_RUN=true; no strategy orders or exits submitted")
-            return []
+        # DRY_RUN suppresses order mutations, not market-data collection.
+        # Always scan first so Testnet diagnostics can prove the configured
+        # universe and strategy pipeline are operational without placing orders.
         candidates = self.scanner.scan()
         scan_status = getattr(self.scanner, "last_scan_status", {})
         if scan_status.get("state") != "COMPLETE":
@@ -2190,6 +2190,14 @@ class FuturesWilliamsRuntime:
                 scan_status,
             )
             return []
+        if self.dry_run:
+            self.db.log_event(
+                "INFO",
+                "futures_dry_run_cycle",
+                "DRY_RUN=true; scanner completed; no strategy orders or exits submitted",
+                scan_status,
+            )
+            return candidates
         by_symbol = {}
         for c in candidates:
             by_symbol.setdefault(c.symbol, []).append(c)
