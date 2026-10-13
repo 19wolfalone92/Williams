@@ -151,9 +151,11 @@ def calculate_indicators(df, cfg):
                 gator_state = "AWAKENING"
         x.iloc[i, x.columns.get_loc("gator_state")] = gator_state
 
-    # NTD names the current-timeframe blue Jaw line the Balance Line. Teeth
-    # remains the red Balance Line one degree lower when used as a fractal gate.
-    x["balance_line"] = x["teeth_current"]
+    # Keep the two book usages distinct: NTD balance line is the current-time
+    # Jaw; the classic external-fractal gate is the red Teeth line. Do not
+    # overload one alias for both concepts.
+    x["balance_line"] = x["jaw_current"]
+    x["fractal_balance_line"] = x["teeth_current"]
     x["balance_line_distance_pct"] = (
         (x["close"] - x["balance_line"]) / x["close"].replace(0, np.nan)
     )
