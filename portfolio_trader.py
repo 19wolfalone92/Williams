@@ -13,7 +13,7 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
-from trading_config import DEFAULT_SYMBOLS, TradingConfig
+from trading_config import TradingConfig
 
 
 POSITION_STATES = {
