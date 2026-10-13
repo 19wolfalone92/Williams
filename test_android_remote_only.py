@@ -188,7 +188,7 @@ def test_android_defaults_match_the_approved_single_campaign_risk_profile():
     assert "daily_loss=0.03" not in runtime
 
 
-def test_futures_user_stream_is_not_the_spot_signed_subscription_protocol():
+def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
     user_stream = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     assert '"/fapi/v1/listenKey"' in user_stream
