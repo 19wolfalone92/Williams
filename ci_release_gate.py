@@ -231,7 +231,7 @@ def main() -> None:
     must(legacy_runtime, "private val executionStore = FuturesExecutionStore(context)", "StandaloneRuntime.kt")
     must(legacy_runtime, "wss://demo-fstream.binance.com/market/stream?streams=", "StandaloneRuntime.kt")
     must(legacy_runtime, "wss://demo-fstream.binance.com/public/stream?streams=", "StandaloneRuntime.kt")
-    must(legacy_runtime, "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE", "StandaloneRuntime.kt")
+    must(legacy_runtime, "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/listenKeyExpired", "StandaloneRuntime.kt")
     must(legacy_runtime, "marketWebSocketFresh()", "StandaloneRuntime.kt")
     must(legacy_runtime, "publicWebSocketFresh()", "StandaloneRuntime.kt")
     must(legacy_runtime, "userStreamConnected &&", "StandaloneRuntime.kt")
