@@ -65,7 +65,7 @@ class PortfolioController:
                     htf_confirmed=candidate.htf_confirmed,
                     spread_pct=candidate.spread_pct,
                     max_spread_pct=self.scanner.max_spread_pct,
-                    invalidation_price=float(getattr(candidate, "wave_invalidation_price", 0.0) or 0.0),
+                    invalidation_price=float(getattr(candidate, "entry_protective_reference", 0.0) or 0.0),
                 )
                 if risk.allowed:
                     analysed.append(Selection(
