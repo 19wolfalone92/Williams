@@ -61,13 +61,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     fun account(): JSONObject = request("GET", "/fapi/v2/account", emptyMap(), signed = true)
 
     fun positions(): JSONArray =
-        request("GET", "/fapi/v2/positionRisk", emptyMap(), signed = true).let { result ->
-            // Binance normally returns an array. Fail closed if the endpoint shape changes.
-            throw IOException("Unexpected Futures position response object: ${result.toString().take(120)}")
-        }
-
-    fun positionRisk(): String =
-        requestRaw("GET", "/fapi/v2/positionRisk", emptyMap(), signed = true)
+        JSONArray(requestRaw("GET", "/fapi/v2/positionRisk", emptyMap(), signed = true))
 
     fun openOrders(symbol: String): JSONArray {
         requireSymbol(symbol)
