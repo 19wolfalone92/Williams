@@ -160,7 +160,7 @@ def _pending_entry_preflight_reason(pending, intent, current_price: float, now_m
 
 
 class FuturesWilliamsScanner:
-    def __init__(self, client, *, interval: str, htf_interval: str = "1h"):
+    def __init__(self, client, *, interval: str = "1h", htf_interval: str = "4h"):
         self.client = client
         self.interval = str(interval).lower()
         self.htf_interval = str(htf_interval).lower()
