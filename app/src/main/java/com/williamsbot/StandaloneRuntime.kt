@@ -1555,6 +1555,28 @@ private class NativeEngine(
         path: String,
         params: String
     ): JSONObject {
+        // Central fail-closed backstop: no BUY-side Spot mutation may bypass
+        // the autonomous execution contract by calling signedPost directly.
+        // This does not block SELL exits/protection or DELETE cancellations.
+        val orderMutation = path.startsWith("/api/v3/order")
+        val buySide = params.split("&").any { field ->
+            val key = field.substringBefore("=", "")
+            val value = field.substringAfter("=", "")
+            key.equals("side", ignoreCase = true) &&
+                value.equals("BUY", ignoreCase = true)
+        }
+        if (
+            method.equals("POST", ignoreCase = true) &&
+            orderMutation &&
+            buySide &&
+            !executionReady()
+        ) {
+            error(
+                "BUY mutation blocked: autonomous execution contract is unverified; blockers=" +
+                    executionBlockers().joinToString(",")
+            )
+        }
+
         var lastBody = "{}"
         repeat(2) { attempt ->
             val query = if (params.isBlank()) {
