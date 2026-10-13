@@ -185,6 +185,46 @@ def _latest_super_ao(
     return None
 
 
+def _latest_three_price_bar_signal(
+    ind: pd.DataFrame,
+    *,
+    side: str,
+    max_age_bars: int = 3,
+) -> tuple[int, float, float] | None:
+    """Return the third bar of the latest TC2 three-price-bar add-on setup.
+
+    The three price bars must be bullish with rising AO bars for LONG, or
+    bearish with falling AO bars for SHORT. AO direction means bar-to-bar
+    change, not whether AO is above/below zero. This is an add-on signal only.
+    """
+    required = {"open", "high", "low", "close", "ao_green", "ao_red"}
+    if ind is None or len(ind) < 3 or not required.issubset(ind.columns):
+        return None
+
+    is_long = str(side).upper() == "LONG"
+    valid = []
+    for _, row in ind.iterrows():
+        try:
+            candle = float(row["close"]) > float(row["open"]) if is_long else float(row["close"]) < float(row["open"])
+            momentum = bool(row["ao_green"] if is_long else row["ao_red"])
+            valid.append(bool(candle and momentum))
+        except (TypeError, ValueError):
+            valid.append(False)
+
+    # Search only recent signal bars; do not resurrect an old add-on after a gap.
+    earliest = max(2, len(ind) - max(1, int(max_age_bars)) - 1)
+    for end in range(len(ind) - 1, earliest - 1, -1):
+        if not all(valid[end - 2:end + 1]):
+            continue
+        if end > 2 and valid[end - 3]:
+            continue
+        row = ind.iloc[end]
+        trigger_base = float(row["high"] if is_long else row["low"])
+        protective = float(row["low"] if is_long else row["high"])
+        return end, trigger_base, protective
+    return None
+
+
 def _latest_confirmed_fractal(
     ind: pd.DataFrame,
     *,
@@ -316,6 +356,36 @@ def extract_long_signal_specs(
                     reason="WM2 Super AO: third green AO bar; BUY STOP above corresponding price bar",
                     source_candle_index=i,
                     expires_at_ms=_expiry(_row_time_ms(row), timeframe, 20),
+                )
+            )
+
+    # TC2 continuation: three same-colour price bars with AO moving in
+    # the same direction form an add-on, never a standalone initial entry.
+    three_bar = _latest_three_price_bar_signal(ind, side="LONG")
+    if three_bar is not None:
+        i, trigger_base, protective = three_bar
+        trigger = trigger_base + tick
+        if current_close < trigger:
+            row = ind.iloc[i]
+            specs.append(
+                SignalSpec.new(
+                    symbol=symbol,
+                    side="BUY",
+                    signal_type=SignalType.THREE_GREEN_BARS,
+                    role=SignalRole.ADD_ON,
+                    timeframe=timeframe,
+                    signal_bar_time_ms=_row_time_ms(row),
+                    trigger_price=trigger,
+                    protective_reference=protective,
+                    trigger_buffer_ticks=1,
+                    teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
+                    alligator_bullish=bool(row.get("bullish_alligator", False)),
+                    alligator_awake=bool(row.get("alligator_awake", False)),
+                    htf_confirmed=bool(htf_confirmed),
+                    context_versions=versions,
+                    reason="TC2 continuation add-on: three bullish price bars with rising AO; BUY STOP above third bar",
+                    source_candle_index=i,
+                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 3),
                 )
             )
 
@@ -452,6 +522,35 @@ def extract_short_signal_specs(
                     reason="WM2 Super AO: third red AO bar; SELL STOP below corresponding price bar",
                     source_candle_index=i,
                     expires_at_ms=_expiry(_row_time_ms(row), timeframe, 20),
+                )
+            )
+
+    # Mirrored TC2 continuation add-on for a short campaign.
+    three_bar = _latest_three_price_bar_signal(ind, side="SHORT")
+    if three_bar is not None:
+        i, trigger_base, protective = three_bar
+        trigger = trigger_base - tick
+        if current_close > trigger:
+            row = ind.iloc[i]
+            specs.append(
+                SignalSpec.new(
+                    symbol=symbol,
+                    side="SELL",
+                    signal_type=SignalType.THREE_GREEN_BARS,
+                    role=SignalRole.ADD_ON,
+                    timeframe=timeframe,
+                    signal_bar_time_ms=_row_time_ms(row),
+                    trigger_price=trigger,
+                    protective_reference=protective,
+                    trigger_buffer_ticks=1,
+                    teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
+                    alligator_bullish=bool(row.get("bearish_alligator", False)),
+                    alligator_awake=bool(row.get("alligator_awake", False)),
+                    htf_confirmed=bool(htf_confirmed),
+                    context_versions=versions,
+                    reason="TC2 continuation add-on: three bearish price bars with falling AO; SELL STOP below third bar",
+                    source_candle_index=i,
+                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 3),
                 )
             )
 
