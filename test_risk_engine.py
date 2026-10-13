@@ -232,3 +232,56 @@ def test_zero_account_equity_fails_closed():
     result = engine.analyse(symbol="BTCUSDT", entry_price=100000, atr=500)
     assert result.allowed is False
     assert result.reason == "invalid account equity"
+
+def test_invalid_structural_invalidation_fails_closed_instead_of_using_atr_fallback():
+    engine = RiskEngine(balance_quote=10000)
+
+    invalid_long = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100000,
+        atr=500,
+        side="LONG",
+        invalidation_price=100100,
+    )
+    invalid_short = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100000,
+        atr=500,
+        side="SHORT",
+        invalidation_price=99900,
+    )
+
+    assert invalid_long.allowed is False
+    assert invalid_long.reason == "structural invalidation stop must be below entry for LONG"
+    assert invalid_long.stop_price == 0.0
+    assert invalid_long.position_quote == 0.0
+
+    assert invalid_short.allowed is False
+    assert invalid_short.reason == "structural invalidation stop must be above entry for SHORT"
+    assert invalid_short.stop_price == 0.0
+    assert invalid_short.position_quote == 0.0
+
+
+def test_valid_structural_invalidation_is_used_for_both_directions():
+    engine = RiskEngine(balance_quote=10000)
+
+    long_result = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100000,
+        atr=500,
+        side="LONG",
+        invalidation_price=99000,
+    )
+    short_result = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100000,
+        atr=500,
+        side="SHORT",
+        invalidation_price=101000,
+    )
+
+    assert long_result.allowed is True
+    assert long_result.stop_price == 99000
+    assert short_result.allowed is True
+    assert short_result.stop_price == 101000
+
