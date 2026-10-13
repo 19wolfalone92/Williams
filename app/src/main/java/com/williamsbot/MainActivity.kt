@@ -226,6 +226,9 @@ data class Status(
     val scannerState: String = "NOT_RUN",
     val scannerError: String? = null,
     val scannerSymbols: Int = 0,
+    val scannerConfiguredSymbols: Int = 10,
+    val scannerLongCandidates: Int = 0,
+    val scannerShortCandidates: Int = 0,
     val scanDurationMs: Long = 0L,
     val marketWsConnected: Boolean = false,
     val userWsConnected: Boolean = false,
@@ -1222,7 +1225,15 @@ private fun DiagnosticsScreen(
         item { DiagnosticRow("History", if (status.historyReady) "PASS" else "BLOCK • " + status.scannerState) }
         item { DiagnosticRow("Market WS", if (status.marketWsConnected) "CONNECTED" else "DEGRADED • REST fallback") }
         item { DiagnosticRow("User WS", if (status.userWsConnected && !status.userStreamSyncRequired) "CONNECTED" else "DEGRADED • REST reconciliation") }
-        item { DiagnosticRow("Scanner", status.scannerState + " • " + status.scannerSymbols + " symbols • " + status.scanDurationMs + " ms") }
+        item {
+            DiagnosticRow(
+                "Scanner",
+                status.scannerState + " • " + status.scannerSymbols + "/" +
+                    status.scannerConfiguredSymbols + " pairs • LONG " +
+                    status.scannerLongCandidates + " / SHORT " +
+                    status.scannerShortCandidates + " • " + status.scanDurationMs + " ms"
+            )
+        }
         item { DiagnosticRow("Execution", if (status.p0GatePassed) "READY" else "BLOCKED • " + status.p0GateReason) }
         status.error?.let { item { DiagnosticRow("Last error", it) } }
         item {
@@ -1526,8 +1537,14 @@ private fun ScanSummaryCard(
                 Text(
                     when (status.scannerState) {
                         "RUNNING" -> "Сканирование рынка…"
-                        "READY" -> status.scannerSymbols.toString() +
-                            " ликвидных USDT-пар • " + formatMs(status.scanDurationMs)
+                        "READY" -> status.scannerSymbols.toString() + "/" +
+                            status.scannerConfiguredSymbols + " пар проверено • LONG " +
+                            status.scannerLongCandidates + " / SHORT " +
+                            status.scannerShortCandidates + " • " + formatMs(status.scanDurationMs)
+                        "PARTIAL" -> "Проверено " + status.scannerSymbols + "/" +
+                            status.scannerConfiguredSymbols + "; новые входы заблокированы"
+                        "BLOCKED" -> "Сканирование заблокировано: " +
+                            (status.scannerError ?: "проверка конфигурации не пройдена")
                         "ERROR" -> "Ошибка сканера: " +
                             (status.scannerError ?: "неизвестная ошибка")
                         else -> "Сканирование ещё не запускалось"
@@ -1853,9 +1870,16 @@ private fun ScannerScreen(
                                 "Сканирование выполняется…"
                             "ERROR" ->
                                 "Ошибка сканера"
+                            "BLOCKED" ->
+                                "Сканирование заблокировано"
+                            "PARTIAL" ->
+                                "Неполное сканирование • новые входы заблокированы"
                             "READY" ->
-                                status.scannerSymbols.toString() +
-                                    " пар • top " + min(20, candidates.size)
+                                status.scannerSymbols.toString() + "/" +
+                                    status.scannerConfiguredSymbols + " пар • LONG " +
+                                    status.scannerLongCandidates + " / SHORT " +
+                                    status.scannerShortCandidates + " • top " +
+                                    min(20, candidates.size)
                             else ->
                                 "Сканирование ещё не запускалось"
                         },
@@ -1887,6 +1911,8 @@ private fun ScannerScreen(
                     icon = Icons.Filled.Radar,
                     title = when (status.scannerState) {
                         "ERROR" -> "Сканер сообщил ошибку"
+                        "BLOCKED" -> "Сканирование заблокировано"
+                        "PARTIAL" -> "Сканирование завершено не полностью"
                         "RUNNING" -> "Сканер работает"
                         else -> "Сканирование ещё не запускалось"
                     },
@@ -3178,6 +3204,12 @@ private fun parseStatus(json: JSONObject): Status {
                 "scanner_symbols",
                 0
             ),
+        scannerConfiguredSymbols =
+            json.optInt("scanner_configured_symbols", 10),
+        scannerLongCandidates =
+            json.optInt("scanner_long_candidates", 0),
+        scannerShortCandidates =
+            json.optInt("scanner_short_candidates", 0),
         scanDurationMs =
             json.optLong(
                 "scanner_duration_ms",
