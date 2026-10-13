@@ -18,7 +18,15 @@ class EquityCircuitBreaker:
         today = datetime.now(timezone.utc).date().isoformat()
         stored_day = db.state_get("daily_risk_day")
         stored_equity = db.state_get("daily_start_equity")
-        if stored_day != today or stored_equity is None:
+        if stored_day == today and stored_equity is None:
+            # Same-day state corruption must not silently establish a fresh
+            # baseline and erase a potentially tripped breaker.
+            raise ValueError("daily equity baseline is missing for the active UTC day")
+        if stored_day is None:
+            raw_latch = db.state_get("daily_loss_tripped", "0")
+            if str(raw_latch).strip().lower() in {"1", "true", "yes", "on"}:
+                raise ValueError("daily loss latch exists without a trustworthy UTC day key")
+        if stored_day != today:
             baseline = float(current_equity_quote)
             if not math.isfinite(baseline) or baseline <= 0.0:
                 raise ValueError("cannot establish a valid daily equity baseline")
