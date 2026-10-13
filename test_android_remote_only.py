@@ -106,3 +106,17 @@ def test_environment_secrets_are_gitignored():
     assert "keystore.properties" in ignore
     assert "data/binance_credentials.enc" in ignore
     assert "data/credential_master.key" in ignore
+
+
+def test_android_defaults_match_the_approved_single_campaign_risk_profile():
+    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+
+    assert "val riskPerTrade: Double = 0.0025" in main
+    assert "val maxDailyLoss: Double = 0.01" in main
+    assert "val maxOpenPositions: Int = 1" in main
+    assert "val maxTotalRiskPct: Double = 0.006" in main
+    assert '"max_daily_loss_pct", 0.01' in main
+    assert '"max_total_risk_pct",\n                0.006' in main
+    assert '.put("max_daily_loss_pct", 0.01)' in runtime
+    assert "daily_loss=0.03" not in runtime
