@@ -1276,7 +1276,7 @@ class FuturesWilliamsRuntime:
         campaign.tags["pending_order_quantity"] = qty
         campaign.tags["pending_order_trigger"] = trigger
         campaign.pending_risk_quote = risk_quote
-        campaign.capital_reserved_quote = notional / max(1, int(os.getenv("FUTURES_LEVERAGE", "2")))
+        campaign.capital_reserved_quote = notional / self.config.futures_leverage
         campaign.tags["pending_order_client_id"] = self._client_id("ADD")
         self.db.save_campaign(campaign)
         cid = campaign.tags["pending_order_client_id"]
