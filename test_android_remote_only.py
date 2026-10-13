@@ -66,6 +66,10 @@ def test_android_corrupt_persisted_campaign_state_fails_closed():
     assert "Persisted Futures pending entries are unreadable" in runtime
     assert "if (persistedStateCorrupt)" in runtime
     assert 'persistSafetyFlag("reconcile_required", true)' in runtime
+    assert 'val interruptedGateSymbol' in runtime
+    assert 'prefs.getString("execution_gate_symbol", "")' in runtime
+    assert 'prefs.edit().putBoolean("auto_run", false).commit()' in runtime
+    assert "Execution gate interrupted for " in runtime
     assert "TradingState.RECONCILE_REQUIRED" in runtime
 
 
