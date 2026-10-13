@@ -14,11 +14,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.InetAddress
-import java.net.ServerSocket
-import java.net.Socket
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -231,8 +226,7 @@ private data class BaseAnalysis(
 )
 
 private class StandaloneServer(private val context: Context) {
-    // in-process Futures Runtime API; no remote execution dependency
-    private val port = 18080
+    // In-process Futures Runtime API; no network listener is created.
     private val prefs = EncryptedSharedPreferences.create(
         context,
         "williams_native_secure",
@@ -266,39 +260,9 @@ private class StandaloneServer(private val context: Context) {
         }
     )
 
-    private var socket: ServerSocket? = null
     private var engine: NativeEngine? = null
 
-    fun start() {
-        if (socket != null) return
-
-        socket = ServerSocket(
-            port,
-            32,
-            InetAddress.getByName("127.0.0.1")
-        )
-
-        Thread {
-            while (true) {
-                try {
-                    val c = socket?.accept() ?: break
-                    Thread { handle(c) }.start()
-                } catch (_: Exception) {
-                    break
-                }
-            }
-        }.apply {
-            isDaemon = true
-            start()
-        }
-    }
-
     fun stop() {
-        try {
-            socket?.close()
-        } catch (_: Exception) {
-        }
-        socket = null
         engine?.stop()
     }
 
@@ -334,81 +298,6 @@ private class StandaloneServer(private val context: Context) {
 
     fun dispatch(method: String, target: String, body: String): String =
         route(method, target, body)
-
-    private fun handle(s: Socket) {
-        s.use {
-            try {
-                val reader = BufferedReader(
-                    InputStreamReader(
-                        s.getInputStream(),
-                        StandardCharsets.UTF_8
-                    )
-                )
-
-                val first = reader.readLine() ?: return
-                val parts = first.split(" ")
-                if (parts.size < 2) return
-
-                val method = parts[0]
-                val target = parts[1]
-
-                var length = 0
-                while (true) {
-                    val line = reader.readLine() ?: return
-                    if (line.isEmpty()) break
-
-                    val header = line.split(":", limit = 2)
-                    if (
-                        header.size == 2 &&
-                        header[0].equals("Content-Length", ignoreCase = true)
-                    ) {
-                        length = header[1].trim().toIntOrNull() ?: 0
-                    }
-                }
-
-                val chars = CharArray(length)
-                if (length > 0) {
-                    reader.read(chars)
-                }
-
-                val body = route(method, target, String(chars))
-                val bytes = body.toByteArray(StandardCharsets.UTF_8)
-
-                val output = s.getOutputStream()
-                output.write(
-                    (
-                        "HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: application/json; charset=utf-8\r\n" +
-                            "Cache-Control: no-store\r\n" +
-                            "Content-Length: " + bytes.size + "\r\n" +
-                            "Connection: close\r\n\r\n"
-                        ).toByteArray(StandardCharsets.UTF_8)
-                )
-                output.write(bytes)
-                output.flush()
-            } catch (x: Exception) {
-                val bytes = JSONObject()
-                    .put("error", x.message ?: x.javaClass.simpleName)
-                    .toString()
-                    .toByteArray(StandardCharsets.UTF_8)
-
-                try {
-                    val out = s.getOutputStream()
-                    out.write(
-                        (
-                            "HTTP/1.1 500 Internal Server Error\r\n" +
-                                "Content-Type: application/json\r\n" +
-                                "Content-Length: " + bytes.size + "\r\n" +
-                                "Connection: close\r\n\r\n"
-                            ).toByteArray(StandardCharsets.UTF_8)
-                    )
-                    out.write(bytes)
-                    out.flush()
-                } catch (_: Exception) {
-                }
-            }
-        }
-    }
 
     private fun route(
         method: String,
