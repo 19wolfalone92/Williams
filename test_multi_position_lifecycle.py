@@ -566,7 +566,7 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
             return {
                 "balances": [
                     {"asset": "USDT", "free": "9400", "locked": "0"},
-                    {"asset": "BTC", "free": "0.4", "locked": "0"},
+                    {"asset": "BTC", "free": "1.0", "locked": "0"},
                 ],
             }
 
