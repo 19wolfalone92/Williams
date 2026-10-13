@@ -424,10 +424,6 @@ class MarketScanner:
             if spread_pct > self.max_spread_pct:
                 return None
 
-            rr = self.target_pct / max(self.stop_pct, 1e-9)
-            if rr < self.min_rr:
-                return None
-
             legacy_strict_signal = bool(last.get("long_signal", False))
             campaign_signal = bool(campaign_specs)
             setup_score = float(last.get("long_setup_score", 0.0))
@@ -440,13 +436,17 @@ class MarketScanner:
             else:
                 signal_strength = 0.5
 
-            risk_pct = self.stop_pct * 100.0
-            risk_score = self._clamp(
-                20.0 * (0.02 / max(self.stop_pct, 0.0001)),
-                0.0,
-                20.0,
-            )
-            rr_score = min(20.0, 20.0 * (rr / 3.0))
+            # Risk distance comes from the Williams signal's structural
+            # protective reference. A fixed percent stop/target must not
+            # manufacture a Core risk/reward gate.
+            structural_stop_distance_pct = 0.0
+            if campaign_specs:
+                trigger = float(campaign_specs[0].trigger_price)
+                protective = float(campaign_specs[0].protective_reference)
+                if trigger > protective > 0.0:
+                    structural_stop_distance_pct = (trigger - protective) / trigger
+            risk_pct = structural_stop_distance_pct * 100.0
+
             atr_score = max(
                 0.0,
                 10.0 * (1.0 - atr_pct / max(self.max_atr_pct, 1e-9)),
@@ -458,13 +458,10 @@ class MarketScanner:
             strategy_score = 30.0 * (setup_score / 100.0)
             breakout_bonus = 15.0 if legacy_strict_signal else 0.0
 
+            # Ranking only; this is not a proof score and cannot admit an order.
+            # Structural validity, context, risk and execution are separate gates.
             base_score = self._clamp(
-                strategy_score
-                + risk_score
-                + rr_score
-                + atr_score
-                + spread_score
-                + breakout_bonus,
+                strategy_score + atr_score + spread_score + breakout_bonus,
                 0.0,
                 100.0,
             )
@@ -484,7 +481,7 @@ class MarketScanner:
                 signal_strength=round(signal_strength, 3),
                 breakout_distance_pct=round(breakout_distance_pct, 4),
                 risk_pct=round(risk_pct, 4),
-                risk_reward=round(rr, 3),
+                risk_reward=0.0,
                 atr_pct=round(atr_pct, 6),
                 spread_pct=round(spread_pct, 6),
                 # This is populated authoritatively by Wave Engine. Keep it
