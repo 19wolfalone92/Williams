@@ -29,6 +29,40 @@ def context(symbol="BTCUSDT", interval="1h", allow_long=True, allow_short=False)
     )
 
 
+
+
+class ExecutionIntentDB:
+    """Minimal durable-persistence test double for execution-barrier tests."""
+
+    def __init__(self):
+        self.states = {"position_state": "FLAT"}
+        self.intents = []
+
+    def save_execution_intent(self, intent, status, reason=""):
+        self.intents.append((intent.intent_id, status, reason))
+
+    def state_get(self, key, default=None):
+        return self.states.get(key, default)
+
+    def try_claim_state(self, key, value):
+        if key in self.states:
+            return False
+        self.states[key] = str(value)
+        return True
+
+    def has_unresolved_execution_intents(self):
+        return False
+
+    def state_set(self, key, value):
+        self.states[key] = str(value)
+
+    def log_event(self, *args, **kwargs):
+        pass
+
+    def save_execution_event(self, *args, **kwargs):
+        pass
+
+
 def test_copy_on_write_versions_and_immutable_snapshot():
     cache = ContextCache()
     first = cache.publish(context())
@@ -41,7 +75,7 @@ def test_copy_on_write_versions_and_immutable_snapshot():
 def test_execution_barrier_rejects_stale_context():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, ExecutionIntentDB())
     snap = cache.snapshot()
     cache.publish(context())
     intent = OrderIntent.new(
@@ -58,7 +92,7 @@ def test_execution_barrier_rejects_stale_context():
 def test_execution_barrier_serializes_publish_and_submit():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, ExecutionIntentDB())
     version = cache.snapshot().context("BTCUSDT", "1h").version
     started = threading.Event()
     published = threading.Event()

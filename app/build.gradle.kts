@@ -133,5 +133,6 @@ dependencies {
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    testImplementation("org.robolectric:robolectric:4.15.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

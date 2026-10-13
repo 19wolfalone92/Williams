@@ -189,8 +189,8 @@ class TradingAuditStore(context: Context) :
         values.put("method", method)
         values.put("path", path)
         values.put("status_code", statusCode)
-        values.put("request_json", requestJson)
-        values.put("response_json", responseJson)
+        values.put("request_json", SecretRedactor.redact(requestJson))
+        values.put("response_json", SecretRedactor.redact(responseJson))
         values.put("created_at", System.currentTimeMillis())
         writableDatabase.insert("rest_calls", null, values)
     }
@@ -228,8 +228,8 @@ class TradingAuditStore(context: Context) :
         values.put("opened_at", openedAt)
         values.put("closed_at", closedAt)
         values.put("outcome", outcome)
-        values.put("reason", reason)
-        values.put("raw_json", rawJson)
+        values.put("reason", SecretRedactor.redact(reason))
+        values.put("raw_json", SecretRedactor.redact(rawJson))
         values.put("fee_usdt", feeUsdt)
         values.put("fee_known", if (feeKnown) 1 else 0)
         writableDatabase.insertWithOnConflict(
@@ -312,20 +312,21 @@ class TradingAuditStore(context: Context) :
         val values = ContentValues()
         values.put("from_state", from.name)
         values.put("to_state", to.name)
-        values.put("reason", reason)
+        values.put("reason", SecretRedactor.redact(reason))
         values.put("created_at", System.currentTimeMillis())
         writableDatabase.insert("state_transitions", null, values)
     }
 
     @Synchronized
     fun recordUserEvent(event: JSONObject) {
+        val safeRawEvent = SecretRedactor.redact(event.toString()) ?: "{}"
         val eventType = event.optString("e", "unknown")
         val eventTime = event.optLong("E", 0L)
         val values = ContentValues()
         values.put("event_type", eventType)
         values.put("event_time", eventTime)
         values.put("received_at", System.currentTimeMillis())
-        values.put("raw_json", event.toString())
+        values.put("raw_json", safeRawEvent)
         writableDatabase.insert("events", null, values)
 
         if (eventType != "executionReport") return
@@ -357,7 +358,7 @@ class TradingAuditStore(context: Context) :
         execution.put("commission_asset", event.optString("N"))
         execution.put("event_time", eventTime)
         execution.put("transaction_time", event.optLong("T", 0L))
-        execution.put("raw_json", event.toString())
+        execution.put("raw_json", safeRawEvent)
         writableDatabase.insertWithOnConflict(
             "executions",
             null,
@@ -381,7 +382,7 @@ class TradingAuditStore(context: Context) :
         order.put("avg_price", if (executed > 0.0) quote / executed else 0.0)
         order.put("last_event_time", eventTime)
         order.put("updated_at", System.currentTimeMillis())
-        order.put("raw_json", event.toString())
+        order.put("raw_json", safeRawEvent)
         writableDatabase.insertWithOnConflict(
             "orders",
             null,

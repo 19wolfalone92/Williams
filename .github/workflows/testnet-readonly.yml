@@ -14,6 +14,8 @@ permissions:
 
 jobs:
   testnet-read-only:
+    # Credentials may only be used against reviewed default-branch code.
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     name: Binance Spot Testnet preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -26,12 +28,12 @@ jobs:
       PYTHONUNBUFFERED: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 1
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
 

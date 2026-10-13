@@ -1,34 +1,76 @@
 import os
 import json, sqlite3
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 8
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
         Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.path = str(path)
         self.conn = sqlite3.connect(path, check_same_thread=False, timeout=20)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute('PRAGMA busy_timeout=20000')
-        self.conn.execute('PRAGMA journal_mode=WAL')
-        self.conn.execute('PRAGMA synchronous=NORMAL')
-        self._transaction_active = False
-        self.init()
+        try:
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute('PRAGMA busy_timeout=20000')
+            self._enable_wal_with_retry()
+            self.conn.execute('PRAGMA synchronous=NORMAL')
+            self._transaction_active = False
+            self.init()
+        except Exception:
+            # Do not leak a connection/lock when schema initialization fails.
+            self.conn.close()
+            raise
+
+    def _enable_wal_with_retry(self, timeout_seconds=20.0):
+        """Enable WAL safely when multiple processes initialize the same DB.
+
+        SQLite may return SQLITE_BUSY/SQLITE_LOCKED immediately for the
+        journal-mode transition even when busy_timeout is configured. Retry
+        only those transient lock errors; propagate all other failures and
+        fail initialization rather than silently running with an unknown mode.
+        """
+        deadline = time.monotonic() + float(timeout_seconds)
+        delay = 0.025
+        while True:
+            try:
+                row = self.conn.execute('PRAGMA journal_mode=WAL').fetchone()
+                if row is None or str(row[0]).lower() != 'wal':
+                    raise sqlite3.OperationalError(
+                        f"SQLite did not enable WAL mode (reported {None if row is None else row[0]!r})"
+                    )
+                return
+            except sqlite3.OperationalError as exc:
+                message = str(exc).lower()
+                if not any(token in message for token in ('database is locked', 'database is busy', 'database table is locked')):
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise sqlite3.OperationalError(
+                        f"timed out enabling SQLite WAL after {timeout_seconds:.1f}s due to concurrent database access"
+                    ) from exc
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, 0.5)
 
     @contextmanager
-    def transaction(self):
-        """Atomic transaction for multi-step DB operations."""
+    def transaction(self, *, immediate=False):
+        """Atomic transaction for multi-step DB operations.
+
+        Schema migration uses BEGIN IMMEDIATE so competing initializers
+        serialize before inspecting/altering schema. A deferred BEGIN allows
+        both initializers to read the same old schema and race on ALTER TABLE.
+        """
         if self._transaction_active:
             yield self
             return
 
         self._transaction_active = True
         try:
-            self.conn.execute('BEGIN')
+            self.conn.execute('BEGIN IMMEDIATE' if immediate else 'BEGIN')
             yield self
             self.conn.commit()
         except Exception:
@@ -36,6 +78,17 @@ class Database:
             raise
         finally:
             self._transaction_active = False
+
+    def close(self):
+        """Close the SQLite connection; callers should use this at lifecycle boundaries."""
+        self.conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.close()
+        return False
 
     def init(self):
         self.conn.executescript('''
@@ -260,10 +313,13 @@ class Database:
         CREATE INDEX IF NOT EXISTS idx_campaign_events_campaign
             ON campaign_events(campaign_id, id);
         ''')
-        self._migrate_trade_columns()
-        self.state_set('schema_version', self.SCHEMA_VERSION)
-        self.state_set('position_state', self.state_get('position_state', 'FLAT'))
-        self.conn.commit()
+        # Schema migration and version marker are one transaction. A failure
+        # halfway through ALTER TABLE operations must leave the old schema intact.
+        with self.transaction(immediate=True):
+            self._migrate_trade_columns()
+            self._migrate_execution_intent_columns()
+            self.state_set('schema_version', self.SCHEMA_VERSION)
+            self.state_set('position_state', self.state_get('position_state', 'FLAT'))
 
     def _migrate_trade_columns(self):
         columns = {
@@ -283,6 +339,21 @@ class Database:
                 self.conn.execute(
                     f'ALTER TABLE trades ADD COLUMN {name} {sql_type}'
                 )
+
+    def _migrate_execution_intent_columns(self):
+        """Add durable exchange evidence and cross-process recovery leases."""
+        columns = {row['name'] for row in self.conn.execute('PRAGMA table_info(execution_intents)').fetchall()}
+        additions = {
+            'order_id': 'TEXT', 'order_list_id': 'TEXT', 'exchange_status': 'TEXT', 'executed_qty': 'REAL',
+            'orig_qty': 'REAL', 'avg_price': 'REAL',
+            'recovery_attempts': 'INTEGER NOT NULL DEFAULT 0',
+            'next_reconcile_at': 'REAL NOT NULL DEFAULT 0', 'lease_owner': 'TEXT',
+            'lease_until': 'REAL', 'last_reconcile_error': 'TEXT', 'resolved_at': 'TEXT',
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                self.conn.execute(f'ALTER TABLE execution_intents ADD COLUMN {name} {sql_type}')
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_intents_recovery ON execution_intents(status, next_reconcile_at, lease_until)")
 
     def state_get(self, key, default=None):
         r = self.conn.execute(
@@ -323,24 +394,150 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
-    def save_execution_intent(self, intent, status, reason=''):
-        self.conn.execute(
-            '''INSERT OR REPLACE INTO execution_intents(
-                intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+    def has_unresolved_execution_intents(self):
+        """Return whether a prior intent may still require exchange reconciliation."""
+        row = self.conn.execute(
+            "SELECT 1 FROM execution_intents WHERE status IN ('PENDING','AMBIGUOUS') LIMIT 1"
+        ).fetchone()
+        return row is not None
+
+    def list_unresolved_execution_intents(self, limit=20, now=None):
+        """Return due recovery work; active leases and backoff windows are excluded."""
+        import time
+        now = float(time.time() if now is None else now)
+        return [
+            dict(row) for row in self.conn.execute(
+                """SELECT * FROM execution_intents
+                   WHERE status IN ('PENDING','AMBIGUOUS','SUBMITTED','NEW','PENDING_NEW','PARTIALLY_FILLED','PENDING_CANCEL','OCO_EXECUTING')
+                     AND COALESCE(next_reconcile_at, 0) <= ?
+                     AND (lease_until IS NULL OR lease_until <= ?)
+                   ORDER BY created_at, intent_id LIMIT ?""",
+                (now, now, max(1, min(int(limit), 100))),
+            ).fetchall()
+        ]
+
+    def claim_execution_intent_recovery(self, intent_id, owner, lease_seconds=30, now=None):
+        """Atomically lease one unresolved intent across threads/processes."""
+        import time
+        now = float(time.time() if now is None else now)
+        cur = self.conn.execute(
+            """UPDATE execution_intents
+               SET lease_owner=?, lease_until=?, recovery_attempts=COALESCE(recovery_attempts,0)+1
+               WHERE intent_id=? AND status IN ('PENDING','AMBIGUOUS','SUBMITTED','NEW','PENDING_NEW','PARTIALLY_FILLED','PENDING_CANCEL','OCO_EXECUTING')
+                 AND COALESCE(next_reconcile_at,0) <= ?
+                 AND (lease_until IS NULL OR lease_until <= ?)""",
+            (str(owner), now + max(1.0, float(lease_seconds)), str(intent_id), now, now),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+        return cur.rowcount == 1
+
+    @staticmethod
+    def _average_execution_price(order):
+        """Return a verified average price field, never the order's limit price."""
+        try:
+            avg = order.get('avgPrice')
+            if avg is not None and float(avg) > 0:
+                return float(avg)
+            executed = float(order.get('executedQty', 0) or 0)
+            quote = order.get('cummulativeQuoteQty', order.get('cumulativeQuoteQty'))
+            if executed > 0 and quote is not None:
+                value = float(quote) / executed
+                return value if value > 0 else None
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+        return None
+
+    def complete_execution_intent_recovery(self, intent_id, owner, status, order, now=None, retry_seconds=5.0):
+        """Persist exchange evidence under lease; active orders remain unresolved."""
+        from datetime import datetime, timezone
+        import time
+        now = float(time.time() if now is None else now)
+        exchange_status = str(order.get('listOrderStatus') or order.get('status') or status or '').upper()
+        terminal = str(status).upper() in {'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED', 'OCO_ALL_DONE', 'OCO_REJECTED'}
+        # An accepted but still-live order is not a completed recovery. Keep it
+        # inside the barrier's unresolved set and schedule another read-only poll.
+        stored_status = str(status).upper() if terminal else 'SUBMITTED'
+        reason = '' if terminal else 'exchange order is active; follow-up reconciliation required'
+        next_reconcile_at = 0 if terminal else now + max(1.0, float(retry_seconds))
+        cur = self.conn.execute(
+            """UPDATE execution_intents SET status=?, reason=?, order_id=?, order_list_id=?,
+                   exchange_status=?, executed_qty=?, orig_qty=?, avg_price=?,
+                   last_reconcile_error=NULL, next_reconcile_at=?,
+                   lease_owner=NULL, lease_until=NULL, resolved_at=?
+               WHERE intent_id=? AND lease_owner=? AND status IN ('PENDING','AMBIGUOUS','SUBMITTED','NEW','PENDING_NEW','PARTIALLY_FILLED','PENDING_CANCEL','OCO_EXECUTING')""",
             (
-                intent.intent_id,
-                intent.symbol,
-                intent.side,
-                intent.order_type,
-                intent.purpose,
+                stored_status, reason,
+                str(order.get('orderId')) if order.get('orderId') is not None else None,
+                str(order.get('orderListId')) if order.get('orderListId') is not None else None,
+                exchange_status,
+                float(order.get('executedQty', 0) or 0),
+                float(order.get('origQty', 0) or 0),
+                self._average_execution_price(order),
+                next_reconcile_at,
+                datetime.now(timezone.utc).isoformat() if terminal else None,
+                str(intent_id), str(owner),
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+        return cur.rowcount == 1
+
+    def defer_execution_intent_recovery(self, intent_id, owner, error, base_seconds=5, max_seconds=300, now=None):
+        """Keep the intent unresolved and apply capped exponential backoff."""
+        import time
+        now = float(time.time() if now is None else now)
+        row = self.conn.execute(
+            "SELECT recovery_attempts FROM execution_intents WHERE intent_id=? AND lease_owner=?",
+            (str(intent_id), str(owner)),
+        ).fetchone()
+        if row is None:
+            return False
+        attempts = max(1, int(row['recovery_attempts'] or 1))
+        delay = min(float(max_seconds), float(base_seconds) * (2 ** min(attempts - 1, 16)))
+        cur = self.conn.execute(
+            """UPDATE execution_intents SET next_reconcile_at=?, last_reconcile_error=?,
+                   lease_owner=NULL, lease_until=NULL
+               WHERE intent_id=? AND lease_owner=? AND status IN ('PENDING','AMBIGUOUS','SUBMITTED','NEW','PENDING_NEW','PARTIALLY_FILLED','PENDING_CANCEL','OCO_EXECUTING')""",
+            (now + delay, str(error)[:500], str(intent_id), str(owner)),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+        return cur.rowcount == 1
+
+    def save_execution_intent(self, intent, status, reason='', exchange_order=None):
+        """Upsert intent state without erasing exchange evidence recorded by recovery."""
+        order = exchange_order if isinstance(exchange_order, dict) else {}
+        self.conn.execute(
+            """INSERT INTO execution_intents(
+                intent_id,symbol,side,order_type,purpose,required_context_versions_json,
+                hypothesis_id,invalidation_level,status,reason,client_order_id,
+                order_id,order_list_id,exchange_status,executed_qty,orig_qty,avg_price
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(intent_id) DO UPDATE SET
+                symbol=excluded.symbol, side=excluded.side, order_type=excluded.order_type,
+                purpose=excluded.purpose,
+                required_context_versions_json=excluded.required_context_versions_json,
+                hypothesis_id=excluded.hypothesis_id, invalidation_level=excluded.invalidation_level,
+                status=excluded.status, reason=excluded.reason,
+                client_order_id=COALESCE(NULLIF(excluded.client_order_id,''), execution_intents.client_order_id),
+                order_id=COALESCE(excluded.order_id, execution_intents.order_id),
+                order_list_id=COALESCE(excluded.order_list_id, execution_intents.order_list_id),
+                exchange_status=COALESCE(excluded.exchange_status, execution_intents.exchange_status),
+                executed_qty=COALESCE(excluded.executed_qty, execution_intents.executed_qty),
+                orig_qty=COALESCE(excluded.orig_qty, execution_intents.orig_qty),
+                avg_price=COALESCE(excluded.avg_price, execution_intents.avg_price)""",
+            (
+                intent.intent_id, intent.symbol, intent.side, intent.order_type, intent.purpose,
                 json.dumps(dict(intent.required_context_versions), sort_keys=True),
-                intent.hypothesis_id,
-                float(intent.invalidation_level or 0.0),
-                status,
-                reason,
+                intent.hypothesis_id, float(intent.invalidation_level or 0.0), status, reason,
                 getattr(intent, 'client_order_id', ''),
+                str(order.get('orderId')) if order.get('orderId') is not None else None,
+                str(order.get('orderListId')) if order.get('orderListId') is not None else None,
+                str(order.get('status') or order.get('listOrderStatus')).upper() if (order.get('status') is not None or order.get('listOrderStatus') is not None) else None,
+                float(order.get('executedQty', 0) or 0) if order else None,
+                float(order.get('origQty', 0) or 0) if order else None,
+                self._average_execution_price(order) if order else None,
             ),
         )
         if not self._transaction_active:

@@ -5,19 +5,31 @@ on:
     branches: [main, master]
     paths:
       - 'app/**'
+      - '*.py'
+      - '.env.example'
+      - 'requirements.txt'
+      - 'requirements-research.txt'
       - '*.gradle.kts'
       - 'gradle.properties'
       - 'gradle/**'
       - 'settings.gradle.kts'
       - '.github/workflows/**'
+      - 'tests/**'
+      - 'reports/task_0017_*.md'
   pull_request:
     paths:
       - 'app/**'
+      - '*.py'
+      - '.env.example'
+      - 'requirements.txt'
+      - 'requirements-research.txt'
       - '*.gradle.kts'
       - 'gradle.properties'
       - 'gradle/**'
       - 'settings.gradle.kts'
       - '.github/workflows/**'
+      - 'tests/**'
+      - 'reports/task_0017_*.md'
   workflow_dispatch:
 
 permissions:
@@ -29,7 +41,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GRADLE_VERSION: '8.14.5'
+  GRADLE_VERSION: '8.14.6'
   # CI validation intentionally runs against the exact current main tree.
   ANDROID_PLATFORM: 'platforms;android-36'
   ANDROID_BUILD_TOOLS: 'build-tools;36.0.0'
@@ -37,32 +49,36 @@ env:
 jobs:
   build-apk:
     name: Build APKs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
       - name: Install Android SDK packages
         run: |
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "${ANDROID_PLATFORM}" "${ANDROID_BUILD_TOOLS}"
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
         with:
-          gradle-version: ${{ env.GRADLE_VERSION }}
+          gradle-version: "8.14.6"
+          # The checked-in wrapper JAR fails official checksum validation.
+          # Regenerate it with this trusted distribution and verify its official hash before use.
           validate-wrappers: false
       - name: Restore persistent debug signing key
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         env:
           DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
         run: |
@@ -75,12 +91,21 @@ jobs:
           printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > build/williams-debug.p12
           chmod 600 build/williams-debug.p12
       - name: Validate debug signing configuration
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         env:
           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
           WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
         run: |
           set -euo pipefail
           test -s build/williams-debug.p12
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+      - name: Regenerate and verify Gradle wrapper from trusted Gradle
+        run: |
+          set -euo pipefail
+          gradle --no-daemon wrapper --gradle-version 8.14.6 --distribution-type bin
+          printf '%s  %s\n' 'ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0' 'gradle/wrapper/gradle-wrapper.jar' | sha256sum --check -
+          ./gradlew --version
       # Release gate is the single pre-build contract check for every APK commit.
       - name: Run release contract gate
         run: python3 ci_release_gate.py
@@ -93,18 +118,18 @@ jobs:
           set -euo pipefail
           for f in feature_store.py ai_shadow.py cpcv_backtester.py stress_suite.py mock_exchange.py quant_models.py shap_explain.py derivatives_features.py shadow_execution.py quant_ml_pipeline.py; do test -f "$f"; done
       - name: Run required Android lint
-        run: gradle --no-daemon :app:lintDebug --stacktrace
+        run: ./gradlew --no-daemon :app:lintDebug --stacktrace
 
       - name: Run Android unit tests
         run: |
           set +e
-          gradle --no-daemon :app:testDebugUnitTest --stacktrace 2>&1 | tee android-unit-tests.log
+          ./gradlew --no-daemon :app:testDebugUnitTest --stacktrace 2>&1 | tee android-unit-tests.log
           rc=${PIPESTATUS[0]}
           set -e
           exit "$rc"
       - name: Upload Android unit-test diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: williams-android-unit-test-diagnostics-${{ github.run_number }}
           path: |
@@ -113,26 +138,35 @@ jobs:
             app/build/reports/tests/testDebugUnitTest/**
           if-no-files-found: ignore
           retention-days: 7
-      - name: Build debug APK
+      - name: Build debug APK with persistent signature (trusted events)
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         env:
           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
           WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
         run: |
           set +e
-          gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-debug.log
+          ./gradlew --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-debug.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          exit "$rc"
+      - name: Build debug APK for pull requests (no secrets)
+        if: github.event_name == 'pull_request'
+        run: |
+          set +e
+          ./gradlew --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-debug.log
           rc=${PIPESTATUS[0]}
           set -e
           exit "$rc"
       - name: Upload debug build log
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: williams-debug-build-log-${{ github.run_number }}
           path: build-debug.log
           if-no-files-found: ignore
           retention-days: 3
       - name: Build release APK
-        run: gradle --no-daemon :app:assembleRelease --stacktrace
+        run: ./gradlew --no-daemon :app:assembleRelease --stacktrace
       - name: Verify APK files
         run: |
           set -euo pipefail
@@ -143,13 +177,21 @@ jobs:
       - name: Inspect APK metadata
         run: |
           set -euo pipefail
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/release/app-release-unsigned.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
+          DEBUG_META="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk)"
+          RELEASE_META="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/release/app-release-unsigned.apk)"
+          printf '%s\n' "$DEBUG_META" | grep -F "package: name='com.williamsbot.debug'"
+          printf '%s\n' "$RELEASE_META" | grep -F "package: name='com.williamsbot'"
+          printf '%s\n' "$DEBUG_META" | grep -F "targetSdkVersion:'36'"
+          printf '%s\n' "$RELEASE_META" | grep -F "targetSdkVersion:'36'"
+          printf '%s\n' "$DEBUG_META" | grep -E "sdkVersion:|targetSdkVersion:"
+          printf '%s\n' "$RELEASE_META" | grep -E "sdkVersion:|targetSdkVersion:"
       - name: Verify persistent debug keystore
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
           set -euo pipefail
           test -s build/williams-debug.p12
       - name: Verify persistent debug APK signature
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         env:
           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
         run: |
@@ -163,6 +205,10 @@ jobs:
           test -n "$APK_SHA"
           test "$(printf '%s' "$KEYSTORE_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$APK_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
           "$APKSIGNER" verify --verbose "$APK"
+      - name: Verify debug APK signature
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose app/build/outputs/apk/debug/app-debug.apk
       - name: Generate SHA-256 checksums
         run: |
           set -euo pipefail
@@ -170,17 +216,21 @@ jobs:
           sha256sum app/build/outputs/apk/release/app-release-unsigned.apk > app/build/outputs/apk/release/app-release-unsigned.apk.sha256
           cat app/build/outputs/apk/debug/app-debug.apk.sha256
           cat app/build/outputs/apk/release/app-release-unsigned.apk.sha256
+          printf 'source_sha=%s\n' "${{ github.event.pull_request.head.sha || github.sha }}" > app/build/outputs/apk/debug/app-debug.apk.provenance.txt
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/apk-signature.txt
       - name: Upload installable debug APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: williams-bot-debug-apk-${{ github.run_number }}
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/debug/app-debug.apk.sha256
+            app/build/outputs/apk/debug/app-debug.apk.provenance.txt
+            app/build/outputs/apk/debug/apk-signature.txt
           if-no-files-found: error
           retention-days: 14
       - name: Upload release APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: williams-bot-release-unsigned-${{ github.run_number }}
           path: |

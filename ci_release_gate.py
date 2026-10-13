@@ -3,6 +3,7 @@
 # Autonomous Android runtime contract is validated alongside the Python release gate.
 from __future__ import annotations
 import ast
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -98,18 +99,77 @@ def main() -> None:
     android_ci = read(".github/workflows/android-apk.yml")
     must(android_ci, "python3 ci_release_gate.py", "android workflow")
     must(android_ci, "group: android-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}", "android workflow")
-    must(android_ci, "gradle --no-daemon :app:lintDebug", "android workflow")
-    must_not(android_ci, "./gradlew --no-daemon :app:", "android workflow")
+    must(android_ci, "gradle --no-daemon wrapper --gradle-version 8.14.6 --distribution-type bin", "android workflow trusted wrapper bootstrap")
+    must(android_ci, "ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0", "android workflow official wrapper checksum")
+    must(android_ci, "./gradlew --no-daemon :app:lintDebug", "android workflow")
+    must_not(android_ci, "gradle --no-daemon :app:", "android workflow direct system-Gradle build")
+    campaign_ci = read(".github/workflows/campaign-ci.yml")
+    must(campaign_ci, "ref: ${{ github.event.pull_request.head.sha || github.sha }}", "campaign CI exact source checkout")
+    must(campaign_ci, "gradle --no-daemon wrapper --gradle-version 8.14.6 --distribution-type bin", "campaign CI trusted wrapper bootstrap")
+    must(campaign_ci, "ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0", "campaign CI official wrapper checksum")
+    must(campaign_ci, "./gradlew --no-daemon :app:testDebugUnitTest", "campaign CI Gradle wrapper build")
+
+    # Pull-request Gradle code is untrusted. Persistent signing material may only
+    # be restored or passed to Gradle on trusted push/manual runs, never PR runs.
+    restore_step = android_ci.split("- name: Restore persistent debug signing key", 1)[1].split("\n      - name:", 1)[0]
+    must(restore_step, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "trusted signing-key restore")
+    validate_step = android_ci.split("- name: Validate debug signing configuration", 1)[1].split("\n      - name:", 1)[0]
+    must(validate_step, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "trusted signing validation")
+    trusted_build = android_ci.split("- name: Build debug APK with persistent signature (trusted events)", 1)[1].split("\n      - name:", 1)[0]
+    must(trusted_build, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "trusted debug build")
+    must(trusted_build, "secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD", "trusted debug build secret")
+    pr_build = android_ci.split("- name: Build debug APK for pull requests (no secrets)", 1)[1].split("\n      - name:", 1)[0]
+    must(pr_build, "if: github.event_name == 'pull_request'", "PR secret-free build step")
+    must_not(pr_build, "secrets.", "PR build secret boundary")
+    verify_keystore = android_ci.split("- name: Verify persistent debug keystore", 1)[1].split("\n      - name:", 1)[0]
+    must(verify_keystore, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "trusted keystore verification")
+    verify_signature = android_ci.split("- name: Verify persistent debug APK signature", 1)[1].split("\n      - name:", 1)[0]
+    must(verify_signature, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "trusted APK signature comparison")
+    must(android_ci, "apksigner", "all-event APK signature verification")
+    must(android_ci, "verify --verbose app/build/outputs/apk/debug/app-debug.apk", "all-event APK signature verification")
 
     python_ci = read(".github/workflows/python-ci.yml")
+    must(python_ci, "permissions:", "python workflow least privilege")
+    must(python_ci, "contents: read", "python workflow least privilege")
+    must(python_ci, "pip-audit -r requirements.txt", "Python dependency vulnerability scan")
+    must(python_ci, "pip-audit -r requirements-research.txt", "optional Python dependency vulnerability scan")
     must(python_ci, "python3 ci_release_gate.py", "python workflow")
     must(python_ci, "group: backend-ci-${{ github.ref }}-${{ github.sha }}", "python workflow")
+    must(python_ci, "execution_recovery.py", "recovery worker compile coverage")
+    must(python_ci, "tests/test_execution_recovery_worker.py", "recovery worker regression coverage")
+    campaign_ci = read(".github/workflows/campaign-ci.yml")
+    must(campaign_ci, "tests/test_execution_recovery_worker.py", "Campaign recovery worker regression coverage")
+
+    requirements = read("requirements.txt")
+    must(requirements, "requests>=2.33.0", "patched requests minimum")
+    must(requirements, "cryptography>=48.0.1", "patched cryptography minimum")
 
     testnet_ci = read(".github/workflows/testnet-readonly.yml")
+    must(testnet_ci, "if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", "credentialed Testnet trusted-branch boundary")
     must(testnet_ci, "python3 ci_release_gate.py", "testnet workflow")
     must(testnet_ci, 'ALLOW_LIVE: "false"', "testnet workflow")
     must(testnet_ci, 'TESTNET: "true"', "testnet workflow")
     must(testnet_ci, "test_testnet_release_gate.py --read-only", "testnet workflow")
+
+    # Every third-party Action is pinned to a verified immutable revision.
+    for workflow_path in (
+        ".github/workflows/android-apk.yml",
+        ".github/workflows/campaign-ci.yml",
+        ".github/workflows/python-ci.yml",
+        ".github/workflows/testnet-readonly.yml",
+    ):
+        workflow = read(workflow_path)
+        for line in workflow.splitlines():
+            if line.strip().startswith("uses:"):
+                reference = line.strip().split("uses:", 1)[1].strip()
+                assert re.fullmatch(r".+@[0-9a-f]{40}(?:\s+#.*)?", reference), (
+                    f"unpinned external action reference in {workflow_path}: {reference}"
+                )
+    must(android_ci, "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09", "APK workflow verified Action revision")
+    must(android_ci, "actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6", "APK workflow verified Action revision")
+    must(android_ci, "android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd", "APK workflow verified Action revision")
+    must(android_ci, "gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c", "APK workflow verified Action revision")
+    must(android_ci, "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9", "APK workflow verified Action revision")
 
     print("WILLIAMS RELEASE CONTRACT GATE: PASS")
 

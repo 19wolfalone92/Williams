@@ -109,9 +109,9 @@ class BinanceSpotClient:
                     time.sleep(delays[attempt])
                     continue
                 raise BinanceAPIError(
-                    f'Binance transport error: {exc}',
+                    'Binance transport error; transport details redacted',
                     unknown_execution=method in {"POST", "DELETE"},
-                ) from exc
+                ) from None
 
             used = r.headers.get('X-MBX-USED-WEIGHT-1M')
             orders = r.headers.get('X-MBX-ORDER-COUNT-1M')
@@ -144,11 +144,11 @@ class BinanceSpotClient:
                 except ValueError:
                     payload_409 = {"code": 409, "msg": r.text}
                 raise BinanceAPIError(
-                    f"Binance 409: cancelReplace partially succeeded; "
-                    "reconciliation is required before retry. payload={payload_409}",
+                    "Binance 409: cancelReplace partially succeeded; "
+                    "reconciliation is required before retry; response body redacted",
                     unknown_execution=True,
                     status_code=409,
-                    payload=payload_409,
+                    payload={"code": payload_409.get("code")} if isinstance(payload_409, dict) else None,
                 )
 
             if r.status_code in (418, 429):
@@ -172,11 +172,7 @@ class BinanceSpotClient:
                     'order mutation requires reconciliation before retry.',
                     unknown_execution=method in {"POST", "DELETE"},
                     status_code=r.status_code,
-                    payload=(
-                        r.json()
-                        if r.content
-                        else {"code": r.status_code, "msg": r.text}
-                    ),
+                    payload={"code": r.status_code},
                 )
 
             if r.status_code >= 500:
@@ -188,10 +184,10 @@ class BinanceSpotClient:
                 except ValueError:
                     payload = {'code': r.status_code, 'msg': r.text}
                 raise BinanceAPIError(
-                    f'Binance {r.status_code}: {payload}',
+                    f'Binance HTTP {r.status_code}: error response body redacted',
                     unknown_execution=method in {"POST", "DELETE"},
                     status_code=r.status_code,
-                    payload=payload,
+                    payload={"code": payload.get("code")} if isinstance(payload, dict) else None,
                 )
 
             try:
@@ -216,9 +212,9 @@ class BinanceSpotClient:
                 and payload.get('code', 0) < 0
             ):
                 raise BinanceAPIError(
-                    f'Binance {r.status_code}: {payload}',
+                    f'Binance HTTP {r.status_code}: error response body redacted',
                     status_code=r.status_code,
-                    payload=payload,
+                    payload={"code": payload.get("code")} if isinstance(payload, dict) else None,
                 )
 
             if method == "GET" and path == "/api/v3/exchangeInfo":
@@ -228,7 +224,7 @@ class BinanceSpotClient:
 
         if last_exc is not None:
             raise BinanceAPIError(
-                f'Binance request failed: {last_exc}',
+                'Binance request failed; transport details redacted',
                 unknown_execution=method in {"POST", "DELETE"},
             ) from last_exc
 

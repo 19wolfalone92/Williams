@@ -15,6 +15,7 @@ from trading_config import TradingConfig
 from market_context import ContextCache, TFMarketContext
 from hypothesis_engine import build_hypotheses
 from execution_barrier import ExecutionBarrier, OrderIntent
+from execution_recovery import ExecutionRecoveryWorker
 from execution_accumulator import accumulate_order, accumulate_fills
 from l2_slippage import L2SlippageGuard
 from equity_breaker import EquityCircuitBreaker
@@ -50,6 +51,7 @@ class Trader:
         self.wise_men_long = WiseMenStateMachine(self.db, self.symbol, 'LONG')
         self.wise_men_short = WiseMenStateMachine(self.db, self.symbol, 'SHORT')
         self.client=BinanceSpotClient(api_key if api_key is not None else os.getenv('BINANCE_API_KEY',''), api_secret if api_secret is not None else os.getenv('BINANCE_API_SECRET',''), testnet=(os.getenv('TESTNET','true').lower()=='true') if testnet is None else testnet)
+        self.execution_recovery_worker = ExecutionRecoveryWorker(self.db, self.client)
         self.filters={}; self.base_asset=self.quote_asset=None; self.recovered=False
         self.symbol_rules = None
         self.preflight_report = None
@@ -1200,6 +1202,7 @@ class Trader:
             self.refresh_execution_context(self.symbol)
             snap = self.context_cache.snapshot()
             required_versions = {tf: snap.context(self.symbol, tf).version for tf in self.config.structural_timeframes}
+            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
             intent = OrderIntent.new(
                 self.symbol,
                 'SELL',
@@ -1207,8 +1210,8 @@ class Trader:
                 required_context_versions=required_versions,
                 purpose='EXIT',
                 quantity=self.client.decimal_format(actual_qty),
+                client_order_id=cid,
             )
-            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
             self._set_state('EXIT_PENDING')
             result = self.execution_barrier.execute(
                 intent,
@@ -1423,10 +1426,31 @@ class Trader:
         )
 
     def run(self):
-        self.setup()
+        # Retry startup only while durable execution intents remain unresolved.
+        # Recovery performs read-only exchange lookups and never submits orders.
         while True:
-            try:self.process()
-            except Exception as e:self.db.log_event('ERROR','loop_error',str(e)); self.notify(f'Williams ERROR\n{self.symbol}\n{type(e).__name__}: {e}')
+            try:
+                self.client.sync_time()
+                self.execution_recovery_worker.run_once()
+                self.setup()
+                break
+            except Exception as e:
+                try:
+                    unresolved = self.db.has_unresolved_execution_intents()
+                except Exception:
+                    raise
+                if not unresolved or not self.client.api_key or not self.client.api_secret:
+                    raise
+                self.db.log_event('ERROR', 'startup_recovery_blocked',
+                    f'{type(e).__name__}: unresolved execution intents remain; retrying safely')
+                time.sleep(min(60, max(5, self.poll_seconds)))
+        while True:
+            try:
+                self.execution_recovery_worker.run_once()
+                self.process()
+            except Exception as e:
+                self.db.log_event('ERROR','loop_error',str(e))
+                self.notify(f'Williams ERROR\\n{self.symbol}\\n{type(e).__name__}: {e}')
             time.sleep(self.poll_seconds)
 
 if __name__=='__main__':Trader().run()

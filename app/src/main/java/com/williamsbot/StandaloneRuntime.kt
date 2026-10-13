@@ -22,6 +22,8 @@ import java.net.Socket
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.UUID
 import java.util.Locale
 import java.util.ArrayDeque
 import java.util.Calendar
@@ -529,6 +531,7 @@ private class NativeEngine(
     private val historyStore = MarketHistoryStore(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
+    private val mutationLedger = DurableMutationLedger(context)
     private val executionAccumulator = ExecutionAccumulator()
     private val stateMachine = TradingStateMachine(
         onTransition = { from, to, reason ->
@@ -631,6 +634,8 @@ private class NativeEngine(
     @Volatile private var lastServerTimeSyncMs = 0L
     @Volatile private var lastOrder: JSONObject? = null
     @Volatile private var reconcileRequired = false
+    @Volatile private var recoveryInProgress = false
+    @Volatile private var recoveryMutationThread: Thread? = null
     @Volatile private var killLatched = false
     @Volatile private var userStreamConnected = false
     @Volatile private var userStreamSyncRequired = true
@@ -771,6 +776,8 @@ private class NativeEngine(
         running &&
             !paused &&
             !reconcileRequired &&
+            !recoveryInProgress &&
+            !mutationLedger.hasUnresolved() &&
             !killLatched &&
             marketDataFresh() &&
             restAccountReady &&
@@ -783,6 +790,8 @@ private class NativeEngine(
             if (!running) add("runtime_not_running")
             if (paused) add("paused")
             if (reconcileRequired) add("reconcile_required")
+            if (recoveryInProgress) add("recovery_in_progress")
+            if (mutationLedger.hasUnresolved()) add("unresolved_durable_mutation")
             if (killLatched) add("kill_switch_latched")
             if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
             if (!restAccountReady) add("rest_account_not_ready")
@@ -931,8 +940,10 @@ private class NativeEngine(
             }
         }
 
+        // A process crash during recovery must not lose the execution barrier.
         reconcileRequired =
-            prefs.getBoolean("reconcile_required", false)
+            prefs.getBoolean("reconcile_required", false) ||
+                prefs.getBoolean("recovery_in_progress", false)
         killLatched =
             prefs.getBoolean("kill_latched", false)
     }
@@ -1401,6 +1412,130 @@ private class NativeEngine(
         return JSONObject().put("resumed", true)
     }
 
+    /**
+     * Read-only reconciliation for single-order POST mutations.
+     *
+     * This deliberately does not infer success from local ACK state or from a
+     * missing order. A positive, exact clientOrderId match from Binance is
+     * required. OCO, cancel, and cancel-replace operations remain unresolved
+     * until their operation-specific parent/child/target reconciliation exists.
+     */
+    private fun reconcileJournaledSingleOrders() {
+        val candidates = mutationLedger.unresolved().filter { intent ->
+            intent.kind == "POST:/api/v3/order" &&
+                !intent.exchangeClientId.isNullOrBlank() &&
+                intent.state in setOf(
+                    DurableMutationLedger.State.SUBMITTING,
+                    DurableMutationLedger.State.UNKNOWN,
+                    DurableMutationLedger.State.ACKNOWLEDGED,
+                    DurableMutationLedger.State.RECONCILING
+                )
+        }
+
+        for (intent in candidates) {
+            val reconciling = if (intent.state == DurableMutationLedger.State.RECONCILING) {
+                intent
+            } else {
+                mutationLedger.transition(
+                    operationId = intent.operationId,
+                    expected = setOf(intent.state),
+                    next = DurableMutationLedger.State.RECONCILING
+                )
+            }
+            val clientOrderId = requireNotNull(reconciling.exchangeClientId)
+            val order = signedGet(
+                "/api/v3/order",
+                "symbol=" + intent.symbol + "&origClientOrderId=" + clientOrderId
+            )
+            val exchangeOrderId = BinanceTradeEvidence.verifyOrderIdentity(
+                expectedSymbol = intent.symbol,
+                expectedClientOrderId = clientOrderId,
+                persistedExchangeOrderId = reconciling.exchangeOrderId,
+                order = order
+            )
+            val status = order.optString("status").uppercase(Locale.US)
+            require(status in setOf(
+                "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED",
+                "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"
+            )) {
+                "MUTATION_RECONCILIATION_STATUS_UNKNOWN"
+            }
+            val originalQty = order.optString("origQty").toBigDecimalOrNull()
+                ?: throw IllegalStateException("MUTATION_RECONCILIATION_ORIG_QTY_INVALID")
+            val executedQty = order.optString("executedQty").toBigDecimalOrNull()
+                ?: throw IllegalStateException("MUTATION_RECONCILIATION_EXECUTED_QTY_INVALID")
+            require(originalQty.signum() >= 0 && executedQty.signum() >= 0 &&
+                executedQty.compareTo(originalQty) <= 0) {
+                "MUTATION_RECONCILIATION_QUANTITY_INCONSISTENT"
+            }
+
+            // Query order-specific trade history before writing RECONCILED.
+            // The ledger rejects incomplete caller-supplied evidence, so the
+            // evidence below is created only after both authoritative reads pass.
+            val trades = JSONArray(
+                signedRawGet(
+                    "/api/v3/myTrades",
+                    "symbol=" + intent.symbol +
+                        "&orderId=" + exchangeOrderId +
+                        "&limit=1000"
+                )
+            )
+            require(trades.length() < 1000) {
+                "MUTATION_RECONCILIATION_TRADE_HISTORY_TRUNCATED"
+            }
+            require(originalQty.signum() > 0) {
+                "MUTATION_RECONCILIATION_ORIG_QTY_NON_POSITIVE"
+            }
+            when (status) {
+                "NEW" -> require(executedQty.signum() == 0) {
+                    "MUTATION_RECONCILIATION_NEW_ORDER_HAS_EXECUTIONS"
+                }
+                "PARTIALLY_FILLED" -> require(
+                    executedQty.signum() > 0 && executedQty.compareTo(originalQty) < 0
+                ) { "MUTATION_RECONCILIATION_PARTIAL_STATUS_QUANTITY_CONFLICT" }
+                "FILLED" -> require(executedQty.compareTo(originalQty) == 0) {
+                    "MUTATION_RECONCILIATION_FILLED_STATUS_QUANTITY_CONFLICT"
+                }
+            }
+            val tradeEvidence = BinanceTradeEvidence.verify(
+                expectedSymbol = intent.symbol,
+                expectedOrderId = exchangeOrderId,
+                expectedExecutedQty = executedQty,
+                trades = trades
+            )
+            val summedTradeQty = tradeEvidence.executedQty
+
+            val reconciliationEvidence = JSONObject()
+                .put("source", "BINANCE_SPOT_TESTNET")
+                .put("scope", "ORDER_MUTATION")
+                .put("query_complete", true)
+                .put("order_verified", true)
+                .put("fills_verified", true)
+                .put("order_status", status)
+                .put("symbol", intent.symbol)
+                .put("client_order_id", clientOrderId)
+                .put("exchange_order_id", exchangeOrderId)
+                .put("original_qty", originalQty.toPlainString())
+                .put("executed_qty", executedQty.toPlainString())
+                .put("trade_count", tradeEvidence.tradeCount)
+                .put("trade_ids", JSONArray(tradeEvidence.tradeIds))
+                .put("trade_qty_sum", summedTradeQty.toPlainString())
+                .put("trade_evidence_verified", true)
+                .put("checked_at_ms", System.currentTimeMillis())
+
+            // This certifies only the individual order and its recorded fills.
+            // It does not certify campaign exposure or protective OCO children.
+            mutationLedger.transition(
+                operationId = reconciling.operationId,
+                expected = setOf(DurableMutationLedger.State.RECONCILING),
+                next = DurableMutationLedger.State.RECONCILED,
+                exchangeOrderId = exchangeOrderId,
+                reconciliationEvidenceJson = reconciliationEvidence.toString()
+            )
+        }
+    }
+
+    @SuppressLint("ApplySharedPref")
     @Synchronized
     fun recover(): JSONObject {
         require(
@@ -1410,7 +1545,43 @@ private class NativeEngine(
             "Configure Binance Testnet credentials first"
         }
 
+        recoveryInProgress = true
+        recoveryMutationThread = Thread.currentThread()
+        val recoveryBarrierCommitted = prefs.edit()
+            .putBoolean("recovery_in_progress", true)
+            .putBoolean("reconcile_required", true)
+            .commit()
+        if (!recoveryBarrierCommitted) {
+            reconcileRequired = true
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, "recovery barrier persistence failed")
+            throw IllegalStateException("RECOVERY_BARRIER_PERSIST_FAILED")
+        }
         return try {
+            // Reconcile only operations for which an exact exchange-side identity
+            // and complete single-order response are available. Unsupported mutation
+            // kinds deliberately remain unresolved and keep the execution barrier set.
+            reconcileJournaledSingleOrders()
+
+            // Keep execution readiness blocked throughout recovery. The recovery thread
+            // may perform its synchronous, journaled recovery operations.
+            // Never clear the recovery barrier while a durable exchange mutation
+            // is unresolved. Reconciliation for every operation kind must finish
+            // before normal recovery may re-enable execution.
+            if (mutationLedger.hasUnresolved()) {
+                reconcileRequired = true
+                stateMachine.force(
+                    TradingState.RECONCILE_REQUIRED,
+                    "durable mutation intents require exchange reconciliation"
+                )
+                prefs.edit().putBoolean("reconcile_required", true).apply()
+                return JSONObject()
+                    .put("recovered", false)
+                    .put("state", "RECONCILE_REQUIRED")
+                    .put("execution_enabled", false)
+                    .put("unresolved_mutation_count", mutationLedger.unresolved().size)
+                    .put("reason", "durable_mutation_reconciliation_pending")
+            }
+
             clearReconcileRequired()
             recoverPendingEntries()
             reconcilePositionsWithExchange()
@@ -1442,6 +1613,10 @@ private class NativeEngine(
                     "error",
                     x.message ?: x.javaClass.simpleName
                 )
+        } finally {
+            recoveryMutationThread = null
+            recoveryInProgress = false
+            prefs.edit().putBoolean("recovery_in_progress", false).commit()
         }
     }
 
@@ -1524,56 +1699,201 @@ private class NativeEngine(
             params = ""
         )
 
+    /**
+     * Sole authenticated REST mutation sink. Every POST/DELETE is journaled
+     * before network I/O. SUBMITTING/UNKNOWN intents are never replayed blindly.
+     * This journal is not atomic with Binance; ambiguous outcomes require
+     * exchange reconciliation before the campaign may admit another entry.
+     */
     private fun signedRequest(
         method: String,
         path: String,
         params: String
     ): JSONObject {
-        var lastBody = "{}"
-        repeat(2) { attempt ->
-            val query = if (params.isBlank()) {
-                "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            } else {
-                params + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+        val mutating = method == "POST" || method == "DELETE"
+        if (mutating && recoveryInProgress && Thread.currentThread() !== recoveryMutationThread) {
+            throw IllegalStateException("RECOVERY_IN_PROGRESS")
+        }
+        var effectiveParams = params
+        var intentId: String? = null
+
+        if (mutating) {
+            val values = params.split("&").filter { it.contains("=") }
+                .associate { part ->
+                    val pair = part.split("=", limit = 2)
+                    pair[0] to pair[1]
+                }.toMutableMap()
+            val symbol = values["symbol"].orEmpty().uppercase(Locale.US)
+            require(symbol.isNotBlank()) { "MUTATION_SYMBOL_REQUIRED" }
+
+            fun digest(value: String): String = MutationIdentity.sha256(value)
+
+            val clientKey = when {
+                method == "DELETE" -> values["origClientOrderId"]
+                    ?: values["listClientOrderId"]
+                    ?: values["clientOrderId"]
+                path.endsWith("/orderList/oco") -> values["listClientOrderId"]
+                else -> values["newClientOrderId"]
             }
-            val signature = hmac(query, secret())
-            val request = when (method) {
-                "POST" -> Request.Builder()
-                    .url(baseUrl + path)
-                    .header("X-MBX-APIKEY", key())
-                    .post((query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType()))
-                    .build()
-                "DELETE" -> Request.Builder()
-                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
-                    .header("X-MBX-APIKEY", key())
-                    .delete()
-                    .build()
-                else -> Request.Builder()
-                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
-                    .header("X-MBX-APIKEY", key())
-                    .get()
-                    .build()
+            val targetKey = values["orderId"]
+                ?: values["origClientOrderId"]
+                ?: values["orderListId"]
+                ?: values["listClientOrderId"]
+                ?: values["cancelOrderId"]
+
+            // A generated client ID must be reproducible after a caller retry or
+            // process restart. Derive it from the logical target/action identity,
+            // not mutable request economics. The ledger fingerprint separately
+            // rejects changed economics under the same operation identity.
+            // Canonicalization rejects duplicate/credential parameters before any durable intent is written.
+            val canonicalFingerprint = MutationIdentity.fingerprint(method, path, symbol, params)
+            val logicalContext = clientKey?.takeIf { it.isNotBlank() }
+                ?: targetKey?.takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("MUTATION_LOGICAL_ID_REQUIRED")
+            val generatedClientId = MutationIdentity.generatedClientOrderId(
+                method, path, symbol, params, logicalContext
+            )
+            val exchangeClientId = when {
+                method == "DELETE" -> clientKey
+                !clientKey.isNullOrBlank() -> clientKey
+                path.endsWith("/cancelReplace") -> generatedClientId
+                else -> null
             }
-            rateGuard.beforeRequest()
-            http.newCall(request).execute().use { response ->
-                rateGuard.observe(response.headers, response.code)
-                lastBody = response.body?.string() ?: "{}"
-                auditStore.recordRestCall(
-                    method,
-                    path,
-                    response.code,
-                    params.ifBlank { null },
-                    lastBody
-                )
-                if (response.isSuccessful) return JSONObject(lastBody)
-                if (attempt == 0 && lastBody.contains("-1021")) {
-                    runCatching { syncServerTime() }
-                    return@use
+            if (method == "POST" && exchangeClientId != null && clientKey.isNullOrBlank()) {
+                val keyName = if (path.endsWith("/orderList/oco")) "listClientOrderId" else "newClientOrderId"
+                effectiveParams = if (effectiveParams.isBlank()) {
+                    "$keyName=$exchangeClientId"
+                } else {
+                    "$effectiveParams&$keyName=$exchangeClientId"
                 }
-                error("Binance " + response.code + ": " + lastBody)
+            }
+
+            val logicalKey = when {
+                method == "DELETE" -> targetKey ?: throw IllegalStateException("MUTATION_TARGET_ID_REQUIRED")
+                !exchangeClientId.isNullOrBlank() -> exchangeClientId
+                else -> throw IllegalStateException("MUTATION_LOGICAL_ID_REQUIRED")
+            }
+            intentId = MutationIdentity.operationId("$method:$path", "BINANCE_SPOT", symbol, logicalKey)
+            val fingerprint = MutationIdentity.fingerprint(method, path, symbol, effectiveParams)
+            try {
+                val existing = mutationLedger.find(intentId!!)
+                if (existing != null && existing.state != DurableMutationLedger.State.PREPARED) {
+                    throw IllegalStateException("MUTATION_REPLAY_BLOCKED_${existing.state.name}")
+                }
+                val isBuyEntry = method == "POST" && path.endsWith("/order") &&
+                    values["side"].equals("BUY", ignoreCase = true)
+                if (isBuyEntry && mutationLedger.unresolved().any { it.operationId != intentId }) {
+                    throw IllegalStateException("MUTATION_RECONCILIATION_REQUIRED")
+                }
+                mutationLedger.prepare(
+                    operationId = intentId!!,
+                    kind = "$method:$path",
+                    symbol = symbol,
+                    requestFingerprint = fingerprint,
+                    exchangeClientId = exchangeClientId
+                )
+                // This SQLite transaction is the only path from PREPARED to SUBMITTING.
+                mutationLedger.claimForSubmission(intentId!!)
+            } catch (x: Exception) {
+                if (x.message?.startsWith("MUTATION_REPLAY_BLOCKED_") == true) throw x
+                setReconcileRequired("Durable mutation preparation or claim failed")
+                throw IllegalStateException("MUTATION_DURABLE_CLAIM_FAILED")
             }
         }
-        error("Binance timestamp retry failed: " + lastBody)
+
+        var lastBody = "{}"
+        try {
+            repeat(2) { attempt ->
+                val query = if (effectiveParams.isBlank()) {
+                    "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+                } else {
+                    effectiveParams + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+                }
+                val signature = hmac(query, secret())
+                val request = when (method) {
+                    "POST" -> Request.Builder()
+                        .url(baseUrl + path)
+                        .header("X-MBX-APIKEY", key())
+                        .post((query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+                        .build()
+                    "DELETE" -> Request.Builder()
+                        .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                        .header("X-MBX-APIKEY", key())
+                        .delete()
+                        .build()
+                    else -> Request.Builder()
+                        .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                        .header("X-MBX-APIKEY", key())
+                        .get()
+                        .build()
+                }
+                rateGuard.beforeRequest()
+                http.newCall(request).execute().use { response ->
+                    rateGuard.observe(response.headers, response.code)
+                    lastBody = response.body?.string() ?: "{}"
+                    auditStore.recordRestCall(
+                        method,
+                        path,
+                        response.code,
+                        effectiveParams.ifBlank { null },
+                        lastBody
+                    )
+                    if (response.isSuccessful) {
+                        val responseJson = JSONObject(lastBody)
+                        if (
+                            mutating &&
+                            path.endsWith("/cancelReplace") &&
+                            (responseJson.optString("cancelResult") != "SUCCESS" ||
+                                responseJson.optString("newOrderResult") != "SUCCESS")
+                        ) {
+                            // HTTP 200 is not proof that both halves of cancel-replace
+                            // succeeded. Keep the operation unresolved for reconciliation.
+                            error("CANCEL_REPLACE_RECONCILIATION_REQUIRED")
+                        }
+                        if (mutating) {
+                            mutationLedger.transition(
+                                requireNotNull(intentId),
+                                setOf(DurableMutationLedger.State.SUBMITTING),
+                                DurableMutationLedger.State.ACKNOWLEDGED,
+                                exchangeOrderId = runCatching {
+                                    JSONObject(lastBody).optString("orderId").takeIf { it.isNotBlank() }
+                                }.getOrNull()
+                            )
+                        }
+                        return JSONObject(lastBody)
+                    }
+                    // A signed mutation is never retransmitted from this transport,
+                    // even for a timestamp error. The response may be authoritative
+                    // rejection, but this layer does not persist typed exchange evidence
+                    // that proves non-acceptance. Keep the intent unresolved and let
+                    // the read-only recovery path establish the outcome. Safe GETs may
+                    // still synchronize time and retry once.
+                    if (MutationTransportPolicy.mayRetryTimestampRejection(method, attempt, lastBody)) {
+                        runCatching { syncServerTime() }
+                        return@use
+                    }
+                    error("Binance " + response.code + ": " + lastBody)
+                }
+            }
+            error("Binance timestamp retry failed: " + lastBody)
+        } catch (x: Exception) {
+            if (mutating && intentId != null) {
+                runCatching {
+                    val current = mutationLedger.find(intentId!!)
+                    if (current?.state == DurableMutationLedger.State.SUBMITTING) {
+                        mutationLedger.transition(
+                            intentId!!,
+                            setOf(DurableMutationLedger.State.SUBMITTING),
+                            DurableMutationLedger.State.UNKNOWN
+                        )
+                    }
+                }
+                reconcileRequired = true
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, "ambiguous exchange mutation")
+                prefs.edit().putBoolean("reconcile_required", true).apply()
+            }
+            throw x
+        }
     }
 
     private fun signedRawGet(
@@ -2579,10 +2899,15 @@ private class NativeEngine(
         purpose: String,
         block: () -> JSONObject
     ): JSONObject {
-        if (!running) error("Runtime is not running")
-        if (paused) error("Runtime is paused")
-        if (reconcileRequired) error("RECONCILE_REQUIRED")
-        if (killLatched) error("KILL_SWITCH_LATCHED")
+        // The campaign exit path is the controlled emergency protocol. It still
+        // passes through the durable mutation sink, but must remain callable when
+        // entries are paused, reconciliation is required, or kill is latched.
+        val emergencyExit = purpose == "CAMPAIGN_EXIT" ||
+            purpose == "CAMPAIGN_EXIT_CANCEL_PROTECTION"
+        if (!running && !emergencyExit) error("Runtime is not running")
+        if (paused && !emergencyExit) error("Runtime is paused")
+        if (reconcileRequired && !emergencyExit) error("RECONCILE_REQUIRED")
+        if (killLatched && !emergencyExit) error("KILL_SWITCH_LATCHED")
         require(executionGate.tryReserve(symbol)) {
             "Campaign execution already reserved for " + symbol
         }
@@ -2608,7 +2933,7 @@ private class NativeEngine(
 
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
-        if (reconcileRequired || paused || killLatched) return
+        if (reconcileRequired || mutationLedger.hasUnresolved() || paused || killLatched) return
         if (positionList().any { it.symbol == candidate.symbol }) return
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
         if (positionList().size >= maxOpenPositions) return
@@ -4105,7 +4430,8 @@ private class NativeEngine(
                         symbol = stored.symbol,
                         qty = stored.qty,
                         entry = stored.entry,
-                        stopDistance = distance
+                        stopDistance = distance,
+                        operationContext = "protection-replace:${stored.ocoListId.ifBlank { stored.ocoListClientId }}:${fmtPrice(desiredStop, tick)}"
                     )
 
                 synchronized(positions) {
@@ -4579,7 +4905,8 @@ private class NativeEngine(
                                 symbol = intent.symbol,
                                 qty = qty,
                                 entry = entryPrice,
-                                stopDistance = intent.stopDistance
+                                stopDistance = intent.stopDistance,
+                                operationContext = "protection-recovery:${intent.clientOrderId}"
                             )
                         }
 
@@ -4985,7 +5312,8 @@ private class NativeEngine(
                         symbol = stored.symbol,
                         qty = current.qty,
                         entry = stored.entry,
-                        stopDistance = distance
+                        stopDistance = distance,
+                        operationContext = "protection-reconcile:${stored.entryClientOrderId}:${stored.ocoListId}"
                     )
 
                 current =
@@ -5843,7 +6171,8 @@ private class NativeEngine(
                     symbol = candidate.symbol,
                     qty = qty,
                     entry = entry,
-                    stopDistance = stopDistance
+                    stopDistance = stopDistance,
+                    operationContext = "entry-protection:$clientOrderId"
                 )
 
             val journalSnapshot =
@@ -6048,8 +6377,10 @@ private class NativeEngine(
         symbol: String,
         qty: Double,
         entry: Double,
-        stopDistance: Double
+        stopDistance: Double,
+        operationContext: String
     ): Protection {
+        require(operationContext.isNotBlank()) { "PROTECTION_OPERATION_ID_REQUIRED" }
         val rules = symbolFilters(symbol)
 
         if (!rules.ocoAllowed) {
@@ -6123,51 +6454,34 @@ private class NativeEngine(
             error("OCO notional above Binance maximum")
         }
 
-        val ocoClientId =
-            "W4O_" +
-                java.util.UUID.randomUUID()
-                    .toString()
-                    .replace("-", "")
-                    .take(28)
+        val ocoRequestParams =
+            "symbol=" + symbol +
+                "&side=SELL" +
+                "&quantity=" + fmtQty(normalizedQty, rules.decimals) +
+                "&aboveType=TAKE_PROFIT_LIMIT" +
+                "&abovePrice=" + fmtPrice(takeLimit, rules.tick) +
+                "&aboveStopPrice=" + fmtPrice(take, rules.tick) +
+                "&aboveTimeInForce=GTC" +
+                "&belowType=STOP_LOSS_LIMIT" +
+                "&belowStopPrice=" + fmtPrice(stop, rules.tick) +
+                "&belowPrice=" + fmtPrice(stopLimit, rules.tick) +
+                "&belowTimeInForce=GTC" +
+                "&newOrderRespType=FULL"
 
-        val oco =
-            signedPost(
-                "/api/v3/orderList/oco",
-                "symbol=" + symbol +
-                    "&side=SELL" +
-                    "&quantity=" +
-                    fmtQty(
-                        normalizedQty,
-                        rules.decimals
-                    ) +
-                    "&aboveType=TAKE_PROFIT_LIMIT" +
-                    "&abovePrice=" +
-                    fmtPrice(
-                        takeLimit,
-                        rules.tick
-                    ) +
-                    "&aboveStopPrice=" +
-                    fmtPrice(
-                        take,
-                        rules.tick
-                    ) +
-                    "&aboveTimeInForce=GTC" +
-                    "&belowType=STOP_LOSS_LIMIT" +
-                    "&belowStopPrice=" +
-                    fmtPrice(
-                        stop,
-                        rules.tick
-                    ) +
-                    "&belowPrice=" +
-                    fmtPrice(
-                        stopLimit,
-                        rules.tick
-                    ) +
-                    "&belowTimeInForce=GTC" +
-                    "&newOrderRespType=FULL" +
-                    "&listClientOrderId=" +
-                    ocoClientId
-            )
+        // Bind protection identity to the position/campaign context and full
+        // economic request, not to a new random ID generated on every recovery.
+        val ocoClientId = MutationIdentity.generatedClientOrderId(
+            "POST",
+            "/api/v3/orderList/oco",
+            symbol,
+            ocoRequestParams,
+            operationContext,
+            "W4O_"
+        )
+        val oco = signedPost(
+            "/api/v3/orderList/oco",
+            "$ocoRequestParams&listClientOrderId=$ocoClientId"
+        )
 
         val actualStopDistance =
             ((entry - stop) / entry)
