@@ -1113,24 +1113,27 @@ private class NativeEngine(
     }
 
     fun clear(): JSONObject {
-        if (
-            positions.isNotEmpty() ||
-            pendingEntries.isNotEmpty()
-        ) {
-            error(
-                "Close/reconcile all positions before deleting Binance credentials."
-            )
+        check(!running) { "Stop the Futures runtime before deleting credentials" }
+        if (key().isNotBlank() && secret().isNotBlank()) {
+            val rows = futuresCampaignCoordinator.positionsSnapshot()
+            val open = (0 until rows.length()).any { i ->
+                val row = rows.optJSONObject(i) ?: return@any false
+                kotlin.math.abs(row.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0
+            }
+            val intents = futuresCampaignCoordinator.intentsSnapshot()
+            val pending = (0 until intents.length()).any { i ->
+                val intent = intents.optJSONObject(i) ?: return@any true
+                intent.optString("exchange_status").uppercase(Locale.US) in setOf(
+                    "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN",
+                    "ACCEPTED", "TRIGGERED", "OPEN_PROTECTED", "POSITION_OPEN"
+                )
+            }
+            require(!open && !pending) { "Close/reconcile every Futures position and pending intent before deleting credentials" }
         }
-
         stop()
-        prefs.edit()
-            .remove("api_key")
-            .remove("api_secret")
-            .remove("positions_json")
-            .remove("pending_entries_json")
-            .putBoolean("auto_run", false)
-            .apply()
-
+        prefs.edit().remove("api_key").remove("api_secret")
+            .remove("positions_json").remove("pending_entries_json")
+            .putBoolean("auto_run", false).commit()
         candidates = JSONArray()
         primaryCandles = emptyList()
         scanSymbols = mutableListOf()
@@ -1140,41 +1143,53 @@ private class NativeEngine(
         historyLastError = null
         lastError = null
         clearReconcileRequired()
-
-        return JSONObject()
-            .put("configured", false)
-            .put("cleared", true)
+        return JSONObject().put("configured", false).put("cleared", true)
     }
 
     fun start(): JSONObject {
-        require(futuresExecutionAdapterReady) {
-            "FUTURES_EXECUTION_ADAPTER_MISSING: this APK runtime still targets Binance Spot /api/v3; USDⓈ-M Futures LONG/SHORT execution is not implemented. Trading is fail-closed."
+        if (killLatched) error("KILL_SWITCH_LATCHED: reset only after exchange reconciliation")
+        require(key().isNotBlank() && secret().isNotBlank()) {
+            "Configure Binance USD-M Futures Testnet credentials first"
         }
-        if (killLatched) {
-            error("KILL_SWITCH_LATCHED: recover and reset kill switch before START")
-        }
-        require(
-            key().isNotBlank() && secret().isNotBlank()
-        ) {
-            "Configure Binance Testnet credentials first"
-        }
-        if (running) {
-            return JSONObject()
-                .put("started", false)
-                .put("reason", "already_running")
+        if (running) return JSONObject().put("started", false).put("reason", "already_running")
+
+        val reconciliation = futuresCampaignCoordinator.reconcile()
+        if (!reconciliation.optBoolean("ok", false)) {
+            reconcileRequired = true
+            prefs.edit().putBoolean("reconcile_required", true).putBoolean("auto_run", false).commit()
+            lastError = reconciliation.optString("blocker", "Futures reconciliation failed")
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures reconciliation failed")
+            return JSONObject().put("started", false).put("state", futuresCampaignCoordinator.state.name)
+                .put("execution_enabled", false).put("futures_reconciliation", reconciliation)
         }
 
-        require(!reconcileRequired) {
-            "RECONCILE_REQUIRED must be resolved before START"
-        }
-
+        reconcileRequired = false
+        prefs.edit().putBoolean("reconcile_required", false).putBoolean("auto_run", true).commit()
+        val account = futuresCampaignCoordinator.accountSnapshot()
+        liveUsdtBalance = account.optString("availableBalance").toDoubleOrNull() ?: 0.0
+        restAccountReady = account.has("availableBalance") &&
+            account.has("totalWalletBalance") && account.has("totalMarginBalance")
+        stateMachine.force(
+            when (futuresCampaignCoordinator.state) {
+                NativeFuturesCampaignCoordinator.State.ENTRY_PENDING -> TradingState.ENTRY_PENDING
+                NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED -> TradingState.PROTECTED
+                NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
+                NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED -> TradingState.RECONCILE_REQUIRED
+                else -> TradingState.READY_FLAT
+            },
+            "USD-M Futures account reconciled on Android"
+        )
         val generation = ++runtimeGeneration
-        prefs.edit()
-            .putBoolean("auto_run", true)
-            .apply()
-
-        stateMachine.force(TradingState.INITIALIZING, "bot start")
-        userStreamSyncRequired = true
+        running = true
+        paused = false
+        // Never start the legacy Spot market/user WebSockets. Futures REST market data
+        // and exchange-side protective algo orders remain authoritative.
+        marketSocket?.close(1000, "Switch to USD-M Futures REST runtime")
+        marketSocket = null
+        marketSocketConnected = false
+        userStream.stop()
+        userStreamConnected = false
+        userStreamSyncRequired = false
         historyReady = false
         historyState = "LOADING"
         historyLastError = null
@@ -1182,103 +1197,44 @@ private class NativeEngine(
         scannerError = null
         scanRunId = ""
         scanProgressSymbols = 0
-
-        try {
-            recoverPendingEntries()
-            reconcilePositionsWithExchange()
-            auditManagedOpenOrders()
-            liveUsdtBalance = signedAccount()
-                .getJSONArray("balances")
-                .let { balances ->
-                    (0 until balances.length())
-                        .asSequence()
-                        .map { balances.getJSONObject(it) }
-                        .firstOrNull { it.optString("asset") == "USDT" }
-                        ?.optString("free")
-                        ?.toDoubleOrNull()
-                        ?: 0.0
-                }
-            equityCircuitBreaker.reset(estimateManagedEquity())
-        } catch (x: Exception) {
-            setReconcileRequired(
-                "startup exchange synchronization failed: " +
-                    (x.message ?: x.javaClass.simpleName)
-            )
-            return JSONObject()
-                .put("started", false)
-                .put("state", "RECONCILE_REQUIRED")
-                .put("error", x.message ?: x.javaClass.simpleName)
-        }
-
-        running = true
-        paused = false
         warmCoreHistoryAsync(generation)
-        startMarketDataStream()
-        userStream.start()
 
         worker = Thread {
             while (running && generation == runtimeGeneration) {
-                if (!paused) {
-                    try {
-                        if (!historyReady) {
-                            if (!historyWarmupRunning) {
-                                warmCoreHistoryAsync(generation)
-                            }
-                        } else if (
-                            marketDataFresh() &&
-                            !reconcileRequired &&
-                            !killLatched
-                        ) {
-                            if (positions.isEmpty()) {
-                                stateMachine.transition(
-                                    TradingState.READY_FLAT,
-                                    "exchange synchronized and streams ready"
-                                )
-                            } else if (
-                                stateMachine.state == TradingState.OPEN_UNPROTECTED
-                            ) {
-                                stateMachine.transition(
-                                    TradingState.PROTECTED,
-                                    "managed position restored"
-                                )
-                            }
-                            checkAutomaticCircuitBreaker()
-                            if (
-                                !userStreamConnected &&
-                                positionList().isNotEmpty() &&
-                                System.currentTimeMillis() - lastRestReconcileMs >= 60_000L
-                            ) {
-                                runCatching {
-                                    lastRestReconcileMs = System.currentTimeMillis()
-                                    reconcilePositionsWithExchange()
-                                }.onFailure {
-                                    lastError = "REST recovery: " +
-                                        (it.message ?: it.javaClass.simpleName)
-                                }
-                            }
+                try {
+                    if (!historyReady) {
+                        if (!historyWarmupRunning) warmCoreHistoryAsync(generation)
+                    } else if (marketDataFresh() && restAccountReady) {
+                        // Reconcile existing positions and manage exchange-side protection
+                        // even while paused or after the daily-loss entry lock engages.
+                        if (!checkFuturesDailyLoss()) {
+                            runCatching { manageNativeFuturesPositions() }
+                                .onFailure { lastError = "Futures position monitor: " + (it.message ?: it.javaClass.simpleName) }
+                        } else if (paused) {
+                            runCatching { manageNativeFuturesPositions() }
+                                .onFailure { lastError = "Futures position monitor: " + (it.message ?: it.javaClass.simpleName) }
+                        } else if (!reconcileRequired && !killLatched) {
                             requestScan()
                         }
-                    } catch (x: Exception) {
-                        lastError =
-                            x.javaClass.simpleName + ": " +
-                                (x.message ?: "")
                     }
+                } catch (x: Exception) {
+                    lastError = x.javaClass.simpleName + ": " + (x.message ?: "")
                 }
-
-                try {
-                    Thread.sleep(10_000L)
-                } catch (_: InterruptedException) {
-                    break
-                }
+                try { Thread.sleep(10_000L) } catch (_: InterruptedException) { break }
             }
-        }.also {
-            it.isDaemon = true
-            it.start()
+        }.apply {
+            isDaemon = true
+            name = "williams-futures-native-engine"
+            start()
         }
-
         return JSONObject()
             .put("started", true)
-            .put("startup_state", "LOADING_HISTORY")
+            .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
+            .put("execution_mode", "AUTONOMOUS_ANDROID")
+            .put("timeframe", "1h")
+            .put("direction_support", JSONArray().put("LONG").put("SHORT"))
+            .put("startup_state", "LOADING_CLOSED_FUTURES_HISTORY")
+            .put("futures_reconciliation", reconciliation)
             .put("execution_ready", executionReady())
             .put("execution_blockers", JSONArray(executionBlockers()))
             .put("interval_seconds", 10)
@@ -1313,82 +1269,53 @@ private class NativeEngine(
     @Synchronized
     fun kill(): JSONObject {
         killLatched = true
-        stateMachine.force(
-            TradingState.KILL_SWITCH_LATCHED,
-            "kill switch requested"
-        )
-        prefs.edit()
-            .putBoolean("kill_latched", true)
-            .putBoolean("auto_run", false)
-            .apply()
-
-        running = false
         paused = true
+        running = false
+        prefs.edit().putBoolean("kill_latched", true).putBoolean("auto_run", false).commit()
         worker?.interrupt()
         worker = null
-        marketSocket?.close(1000, "Williams kill switch")
+        marketSocket?.close(1000, "USD-M Futures kill switch")
         marketSocket = null
         marketSocketConnected = false
         userStream.stop()
         userStreamConnected = false
 
-        val pending = synchronized(pendingEntries) {
-            pendingEntries.values.toList()
-        }
-        for (intent in pending) {
-            runCatching {
-                signedDelete(
-                    "/api/v3/order",
-                    "symbol=" + intent.symbol +
-                        "&origClientOrderId=" + intent.clientOrderId
-                )
-            }
-        }
-
-        runCatching { recoverPendingEntries() }
-
-        val symbols = positionList().map { it.symbol }
         val errors = mutableListOf<String>()
-        for (symbol in symbols) {
-            val result = runCatching { sell(symbol) }
-            if (result.isFailure) {
-                errors += symbol + ": " +
-                    (result.exceptionOrNull()?.message ?: "kill sell failed")
+        runCatching { futuresCampaignCoordinator.cancelPendingEntries("KILL_SWITCH") }
+            .onFailure { errors += "pending entries: " + (it.message ?: it.javaClass.simpleName) }
+        val rows = runCatching { futuresCampaignCoordinator.positionsSnapshot() }.getOrElse {
+            errors += "Futures position query: " + (it.message ?: it.javaClass.simpleName)
+            JSONArray()
+        }
+        for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: continue
+            val symbol = row.optString("symbol").uppercase(Locale.US)
+            if (symbol !in coreSymbols) continue
+            val signedQty = row.optString("positionAmt").toDoubleOrNull() ?: 0.0
+            if (signedQty == 0.0) continue
+            try {
+                val rules = symbolFilters(symbol)
+                val qty = floorStep(kotlin.math.abs(signedQty), if (rules.marketStep > 0.0) rules.marketStep else rules.step)
+                require(qty >= rules.minQty) { "Cannot safely round exchange position qty for $symbol" }
+                val direction = if (signedQty > 0.0) NativeFuturesCampaignCoordinator.Direction.LONG
+                    else NativeFuturesCampaignCoordinator.Direction.SHORT
+                val cid = ("W2K_" + symbol.take(8) + "_" + System.nanoTime().toString(16).takeLast(12)).take(36)
+                val result = futuresCampaignCoordinator.closePosition(symbol, direction, fmtQty(qty, rules.decimals), cid, "KILL_SWITCH")
+                if (!result.optBoolean("ok", false)) errors += "$symbol: " + result.optString("blocker", result.optString("error"))
+            } catch (x: Exception) {
+                errors += "$symbol: " + (x.message ?: x.javaClass.simpleName)
             }
         }
-
-        val recoveryOk = runCatching {
-            reconcilePositionsWithExchange()
-        }.isSuccess
-
-        val failedSymbols = errors.map { it.substringBefore(":") }.toSet()
-        val forcedState =
-            if (errors.isEmpty() && recoveryOk) {
-                stateName()
-            } else {
-                reconcileRequired = true
-                prefs.edit()
-                    .putBoolean("reconcile_required", true)
-                    .apply()
-                "RECONCILE_REQUIRED"
-            }
-
-        lastError =
-            if (errors.isEmpty() && recoveryOk) {
-                "KILL_SWITCH executed; trading remains latched OFF"
-            } else {
-                "KILL_SWITCH completed with reconciliation warnings"
-            }
-
-        return JSONObject()
-            .put("killed", true)
-            .put("latched", true)
-            .put("state", forcedState)
-            .put(
-                "closed_symbols",
-                JSONArray(symbols.filter { it !in failedSymbols })
-            )
-            .put("errors", JSONArray(errors))
+        val reconciliation = runCatching { futuresCampaignCoordinator.reconcile() }.getOrElse {
+            JSONObject().put("ok", false).put("error", it.message ?: it.javaClass.simpleName)
+        }
+        stateMachine.force(TradingState.KILL_SWITCH_LATCHED, "USD-M Futures kill switch; restart blocked")
+        val success = errors.isEmpty() && reconciliation.optBoolean("ok", false)
+        lastError = if (success) "KILL_SWITCH: Futures positions reconciled; trading remains latched OFF"
+            else "KILL_SWITCH: unresolved exchange close/reconciliation warning"
+        return JSONObject().put("killed", true).put("latched", true)
+            .put("exchange", "BINANCE_USDM_FUTURES_TESTNET").put("state", "KILL_SWITCH_LATCHED")
+            .put("errors", JSONArray(errors)).put("futures_reconciliation", reconciliation)
     }
 
     fun resetKillSwitch(): JSONObject {
@@ -1425,46 +1352,30 @@ private class NativeEngine(
 
     @Synchronized
     fun recover(): JSONObject {
-        require(
-            key().isNotBlank() &&
-                secret().isNotBlank()
-        ) {
-            "Configure Binance Testnet credentials first"
+        require(key().isNotBlank() && secret().isNotBlank()) {
+            "Configure Binance USD-M Futures Testnet credentials first"
         }
-
-        return try {
-            clearReconcileRequired()
-            recoverPendingEntries()
-            reconcilePositionsWithExchange()
-
-            JSONObject()
-                .put("recovered", !reconcileRequired)
-                .put("state", stateName())
-                .put(
-                    "execution_enabled",
-                    !reconcileRequired
-                )
-                .put(
-                    "open_positions",
-                    positionList().size
-                )
-                .put(
-                    "reserved_risk_pct",
-                    reservedRiskPct()
-                )
-        } catch (x: Exception) {
-            setReconcileRequired(
-                x.message ?: "recovery failed"
-            )
-            JSONObject()
-                .put("recovered", false)
-                .put("state", "RECONCILE_REQUIRED")
-                .put("execution_enabled", executionReady())
-                .put(
-                    "error",
-                    x.message ?: x.javaClass.simpleName
-                )
+        val result = futuresCampaignCoordinator.reconcile()
+        val ok = result.optBoolean("ok", false)
+        reconcileRequired = !ok
+        prefs.edit().putBoolean("reconcile_required", !ok).commit()
+        if (ok) {
+            when (futuresCampaignCoordinator.state) {
+                NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED ->
+                    stateMachine.force(TradingState.PROTECTED, "Futures positions protected by exchange")
+                NativeFuturesCampaignCoordinator.State.ENTRY_PENDING ->
+                    stateMachine.force(TradingState.ENTRY_PENDING, "Futures pending entry reconciled")
+                NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
+                NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED ->
+                    stateMachine.force(TradingState.RECONCILE_REQUIRED, "Futures protection/reconciliation unresolved")
+                else -> stateMachine.force(TradingState.READY_FLAT, "Futures account reconciled")
+            }
+        } else {
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, result.optString("blocker", "Futures reconciliation failed"))
         }
+        return JSONObject().put("recovered", ok).put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
+            .put("execution_enabled", ok && futuresCampaignCoordinator.status().optBoolean("ready_for_new_entry", false))
+            .put("futures_reconciliation", result).put("state", futuresCampaignCoordinator.state.name)
     }
 
     private fun signedTimestamp(): Long {
