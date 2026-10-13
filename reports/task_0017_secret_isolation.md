@@ -19,3 +19,10 @@
 - Exact final report-HEAD CI and Android tests remain pending.
 
 Only synthetic sentinel values were used. No real credentials were read or emitted. P0 remains open.
+
+## TASK 001.12 exact-HEAD addendum
+
+- At SHA `4e7ad93990b4b9d3b5291bed9d83909fbfac3bcf`, the synthetic BL-004 sentinel test exercises a fake transport exception and checks the public exception output and actual temporary SQLite contents. Campaign Python suite passed 262 tests on run [38341931762](https://github.com/19wolfalone92/Williams/actions/runs/38341931762).
+- This is a targeted test, not a completed exhaustive scan of every log, traceback, DecisionTrace, Android/Python database, recovery output, CI artifact and APK build report. Do not mark BL-004 fully closed.
+- Android secret-redaction and audit-store tests exist in the repository, but exact-HEAD Android unit-test results were pending at the time of this report. The standalone APK workflow [38341932569](https://github.com/19wolfalone92/Williams/actions/runs/38341932569) failed at startup with zero jobs/artifacts; its cause is not exposed.
+- Only synthetic markers were used in the described test; no real credentials were used.
