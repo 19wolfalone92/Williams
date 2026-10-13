@@ -22,10 +22,10 @@ class EquityCircuitBreaker:
             baseline = float(current_equity_quote)
             if not math.isfinite(baseline) or baseline <= 0.0:
                 raise ValueError("cannot establish a valid daily equity baseline")
-            # Persist day and equity before allowing the first entry of the day.
-            # Write the baseline first. If the process dies between writes,
-            # the old day key forces a safe re-initialization on the next check.
+            # Persist baseline before publishing the new UTC day key. Reset
+            # the daily trip latch only when a new risk day is established.
             db.state_set("daily_start_equity", str(baseline))
+            db.state_set("daily_loss_tripped", "0")
             db.state_set("daily_risk_day", today)
             return baseline
         baseline = float(stored_equity)
@@ -73,8 +73,31 @@ class EquityCircuitBreaker:
         if not math.isfinite(net_daily_pnl):
             return False, "daily net PnL is non-finite; entry blocked"
 
+        try:
+            raw_latch = db.state_get("daily_loss_tripped", "0")
+            already_tripped = (
+                raw_latch is True
+                or str(raw_latch).strip().lower() in {"1", "true", "yes", "on"}
+            )
+        except Exception as exc:
+            return False, (
+                "daily risk trip latch unavailable "
+                f"({type(exc).__name__}); entry blocked"
+            )
+        if already_tripped:
+            return False, "daily equity loss circuit breaker remains latched until next UTC day"
+
         loss_limit = start_equity * self.max_daily_loss_pct
         if net_daily_pnl <= -loss_limit:
+            try:
+                # Latch before returning. Recovering unrealized PnL later in the
+                # same UTC day must not silently re-enable fresh risk entries.
+                db.state_set("daily_loss_tripped", "1")
+            except Exception as exc:
+                return False, (
+                    "daily loss reached limit but trip latch could not be persisted "
+                    f"({type(exc).__name__}); entry blocked"
+                )
             return False, (
                 "daily equity loss circuit breaker tripped: "
                 f"net_pnl={net_daily_pnl:.8f}, limit={-loss_limit:.8f}"
