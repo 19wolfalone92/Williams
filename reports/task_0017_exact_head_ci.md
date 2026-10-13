@@ -34,3 +34,12 @@ Artifact [williams-debug-apk, ID 11770927454](https://github.com/19wolfalone92/W
 - Full Android fake-exchange fault injection, every-transition FI-07, complete mutation-boundary proof, full migration/concurrency matrix and comprehensive BL-004 artifact scan remain open.
 
 Status: `PARTIALLY IMPLEMENTED — P0 OPEN`. No live credentials or live orders used.
+
+## TASK 001.12 exact-HEAD addendum (checked 2026-10-13 UTC)
+
+- Required starting SHA and actual PR head at baseline: `4e7ad93990b4b9d3b5291bed9d83909fbfac3bcf`; PR #66 is OPEN, Draft, unmerged; base is `fix/pytest-safe-collection` at `0007e79b1afde86b8c736128e6d09bfdd370106f`.
+- Commit diff from previous HEAD `2bbf6bea41f575a74ebdda67aa4b588d0d733d12`: one file, `tests/test_fi_01_fi_12_fake_exchange.py`, 88 additions / 75 deletions. This commit changes repeated FI-13 race coverage, not production code.
+- Python backend run [38341931627](https://github.com/19wolfalone92/Williams/actions/runs/38341931627), job 115114647440: SUCCESS, `223 passed, 4 warnings in 4.73s`; pytest artifact [11787072662](https://github.com/19wolfalone92/Williams/actions/runs/38341931627/artifacts/11787072662).
+- Campaign run [38341931762](https://github.com/19wolfalone92/Williams/actions/runs/38341931762), Python job 115114648003: SUCCESS, `262 passed, 4 warnings in 6.10s`. Android job 115114647875 was still running at report time; build/unit tests and APK proof were not yet complete.
+- Separate APK workflow [38341932569](https://github.com/19wolfalone92/Williams/actions/runs/38341932569): `startup_failure`, zero jobs/artifacts. Available Actions data exposes no cause. This is not evidence of a Gradle or application failure.
+- Do not infer current-SHA APK evidence from the older artifact built from SHA `51ca573ee2366065ce7d75af6699e25ae3ac94a3`. Exact-HEAD Android evidence remains pending.
