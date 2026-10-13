@@ -349,6 +349,50 @@ def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypa
     assert math.isclose(proposed[-1], float(frame.iloc[-2]["low"]) - 0.1)
 
 
+def test_ntd_teeth_exit_uses_close_beyond_line_not_only_a_fresh_crossing(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "NTD_FIVE_DIMENSIONS")
+    frame = pd.DataFrame({
+        "open": [100.0] * 55,
+        "high": [101.0] * 55,
+        "low": [99.0] * 55,
+        "close": [100.0] * 55,
+        "volume": [1000.0] * 55,
+    })
+
+    for side, close_price, market_price in (
+        ("BUY", 95.0, 95.0),  # Already below Teeth on the previous close too.
+        ("SELL", 105.0, 105.0),  # Already above Teeth on the previous close too.
+    ):
+        class Client:
+            def ticker_price(self, symbol):
+                return {"price": str(market_price)}
+
+        runtime = object.__new__(FuturesWilliamsRuntime)
+        runtime.dry_run = False
+        runtime.client = Client()
+        runtime._tick = lambda symbol: 0.1
+        runtime._replace_protection = lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("trailing must not run after the NTD Teeth exit")
+        )
+        runtime._exit_market = lambda campaign, reason: {"reason": reason}
+        monkeypatch.setattr(
+            "futures_williams_runtime.fetch_klines",
+            lambda *args, **kwargs: frame,
+        )
+        monkeypatch.setattr(
+            "futures_williams_runtime.calculate_indicators",
+            lambda *_args, **_kwargs: pd.DataFrame({
+                "close": [close_price, close_price],
+                "teeth_shifted": [100.0, 100.0],
+            }),
+        )
+        campaign = type("C", (), {
+            "symbol": "BTCUSDT", "side": side, "current_stop_price": 80.0 if side == "BUY" else 120.0,
+            "execution_timeframe": "1h", "state": CampaignState.TREND_ACTIVE,
+        })()
+        assert runtime._trail(campaign)["reason"] == "TEETH_CLOSE_EXIT"
+
+
 def test_tc2_profile_does_not_apply_ntd_teeth_close_exit(monkeypatch):
     monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "TC2_THREE_WISE_MEN")
     n = 55
