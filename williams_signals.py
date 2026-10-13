@@ -271,10 +271,23 @@ def _latest_confirmed_fractal(
                 continue
             if direction == "SHORT" and trigger >= float(current_teeth):
                 continue
-        if current_close is not None:
-            if direction == "LONG" and float(current_close) >= trigger:
+        # A confirmed fractal can only be acted on after its two right-hand
+        # bars close. If any bar from confirmation onward already touched the
+        # trigger intrabar, do not revive that old stop order after a scan gap.
+        since_confirmation = ind.iloc[confirmation_i:]
+        if direction == "LONG":
+            if current_close is not None and float(current_close) >= trigger:
                 continue
-            if direction == "SHORT" and float(current_close) <= trigger:
+            if not since_confirmation.empty and bool(
+                (pd.to_numeric(since_confirmation["high"], errors="coerce") >= trigger).any()
+            ):
+                continue
+        else:
+            if current_close is not None and float(current_close) <= trigger:
+                continue
+            if not since_confirmation.empty and bool(
+                (pd.to_numeric(since_confirmation["low"], errors="coerce") <= trigger).any()
+            ):
                 continue
         return confirmation_i, center_i, trigger_base, protective, teeth
     return None
