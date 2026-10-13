@@ -124,3 +124,13 @@ def test_non_2xx_market_read_is_not_mistaken_for_valid_payload():
     c, _ = client([Response({"code": -1121, "msg": "Invalid symbol"}, status_code=400)])
     with pytest.raises(BinanceFuturesAPIError):
         c.ticker_price("NOT_A_SYMBOL")
+
+
+def test_spot_portfolio_trader_rejects_futures_client_before_initialization():
+    from portfolio_trader import MultiPositionTrader
+
+    class FuturesClientMarker:
+        product = "USD_M_FUTURES"
+
+    with pytest.raises(ValueError, match="Spot-only"):
+        MultiPositionTrader(FuturesClientMarker())
