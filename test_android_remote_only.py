@@ -9,84 +9,96 @@ def _read(path):
     return path.read_text(errors="replace") if path.exists() else ""
 
 
-def test_android_has_remote_cockpit_runtime():
-    standalone = ANDROID / "java/com/williamsbot/StandaloneRuntime.kt"
-    user_stream = ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt"
-    service = ANDROID / "java/com/williamsbot/TradingForegroundService.kt"
-    assert standalone.exists()
-    assert user_stream.exists()
-    assert service.exists()
-
-    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
-    assert "TradingForegroundService" in main or "BackendApi" in main
-    assert "https://" in main
-    assert "StandaloneRuntime.start(this)" not in main
-
-
-def test_android_remote_backend_requires_https():
-    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
-    assert "https://" in main
-    assert "127.0.0.1:18080" not in main
-    assert "localhost:18080" not in main
-    assert 'putString("backend_url"' in main
-    assert 'putString("mobile_token"' in main
-
-
-def test_android_does_not_clear_native_binance_credentials_on_start():
-    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
-    assert 'remove("api_key")' not in main
-    assert 'remove("api_secret")' not in main
-
-
-def test_android_does_not_start_native_spot_runtime():
+def test_android_starts_native_futures_runtime_from_foreground_service():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     service = _read(ANDROID / "java/com/williamsbot/TradingForegroundService.kt")
-    assert "StandaloneRuntime.start(this)" not in main
-    assert "StandaloneRuntime.autostart(this)" not in main
-    assert "legacy native Spot runtime" in service
-    assert "remote Futures backend" in service
+    manifest = _read(ANDROID / "AndroidManifest.xml")
+
+    assert "TradingForegroundService.ACTION_START" in main
+    assert "StandaloneRuntime.start(applicationContext)" in service
+    assert "StandaloneRuntime.autostart(applicationContext)" in service
+    assert "StandaloneRuntime.stopTrading()" in service
+    assert 'android:name=".TradingForegroundService"' in manifest
+    assert "Futures Testnet runtime on this device" in service
 
 
-def test_android_does_not_require_native_portfolio_api():
+def test_android_ui_routes_directly_to_local_runtime_without_remote_backend():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
-    # The Android cockpit must not require a remote/native portfolio endpoint
-    # for autonomous Futures execution; this is an architectural non-dependency.
-    assert "/api/v1/portfolio" not in main
-    assert "BackendApi" in main
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+
+    assert "class LocalRuntimeApi" in main
+    assert "StandaloneRuntime.request(appContext" in main
+    assert "class BackendApi" not in main
+    assert "backend_url" not in main
+    assert "mobile_token" not in main
+    assert "StandaloneRuntime.request(context: Context" in runtime
+    assert "fun dispatch(method: String, target: String, body: String)" in runtime
+    # Trading API keys are never put in UI/backend connection preferences.
+    assert 'putString("api_key"' not in main
+    assert 'putString("api_secret"' not in main
 
 
-def test_android_never_stores_binance_credentials_in_main_activity():
-    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
-    assert '.putString("api_key"' not in main
-    assert '.putString("api_secret"' not in main
+def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+
+    assert "wss://demo-fstream.binance.com/market/stream?streams=" in runtime
+    assert "startMarketDataStream()" in runtime
+    assert "marketSocketLastEventMs = System.currentTimeMillis()" in runtime
+    assert "private fun marketWebSocketFresh" in runtime
+    assert "marketWebSocketFresh() &&" in runtime
+    assert 'add("market_websocket_disconnected_or_stale")' in runtime
+    assert "if (!executionReady() || !candidate.campaignReady) return" in runtime
+    assert "https://demo-fapi.binance.com" in runtime
 
 
-def test_server_futures_contract_is_present():
+def test_android_campaign_and_intents_are_sqlite_backed():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    store = _read(ANDROID / "java/com/williamsbot/FuturesExecutionStore.kt")
+
+    assert "private val executionStore = FuturesExecutionStore(context)" in runtime
+    assert "NativeFuturesCampaignCoordinator(executionStore)" in runtime
+    assert "executionStore.writeRuntimeState" in runtime
+    assert "executionStore.readState" in runtime
+    assert "private val executionStore: FuturesExecutionStore" in coordinator
+    assert "executionStore.writeState(intentsKey, array.toString())" in coordinator
+    assert "SQLiteOpenHelper" in store
+    assert "CREATE TABLE IF NOT EXISTS runtime_state" in store
+    assert "db.beginTransaction()" in store
+    assert "migrateLegacyState" in store
+    assert "prefs.getString(intentsKey" not in coordinator
+    assert "prefs.edit().putString(intentsKey" not in coordinator
+
+
+def test_android_futures_adapter_has_unambiguous_long_short_sides():
+    adapter = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
+    tests = _read(ROOT / "app/src/test/java/com/williamsbot/BinanceUsdMFuturesTestnetAdapterContractTest.kt")
+
+    assert 'private val base = "https://demo-fapi.binance.com"' in adapter
+    assert '"/fapi/v1/order"' in adapter
+    assert '"/fapi/v1/algoOrder"' in adapter
+    assert 'fun entrySide(direction: String)' in adapter
+    assert 'fun closeSide(direction: String)' in adapter
+    assert 'assertEquals("BUY", BinanceUsdMFuturesTestnetAdapter.entrySide("LONG"))' in tests
+    assert 'assertEquals("SELL", BinanceUsdMFuturesTestnetAdapter.entrySide("SHORT"))' in tests
+    assert 'assertEquals("SELL", BinanceUsdMFuturesTestnetAdapter.closeSide("LONG"))' in tests
+    assert 'assertEquals("BUY", BinanceUsdMFuturesTestnetAdapter.closeSide("SHORT"))' in tests
+
+
+def test_server_python_backend_remains_futures_and_mainnet_is_disabled_by_default():
+    config = _read(ROOT / ".env.example")
     server = _read(ROOT / "server.py")
-    assert "def portfolio():" in server
-    assert "'account_type': 'FUTURES'" in server
-    assert "'max_open_positions': multi.max_open_positions" in server
-    assert "risk_capacity_positions" in server
-
-
-def test_futures_client_has_ambiguous_execution_reconciliation():
-    client = _read(ROOT / "binance_futures_client.py")
-    assert "unknown_execution=True" in client
-    assert "order_safe" in client
-    assert 'orig_client_order_id=new_client_order_id' in client
-    assert '"/fapi/v1/order"' in client
-
-
-def test_active_backend_uses_futures_and_legacy_spot_is_not_authoritative():
-    server = _read(ROOT / "server.py")
-    futures = _read(ROOT / "binance_futures_client.py")
     runtime = _read(ROOT / "futures_williams_runtime.py")
-    assert "BinanceFuturesClient" in server
+
+    assert "BINANCE_MARKET=futures_usdt" in config
+    assert "TESTNET=true" in config
+    assert "ALLOW_LIVE=false" in config
+    assert "DRY_RUN=true" in config
     assert "FuturesWilliamsRuntime" in server
-    assert "/fapi/v1/order" in futures
-    assert "positionAmt" in futures
-    assert "reduceOnly" in futures
-    assert "STOP_MARKET" in runtime
+    assert "BinanceFuturesClient" in server
+    assert "extract_long_signal_specs" in runtime
+    assert "extract_short_signal_specs" in runtime
+
 
 def test_environment_secrets_are_gitignored():
     ignore = _read(ROOT / ".gitignore")
