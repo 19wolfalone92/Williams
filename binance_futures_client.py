@@ -175,8 +175,8 @@ class BinanceUsdMFuturesClient:
             params["positionSide"] = ps
         if reduce_only is not None:
             # Binance rejects reduceOnly in Hedge Mode.
-            if str(params.get("positionSide", "BOTH")).upper() in {"LONG", "SHORT"} and str(reduce_only).lower() == "true":
-                raise ValueError("reduceOnly cannot be sent in Hedge Mode; use correct positionSide and close side")
+            if str(params.get("positionSide", "BOTH")).upper() in {"LONG", "SHORT"}:
+                raise ValueError("reduceOnly must be omitted in Hedge Mode; use correct positionSide and close side")
             params["reduceOnly"] = str(bool(reduce_only)).lower()
         if close_position is not None:
             if type_ not in {"STOP_MARKET", "TAKE_PROFIT_MARKET"}:
