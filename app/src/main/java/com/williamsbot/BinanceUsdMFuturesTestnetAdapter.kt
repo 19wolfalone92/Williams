@@ -120,6 +120,23 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         return JSONArray(requestRaw("GET", "/fapi/v1/openOrders", mapOf("symbol" to symbol), signed = true))
     }
 
+    /**
+     * Conditional orders use Binance's Algo Order API. Do not query/cancel these
+     * through /fapi/v1/openOrders or /fapi/v1/order.
+     */
+    fun openAlgoOrders(symbol: String): JSONArray {
+        requireSymbol(symbol)
+        return JSONArray(requestRaw("GET", "/fapi/v1/openAlgoOrders", mapOf("symbol" to symbol), signed = true))
+    }
+
+    fun cancelAlgoOrder(symbol: String, clientAlgoId: String): JSONObject {
+        requireSymbol(symbol)
+        require(clientAlgoId.isNotBlank())
+        return JSONObject(requestRaw("DELETE", "/fapi/v1/algoOrder", mapOf(
+            "symbol" to symbol, "clientAlgoId" to clientAlgoId
+        ), signed = true))
+    }
+
     /** Explicit direction API prevents strategy code from accidentally mapping SHORT to BUY. */
     fun openMarketPosition(
         symbol: String,
@@ -197,18 +214,29 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         val stop = stopPrice.toBigDecimalOrNull()
             ?: throw IllegalArgumentException("Stop price must be numeric")
         require(stop.signum() > 0) { "Stop price must be positive" }
-        require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client order id" }
+        require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client algo id" }
+
+        // Validate trigger orientation against the current mark price. A stale or
+        // unavailable mark price throws and therefore fails closed before mutation.
+        val mark = java.math.BigDecimal.valueOf(markPrice(symbol))
+        if (positionDirection == "LONG") {
+            require(stop < mark) { "LONG protective stop must be below the current mark price" }
+        } else {
+            require(stop > mark) { "SHORT protective stop must be above the current mark price" }
+        }
+
         val params = linkedMapOf(
+            "algoType" to "CONDITIONAL",
             "symbol" to symbol,
             "side" to if (positionDirection == "LONG") "SELL" else "BUY",
             "type" to "STOP_MARKET",
-            "stopPrice" to stop.stripTrailingZeros().toPlainString(),
+            "triggerPrice" to stop.stripTrailingZeros().toPlainString(),
             "closePosition" to "true",
             "workingType" to "MARK_PRICE",
             "priceProtect" to "TRUE",
-            "newClientOrderId" to clientOrderId
+            "clientAlgoId" to clientOrderId
         )
-        return JSONObject(requestRaw("POST", "/fapi/v1/order", params, signed = true))
+        return JSONObject(requestRaw("POST", "/fapi/v1/algoOrder", params, signed = true))
     }
 
     private fun request(method: String, path: String, params: Map<String, String>, signed: Boolean): JSONObject =
