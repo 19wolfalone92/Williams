@@ -1081,6 +1081,8 @@ def status():
         'futures_leverage': t.config.futures_leverage,
         'futures_margin_type': t.config.futures_margin_type,
         'futures_force_one_way': t.config.futures_force_one_way,
+        'allow_long': t.config.allow_long,
+        'allow_short': t.config.allow_short,
         'scanner_scanning': bool(_scanner_snapshot()['scanning']),
         'scanner_symbols': int(_scanner_snapshot()['symbols_scanned']),
         'scanner_configured_symbols': int(_scanner_snapshot()['symbols_configured']),
