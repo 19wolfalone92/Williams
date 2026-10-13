@@ -145,6 +145,9 @@ def main() -> None:
 
     futures = read("futures_williams_runtime.py")
     must(futures, "canonical_indicator_config_from_env()", "futures_williams_runtime.py")
+    must(futures, "_signal_profile_entry_block_reason(profile)", "futures_williams_runtime.py")
+    must(futures, "def _signal_profile_entry_block_reason(profile: str) -> str", "futures_williams_runtime.py")
+    must(futures, "the standalone Balance Line trade engine is missing/unverified", "futures_williams_runtime.py")
     must(futures, "default_symbols = DEFAULT_FUTURES_SYMBOLS", "futures_williams_runtime.py")
     must(futures, "tuple(approved) != DEFAULT_FUTURES_SYMBOLS", "futures_williams_runtime.py")
     must(futures, '("LONG", long_specs, long_htf)', "futures_williams_runtime.py")
