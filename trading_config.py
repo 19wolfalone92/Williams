@@ -87,7 +87,7 @@ class TradingConfig:
     no_trade_when_uncertain: bool = True
 
     risk_per_trade_pct: float = 0.0025
-    max_total_risk_pct: float = 0.01
+    max_total_risk_pct: float = 0.006
     max_daily_loss_pct: float = 0.03
     max_consecutive_losses: int = 3
     cooldown_minutes: int = 30
@@ -148,7 +148,7 @@ class TradingConfig:
         max_positions = min(1, max(0, _int(source, "MAX_OPEN_POSITIONS", 1)))
         risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
         risk = max(0.0, min(0.0025, _float(source, risk_key, 0.0025)))
-        total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
+        total_risk = max(0.0, min(0.006, _float(source, "MAX_TOTAL_RISK_PCT", 0.006)))
 
         execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", source.get("INTERVAL", "1h"))).strip().lower()
         structural_timeframes = _tf_chain(execution_timeframe, source)
