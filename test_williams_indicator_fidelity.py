@@ -172,12 +172,12 @@ def test_gator_oscillator_uses_alligator_line_differences_and_is_diagnostic_only
     ind = calculate_indicators(make_frame(highs, lows), config_from_env({}))
     pd.testing.assert_series_equal(
         ind["gator_upper"],
-        (ind["jaw_shifted"] - ind["teeth_shifted"]).abs(),
+        (ind["jaw_current"] - ind["teeth_current"]).abs(),
         check_names=False,
     )
     pd.testing.assert_series_equal(
         ind["gator_lower"],
-        -(ind["teeth_shifted"] - ind["lips_shifted"]).abs(),
+        -(ind["teeth_current"] - ind["lips_current"]).abs(),
         check_names=False,
     )
     assert set(ind["gator_state"].unique()) <= {
