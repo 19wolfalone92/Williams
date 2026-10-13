@@ -1241,6 +1241,26 @@ private class NativeEngine(
 
         worker = Thread {
             while (running && generation == runtimeGeneration) {
+                // Resting conditional BUYs can still trigger while the scanner
+                // is paused or a daily-risk monitor has failed. Cancel them
+                // independently of scan eligibility; never cancel protective exits.
+                if (
+                    !dailyRiskMonitorHealthy ||
+                    equityCircuitBreaker.isTripped()
+                ) {
+                    runCatching {
+                        cancelRestingCampaignEntriesForDailyRisk(
+                            if (equityCircuitBreaker.isTripped()) {
+                                "DAILY_LOSS_LIMIT"
+                            } else {
+                                "DAILY_RISK_UNAVAILABLE"
+                            }
+                        )
+                    }.onFailure {
+                        lastError = "Pending-entry risk cancellation: " +
+                            (it.message ?: it.javaClass.simpleName)
+                    }
+                }
                 if (!paused) {
                     try {
                         if (!historyReady) {
@@ -2717,10 +2737,11 @@ private class NativeEngine(
         block: () -> JSONObject
     ): JSONObject {
         if (!running) error("Runtime is not running")
-        if (paused) error("Runtime is paused")
-        if (reconcileRequired) error("RECONCILE_REQUIRED")
-        if (killLatched) error("KILL_SWITCH_LATCHED")
-        validateNewCampaignEntryAtMutation(symbol, purpose)
+        val isEntryCancellation = purpose.startsWith("CAMPAIGN_ENTRY_CANCEL_")
+        if (paused && !isEntryCancellation) error("Runtime is paused")
+        if (reconcileRequired && !isEntryCancellation) error("RECONCILE_REQUIRED")
+        if (killLatched && !isEntryCancellation) error("KILL_SWITCH_LATCHED")
+        if (!isEntryCancellation) validateNewCampaignEntryAtMutation(symbol, purpose)
         require(executionGate.tryReserve(symbol)) {
             "Campaign execution already reserved for " + symbol
         }
@@ -3282,6 +3303,48 @@ private class NativeEngine(
      * After DELETE, fetch again: a race-to-fill becomes a protected position,
      * never a silently discarded fill.
      */
+    /**
+     * Cancel only resting campaign-entry orders when the daily equity monitor
+     * is tripped or unavailable. The exchange order is re-read first and every
+     * cancellation is followed by a terminal-state reconciliation.
+     */
+    private fun cancelRestingCampaignEntriesForDailyRisk(reason: String) {
+        val pending = synchronized(pendingEntries) {
+            pendingEntries.values.toList()
+        }
+        for (intent in pending) {
+            try {
+                val observed = signedGet(
+                    "/api/v3/order",
+                    "symbol=" + intent.symbol +
+                        "&origClientOrderId=" + intent.clientOrderId
+                )
+                val status = observed.optString("status", "").uppercase(Locale.US)
+                val executed = observed.optString("executedQty").toDoubleOrNull() ?: 0.0
+                when {
+                    status in setOf("NEW", "PENDING_NEW") && executed <= 0.0 ->
+                        cancelCampaignEntryAndReconcile(intent, observed, reason)
+                    status == "PARTIALLY_FILLED" ->
+                        cancelCampaignEntryAndReconcile(intent, observed, reason)
+                    status == "FILLED" ->
+                        recoverCampaignPendingEntries()
+                    status in setOf("CANCELED", "EXPIRED", "REJECTED") ->
+                        clearCampaignPending(intent.symbol)
+                    else -> setReconcileRequired(
+                        intent.symbol + ": daily-risk cancellation cannot prove order state: " + status
+                    )
+                }
+            } catch (x: Throwable) {
+                lastError = intent.symbol + ": daily-risk cancellation unresolved: " +
+                    (x.message ?: x.javaClass.simpleName)
+                // Keep the pending intent persisted and retry reconciliation on
+                // the next worker cycle. No new entry is allowed meanwhile.
+                reconcileRequired = true
+                prefs.edit().putBoolean("reconcile_required", true).commit()
+            }
+        }
+    }
+
     private fun cancelCampaignEntryAndReconcile(
         intent: PendingEntry,
         observedOrder: JSONObject,
@@ -3337,7 +3400,7 @@ private class NativeEngine(
     private fun clearCampaignPending(symbol: String) {
         synchronized(pendingEntries) { pendingEntries.remove(symbol) }
         savePersistedState()
-        if (positionList().isEmpty()) {
+        if (positionList().isEmpty() && !reconcileRequired && !killLatched) {
             stateMachine.force(
                 TradingState.READY_FLAT,
                 "Campaign conditional entry cleared"
