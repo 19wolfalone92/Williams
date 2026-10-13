@@ -8,7 +8,8 @@ from campaign_model import CampaignState, PendingSignal, SignalRole, SignalSpec,
 from futures_williams_runtime import FuturesWilliamsRuntime, FuturesWilliamsScanner
 from williams_signals import (
     extract_long_signal_specs, extract_short_signal_specs,
-    extract_ntd_ao_signal_specs, _latest_super_ao, _latest_three_price_bar_signal,
+    extract_ntd_ao_signal_specs, extract_ntd_ac_signal_specs,
+    _latest_super_ao, _latest_three_price_bar_signal,
 )
 
 
@@ -729,3 +730,51 @@ def test_ntd_ao_twin_peaks_requires_second_peak_closer_to_zero():
     )
     assert len(signals) == 1
     assert signals[0].signal_type == SignalType.AO_TWIN_PEAKS
+
+
+
+def test_ntd_ac_requires_directional_colour_run_and_prices_the_signal_bar():
+    ind = pd.DataFrame({
+        "ac": [0.5, 0.4, 0.45, 0.5],
+        "high": [100.0, 100.5, 100.8, 101.0],
+        "low": [98.0, 98.5, 98.8, 99.0],
+        "close": [99.0, 99.5, 100.0, 100.0],
+    })
+    signals = extract_ntd_ac_signal_specs(
+        "BTCUSDT", ind, side="LONG", timeframe="5m", tick_size=0.1
+    )
+    assert len(signals) == 1
+    assert signals[0].signal_type == SignalType.AC_SIGNAL
+    assert signals[0].side == "BUY"
+    assert math.isclose(signals[0].trigger_price, 101.1)
+    assert math.isclose(signals[0].protective_reference, 99.0)
+
+
+def test_ntd_ac_below_zero_requires_three_green_bars_for_long():
+    ind = pd.DataFrame({
+        "ac": [-0.5, -0.6, -0.55, -0.5, -0.45],
+        "high": [100.0, 99.5, 100.0, 100.5, 101.0],
+        "low": [98.0, 97.5, 98.0, 98.5, 99.0],
+        "close": [99.0, 98.0, 99.0, 100.0, 100.0],
+    })
+    signals = extract_ntd_ac_signal_specs(
+        "BTCUSDT", ind, side="LONG", timeframe="5m", tick_size=0.1
+    )
+    assert len(signals) == 1
+    assert signals[0].signal_type == SignalType.AC_SIGNAL
+    assert signals[0].source_candle_index == 4
+
+
+def test_ntd_ac_below_zero_short_is_mirrored():
+    ind = pd.DataFrame({
+        "ac": [-0.5, -0.4, -0.45, -0.5],
+        "high": [102.0, 101.5, 101.0, 100.5],
+        "low": [100.0, 99.5, 99.0, 98.5],
+        "close": [101.0, 100.0, 100.0, 99.0],
+    })
+    signals = extract_ntd_ac_signal_specs(
+        "BTCUSDT", ind, side="SHORT", timeframe="5m", tick_size=0.1
+    )
+    assert len(signals) == 1
+    assert signals[0].side == "SELL"
+    assert math.isclose(signals[0].trigger_price, 98.4)
