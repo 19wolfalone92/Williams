@@ -302,6 +302,45 @@ def test_teeth_close_exit_uses_only_closed_bars_for_short(monkeypatch):
     assert exits == ["TEETH_CLOSE_EXIT"]
 
 
+def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypatch):
+    n = 55
+    close = [100.0 + i for i in range(n)]
+    frame = pd.DataFrame({
+        "open": [x - 0.5 for x in close],
+        "high": [x + 1.0 for x in close],
+        "low": [x - 1.0 for x in close],
+        "close": close,
+        "volume": [1000.0] * n,
+    })
+
+    class Client:
+        def ticker_price(self, symbol):
+            return {"price": "200"}
+
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime.dry_run = False
+    runtime.client = Client()
+    runtime._tick = lambda symbol: 0.1
+    proposed = []
+    runtime._replace_protection = lambda campaign, price, **kwargs: proposed.append(price) or True
+    runtime._exit_market = lambda campaign, reason: (_ for _ in ()).throw(
+        AssertionError("rising closes must not trigger a Teeth exit")
+    )
+    monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *args, **kwargs: frame)
+    campaign = type("C", (), {
+        "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 100.0,
+        "execution_timeframe": "1h", "state": CampaignState.TREND_ACTIVE,
+        "tags": {},
+    })()
+
+    runtime._trail(campaign)
+    assert campaign.tags["ntd_five_colour_trail_active"] is True
+    assert proposed
+    # Five green bars activate the NTD rule: trail below the latest completed bar,
+    # tighter than the older 3/5-bar structural minimum in this monotonic test.
+    assert math.isclose(proposed[-1], float(frame.iloc[-2]["low"]) - 0.1)
+
+
 def test_pending_signal_rejects_illegal_backward_transition():
     signal = SignalSpec.new(
         symbol="BTCUSDT", side="SELL", signal_type=SignalType.FRACTAL,
