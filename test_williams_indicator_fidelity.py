@@ -1,6 +1,7 @@
 import pandas as pd
 
 from strategy import calculate_indicators, config_from_env
+from williams_signals import _latest_confirmed_fractal, extract_ntd_fractal_signal_specs
 
 
 def make_frame(highs, lows=None, volumes=None, trades=None):
@@ -80,3 +81,47 @@ def test_trade_count_proxy_is_explicit_and_never_claimed_as_canonical_mfi():
     assert set(ind["mfi_proxy_source"]) == {"BINANCE_TRADE_COUNT_PROXY"}
     assert "mfi_proxy" in ind
     assert "mfi_proxy_valid" in ind
+
+
+def test_wm3_consumers_use_actual_confirmation_and_whole_plateau_stop():
+    rows = []
+    highs = [9, 10, 11, 12, 12, 11, 10, 9]
+    lows = [8, 9, 10, 11, 10, 9, 8, 7]
+    for i, (high, low) in enumerate(zip(highs, lows)):
+        rows.append({
+            "open": (high + low) / 2,
+            "high": float(high),
+            "low": float(low),
+            "close": 9.0 if i == 7 else (high + low) / 2,
+            "teeth_shifted": 10.5,
+            "fractal_up": i == 4,
+            "fractal_down": False,
+            "fractal_up_confirmed": i == 6,
+            "fractal_down_confirmed": False,
+            "confirmed_up_level": 12.0 if i == 6 else float("nan"),
+            "confirmed_down_level": float("nan"),
+            "confirmed_up_center_index": 4.0 if i == 6 else float("nan"),
+            "confirmed_down_center_index": float("nan"),
+            "confirmed_up_group_start_index": 3.0 if i == 6 else float("nan"),
+            "confirmed_down_group_start_index": float("nan"),
+            "open_time_ms": 1_800_000_000_000 + i * 3_600_000,
+        })
+    ind = pd.DataFrame(rows)
+
+    found = _latest_confirmed_fractal(
+        ind, side="LONG", current_teeth=10.5, current_close=9.0, tick_size=0.1
+    )
+    assert found is not None
+    confirmation_i, center_i, trigger_base, protective, _ = found
+    assert confirmation_i == 6
+    assert center_i == 4
+    assert trigger_base == 12.0
+    assert protective == 10.0  # minimum low across equal-high bars 3 and 4
+
+    specs = extract_ntd_fractal_signal_specs(
+        "BTCUSDT", ind, side="LONG", timeframe="1h", tick_size=0.1
+    )
+    assert len(specs) == 1
+    assert specs[0].signal_bar_time_ms == ind.iloc[6]["open_time_ms"]
+    assert specs[0].trigger_price == 12.1
+    assert specs[0].protective_reference == 10.0
