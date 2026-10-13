@@ -618,10 +618,9 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
-    // Default supports the portfolio model: up to five independent positions;
-    // aggregate risk remains capped separately at 1%.
+    // Five independent Futures contracts maximum; aggregate campaign risk is capped at 0.6%.
     private val maxOpenPositions: Int
-        get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
+        get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 5)
     private val campaignEngineEnabled: Boolean
         get() = true
     private val campaignExecutionTimeframe: String
