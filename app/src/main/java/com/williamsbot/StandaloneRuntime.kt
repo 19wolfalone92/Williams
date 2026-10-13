@@ -3934,9 +3934,15 @@ private class NativeEngine(
             h4.last().c > h4Line.lips && ao(h4, h4.lastIndex) > 0.0
         val h4Bear = h4Line.lips < h4Line.teeth && h4Line.teeth < h4Line.jaw &&
             h4.last().c < h4Line.lips && ao(h4, h4.lastIndex) < 0.0
+        // Match the Python campaign contract: a REVERSAL is a presenting
+        // signal and does not require directional H4 confirmation; D1 remains
+        // the macro veto. Continuation/other initial entries require H4 alignment.
+        val reversalSignal = signal.type.contains("REVERSAL", ignoreCase = true)
         val contextAllowed = when (direction) {
-            NativeFuturesCampaignCoordinator.Direction.LONG -> h4Bull && !d1Bear
-            NativeFuturesCampaignCoordinator.Direction.SHORT -> h4Bear && !d1Bull
+            NativeFuturesCampaignCoordinator.Direction.LONG ->
+                (reversalSignal || h4Bull) && !d1Bear
+            NativeFuturesCampaignCoordinator.Direction.SHORT ->
+                (reversalSignal || h4Bear) && !d1Bull
         }
         if (!contextAllowed) return
 
