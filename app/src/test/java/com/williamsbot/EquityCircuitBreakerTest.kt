@@ -6,11 +6,11 @@ import org.junit.Test
 
 class EquityCircuitBreakerTest {
     @Test
-    fun tripsAtFivePercentWithinHour() {
+    fun tripsAtThreePercentWithinHour() {
         val b = EquityCircuitBreaker()
         b.observe(1000.0, 1_000L)
-        assertTrue(b.observe(950.0, 2_000L).tripped)
-        assertTrue(b.observe(949.9, 3_000L).tripped)
+        assertTrue(b.observe(970.0, 2_000L).tripped)
+        assertTrue(b.observe(969.9, 3_000L).tripped)
     }
 
     @Test
@@ -29,7 +29,7 @@ class EquityCircuitBreakerTest {
     fun resetsAtUtcDayBoundary() {
         val b = EquityCircuitBreaker()
         b.observe(1000.0, 1_000L)
-        assertTrue(b.observe(950.0, 2_000L).tripped)
+        assertTrue(b.observe(970.0, 2_000L).tripped)
 
         val nextUtcDay = 86_400_000L + 1_000L
         assertFalse(b.observe(950.0, nextUtcDay).tripped)
