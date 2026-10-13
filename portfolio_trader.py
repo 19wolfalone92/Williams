@@ -2429,10 +2429,12 @@ class MultiPositionTrader:
                     "open_positions": len(open_trades),
                 }
 
+        shared_context_cache = getattr(self.execution_barrier, "context_cache", None)
         controller = PortfolioController(
             self.client,
             balance_quote=balance,
             symbols=self.symbols,
+            context_cache=shared_context_cache,
         )
         selections = controller.select_portfolio(
             open_risk_quote=self.reserved_risk_quote(),
