@@ -525,7 +525,10 @@ finding(
 finding(
     "PASS" if "positionAmt" in futures_client
     and "/fapi/v1/order" in futures_client
-    and "/fapi/v1/account" in futures_client
+    and (
+        "/fapi/v2/account" in futures_client
+        or "/fapi/v3/account" in futures_client
+    )
     else "FAIL",
     "Binance client uses USD-M Futures endpoints"
 )
