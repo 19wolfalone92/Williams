@@ -7827,7 +7827,7 @@ private class NativeEngine(
             )) intent.optDouble("risk_pct", 0.0) else 0.0
         }
         val utcDayStart = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
-            timeInMillis = futuresMarketData.exchangeNowMs()
+            timeInMillis = runCatching { futuresMarketData.exchangeNowMs() }.getOrElse { System.currentTimeMillis() }
             set(java.util.Calendar.HOUR_OF_DAY, 0)
             set(java.util.Calendar.MINUTE, 0)
             set(java.util.Calendar.SECOND, 0)
