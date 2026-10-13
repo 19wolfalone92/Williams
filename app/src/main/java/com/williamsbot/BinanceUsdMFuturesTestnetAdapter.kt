@@ -248,6 +248,25 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         params: Map<String, String>,
         signed: Boolean
     ): String {
+        return try {
+            requestRawOnce(method, path, params, signed)
+        } catch (error: IOException) {
+            // Binance -1021 explicitly rejects a request whose timestamp is outside
+            // recvWindow. Only this definite rejection permits a single resync/retry;
+            // timeouts, connection resets and 5xx remain UNKNOWN and are never retried.
+            if (!signed || !error.message.orEmpty().contains("-1021")) throw error
+            timeSynced = false
+            serverTime()
+            requestRawOnce(method, path, params, signed = true)
+        }
+    }
+
+    private fun requestRawOnce(
+        method: String,
+        path: String,
+        params: Map<String, String>,
+        signed: Boolean
+    ): String {
         require(path.startsWith("/fapi/")) { "Only USD-M Futures endpoints are allowed" }
         val all = LinkedHashMap(params)
         if (signed) {
