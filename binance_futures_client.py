@@ -23,6 +23,8 @@ class BinanceFuturesAPIError(RuntimeError):
 
 
 class BinanceUsdMFuturesClient:
+    product = "USD_M_FUTURES"
+
     """Small, fail-closed USDⓈ-M Futures REST client.
 
     demo=True uses Binance Demo Trading (not the retired Futures testnet).
