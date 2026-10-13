@@ -1585,6 +1585,9 @@ private class NativeEngine(
         path: String,
         params: String
     ): String {
+        require(path.startsWith("/fapi/")) {
+            "SECURITY_BLOCK: signed raw transport accepts USD-M Futures routes only"
+        }
         var lastBody = "{}"
         repeat(2) { attempt ->
             val query = if (params.isBlank()) {
