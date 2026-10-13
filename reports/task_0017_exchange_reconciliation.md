@@ -22,3 +22,10 @@
 - No response, failed lookup, truncated history, contradictory identity or persistence error is not evidence of non-acceptance. UNKNOWN must remain unresolved and block unsafe retry.
 
 P0 remains open. No live credentials or orders used.
+
+## TASK 001.12 exact-HEAD addendum
+
+- At SHA `4e7ad93990b4b9d3b5291bed9d83909fbfac3bcf`, Campaign Python tests passed 262/262 (run [38341931762](https://github.com/19wolfalone92/Williams/actions/runs/38341931762), job 115114648003); backend tests passed 223/223 (run [38341931627](https://github.com/19wolfalone92/Williams/actions/runs/38341931627), job 115114647440).
+- FI-13 code repeats 12 fresh SQLite databases with two independent SQLite connections and two threads. Its assertions include exactly one claim, one exchange observation, zero fake-exchange mutations, expected persisted order ID and terminal durable state. This is thread-level, same-process evidence, not a multi-process proof.
+- Recovery validation still rejects conflicting persisted exchange order IDs, incomplete trade evidence and unsupported compound cancel/cancel-replace operations. Unknown outcomes remain unresolved; these cases are fail-closed, not fully implemented compound recovery.
+- Not yet proven: lease expiry during a live reconciliation, process kill across all transaction boundaries, active/partial/terminal cases under true multiprocessing, or Android/Python cross-runtime atomicity. No live Binance mutation was used.
