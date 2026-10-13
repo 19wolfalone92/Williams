@@ -1,35 +1,34 @@
-# WILLIAMS BOT 2.1 — Approved Futures Symbol Universe Blocker
+# WILLIAMS BOT 2.1 — Futures Symbol Universe Decision
 
-**Status:** BLOCKED — approved ten-symbol list not recovered  
-**Severity:** P0 — trading scanner must remain fail-closed  
+**Status:** CONFIGURED — 10 selected liquid USDⓈ-M USDT perpetual candidates; exchange validation still required  
+**Severity:** P0 acceptance gate until all ten validate and receive market-data/scanner evidence  
 **Repository:** 19wolfalone92/Williams  
-**Repair branch:** `task-002-futures-runtime-repair-20261013`  
-**Baseline:** `7909e77ccfe72ec7c07fecf22e6553d67466cde7`
+**Branch:** `futures-williams-campaign`
 
-## Sources inspected
+## Selected symbols
 
-1. Futures PR #36 branch `futures-williams-campaign` at the recorded baseline. Its `.env.example` declares `WILLIAMS_SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT` (five symbols) and `FUTURES_SCAN_TOP_N=40`; this is not evidence of the user-approved ten-symbol list.
-2. `trading_config.py` at the same branch has `DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")`, again five symbols.
-3. `futures_williams_runtime.py` previously discovered all eligible USDT perpetuals from `exchange_info()`, ranked them by 24-hour quote volume, and returned the top N. That behavior does not preserve an approved fixed universe.
-4. Commit search in `19wolfalone92/Williams` for symbol configuration / Futures universe found general configuration changes, but no commit that establishes an approved list of exactly ten symbols.
-5. PR #36 description and the known baseline commit do not identify ten approved symbols.
+`BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT,LTCUSDT`
 
-## Correction applied
+These are a practical initial universe selected by the user’s instruction to use ten popular pairs. This is a configuration decision, not a claim that every symbol is available on every Demo/Testnet environment at this moment.
 
-The Futures scanner no longer auto-discovers or ranks arbitrary contracts for trading. It now requires `FUTURES_APPROVED_SYMBOLS` to contain exactly ten unique, syntactically valid USDT symbols and validates each against Futures `exchangeInfo` status, quote asset, perpetual contract type, and required price/lot/notional filters. Missing, duplicate, or exchange-ineligible entries produce an empty universe with an explicit `last_universe_error`; no fallback list is invented.
+## Runtime contract
 
-Regression tests cover missing configuration, duplicate rejection, exchange-ineligible rejection, exact-ten validation, and prevention of dynamic additions.
+- The runtime uses this fixed list by default; `FUTURES_APPROVED_SYMBOLS` may override it only with exactly ten unique USDT symbols.
+- Every symbol must pass live USDⓈ-M `exchangeInfo` checks: TRADING status, USDT quote asset, PERPETUAL contract type, and required price/lot/notional filters.
+- Any invalid/unavailable symbol blocks the universe as a whole. No silent substitution, top-volume ranking, or automatic expansion.
+- LONG and SHORT candidates are both enabled by the Futures runtime; Shorts are Futures positions, not Spot sells.
+- Safety remains `TESTNET=true`, `ALLOW_LIVE=false`, `DRY_RUN=true` by default.
 
-## What remains blocked
+## Required proof before readiness
 
-- The original ten-symbol list still requires recovery from the user's approved project record, specification, or another authoritative source.
-- No claim is made that any real exchange has validated ten symbols, that historical data is loaded, or that the scanner evaluated ten real symbols.
-- The new configuration gate is currently a scanner boundary; integration of this canonical universe into all risk/execution/recovery/diagnostics/UI consumers still requires verification.
+1. Exact-HEAD CI passes after this change.
+2. USDⓈ-M Demo/Testnet `exchangeInfo` validates all ten symbols.
+3. Each symbol receives sufficient closed H1 history and a scanner evaluation; partial failures are reported by symbol.
+4. LONG and SHORT signal paths pass deterministic tests, while DRY_RUN prevents order mutation.
+5. Demo/Testnet order lifecycle tests prove entry, protective stop, close/reduce-only, restart recovery, idempotency, and unknown-state fail-closed behavior.
+6. A debug APK is built from the same exact HEAD and its version/signature/manifest are verified.
+7. Device-level install/start/diagnostics evidence is captured. CI build success alone is not device proof.
 
-## Required next action
+## Acceptance limitation
 
-Recover the exact approved ten symbols from an authoritative project record. Then populate `FUTURES_APPROVED_SYMBOLS`, run the official USDⓈ-M Demo `exchangeInfo` validation and all-ten market-history/scanner evidence tests, and only then consider the universe acceptance criterion satisfied.
-
-## Safety decision
-
-Until the list is recovered and end-to-end verification passes, keep `DRY_RUN=true`, `ALLOW_LIVE=false`, and block new entries. Do not substitute Spot symbols, a guessed list, or top-volume discovery.
+The ten symbols are now configured. This report does **not** claim the Demo/Testnet exchange has validated all ten or that an end-to-end Futures trade cycle has passed. Keep live Mainnet disabled until those proofs are complete.
