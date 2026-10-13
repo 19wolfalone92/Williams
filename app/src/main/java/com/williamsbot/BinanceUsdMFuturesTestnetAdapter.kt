@@ -86,7 +86,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         }
     }
 
-    fun account(): JSONObject = request("GET", "/fapi/v2/account", emptyMap(), signed = true)
+    fun account(): JSONObject = request("GET", "/fapi/v3/account", emptyMap(), signed = true)
 
     /** Must be checked before trading; the adapter assumes one-way mode (BOTH). */
     fun positionMode(): JSONObject =
@@ -135,7 +135,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     }
 
     fun positions(): JSONArray =
-        JSONArray(requestRaw("GET", "/fapi/v2/positionRisk", emptyMap(), signed = true))
+        JSONArray(requestRaw("GET", "/fapi/v3/positionRisk", emptyMap(), signed = true))
 
     fun order(symbol: String, clientOrderId: String): JSONObject {
         requireSymbol(symbol)
