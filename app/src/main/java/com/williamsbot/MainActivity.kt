@@ -229,6 +229,11 @@ data class Status(
     val scannerConfiguredSymbols: Int = 10,
     val scannerLongCandidates: Int = 0,
     val scannerShortCandidates: Int = 0,
+    val allowLong: Boolean = false,
+    val allowShort: Boolean = false,
+    val futuresLeverage: Int = 0,
+    val futuresMarginType: String = "UNKNOWN",
+    val futuresForceOneWay: Boolean = false,
     val scanDurationMs: Long = 0L,
     val marketWsConnected: Boolean = false,
     val userWsConnected: Boolean = false,
@@ -1232,6 +1237,20 @@ private fun DiagnosticsScreen(
                     status.scannerConfiguredSymbols + " pairs • LONG " +
                     status.scannerLongCandidates + " / SHORT " +
                     status.scannerShortCandidates + " • " + status.scanDurationMs + " ms"
+            )
+        }
+        item {
+            DiagnosticRow(
+                "Directions",
+                "LONG " + if (status.allowLong) "ENABLED" else "BLOCKED" +
+                    " • SHORT " + if (status.allowShort) "ENABLED" else "BLOCKED"
+            )
+        }
+        item {
+            DiagnosticRow(
+                "Futures mode",
+                status.futuresLeverage.toString() + "x • " + status.futuresMarginType +
+                    " • ONE-WAY " + if (status.futuresForceOneWay) "REQUIRED" else "INVALID"
             )
         }
         item { DiagnosticRow("Execution", if (status.p0GatePassed) "READY" else "BLOCKED • " + status.p0GateReason) }
@@ -3219,6 +3238,16 @@ private fun parseStatus(json: JSONObject): Status {
             json.optInt("scanner_long_candidates", 0),
         scannerShortCandidates =
             json.optInt("scanner_short_candidates", 0),
+        allowLong =
+            json.optBoolean("allow_long", false),
+        allowShort =
+            json.optBoolean("allow_short", false),
+        futuresLeverage =
+            json.optInt("futures_leverage", 0),
+        futuresMarginType =
+            json.optString("futures_margin_type", "UNKNOWN"),
+        futuresForceOneWay =
+            json.optBoolean("futures_force_one_way", false),
         scanDurationMs =
             json.optLong(
                 "scanner_duration_ms",
