@@ -745,7 +745,9 @@ def test_ntd_external_fractal_is_initial_entry_and_requires_untriggered_breakout
 def test_ntd_ao_saucer_is_an_explicit_conditional_entry():
     ind = pd.DataFrame({
         "ao": [1.0, 1.1, 1.0, 1.05],
-        "ao_green": [False, True, False, True],
+        # The first Saucer bar may itself be red; only the middle
+        # downswing and final upswing colours are required by NTD.
+        "ao_green": [False, False, False, True],
         "ao_red": [False, False, True, False],
         "high": [100.0, 101.0, 100.5, 101.0],
         "low": [98.0, 99.0, 98.5, 99.0],
@@ -761,6 +763,25 @@ def test_ntd_ao_saucer_is_an_explicit_conditional_entry():
     assert signals[0].side == "BUY"
     assert math.isclose(signals[0].trigger_price, 101.1)
     assert math.isclose(signals[0].protective_reference, 99.0)
+
+
+def test_ntd_bearish_ao_saucer_does_not_require_first_bar_red():
+    ind = pd.DataFrame({
+        "ao": [-1.0, -0.8, -0.9],
+        "ao_green": [False, True, False],
+        "ao_red": [False, False, True],
+        "high": [101.0, 100.5, 100.0],
+        "low": [99.0, 98.5, 98.0],
+        "close": [100.0, 99.0, 99.0],
+    })
+    signals = extract_ntd_ao_signal_specs(
+        "BTCUSDT", ind, side="SHORT", timeframe="5m", tick_size=0.1
+    )
+    assert len(signals) == 1
+    assert signals[0].signal_type == SignalType.AO_SAUCER
+    assert signals[0].side == "SELL"
+    assert signals[0].role == SignalRole.ADD_ON
+    assert math.isclose(signals[0].trigger_price, 97.9)
 
 
 def test_ntd_ao_zero_line_cross_is_directional_and_mirrored():
