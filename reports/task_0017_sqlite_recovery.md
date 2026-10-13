@@ -29,3 +29,8 @@ Android SQLite and Python SQLite are distinct stores without a common atomic tra
 - FI-13B repeats 12 independent temporary-database initialization races and checks worker termination, zero recorded exceptions, both successes, `PRAGMA integrity_check='ok'`, and integrity after reopen. Campaign Python tests passed 262/262 on run [38341931762](https://github.com/19wolfalone92/Williams/actions/runs/38341931762).
 - FI-13 repeats 12 same-process/two-thread claims using independent connections; exactly one claim and one exchange observation are asserted, with zero fake mutations and persisted order identity.
 - Remaining gaps: true multi-process races, process termination during each migration DDL/DML boundary, explicit preservation assertions for populated legacy tables under interrupted migration, lock-timeout/non-lock SQLite error injection, and lease expiry/loss while reconciliation is in flight. P0 remains open.
+
+
+## TASK 001.12 Android evidence correction
+
+At code SHA `b6d43d439a1c49c577570d36332bbe1c60ff7477`, Android job 115116130632 in [run 38342390656](https://github.com/19wolfalone92/Williams/actions/runs/38342390656) passed `:app:testDebugUnitTest`, `:app:lintDebug` and `:app:assembleDebug`. APK SHA-256 `e9ce68cfeac340c09979463aa5a2e0b1a346d08d19403e163a2d99589f254ac6`; provenance matches `b6d43d439a1c49c577570d36332bbe1c60ff7477`; artifact ID 11787686242. This does not close the untested multi-process lease race, interrupted migration matrix, lease expiry during in-flight reconciliation, or lock/non-lock error injection. Report-only commits after this SHA require another exact-HEAD check.
