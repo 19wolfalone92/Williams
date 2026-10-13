@@ -2642,6 +2642,7 @@ private class NativeEngine(
 
     private fun validateNewCampaignEntryAtMutation(symbol: String, purpose: String) {
         if (purpose != "CAMPAIGN_ENTRY" && purpose != "CAMPAIGN_ADD_ON") return
+        checkAutomaticCircuitBreaker(force = true)
         require(dailyRiskMonitorHealthy) {
             "DAILY_RISK_UNAVAILABLE: entry blocked until equity and daily PnL are verified"
         }
@@ -2747,6 +2748,7 @@ private class NativeEngine(
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
         if (reconcileRequired || paused || killLatched) return
+        checkAutomaticCircuitBreaker(force = true)
         if (!dailyRiskMonitorHealthy) {
             lastError = "DAILY_RISK_UNAVAILABLE: new entries blocked until equity and daily PnL are verified"
             return
@@ -5783,10 +5785,10 @@ private class NativeEngine(
         return equity
     }
 
-    private fun checkAutomaticCircuitBreaker() {
+    private fun checkAutomaticCircuitBreaker(force: Boolean = false) {
         if (!running || paused || killLatched) return
         val now = System.currentTimeMillis()
-        if (now - lastEquityCheckMs < 60_000L) return
+        if (!force && now - lastEquityCheckMs < 60_000L) return
         lastEquityCheckMs = now
 
         runCatching {
