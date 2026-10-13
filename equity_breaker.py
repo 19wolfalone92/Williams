@@ -21,8 +21,10 @@ class EquityCircuitBreaker:
             if not math.isfinite(baseline) or baseline <= 0.0:
                 raise ValueError("cannot establish a valid daily equity baseline")
             # Persist day and equity before allowing the first entry of the day.
-            db.state_set("daily_risk_day", today)
+            # Write the baseline first. If the process dies between writes,
+            # the old day key forces a safe re-initialization on the next check.
             db.state_set("daily_start_equity", str(baseline))
+            db.state_set("daily_risk_day", today)
             return baseline
         baseline = float(stored_equity)
         if not math.isfinite(baseline) or baseline <= 0.0:
