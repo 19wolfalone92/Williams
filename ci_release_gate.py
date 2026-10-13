@@ -165,6 +165,7 @@ def main() -> None:
 
     server = read("server.py")
     must(server, '"symbols_configured": int(scanner_cache["symbols_configured"])', "server.py")
+    must(server, "'scanner_universe': list(t.config.symbols)", "server.py")
     must(server, '"long_candidates": int(scanner_cache["long_candidates"])', "server.py")
     must(server, '"short_candidates": int(scanner_cache["short_candidates"])', "server.py")
     must(server, "'futures_leverage': t.config.futures_leverage", "server.py")
@@ -200,6 +201,8 @@ def main() -> None:
     must_not(android, "http://localhost:18080", "MainActivity.kt")
     for needle in (
         "scannerConfiguredSymbols",
+        "scannerUniverse",
+        "Approved Futures universe",
         "scannerLongCandidates",
         "scannerShortCandidates",
         "status.allowLong",
