@@ -70,12 +70,23 @@ class ExecutionBarrier:
         self.context_cache = context_cache
         self.db = db
 
-    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            try:
-                self.db.save_execution_intent(intent, status, reason)
-            except Exception:
-                pass
+    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> bool:
+        """Persist execution state and report failure to the caller.
+
+        A pre-submit intent is a hard safety prerequisite, not best-effort
+        telemetry. Missing storage, a missing persistence API, or any database
+        exception must prevent the exchange mutation.
+        """
+        if self.db is None:
+            return False
+        save = getattr(self.db, "save_execution_intent", None)
+        if not callable(save):
+            return False
+        try:
+            result = save(intent, status, reason)
+            return result is not False
+        except Exception:
+            return False
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
@@ -151,7 +162,10 @@ class ExecutionBarrier:
         pre_submit_checks: Callable[[MarketStateSnapshot], None] | None = None,
     ) -> ExecutionResult:
         with self.context_cache.execution_lock:
-            self._persist(intent, "PENDING")
+            if not self._persist(intent, "PENDING"):
+                reason = "durable_intent_persistence_failed; exchange mutation blocked"
+                self._record("ERROR", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
@@ -200,7 +214,12 @@ class ExecutionBarrier:
                 )
                 raise
 
-            self._persist(intent, "SUBMITTED")
+            status_persisted = self._persist(intent, "SUBMITTED")
+            if not status_persisted:
+                self._record(
+                    "CRITICAL", "execution_reconcile_required", intent,
+                    "Exchange submit returned but SUBMITTED status could not be persisted; reconcile exchange state before any retry",
+                )
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
@@ -209,4 +228,9 @@ class ExecutionBarrier:
             self._record("INFO", "execution_submitted", intent, "Binance accepted request", {
                 "intent_id": intent.intent_id,
             })
-            return ExecutionResult(intent.intent_id, True, response=response)
+            return ExecutionResult(
+                intent.intent_id,
+                True,
+                response=response,
+                reason="" if status_persisted else "submitted_but_durable_status_persistence_failed_reconcile_required",
+            )
