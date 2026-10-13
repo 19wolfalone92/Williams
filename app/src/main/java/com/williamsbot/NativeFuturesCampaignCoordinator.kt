@@ -361,6 +361,32 @@ internal class NativeFuturesCampaignCoordinator(
                 if (symbol !in openBySymbol && status in setOf("OPEN_PROTECTED", "POSITION_OPEN")) {
                     intent.put("exchange_status", "CLOSED_OR_STOPPED")
                         .put("closed_observed_at_ms", System.currentTimeMillis())
+                    // A stop-triggered or manually closed position must not leave a
+                    // closePosition algo armed to affect a future campaign on this symbol.
+                    val knownProtectionIds = listOf(
+                        intent.optString("protection_client_id"),
+                        intent.optString("previous_protection_client_id")
+                    ).filter { it.isNotBlank() }.toSet()
+                    if (knownProtectionIds.isNotEmpty()) {
+                        val algos = adapter.openAlgoOrders(symbol)
+                        for (j in 0 until algos.length()) {
+                            val order = algos.optJSONObject(j) ?: continue
+                            val clientAlgoId = order.optString("clientAlgoId")
+                            if (clientAlgoId !in knownProtectionIds) continue
+                            val algoId = order.optString("algoId")
+                            if (algoId.isNotBlank()) adapter.cancelAlgoOrderById(symbol, algoId)
+                            else if (clientAlgoId.isNotBlank()) adapter.cancelAlgoOrder(symbol, clientAlgoId)
+                            else throw IOException("Cannot identify orphaned protective Futures algo for $symbol")
+                        }
+                        val remaining = adapter.openAlgoOrders(symbol)
+                        if ((0 until remaining.length()).any { j ->
+                            remaining.optJSONObject(j)?.optString("clientAlgoId") in knownProtectionIds
+                        }) {
+                            throw IOException("Orphaned protective Futures algo remains open for flat $symbol")
+                        }
+                        intent.remove("previous_protection_client_id")
+                        intent.remove("previous_protective_stop")
+                    }
                 }
             }
             saveIntents(persisted)
