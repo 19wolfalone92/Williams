@@ -54,6 +54,24 @@ def _frame(medians, highs=None, lows=None, times=None):
     )
 
 
+
+def test_invalid_ohlc_cannot_create_zero_price_indicators_or_fractals():
+    frame = _frame(np.linspace(10.0, 20.0, 160))
+    frame.loc[frame.index[100], ["high", "low"]] = [0.0, 0.0]
+    frame.loc[frame.index[101], "close"] = 0.0
+
+    indicators = calculate_indicators(frame, config_from_env({}))
+
+    assert pd.isna(indicators["high"].iloc[100])
+    assert pd.isna(indicators["low"].iloc[100])
+    assert pd.isna(indicators["ao"].iloc[100])
+    assert not bool(indicators["fractal_up"].iloc[100])
+    assert not bool(indicators["fractal_down"].iloc[100])
+    assert pd.isna(indicators["close"].iloc[101])
+    assert not bool(indicators["long_fractal_signal"].iloc[101])
+    assert not bool(indicators["short_fractal_signal"].iloc[101])
+
+
 def test_smma_fails_closed_on_invalid_seed_and_does_not_silently_reseed_after_gap():
     from strategy import smma
 
