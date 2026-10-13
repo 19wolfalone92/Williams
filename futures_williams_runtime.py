@@ -31,6 +31,7 @@ from williams_signals import (
     extract_short_signal_specs,
     extract_ntd_ao_signal_specs,
     extract_ntd_ac_signal_specs,
+    extract_ntd_fractal_signal_specs,
 )
 from campaign_engine import CampaignEngine
 from equity_breaker import EquityCircuitBreaker
@@ -261,24 +262,34 @@ class FuturesWilliamsScanner:
                 ).lower() == "true",
             )
         elif profile == "NTD_FIVE_DIMENSIONS":
-            # Keep New Trading Dimensions AO entries edition-specific. Do not
-            # silently blend these with TC2's sequential Three Wise Men flow.
-            long_specs = (
-                extract_ntd_ao_signal_specs(
-                    symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
-                )
-                + extract_ntd_ac_signal_specs(
-                    symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
-                )
+            # NTD requires the first valid external fractal to start a campaign.
+            # AO and AC formations are later add-ons, never stand-alone initial
+            # entries. Keep edition-specific signal chronology explicit.
+            long_specs = extract_ntd_fractal_signal_specs(
+                symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
             )
-            short_specs = (
-                extract_ntd_ao_signal_specs(
-                    symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
-                )
-                + extract_ntd_ac_signal_specs(
-                    symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
-                )
+            short_specs = extract_ntd_fractal_signal_specs(
+                symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
             )
+            current = ind.iloc[-1]
+            if bool(current.get("long_fractal_outside", False)):
+                long_specs += (
+                    extract_ntd_ao_signal_specs(
+                        symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
+                    )
+                    + extract_ntd_ac_signal_specs(
+                        symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
+                    )
+                )
+            if bool(current.get("short_fractal_outside", False)):
+                short_specs += (
+                    extract_ntd_ao_signal_specs(
+                        symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
+                    )
+                    + extract_ntd_ac_signal_specs(
+                        symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
+                    )
+                )
         else:
             self.last_signal_profile_error = (
                 "WILLIAMS_SIGNAL_PROFILE must be TC2_THREE_WISE_MEN or NTD_FIVE_DIMENSIONS"
