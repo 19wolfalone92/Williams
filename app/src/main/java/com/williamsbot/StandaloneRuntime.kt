@@ -3308,6 +3308,7 @@ private class NativeEngine(
      * is tripped or unavailable. The exchange order is re-read first and every
      * cancellation is followed by a terminal-state reconciliation.
      */
+    @Suppress("ApplySharedPref")
     private fun cancelRestingCampaignEntriesForDailyRisk(reason: String) {
         val pending = synchronized(pendingEntries) {
             pendingEntries.values.toList()
