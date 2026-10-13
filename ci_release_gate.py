@@ -286,6 +286,7 @@ def main() -> None:
         "test_android_daily_loss_is_rechecked_at_order_admission",
         "test_android_signed_execution_boundary_rejects_legacy_spot_routes",
         "test_android_user_stream_is_not_the_spot_signed_subscription_protocol",
+        "test_android_diagnostics_do_not_fake_self_heal_readiness",
     ):
         must(android_contract, needle, "Android autonomous runtime contract")
 
