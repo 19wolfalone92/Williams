@@ -228,7 +228,7 @@ class FuturesWilliamsScanner:
             point_zero_confirmed=point_zero_confirmed,
             point_zero_score=point_zero_score,
             require_point_zero_for_reversal=os.getenv(
-                "REQUIRE_POINT_ZERO_FOR_WM1", "true"
+                "REQUIRE_POINT_ZERO_FOR_WM1", "false"
             ).lower() == "true",
         )
         short_specs = extract_short_signal_specs(
