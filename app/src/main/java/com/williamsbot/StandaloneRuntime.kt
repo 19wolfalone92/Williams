@@ -8306,7 +8306,14 @@ private class NativeEngine(
         test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
         test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss=0.01")
-        test("self_heal_contract", "runtime", true, "FAIL", "safe_only=true; endpoint=/api/v1/control/self-heal")
+        test(
+            "self_heal_contract",
+            "runtime",
+            running && !reconcileRequired && !killLatched,
+            "FAIL",
+            "running=" + running + "; safe_only=true; reconcile_required=" + reconcileRequired +
+                "; kill_latched=" + killLatched
+        )
         return tests
     }
 
