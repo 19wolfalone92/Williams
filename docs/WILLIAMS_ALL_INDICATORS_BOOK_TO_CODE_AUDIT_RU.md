@@ -33,7 +33,7 @@
 | **Alligator Jaw** SMMA(13), shift 8 | Контекст/«челюсть» | `strategy.py: smma, jaw_shifted` | **CODE-PRESENT**. SMA seed периода используется как инженерная инициализация; точная seed convention не объявляется доказанной авторской формулой без отдельного подтверждения. |
 | **Alligator Teeth** SMMA(8), shift 5 | Balance Line и контроль внешнего фрактала | `strategy.py: teeth_shifted` | **CODE-PRESENT**. Используется как внешний/текущий gate в разных профилях; это не равно полной реализации самостоятельных Balance-Line trades NTD. |
 | **Alligator Lips** SMMA(5), shift 3 | Быстрая линия, контекст и возможный быстрый выход | `strategy.py: lips_shifted` | **CODE-PRESENT**. Числовой порог `MIN_ALLIGATOR_SPREAD_PCT` — **SYSTEM/IMPLEMENTATION RULE**, не авторская универсальная граница «проснулся». |
-| **Сон / пробуждение / еда / насыщение Alligator** | Описывает режим рынка, а не единственный сигнал входа | `alligator_awake`, порядок линий | **PARTIAL**. Есть spread threshold и бычий/медвежий порядок, но полноценная авторская state machine всех режимов не доказана. |
+| **Сон / пробуждение / еда / насыщение Alligator** | Описывает режим рынка, а не единственный сигнал входа | `alligator_awake` (spread threshold) плюс display-only `gator_state` | **PARTIAL**. Диагностические состояния есть, но `MIN_ALLIGATOR_SPREAD_PCT` остаётся system overlay, а state label не заменяет книжную оценку контекста и не является entry gate. |
 | **AO (Awesome Oscillator)** SMA(5, Median) − SMA(34, Median) | Momentum | `strategy.py: ao` | **CODE-PRESENT**. Нужна parity-проверка Python/другие consumers и закрытых баров. |
 | **AO colour / momentum** | Цвет определяется изменением AO относительно предыдущего столбца, а не только знаком AO | `ao_green`, `ao_red`, streak | **CODE-PRESENT**. AO > 0 / < 0 — отдельное свойство; нельзя подменять им цвет/направление. |
 | **AC (Accelerator/Decelerator)** AO − SMA(5, AO) | Изменение momentum | `strategy.py: ac` | **CODE-PRESENT**. Нулевая линия AC сама по себе не должна превращаться в отдельный entry trigger. |
@@ -76,6 +76,7 @@
 - **Trading Chaos Course, сканированные страницы 85–92 (Level III, pp. 10–17),** просмотрены изображения Profitunity Trading Partner, Two-Bar Reversal/Air Bag, T-W-R / 5/34/5 MACD, Fractal (Hump), Thumb Trade, worksheet и checklist. Это последовательный старый учебный процесс, а не один индикатор или синоним TC2 Three Wise Men.
 - **New Trading Dimensions, глава 8 «Торговля с помощью Линии Баланса», печатные страницы 98–113 / PDF 102–112, рисунки 8-5–8-23.** Проверены base-bar rules, BUY-only highs, SELL-only lows, 1-vs-2 new-extreme requirement, special-blue-light relocation, Zone filters, «не кормить Аллигатора» и случаи, когда сигнала нет, потому что рынок продолжает обновлять экстремум без коррекции.
 - **Trading Chaos, глава 6 и раздел Profitunity MACD 5/34/5, включая печатную страницу 59,** подтверждает, что MFI и MACD 5/34/5 являются отдельными частями старой волновой методики. MACD 5/34/5 не заменяет TC2 Super AO; это родственная математическая линия momentum плюс 5-period signal/histogram.
+- **Индикаторная справка MetaTrader 5 по Bill Williams' Indicators / Gator Oscillator** проверена как вторичный reference по точным графическим формулам: upper = abs(Jaw−Teeth), lower = −abs(Teeth−Lips). Это подтверждает визуальный индикатор, но не превращает Gator в обязательный TC2 entry filter.
 
 ## 4. Исправления кода, сделанные в этом проходе
 
@@ -83,7 +84,9 @@
 2. `williams_signals.py`: WM3/NTD потребители используют явную связь confirmation→pivot, а защитный reference охватывает противоположный экстремум всей равной группы.
 3. `wave_engine.py`: structural pivots читают сохранённый confirmation index; двойной up/down fractal не превращается в два упорядоченных pivots.
 4. `strategy.py`: окна Profitunity не маркируют отсутствующие данные как Fading; невалидные сравнения получают `UNKNOWN`.
-5. Добавлен `test_williams_indicator_fidelity.py`: extended equal-high/equal-low confirmation, no-premature-confirmation и MFI warm-up/proxy checks.
+5. `strategy.py`: добавлены явные `profitunity_macd_line/signal/histogram`, `balance_line` (Jaw текущего ТФ) и Gator upper/lower/phase outputs.
+6. Production Futures scanner и exit calculation теперь валидируют канонические параметры Alligator 13/8/5 + shifts 8/5/3, AO 5/34, AC 5, fractal 2/2, Super AO 3. Research callers могут по-прежнему менять конфигурацию, но production не торгует с изменёнными периодами под именем канонического профиля.
+7. Добавлен `test_williams_indicator_fidelity.py`: extended equal-high/equal-low confirmation, no-premature-confirmation и MFI warm-up/proxy checks.
 6. Оба Python CI workflow включают новый регрессионный файл; release gate проверяет наличие новых causal metadata и MFI validity state.
 
 ## 5. Оставшиеся проблемы, которые нельзя честно объявить решёнными
