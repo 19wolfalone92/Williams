@@ -181,16 +181,13 @@ def calculate_indicators(df, cfg):
         x["low"].where(x["bearish_reversal_bar"]).ffill().shift(1)
     )
 
-    # Second Wise Man: Super AO. We use Williams' histogram color definition
-    # (green = current AO above previous AO, red = below), not merely AO > 0.
-    x["long_super_ao_signal"] = (
-        x["super_ao_long"]
-        & x["long_fractal_outside"].shift(1).eq(True)
-    )
-    x["short_super_ao_signal"] = (
-        x["super_ao_short"]
-        & x["short_fractal_outside"].shift(1).eq(True)
-    )
+    # Second Wise Man: Super AO. The signal is the third consecutive AO
+    # bar in the same direction. Do not gate WM2's detection on an external
+    # fractal: that would silently turn a distinct Wise-Man event into a
+    # WM3 prerequisite. Campaign admission and risk/context checks belong to
+    # the downstream decision/execution layer.
+    x["long_super_ao_signal"] = x["super_ao_long"].astype(bool)
+    x["short_super_ao_signal"] = x["super_ao_short"].astype(bool)
 
     # Conservative execution overlay. The counter-trend Wise-Man signals from
     # the book are retained as diagnostics, but disabled for the long-only
