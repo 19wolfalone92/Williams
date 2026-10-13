@@ -193,11 +193,17 @@ internal class NativeFuturesCampaignCoordinator(
                     }
                 }
 
-                matchingIntent?.put("exchange_status", "OPEN_PROTECTED")
-                    ?.put("protection_status", "PROTECTED")
-                    ?.put("protection_client_id", protective?.optString("clientAlgoId", matchingIntent?.optString("protection_client_id") ?: "") ?: "")
-                    ?.put("protective_stop", protective?.optString("triggerPrice", protective?.optString("stopPrice", matchingIntent.optString("protective_stop"))))
-                    ?.put("last_reconciled_ms", System.currentTimeMillis())
+                if (matchingIntent != null) {
+                    val confirmedStop = protective?.optString("triggerPrice")?.takeIf { it.isNotBlank() }
+                        ?: protective?.optString("stopPrice")?.takeIf { it.isNotBlank() }
+                        ?: matchingIntent.optString("protective_stop")
+                    matchingIntent.put("exchange_status", "OPEN_PROTECTED")
+                        .put("protection_status", "PROTECTED")
+                        .put("protection_client_id", protective?.optString("clientAlgoId")
+                            ?.takeIf { it.isNotBlank() } ?: matchingIntent.optString("protection_client_id"))
+                        .put("protective_stop", confirmedStop)
+                        .put("last_reconciled_ms", System.currentTimeMillis())
+                }
             }
 
             // Once Binance reports the symbol flat, prior position intents are terminal.
@@ -556,7 +562,6 @@ internal class NativeFuturesCampaignCoordinator(
         when (plan.direction) {
             Direction.LONG -> {
                 require(stop < price) { "LONG protective stop must be below entry" }
-                require(plan.kind != EntryKind.STOP || true)
             }
             Direction.SHORT -> {
                 require(stop > price) { "SHORT protective stop must be above entry" }
