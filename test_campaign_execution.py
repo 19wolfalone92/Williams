@@ -178,7 +178,7 @@ def test_execution_barrier_blocks_non_h1_campaign_entry_without_order_mutation(m
 
     now = int(time.time() * 1000)
     monkeypatch.setenv("EXECUTION_TIMEFRAME", "1h")
-    barrier = ExecutionBarrier(FakeCache(), None)
+    barrier = ExecutionBarrier(FakeCache(), None, require_durable_intent=False)
     attempts = []
 
     cases = [
@@ -207,7 +207,7 @@ def test_execution_barrier_blocks_h1_signal_when_runtime_config_is_non_h1(monkey
 
     now = int(time.time() * 1000)
     monkeypatch.setenv("EXECUTION_TIMEFRAME", "5m")
-    barrier = ExecutionBarrier(FakeCache(), None)
+    barrier = ExecutionBarrier(FakeCache(), None, require_durable_intent=False)
     attempts = []
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "STOP_LOSS", {},
@@ -229,7 +229,7 @@ def test_execution_barrier_blocks_entry_aliases_and_addons_before_submit(monkeyp
 
     now = int(time.time() * 1000)
     monkeypatch.setenv("EXECUTION_TIMEFRAME", "1h")
-    barrier = ExecutionBarrier(FakeCache(), None)
+    barrier = ExecutionBarrier(FakeCache(), None, require_durable_intent=False)
     calls = []
     for purpose in ("ENTRY", "ADD_ON", "CAMPAIGN_ADD_ON"):
         intent = OrderIntent.new(
@@ -253,7 +253,7 @@ def test_execution_barrier_requires_last_mile_callback_for_new_entry(monkeypatch
 
     now = int(time.time() * 1000)
     monkeypatch.setenv("EXECUTION_TIMEFRAME", "1h")
-    barrier = ExecutionBarrier(FakeCache(), None)
+    barrier = ExecutionBarrier(FakeCache(), None, require_durable_intent=False)
     calls = []
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "STOP_LOSS", {},
@@ -276,7 +276,7 @@ def test_execution_barrier_does_not_apply_entry_timeframe_gate_to_campaign_exit(
     from execution_barrier import OrderIntent
 
     monkeypatch.setenv("EXECUTION_TIMEFRAME", "5m")
-    barrier = ExecutionBarrier(FakeCache(), None)
+    barrier = ExecutionBarrier(FakeCache(), None, require_durable_intent=False)
     intent = OrderIntent.new(
         "BTCUSDT", "SELL", "MARKET", {},
         purpose="CAMPAIGN_EXIT",
