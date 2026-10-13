@@ -55,6 +55,11 @@ class SignalType(str, Enum):
     SUPER_AO = "SUPER_AO"
     FRACTAL = "FRACTAL"
     THREE_GREEN_BARS = "THREE_GREEN_BARS"
+    # New Trading Dimensions AO signal family. These are kept distinct from
+    # TC2 Wise Men so the runtime can select an edition-specific signal profile.
+    AO_SAUCER = "AO_SAUCER"
+    AO_ZERO_LINE = "AO_ZERO_LINE"
+    AO_TWIN_PEAKS = "AO_TWIN_PEAKS"
 
 
 class SignalRole(str, Enum):
