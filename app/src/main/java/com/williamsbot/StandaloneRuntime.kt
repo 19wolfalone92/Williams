@@ -245,7 +245,9 @@ private class StandaloneServer(private val context: Context) {
                 "positions_json",
                 "pending_entries_json",
                 "futures_daily_loss_pct",
-                "futures_daily_pnl_usdt"
+                "futures_daily_pnl_usdt",
+                "reconcile_required",
+                "kill_latched"
             ) + prefs.all.keys.filter { it.startsWith("futures_day_start_equity_") }
         )
     }
@@ -859,29 +861,43 @@ private class NativeEngine(
         }
 
         reconcileRequired =
-            prefs.getBoolean("reconcile_required", false)
+            (executionStore.readState("reconcile_required")?.toBooleanStrictOrNull()
+                ?: prefs.getBoolean("reconcile_required", false))
         killLatched =
-            prefs.getBoolean("kill_latched", false)
+            (executionStore.readState("kill_latched")?.toBooleanStrictOrNull()
+                ?: prefs.getBoolean("kill_latched", false))
+    }
+
+    /**
+     * Journal safety latches in SQLite before mirroring compatibility preferences.
+     * A failed SQLite write always leaves the runtime fail-closed in memory.
+     */
+    private fun persistSafetyFlag(key: String, value: Boolean): Boolean {
+        val durable = executionStore.writeState(key, value.toString())
+        runCatching { prefs.edit().putBoolean(key, value).commit() }
+        if (!durable) {
+            lastError = "SQLite safety-latch write failed for $key=$value"
+            if (key == "reconcile_required") reconcileRequired = true
+            if (key == "kill_latched") killLatched = true
+            return false
+        }
+        return true
     }
 
     private fun setReconcileRequired(reason: String) {
         reconcileRequired = true
+        persistSafetyFlag("reconcile_required", true)
         stateMachine.force(
             TradingState.RECONCILE_REQUIRED,
             reason
         )
-        prefs.edit()
-            .putBoolean("reconcile_required", true)
-            .apply()
         lastError = "RECONCILE_REQUIRED: " + reason
         stop()
     }
 
     private fun clearReconcileRequired() {
+        if (!persistSafetyFlag("reconcile_required", false)) return
         reconcileRequired = false
-        prefs.edit()
-            .putBoolean("reconcile_required", false)
-            .apply()
         if (!killLatched && pendingEntries.isEmpty() && positions.isEmpty()) {
             stateMachine.force(
                 TradingState.READY_FLAT,
@@ -1077,15 +1093,22 @@ private class NativeEngine(
         val reconciliation = futuresCampaignCoordinator.reconcile()
         if (!reconciliation.optBoolean("ok", false)) {
             reconcileRequired = true
-            prefs.edit().putBoolean("reconcile_required", true).putBoolean("auto_run", false).commit()
+            persistSafetyFlag("reconcile_required", true)
+            prefs.edit().putBoolean("auto_run", false).commit()
             lastError = reconciliation.optString("blocker", "Futures reconciliation failed")
             stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures reconciliation failed")
             return JSONObject().put("started", false).put("state", futuresCampaignCoordinator.state.name)
                 .put("execution_enabled", false).put("futures_reconciliation", reconciliation)
         }
 
+        if (!persistSafetyFlag("reconcile_required", false)) {
+            return JSONObject().put("started", false)
+                .put("state", "RECONCILE_REQUIRED")
+                .put("execution_enabled", false)
+                .put("blocker", "SQLite could not persist the cleared reconciliation latch")
+        }
         reconcileRequired = false
-        prefs.edit().putBoolean("reconcile_required", false).putBoolean("auto_run", true).commit()
+        prefs.edit().putBoolean("auto_run", true).commit()
         val account = futuresCampaignCoordinator.accountSnapshot()
         liveUsdtBalance = account.optString("availableBalance").toDoubleOrNull() ?: 0.0
         restAccountReady = account.has("availableBalance") &&
@@ -1188,7 +1211,7 @@ private class NativeEngine(
             cancellation.optString("state") == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED.name
         ) {
             reconcileRequired = true
-            prefs.edit().putBoolean("reconcile_required", true).commit()
+            persistSafetyFlag("reconcile_required", true)
             lastError = if (!cancellation.optBoolean("ok", false)) {
                 "Stop completed locally, but pending Futures entry cancellation is unconfirmed: " +
                     cancellation.optString("error", cancellation.optString("blocker", "unknown cancellation state"))
@@ -1230,7 +1253,8 @@ private class NativeEngine(
         killLatched = true
         paused = true
         running = false
-        prefs.edit().putBoolean("kill_latched", true).putBoolean("auto_run", false).commit()
+        persistSafetyFlag("kill_latched", true)
+        prefs.edit().putBoolean("auto_run", false).commit()
         worker?.interrupt()
         worker = null
         marketSocket?.close(1000, "USD-M Futures kill switch")
@@ -1253,7 +1277,7 @@ private class NativeEngine(
             errors += "pending entry cancellation unresolved: " +
                 cancellation.optString("blocker", cancellation.optString("error", "unknown exchange state"))
             reconcileRequired = true
-            prefs.edit().putBoolean("reconcile_required", true).commit()
+            persistSafetyFlag("reconcile_required", true)
         }
         val rows = runCatching { futuresCampaignCoordinator.positionsSnapshot() }.getOrElse {
             errors += "Futures position query: " + (it.message ?: it.javaClass.simpleName)
@@ -1317,11 +1341,11 @@ private class NativeEngine(
         require(!hasPendingOrder && futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.READY) {
             "Kill switch reset refused: pending or unresolved Futures intent remains."
         }
+        check(persistSafetyFlag("kill_latched", false)) {
+            "SQLite could not persist kill-switch reset; kill switch remains latched"
+        }
         killLatched = false
         stateMachine.force(TradingState.READY_FLAT, "Futures account flat and kill switch reset")
-        prefs.edit()
-            .putBoolean("kill_latched", false)
-            .apply()
         lastError = null
         return JSONObject()
             .put("reset", true)
@@ -1346,7 +1370,9 @@ private class NativeEngine(
         val result = futuresCampaignCoordinator.reconcile()
         val ok = result.optBoolean("ok", false)
         reconcileRequired = !ok
-        prefs.edit().putBoolean("reconcile_required", !ok).commit()
+        check(persistSafetyFlag("reconcile_required", !ok)) {
+            "SQLite could not persist recovery reconciliation state"
+        }
         if (ok) {
             when (futuresCampaignCoordinator.state) {
                 NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED ->
@@ -3707,12 +3733,12 @@ private class NativeEngine(
         if (!reconciliation.optBoolean("ok", false)) {
             scannerError = reconciliation.optString("blocker", "Futures reconciliation failed")
             reconcileRequired = true
-            prefs.edit().putBoolean("reconcile_required", true).commit()
+            persistSafetyFlag("reconcile_required", true)
             stateMachine.force(TradingState.RECONCILE_REQUIRED, scannerError ?: "Futures reconciliation failed")
             return false
         }
         reconcileRequired = false
-        prefs.edit().putBoolean("reconcile_required", false).commit()
+        persistSafetyFlag("reconcile_required", false)
         when (futuresCampaignCoordinator.state) {
             NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED ->
                 stateMachine.force(TradingState.PROTECTED, "Exchange confirms Futures position protected")
@@ -3723,14 +3749,14 @@ private class NativeEngine(
             NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
             NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED -> {
                 reconcileRequired = true
-                prefs.edit().putBoolean("reconcile_required", true).commit()
+                persistSafetyFlag("reconcile_required", true)
                 stateMachine.force(TradingState.RECONCILE_REQUIRED, futuresCampaignCoordinator.lastBlocker ?: "Futures protection missing")
                 return false
             }
             NativeFuturesCampaignCoordinator.State.EXIT_PENDING,
             NativeFuturesCampaignCoordinator.State.UNINITIALIZED -> {
                 reconcileRequired = true
-                prefs.edit().putBoolean("reconcile_required", true).commit()
+                persistSafetyFlag("reconcile_required", true)
                 stateMachine.force(TradingState.RECONCILE_REQUIRED, "Futures coordinator not in a tradable reconciled state")
                 return false
             }
@@ -3912,7 +3938,7 @@ private class NativeEngine(
             lastError = result.optString("blocker", result.optString("error"))
             if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED) {
                 reconcileRequired = true
-                prefs.edit().putBoolean("reconcile_required", true).commit()
+                persistSafetyFlag("reconcile_required", true)
                 stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures submission unresolved")
             }
         } else {
@@ -7886,7 +7912,7 @@ private class NativeEngine(
             runCatching { futuresPositionSnapshot() }.getOrElse { failure ->
                 futuresPositionSnapshotError = failure.message ?: failure.javaClass.simpleName
                 reconcileRequired = true
-                prefs.edit().putBoolean("reconcile_required", true).commit()
+                persistSafetyFlag("reconcile_required", true)
                 lastError = "Futures position snapshot unavailable; trading blocked: " + futuresPositionSnapshotError
                 stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures position snapshot unavailable")
                 JSONArray()
@@ -8331,7 +8357,7 @@ private class NativeEngine(
                 actions.put("futures_exchange_reconciliation")
             } else if (reconciliation != null) {
                 reconcileRequired = true
-                prefs.edit().putBoolean("reconcile_required", true).commit()
+                persistSafetyFlag("reconcile_required", true)
                 actions.put("futures_reconciliation_blocked")
             }
             if (historyReady && !scanning && !paused) {
