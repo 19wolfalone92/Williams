@@ -29,6 +29,20 @@ def context(symbol="BTCUSDT", interval="1h", allow_long=True, allow_short=False)
     )
 
 
+class _DurableBarrierDB:
+    def save_execution_intent(self, intent, status, reason=""):
+        return None
+
+    def save_execution_event(self, intent_id, event, payload=None):
+        return None
+
+    def state_get(self, key, default=None):
+        return default
+
+    def claim_signal_once(self, signal_id, canonical_payload):
+        return "CLAIMED"
+
+
 def test_copy_on_write_versions_and_immutable_snapshot():
     cache = ContextCache()
     first = cache.publish(context())
@@ -41,7 +55,7 @@ def test_copy_on_write_versions_and_immutable_snapshot():
 def test_execution_barrier_rejects_stale_context():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, db=_DurableBarrierDB())
     snap = cache.snapshot()
     cache.publish(context())
     now_ms = int(time.time() * 1000)
