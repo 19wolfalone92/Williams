@@ -110,8 +110,28 @@ internal class BinanceUsdMFuturesTestnetAdapter(
 
     fun setLeverage(symbol: String, leverage: Int): JSONObject {
         requireSymbol(symbol)
-        require(leverage in 1..20) { "Leverage outside explicitly supported safety range" }
+        require(leverage in 1..2) { "Futures leverage is capped at 2x by this runtime" }
         return request("POST", "/fapi/v1/leverage", mapOf("symbol" to symbol, "leverage" to leverage.toString()), signed = true)
+    }
+
+    /** Idempotently enforce this bot's account policy before entry. */
+    fun ensureIsolatedTwoX(symbol: String) {
+        try {
+            setIsolatedMargin(symbol)
+        } catch (failure: IOException) {
+            // Binance returns -4046 when the requested margin type is already active.
+            if (!failure.message.orEmpty().contains("-4046")) throw failure
+        }
+        setLeverage(symbol, 2)
+    }
+
+    fun incomeHistory(startTime: Long, endTime: Long = System.currentTimeMillis()): JSONArray {
+        require(startTime >= 0L && endTime >= startTime)
+        return JSONArray(requestRaw("GET", "/fapi/v1/income", mapOf(
+            "startTime" to startTime.toString(),
+            "endTime" to endTime.toString(),
+            "limit" to "1000"
+        ), signed = true))
     }
 
     fun positions(): JSONArray =
@@ -151,6 +171,26 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         return JSONObject(requestRaw("DELETE", "/fapi/v1/algoOrder", mapOf(
             "symbol" to symbol, "clientAlgoId" to clientAlgoId
         ), signed = true))
+    }
+
+    fun cancelAlgoOrderById(symbol: String, algoId: String): JSONObject {
+        requireSymbol(symbol)
+        require(algoId.isNotBlank())
+        return JSONObject(requestRaw("DELETE", "/fapi/v1/algoOrder", mapOf(
+            "symbol" to symbol, "algoId" to algoId
+        ), signed = true))
+    }
+
+    fun cancelAllAlgoOrders(symbol: String) {
+        val orders = openAlgoOrders(symbol)
+        for (i in 0 until orders.length()) {
+            val row = orders.optJSONObject(i) ?: continue
+            val id = row.optString("algoId", "")
+            val clientId = row.optString("clientAlgoId", "")
+            if (id.isNotBlank()) cancelAlgoOrderById(symbol, id)
+            else if (clientId.isNotBlank()) cancelAlgoOrder(symbol, clientId)
+            else throw IOException("Cannot safely cancel unidentified Futures algo order for $symbol")
+        }
     }
 
     /** Explicit direction API prevents strategy code from accidentally mapping SHORT to BUY. */
