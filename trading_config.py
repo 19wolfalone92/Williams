@@ -118,12 +118,31 @@ class TradingConfig:
             market = "futures_usdt"
         default_symbols = DEFAULT_FUTURES_SYMBOLS if market == "futures_usdt" else DEFAULT_SYMBOLS
         symbols = _csv(source, "WILLIAMS_SYMBOLS", default_symbols)
-        # ALL/AUTO/* means use the market-specific autonomous scanner universe.
-        # Keep a real seed symbol for legacy status/chart paths instead of treating ALL as a symbol.
+        # ALL/AUTO/* is a compatibility alias for the approved market-specific
+        # list, never permission to discover arbitrary contracts.
         if len(symbols) == 1 and symbols[0].upper() in {"ALL", "AUTO", "*"}:
             symbols = default_symbols
-        # AUTO_SCAN_SYMBOLS remains a backwards-compatible override.
-        if str(source.get("AUTO_SCAN_SYMBOLS", "")).strip():
+
+        raw_auto_symbols = str(source.get("AUTO_SCAN_SYMBOLS", "")).strip()
+        if market == "futures_usdt":
+            # The Futures scanner, history loader, risk engine and UI must agree
+            # on one fixed ten-contract universe. Fail closed on configuration
+            # drift instead of silently scanning a different set.
+            if symbols != DEFAULT_FUTURES_SYMBOLS:
+                raise ValueError(
+                    "WILLIAMS_SYMBOLS must match the approved ten-symbol Futures universe"
+                )
+            if raw_auto_symbols:
+                auto_symbols = _csv(source, "AUTO_SCAN_SYMBOLS", default_symbols)
+                if len(auto_symbols) == 1 and auto_symbols[0].upper() in {"ALL", "AUTO", "*"}:
+                    auto_symbols = default_symbols
+                if auto_symbols != DEFAULT_FUTURES_SYMBOLS:
+                    raise ValueError(
+                        "AUTO_SCAN_SYMBOLS cannot override the fixed Futures universe"
+                    )
+            symbols = DEFAULT_FUTURES_SYMBOLS
+        elif raw_auto_symbols:
+            # Legacy Spot mode retains its own market-specific configuration.
             symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
 
         max_positions = max(0, _int(source, "MAX_OPEN_POSITIONS", 5))
