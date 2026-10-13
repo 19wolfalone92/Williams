@@ -6594,8 +6594,9 @@ private class NativeEngine(
                 trigger <= 0.0 || stop <= trigger || trigger >= current
             ) return@mapNotNull null
             signal.copy(
-                signalId = signal.signalId.replace(":",
-                    ":SHORT:", ignoreCase = false),
+                signalId = campaignSignalId(
+                    symbol, frame, "SHORT_" + signal.type, signal.signalBarTimeMs
+                ),
                 type = "SHORT_" + signal.type,
                 triggerPrice = trigger,
                 protectivePrice = stop,
