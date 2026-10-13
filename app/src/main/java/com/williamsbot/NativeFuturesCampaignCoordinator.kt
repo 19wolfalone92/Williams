@@ -89,6 +89,48 @@ internal class NativeFuturesCampaignCoordinator(
                     latestEntryIndexBySymbol[item.optString("symbol").uppercase(Locale.US)] = i
                 }
             }
+            val activeEntryClientIds = mutableSetOf<String>()
+            val activeProtectionClientIds = mutableSetOf<String>()
+            for (i in 0 until persisted.length()) {
+                val item = persisted.optJSONObject(i) ?: continue
+                if (item.optString("intent_role", "ENTRY") != "ENTRY") continue
+                val status = item.optString("exchange_status").uppercase(Locale.US)
+                val entryId = item.optString("client_id")
+                if (status in activeStatuses && entryId.isNotBlank()) activeEntryClientIds += entryId
+                if (status in activeStatuses || status in setOf("OPEN_PROTECTED", "POSITION_OPEN")) {
+                    item.optString("protection_client_id").takeIf { it.isNotBlank() }
+                        ?.let { activeProtectionClientIds += it }
+                }
+            }
+            // A manual or orphaned order can create exposure without any local intent.
+            // Block startup if any account-wide open order cannot be tied to this bot's
+            // durable intent journal; never silently adopt or duplicate it.
+            val allOpenOrders = adapter.allOpenOrders()
+            for (i in 0 until allOpenOrders.length()) {
+                val order = allOpenOrders.optJSONObject(i)
+                    ?: throw IllegalStateException("Malformed account-wide Futures open-order row")
+                val symbol = order.optString("symbol").uppercase(Locale.US)
+                val clientId = order.optString("clientOrderId")
+                if (symbol !in allowedSymbols || clientId !in activeEntryClientIds) {
+                    throw IllegalStateException(
+                        "Unmanaged Futures open order detected ($symbol/$clientId); cancel/reconcile manually before trading"
+                    )
+                }
+            }
+            val allOpenAlgoOrders = adapter.allOpenAlgoOrders()
+            for (i in 0 until allOpenAlgoOrders.length()) {
+                val order = allOpenAlgoOrders.optJSONObject(i)
+                    ?: throw IllegalStateException("Malformed account-wide Futures algo-order row")
+                val symbol = order.optString("symbol").uppercase(Locale.US)
+                val clientId = order.optString("clientAlgoId")
+                if (symbol !in allowedSymbols ||
+                    (clientId !in activeEntryClientIds && clientId !in activeProtectionClientIds)
+                ) {
+                    throw IllegalStateException(
+                        "Unmanaged Futures conditional/algo order detected ($symbol/$clientId); reconcile manually before trading"
+                    )
+                }
+            }
             var hasPendingExit = false
             // Resolve persisted entry and exit intents against Binance. Older completed
             // campaigns on a symbol must not be mistaken for the campaign now in market.
