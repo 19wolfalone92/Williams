@@ -6,7 +6,10 @@ import pandas as pd
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingSignal, SignalRole, SignalSpec, SignalState, SignalType, stop_only_reduces_risk
 from futures_williams_runtime import FuturesWilliamsRuntime, FuturesWilliamsScanner
-from williams_signals import extract_long_signal_specs, extract_short_signal_specs, _latest_super_ao, _latest_three_price_bar_signal
+from williams_signals import (
+    extract_long_signal_specs, extract_short_signal_specs,
+    extract_ntd_ao_signal_specs, _latest_super_ao, _latest_three_price_bar_signal,
+)
 
 
 def test_tc2_three_bullish_price_bars_create_add_on_not_initial_entry():
@@ -660,3 +663,69 @@ def test_tc2_wm1_is_not_blocked_by_directional_htf_confirmation_policy():
     assert _requires_directional_htf_confirmation(SignalType.REVERSAL) is False
     assert _requires_directional_htf_confirmation(SignalType.SUPER_AO) is True
     assert _requires_directional_htf_confirmation(SignalType.FRACTAL) is True
+
+
+
+def test_ntd_ao_saucer_is_an_explicit_conditional_entry():
+    ind = pd.DataFrame({
+        "ao": [1.0, 1.1, 1.0, 1.05],
+        "ao_green": [False, True, False, True],
+        "ao_red": [False, False, True, False],
+        "high": [100.0, 101.0, 100.5, 101.0],
+        "low": [98.0, 99.0, 98.5, 99.0],
+        "close": [99.0, 100.0, 99.0, 100.0],
+        "teeth_shifted": [99.0, 99.5, 99.0, 99.5],
+    })
+    signals = extract_ntd_ao_signal_specs(
+        "BTCUSDT", ind, side="LONG", timeframe="5m", tick_size=0.1
+    )
+    assert len(signals) == 1
+    assert signals[0].signal_type == SignalType.AO_SAUCER
+    assert signals[0].side == "BUY"
+    assert math.isclose(signals[0].trigger_price, 101.1)
+    assert math.isclose(signals[0].protective_reference, 99.0)
+
+
+def test_ntd_ao_zero_line_cross_is_directional_and_mirrored():
+    long_ind = pd.DataFrame({
+        "ao": [-0.2, -0.05, 0.1],
+        "ao_green": [False, True, True],
+        "ao_red": [False, False, False],
+        "high": [100.0, 100.5, 101.0],
+        "low": [98.0, 98.5, 99.0],
+        "close": [99.0, 100.0, 100.0],
+    })
+    short_ind = pd.DataFrame({
+        "ao": [0.2, 0.05, -0.1],
+        "ao_green": [False, False, False],
+        "ao_red": [False, True, True],
+        "high": [102.0, 101.5, 101.0],
+        "low": [100.0, 99.5, 99.0],
+        "close": [101.0, 100.0, 100.0],
+    })
+    long_signals = extract_ntd_ao_signal_specs(
+        "BTCUSDT", long_ind, side="LONG", timeframe="5m", tick_size=0.1
+    )
+    short_signals = extract_ntd_ao_signal_specs(
+        "BTCUSDT", short_ind, side="SHORT", timeframe="5m", tick_size=0.1
+    )
+    assert [s.signal_type for s in long_signals] == [SignalType.AO_ZERO_LINE]
+    assert [s.signal_type for s in short_signals] == [SignalType.AO_ZERO_LINE]
+    assert long_signals[0].side == "BUY"
+    assert short_signals[0].side == "SELL"
+
+
+def test_ntd_ao_twin_peaks_requires_second_peak_closer_to_zero():
+    ind = pd.DataFrame({
+        "ao": [-0.5, -1.0, -0.6, -0.8, -0.4],
+        "ao_green": [False, False, True, False, True],
+        "ao_red": [False, True, False, True, False],
+        "high": [100.0, 99.0, 100.0, 99.5, 101.0],
+        "low": [98.0, 97.0, 98.0, 97.5, 99.0],
+        "close": [99.0, 98.0, 99.0, 98.5, 100.0],
+    })
+    signals = extract_ntd_ao_signal_specs(
+        "BTCUSDT", ind, side="LONG", timeframe="5m", tick_size=0.1
+    )
+    assert len(signals) == 1
+    assert signals[0].signal_type == SignalType.AO_TWIN_PEAKS
