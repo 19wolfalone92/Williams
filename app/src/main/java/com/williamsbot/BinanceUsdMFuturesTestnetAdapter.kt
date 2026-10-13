@@ -147,7 +147,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         require(direction == "LONG" || direction == "SHORT") { "Direction must be LONG or SHORT" }
         return newOrder(
             symbol = symbol,
-            side = if (direction == "LONG") "BUY" else "SELL",
+            side = entrySide(direction),
             quantity = quantity,
             reduceOnly = false,
             clientOrderId = clientOrderId
@@ -164,7 +164,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         require(direction == "LONG" || direction == "SHORT") { "Direction must be LONG or SHORT" }
         return newOrder(
             symbol = symbol,
-            side = if (direction == "LONG") "SELL" else "BUY",
+            side = closeSide(direction),
             quantity = quantity,
             reduceOnly = true,
             clientOrderId = clientOrderId
@@ -297,6 +297,16 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     }
 
     companion object {
+        internal fun entrySide(direction: String): String {
+            require(direction == "LONG" || direction == "SHORT") { "Direction must be LONG or SHORT" }
+            return if (direction == "LONG") "BUY" else "SELL"
+        }
+
+        internal fun closeSide(direction: String): String {
+            require(direction == "LONG" || direction == "SHORT") { "Direction must be LONG or SHORT" }
+            return if (direction == "LONG") "SELL" else "BUY"
+        }
+
         val APPROVED_SYMBOLS: Set<String> = setOf(
             "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
             "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
