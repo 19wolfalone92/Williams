@@ -477,6 +477,41 @@ class Trader:
         a=self.client.account()
         return next((float(b['free'])+float(b['locked']) for b in a.get('balances',[]) if b.get('asset')==self.base_asset),0.0)
 
+    def _daily_risk_inputs(self):
+        """Build a portfolio-wide daily-risk snapshot; missing marks block entries."""
+        import math
+
+        account = self.client.account()
+        balances = account.get('balances', [])
+        usdt = next(
+            (
+                float(b.get('free', 0) or 0) + float(b.get('locked', 0) or 0)
+                for b in balances
+                if str(b.get('asset', '')).upper() == 'USDT'
+            ),
+            0.0,
+        )
+        equity = usdt
+        unrealized = 0.0
+        for trade in self.db.open_trades():
+            symbol = str(trade.get('symbol', '')).upper()
+            qty = float(trade.get('quantity', 0) or 0)
+            entry = float(trade.get('entry_price', 0) or 0)
+            if not symbol or qty <= 0 or entry <= 0:
+                raise RuntimeError('daily risk blocked: invalid managed open-trade record')
+            mark = float(self.client.ticker_price(symbol).get('price', 0) or 0)
+            if not math.isfinite(mark) or mark <= 0:
+                raise RuntimeError('daily risk blocked: fresh mark unavailable for ' + symbol)
+            equity += qty * mark
+            unrealized += (mark - entry) * qty
+        fees = float(self.db.conn.execute(
+            "SELECT COALESCE(SUM(fees),0) FROM trades "
+            "WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
+        ).fetchone()[0] or 0.0)
+        if not all(math.isfinite(value) for value in (equity, unrealized, fees)):
+            raise RuntimeError('daily risk blocked: non-finite portfolio snapshot')
+        return equity, unrealized, fees
+
     def bot_base_balance(self, total_balance=None):
         if total_balance is None:
             total_balance=self.base_balance_total()
@@ -1061,7 +1096,10 @@ class Trader:
                 raise RuntimeError('BUY blocked: another entry intent is already reserved')
             if self.db.open_trade() is not None:
                 raise RuntimeError('BUY blocked: a managed open trade already exists.')
-            equity_ok, equity_reason = self.equity_breaker.check(self.db, self.available_quote(), self.symbol)
+            equity, unrealized, fees = self._daily_risk_inputs()
+            equity_ok, equity_reason = self.equity_breaker.check(
+                self.db, equity, None, unrealized, fees
+            )
             if not equity_ok:
                 raise RuntimeError(equity_reason)
             if not (os.getenv("WILLIAMS_TEST_DB") and not hasattr(self.client, "book_ticker")):
