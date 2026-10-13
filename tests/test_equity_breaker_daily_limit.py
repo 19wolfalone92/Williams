@@ -49,3 +49,36 @@ def test_daily_loss_breaker_blocks_when_equity_is_zero():
     )
     assert allowed is False
     assert reason == "equity is zero"
+
+class _DBWithoutDailyPnl(_DB):
+    pnl_today_all = None
+
+
+def test_daily_loss_breaker_fails_closed_when_realized_pnl_is_unavailable():
+    db = _DBWithoutDailyPnl()
+    allowed, reason = EquityCircuitBreaker(0.03).check(
+        db, current_equity_quote=1000.0
+    )
+    assert allowed is False
+    assert "daily realized PnL unavailable" in reason
+
+
+def test_database_reports_realized_pnl_across_all_symbols(tmp_path):
+    from db import Database
+
+    db = Database(str(tmp_path / "daily-risk.sqlite3"))
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    db.conn.executemany(
+        "INSERT INTO trades(entry_time, exit_time, symbol, pnl, fees) VALUES(?,?,?,?,?)",
+        [
+            (now, now, "BTCUSDT", -12.0, 0.5),
+            (now, now, "ETHUSDT", -18.0, 0.5),
+            (now, None, "SOLUSDT", -99.0, 0.0),
+        ],
+    )
+    db.conn.commit()
+    try:
+        assert db.pnl_today_all() == pytest.approx(-30.0)
+        assert db.pnl_today("BTCUSDT") == pytest.approx(-12.0)
+    finally:
+        db.conn.close()
