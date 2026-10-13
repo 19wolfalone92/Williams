@@ -526,10 +526,10 @@ private class NativeEngine(
     // Futures-native public market data; the legacy Spot account/order transport remains
     // hard-disabled below until every remaining market/execution path is migrated.
     private val futuresMarketData = BinanceUsdMFuturesMarketData(http)
-    // SAFETY BLOCKER: this native adapter still speaks Spot /api/v3 (Spot account, OCO,
-    // and BUY-only campaign execution). It is NOT a USDⓈ-M Futures adapter. Never permit
-    // order mutation until the Futures REST + position/protection/recovery contract is wired.
-    private val futuresExecutionAdapterReady = false
+    // Runtime execution is routed through the local USD-M Futures adapter/coordinator below.
+    // Any leftover signed Spot mutation is blocked at the signedRequest boundary.
+    private val futuresExecutionAdapterReady = true
+    @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
         NativeFuturesCampaignCoordinator(prefs) {
             BinanceUsdMFuturesTestnetAdapter(key(), secret(), http)
@@ -595,7 +595,7 @@ private class NativeEngine(
 
     private val scanCacheTtlMs = 12_000L
     private val deepWatchTopN = 10
-    private val scannerUniverseLabel = "CORE_5_BTC_ETH_BNB_SOL_XRP"
+    private val scannerUniverseLabel = "USD_M_FUTURES_TESTNET_10"
 
     @Volatile
     private var running = false
@@ -623,16 +623,16 @@ private class NativeEngine(
     private val maxOpenPositions: Int
         get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
     private val campaignEngineEnabled: Boolean
-        get() = prefs.getBoolean("campaign_engine_enabled", true)
+        get() = true
     private val campaignExecutionTimeframe: String
-        get() = prefs.getString("campaign_execution_timeframe", "1h") ?: "1h"
-    private val campaignRiskLimitPct = 0.005
+        get() = "1h"
+    private val campaignRiskLimitPct = 0.006
     private val campaignInitialRiskPct = 0.002
     private val campaignAddRiskCapPct = 0.002
     private val campaignTrailBars: Int
         get() = prefs.getInt("campaign_trail_bars", 5).coerceIn(3, 5)
-    private val maxTotalRiskPct = 0.01
-    private val maxRiskPerTradePct = 0.005
+    private val maxTotalRiskPct = 0.006
+    private val maxRiskPerTradePct = 0.0025
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
     private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
@@ -1551,6 +1551,9 @@ private class NativeEngine(
         path: String,
         params: String
     ): JSONObject {
+        require(!(path.startsWith("/api/v3/") && method != "GET")) {
+            "SECURITY_BLOCK: Spot order mutations are disabled; use USD-M Futures execution coordinator"
+        }
         var lastBody = "{}"
         repeat(2) { attempt ->
             val query = if (params.isBlank()) {
@@ -2438,39 +2441,25 @@ private class NativeEngine(
     }
 
     private fun loadUniverse(): Triple<List<String>, Map<String, Double>, Map<String, Double>> {
-        val encodedSymbols = URLEncoder.encode(
-            JSONArray(coreSymbols).toString(),
-            StandardCharsets.UTF_8.name()
-        )
-
-        val volumeRows = JSONArray(
-            getBody("/api/v3/ticker/24hr?symbols=" + encodedSymbols)
-        )
         val volumes = HashMap<String, Double>()
+        val volumeRows = futuresMarketData.ticker24h()
         for (i in 0 until volumeRows.length()) {
             val item = volumeRows.optJSONObject(i) ?: continue
             val symbol = item.optString("symbol").uppercase(Locale.US)
-            if (symbol in coreSymbols) {
-                volumes[symbol] =
-                    item.optString("quoteVolume").toDoubleOrNull() ?: 0.0
-            }
+            if (symbol in coreSymbols) volumes[symbol] = item.optString("quoteVolume").toDoubleOrNull() ?: 0.0
         }
-
-        val bookRows = JSONArray(
-            getBody("/api/v3/ticker/bookTicker?symbols=" + encodedSymbols)
-        )
         val spreads = HashMap<String, Double>()
+        val bookRows = futuresMarketData.bookTickers()
         for (i in 0 until bookRows.length()) {
             val item = bookRows.optJSONObject(i) ?: continue
             val symbol = item.optString("symbol").uppercase(Locale.US)
             if (symbol !in coreSymbols) continue
             val bid = item.optString("bidPrice").toDoubleOrNull() ?: 0.0
             val ask = item.optString("askPrice").toDoubleOrNull() ?: 0.0
-            if (bid > 0.0 && ask >= bid) {
-                spreads[symbol] = (ask - bid) / bid
-            }
+            if (bid > 0.0 && ask >= bid) spreads[symbol] = (ask - bid) / bid
         }
-
+        val missing = coreSymbols.filter { (volumes[it] ?: 0.0) <= 0.0 || spreads[it] == null }
+        require(missing.isEmpty()) { "Futures market data missing approved contracts: " + missing.joinToString(",") }
         return Triple(coreSymbols.toList(), volumes, spreads)
     }
 
@@ -2853,11 +2842,7 @@ private class NativeEngine(
     }
 
     private fun currentCampaignPrice(symbol: String): Double =
-        livePrices[symbol]
-            ?: JSONObject(
-                getBody("/api/v3/ticker/price?symbol=" + symbol)
-            ).optString("price").toDoubleOrNull()
-            ?: 0.0
+        runCatching { futuresMarketData.markPrice(symbol) }.getOrDefault(livePrices[symbol] ?: 0.0)
 
     private fun campaignExitMarket(position: PositionState, reason: String) {
         val symbol = position.symbol
@@ -5156,12 +5141,21 @@ private class NativeEngine(
     }
 
     private fun symbolFilters(symbol: String): SymbolRules {
-        val info = JSONObject(
-            getBody("/api/v3/exchangeInfo?symbol=" + symbol)
-        )
-        val row = info.getJSONArray("symbols").getJSONObject(0)
-        val filters = row.getJSONArray("filters")
-
+        val normalized = symbol.uppercase(Locale.US)
+        require(normalized in coreSymbols) { "Symbol is outside the approved Futures universe" }
+        val now = System.currentTimeMillis()
+        val cached = futuresExchangeInfoCache
+        val info = if (cached != null && now - cached.first < 300_000L) cached.second else {
+            val loaded = futuresMarketData.exchangeInfo()
+            futuresExchangeInfoCache = now to loaded
+            loaded
+        }
+        val row = (info.optJSONArray("symbols") ?: JSONArray()).let { rows ->
+            (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+                .firstOrNull { it.optString("symbol").uppercase(Locale.US) == normalized }
+        } ?: throw IllegalStateException("Futures exchangeInfo has no contract $normalized")
+        require(row.optString("status").equals("TRADING", true)) { "Futures contract $normalized is not TRADING" }
+        val filters = row.optJSONArray("filters") ?: JSONArray()
         var step = 0.000001
         var minQty = 0.0
         var maxQty = Double.POSITIVE_INFINITY
@@ -5184,9 +5178,8 @@ private class NativeEngine(
         var maxNumAlgoOrders = Int.MAX_VALUE
         var maxNumOrderLists = Int.MAX_VALUE
         var maxPosition = Double.POSITIVE_INFINITY
-
         for (i in 0 until filters.length()) {
-            val f = filters.getJSONObject(i)
+            val f = filters.optJSONObject(i) ?: continue
             when (f.optString("filterType")) {
                 "LOT_SIZE" -> {
                     step = f.optString("stepSize").toDoubleOrNull() ?: step
@@ -5203,99 +5196,31 @@ private class NativeEngine(
                     minPrice = f.optString("minPrice").toDoubleOrNull() ?: minPrice
                     maxPrice = f.optString("maxPrice").toDoubleOrNull() ?: maxPrice
                 }
-                "MIN_NOTIONAL" -> {
-                    minNotional = max(
-                        minNotional,
-                        f.optString("minNotional").toDoubleOrNull() ?: 0.0
-                    )
-                }
-                "NOTIONAL" -> {
-                    minNotional = max(
-                        minNotional,
-                        f.optString("minNotional").toDoubleOrNull() ?: 0.0
-                    )
-                    maxNotional = min(
-                        maxNotional,
-                        f.optString("maxNotional").toDoubleOrNull()
-                            ?: Double.POSITIVE_INFINITY
-                    )
+                "MIN_NOTIONAL", "NOTIONAL" -> {
+                    minNotional = max(minNotional, f.optString("notional", f.optString("minNotional")).toDoubleOrNull() ?: 0.0)
+                    maxNotional = min(maxNotional, f.optString("maxNotional").toDoubleOrNull() ?: Double.POSITIVE_INFINITY)
                 }
                 "PERCENT_PRICE" -> {
                     percentUp = f.optString("multiplierUp").toDoubleOrNull() ?: percentUp
                     percentDown = f.optString("multiplierDown").toDoubleOrNull() ?: percentDown
                     avgPriceMins = f.optInt("avgPriceMins", avgPriceMins)
                 }
-                "PERCENT_PRICE_BY_SIDE" -> {
-                    bidUp = f.optString("bidMultiplierUp").toDoubleOrNull() ?: bidUp
-                    bidDown = f.optString("bidMultiplierDown").toDoubleOrNull() ?: bidDown
-                    askUp = f.optString("askMultiplierUp").toDoubleOrNull() ?: askUp
-                    askDown = f.optString("askMultiplierDown").toDoubleOrNull() ?: askDown
-                    avgPriceMins = f.optInt("avgPriceMins", avgPriceMins)
-                }
-                "MAX_NUM_ORDERS" -> {
-                    maxNumOrders = f.optInt("maxNumOrders", maxNumOrders)
-                }
-                "MAX_NUM_ALGO_ORDERS" -> {
-                    maxNumAlgoOrders = f.optInt("maxNumAlgoOrders", maxNumAlgoOrders)
-                }
-                "MAX_NUM_ORDER_LISTS" -> {
-                    maxNumOrderLists = f.optInt("maxNumOrderLists", maxNumOrderLists)
-                }
-                "MAX_POSITION" -> {
-                    maxPosition =
-                        f.optString("maxPosition").toDoubleOrNull()
-                            ?: maxPosition
-                }
+                "MAX_NUM_ORDERS" -> maxNumOrders = f.optInt("limit", f.optInt("maxNumOrders", maxNumOrders))
+                "MAX_NUM_ALGO_ORDERS" -> maxNumAlgoOrders = f.optInt("limit", f.optInt("maxNumAlgoOrders", maxNumAlgoOrders))
+                "MAX_POSITION" -> maxPosition = f.optString("maxPosition").toDoubleOrNull() ?: maxPosition
             }
         }
-
-        val decimals = max(
-            0,
-            step.toString().substringAfter('.', "").trimEnd('0').length
-        )
-        val quoteAllowed = row.optBoolean("quoteOrderQtyMarketAllowed", true)
-        val types = row.optJSONArray("orderTypes")
-        val ocoAllowed = row.optBoolean(
-            "ocoAllowed",
-            types?.let {
-                var take = false
-                var stop = false
-                for (i in 0 until it.length()) {
-                    when (it.optString(i)) {
-                        "TAKE_PROFIT_LIMIT" -> take = true
-                        "STOP_LOSS_LIMIT" -> stop = true
-                    }
-                }
-                take && stop
-            } ?: false
-        )
-
+        require(step > 0.0 && tick > 0.0 && minQty > 0.0) { "Futures contract filters are incomplete for $normalized" }
+        val decimals = max(0, step.toString().substringAfter('.', "").trimEnd('0').length)
         return SymbolRules(
-            step = step,
-            tick = tick,
-            decimals = decimals,
-            minQty = minQty,
-            maxQty = maxQty,
-            marketStep = marketStep,
-            marketMinQty = marketMinQty,
-            marketMaxQty = marketMaxQty,
-            minPrice = minPrice,
-            maxPrice = maxPrice,
-            minNotional = minNotional,
-            maxNotional = maxNotional,
-            quoteOrderQtyMarketAllowed = quoteAllowed,
-            ocoAllowed = ocoAllowed,
-            percentUp = percentUp,
-            percentDown = percentDown,
-            bidPercentUp = bidUp,
-            bidPercentDown = bidDown,
-            askPercentUp = askUp,
-            askPercentDown = askDown,
-            avgPriceMins = avgPriceMins,
-            maxNumOrders = maxNumOrders,
-            maxNumAlgoOrders = maxNumAlgoOrders,
-            maxNumOrderLists = maxNumOrderLists,
-            maxPosition = maxPosition
+            step = step, tick = tick, decimals = decimals, minQty = minQty, maxQty = maxQty,
+            marketStep = marketStep, marketMinQty = marketMinQty, marketMaxQty = marketMaxQty,
+            minPrice = minPrice, maxPrice = maxPrice, minNotional = minNotional, maxNotional = maxNotional,
+            quoteOrderQtyMarketAllowed = false, ocoAllowed = false,
+            percentUp = percentUp, percentDown = percentDown, bidPercentUp = bidUp, bidPercentDown = bidDown,
+            askPercentUp = askUp, askPercentDown = askDown, avgPriceMins = avgPriceMins,
+            maxNumOrders = maxNumOrders, maxNumAlgoOrders = maxNumAlgoOrders,
+            maxNumOrderLists = maxNumOrderLists, maxPosition = maxPosition
         )
     }
 
@@ -7707,13 +7632,7 @@ private class NativeEngine(
             while (restProbeRunning) {
                 val started = System.currentTimeMillis()
                 try {
-                    val encodedSymbols = URLEncoder.encode(
-                        JSONArray(coreSymbols).toString(),
-                        StandardCharsets.UTF_8.name()
-                    )
-                    val rows = JSONArray(
-                        getBody("/api/v3/ticker/price?symbols=" + encodedSymbols)
-                    )
+                    val rows = futuresMarketData.tickerPrices()
                     var found = 0
                     for (i in 0 until rows.length()) {
                         val row = rows.optJSONObject(i) ?: continue
@@ -7728,26 +7647,18 @@ private class NativeEngine(
                     restMarketReady = found == coreSymbols.size
                     restLastSuccessMs = System.currentTimeMillis()
                     restLastLatencyMs = System.currentTimeMillis() - started
-                    if (!restMarketReady) {
-                        restLastError = "ticker returned " + found + "/" + coreSymbols.size + " symbols"
-                    }
-
+                    restLastError = if (restMarketReady) null else "Futures ticker returned $found/${coreSymbols.size} contracts"
                     if (key().isNotBlank() && secret().isNotBlank() &&
                         System.currentTimeMillis() - lastAccountProbe >= 15_000L
                     ) {
                         lastAccountProbe = System.currentTimeMillis()
-                        val balances = signedAccount().optJSONArray("balances") ?: JSONArray()
-                        var usdt = 0.0
-                        var foundUsdt = false
-                        for (i in 0 until balances.length()) {
-                            val row = balances.optJSONObject(i) ?: continue
-                            if (row.optString("asset") == "USDT") {
-                                usdt = row.optString("free").toDoubleOrNull() ?: 0.0
-                                foundUsdt = true
-                            }
-                        }
-                        liveUsdtBalance = usdt
-                        restAccountReady = foundUsdt
+                        val account = futuresCampaignCoordinator.accountSnapshot()
+                        val available = account.optString("availableBalance").toDoubleOrNull()
+                        val wallet = account.optString("totalWalletBalance").toDoubleOrNull()
+                        val equity = account.optString("totalMarginBalance").toDoubleOrNull()
+                        restAccountReady = available != null && wallet != null && equity != null
+                        if (available != null) liveUsdtBalance = available
+                        if (!restAccountReady) throw IllegalStateException("Futures account omitted required balance fields")
                     } else if (key().isBlank() || secret().isBlank()) {
                         restAccountReady = false
                     }
@@ -7757,13 +7668,12 @@ private class NativeEngine(
                     restMarketReady = false
                     if (key().isNotBlank() && secret().isNotBlank()) restAccountReady = false
                 }
-
                 try { Thread.sleep(5_000L) }
                 catch (_: InterruptedException) { break }
             }
         }.apply {
             isDaemon = true
-            name = "williams-rest-probe"
+            name = "williams-futures-rest-probe"
             start()
         }
     }
@@ -8081,13 +7991,7 @@ private class NativeEngine(
     }
 
     fun marketTickers(): JSONObject {
-        val encodedSymbols = URLEncoder.encode(
-            JSONArray(coreSymbols).toString(),
-            StandardCharsets.UTF_8.name()
-        )
-        val rows = JSONArray(
-            getBody("/api/v3/ticker/price?symbols=" + encodedSymbols)
-        )
+        val rows = futuresMarketData.tickerPrices()
         val priceMap = HashMap<String, Double>()
         for (i in 0 until rows.length()) {
             val item = rows.optJSONObject(i) ?: continue
@@ -8096,21 +8000,43 @@ private class NativeEngine(
             val price = item.optString("price").toDoubleOrNull() ?: continue
             if (price > 0.0) priceMap[symbol] = price
         }
-
         val pairs = JSONArray()
         for (symbol in coreSymbols) {
-            pairs.put(
-                JSONObject()
-                    .put("symbol", symbol)
-                    .put(
-                        "price",
-                        livePrices[symbol] ?: priceMap[symbol] ?: JSONObject.NULL
-                    )
-            )
+            pairs.put(JSONObject().put("symbol", symbol)
+                .put("price", livePrices[symbol] ?: priceMap[symbol] ?: JSONObject.NULL))
         }
-        return JSONObject()
-            .put("symbols", JSONArray(coreSymbols))
-            .put("pairs", pairs)
+        return JSONObject().put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
+            .put("symbols", JSONArray(coreSymbols)).put("pairs", pairs)
+    }
+
+    private fun futuresPositionSnapshot(): JSONArray {
+        val out = JSONArray()
+        if (key().isBlank() || secret().isBlank()) return out
+        val rows = futuresCampaignCoordinator.positionsSnapshot()
+        val intents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
+        for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: continue
+            val symbol = row.optString("symbol").uppercase(Locale.US)
+            if (symbol !in coreSymbols) continue
+            val signedQty = row.optString("positionAmt").toDoubleOrNull() ?: 0.0
+            if (signedQty == 0.0) continue
+            val direction = if (signedQty > 0.0) "LONG" else "SHORT"
+            val entry = row.optString("entryPrice").toDoubleOrNull() ?: 0.0
+            val mark = row.optString("markPrice").toDoubleOrNull() ?: runCatching { futuresMarketData.markPrice(symbol) }.getOrDefault(0.0)
+            val intent = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.lastOrNull {
+                it.optString("intent_role", "ENTRY") == "ENTRY" && it.optString("symbol") == symbol &&
+                    it.optString("direction") == direction && it.optString("exchange_status") == "OPEN_PROTECTED"
+            }
+            out.put(JSONObject().put("symbol", symbol).put("direction", direction).put("side", direction)
+                .put("qty", kotlin.math.abs(signedQty)).put("positionAmt", signedQty).put("entry", entry)
+                .put("entryPrice", entry).put("mark_price", mark)
+                .put("stop", intent?.optString("protective_stop")?.toDoubleOrNull() ?: JSONObject.NULL)
+                .put("risk_pct", intent?.optDouble("risk_pct", 0.0) ?: 0.0)
+                .put("unrealized_pnl_usdt", row.optString("unRealizedProfit").toDoubleOrNull() ?: 0.0)
+                .put("margin_type", row.optString("marginType")).put("leverage", row.optString("leverage"))
+                .put("exchange_confirmed", true))
+        }
+        return out
     }
 
     fun portfolio(): JSONObject {
