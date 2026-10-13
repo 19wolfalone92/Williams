@@ -174,10 +174,6 @@ class MarketScanner:
         self.require_htf_confirmation = (
             os.getenv("REQUIRE_HTF_CONFIRMATION", "true").lower() == "true"
         )
-        self.min_risk_reward = float(os.getenv("MIN_RISK_REWARD", "1.5"))
-        self.stop_pct = float(os.getenv("STOP_LOSS_PCT", "0.02"))
-        self.target_pct = float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
-        self.min_rr = self.min_risk_reward
         self.htf_interval = _normalize_interval(os.getenv("HTF_INTERVAL", "4h"))
 
         self.wave_engine = MultiTimeframeWaveEngine(
