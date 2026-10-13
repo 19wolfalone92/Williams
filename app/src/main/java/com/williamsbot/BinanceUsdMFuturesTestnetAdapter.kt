@@ -95,11 +95,27 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     fun setOneWayMode(): JSONObject =
         request("POST", "/fapi/v1/positionSide/dual", mapOf("dualSidePosition" to "false"), signed = true)
 
-    /** Fail closed if the account is in Hedge Mode; order methods use BOTH semantics. */
+    /**
+     * Enforce One-way mode only when safe. If an account is in Hedge Mode with
+     * any live position, do not mutate account mode; require manual reconciliation.
+     */
     fun requireOneWayMode() {
-        val dualSide = positionMode().optBoolean("dualSidePosition", true)
-        check(!dualSide) {
-            "Futures account is in Hedge Mode; expected One-way Mode (dualSidePosition=false)"
+        if (!positionMode().optBoolean("dualSidePosition", true)) return
+        val live = positions()
+        val hasPosition = (0 until live.length()).any { i ->
+            val row = live.optJSONObject(i) ?: return@any true
+            kotlin.math.abs(row.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0
+        }
+        check(!hasPosition) {
+            "Futures account is in Hedge Mode with live positions; flatten/reconcile manually before switching to One-way"
+        }
+        try {
+            setOneWayMode()
+        } catch (failure: IOException) {
+            if (!failure.message.orEmpty().contains("-4059")) throw failure
+        }
+        check(!positionMode().optBoolean("dualSidePosition", true)) {
+            "Binance did not confirm One-way Mode after the safe mode-change request"
         }
     }
 
