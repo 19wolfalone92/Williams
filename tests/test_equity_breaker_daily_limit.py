@@ -125,3 +125,41 @@ def test_daily_loss_latch_resets_only_when_new_utc_day_is_established():
     assert reason == "ok"
     assert db.state["daily_loss_tripped"] == "0"
     assert db.state["daily_start_equity"] == "1200.0"
+
+
+def test_daily_risk_gate_runs_before_pending_entry_adoption():
+    from types import SimpleNamespace
+    from portfolio_trader import PortfolioTrader
+
+    events = []
+
+    class _CampaignExecution:
+        def reconcile_active_campaigns(self):
+            events.append("active_recovery")
+            return []
+
+        def reconcile_pending_entries(self, **kwargs):
+            events.append(("pending_recovery", kwargs.get("force_cancel_reason")))
+            return [{"state": "ENTRY_CANCELLED_STALE"}]
+
+    trader = PortfolioTrader.__new__(PortfolioTrader)
+    trader.campaign_engine_enabled = True
+    trader.campaign_execution = _CampaignExecution()
+    trader.campaign_monitor = SimpleNamespace(
+        monitor_all=lambda: events.append("campaign_monitor") or []
+    )
+    trader._daily_entry_guard = lambda: events.append("daily_guard") or (
+        False, "daily loss limit reached"
+    )
+    trader.db = SimpleNamespace(
+        log_event=lambda *args, **kwargs: events.append("risk_event")
+    )
+
+    result = trader.scan_and_execute()
+
+    assert result["status"] == "RISK_BLOCKED"
+    assert events.index("daily_guard") < next(
+        i for i, item in enumerate(events)
+        if isinstance(item, tuple) and item[0] == "pending_recovery"
+    )
+    assert ("pending_recovery", "DAILY_RISK_GATE_BLOCKED") in events
