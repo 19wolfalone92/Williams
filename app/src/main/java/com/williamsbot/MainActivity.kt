@@ -3062,7 +3062,7 @@ private fun parseStatus(json: JSONObject): Status {
         error =
             json.optString("last_error")
                 .takeIf { it.isNotBlank() },
-        // Backend exposes the same state as auth_configured;
+        // Local Futures Runtime exposes the same state as auth_configured;
         // keep compatibility with backend status payloads that use binance_configured.
         binanceConfigured =
             json.optBoolean(
@@ -3072,12 +3072,12 @@ private fun parseStatus(json: JSONObject): Status {
         riskPerTrade =
             json.optDouble(
                 "risk_per_trade_pct",
-                0.005
+                0.0025
             ),
         maxDailyLoss =
             json.optDouble(
                 "max_daily_loss_pct",
-                0.03
+                0.01
             ),
         tradesToday =
             json.optInt("trades_today", 0),
