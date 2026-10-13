@@ -10,6 +10,18 @@ class _ContextCache:
     def __init__(self):
         self.execution_lock = threading.RLock()
 
+    def snapshot(self):
+        class _Context:
+            version = 1
+            allow_long = True
+            allow_short = True
+
+        class _Snapshot:
+            def context(self, symbol, interval):
+                return _Context()
+
+        return _Snapshot()
+
 
 class _FailingIntentDB:
     def save_execution_intent(self, intent, status, reason=""):
@@ -21,7 +33,7 @@ def _exit_intent():
         symbol="BTCUSDT",
         side="SELL",
         order_type="MARKET",
-        required_context_versions={},
+        required_context_versions={"1h": 1},
         purpose="EXIT",
     )
 
@@ -188,6 +200,7 @@ def test_post_submit_persistence_failure_is_ambiguous_and_never_retries():
         barrier.execute(
             _exit_intent(),
             lambda: submitted.append(True) or {"status": "FILLED", "executedQty": "0.01"},
+            pre_submit_checks=lambda _snapshot: None,
         )
 
     assert submitted == [True]
@@ -197,7 +210,7 @@ def test_post_submit_persistence_failure_is_ambiguous_and_never_retries():
 
 def test_post_submit_event_failure_is_ambiguous_and_never_retries():
     submitted = []
-    db = _PersistingDB()
+    db = _PersistingDB(state="OPEN")
 
     def fail_submitted_event(intent_id, event, payload):
         if event == "BINANCE_SUBMITTED":
@@ -212,6 +225,7 @@ def test_post_submit_event_failure_is_ambiguous_and_never_retries():
         barrier.execute(
             _exit_intent(),
             lambda: submitted.append(True) or {"status": "FILLED", "executedQty": "0.01"},
+            pre_submit_checks=lambda _snapshot: None,
         )
 
     assert submitted == [True]
