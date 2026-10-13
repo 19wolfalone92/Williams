@@ -358,6 +358,9 @@ def test_futures_universe_fails_closed_without_recovered_approved_ten(monkeypatc
     scanner = FuturesWilliamsScanner(Client(), interval="5m")
     assert scanner.universe() == []
     assert "exactly 10 approved symbols" in scanner.last_universe_error
+    assert scanner.scan() == []
+    assert scanner.last_scan_status["state"] == "BLOCKED"
+    assert scanner.last_scan_status["evaluated_symbols"] == 0
 
 
 def test_futures_universe_rejects_duplicates_and_exchange_ineligible_symbols(monkeypatch):
