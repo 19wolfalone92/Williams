@@ -4763,7 +4763,8 @@ private class NativeEngine(
                             val locked =
                                 row.optString("l").toDoubleOrNull()
                                     ?: row.optDouble("l", 0.0)
-                            liveUsdtBalance = free + locked
+                            liveUsdtBalance = free
+                            liveUsdtLockedBalance = locked
                         }
                     }
                 }
@@ -7964,15 +7965,18 @@ private class NativeEngine(
                         lastAccountProbe = System.currentTimeMillis()
                         val balances = signedAccount().optJSONArray("balances") ?: JSONArray()
                         var usdt = 0.0
+                        var usdtLocked = 0.0
                         var foundUsdt = false
                         for (i in 0 until balances.length()) {
                             val row = balances.optJSONObject(i) ?: continue
                             if (row.optString("asset") == "USDT") {
                                 usdt = row.optString("free").toDoubleOrNull() ?: 0.0
+                                usdtLocked = row.optString("locked").toDoubleOrNull() ?: 0.0
                                 foundUsdt = true
                             }
                         }
                         liveUsdtBalance = usdt
+                        liveUsdtLockedBalance = usdtLocked
                         restAccountReady = foundUsdt
                     } else if (key().isBlank() || secret().isBlank()) {
                         restAccountReady = false
@@ -8074,6 +8078,8 @@ private class NativeEngine(
                             item.optString("free")
                                 .toDoubleOrNull()
                         liveUsdtBalance = balance ?: 0.0
+                        liveUsdtLockedBalance =
+                            item.optString("locked").toDoubleOrNull() ?: 0.0
                         break
                     }
                 }
