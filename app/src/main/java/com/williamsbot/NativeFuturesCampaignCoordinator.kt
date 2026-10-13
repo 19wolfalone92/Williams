@@ -30,7 +30,8 @@ internal class NativeFuturesCampaignCoordinator(
         val quantity: String,
         val entryPrice: String,
         val protectiveStop: String,
-        val clientId: String
+        val clientId: String,
+        val riskPct: Double
     )
 
     @Volatile var state: State = State.UNINITIALIZED
@@ -52,6 +53,7 @@ internal class NativeFuturesCampaignCoordinator(
 
     fun accountSnapshot(): JSONObject = adapterFactory().account()
     fun positionsSnapshot(): JSONArray = adapterFactory().positions()
+    fun intentsSnapshot(): JSONArray = JSONArray(intents().toString())
 
     /** Must finish successfully before the scanner may submit a new entry. */
     fun reconcile(): JSONObject = synchronized(lock) {
@@ -271,6 +273,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("quantity", plan.quantity)
             .put("entry_price", plan.entryPrice)
             .put("protective_stop", plan.protectiveStop)
+            .put("risk_pct", plan.riskPct)
             .put("client_id", plan.clientId)
             .put("exchange_status", "SUBMISSION_UNKNOWN")
             .put("protection_status", "NOT_SUBMITTED")
@@ -339,7 +342,9 @@ internal class NativeFuturesCampaignCoordinator(
         newStopPrice: String,
         clientAlgoId: String
     ): JSONObject = synchronized(lock) {
-        check(state == State.OPEN_PROTECTED) { "Stop trail blocked while Futures state is $state" }
+        check(state == State.OPEN_PROTECTED || state == State.ENTRY_PENDING) {
+            "Stop trail blocked while Futures state is $state"
+        }
         require(symbol in allowedSymbols)
         require(clientAlgoId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
         val persisted = intents()
@@ -499,6 +504,9 @@ internal class NativeFuturesCampaignCoordinator(
         val stop = plan.protectiveStop.toBigDecimalOrNull()
             ?: throw IllegalArgumentException("Protective stop is invalid")
         require(price.signum() > 0 && stop.signum() > 0) { "Entry and stop prices must be positive" }
+        require(plan.riskPct.isFinite() && plan.riskPct > 0.0 && plan.riskPct <= 0.0025) {
+            "Per-entry risk must be positive and no greater than 0.25% equity"
+        }
         when (plan.direction) {
             Direction.LONG -> {
                 require(stop < price) { "LONG protective stop must be below entry" }
