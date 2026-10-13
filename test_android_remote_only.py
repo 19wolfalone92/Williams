@@ -33,6 +33,9 @@ def test_android_ui_routes_directly_to_local_runtime_without_remote_backend():
     assert "mobile_token" not in main
     assert "StandaloneRuntime.request(context: Context" in runtime
     assert "fun dispatch(method: String, target: String, body: String)" in runtime
+    assert "ServerSocket" not in runtime
+    assert "InetAddress.getByName(\"127.0.0.1\")" not in runtime
+    assert "private fun handle(s: Socket)" not in runtime
     # Trading API keys are never put in UI/backend connection preferences.
     assert 'putString("api_key"' not in main
     assert 'putString("api_secret"' not in main
