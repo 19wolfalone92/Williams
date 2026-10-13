@@ -148,3 +148,24 @@ def test_balance_line_and_profitunity_macd_components_are_explicit():
     assert set(ind["balance_line_side"].unique()) <= {
         "ABOVE", "BELOW", "ON", "UNKNOWN"
     }
+
+
+def test_gator_oscillator_uses_alligator_line_differences_and_is_diagnostic_only():
+    highs = [100 + (i * 0.05) ** 2 + 1 for i in range(80)]
+    lows = [h - 2.0 for h in highs]
+    ind = calculate_indicators(make_frame(highs, lows), config_from_env({}))
+    pd.testing.assert_series_equal(
+        ind["gator_upper"],
+        (ind["jaw_shifted"] - ind["teeth_shifted"]).abs(),
+        check_names=False,
+    )
+    pd.testing.assert_series_equal(
+        ind["gator_lower"],
+        -(ind["teeth_shifted"] - ind["lips_shifted"]).abs(),
+        check_names=False,
+    )
+    assert set(ind["gator_state"].unique()) <= {
+        "UNKNOWN", "SLEEPING", "AWAKENING", "EATING", "SATIATED"
+    }
+    # No Gator state is promoted into the TC2 signal boolean by this layer.
+    assert "gator_state" not in {"long_signal", "short_signal"}
