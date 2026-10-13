@@ -472,12 +472,13 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
             super().__init__()
             self.cancelled = False
             self.manual_order = None
+            self.base_free = 1.0
 
         def account(self):
             return {
                 "balances": [
                     {"asset": "USDT", "free": "9400", "locked": "0"},
-                    {"asset": "BTC", "free": "1.0", "locked": "0"},
+                    {"asset": "BTC", "free": str(self.base_free), "locked": "0"},
                 ],
             }
 
@@ -503,6 +504,7 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
                 "executedQty": "0.6",
                 "cummulativeQuoteQty": "60",
             }
+            self.base_free = max(0.0, self.base_free - 0.6)
             return self.manual_order
 
         def all_orders(self, symbol, limit=1000):
