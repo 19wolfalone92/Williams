@@ -366,16 +366,27 @@ class MultiTimeframeWaveEngine:
         ).mean()
 
         raw: List[Pivot] = []
-        for i in range(left, len(ind) - right):
+        up_confirmation_col = "fractal_up_confirmation_index"
+        down_confirmation_col = "fractal_down_confirmation_index"
+        for i in range(left, len(ind)):
             up = bool(ind["fractal_up"].iloc[i])
             down = bool(ind["fractal_down"].iloc[i])
             if up and down:
+                # A dual fractal is one ambiguous structural event, not two
+                # pivots with an invented order.
                 continue
             if not (up or down):
                 continue
 
-            confirmed = i + right
-            if confirmed >= len(ind):
+            confirmation_value = (
+                ind[up_confirmation_col].iloc[i] if up and up_confirmation_col in ind.columns
+                else ind[down_confirmation_col].iloc[i] if down and down_confirmation_col in ind.columns
+                else i + right
+            )
+            if pd.isna(confirmation_value):
+                continue
+            confirmed = int(confirmation_value)
+            if confirmed < i or confirmed >= len(ind):
                 continue
 
             row = ind.iloc[i]
