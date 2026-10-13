@@ -373,6 +373,8 @@ scanner_cache = {
     "started_at": 0.0,
     "duration_ms": 0,
     "symbols_scanned": 0,
+    "symbols_configured": 0,
+    "scan_status": {},
 }
 
 SCANNER_CACHE_SECONDS = max(
@@ -414,6 +416,8 @@ def _scanner_snapshot():
             "cached": bool(scanner_cache["data"]),
             "duration_ms": int(scanner_cache["duration_ms"]),
             "symbols_scanned": int(scanner_cache["symbols_scanned"]),
+            "symbols_configured": int(scanner_cache["symbols_configured"]),
+            "scan_status": dict(scanner_cache["scan_status"]),
             "scanner_symbols": int(scanner_cache["symbols_scanned"]),
             "fresh": fresh,
             "cache_ttl_seconds": SCANNER_CACHE_SECONDS,
@@ -456,8 +460,13 @@ def _scanner_worker():
             scanner_cache["duration_ms"] = int(
                 (time.monotonic() - started) * 1000
             )
-            scanner_cache["symbols_scanned"] = len(
-                getattr(scanner, "symbols", []) or []
+            scan_status = dict(getattr(scanner, "last_scan_status", {}) or {})
+            scanner_cache["scan_status"] = scan_status
+            scanner_cache["symbols_configured"] = int(
+                scan_status.get("configured_symbols", len(getattr(scanner, "symbols", []) or [])) or 0
+            )
+            scanner_cache["symbols_scanned"] = int(
+                scan_status.get("evaluated_symbols", 0) or 0
             )
 
     except Exception as exc:
@@ -465,6 +474,12 @@ def _scanner_worker():
             scanner_cache["last_error"] = (
                 f"{type(exc).__name__}: {exc}"
             )
+            scanner_cache["scan_status"] = {
+                "state": "ERROR",
+                "reason": scanner_cache["last_error"],
+                "configured_symbols": int(scanner_cache.get("symbols_configured", 0)),
+                "evaluated_symbols": int(scanner_cache.get("symbols_scanned", 0)),
+            }
 
     finally:
         with scanner_lock:
