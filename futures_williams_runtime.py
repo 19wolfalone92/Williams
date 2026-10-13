@@ -732,11 +732,8 @@ class FuturesWilliamsRuntime:
         symbol = str(symbol).upper()
         if symbol in self._initialised_symbols:
             return
-        self.client.set_margin_type(symbol, os.getenv("FUTURES_MARGIN_TYPE", "ISOLATED"))
-        self.client.set_leverage(
-            symbol,
-            max(1, min(20, int(os.getenv("FUTURES_LEVERAGE", "2")))),
-        )
+        self.client.set_margin_type(symbol, self.config.futures_margin_type)
+        self.client.set_leverage(symbol, self.config.futures_leverage)
         self._initialised_symbols.add(symbol)
 
     def _preflight(self):
@@ -861,8 +858,9 @@ class FuturesWilliamsRuntime:
                 return report
             report["checks"]["exchange_info"] = "PASS"
             report["checks"]["market_mode"] = "USD_M_FUTURES"
-            report["details"]["leverage"] = max(1, min(20, int(os.getenv("FUTURES_LEVERAGE", "2"))))
-            report["details"]["margin_type"] = os.getenv("FUTURES_MARGIN_TYPE", "ISOLATED").upper()
+            report["details"]["leverage"] = self.config.futures_leverage
+            report["details"]["margin_type"] = self.config.futures_margin_type
+            report["details"]["one_way_mode_required"] = self.config.futures_force_one_way
             report["details"]["allow_long"] = self.config.allow_long
             report["details"]["allow_short"] = self.config.allow_short
             report["ready"] = True
@@ -881,8 +879,8 @@ class FuturesWilliamsRuntime:
         self.notify(
             f"Williams Futures READY | TESTNET={self.client.testnet} | "
             f"LONG={self.config.allow_long} SHORT={self.config.allow_short} | "
-            f"LEVERAGE={os.getenv('FUTURES_LEVERAGE', '2')} | "
-            f"MARGIN={os.getenv('FUTURES_MARGIN_TYPE', 'ISOLATED')}"
+            f"LEVERAGE={self.config.futures_leverage} | "
+            f"MARGIN={self.config.futures_margin_type} | ONE_WAY={self.config.futures_force_one_way}"
         )
 
     def _position(self, symbol):
@@ -1074,7 +1072,7 @@ class FuturesWilliamsRuntime:
         fee_buffer = 2.0 * max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")))
         slippage_buffer = max(0.0, float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")))
         effective_loss_fraction = distance_fraction + fee_buffer + slippage_buffer
-        leverage = max(1, int(os.getenv("FUTURES_LEVERAGE", "2")))
+        leverage = self.config.futures_leverage
         max_margin_fraction = max(
             0.01,
             min(0.90, float(os.getenv("FUTURES_MAX_MARGIN_FRACTION", "0.25"))),
@@ -1147,7 +1145,7 @@ class FuturesWilliamsRuntime:
         campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.pending_risk_quote = risk_quote
-        campaign.capital_reserved_quote = notional / max(1, int(os.getenv("FUTURES_LEVERAGE", "2")))
+        campaign.capital_reserved_quote = notional / self.config.futures_leverage
         campaign.tags["pending_order_quantity"] = qty
         campaign.tags["pending_order_trigger"] = trigger
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
