@@ -54,7 +54,7 @@ class RiskEngine:
         balance_quote: float,
         risk_per_trade_pct: float = 0.0025,
         max_position_fraction: float = 0.25,
-        max_daily_loss_pct: float = 0.03,
+        max_daily_loss_pct: float = 0.01,
         min_rr: float = 1.5,
         max_atr_pct: float = 0.08,
         fee_buffer_per_side_pct: float = 0.001,
@@ -63,7 +63,7 @@ class RiskEngine:
         self.balance = float(balance_quote)
         self.risk_per_trade_pct = float(risk_per_trade_pct)
         self.max_position_fraction = float(max_position_fraction)
-        self.max_daily_loss_pct = float(max_daily_loss_pct)
+        self.max_daily_loss_pct = max(0.0, min(0.01, float(max_daily_loss_pct)))
         self.min_rr = float(min_rr)
         self.max_atr_pct = float(max_atr_pct)
         self.fee_buffer_per_side_pct = max(0.0, float(fee_buffer_per_side_pct))
