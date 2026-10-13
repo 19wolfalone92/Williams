@@ -48,7 +48,7 @@ internal class NativeFuturesCampaignCoordinator(
     )
     private val activeStatuses = setOf(
         "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED",
-        "SUBMISSION_UNKNOWN", "ACCEPTED", "TRIGGERED"
+        "SUBMISSION_UNKNOWN", "ACCEPTED", "TRIGGERED", "CANCEL_SUBMISSION_UNKNOWN"
     )
 
     fun accountSnapshot(): JSONObject = adapterFactory().account()
@@ -75,8 +75,17 @@ internal class NativeFuturesCampaignCoordinator(
             }
 
             val persisted = intents()
-            // Resolve persisted entry intents. A live position supersedes the entry-order
-            // status; it must be protected before it can be considered reconciled.
+            val latestEntryIndexBySymbol = mutableMapOf<String, Int>()
+            for (i in 0 until persisted.length()) {
+                val item = persisted.optJSONObject(i)
+                    ?: throw IllegalStateException("Persisted Futures intent is malformed")
+                if (item.optString("intent_role", "ENTRY") == "ENTRY") {
+                    latestEntryIndexBySymbol[item.optString("symbol").uppercase(Locale.US)] = i
+                }
+            }
+            var hasPendingExit = false
+            // Resolve persisted entry and exit intents against Binance. Older completed
+            // campaigns on a symbol must not be mistaken for the campaign now in market.
             for (i in 0 until persisted.length()) {
                 val intent = persisted.optJSONObject(i)
                     ?: throw IllegalStateException("Persisted Futures intent is malformed")
@@ -86,16 +95,60 @@ internal class NativeFuturesCampaignCoordinator(
                 if (symbol !in allowedSymbols || clientId.isBlank()) {
                     throw IllegalStateException("Persisted Futures intent is malformed")
                 }
-                if (role == "EXIT") continue
                 val position = openBySymbol[symbol]
+                val prior = intent.optString("exchange_status").uppercase(Locale.US)
+                if (role == "EXIT") {
+                    val order = runCatching { adapter.order(symbol, clientId) }.getOrNull()
+                    if (order == null) {
+                        if (position == null) {
+                            intent.put("exchange_status", "EXIT_CONFIRMED")
+                                .put("confirmed_flat_at_ms", System.currentTimeMillis())
+                        } else {
+                            throw IllegalStateException(
+                                "Exit intent " + clientId + " is unresolved while " + symbol + " remains open; no retry permitted"
+                            )
+                        }
+                    } else {
+                        val exitStatus = order.optString("status").uppercase(Locale.US)
+                        if (exitStatus == "FILLED") {
+                            if (position != null) {
+                                throw IllegalStateException(
+                                    "Exit order " + clientId + " reports FILLED but Binance still reports an open " + symbol + " position"
+                                )
+                            }
+                            intent.put("exchange_status", "EXIT_CONFIRMED")
+                                .put("exchange_order_id", order.optString("orderId"))
+                                .put("confirmed_flat_at_ms", System.currentTimeMillis())
+                        } else if (exitStatus in setOf("CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH")) {
+                            intent.put("exchange_status", if (position == null) "EXIT_CONFIRMED" else "EXIT_TERMINAL_POSITION_OPEN")
+                                .put("exchange_order_id", order.optString("orderId"))
+                                .put("last_reconciled_ms", System.currentTimeMillis())
+                        } else {
+                            hasPendingExit = true
+                            intent.put("exchange_status", exitStatus)
+                                .put("exchange_order_id", order.optString("orderId"))
+                                .put("last_reconciled_ms", System.currentTimeMillis())
+                        }
+                    }
+                    continue
+                }
                 val direction = if ((position?.optString("positionAmt")?.toDoubleOrNull() ?: 0.0) > 0.0) "LONG" else "SHORT"
-                if (position != null && intent.optString("direction") == direction) {
+                val isLatestCampaign = latestEntryIndexBySymbol[symbol] == i
+                if (position != null && isLatestCampaign && intent.optString("direction") == direction) {
                     intent.put("exchange_status", "POSITION_OPEN")
                     intent.put("last_reconciled_ms", System.currentTimeMillis())
                     continue
                 }
-
-                val prior = intent.optString("exchange_status").uppercase(Locale.US)
+                if (position != null && !isLatestCampaign && prior !in terminalStatuses) {
+                    intent.put("exchange_status", "CLOSED_OR_STOPPED")
+                        .put("closed_observed_at_ms", System.currentTimeMillis())
+                    continue
+                }
+                if (position != null && isLatestCampaign && intent.optString("direction") != direction) {
+                    throw IllegalStateException(
+                        "Live " + symbol + " Futures position direction conflicts with persisted campaign"
+                    )
+                }
                 if (prior in terminalStatuses || prior == "OPEN_PROTECTED" || prior == "POSITION_OPEN") {
                     if (prior == "OPEN_PROTECTED" || prior == "POSITION_OPEN") {
                         intent.put("exchange_status", "CLOSED_OR_STOPPED")
@@ -127,15 +180,14 @@ internal class NativeFuturesCampaignCoordinator(
                 val direction = if (amount > 0.0) "LONG" else "SHORT"
                 val algos = protectiveOrdersBySymbol.getOrPut(symbol) { adapter.openAlgoOrders(symbol) }
                 var protective = findProtectiveStop(algos, direction)
-                val matchingIntent = (0 until persisted.length())
-                    .mapNotNull { persisted.optJSONObject(it) }
-                    .filter {
+                val latestIntentIndex = latestEntryIndexBySymbol[symbol]
+                val matchingIntent = latestIntentIndex?.let { persisted.optJSONObject(it) }
+                    ?.takeIf {
                         it.optString("intent_role", "ENTRY") == "ENTRY" &&
                             it.optString("symbol").uppercase(Locale.US) == symbol &&
                             it.optString("direction") == direction &&
                             it.optString("protective_stop").toDoubleOrNull()?.let { p -> p > 0.0 } == true
                     }
-                    .lastOrNull()
 
                 if (protective == null) {
                     if (matchingIntent == null) {
@@ -228,6 +280,7 @@ internal class NativeFuturesCampaignCoordinator(
             }
             state = when {
                 anyUnprotected -> State.POSITION_UNPROTECTED
+                hasPendingExit -> State.EXIT_PENDING
                 hasPendingEntry -> State.ENTRY_PENDING
                 openBySymbol.isNotEmpty() -> State.OPEN_PROTECTED
                 else -> State.READY
@@ -239,13 +292,14 @@ internal class NativeFuturesCampaignCoordinator(
                 }
             }
             JSONObject()
-                .put("ok", !anyUnprotected)
+                .put("ok", !anyUnprotected && !hasPendingExit)
                 .put("engine", "USD_M_FUTURES_TESTNET")
                 .put("state", state.name)
                 .put("positions_checked", exchangePositions.length())
                 .put("open_positions", openBySymbol.size)
                 .put("pending_intents_checked", persisted.length())
                 .put("active_pending_entry", hasPendingEntry)
+                .put("active_pending_exit", hasPendingExit)
                 .put("blocker", lastBlocker ?: JSONObject.NULL)
         } catch (failure: Exception) {
             state = State.RECONCILE_REQUIRED
@@ -359,7 +413,7 @@ internal class NativeFuturesCampaignCoordinator(
                 if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
                 val symbol = intent.optString("symbol")
                 val status = intent.optString("exchange_status").uppercase(Locale.US)
-                if (symbol in openSymbols || status !in activeStatuses) continue
+                if (status !in activeStatuses) continue
                 val clientId = intent.optString("client_id")
                 intent.put("exchange_status", "CANCEL_SUBMISSION_UNKNOWN")
                     .put("cancel_reason", reason)
