@@ -44,3 +44,20 @@ def test_intent_persistence_failure_blocks_exchange_mutation():
         barrier.execute(_exit_intent(), lambda: submitted.append(True))
 
     assert submitted == []
+
+class _FailingEventDB:
+    def save_execution_intent(self, intent, status, reason=""):
+        return None
+
+    def save_execution_event(self, intent_id, event, payload):
+        raise OSError("simulated event-log storage failure")
+
+
+def test_required_admission_event_failure_blocks_exchange_mutation():
+    submitted = []
+    barrier = ExecutionBarrier(_ContextCache(), db=_FailingEventDB())
+
+    with pytest.raises(RuntimeError, match="execution-event persistence failed"):
+        barrier.execute(_exit_intent(), lambda: submitted.append(True))
+
+    assert submitted == []
