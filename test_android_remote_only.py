@@ -124,3 +124,14 @@ def test_android_defaults_match_the_approved_single_campaign_risk_profile():
     assert '"max_total_risk_pct",\n                0.006' in main
     assert '.put("max_daily_loss_pct", 0.01)' in runtime
     assert "daily_loss=0.03" not in runtime
+
+
+def test_futures_user_stream_is_not_the_spot_signed_subscription_protocol():
+    user_stream = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert '"/fapi/v1/listenKey"' in user_stream
+    assert "userDataStream.subscribe.signature" not in user_stream
+    assert "userStream.start()" in runtime
+    assert '"ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE"' in runtime
+    assert "userStreamConnected &&" in runtime
+    assert "!userStreamSyncRequired" in runtime
