@@ -129,7 +129,7 @@ def test_daily_loss_latch_resets_only_when_new_utc_day_is_established():
 
 def test_daily_risk_gate_runs_before_pending_entry_adoption():
     from types import SimpleNamespace
-    from portfolio_trader import PortfolioTrader
+    from portfolio_trader import MultiPositionTrader
 
     events = []
 
@@ -142,7 +142,7 @@ def test_daily_risk_gate_runs_before_pending_entry_adoption():
             events.append(("pending_recovery", kwargs.get("force_cancel_reason")))
             return [{"state": "ENTRY_CANCELLED_STALE"}]
 
-    trader = PortfolioTrader.__new__(PortfolioTrader)
+    trader = MultiPositionTrader.__new__(MultiPositionTrader)
     trader.campaign_engine_enabled = True
     trader.campaign_execution = _CampaignExecution()
     trader.campaign_monitor = SimpleNamespace(
