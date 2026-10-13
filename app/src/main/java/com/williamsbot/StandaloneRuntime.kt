@@ -7800,6 +7800,7 @@ private class NativeEngine(
                 reconcileRequired = true
                 prefs.edit().putBoolean("reconcile_required", true).commit()
                 lastError = "Futures position snapshot unavailable; trading blocked: " + futuresPositionSnapshotError
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures position snapshot unavailable")
                 JSONArray()
             }
         } else {
