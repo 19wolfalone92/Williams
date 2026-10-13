@@ -621,7 +621,7 @@ private class NativeEngine(
     private var lastSymbolsScanned = 0
     // Five independent Futures contracts maximum; aggregate campaign risk is capped at 0.6%.
     private val maxOpenPositions: Int
-        get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 5)
+        get() = 1
     private val campaignEngineEnabled: Boolean
         get() = true
     private val campaignExecutionTimeframe: String
@@ -7984,7 +7984,7 @@ private class NativeEngine(
             .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
             .put("execution_mode", "AUTONOMOUS_ANDROID")
             .put("decision_timeframe", "1h")
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", 0.01)
             .put("futures_runtime", futuresRuntimeStatus)
             .put("futures_positions", futuresPositions)
     }
@@ -8283,7 +8283,7 @@ private class NativeEngine(
             .put("campaign_execution_timeframe", campaignExecutionTimeframe)
             .put("campaign_entry_mode", "CONDITIONAL_STOP")
             .put("campaign_fixed_take_profit", false)
-            .put("campaign_entry_execution", "DISABLED_UNTIL_FUTURES_ADAPTER")
+            .put("campaign_entry_execution", "USD_M_FUTURES_TESTNET_COORDINATOR")
             .put("campaign_risk_limit_pct", campaignRiskLimitPct)
             .put("campaign_initial_risk_pct", campaignInitialRiskPct)
             .put("campaign_add_on_risk_cap_pct", campaignAddRiskCapPct)
@@ -8305,11 +8305,11 @@ private class NativeEngine(
             .put("startup_history_frames", startupFrames.joinToString(","))
             .put("testnet_live_execution", false)
             .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
-            .put("execution_block_reason", "USDⓈ-M Futures adapter missing; Spot /api/v3 order path must never be used for Futures")
+            .put("execution_block_reason", "Entries require reconciled Futures account, fresh H1 market data, risk approval, and exchange-confirmed protection")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
             .put("max_trades_per_day", 0)
-            .put("max_consecutive_losses", 3)
+            .put("max_consecutive_losses", 2)
             .put("cooldown_minutes", 30)
             .put("min_risk_reward", 1.5)
             .put("atr_period", 14)
