@@ -24,6 +24,7 @@ _ALLOWED = {
     OrderState.ADMISSION: {OrderState.SUBMITTING, OrderState.CANCELED, OrderState.RECONCILE_REQUIRED},
     OrderState.SUBMITTING: {
         OrderState.OPEN, OrderState.PARTIALLY_FILLED, OrderState.FILLED,
+        OrderState.CANCELED, OrderState.CANCEL_PENDING,
         OrderState.REJECTED, OrderState.EXPIRED, OrderState.AMBIGUOUS,
         OrderState.RECONCILE_REQUIRED,
     },
@@ -40,7 +41,8 @@ _ALLOWED = {
     OrderState.FILLED: set(),
     OrderState.CANCEL_PENDING: {
         OrderState.CANCELED, OrderState.FILLED,
-        OrderState.PARTIALLY_FILLED, OrderState.AMBIGUOUS,
+        OrderState.PARTIALLY_FILLED, OrderState.EXPIRED,
+        OrderState.REJECTED, OrderState.AMBIGUOUS,
         OrderState.RECONCILE_REQUIRED,
     },
     OrderState.CANCELED: set(),
