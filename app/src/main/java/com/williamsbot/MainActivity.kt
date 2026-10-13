@@ -1876,10 +1876,10 @@ private fun ScannerScreen(
                                 "Неполное сканирование • новые входы заблокированы"
                             "READY" ->
                                 status.scannerSymbols.toString() + "/" +
-                                    status.scannerConfiguredSymbols + " пар • LONG " +
+                                    status.scannerConfiguredSymbols + " утверждённых пар • LONG " +
                                     status.scannerLongCandidates + " / SHORT " +
-                                    status.scannerShortCandidates + " • top " +
-                                    min(20, candidates.size)
+                                    status.scannerShortCandidates + " • кандидатов " +
+                                    candidates.size
                             else ->
                                 "Сканирование ещё не запускалось"
                         },
