@@ -8130,9 +8130,9 @@ private class NativeEngine(
                     if (reconcileRequired) {
                         "Recovery required; trading is blocked"
                     } else if (scanning) {
-                        "Standalone scanner is running; TESTNET; execution enabled"
+                        "Standalone scanner is running; USD-M Futures execution BLOCKED until native Futures adapter is integrated and verified"
                     } else {
-                        "Standalone native engine active; TESTNET"
+                        "Standalone native engine active; USD-M Futures execution BLOCKED until native Futures adapter is integrated and verified"
                     }
                 )
         )
