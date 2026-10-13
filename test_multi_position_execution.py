@@ -181,8 +181,8 @@ def test_legacy_direct_market_entry_is_blocked(tmp_path, monkeypatch):
     client = FakeClient()
     db = Database(str(tmp_path / "trades.sqlite3"))
     trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT", "ETHUSDT"])
-    # Exercise the production allocation path, including fee and slippage
-    # buffers, so the test protects the real aggregate-risk contract.
+    # The legacy path is intentionally disabled because it bypasses
+    # canonical H1 campaign triggers and the durable execution barrier.
 
     result = trader.execute([Selection("BTCUSDT"), Selection("ETHUSDT")])
 
