@@ -53,6 +53,12 @@ from binance_futures_client import BinanceFuturesClient
 from trading_config import DEFAULT_FUTURES_SYMBOLS
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Parse the same conventional boolean values used by TradingConfig."""
+    raw = os.getenv(name, str(default)).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class FuturesCandidate:
     symbol: str
@@ -239,7 +245,7 @@ class FuturesWilliamsScanner:
         return (ask - bid) / bid
 
     def _htf(self, symbol: str) -> tuple[bool, bool]:
-        if not os.getenv("REQUIRE_HTF_CONFIRMATION", "true").lower() == "true":
+        if not _env_bool("REQUIRE_HTF_CONFIRMATION", True):
             return True, True
         frame = fetch_klines(self.client, symbol, self.htf_interval, limit=180)
         if len(frame) < 90:
@@ -367,9 +373,9 @@ class FuturesWilliamsScanner:
             ("LONG", long_specs, long_htf),
             ("SHORT", short_specs, short_htf),
         ):
-            if side == "LONG" and not os.getenv("ALLOW_LONG", "true").lower() == "true":
+            if side == "LONG" and not _env_bool("ALLOW_LONG", True):
                 continue
-            if side == "SHORT" and not os.getenv("ALLOW_SHORT", "true").lower() == "true":
+            if side == "SHORT" and not _env_bool("ALLOW_SHORT", True):
                 continue
             if not specs:
                 continue
@@ -516,7 +522,7 @@ class FuturesWilliamsRuntime:
             api_key if api_key is not None else os.getenv("BINANCE_API_KEY", ""),
             api_secret if api_secret is not None else os.getenv("BINANCE_API_SECRET", ""),
             testnet=(
-                os.getenv("TESTNET", "true").lower() == "true"
+                _env_bool("TESTNET", True)
                 if testnet is None else bool(testnet)
             ),
         )
@@ -2444,7 +2450,7 @@ class FuturesWilliamsRuntime:
             # TC2 campaign management admits later valid same-direction Wise-Men
             # signals as additions. A reversal add may be disabled explicitly as
             # a risk overlay, but must not be silently excluded by default.
-            allow_reversal = os.getenv("CAMPAIGN_ALLOW_REVERSAL_ADD", "true").lower() == "true"
+            allow_reversal = _env_bool("CAMPAIGN_ALLOW_REVERSAL_ADD", True)
             for candidate in symbol_candidates:
                 signals = list(getattr(candidate, "all_signals", ()) or ())
                 if not signals:
