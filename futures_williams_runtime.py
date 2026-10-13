@@ -98,6 +98,40 @@ def _requires_directional_htf_confirmation(signal_type: SignalType) -> bool:
     return signal_type != SignalType.REVERSAL
 
 
+def _pending_entry_preflight_reason(pending, intent, current_price: float, now_ms: int | None = None) -> str:
+    """Fail closed if a conditional Wise-Man entry is stale or its trigger already passed."""
+    now = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    if not isinstance(pending, dict):
+        return "pending_signal_missing"
+    signal = pending.get("signal")
+    if not isinstance(signal, dict):
+        return "pending_signal_payload_missing"
+    if str(pending.get("state", "")).upper() != SignalState.VALIDATED.value:
+        return "pending_signal_not_validated"
+    if str(signal.get("signal_id", "")) != str(getattr(intent, "signal_id", "")):
+        return "pending_signal_id_mismatch"
+    side = str(getattr(intent, "side", "")).upper()
+    if str(signal.get("side", "")).upper() != side or side not in {"BUY", "SELL"}:
+        return "pending_signal_side_mismatch"
+    try:
+        expires_at = int(signal.get("expires_at_ms", 0) or 0)
+        trigger = float(signal.get("trigger_price", 0) or 0)
+        price = float(current_price)
+    except (TypeError, ValueError):
+        return "pending_signal_price_or_expiry_invalid"
+    if expires_at <= 0:
+        return "pending_signal_expiry_missing"
+    if now >= expires_at:
+        return "pending_signal_expired"
+    if trigger <= 0 or price <= 0:
+        return "pending_signal_trigger_or_market_price_invalid"
+    if side == "BUY" and price >= trigger:
+        return "long_trigger_already_crossed; late entry blocked"
+    if side == "SELL" and price <= trigger:
+        return "short_trigger_already_crossed; late entry blocked"
+    return ""
+
+
 class FuturesWilliamsScanner:
     def __init__(self, client, *, interval: str, htf_interval: str = "1h"):
         self.client = client
@@ -908,6 +942,14 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError("LONG entries are disabled by configuration")
             if intent.side == "SELL" and not self.config.allow_short:
                 raise RuntimeError("SHORT entries are disabled by configuration")
+            pending = campaign.tags.get("pending_signal")
+            price_row = self.client.ticker_price(intent.symbol)
+            current_price = float(price_row.get("price", 0) or 0)
+            reason = _pending_entry_preflight_reason(
+                pending, intent, current_price, int(time.time() * 1000)
+            )
+            if reason:
+                raise RuntimeError(f"{intent.symbol}: entry preflight blocked: {reason}")
         elif purpose == "CAMPAIGN_ADD_ON":
             if campaign.state != CampaignState.ADD_ON_PENDING:
                 raise RuntimeError(
