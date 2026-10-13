@@ -158,3 +158,59 @@ def test_unresolved_oco_response_does_not_claim_submission_succeeded():
     )
     with pytest.raises(RuntimeError, match="OCO creation response"):
         barrier.execute(intent, lambda: {"orderListId": 42})
+
+
+class _FailsAfterExchangeDB:
+    def __init__(self, fail_on="SUBMITTED"):
+        self.fail_on = fail_on
+        self.intents = []
+        self.events = []
+
+    def state_get(self, key, default=None):
+        return default
+
+    def save_execution_intent(self, intent, status, reason=""):
+        self.intents.append((status, reason))
+        if status == self.fail_on:
+            raise OSError("simulated post-submit storage failure")
+
+    def save_execution_event(self, intent_id, event, payload):
+        self.events.append(event)
+
+
+def test_post_submit_persistence_failure_is_ambiguous_and_never_retries():
+    submitted = []
+    db = _FailsAfterExchangeDB(fail_on="SUBMITTED")
+    barrier = ExecutionBarrier(_ContextCache(), db=db)
+
+    with pytest.raises(RuntimeError, match="requires reconciliation"):
+        barrier.execute(
+            _exit_intent(),
+            lambda: submitted.append(True) or {"status": "FILLED", "executedQty": "0.01"},
+        )
+
+    assert submitted == [True]
+    assert ("SUBMITTING", "") in db.intents
+    assert any(status == "AMBIGUOUS" for status, _ in db.intents)
+
+
+def test_post_submit_event_failure_is_ambiguous_and_never_retries():
+    submitted = []
+    db = _PersistingDB()
+
+    def fail_submitted_event(intent_id, event, payload):
+        if event == "BINANCE_SUBMITTED":
+            raise OSError("simulated post-submit audit failure")
+        db.events.append((intent_id, event, payload))
+
+    db.save_execution_event = fail_submitted_event
+    barrier = ExecutionBarrier(_ContextCache(), db=db)
+
+    with pytest.raises(RuntimeError, match="requires reconciliation"):
+        barrier.execute(
+            _exit_intent(),
+            lambda: submitted.append(True) or {"status": "FILLED", "executedQty": "0.01"},
+        )
+
+    assert submitted == [True]
+    assert any(status == "AMBIGUOUS" for status, _ in db.intents)
