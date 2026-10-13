@@ -6601,7 +6601,7 @@ private class NativeEngine(
             emptyList()
         }
 
-        val alligator = alligator(closes)
+        val alligator = alligator(workCandles, i)
         val bullish =
             alligator.lips > alligator.teeth &&
                 alligator.teeth > alligator.jaw &&
@@ -7091,12 +7091,42 @@ private class NativeEngine(
         return count.coerceIn(0, 3)
     }
 
+    /**
+     * Canonical Williams Alligator at the requested candle index.
+     *
+     * Uses Median Price (H+L)/2, SMMA seeded by the first-period arithmetic
+     * mean, and the canonical plotted displacements Jaw=8, Teeth=5, Lips=3.
+     * The displacement is applied as a historical lookup, never as a read of
+     * future candles. This keeps the native runtime aligned with strategy.py.
+     */
     private fun alligator(
-        closes: List<Double>
+        candles: List<CandleN>,
+        index: Int
     ): TripleValues {
-        val jaw = smma(closes, 13).lastOrNull() ?: 0.0
-        val teeth = smma(closes, 8).lastOrNull() ?: 0.0
-        val lips = smma(closes, 5).lastOrNull() ?: 0.0
+        if (candles.isEmpty() || index !in candles.indices) {
+            return TripleValues(0.0, 0.0, 0.0)
+        }
+        val median = candles.map { (it.h + it.l) / 2.0 }
+        fun canonicalSmma(period: Int): List<Double> {
+            val values = MutableList(median.size) { Double.NaN }
+            if (median.size < period) return values
+            var seed = 0.0
+            for (i in 0 until period) seed += median[i]
+            values[period - 1] = seed / period
+            for (i in period until median.size) {
+                values[i] = (values[i - 1] * (period - 1) + median[i]) / period
+            }
+            return values
+        }
+        fun displaced(values: List<Double>, shift: Int): Double {
+            val sourceIndex = index - shift
+            if (sourceIndex < 0 || sourceIndex >= values.size) return 0.0
+            val value = values[sourceIndex]
+            return if (value.isFinite()) value else 0.0
+        }
+        val jaw = displaced(canonicalSmma(13), 8)
+        val teeth = displaced(canonicalSmma(8), 5)
+        val lips = displaced(canonicalSmma(5), 3)
         return TripleValues(jaw, teeth, lips)
     }
 
@@ -7299,7 +7329,7 @@ private class NativeEngine(
             }
 
         val alligatorValues =
-            alligator(candles.map { it.c })
+            alligator(candles, candles.lastIndex)
 
         val bullish =
             alligatorValues.lips >
@@ -7944,12 +7974,7 @@ private class NativeEngine(
                         .put(
                             "long_signal",
                             i >= 40 &&
-                                alligator(
-                                    prices.subList(
-                                        0,
-                                        i + 1
-                                    )
-                                ).let { values ->
+                                alligator(sourceCandles, i).let { values ->
                                     values.lips > values.teeth &&
                                         values.teeth > values.jaw &&
                                         prices[i] > values.lips &&
