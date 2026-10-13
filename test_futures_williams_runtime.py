@@ -971,3 +971,10 @@ def test_newer_fractal_inside_teeth_does_not_shadow_older_valid_trigger():
     assert result[0] == 4
     assert result[1] == 2
     assert result[2] == 110.0
+
+    # A later intrabar touch must invalidate the pending stop even if the
+    # latest close is again below the trigger.
+    ind.loc[5, "high"] = 112.0
+    assert _latest_confirmed_fractal(
+        ind, side="LONG", current_teeth=106.0, current_close=107.0, tick_size=1.0
+    ) is None
