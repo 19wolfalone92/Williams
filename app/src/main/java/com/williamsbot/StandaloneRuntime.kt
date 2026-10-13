@@ -639,7 +639,6 @@ private class NativeEngine(
     private val maxSlippagePct = 0.0015
     private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.03)
     @Volatile private var lastEquityCheckMs = 0L
-    @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
     @Volatile private var serverTimeOffsetMs = 0L
     private val BINANCE_RECV_WINDOW_MS = 60000L
@@ -5748,7 +5747,7 @@ private class NativeEngine(
     }
 
     private fun checkAutomaticCircuitBreaker() {
-        if (!running || paused || killLatched || circuitBreakerTripInProgress) return
+        if (!running || paused || killLatched) return
         val now = System.currentTimeMillis()
         if (now - lastEquityCheckMs < 60_000L) return
         lastEquityCheckMs = now
