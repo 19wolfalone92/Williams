@@ -231,6 +231,9 @@ def main() -> None:
     must(legacy_runtime, "private val executionStore = FuturesExecutionStore(context)", "StandaloneRuntime.kt")
     must(legacy_runtime, "wss://demo-fstream.binance.com/market/stream?streams=", "StandaloneRuntime.kt")
     must(legacy_runtime, "marketWebSocketFresh()", "StandaloneRuntime.kt")
+    must(legacy_runtime, '.put("ok", running && !reconcileRequired && !killLatched)', "StandaloneRuntime.kt")
+    must(legacy_runtime, 'userStreamSyncRequired = true', "StandaloneRuntime.kt")
+    must(legacy_runtime, 'daily_loss=0.01', "StandaloneRuntime.kt")
 
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
     for needle in (
@@ -245,6 +248,13 @@ def main() -> None:
     must_not(android, 'putString("api_key"', "MainActivity.kt")
     must_not(android, 'putString("api_secret"', "MainActivity.kt")
     must_not(android, "Backend URL", "MainActivity.kt")
+    for needle in (
+        "val riskPerTrade: Double = 0.0025",
+        "val maxDailyLoss: Double = 0.01",
+        "val maxOpenPositions: Int = 1",
+        "val maxTotalRiskPct: Double = 0.006",
+    ):
+        must(android, needle, "MainActivity.kt")
 
     service = read("app/src/main/java/com/williamsbot/TradingForegroundService.kt")
     for needle in (
