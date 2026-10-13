@@ -15,6 +15,8 @@
 
 ### Independent Wise-Man events
 - `strategy.py`: removed the legacy same-candle “minimum N of 3” quorum from `long_signal`/`short_signal`. A valid reversal, Super AO, or fractal-breakout event can independently be the presenting Wise-Man event, subject to operative Alligator context and downstream risk/execution gates.
+- Super AO is now a one-shot event on the configured Nth same-direction AO bar rather than a persistent true state after the threshold. `williams_signals.py` uses the same `SUPER_AO_BARS` threshold.
+- Removed a redundant stacked `@staticmethod` decorator in `campaign_engine.py`.
 - The legacy count remains diagnostic/ranking data; it is no longer the entry Boolean's same-bar prerequisite.
 
 **Important limitation:** source-specific differences between TC1, NTD, and TC2 still require profile separation. This change does not assert that every historical signal from every edition should be enabled simultaneously.
@@ -33,7 +35,7 @@
 |---|---|---|
 | Alligator | PARTIAL | Python computes median-price SMMA and displaced lines. Android also has its own implementation. Identical initialization, shift semantics, closed-candle boundaries, and outputs across all consumers remain unproven. |
 | WM1 reversal bar | PARTIAL | The reversal-bar predicate is explicit. `_angulation()` is clearly labeled an engineering approximation; no exact author-certified numerical formula is claimed. Do not treat this approximation as a fully verified source rule. |
-| WM2 Super AO | PARTIAL | Detection is independent of WM3 in the signal detector and same-bar quorum was removed. End-to-end trace through candidate selection, pending signal, campaign admission, and execution is not yet behavior-confirmed. |
+| WM2 Super AO | PARTIAL | Detection is independent of WM3; same-bar quorum is removed; event fires only on the configured Nth AO bar in both indicator and signal extraction. End-to-end campaign/order behavior and CI remain unverified. |
 | WM3 fractal | PARTIAL | Equal-extreme grouping and dynamic confirmation indices have been implemented. All consumers, backtest replay, wave pivots, persistence, and Android still require cross-path parity proof. |
 | Three Wise Men chronology | PARTIAL | Signals are no longer required to coincide on one candle. First-presenting signal vs later add-on must still be demonstrated through campaign state and live order intent. |
 | Stop / exit | PARTIAL | Risk engine now requires structural invalidation and no longer invents a fixed target by default. Python campaign and Android stop/exit implementations still need mode-by-mode parity. |
