@@ -74,6 +74,16 @@ def test_android_campaign_and_intents_are_sqlite_backed():
     assert "prefs.edit().putString(intentsKey" not in coordinator
 
 
+def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+
+    assert 'require(path.startsWith("/fapi/"))' in runtime
+    assert "Any leftover signed Spot mutation is blocked at the signedRequest boundary." in runtime
+    assert '"/api/v3/order"' in runtime  # legacy call sites may remain only as fail-closed dead paths
+    assert '"/fapi/v1/order"' in runtime
+    assert "NativeFuturesCampaignCoordinator(executionStore)" in runtime
+
+
 def test_android_futures_adapter_has_unambiguous_long_short_sides():
     adapter = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
     tests = _read(ROOT / "app/src/test/java/com/williamsbot/BinanceUsdMFuturesTestnetAdapterContractTest.kt")
