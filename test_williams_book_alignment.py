@@ -31,13 +31,14 @@ def test_profitunity_mfi_proxy_windows():
     assert 'squatting_bar' in ind
 
 
-def test_ao_green_streak_drives_super_ao():
-    # A monotonic rising series produces consecutive green AO bars after the
-    # 34-bar warmup; the three-bar Super AO condition must then become true.
+def test_ao_green_streak_emits_super_ao_once_on_the_configured_bar():
+    # Super AO is an event on the configured Nth same-direction AO bar, not
+    # a persistent state on every later bar.
     prices = [100 + (i * 0.05) ** 2 for i in range(80)]
     ind = calculate_indicators(frame(prices), config_from_env())
-    assert int(ind['ao_green_streak'].iloc[-1]) >= 3
-    assert bool(ind['super_ao_long'].iloc[-1]) is True
+    event_rows = ind.index[ind["super_ao_long"]]
+    assert len(event_rows) > 0
+    assert (ind.loc[event_rows, "ao_green_streak"].astype(int) == 3).all()
     assert bool(ind['long_ao_positive'].iloc[-1]) is True
 
 
