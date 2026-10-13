@@ -993,13 +993,35 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
+
+        def _validate_oco_submission(_snapshot):
+            latest_price = float(self.client.ticker_price(symbol).get("price", 0) or 0)
+            if latest_price <= 0 or not (tp > latest_price > sl):
+                raise RuntimeError(
+                    f"{symbol}: market moved outside valid OCO price ordering before submit"
+                )
+            latest_account = self.client.account()
+            latest_free = self._asset_balance(symbol, account=latest_account)
+            if latest_free + 1e-12 < qty:
+                raise RuntimeError(
+                    f"{symbol}: free inventory changed before protective OCO submit"
+                )
+
+        result = self._submit_risk_reducing_order(
             symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+            "OCO",
+            "CAMPAIGN_PROTECTION",
+            lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
+            quantity=self.client.decimal_format(qty),
+            client_order_id=client_id,
+            pre_submit_checks=_validate_oco_submission,
         )
 
         for leg in result.get("orderReports", []):
