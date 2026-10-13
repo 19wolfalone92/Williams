@@ -360,7 +360,6 @@ class ExecutionBarrier:
                 response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
-                order_fsm.state = OrderState.AMBIGUOUS
                 self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
                 self._record(
                     "ERROR",
@@ -371,80 +370,104 @@ class ExecutionBarrier:
                 )
                 raise
 
-            if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
-                ).upper()
-                if status:
-                    order_fsm.observe_exchange_status(
-                        status,
-                        float(
-                            response.get("executedQty", 0) or 0
-                            if isinstance(response, dict)
-                            else 0
-                        ),
-                    )
-                elif (
-                    isinstance(response, dict)
-                    and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
-                ):
-                    order_fsm.state = OrderState.OPEN
-                else:
+            response_type = str(intent.order_type or "").strip().upper()
+            response_status = (
+                str(response.get("status", "")).upper()
+                if isinstance(response, dict)
+                else ""
+            )
+
+            if response_type == "CANCEL":
+                if response_status not in {"CANCELED", "FILLED", "EXPIRED", "REJECTED"}:
                     order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
-                    self._record(
-                        "ERROR",
-                        "execution_ambiguous",
-                        intent,
-                        "Exchange accepted an operation without authoritative state",
-                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
-                    )
+                    self._persist(intent, "AMBIGUOUS", "cancel response lacks authoritative terminal order status")
                     raise RuntimeError(
-                        "ExecutionBarrier: exchange response lacks authoritative order state"
+                        "ExecutionBarrier: cancel response lacks authoritative terminal order status"
                     )
-            if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
+                order_fsm.observe_exchange_status(
+                    response_status,
+                    float(response.get("executedQty", 0) or 0),
+                )
+            elif response_type == "CANCEL_OCO":
+                list_id = response.get("orderListId") if isinstance(response, dict) else None
+                list_status = str(
+                    response.get("listOrderStatus", response.get("listStatusType", ""))
+                    if isinstance(response, dict) else ""
                 ).upper()
-                if status:
-                    order_fsm.observe_exchange_status(
-                        status,
-                        float(
-                            response.get("executedQty", 0) or 0
-                            if isinstance(response, dict)
-                            else 0
-                        ),
-                    )
-                elif (
-                    isinstance(response, dict)
-                    and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
+                reports = (
+                    response.get("orderReports", response.get("orders", []))
+                    if isinstance(response, dict) else []
+                )
+                report_statuses = [
+                    str(row.get("status", "")).upper()
+                    for row in reports if isinstance(row, dict)
+                ]
+                terminal_reports = bool(report_statuses) and all(
+                    status in {"CANCELED", "FILLED", "EXPIRED", "REJECTED"}
+                    for status in report_statuses
+                )
+                if list_id is None or not (
+                    list_status == "ALL_DONE" or terminal_reports
                 ):
-                    order_fsm.state = OrderState.OPEN
-                else:
                     order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
-                    self._record(
-                        "ERROR",
-                        "execution_ambiguous",
-                        intent,
-                        "Exchange accepted an operation without authoritative state",
-                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
-                    )
+                    self._persist(intent, "AMBIGUOUS", "OCO cancellation response is not terminal")
                     raise RuntimeError(
-                        "ExecutionBarrier: exchange response lacks authoritative order state"
+                        "ExecutionBarrier: OCO cancellation outcome requires reconciliation"
                     )
+                order_fsm.state = OrderState.CANCELED
+            elif response_type in {"OCO", "ORDER_LIST"}:
+                list_id = response.get("orderListId") if isinstance(response, dict) else None
+                list_status = str(
+                    response.get("listOrderStatus", response.get("listStatusType", ""))
+                    if isinstance(response, dict) else ""
+                ).upper()
+                reports = (
+                    response.get("orderReports", response.get("orders", []))
+                    if isinstance(response, dict) else []
+                )
+                report_statuses = [
+                    str(row.get("status", "")).upper()
+                    for row in reports if isinstance(row, dict)
+                ]
+                accepted_reports = bool(report_statuses) and all(
+                    status in {"NEW", "PARTIALLY_FILLED", "FILLED"}
+                    for status in report_statuses
+                )
+                accepted_list_status = list_status in {"EXECUTING", "EXEC_STARTED"}
+                if list_id is None or not (accepted_reports or accepted_list_status):
+                    order_fsm.state = OrderState.RECONCILE_REQUIRED
+                    self._persist(intent, "AMBIGUOUS", "OCO creation response lacks authoritative order-list state")
+                    raise RuntimeError(
+                        "ExecutionBarrier: OCO creation response lacks authoritative order-list state"
+                    )
+                order_fsm.state = OrderState.OPEN
+            elif response_status:
+                order_fsm.observe_exchange_status(
+                    response_status,
+                    float(response.get("executedQty", 0) or 0),
+                )
+            elif (
+                isinstance(response, dict)
+                and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
+            ):
+                order_fsm.state = OrderState.OPEN
+            else:
+                order_fsm.state = OrderState.RECONCILE_REQUIRED
+                self._persist(
+                    intent,
+                    "AMBIGUOUS",
+                    "exchange response did not contain authoritative order state",
+                )
+                self._record(
+                    "ERROR",
+                    "execution_ambiguous",
+                    intent,
+                    "Exchange accepted an operation without authoritative state",
+                    {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
+                )
+                raise RuntimeError(
+                    "ExecutionBarrier: exchange response lacks authoritative order state"
+                )
             # The exchange call has already happened. Any local persistence failure
             # from this point is an ambiguous outcome, never evidence that no order exists.
             try:
