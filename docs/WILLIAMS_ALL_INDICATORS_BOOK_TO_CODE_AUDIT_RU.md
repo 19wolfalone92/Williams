@@ -62,13 +62,20 @@
 | **Thumb Trade** | Course: отдельная формация «пальцев», внутренние бары не считаются, важны экстремумы и типы баров | Полный detector не найден | **MISSING** как самостоятельный исполняемый профиль. |
 | **Hump Formation** | Course: Hump Start/Signal и отношение противоположных фракталов | Полный detector не найден | **MISSING/PARTIAL**; не подменяется обычным fractal breakout. |
 | **T-W-R / Profitunity Partner / Planned Trade** | Course: последовательный checklist контекста, momentum, структуры, триггера и плана | Есть MTF/campaign/risk components, но полный обязательный workflow не найден | **PARTIAL**. Диагностическая запись решения не доказывает полный старый учебный процесс. |
-| **Exits: 3/5-bar trailing** | TC2: динамический стоп за экстремумом последних 3 или 5 ценовых баров | Campaign trail policy и структурные/ATR правила | **PARTIAL/HYBRID**. В этой ветке требуется подтвердить точную production exit path; 3-bar и 5-bar должны быть отдельными профилями, а не скрытой смесью. |
+| **Exits: 3/5-bar trailing** | TC2: динамический стоп за экстремумом последних 3 или 5 ценовых баров | `FuturesWilliamsRuntime._trail` uses the selected 3–5 closed-bar low/high plus one tick for TC2 | **CODE-PRESENT, SOURCE-ALIGNED MECHANISM**. `CAMPAIGN_TRAIL_BARS` is clipped to 3..5. Exact runtime/recovery behaviour still needs replay/Demo proof. |
 | **Teeth-close / Lips-fast exit** | NTD: close относительно Teeth; Lips возможна как более быстрая защита в быстром рынке | Есть Teeth/ATR/fractal logic в campaign/legacy layers | **PARTIAL**. Отделить книжные exit profiles от hard safety exit. |
 | **Opposite signal / exhaustion exit** | TC2/NTD: альтернативные способы закрытия; не каждый обратный признак должен закрывать позицию автоматически | Campaign exit, wave exhaustion and hard guards | **PARTIAL**. Должна быть явная причина выхода и provenance. |
 | **Reverse pyramid 1:5:4:3:2** | TC2: исторический пример распределения размера, не универсальный риск-процент | Campaign risk weights | **ENGINEERING ADAPTATION**. Нельзя обещать точные исторические количества; фактический риск пересчитывается по stop, fills, fees и exposure. |
 | **Psychology / belief systems** | Во всех книгах/Course — важная часть метода и дисциплины | Diagnostics/decision traces частично объясняют решения | Не является напрямую OHLC-индикатором; не надо имитировать его как булев сигнал. |
 
-## 3. Исправления кода, сделанные в этом проходе
+## 3. Прямые страницы и рисунки, повторно сверенные в этом проходе
+
+- **TC2, глава 11 «Третий Мудрец», печатные страницы 135–137; PDF-страницы 150–152, рисунки 11.7–11.10.** Текст прямо говорит, что фрактал может иметь центральный бар **или группу**, что сигнал формируется минимум пятью барами и что важна точка срабатывания относительно пасти Аллигатора, а не только место образования. На рис. 11.7 показаны валидные и невалидные формации; на рис. 11.10 показана последовательность сигналов.
+- **TC2, глава 12, печатные страницы 138–143; PDF-страницы 153–158, рисунки 12.1–12.2.** Проверены порядок WM1 → Super AO → WM3 как идеальный сценарий, вход за максимумом третьего зелёного AO-соответствующего ценового бара, добавления по новым фракталам, альтернативы когда первым срабатывает фрактал или Super AO, и стоп за минимумом/максимумом последних 3–5 ценовых баров. Источник прямо допускает, что первым сигналом может быть WM2 или WM3.
+- **Trading Chaos Course, сканированные страницы 68–72 (печатные Level II, pp. 36–40),** просмотрены изображения Thumb Trade, Key Formation Definitions и Hump Formations & Signals. На таблице Key Formation Definitions фрактал — центральный бар/группа с двумя более низкими High / двумя более высокими Low по сторонам; Thumb имеет отдельные условия по последовательности экстремумов, внутренним/параллельным барам и объёму; Hump Formation требует отдельной связи противоположных фракталов.
+- **Trading Chaos Course, сканированные страницы 85–92 (Level III, pp. 10–17),** просмотрены изображения Profitunity Trading Partner, Two-Bar Reversal/Air Bag, T-W-R / 5/34/5 MACD, Fractal (Hump), Thumb Trade, worksheet и checklist. Это последовательный старый учебный процесс, а не один индикатор или синоним TC2 Three Wise Men.
+
+## 4. Исправления кода, сделанные в этом проходе
 
 1. `strategy.py`: фрактал больше не представлен только строгой одиночной пятибарной проверкой. Обрабатывается смежная группа равных экстремумов; фиксируются начало группы, якорь и индекс подтверждения; отдельный флаг ставится на фактическом баре подтверждения.
 2. `williams_signals.py`: WM3/NTD потребители используют явную связь confirmation→pivot, а защитный reference охватывает противоположный экстремум всей равной группы.
@@ -77,7 +84,7 @@
 5. Добавлен `test_williams_indicator_fidelity.py`: extended equal-high/equal-low confirmation, no-premature-confirmation и MFI warm-up/proxy checks.
 6. Оба Python CI workflow включают новый регрессионный файл; release gate проверяет наличие новых causal metadata и MFI validity state.
 
-## 4. Оставшиеся проблемы, которые нельзя честно объявить решёнными
+## 5. Оставшиеся проблемы, которые нельзя честно объявить решёнными
 
 - Не доказана авторская численная формула angulation: текущий score — аппроксимация.
 - Не доказано, что trade count/base volume эквивалентны tick volume; MFI остаётся proxy.
@@ -88,7 +95,7 @@
 - Не доказана end-to-end эквивалентность выходов выбранному книжному профилю.
 - Для этой серии изменений пока требуется CI на точном HEAD и replay golden vectors. До получения результатов не заявлять PASS.
 
-## 5. Правило для дальнейших исправлений
+## 6. Правило для дальнейших исправлений
 
 Каждый indicator/signal должен иметь: `source_profile`, `source_rule_id`, `formation_index`, `confirmation_index`, `trigger_index/time`, `trigger_price`, `protective_reference`, `invalidation_reason` и `decision_reason`. Отсутствие обязательных полей блокирует увеличение экспозиции.
 
