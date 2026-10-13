@@ -154,11 +154,17 @@ class CampaignEngine:
 
     @staticmethod
     def choose_initial_signal(signals: Iterable[SignalSpec]) -> SignalSpec | None:
+        now_ms = int(time.time() * 1000)
         candidates = [
             s for s in signals
             if s.role == SignalRole.ENTRY
             and s.side in {"BUY", "SELL"}
             and s.trigger_price > 0
+            # A stale signal must never be revived into a new campaign. Zero
+            # expiry is retained only for legacy/test-created signals; all
+            # production extractors are expected to provide a concrete expiry.
+            and (not s.expires_at_ms or now_ms <= int(s.expires_at_ms))
+            and (not s.signal_bar_time_ms or int(s.signal_bar_time_ms) <= now_ms)
         ]
         if not candidates:
             return None
