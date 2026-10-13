@@ -280,6 +280,7 @@ def main() -> None:
         "test_android_ui_routes_directly_to_local_runtime_without_remote_backend",
         "test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries",
         "test_android_campaign_and_intents_are_sqlite_backed",
+        "test_android_reconcile_and_kill_latches_are_sqlite_durable",
         "test_android_reversal_htf_gate_matches_python_campaign_contract",
         "test_android_daily_loss_is_rechecked_at_order_admission",
         "test_android_signed_execution_boundary_rejects_legacy_spot_routes",
