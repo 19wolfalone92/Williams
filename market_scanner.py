@@ -13,7 +13,7 @@ from feature_store import FeatureStore, build_market_feature_vector
 from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
 from williams_signals import extract_long_signal_specs
 from shadow_execution import ShadowExecutionSimulator
-from trading_config import DEFAULT_SYMBOLS
+from trading_config import DEFAULT_SYMBOLS, TradingConfig
 
 
 log = logging.getLogger("williams-scanner")
@@ -136,7 +136,7 @@ class MarketScanner:
         # `None` means resolve the configured/default universe. An explicit []
         # remains a genuine empty test universe and does not fall back to all.
         self.explicit_symbols = symbols is not None
-        allowed_symbols = set(DEFAULT_SYMBOLS)
+        allowed_symbols = set(TradingConfig.from_env().symbols)
         requested_symbols = (
             [str(x).upper().strip() for x in symbols if str(x).strip()]
             if symbols is not None
@@ -220,11 +220,13 @@ class MarketScanner:
 
     def _load_symbols(self):
         raw = os.getenv("SCAN_SYMBOLS", "").strip()
-        # ALL/AUTO/* means the fixed native Spot allowlist, never every exchange pair.
+        # TradingConfig is the single source of the fixed native Spot allowlist.
+        allowed = tuple(TradingConfig.from_env().symbols)
+        # ALL/AUTO/* means that configured allowlist, never every exchange pair.
         if not raw or raw.upper() in {"ALL", "AUTO", "*"}:
-            return list(DEFAULT_SYMBOLS)
+            return list(allowed)
         requested = [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
-        return [x for x in requested if x in DEFAULT_SYMBOLS]
+        return [x for x in requested if x in allowed]
     def _atr(df, period):
         prev = df["close"].shift(1)
         tr = pd.concat(
