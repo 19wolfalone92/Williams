@@ -215,3 +215,18 @@ def test_direct_campaign_entry_api_cannot_bypass_daily_risk_gate():
     assert result[0]["status"] == "RISK_BLOCKED"
     assert result[0]["symbol"] == "BTCUSDT"
     assert calls == ["DAILY_RISK_GATE_BLOCKED"]
+
+
+@pytest.mark.parametrize("day_key", ["not-a-date", "2999-12-31"])
+def test_corrupt_or_future_daily_risk_day_key_fails_closed(day_key):
+    db = _DB(start_equity=1000.0, realized=0.0)
+    db.state["daily_risk_day"] = day_key
+    db.state["daily_loss_tripped"] = "1"
+
+    allowed, reason = EquityCircuitBreaker(0.03).check(
+        db, current_equity_quote=1200.0
+    )
+
+    assert allowed is False
+    assert "baseline unavailable" in reason
+    assert db.state["daily_loss_tripped"] == "1"
