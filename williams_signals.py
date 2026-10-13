@@ -315,7 +315,7 @@ def _latest_confirmed_fractal(
             if direction == "LONG"
             else pd.to_numeric(group["high"], errors="coerce").max()
         )
-        teeth = float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0)
+        teeth = float(row.get("teeth_current", row.get("teeth_current", row.get("teeth_shifted", 0.0))) or 0.0)
 
         if current_teeth is not None:
             if direction == "LONG" and trigger <= float(current_teeth):
@@ -467,7 +467,7 @@ def extract_ntd_ao_signal_specs(
         trigger_price=trigger,
         protective_reference=protective,
         trigger_buffer_ticks=1,
-        teeth_at_detection=float(current.get("teeth_current", current.get("teeth_shifted", 0.0)) or 0.0),
+        teeth_at_detection=float(current.get("teeth_current", current.get("teeth_current", current.get("teeth_shifted", 0.0))) or 0.0),
         alligator_bullish=bool(current.get("bullish_alligator", False)),
         alligator_awake=bool(current.get("alligator_awake", False)),
         reason=reason,
@@ -690,8 +690,8 @@ def extract_ntd_fractal_signal_specs(
         return []
     is_long = direction == "LONG"
     fractal_col = "fractal_up" if is_long else "fractal_down"
-    required = {fractal_col, "high", "low", "close", "teeth_shifted"}
-    if not required.issubset(ind.columns):
+    required = {fractal_col, "high", "low", "close"}
+    if not required.issubset(ind.columns) or not ({"teeth_current", "teeth_shifted"} & set(ind.columns)):
         return []
 
     tick = max(float(tick_size), 1e-12)
