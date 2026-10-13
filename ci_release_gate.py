@@ -169,6 +169,8 @@ def main() -> None:
     must(server, '"short_candidates": int(scanner_cache["short_candidates"])', "server.py")
     must(server, "'futures_leverage': t.config.futures_leverage", "server.py")
     must(server, "'futures_margin_type': t.config.futures_margin_type", "server.py")
+    must(server, "'allow_long': t.config.allow_long", "server.py")
+    must(server, "'allow_short': t.config.allow_short", "server.py")
     for needle in (
         "FuturesWilliamsRuntime",
         "BinanceFuturesClient",
@@ -200,6 +202,9 @@ def main() -> None:
         "scannerConfiguredSymbols",
         "scannerLongCandidates",
         "scannerShortCandidates",
+        "status.allowLong",
+        "status.allowShort",
+        "futuresForceOneWay",
         '"BLOCKED" ->',
         '"PARTIAL" ->',
     ):
