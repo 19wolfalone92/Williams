@@ -1086,6 +1086,7 @@ def status():
         'scanner_scanning': bool(_scanner_snapshot()['scanning']),
         'scanner_symbols': int(_scanner_snapshot()['symbols_scanned']),
         'scanner_configured_symbols': int(_scanner_snapshot()['symbols_configured']),
+        'scanner_universe': list(t.config.symbols),
         'scanner_long_candidates': int(_scanner_snapshot()['long_candidates']),
         'scanner_short_candidates': int(_scanner_snapshot()['short_candidates']),
         'scanner_scan_status': dict(_scanner_snapshot()['scan_status']),
