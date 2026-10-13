@@ -7121,7 +7121,7 @@ private class NativeEngine(
     )
 
     private fun medianPrices(candles: List<CandleN>): List<Double> =
-        candles.map { (it.h + it.l) / 2.0 }
+        candles.map { williamsMedianPrice(it.h, it.l) }
 
     private fun smma(
         values: List<Double>,
