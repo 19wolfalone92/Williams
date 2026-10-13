@@ -232,6 +232,11 @@ class CampaignEngine:
     # ------------------------------------------------------------------
 
     def arm_entry(self, campaign: TradingCampaign, signal: SignalSpec) -> TradingCampaign:
+        now_ms = int(time.time() * 1000)
+        if signal.expires_at_ms and now_ms > int(signal.expires_at_ms):
+            raise ValueError("cannot arm expired Williams entry signal")
+        if signal.signal_bar_time_ms and int(signal.signal_bar_time_ms) > now_ms:
+            raise ValueError("cannot arm Williams entry signal from a future candle")
         if campaign.state not in {CampaignState.SIGNAL_DETECTED, CampaignState.ENTRY_ARMING}:
             raise ValueError(f"Cannot arm entry from {campaign.state.value}")
         campaign.current_signal_id = signal.signal_id
@@ -252,6 +257,11 @@ class CampaignEngine:
         return campaign
 
     def arm_add_on(self, campaign: TradingCampaign, signal: SignalSpec, *, risk_quote: float, capital_reserved_quote: float) -> TradingCampaign:
+        now_ms = int(time.time() * 1000)
+        if signal.expires_at_ms and now_ms > int(signal.expires_at_ms):
+            raise ValueError("cannot arm expired Williams add-on signal")
+        if signal.signal_bar_time_ms and int(signal.signal_bar_time_ms) > now_ms:
+            raise ValueError("cannot arm Williams add-on signal from a future candle")
         if campaign.position_qty <= 0:
             raise ValueError("add-on requires an open campaign position")
         if signal.side != campaign.side:
