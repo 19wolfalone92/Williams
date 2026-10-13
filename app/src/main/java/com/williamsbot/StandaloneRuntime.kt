@@ -3329,6 +3329,8 @@ private class NativeEngine(
                         cancelCampaignEntryAndReconcile(intent, observed, reason)
                     status == "FILLED" ->
                         recoverCampaignPendingEntries()
+                    status in setOf("CANCELED", "EXPIRED", "REJECTED") && executed > 0.0 ->
+                        recoverCampaignPendingEntries()
                     status in setOf("CANCELED", "EXPIRED", "REJECTED") ->
                         clearCampaignPending(intent.symbol)
                     else -> setReconcileRequired(
