@@ -3812,8 +3812,13 @@ private class NativeEngine(
 
         // Macro D1 is an airbag; H4 supplies context; H1 is the only decision/entry TF.
         // M15/M5 are deliberately not read here and cannot create an entry.
+        val contextNow = futuresMarketData.exchangeNowMs()
+        val d1BarMs = frameSeconds("1d") * 1000L
+        val h4BarMs = frameSeconds("4h") * 1000L
         val d1 = fetchCandles(symbol, "1d", 90)
+            .filter { it.t > 0L && it.t + d1BarMs <= contextNow }
         val h4 = fetchCandles(symbol, "4h", 120)
+            .filter { it.t > 0L && it.t + h4BarMs <= contextNow }
         if (d1.size < 45 || h4.size < 45) return
         val d1Line = alligator(d1, d1.lastIndex)
         val h4Line = alligator(h4, h4.lastIndex)
