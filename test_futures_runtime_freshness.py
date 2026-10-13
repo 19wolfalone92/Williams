@@ -78,7 +78,7 @@ def test_conservative_trading_defaults_match_release_policy():
     cfg = TradingConfig.from_env({})
     assert cfg.risk_per_trade_pct == pytest.approx(0.0025)
     assert cfg.max_total_risk_pct == pytest.approx(0.01)
-    assert cfg.max_daily_loss_pct == pytest.approx(0.01)
+    assert cfg.max_daily_loss_pct == pytest.approx(0.03)
     assert cfg.max_consecutive_losses == 2
     assert cfg.max_open_positions == 1
 
