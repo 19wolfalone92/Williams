@@ -42,3 +42,18 @@ def test_futures_can_reduce_risk_but_not_increase_it():
     assert config.max_total_risk_pct == 0.004
     assert config.max_daily_loss_pct == 0.005
     assert config.max_open_positions == 1
+
+
+
+def test_lower_portfolio_cap_also_lowers_entry_and_campaign_caps():
+    config = TradingConfig.from_env({
+        "MAX_TOTAL_RISK_PCT": "0.001",
+        "MAX_RISK_PER_TRADE_PCT": "0.0025",
+        "CAMPAIGN_RISK_LIMIT_PCT": "0.006",
+        "INITIAL_ENTRY_RISK_PCT": "0.002",
+    })
+
+    assert config.max_total_risk_pct == 0.001
+    assert config.campaign_risk_limit_pct == 0.001
+    assert config.risk_per_trade_pct == 0.001
+    assert config.initial_entry_risk_pct == 0.001
