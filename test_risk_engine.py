@@ -208,3 +208,27 @@ def test_default_risk_is_half_percent():
     assert result.risk_quote == 50
     assert result.risk_pct == 0.5
     print("[PASS] default per-trade risk is 0.5%")
+
+
+def test_non_finite_market_and_risk_inputs_fail_closed():
+    engine = RiskEngine(balance_quote=10000)
+    cases = [
+        {"entry_price": float("nan"), "atr": 500},
+        {"entry_price": 100000, "atr": float("inf")},
+        {"entry_price": 100000, "atr": 500, "spread_pct": float("nan")},
+        {"entry_price": 100000, "atr": 500, "risk_pct_override": float("nan")},
+        {"entry_price": 100000, "atr": 500, "max_spread_pct": float("inf")},
+    ]
+    for case in cases:
+        kwargs = {"symbol": "BTCUSDT", "entry_price": 100000, "atr": 500}
+        kwargs.update(case)
+        result = engine.analyse(**kwargs)
+        assert result.allowed is False
+        assert "non-finite" in result.reason
+
+
+def test_zero_account_equity_fails_closed():
+    engine = RiskEngine(balance_quote=0)
+    result = engine.analyse(symbol="BTCUSDT", entry_price=100000, atr=500)
+    assert result.allowed is False
+    assert result.reason == "invalid account equity"
