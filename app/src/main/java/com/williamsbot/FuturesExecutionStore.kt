@@ -46,7 +46,9 @@ internal class FuturesExecutionStore(context: Context) :
                     arrayOf(key)
                 ).use { it.moveToFirst() }
                 if (!exists) {
-                    val oldValue = legacy.getString(key, null) ?: return@forEach
+                    // Legacy state includes String snapshots and Boolean safety latches.
+                    // Convert the stored value by type so migration cannot crash on getString().
+                    val oldValue = legacy.all[key]?.toString() ?: return@forEach
                     val values = ContentValues().apply {
                         put("state_key", key)
                         put("state_value", oldValue)
