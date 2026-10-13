@@ -527,6 +527,11 @@ private class NativeEngine(
     // and BUY-only campaign execution). It is NOT a USDⓈ-M Futures adapter. Never permit
     // order mutation until the Futures REST + position/protection/recovery contract is wired.
     private val futuresExecutionAdapterReady = false
+    private val futuresCampaignCoordinator by lazy {
+        NativeFuturesCampaignCoordinator(prefs) {
+            BinanceUsdMFuturesTestnetAdapter(key(), secret(), http)
+        }
+    }
     private val historyStore = MarketHistoryStore(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
@@ -8242,6 +8247,7 @@ private class NativeEngine(
             .put("binance_testnet", true)
             .put("exchange_market", "USDⓈ-M_FUTURES_REQUIRED")
             .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
+            .put("futures_campaign_coordinator", futuresCampaignCoordinator.status())
             .put("status", status(fast = true))
             .put("settings", settings())
             .put("system_info", JSONObject()
