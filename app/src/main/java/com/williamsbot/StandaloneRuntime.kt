@@ -5608,6 +5608,9 @@ private class NativeEngine(
                 }
             }
         }.onFailure {
+            // If the equity source or durable breaker state is unavailable,
+            // keep new exposure blocked until a later successful persisted check.
+            equityCircuitBreakerPersistenceReady = false
             lastError =
                 "equity monitor: " +
                     (it.message ?: it.javaClass.simpleName)
