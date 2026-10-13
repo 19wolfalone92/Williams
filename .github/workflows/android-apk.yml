@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, audit/williams-2.1-task-009-integration]
     paths:
       - 'app/**'
       - '*.gradle.kts'
