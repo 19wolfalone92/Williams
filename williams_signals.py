@@ -516,6 +516,92 @@ def extract_ntd_ac_signal_specs(
     )]
 
 
+def extract_ntd_zone_add_on_specs(
+    symbol: str,
+    ind: pd.DataFrame,
+    *,
+    side: str,
+    timeframe: str,
+    tick_size: float,
+    max_age_bars: int = 1,
+) -> list[SignalSpec]:
+    """Detect NTD Green/Red Zone continuation additions on a closed price bar.
+
+    NTD zone colour is determined by AO and AC histogram direction, not by
+    whether either oscillator is above/below zero. A same-colour price bar in
+    the matching zone can propose a continuation add-on after the external
+    fractal gate. It can never open a flat campaign.
+    """
+    direction = str(side or "").upper()
+    if direction not in {"LONG", "SHORT"} or ind is None or len(ind) < 2:
+        return []
+    required = {"open", "high", "low", "close", "ao", "ac", "teeth_shifted"}
+    gate_col = "long_fractal_outside" if direction == "LONG" else "short_fractal_outside"
+    if not required.issubset(ind.columns) or gate_col not in ind.columns:
+        return []
+    current = ind.iloc[-1]
+    previous = ind.iloc[-2]
+    if not bool(current.get(gate_col, False)):
+        return []
+
+    try:
+        ao_now, ao_prev = float(current["ao"]), float(previous["ao"])
+        ac_now, ac_prev = float(current["ac"]), float(previous["ac"])
+        open_price = float(current["open"])
+        high = float(current["high"])
+        low = float(current["low"])
+        close = float(current["close"])
+        teeth = float(current.get("teeth_shifted", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return []
+    values = (ao_now, ao_prev, ac_now, ac_prev, open_price, high, low, close)
+    if not all(math.isfinite(v) for v in values) or min(open_price, high, low, close) <= 0 or high < low:
+        return []
+
+    is_long = direction == "LONG"
+    # AO/AC colour is the direction of each histogram relative to its previous
+    # closed value. The zone rule does not impose a zero-line restriction.
+    if is_long:
+        if not (ao_now > ao_prev and ac_now > ac_prev and close > open_price):
+            return []
+        order_side = "BUY"
+        trigger = high + max(float(tick_size), 1e-12)
+        protective = low
+    else:
+        if not (ao_now < ao_prev and ac_now < ac_prev and close < open_price):
+            return []
+        order_side = "SELL"
+        trigger = low - max(float(tick_size), 1e-12)
+        protective = high
+    if trigger <= 0 or (is_long and close >= trigger) or (not is_long and close <= trigger):
+        return []
+
+    signal_time = _row_time_ms(current)
+    if signal_time <= 0:
+        return []
+    return [SignalSpec.new(
+        symbol=symbol,
+        side=order_side,
+        signal_type=SignalType.ZONE_ADD_ON,
+        role=SignalRole.ADD_ON,
+        timeframe=timeframe,
+        signal_bar_time_ms=signal_time,
+        trigger_price=trigger,
+        protective_reference=protective,
+        trigger_buffer_ticks=1,
+        teeth_at_detection=teeth,
+        alligator_bullish=bool(current.get("bullish_alligator", False)),
+        alligator_awake=bool(current.get("alligator_awake", False)),
+        reason=(
+            "NTD Green Zone continuation add-on; BUY STOP above closed green bar"
+            if is_long else
+            "NTD Red Zone continuation add-on; SELL STOP below closed red bar"
+        ),
+        source_candle_index=len(ind) - 1,
+        expires_at_ms=_expiry(signal_time, timeframe, max_age_bars),
+    )]
+
+
 def extract_ntd_fractal_signal_specs(
     symbol: str,
     ind: pd.DataFrame,
