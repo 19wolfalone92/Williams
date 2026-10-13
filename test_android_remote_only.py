@@ -77,6 +77,15 @@ def test_android_campaign_and_intents_are_sqlite_backed():
     assert "prefs.edit().putString(intentsKey" not in coordinator
 
 
+def test_android_daily_loss_is_rechecked_at_order_admission():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+
+    assert "val dailyLossAllowsEntry = runCatching { checkFuturesDailyLoss() }" in runtime
+    assert "if (!dailyLossAllowsEntry) return" in runtime
+    assert "FUTURES_DAILY_LOSS_CHECK_FAILED" in runtime
+    assert 'if (lossPct >= 0.01)' in runtime
+
+
 def test_android_reversal_htf_gate_matches_python_campaign_contract():
     android = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     python = _read(ROOT / "futures_williams_runtime.py")
