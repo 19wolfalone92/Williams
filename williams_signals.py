@@ -142,10 +142,14 @@ def _latest_super_ao(
             streak = int(row.get(streak_col, 0) or 0)
         except (TypeError, ValueError):
             streak = 0
-        # WM2 is the third consecutive same-direction AO bar. Detect the
-        # Wise-Man event independently of WM3/fractal state; campaign, context
-        # and risk admission must be applied downstream.
-        if streak == 3:
+        # WM2 is a one-shot event on the configured Nth consecutive AO bar.
+        # Keep this threshold aligned with strategy.calculate_indicators(), which
+        # reads SUPER_AO_BARS from configuration.
+        try:
+            event_bar_count = max(1, int(os.getenv("SUPER_AO_BARS", "3")))
+        except (TypeError, ValueError):
+            return None
+        if streak == event_bar_count:
             trigger_base = float(row["high"] if side == "LONG" else row["low"])
             protective = float(row["low"] if side == "LONG" else row["high"])
             return i, trigger_base, protective
