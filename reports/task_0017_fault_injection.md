@@ -28,3 +28,8 @@ These results are targeted Python production-abstraction tests, not complete clo
 - FI-13B: test repeats concurrent schema initialization 12 times on fresh files, checking worker termination, zero recorded exceptions, both successes, and SQLite integrity before/after reopen.
 - FI-07 only injects a crash immediately after reconciliation commit in the shown fake-exchange suite; this is not coverage of every SUBMITTING/UNKNOWN/RECONCILING boundary. Comprehensive crash/restart matrix and lease-expiry-under-work tests remain open.
 - The test code catches main-thread `BrokenBarrierError` to allow worker failures to be recorded; any worker exception is asserted empty. It still does not establish cross-process safety.
+
+
+## TASK 001.12 Android evidence correction
+
+At code SHA `b6d43d439a1c49c577570d36332bbe1c60ff7477`, Python Campaign tests passed (262 passed, 4 warnings) and Android job 115116130632 in [run 38342390656](https://github.com/19wolfalone92/Williams/actions/runs/38342390656) succeeded for unit tests, lint, APK build, signature, checksum, provenance, package identity and artifact upload. APK SHA-256: `e9ce68cfeac340c09979463aa5a2e0b1a346d08d19403e163a2d99589f254ac6`. The FI-13/FI-13B loops are still same-process threads; no process-kill matrix at every durable boundary was run. P0 remains open.
