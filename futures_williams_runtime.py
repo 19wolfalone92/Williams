@@ -26,7 +26,11 @@ from db import Database
 from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache
 from strategy import calculate_indicators, config_from_env
-from williams_signals import extract_long_signal_specs, extract_short_signal_specs
+from williams_signals import (
+    extract_long_signal_specs,
+    extract_short_signal_specs,
+    extract_ntd_ao_signal_specs,
+)
 from campaign_engine import CampaignEngine
 from equity_breaker import EquityCircuitBreaker
 from campaign_model import (
@@ -229,31 +233,47 @@ class FuturesWilliamsScanner:
         if not (spread_pct <= float(os.getenv("MAX_SPREAD_PCT", "0.0015"))):
             return []
 
-        long_specs = extract_long_signal_specs(
-            symbol,
-            ind,
-            timeframe=self.interval,
-            tick_size=tick,
-            point_zero_confirmed=point_zero_confirmed,
-            point_zero_score=point_zero_score,
-            require_point_zero_for_reversal=os.getenv(
-                "REQUIRE_POINT_ZERO_FOR_WM1", "false"
-            ).lower() == "true",
-        )
-        short_specs = extract_short_signal_specs(
-            symbol,
-            ind,
-            timeframe=self.interval,
-            tick_size=tick,
-            point_zero_confirmed=point_zero_confirmed,
-            point_zero_score=point_zero_score,
-            # WM1 is a valid first-presenting signal on either side. Requiring
-            # Point Zero on shorts but not longs would create an undocumented
-            # directional asymmetry; make it an explicit opt-in gate for both.
-            require_point_zero_for_reversal=os.getenv(
-                "REQUIRE_POINT_ZERO_FOR_WM1", "false"
-            ).lower() == "true",
-        )
+        profile = os.getenv(
+            "WILLIAMS_SIGNAL_PROFILE", "TC2_THREE_WISE_MEN"
+        ).strip().upper()
+        if profile == "TC2_THREE_WISE_MEN":
+            long_specs = extract_long_signal_specs(
+                symbol,
+                ind,
+                timeframe=self.interval,
+                tick_size=tick,
+                point_zero_confirmed=point_zero_confirmed,
+                point_zero_score=point_zero_score,
+                require_point_zero_for_reversal=os.getenv(
+                    "REQUIRE_POINT_ZERO_FOR_WM1", "false"
+                ).lower() == "true",
+            )
+            short_specs = extract_short_signal_specs(
+                symbol,
+                ind,
+                timeframe=self.interval,
+                tick_size=tick,
+                point_zero_confirmed=point_zero_confirmed,
+                point_zero_score=point_zero_score,
+                require_point_zero_for_reversal=os.getenv(
+                    "REQUIRE_POINT_ZERO_FOR_WM1", "false"
+                ).lower() == "true",
+            )
+        elif profile == "NTD_FIVE_DIMENSIONS":
+            # Keep New Trading Dimensions AO entries edition-specific. Do not
+            # silently blend these with TC2's sequential Three Wise Men flow.
+            long_specs = extract_ntd_ao_signal_specs(
+                symbol, ind, side="LONG", timeframe=self.interval, tick_size=tick
+            )
+            short_specs = extract_ntd_ao_signal_specs(
+                symbol, ind, side="SHORT", timeframe=self.interval, tick_size=tick
+            )
+        else:
+            self.last_signal_profile_error = (
+                "WILLIAMS_SIGNAL_PROFILE must be TC2_THREE_WISE_MEN or NTD_FIVE_DIMENSIONS"
+            )
+            return []
+        self.last_signal_profile_error = None
         long_htf, short_htf = self._htf(symbol)
         out: list[FuturesCandidate] = []
 
@@ -290,6 +310,9 @@ class FuturesWilliamsScanner:
                 SignalType.REVERSAL: 3.0,
                 SignalType.SUPER_AO: 2.0,
                 SignalType.FRACTAL: 1.0,
+                SignalType.AO_TWIN_PEAKS: 3.0,
+                SignalType.AO_SAUCER: 2.0,
+                SignalType.AO_ZERO_LINE: 1.0,
             }.get(signal.signal_type, 0.0)
             score = 60.0 + freshness * 20.0 + type_bonus
             if signal.alligator_awake:
