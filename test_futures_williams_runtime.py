@@ -1175,3 +1175,29 @@ def test_scanner_reports_all_ten_evaluated_symbols_and_both_directions(monkeypat
     assert {candidate.side for candidate in candidates} == {"LONG", "SHORT"}
     assert candidates[0].score == 61.0
     assert len(candidates) == 20
+
+
+def test_futures_config_rejects_symbol_universe_drift():
+    import pytest
+
+    with pytest.raises(ValueError, match="WILLIAMS_SYMBOLS"):
+        TradingConfig.from_env({
+            "BINANCE_MARKET": "futures_usdt",
+            "WILLIAMS_SYMBOLS": "BTCUSDT,ETHUSDT",
+        })
+
+    with pytest.raises(ValueError, match="AUTO_SCAN_SYMBOLS"):
+        TradingConfig.from_env({
+            "BINANCE_MARKET": "futures_usdt",
+            "AUTO_SCAN_SYMBOLS": "BTCUSDT,ETHUSDT",
+        })
+
+
+def test_futures_config_keeps_fixed_ten_symbols_even_when_auto_alias_is_used():
+    config = TradingConfig.from_env({
+        "BINANCE_MARKET": "futures_usdt",
+        "WILLIAMS_SYMBOLS": "ALL",
+        "AUTO_SCAN_SYMBOLS": "AUTO",
+    })
+    assert config.symbols == DEFAULT_FUTURES_SYMBOLS
+    assert len(config.symbols) == 10
