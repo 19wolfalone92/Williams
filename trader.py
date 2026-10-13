@@ -1230,18 +1230,17 @@ class Trader:
             if not OrderMath.validate_notional(actual_qty, sl_d, self.symbol_rules, buffer_pct):
                 raise RuntimeError('OCO SL notional is below protected minimum')
 
-            self.refresh_execution_context(self.symbol)
-            snap = self.context_cache.snapshot()
-            required_versions = {tf: snap.context(self.symbol, tf).version for tf in self.config.structural_timeframes}
+            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
             intent = OrderIntent.new(
                 self.symbol,
                 'SELL',
                 'OCO',
-                required_context_versions=required_versions,
-                purpose='EXIT',
+                required_context_versions={},
+                purpose='CAMPAIGN_PROTECTION',
                 quantity=self.client.decimal_format(actual_qty),
+                client_order_id=cid,
+                max_age_ms=60_000,
             )
-            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
             self._set_state('EXIT_PENDING')
             result = self.execution_barrier.execute(
                 intent,
