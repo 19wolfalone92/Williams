@@ -31,7 +31,7 @@ class PortfolioController:
 
         self.scanner = MarketScanner(
             client=client,
-            symbols=(symbols if symbols else None),
+            symbols=symbols,
             interval=self.interval,
             context_cache=self.context_cache,
         )
