@@ -572,7 +572,13 @@ class CampaignExecutionService:
                     except Exception:
                         pass
 
-                if status in {"NEW", "PENDING_NEW"} and executed <= 0:
+                if (
+                    (status in {"NEW", "PENDING_NEW"} and executed <= 0)
+                    or (
+                        force_cancel_reason
+                        and status == "PARTIALLY_FILLED"
+                    )
+                ):
                     # Conditional entries must remain causally valid while
                     # waiting at Binance. Expiry/cancellation is a System
                     # Safety/Implementation rule; it is not attributed to the
