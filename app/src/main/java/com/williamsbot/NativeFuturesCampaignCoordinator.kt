@@ -195,7 +195,7 @@ internal class NativeFuturesCampaignCoordinator(
 
                 matchingIntent?.put("exchange_status", "OPEN_PROTECTED")
                     ?.put("protection_status", "PROTECTED")
-                    ?.put("protection_client_id", protective?.optString("clientAlgoId", matchingIntent.optString("protection_client_id")))
+                    ?.put("protection_client_id", protective?.optString("clientAlgoId", matchingIntent?.optString("protection_client_id") ?: "") ?: "")
                     ?.put("protective_stop", protective?.optString("triggerPrice", protective?.optString("stopPrice", matchingIntent.optString("protective_stop"))))
                     ?.put("last_reconciled_ms", System.currentTimeMillis())
             }
@@ -330,6 +330,52 @@ internal class NativeFuturesCampaignCoordinator(
             JSONObject()
                 .put("accepted", false)
                 .put("state", state.name)
+                .put("blocker", lastBlocker)
+                .put("error", failure.message ?: failure.javaClass.simpleName)
+        }
+    }
+
+    /** Cancel unfilled entries on STOP/KILL without retrying ambiguous mutations. */
+    fun cancelPendingEntries(reason: String): JSONObject = synchronized(lock) {
+        val adapter = adapterFactory()
+        val all = intents()
+        val openPositions = adapter.positions()
+        val openSymbols = mutableSetOf<String>()
+        for (i in 0 until openPositions.length()) {
+            val row = openPositions.optJSONObject(i) ?: continue
+            if (kotlin.math.abs(row.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0) {
+                openSymbols.add(row.optString("symbol"))
+            }
+        }
+        try {
+            for (i in 0 until all.length()) {
+                val intent = all.optJSONObject(i) ?: continue
+                if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
+                val symbol = intent.optString("symbol")
+                val status = intent.optString("exchange_status").uppercase(Locale.US)
+                if (symbol in openSymbols || status !in activeStatuses) continue
+                val clientId = intent.optString("client_id")
+                intent.put("exchange_status", "CANCEL_SUBMISSION_UNKNOWN")
+                    .put("cancel_reason", reason)
+                    .put("cancel_attempt_at_ms", System.currentTimeMillis())
+                saveIntents(all)
+                val result = when (intent.optString("kind")) {
+                    EntryKind.LIMIT.name -> adapter.cancelOrder(symbol, clientId)
+                    EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name -> adapter.cancelAlgoOrder(symbol, clientId)
+                    else -> throw IllegalStateException("Unknown pending-entry type; cannot cancel safely")
+                }
+                intent.put("exchange_status", "CANCELED")
+                    .put("cancel_result", result.toString())
+                    .put("canceled_at_ms", System.currentTimeMillis())
+                saveIntents(all)
+            }
+            state = if (openSymbols.isEmpty()) State.READY else State.OPEN_PROTECTED
+            lastBlocker = null
+            JSONObject().put("ok", true).put("state", state.name).put("reason", reason)
+        } catch (failure: Exception) {
+            state = State.RECONCILE_REQUIRED
+            lastBlocker = "ambiguous_pending_entry_cancel_reconcile_required"
+            JSONObject().put("ok", false).put("state", state.name)
                 .put("blocker", lastBlocker)
                 .put("error", failure.message ?: failure.javaClass.simpleName)
         }
