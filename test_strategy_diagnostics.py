@@ -59,3 +59,18 @@ print(
     "Long signal:",
     bool(last["long_signal"]),
 )
+
+
+
+def test_ntd_zone_and_trade_count_mfi_proxy_are_exposed():
+    proxy_df = make_data()
+    proxy_df["trades"] = list(range(100, 220))
+    proxy_result = calculate_indicators(proxy_df, config_from_env())
+    last = proxy_result.iloc[-1]
+    assert last["mfi_proxy_source"] == "BINANCE_TRADE_COUNT_PROXY"
+    assert abs(float(last["mfi_proxy"]) - (
+        float(last["high"]) - float(last["low"])
+    ) / float(last["trades"])) < 1e-12
+    assert last["williams_zone"] in {"GREEN", "RED", "GRAY"}
+    assert "ac_green" in proxy_result.columns
+    assert "ac_red" in proxy_result.columns
