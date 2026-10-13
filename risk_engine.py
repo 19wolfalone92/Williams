@@ -91,7 +91,8 @@ class RiskEngine:
         self.max_position_fraction = float(max_position_fraction)
         # Compatibility/configuration only. Daily PnL enforcement belongs to
         # EquityCircuitBreaker at the final portfolio entry-admission boundary.
-        self.max_daily_loss_pct = float(max_daily_loss_pct)
+        # Report the same project-wide ceiling as the authoritative breaker.
+        self.max_daily_loss_pct = min(0.03, float(max_daily_loss_pct))
         self.min_rr = float(min_rr)
         self.max_atr_pct = float(max_atr_pct)
         self.fee_buffer_per_side_pct = float(fee_buffer_per_side_pct)
