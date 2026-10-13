@@ -997,7 +997,8 @@ private class NativeEngine(
 
     fun health(): JSONObject =
         JSONObject()
-            .put("ok", true)
+            .put("ok", running && !reconcileRequired && !killLatched)
+            .put("execution_ready", executionReady())
             .put("service", "williams-native")
             .put("version", BuildConfig.VERSION_NAME)
             .put("standalone", true)
@@ -1217,7 +1218,10 @@ private class NativeEngine(
         // account-event transport is enabled; unknown state blocks new entries.
         userStream.stop()
         userStreamConnected = false
-        userStreamSyncRequired = false
+        // The legacy Spot subscription protocol is deliberately not treated as a
+        // Futures account stream. REST reconciliation remains active, but diagnostics
+        // must continue to report the missing Futures user stream.
+        userStreamSyncRequired = true
         historyReady = false
         historyState = "LOADING"
         historyLastError = null
