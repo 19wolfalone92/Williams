@@ -145,28 +145,37 @@ class TradingConfig:
             # Legacy Spot mode retains its own market-specific configuration.
             symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
 
-        max_positions = max(0, _int(source, "MAX_OPEN_POSITIONS", 5))
+        max_positions = min(10, max(0, _int(source, "MAX_OPEN_POSITIONS", 5)))
         risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
         risk = max(0.0, min(0.005, _float(source, risk_key, 0.005)))
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
         execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", source.get("INTERVAL", "1h"))).lower()
-        futures_leverage = max(1, min(20, _int(source, "FUTURES_LEVERAGE", 2)))
+        futures_leverage = max(1, min(2, _int(source, "FUTURES_LEVERAGE", 2)))
         futures_margin_type = str(source.get("FUTURES_MARGIN_TYPE", "ISOLATED")).strip().upper()
-        if futures_margin_type not in {"ISOLATED", "CROSSED"}:
+        if market == "futures_usdt" and futures_margin_type != "ISOLATED":
+            raise ValueError("FUTURES_MARGIN_TYPE must be ISOLATED")
+        if futures_margin_type != "ISOLATED":
             futures_margin_type = "ISOLATED"
+        futures_force_one_way = _bool(source, "FUTURES_FORCE_ONE_WAY", True)
+        if market == "futures_usdt" and not futures_force_one_way:
+            raise ValueError("FUTURES_FORCE_ONE_WAY must remain enabled")
 
         return cls(
             symbols=symbols,
             structural_timeframes=_tf_chain(execution_timeframe, source),
             execution_timeframe=execution_timeframe,
+            market=market,
+            futures_leverage=futures_leverage,
+            futures_margin_type=futures_margin_type,
+            futures_force_one_way=futures_force_one_way,
             allow_long=_bool(source, "ALLOW_LONG", True),
             allow_short=_bool(source, "ALLOW_SHORT", True),
             require_htf_confirmation=_bool(source, "REQUIRE_HTF_CONFIRMATION", True),
             no_trade_when_uncertain=_bool(source, "NO_TRADE_WHEN_UNCERTAIN", True),
             risk_per_trade_pct=risk,
             max_total_risk_pct=max(total_risk, risk),
-            max_daily_loss_pct=max(0.0, _float(source, "MAX_DAILY_LOSS_PCT", 0.03)),
+            max_daily_loss_pct=max(0.0, min(0.03, _float(source, "MAX_DAILY_LOSS_PCT", 0.03))),
             max_consecutive_losses=max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 3)),
             cooldown_minutes=max(0, _int(source, "COOLDOWN_MINUTES", 30)),
             max_open_positions=max_positions,
