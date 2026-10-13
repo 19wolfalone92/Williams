@@ -2152,6 +2152,26 @@ class FuturesWilliamsRuntime:
         tick = self._tick(symbol)
         try:
             current_price = float(self.client.ticker_price(symbol)["price"])
+
+            # NTD exit rule: a closed price bar through the Alligator Teeth
+            # invalidates the current trend leg. Evaluate only completed bars;
+            # this is a distinct strategy exit, not a stop-price adjustment.
+            # The chart-displaced Teeth series is used consistently with the
+            # displayed Alligator and does not read future candles.
+            if {"high", "low", "close"}.issubset(closed.columns) and len(closed) >= 40:
+                indicator_frame = calculate_indicators(closed, config_from_env())
+                last = indicator_frame.iloc[-1]
+                close_price = float(last.get("close", 0.0) or 0.0)
+                teeth_price = float(last.get("teeth_shifted", 0.0) or 0.0)
+                if close_price > 0 and teeth_price > 0:
+                    crossed_teeth = (
+                        campaign.side == "BUY" and close_price < teeth_price
+                    ) or (
+                        campaign.side == "SELL" and close_price > teeth_price
+                    )
+                    if crossed_teeth:
+                        return self._exit_market(campaign, "TEETH_CLOSE_EXIT")
+
             if campaign.side == "BUY":
                 recent = [float(x) for x in closed["low"].tail(window) if float(x) > 0]
                 proposed = min(recent) - tick if recent else 0.0
