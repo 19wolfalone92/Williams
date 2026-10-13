@@ -515,8 +515,11 @@ class FuturesWilliamsRuntime:
         self.engine = CampaignEngine(
             self.db,
             portfolio_risk_limit_pct=self.config.max_total_risk_pct,
-            campaign_risk_limit_pct=self.config.risk_per_trade_pct,
-            initial_risk_fraction_of_campaign=1.0 / 15.0,
+            campaign_risk_limit_pct=self.config.campaign_risk_limit_pct,
+            initial_risk_fraction_of_campaign=(
+                self.config.initial_entry_risk_pct /
+                max(self.config.campaign_risk_limit_pct, 1e-12)
+            ),
         )
         self.scanner = FuturesWilliamsScanner(
             self.client,
@@ -1033,17 +1036,28 @@ class FuturesWilliamsRuntime:
         campaign.tags["pending_signal"] = pending
 
     def _initial_risk_pct(self):
-        campaign_cap = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
-        return max(0.0, campaign_cap * 1.0 / 15.0)
+        # Keep the actual first entry aligned with Android: 0.20% equity by
+        # default, never above the unified 0.25% per-entry ceiling.
+        return max(0.0, min(
+            float(self.config.initial_entry_risk_pct),
+            float(self.config.risk_per_trade_pct),
+            0.0025,
+        ))
 
     def _next_add_risk_pct(self, campaign):
-        cap = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
-        weights = (1, 5, 4, 3, 2)
-        idx = min(max(int(campaign.tranche_index), 1), len(weights) - 1)
-        weight = weights[idx]
+        # Add-ons consume the same persisted campaign/portfolio risk budget;
+        # this is a ceiling, not a mandatory reverse-pyramid sizing formula.
+        cap = max(0.0, min(
+            float(self.config.campaign_risk_limit_pct),
+            float(self.config.max_total_risk_pct),
+            0.006,
+        ))
+        equity = max(self._equity(), 1e-12)
         used = float(campaign.open_risk_quote or 0.0) + float(campaign.pending_risk_quote or 0.0)
-        remaining = max(0.0, cap * self._equity() - used)
-        return min(remaining / max(self._equity(), 1e-12), cap * weight / 15.0)
+        remaining = max(0.0, cap * equity - used)
+        # Even when the legacy campaign engine asks for an add, keep its risk
+        # bounded by one per-entry limit and the remaining campaign allocation.
+        return min(remaining / equity, float(self.config.risk_per_trade_pct), 0.0025)
 
     def _size_from_risk(self, symbol, trigger, stop, risk_pct):
         equity = self._equity()
