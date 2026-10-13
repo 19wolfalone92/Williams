@@ -191,3 +191,27 @@ def test_trip_latch_without_day_key_fails_closed():
     assert allowed is False
     assert "baseline unavailable" in reason
     assert db.state["daily_loss_tripped"] == "1"
+
+
+def test_direct_campaign_entry_api_cannot_bypass_daily_risk_gate():
+    from types import SimpleNamespace
+    from portfolio_trader import MultiPositionTrader
+
+    calls = []
+
+    class _CampaignExecution:
+        def reconcile_pending_entries(self, **kwargs):
+            calls.append(kwargs.get("force_cancel_reason"))
+            return []
+
+    trader = MultiPositionTrader.__new__(MultiPositionTrader)
+    trader.campaign_execution = _CampaignExecution()
+    trader._daily_entry_guard = lambda: (False, "daily loss limit reached")
+    trader.db = SimpleNamespace(log_event=lambda *args, **kwargs: None)
+    selection = SimpleNamespace(candidate=SimpleNamespace(symbol="BTCUSDT"))
+
+    result = trader.execute_campaign([selection])
+
+    assert result[0]["status"] == "RISK_BLOCKED"
+    assert result[0]["symbol"] == "BTCUSDT"
+    assert calls == ["DAILY_RISK_GATE_BLOCKED"]
