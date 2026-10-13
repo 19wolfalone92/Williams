@@ -778,3 +778,17 @@ def test_ntd_ac_below_zero_short_is_mirrored():
     assert len(signals) == 1
     assert signals[0].side == "SELL"
     assert math.isclose(signals[0].trigger_price, 98.4)
+
+
+
+def test_invalid_williams_profile_blocks_scan_before_exchange_discovery(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "TYPO_PROFILE")
+
+    class Client:
+        def exchange_info(self):
+            raise AssertionError("invalid profile must block before exchange access")
+
+    scanner = FuturesWilliamsScanner(Client(), interval="5m")
+    assert scanner.scan() == []
+    assert scanner.last_scan_status["state"] == "BLOCKED"
+    assert scanner.last_scan_status["reason"] == "INVALID_WILLIAMS_SIGNAL_PROFILE"
