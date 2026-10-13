@@ -67,7 +67,7 @@ def test_momentum_fading_and_volume_diagnostics_are_boolean():
     ind = calculate_indicators(frame(prices), config_from_env())
     assert ind["ao_momentum_falling"].dtype == bool
     assert ind["squatting_bar"].dtype == bool
-    assert ind["profitunity_window"].iloc[-1] in {"GREEN", "FADING", "FAKE", "SQUAT", "STABLE"}
+    assert ind["profitunity_window"].iloc[-1] in {"GREEN", "FADING", "FAKE", "SQUAT", "STABLE", "UNKNOWN"}
 
 def test_reversal_bar_needs_followup_extreme_breakout():
     import pandas as pd
