@@ -226,7 +226,7 @@ private data class BaseAnalysis(
 )
 
 private class StandaloneServer(private val context: Context) {
-    // In-process Futures Runtime API; no network listener is created.
+    // in-process Futures Runtime API; no remote execution dependency; no loopback listener.
     private val prefs = EncryptedSharedPreferences.create(
         context,
         "williams_native_secure",
