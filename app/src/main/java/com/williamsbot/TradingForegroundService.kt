@@ -42,7 +42,7 @@ class TradingForegroundService : Service() {
                 .setSmallIcon(R.drawable.ic_launcher)
                 .setContentTitle("Williams Trader")
                 .setContentText(
-                    "Remote Futures cockpit: backend engine"
+                    "Autonomous USDⓈ-M Futures Testnet runtime on this device"
                 )
                 .setOngoing(true)
                 .setCategory(
@@ -66,8 +66,6 @@ class TradingForegroundService : Service() {
             }
         )
 
-        // The authoritative Futures trading engine is backend-only.
-        // This service intentionally does not start the legacy native Spot runtime.
     }
 
     override fun onStartCommand(
@@ -76,14 +74,22 @@ class TradingForegroundService : Service() {
         startId: Int
     ): Int {
         when (intent?.action) {
-            ACTION_START -> {
-                // ACTION_START keeps only the Android foreground service alive.
-                // Trading remains exclusively on the remote Futures backend.
-            }
-
             ACTION_STOP -> {
-                // Trading is stopped through the backend control API.
+                runCatching { StandaloneRuntime.stopTrading() }
+                StandaloneRuntime.stop()
                 stopSelf()
+                return START_NOT_STICKY
+            }
+            else -> {
+                // Also runs after a sticky service recreation with a null intent.
+                // Autostart is safe because persisted state is reconciled with Binance
+                // before the scanner can submit any new order.
+                runCatching {
+                    StandaloneRuntime.start(applicationContext)
+                    StandaloneRuntime.autostart(applicationContext)
+                }.onFailure {
+                    android.util.Log.e("WilliamsFutures", "Local Futures runtime startup failed", it)
+                }
             }
         }
 
@@ -91,9 +97,8 @@ class TradingForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        // Do not clear auto-run state here. A user-driven STOP explicitly
-        // calls stopTrading() before stopSelf(); unexpected destruction
-        // should leave the engine state available for recreation.
+        // Do not clear auto_run on unexpected teardown. START_STICKY recreation
+        // re-enters autostart(), which reconciles the exchange state first.
         super.onDestroy()
     }
 
