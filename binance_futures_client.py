@@ -12,7 +12,7 @@ import time
 import hmac
 import hashlib
 from decimal import Decimal, ROUND_DOWN
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import requests
 
@@ -33,11 +33,48 @@ class BinanceFuturesClient:
         self.api_key = api_key
         self.api_secret = api_secret
         self.testnet = bool(testnet)
-        self.base_url = (
-            os.getenv("BINANCE_FUTURES_TESTNET_URL", "https://demo-fapi.binance.com")
-            if self.testnet
-            else os.getenv("BINANCE_FUTURES_URL", "https://fapi.binance.com")
-        )
+        if self.testnet:
+            # Never allow an environment override to silently route a Testnet
+            # client to the live Futures host. This flag controls both endpoint
+            # selection and the runtime's live-order permission gate.
+            configured_url = os.getenv(
+                "BINANCE_FUTURES_TESTNET_URL", "https://demo-fapi.binance.com"
+            ).strip().rstrip("/")
+            parsed_url = urlparse(configured_url)
+            if (
+                parsed_url.scheme != "https"
+                or parsed_url.hostname != "demo-fapi.binance.com"
+                or parsed_url.username is not None
+                or parsed_url.password is not None
+                or parsed_url.port not in (None, 443)
+                or parsed_url.path not in ("", "/")
+                or parsed_url.query
+                or parsed_url.fragment
+            ):
+                raise ValueError(
+                    "Testnet client must use https://demo-fapi.binance.com; "
+                    "custom/live Futures endpoints are forbidden in Testnet mode"
+                )
+            self.base_url = "https://demo-fapi.binance.com"
+        else:
+            configured_url = os.getenv(
+                "BINANCE_FUTURES_URL", "https://fapi.binance.com"
+            ).strip().rstrip("/")
+            parsed_url = urlparse(configured_url)
+            if (
+                parsed_url.scheme != "https"
+                or parsed_url.hostname != "fapi.binance.com"
+                or parsed_url.username is not None
+                or parsed_url.password is not None
+                or parsed_url.port not in (None, 443)
+                or parsed_url.path not in ("", "/")
+                or parsed_url.query
+                or parsed_url.fragment
+            ):
+                raise ValueError(
+                    "Live Futures client must use https://fapi.binance.com"
+                )
+            self.base_url = "https://fapi.binance.com"
         self.recv_window = int(recv_window)
         self.timeout = timeout
         self.session = requests.Session()
