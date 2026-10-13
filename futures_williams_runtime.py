@@ -50,7 +50,7 @@ from campaign_model import (
 from data import fetch_klines
 from binance_client import BinanceAPIError
 from binance_futures_client import BinanceFuturesClient
-from trading_config import DEFAULT_FUTURES_SYMBOLS
+from trading_config import DEFAULT_FUTURES_SYMBOLS, TradingConfig
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -488,7 +488,7 @@ class FuturesWilliamsRuntime:
     is_futures_runtime = True
 
     def __init__(self, api_key=None, api_secret=None, testnet=None, context_cache=None):
-        self.config = __import__("trading_config").TradingConfig.from_env()
+        self.config = TradingConfig.from_env()
         self.symbol = os.getenv("SYMBOL", self.config.symbols[0]).upper()
         self.interval = self.config.execution_timeframe
         self.htf_interval = os.getenv("HTF_INTERVAL", "1h")
