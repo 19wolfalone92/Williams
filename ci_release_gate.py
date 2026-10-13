@@ -280,6 +280,9 @@ def main() -> None:
         "test_android_ui_routes_directly_to_local_runtime_without_remote_backend",
         "test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries",
         "test_android_campaign_and_intents_are_sqlite_backed",
+        "test_android_reversal_htf_gate_matches_python_campaign_contract",
+        "test_android_signed_execution_boundary_rejects_legacy_spot_routes",
+        "test_android_user_stream_is_not_the_spot_signed_subscription_protocol",
     ):
         must(android_contract, needle, "Android autonomous runtime contract")
 
