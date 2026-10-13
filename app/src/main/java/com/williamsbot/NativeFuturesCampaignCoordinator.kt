@@ -179,7 +179,6 @@ internal class NativeFuturesCampaignCoordinator(
                 val amount = position.optString("positionAmt").toDoubleOrNull() ?: 0.0
                 val direction = if (amount > 0.0) "LONG" else "SHORT"
                 val algos = protectiveOrdersBySymbol.getOrPut(symbol) { adapter.openAlgoOrders(symbol) }
-                var protective = findProtectiveStop(algos, direction)
                 val latestIntentIndex = latestEntryIndexBySymbol[symbol]
                 val matchingIntent = latestIntentIndex?.let { persisted.optJSONObject(it) }
                     ?.takeIf {
@@ -188,6 +187,11 @@ internal class NativeFuturesCampaignCoordinator(
                             it.optString("direction") == direction &&
                             it.optString("protective_stop").toDoubleOrNull()?.let { p -> p > 0.0 } == true
                     }
+                var protective = findProtectiveStop(
+                    algos, direction,
+                    matchingIntent?.optString("protection_client_id"),
+                    matchingIntent?.optString("protective_stop")
+                )
 
                 if (protective == null) {
                     if (matchingIntent == null) {
@@ -208,7 +212,7 @@ internal class NativeFuturesCampaignCoordinator(
                         // permission to resubmit: the operator must resolve the uncertainty.
                         runCatching { adapter.queryAlgoOrder(symbol, protectionClientId) }
                         val refreshed = adapter.openAlgoOrders(symbol)
-                        protective = findProtectiveStop(refreshed, direction)
+                        protective = findProtectiveStop(refreshed, direction, protectionClientId, matchingIntent.optString("protective_stop"))
                         if (protective == null) {
                             anyUnprotected = true
                             lastBlocker = "$symbol protective-stop submission is ambiguous; no retry performed"
@@ -625,9 +629,23 @@ internal class NativeFuturesCampaignCoordinator(
         require(plan.clientId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client order ID" }
     }
 
-    private fun findProtectiveStop(orders: JSONArray, direction: String): JSONObject? =
-        (0 until orders.length()).mapNotNull { orders.optJSONObject(it) }
-            .firstOrNull { isProtectiveStop(it, direction) }
+    private fun findProtectiveStop(
+        orders: JSONArray,
+        direction: String,
+        expectedClientId: String? = null,
+        expectedStop: String? = null
+    ): JSONObject? {
+        val candidates = (0 until orders.length()).mapNotNull { orders.optJSONObject(it) }
+            .filter { isProtectiveStop(it, direction) }
+        if (!expectedClientId.isNullOrBlank()) {
+            return candidates.firstOrNull { it.optString("clientAlgoId") == expectedClientId }
+        }
+        val stop = expectedStop?.toBigDecimalOrNull() ?: return null
+        return candidates.firstOrNull { row ->
+            val trigger = row.optString("triggerPrice", row.optString("stopPrice")).toBigDecimalOrNull()
+            trigger != null && trigger.compareTo(stop) == 0
+        }
+    }
 
     private fun isProtectiveStop(order: JSONObject, direction: String): Boolean {
         val type = order.optString("type", order.optString("orderType")).uppercase(Locale.US)
