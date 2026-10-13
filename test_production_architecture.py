@@ -39,9 +39,13 @@ def test_copy_on_write_versions_and_immutable_snapshot():
 
 
 def test_execution_barrier_rejects_stale_context():
+    class IntentStore:
+        def save_execution_intent(self, intent, status, reason=""):
+            return None
+
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, IntentStore())
     snap = cache.snapshot()
     cache.publish(context())
     intent = OrderIntent.new(
@@ -56,9 +60,13 @@ def test_execution_barrier_rejects_stale_context():
 
 
 def test_execution_barrier_serializes_publish_and_submit():
+    class IntentStore:
+        def save_execution_intent(self, intent, status, reason=""):
+            return None
+
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, IntentStore())
     version = cache.snapshot().context("BTCUSDT", "1h").version
     started = threading.Event()
     published = threading.Event()
