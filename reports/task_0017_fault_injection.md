@@ -20,3 +20,11 @@
 | FI-12 | Retry while unresolved | PASS; no second fake-exchange mutation | Android not injected |
 
 These results are targeted Python production-abstraction tests, not complete closure of each canonical acceptance matrix. No live credentials or live orders were used. P0 remains open.
+
+## TASK 001.12 exact-HEAD addendum
+
+- At SHA `4e7ad93990b4b9d3b5291bed9d83909fbfac3bcf`, Campaign Python suite passed 262 tests (run [38341931762](https://github.com/19wolfalone92/Williams/actions/runs/38341931762), job 115114648003); backend suite passed 223 tests (run [38341931627](https://github.com/19wolfalone92/Williams/actions/runs/38341931627), job 115114647440).
+- FI-13: test repeats 12 races on fresh SQLite files; two independent database connections/two threads contend for one intent. It asserts exactly one lease claim, one observation, zero exchange mutations, no thread exceptions/timeouts, preserved exchange order ID and expected final state. No multiprocessing coverage is present.
+- FI-13B: test repeats concurrent schema initialization 12 times on fresh files, checking worker termination, zero recorded exceptions, both successes, and SQLite integrity before/after reopen.
+- FI-07 only injects a crash immediately after reconciliation commit in the shown fake-exchange suite; this is not coverage of every SUBMITTING/UNKNOWN/RECONCILING boundary. Comprehensive crash/restart matrix and lease-expiry-under-work tests remain open.
+- The test code catches main-thread `BrokenBarrierError` to allow worker failures to be recorded; any worker exception is asserted empty. It still does not establish cross-process safety.
