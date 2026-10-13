@@ -48,6 +48,10 @@ def main() -> None:
         "FUTURES_LEVERAGE=2",
         "FUTURES_MARGIN_TYPE=ISOLATED",
         "FUTURES_FORCE_ONE_WAY=true",
+        "FUTURES_APPROVED_SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT,LTCUSDT",
+        "WILLIAMS_SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT,LTCUSDT",
+        "EXECUTION_TIMEFRAME=1h",
+        "STRUCTURAL_TIMEFRAMES=1d,4h,1h,15m",
         "ALLOW_LONG=true",
         "ALLOW_SHORT=true",
         "TAKE_PROFIT_PCT=0.0",
@@ -59,6 +63,8 @@ def main() -> None:
         must(env, needle, ".env.example")
 
     cfg = read("trading_config.py")
+    must(cfg, "WILLIAMS_SYMBOLS must match the approved ten-symbol Futures universe", "trading_config.py")
+    must(cfg, "AUTO_SCAN_SYMBOLS cannot override the fixed Futures universe", "trading_config.py")
     for needle in (
         'market: str = "futures_usdt"',
         "futures_leverage: int = 2",
@@ -104,6 +110,13 @@ def main() -> None:
         must(signals, needle, "williams_signals.py")
 
     futures = read("futures_williams_runtime.py")
+    must(futures, "default_symbols = DEFAULT_FUTURES_SYMBOLS", "futures_williams_runtime.py")
+    must(futures, "tuple(approved) != DEFAULT_FUTURES_SYMBOLS", "futures_williams_runtime.py")
+    must(futures, '("LONG", long_specs, long_htf)', "futures_williams_runtime.py")
+    must(futures, '("SHORT", short_specs, short_htf)', "futures_williams_runtime.py")
+    must(futures, '"ALLOW_LONG", "true"', "futures_williams_runtime.py")
+    must(futures, '"ALLOW_SHORT", "true"', "futures_williams_runtime.py")
+    must(futures, 'result.sort(key=lambda c: (-c.score, -c.signal.signal_bar_time_ms, c.symbol, c.side))', "futures_williams_runtime.py")
     for needle in (
         "class FuturesWilliamsScanner",
         "class FuturesWilliamsRuntime",
@@ -132,6 +145,9 @@ def main() -> None:
         must(client, needle, "binance_futures_client.py")
 
     server = read("server.py")
+    must(server, '"symbols_configured": int(scanner_cache["symbols_configured"])', "server.py")
+    must(server, '"long_candidates": int(scanner_cache["long_candidates"])', "server.py")
+    must(server, '"short_candidates": int(scanner_cache["short_candidates"])', "server.py")
     for needle in (
         "FuturesWilliamsRuntime",
         "BinanceFuturesClient",
