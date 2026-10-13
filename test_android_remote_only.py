@@ -43,7 +43,7 @@ def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
 
     assert "wss://demo-fstream.binance.com/market/stream?streams=" in runtime
     assert "wss://demo-fstream.binance.com/public/stream?streams=" in runtime
-    assert "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE" in runtime
+    assert "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/listenKeyExpired" in runtime
     assert "startMarketDataStream()" in runtime
     assert "startPublicDataStream()" in runtime
     assert "publicWebSocketFresh()" in runtime
