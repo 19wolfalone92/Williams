@@ -333,4 +333,11 @@ def extract_long_signal_specs(
     unique: dict[tuple[str, int], SignalSpec] = {}
     for spec in specs:
         unique[(spec.signal_type.value, spec.signal_bar_time_ms)] = spec
-    return sorted(unique.values(), key=lambda x: (x.signal_bar_time_ms, x.signal_type.value))
+    # Do not leak expired historical candidates to selection/admission. The
+    # latest row is the most recent closed candle; compare in exchange candle
+    # time so replay remains deterministic and does not depend on wall-clock.
+    active = [
+        spec for spec in unique.values()
+        if spec.expires_at_ms > current_time
+    ]
+    return sorted(active, key=lambda x: (x.signal_bar_time_ms, x.signal_type.value))
