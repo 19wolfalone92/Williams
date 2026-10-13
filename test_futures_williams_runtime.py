@@ -1215,3 +1215,14 @@ def test_futures_universe_rejects_unapproved_ten_symbol_substitution(monkeypatch
     scanner = FuturesWilliamsScanner(Client(), interval="1h")
     assert scanner.universe() == []
     assert "canonical ten-symbol" in scanner.last_universe_error
+
+
+def test_futures_boolean_parser_matches_configuration_conventions(monkeypatch):
+    from futures_williams_runtime import _env_bool
+
+    for value in ("1", "true", "YES", "on"):
+        monkeypatch.setenv("ALLOW_SHORT", value)
+        assert _env_bool("ALLOW_SHORT", False) is True
+    for value in ("0", "false", "no", "off", ""):
+        monkeypatch.setenv("ALLOW_SHORT", value)
+        assert _env_bool("ALLOW_SHORT", True) is False
