@@ -2273,37 +2273,16 @@ class MultiPositionTrader:
                 "reason": "Legacy direct-market entry disabled; canonical CampaignEngine is required",
             }
 
-        # Reconcile ambiguous exchange mutations first, then continue managing
-        # existing campaigns even if another symbol remains unresolved.
-        pending_recovery = self.campaign_execution.reconcile_pending_entries()
+        # First reconcile/manage already-open campaigns so risk gating never
+        # suppresses exits. Then evaluate the portfolio-wide daily loss gate
+        # BEFORE adopting resting conditional BUYs: those orders can still fill
+        # at Binance even when this process refuses to create a new order.
         active_recovery = self.campaign_execution.reconcile_active_campaigns()
         campaign_monitor = self.campaign_monitor.monitor_all()
-        unresolved = self.unresolved_symbols()
-        pending_entries = self._pending_entries()
-        recovery = {
-            "ok": not unresolved and not pending_entries,
-            "unresolved_symbols": unresolved,
-            "pending_entries": [row[0] for row in pending_entries],
-            "results": pending_recovery + active_recovery,
-        }
-        if unresolved or pending_entries:
-            return {
-                "status": "BLOCKED",
-                "recovery": recovery,
-                "pending_recovery": pending_recovery,
-                "active_recovery": active_recovery,
-                "campaign_monitor": campaign_monitor,
-                "results": [],
-                "reason": "campaign reconciliation required",
-            }
 
         allowed, risk_reason = self._daily_entry_guard()
         if not allowed:
             self.db.log_event("WARNING", "daily_entry_blocked", risk_reason)
-            # A conditional BUY resting at Binance is still capable of opening
-            # new exposure after the breaker trips. Cancel only pending entry
-            # intents through the canonical barrier; protective OCO exits remain
-            # untouched and emergency reductions remain available.
             try:
                 cancelled_pending = self.campaign_execution.reconcile_pending_entries(
                     force_cancel_reason="DAILY_RISK_GATE_BLOCKED"
@@ -2327,8 +2306,32 @@ class MultiPositionTrader:
                 "status": "RISK_BLOCKED",
                 "results": [],
                 "reason": risk_reason,
+                "active_recovery": active_recovery,
+                "campaign_monitor": campaign_monitor,
                 "pending_entry_cancellation": cancelled_pending,
                 "pending_entry_cancellation_reconciled": not unresolved_cancels,
+            }
+
+        # Only after daily risk admission is confirmed may normal pending-entry
+        # adoption/revalidation run.
+        pending_recovery = self.campaign_execution.reconcile_pending_entries()
+        unresolved = self.unresolved_symbols()
+        pending_entries = self._pending_entries()
+        recovery = {
+            "ok": not unresolved and not pending_entries,
+            "unresolved_symbols": unresolved,
+            "pending_entries": [row[0] for row in pending_entries],
+            "results": pending_recovery + active_recovery,
+        }
+        if unresolved or pending_entries:
+            return {
+                "status": "BLOCKED",
+                "recovery": recovery,
+                "pending_recovery": pending_recovery,
+                "active_recovery": active_recovery,
+                "campaign_monitor": campaign_monitor,
+                "results": [],
+                "reason": "campaign reconciliation required",
             }
 
         balance = self._balance()
