@@ -864,8 +864,11 @@ private class NativeEngine(
         loadPersistedState()
         startRestDataProbe()
         restoreExecutionAccumulators()
+        // SQLite is authoritative for the execution-door lease. SharedPreferences
+        // mirrors it for backward compatibility, but must not hide a stale SQLite lease.
         val interruptedGateSymbol =
-            prefs.getString("execution_gate_symbol", "") ?: ""
+            (prefs.getString("execution_gate_symbol", "") ?: "")
+                .ifBlank { executionStore.readState("execution_gate_symbol").orEmpty() }
         if (interruptedGateSymbol.isNotBlank()) {
             reconcileRequired = true
             persistSafetyFlag("reconcile_required", true)
@@ -3266,30 +3269,66 @@ private class NativeEngine(
         }
     }
 
+    /**
+     * One account-wide Execution Door for every runtime-issued Futures mutation.
+     * Safety/recovery actions may explicitly opt into paused/stopped/reconcile states;
+     * ordinary entries never can. The lease is committed to SQLite and mirrored to
+     * encrypted preferences before network I/O. An unresolved lease fails closed.
+     */
     private fun withCampaignMutation(
         symbol: String,
         purpose: String,
+        allowPaused: Boolean = false,
+        allowStopped: Boolean = false,
+        allowKillLatched: Boolean = false,
+        allowReconcileRequired: Boolean = false,
         block: () -> JSONObject
     ): JSONObject {
-        if (!running) error("Runtime is not running")
-        if (paused) error("Runtime is paused")
-        if (reconcileRequired) error("RECONCILE_REQUIRED")
-        if (killLatched) error("KILL_SWITCH_LATCHED")
-        require(executionGate.tryReserve(symbol)) {
-            "Campaign execution already reserved for " + symbol
+        if (!running && !allowStopped) error("Runtime is not running")
+        if (paused && !allowPaused) error("Runtime is paused")
+        if (reconcileRequired && !allowReconcileRequired) error("RECONCILE_REQUIRED")
+        if (killLatched && !allowKillLatched) error("KILL_SWITCH_LATCHED")
+
+        // Campaign policy is account-wide (one active campaign), so distinct symbols
+        // must not obtain concurrent mutation reservations.
+        val reservationKey = "__FUTURES_ACCOUNT__"
+        require(executionGate.tryReserve(reservationKey)) {
+            "Futures Execution Door is already reserved by another mutation"
         }
-        prefs.edit()
-            .putString("execution_gate_symbol", symbol)
-            .putString("execution_gate_purpose", purpose)
-            .apply()
-        return try {
-            block()
-        } finally {
-            executionGate.release(symbol)
+
+        val leasePersisted = executionStore.writeExecutionGate(symbol, purpose) &&
             prefs.edit()
+                .putString("execution_gate_symbol", symbol)
+                .putString("execution_gate_purpose", purpose)
+                .commit()
+        if (!leasePersisted) {
+            executionGate.release(reservationKey)
+            reconcileRequired = true
+            persistSafetyFlag("reconcile_required", true)
+            val blocker = "Futures Execution Door lease could not be committed; exchange mutation blocked"
+            lastError = blocker
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, blocker)
+            error(blocker)
+        }
+
+        try {
+            return block()
+        } finally {
+            executionGate.release(reservationKey)
+            val sqliteCleared = executionStore.writeExecutionGate("", "")
+            val preferencesCleared = prefs.edit()
                 .remove("execution_gate_symbol")
                 .remove("execution_gate_purpose")
-                .apply()
+                .commit()
+            if (!sqliteCleared || !preferencesCleared) {
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+                val blocker = "Futures Execution Door lease could not be cleared durably after mutation"
+                lastError = blocker
+                scannerError = blocker
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, blocker)
+                throw IllegalStateException(blocker)
+            }
         }
     }
 
@@ -4511,8 +4550,17 @@ private class NativeEngine(
             stateMachine.force(TradingState.RECONCILE_REQUIRED, scannerError ?: "Futures reconciliation failed")
             return false
         }
+        // Never reopen entries if SQLite cannot confirm that the reconciliation
+        // latch was cleared. Persist first, then update the in-memory authority.
+        if (!persistSafetyFlag("reconcile_required", false)) {
+            reconcileRequired = true
+            val blocker = "SQLite could not persist cleared Futures reconciliation state"
+            lastError = blocker
+            scannerError = blocker
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, blocker)
+            return false
+        }
         reconcileRequired = false
-        persistSafetyFlag("reconcile_required", false)
         when (futuresCampaignCoordinator.state) {
             NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED ->
                 stateMachine.force(TradingState.PROTECTED, "Exchange confirms Futures position protected")
