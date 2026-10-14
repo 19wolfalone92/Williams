@@ -604,10 +604,25 @@ private class NativeEngine(
     // Startup only needs the frames that directly participate in execution.
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
     private val startupFrames = listOf("1d", "4h", "1h", "15m")
-    // Fetch enough closed candles for the scanner's 150-candle working set while
-    // leaving headroom for the currently forming candle.
+    // The H1 decision engine needs the full 150-candle working set. Higher-timeframe
+    // context has explicit lower minimums in the entry contract; requiring 150 D1
+    // candles during startup can deadlock scanning on a fresh Futures Demo market.
     private val startupHistoryLimit = 180
     private val minStartupHistoryCandles = 150
+
+    private fun startupHistoryLimit(frame: String): Int = when (frame) {
+        "1h" -> startupHistoryLimit
+        "4h" -> 120
+        "1d" -> 90
+        "15m" -> 90
+        else -> startupHistoryLimit
+    }
+
+    private fun minStartupHistoryCandles(frame: String): Int = when (frame) {
+        "1h" -> 150
+        "4h", "1d", "15m" -> 45
+        else -> minStartupHistoryCandles
+    }
     private val maxScanSymbols = 10
     private val waveTopN = 5
     private val scanExecutor = Executors.newFixedThreadPool(12)
@@ -2272,13 +2287,17 @@ private class NativeEngine(
                             var recent = emptyList<CandleN>()
                             var failure: Throwable? = null
                             for (attempt in 0 until 3) {
+                                val requiredCount = minStartupHistoryCandles(frame)
+                                val requestedCount = startupHistoryLimit(frame)
                                 val result = runCatching {
-                                    fetchCandles(symbol, frame, startupHistoryLimit)
+                                    fetchCandles(symbol, frame, requestedCount)
                                 }
                                 if (result.isSuccess) {
                                     recent = result.getOrDefault(emptyList())
-                                    if (recent.size >= minStartupHistoryCandles) break
-                                    failure = IllegalStateException("received " + recent.size + " closed candles")
+                                    if (recent.size >= requiredCount) break
+                                    failure = IllegalStateException(
+                                        "received " + recent.size + " closed candles; need " + requiredCount
+                                    )
                                 } else {
                                     failure = result.exceptionOrNull()
                                 }
@@ -2292,14 +2311,16 @@ private class NativeEngine(
                             }
 
                             if (!running || generation != runtimeGeneration) return@Callable false
+                            val requiredCount = minStartupHistoryCandles(frame)
+                            val requestedCount = startupHistoryLimit(frame)
                             val persistedCount = historyStore.count(symbol, frame).toInt()
-                            val ok = recent.size >= minStartupHistoryCandles &&
-                                persistedCount >= minStartupHistoryCandles
+                            val ok = recent.size >= requiredCount &&
+                                persistedCount >= requiredCount
                             if (ok) {
                                 val cacheKey = symbol + ":" + frame
                                 liveCandleCache[cacheKey] =
-                                    recent.takeLast(startupHistoryLimit).toMutableList()
-                                candleCache[symbol + ":" + frame + ":" + startupHistoryLimit] =
+                                    recent.takeLast(requestedCount).toMutableList()
+                                candleCache[symbol + ":" + frame + ":" + requestedCount] =
                                     System.currentTimeMillis() to recent
                                 indicatorSnapshots[cacheKey] =
                                     buildIndicatorSnapshot(recent, symbol, frame)
