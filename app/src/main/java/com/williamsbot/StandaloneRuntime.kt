@@ -756,9 +756,13 @@ private class NativeEngine(
     private val candleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CandleN>>>()
     private val liveCandleCache = java.util.concurrent.ConcurrentHashMap<String, MutableList<CandleN>>()
     private val indicatorSnapshots = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
+    // Keep last trade distinct from bid/ask midpoint: the chart LIVE line should
+    // follow the traded price first, then the live Futures bookTicker, then REST.
+    private val lastTradePrices = java.util.concurrent.ConcurrentHashMap<String, Double>()
+    private val lastTradeUpdatedAtMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val livePrices = java.util.concurrent.ConcurrentHashMap<String, Double>()
     private val livePriceUpdatedAtMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
-    // Chart fallback is rate-limited per symbol when the live Futures bookTicker stream is stale.
+    // Chart fallback is rate-limited per symbol when the live Futures public streams are stale.
     private val chartRestQuoteCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Double, Long>>()
     private val tradeFlow = java.util.concurrent.ConcurrentHashMap<String, ArrayDeque<TradeFlowSample>>()
     private val lastUserEventTimeByType = java.util.concurrent.ConcurrentHashMap<String, Long>()
@@ -2544,8 +2548,14 @@ private class NativeEngine(
         val symbol = data.optString("s").uppercase(Locale.US)
         if (symbol !in coreSymbols) return
         val price = data.optString("p").toDoubleOrNull() ?: return
+        if (!price.isFinite() || price <= 0.0) return
+        val receivedAtMs = System.currentTimeMillis()
+        lastTradePrices[symbol] = price
+        lastTradeUpdatedAtMs[symbol] = receivedAtMs
         val qty = data.optString("q").toDoubleOrNull() ?: return
-        val time = data.optLong("T", System.currentTimeMillis())
+        // Stream recency uses local receive time. Exchange trade timestamps can be
+        // offset from the phone clock and must not prematurely expire the 5s flow window.
+        val time = receivedAtMs
         val quote = price * qty
         if (quote <= 0.0) return
         val queue = tradeFlow.computeIfAbsent(symbol) { ArrayDeque() }
@@ -9576,13 +9586,27 @@ private class NativeEngine(
         }
 
         val nowMs = System.currentTimeMillis()
-        val lastWsAt = livePriceUpdatedAtMs[symbol] ?: 0L
-        val wsQuote = livePrices[symbol]?.takeIf {
-            it.isFinite() && it > 0.0 && lastWsAt > 0L && nowMs >= lastWsAt && nowMs - lastWsAt <= 5_000L
+        val lastTradeAt = lastTradeUpdatedAtMs[symbol] ?: 0L
+        val lastTradeQuote = lastTradePrices[symbol]?.takeIf {
+            it.isFinite() && it > 0.0 && lastTradeAt > 0L && nowMs >= lastTradeAt &&
+                nowMs - lastTradeAt <= 5_000L
         }
-        var liveQuote: Double? = wsQuote
-        var liveQuoteAtMs = if (wsQuote != null) lastWsAt else 0L
-        var liveQuoteSource = if (wsQuote != null) "WEBSOCKET" else "UNAVAILABLE"
+        val lastWsAt = livePriceUpdatedAtMs[symbol] ?: 0L
+        val bookTickerQuote = livePrices[symbol]?.takeIf {
+            it.isFinite() && it > 0.0 && lastWsAt > 0L && nowMs >= lastWsAt &&
+                nowMs - lastWsAt <= 5_000L
+        }
+        var liveQuote: Double? = lastTradeQuote ?: bookTickerQuote
+        var liveQuoteAtMs = when {
+            lastTradeQuote != null -> lastTradeAt
+            bookTickerQuote != null -> lastWsAt
+            else -> 0L
+        }
+        var liveQuoteSource = when {
+            lastTradeQuote != null -> "LAST_TRADE_WS"
+            bookTickerQuote != null -> "BOOK_TICKER_WS"
+            else -> "UNAVAILABLE"
+        }
         if (liveQuote == null) {
             val cachedRest = chartRestQuoteCache[symbol]?.takeIf {
                 it.first.isFinite() && it.first > 0.0 && nowMs >= it.second && nowMs - it.second <= 2_000L
