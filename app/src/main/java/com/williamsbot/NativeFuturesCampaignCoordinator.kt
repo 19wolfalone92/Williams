@@ -538,6 +538,7 @@ internal class NativeFuturesCampaignCoordinator(
                             )
                         }
                         openBySymbol[symbol] = confirmedPosition
+                            ?: throw IllegalStateException("Binance omitted $symbol after confirming a non-zero position amount")
                     }
                     intent.put("campaign_status", "POSITION_OPEN")
                         .put("last_reconciled_ms", System.currentTimeMillis())
