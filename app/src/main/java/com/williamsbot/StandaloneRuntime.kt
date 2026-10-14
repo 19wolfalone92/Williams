@@ -238,16 +238,16 @@ internal fun runtimeRecoveryContract(
 
 /** Prefer a live WS quote, then a fresh Futures REST ticker, then the last closed candle. */
 internal fun dashboardPrice(
-    websocketPrice: Double?,
+    livePrice: Double?,
     restPrice: Double?,
     lastClosedPrice: Double?,
-    websocketFresh: Boolean,
+    livePriceFresh: Boolean,
     restTickerFresh: Boolean
 ): Double? {
     fun valid(value: Double?): Double? =
         value?.takeIf { it.isFinite() && it > 0.0 }
-    return if (websocketFresh) valid(websocketPrice) else null
-        ?: if (restTickerFresh) valid(restPrice) else null
+    return (if (livePriceFresh) valid(livePrice) else null)
+        ?: (if (restTickerFresh) valid(restPrice) else null)
         ?: valid(lastClosedPrice)
 }
 
@@ -748,6 +748,7 @@ private class NativeEngine(
     private val liveCandleCache = java.util.concurrent.ConcurrentHashMap<String, MutableList<CandleN>>()
     private val indicatorSnapshots = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
     private val livePrices = java.util.concurrent.ConcurrentHashMap<String, Double>()
+    private val livePriceUpdatedAtMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val tradeFlow = java.util.concurrent.ConcurrentHashMap<String, ArrayDeque<TradeFlowSample>>()
     private val lastUserEventTimeByType = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private var marketSocket: WebSocket? = null
@@ -2443,6 +2444,7 @@ private class NativeEngine(
                 val ask = data.optString("a").toDoubleOrNull() ?: return
                 if (bid <= 0.0 || ask < bid) return
                 livePrices[symbol] = (bid + ask) / 2.0
+                livePriceUpdatedAtMs[symbol] = eventAt
             }
         }
     }
@@ -8759,6 +8761,7 @@ private class NativeEngine(
                         val price = row.optString("price").toDoubleOrNull() ?: 0.0
                         if (symbol in coreSymbols && price.isFinite() && price > 0.0) {
                             livePrices[symbol] = price
+                            livePriceUpdatedAtMs[symbol] = System.currentTimeMillis()
                             if (symbol == primarySymbol) restLastTickerPrice = price
                             found++
                         }
@@ -8930,10 +8933,13 @@ private class NativeEngine(
             .put(
                 "price",
                 dashboardPrice(
-                    websocketPrice = livePrices[primarySymbol],
+                    livePrice = livePrices[primarySymbol],
                     restPrice = restLastTickerPrice,
                     lastClosedPrice = primaryCandles.lastOrNull()?.c,
-                    websocketFresh = marketWebSocketFresh(),
+                    livePriceFresh = livePriceUpdatedAtMs[primarySymbol]?.let { updatedAt ->
+                        val nowMs = System.currentTimeMillis()
+                        updatedAt > 0L && nowMs >= updatedAt && nowMs - updatedAt <= 30_000L
+                    } == true,
                     restTickerFresh = restLastSuccessMs > 0L &&
                         System.currentTimeMillis() >= restLastSuccessMs &&
                         System.currentTimeMillis() - restLastSuccessMs <= 30_000L
