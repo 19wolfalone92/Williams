@@ -2365,6 +2365,7 @@ private class NativeEngine(
                         reachedHistoryBeginning = true
                         break
                     }
+                    val exchangeNowMs = futuresMarketData.exchangeNowMs()
 
                     val batch = ArrayList<MarketHistoryStore.Candle>(
                         array.length()
@@ -2441,7 +2442,6 @@ private class NativeEngine(
             val array = JSONArray(body)
             val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
             val exchangeNowMs = futuresMarketData.exchangeNowMs()
-                        val exchangeNowMs = futuresMarketData.exchangeNowMs()
 
             for (i in 0 until array.length()) {
                 val row = array.getJSONArray(i)
