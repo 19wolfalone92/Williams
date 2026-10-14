@@ -41,6 +41,20 @@ def main() -> None:
     for path in core_files:
         ast.parse(read(path), filename=path)
 
+    # P09 must execute real authenticated market-data checks, not be represented
+    # only by an offline checklist label.
+    testnet_gate = read("test_testnet_release_gate.py")
+    for needle in (
+        "def _validate_h1_market_snapshot",
+        'client.mark_price(item)',
+        'client.klines(item, "1h", limit=3)',
+        "market_data_checked",
+        "test_read_only_market_gate_rejects_stale_mark_price",
+        "test_read_only_market_gate_rejects_stale_closed_h1_candle",
+        "test_read_only_market_gate_rejects_inconsistent_ohlc",
+    ):
+        must(testnet_gate, needle, "test_testnet_release_gate.py")
+
     env = read(".env.example")
     for needle in (
         "TESTNET=true",
