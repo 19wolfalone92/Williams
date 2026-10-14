@@ -227,6 +227,16 @@ def test_android_kill_switch_never_closes_an_unmanaged_or_unreconciled_position(
     assert "manual reconciliation required" in coordinator
 
 
+def test_android_private_futures_stream_uses_supported_event_query_delimiters():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    endpoint = next(
+        line for line in runtime.splitlines()
+        if 'endpoint = "wss://demo-fstream.binance.com/private/ws?events=' in line
+    )
+    assert "ORDER_TRADE_UPDATE,ACCOUNT_UPDATE,ALGO_UPDATE" in endpoint
+    assert "CONDITIONAL_ORDER_TRIGGER_REJECT,listenKeyExpired" in endpoint
+    assert "ORDER_TRADE_UPDATE/ACCOUNT_UPDATE" not in endpoint
+
 def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
     user_stream = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
