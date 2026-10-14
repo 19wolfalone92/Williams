@@ -129,6 +129,14 @@ internal fun awesomeOscillatorAt(medianPrices: List<Double>, index: Int): Double
     return fastValues.average() - slowValues.average()
 }
 
+/** Accelerator Oscillator: AO minus the five-bar simple average of AO. */
+internal fun acceleratorOscillatorAt(aoValues: List<Double>, index: Int): Double {
+    if (index < 4 || index >= aoValues.size) return Double.NaN
+    val window = aoValues.subList(index - 4, index + 1)
+    if (window.any { !it.isFinite() }) return Double.NaN
+    return aoValues[index] - window.average()
+}
+
 internal data class StartupHistoryPolicy(
     val requestedCount: Int,
     val minimumCount: Int
@@ -750,6 +758,8 @@ private class NativeEngine(
     private val indicatorSnapshots = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
     private val livePrices = java.util.concurrent.ConcurrentHashMap<String, Double>()
     private val livePriceUpdatedAtMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    // Chart fallback is rate-limited per symbol when the live Futures bookTicker stream is stale.
+    private val chartRestQuoteCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Double, Long>>()
     private val tradeFlow = java.util.concurrent.ConcurrentHashMap<String, ArrayDeque<TradeFlowSample>>()
     private val lastUserEventTimeByType = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private var marketSocket: WebSocket? = null
@@ -8591,8 +8601,12 @@ private class NativeEngine(
         candles: List<CandleN>,
         index: Int
     ): Double {
-        val medians = candles.map { (it.h + it.l) / 2.0 }
-        return awesomeOscillatorAt(medians, index)
+        if (index < 33 || index >= candles.size) return Double.NaN
+        var fastSum = 0.0
+        var slowSum = 0.0
+        for (i in index - 4..index) fastSum += (candles[i].h + candles[i].l) / 2.0
+        for (i in index - 33..index) slowSum += (candles[i].h + candles[i].l) / 2.0
+        return fastSum / 5.0 - slowSum / 34.0
     }
 
     private fun aoBearishDivergence(candles: List<CandleN>): Boolean {
@@ -9405,17 +9419,21 @@ private class NativeEngine(
 
         val output = JSONArray()
         val prices = sourceCandles.map { it.c }
+        val medianPrices = sourceCandles.map { (it.h + it.l) / 2.0 }
+        val aoValues = medianPrices.indices.map { index -> awesomeOscillatorAt(medianPrices, index) }
+        val acValues = aoValues.indices.map { index -> acceleratorOscillatorAt(aoValues, index) }
+        val indicatorSnapshot = buildIndicatorSnapshot(sourceCandles, symbol, selectedInterval)
 
         if (prices.isNotEmpty()) {
             val jaw = williamsAlligatorLine(sourceCandles, 13, 8)
             val teeth = williamsAlligatorLine(sourceCandles, 8, 5)
             val lips = williamsAlligatorLine(sourceCandles, 5, 3)
-
-            val start =
-                max(0, sourceCandles.size - 120)
+            val start = max(0, sourceCandles.size - 120)
 
             for (i in start until sourceCandles.size) {
                 val c = sourceCandles[i]
+                val range = (c.h - c.l).coerceAtLeast(0.0)
+                val volumeProxy = range / c.v.coerceAtLeast(1e-12)
                 output.put(
                     JSONObject()
                         .put("time", c.t)
@@ -9423,47 +9441,50 @@ private class NativeEngine(
                         .put("high", c.h)
                         .put("low", c.l)
                         .put("close", c.c)
-                        .put(
-                            "jaw",
-                            jaw.getOrNull(i)
-                                ?: JSONObject.NULL
-                        )
-                        .put(
-                            "teeth",
-                            teeth.getOrNull(i)
-                                ?: JSONObject.NULL
-                        )
-                        .put(
-                            "lips",
-                            lips.getOrNull(i)
-                                ?: JSONObject.NULL
-                        )
-                        .put(
-                            "ao",
-                            ao(sourceCandles, i)
-                        )
-                        // Chart payload is diagnostic only. Never synthesize an
-                        // entry marker from Alligator+AO on the selected display TF;
-                        // H1 campaign logic is the sole signal authority.
+                        .put("jaw", jaw.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("teeth", teeth.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("lips", lips.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        // AO/AC are nullable during warm-up. Never let NaN/Infinity
+                        // abort the entire chart response for a valid symbol/timeframe.
+                        .put("ao", aoValues.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("ac", acValues.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("mfi_proxy", volumeProxy.takeIf { it.isFinite() } ?: JSONObject.NULL)
                         .put("signal_source", "DIAGNOSTIC_ONLY_H1_CAMPAIGN_AUTHORITY")
-                        .put(
-                            "fractal_up",
-                            isUpFractal(sourceCandles, i)
-                        )
-                        .put(
-                            "fractal_down",
-                            isDownFractal(sourceCandles, i)
-                        )
+                        .put("fractal_up", isUpFractal(sourceCandles, i))
+                        .put("fractal_down", isDownFractal(sourceCandles, i))
                 )
             }
         }
 
-        val liveQuote = livePrices[symbol]?.takeIf { it.isFinite() && it > 0.0 }
-            ?: runCatching { futuresMarketData.price(symbol) }.getOrNull()
+        val nowMs = System.currentTimeMillis()
+        val lastWsAt = livePriceUpdatedAtMs[symbol] ?: 0L
+        val wsQuote = livePrices[symbol]?.takeIf {
+            it.isFinite() && it > 0.0 && lastWsAt > 0L && nowMs >= lastWsAt && nowMs - lastWsAt <= 5_000L
+        }
+        var liveQuote: Double? = wsQuote
+        var liveQuoteAtMs = if (wsQuote != null) lastWsAt else 0L
+        var liveQuoteSource = if (wsQuote != null) "WEBSOCKET" else "UNAVAILABLE"
+        if (liveQuote == null) {
+            val cachedRest = chartRestQuoteCache[symbol]?.takeIf {
+                it.first.isFinite() && it.first > 0.0 && nowMs >= it.second && nowMs - it.second <= 2_000L
+            }
+            val restQuote = cachedRest ?: runCatching {
+                futuresMarketData.price(symbol).takeIf { it.isFinite() && it > 0.0 }?.let { it to nowMs }
+            }.getOrNull()
+            if (restQuote != null) {
+                chartRestQuoteCache[symbol] = restQuote
+                liveQuote = restQuote.first
+                liveQuoteAtMs = restQuote.second
+                liveQuoteSource = "REST_FALLBACK"
+            }
+        }
         return JSONObject()
             .put("symbol", symbol)
             .put("interval", selectedInterval)
             .put("live_price", liveQuote ?: JSONObject.NULL)
+            .put("live_price_at_ms", liveQuoteAtMs)
+            .put("live_price_source", liveQuoteSource)
+            .put("indicator_snapshot", indicatorSnapshot)
             .put("candles", output)
     }
 
