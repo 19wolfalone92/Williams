@@ -22,6 +22,26 @@ def test_android_starts_native_futures_runtime_from_foreground_service():
     assert "Futures Testnet runtime on this device" in service
 
 
+def test_android_boot_recovery_is_opt_in_and_keeps_reconciliation_gate():
+    manifest = _read(ANDROID / "AndroidManifest.xml")
+    boot_receiver = _read(ANDROID / "java/com/williamsbot/TradingBootReceiver.kt")
+    service = _read(ANDROID / "java/com/williamsbot/TradingForegroundService.kt")
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+
+    assert "android.permission.RECEIVE_BOOT_COMPLETED" in manifest
+    assert 'android:name=".TradingBootReceiver"' in manifest
+    assert "android.intent.action.BOOT_COMPLETED" in manifest
+    assert "android.intent.action.MY_PACKAGE_REPLACED" in manifest
+    assert 'getBoolean("auto_run", false)' in boot_receiver
+    assert "ContextCompat.startForegroundService" in boot_receiver
+    assert "TradingForegroundService.ACTION_START" in boot_receiver
+    assert "StandaloneRuntime.autostart(applicationContext)" in service
+    # The worker is started with private user-stream synchronization still required;
+    # new entries remain locked until exchange state is reconciled.
+    assert "userStreamSyncRequired = true" in runtime
+    assert "futuresCampaignCoordinator.reconcile()" in runtime
+
+
 def test_android_ui_routes_directly_to_local_runtime_without_remote_backend():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
