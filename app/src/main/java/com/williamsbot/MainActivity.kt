@@ -85,6 +85,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -2280,6 +2281,12 @@ private fun SettingsScreen(
     diagnosticsMessage: String,
     message: String
 ) {
+    val context = LocalContext.current
+    val batteryPowerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+    val batteryExemptionGranted =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+            batteryPowerManager.isIgnoringBatteryOptimizations(context.packageName)
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -2320,6 +2327,44 @@ private fun SettingsScreen(
                     InfoRow("Execution authority", "Автономный телефон • Binance напрямую")
                     InfoRow("Scanner universe", "USDⓈ-M Futures • 10 USDT contracts")
                     InfoRow("MTF", "D1/H4 context • H1 decisions • M15 monitoring")
+                }
+            }
+        }
+
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+            ) {
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("Фоновая работа Android", style = MaterialTheme.typography.titleMedium)
+                    InfoRow(
+                        "Doze exemption",
+                        if (batteryExemptionGranted) "Разрешено" else "Не подтверждено системой"
+                    )
+                    Text(
+                        "Для автономной работы откройте системные настройки приложения и проверьте режим батареи/фоновой активности. Поведение также зависит от производителя телефона; этот статус не заменяет физический тест.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.textMuted
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        Uri.fromParts("package", context.packageName, null)
+                                    )
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("ОТКРЫТЬ НАСТРОЙКИ ПРИЛОЖЕНИЯ")
+                    }
                 }
             }
         }
