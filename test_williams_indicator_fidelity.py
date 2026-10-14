@@ -131,17 +131,18 @@ def test_wm3_consumers_use_actual_confirmation_and_whole_plateau_stop():
     assert specs[0].protective_reference == 10.0
 
 
-def test_alligator_decision_lines_are_current_not_chart_displaced():
+def test_alligator_decision_lines_match_forward_shifted_chart_values():
     highs = [100 + (i * 0.05) ** 2 + 1 for i in range(80)]
     lows = [h - 2.0 for h in highs]
     ind = calculate_indicators(make_frame(highs, lows), config_from_env({}))
-    pd.testing.assert_series_equal(ind["jaw_current"], ind["jaw"], check_names=False)
-    pd.testing.assert_series_equal(ind["teeth_current"], ind["teeth"], check_names=False)
-    pd.testing.assert_series_equal(ind["lips_current"], ind["lips"], check_names=False)
-    pd.testing.assert_series_equal(ind["balance_line"], ind["jaw"], check_names=False)
-    pd.testing.assert_series_equal(ind["fractal_balance_line"], ind["teeth"], check_names=False)
-    # Legacy displaced columns remain available but must not feed decision aliases.
-    assert not ind["jaw_current"].equals(ind["jaw_shifted"])
+    pd.testing.assert_series_equal(ind["jaw_current"], ind["jaw_shifted"], check_names=False)
+    pd.testing.assert_series_equal(ind["teeth_current"], ind["teeth_shifted"], check_names=False)
+    pd.testing.assert_series_equal(ind["lips_current"], ind["lips_shifted"], check_names=False)
+    pd.testing.assert_series_equal(ind["balance_line"], ind["jaw_shifted"], check_names=False)
+    pd.testing.assert_series_equal(ind["fractal_balance_line"], ind["teeth_shifted"], check_names=False)
+    # Decision values must align with the line plotted at the present candle,
+    # not the unshifted SMMA value whose chart coordinate lies in the future.
+    assert not ind["jaw_current"].equals(ind["jaw"])
 
 
 def test_balance_line_and_profitunity_macd_components_are_explicit():
@@ -149,10 +150,10 @@ def test_balance_line_and_profitunity_macd_components_are_explicit():
     lows = [h - 2.0 for h in highs]
     ind = calculate_indicators(make_frame(highs, lows), config_from_env({}))
     pd.testing.assert_series_equal(
-        ind["balance_line"], ind["jaw_current"], check_names=False
+        ind["balance_line"], ind["jaw_shifted"], check_names=False
     )
     pd.testing.assert_series_equal(
-        ind["fractal_balance_line"], ind["teeth_current"], check_names=False
+        ind["fractal_balance_line"], ind["teeth_shifted"], check_names=False
     )
     pd.testing.assert_series_equal(
         ind["profitunity_macd_line"], ind["ao"], check_names=False
@@ -189,6 +190,21 @@ def test_gator_oscillator_uses_alligator_line_differences_and_is_diagnostic_only
     }
     # No Gator state is promoted into the TC2 signal boolean by this layer.
     assert "gator_state" not in {"long_signal", "short_signal"}
+
+
+def test_alligator_awake_has_no_arbitrary_percentage_threshold():
+    highs = [100 + (i * 0.05) ** 2 + 1 for i in range(80)]
+    lows = [h - 2.0 for h in highs]
+    frame = make_frame(highs, lows)
+    default = calculate_indicators(frame, config_from_env({}))
+    altered_threshold = calculate_indicators(
+        frame, config_from_env({"MIN_ALLIGATOR_SPREAD_PCT": "0.9"})
+    )
+    assert default["alligator_state"].tolist() == altered_threshold["alligator_state"].tolist()
+    assert default["alligator_awake"].tolist() == altered_threshold["alligator_awake"].tolist()
+    assert set(default["alligator_state"].unique()) <= {
+        "UNKNOWN", "SLEEPING", "AWAKENING", "EATING", "SATIATED"
+    }
 
 
 def test_futures_canonical_indicator_contract_rejects_period_drift():
