@@ -109,7 +109,8 @@ class BinanceUserDataStream(
                 val listenKey = createListenKey(apiKey)
                 val separator = if (endpoint.contains("?")) "&" else "?"
                 val streamUrl = endpoint + separator +
-                    "listenKey=" + URLEncoder.encode(listenKey, "UTF-8")
+                    "listenKey=" + URLEncoder.encode(listenKey, "UTF-8") +
+                    "&events=" + EVENT_TYPES
                 val request = Request.Builder().url(streamUrl).build()
 
                 socket = http.newWebSocket(
@@ -239,6 +240,9 @@ class BinanceUserDataStream(
 
     companion object {
         private const val REST_BASE = "https://demo-fapi.binance.com"
+        // Binance USD-M private stream accepts comma-separated event filters.
+        private const val EVENT_TYPES =
+            "ORDER_TRADE_UPDATE,ACCOUNT_UPDATE,ALGO_UPDATE,ACCOUNT_CONFIG_UPDATE,CONDITIONAL_ORDER_TRIGGER_REJECT,listenKeyExpired"
         private val FORM_MEDIA_TYPE = "application/x-www-form-urlencoded".toMediaType()
     }
 }
