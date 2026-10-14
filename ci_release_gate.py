@@ -231,7 +231,7 @@ def main() -> None:
     must(legacy_runtime, "private val executionStore = FuturesExecutionStore(context)", "StandaloneRuntime.kt")
     must(legacy_runtime, "wss://demo-fstream.binance.com/market/stream?streams=", "StandaloneRuntime.kt")
     must(legacy_runtime, "wss://demo-fstream.binance.com/public/stream?streams=", "StandaloneRuntime.kt")
-    must(legacy_runtime, "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/listenKeyExpired", "StandaloneRuntime.kt")
+    must(legacy_runtime, "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE,ACCOUNT_UPDATE,ALGO_UPDATE,ACCOUNT_CONFIG_UPDATE,CONDITIONAL_ORDER_TRIGGER_REJECT,listenKeyExpired", "StandaloneRuntime.kt")
     must(legacy_runtime, "marketWebSocketFresh()", "StandaloneRuntime.kt")
     must(legacy_runtime, "publicWebSocketFresh()", "StandaloneRuntime.kt")
     must(legacy_runtime, "userStreamConnected &&", "StandaloneRuntime.kt")
@@ -385,6 +385,7 @@ def main() -> None:
         "test_android_daily_loss_is_rechecked_at_order_admission",
         "test_android_signed_execution_boundary_rejects_legacy_spot_routes",
         "test_android_user_stream_is_not_the_spot_signed_subscription_protocol",
+        "test_android_private_futures_stream_uses_supported_event_query_delimiters",
         "test_android_diagnostics_do_not_fake_self_heal_readiness",
     ):
         must(android_contract, needle, "Android autonomous runtime contract")
