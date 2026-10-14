@@ -1,4 +1,8 @@
 @file:Suppress("UseKtx")
+// Synchronous SharedPreferences commits here are deliberate: these writes mirror
+// fail-closed recovery/kill/daily-loss safety latches and must finish before the
+// runtime acknowledges a safety transition. Durable authority remains SQLite.
+@file:android.annotation.SuppressLint("ApplySharedPref")
 package com.williamsbot
 
 import android.annotation.SuppressLint
