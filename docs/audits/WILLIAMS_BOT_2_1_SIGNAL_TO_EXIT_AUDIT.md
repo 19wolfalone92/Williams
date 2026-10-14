@@ -610,3 +610,14 @@ The audit is traced across both Python and Android paths, not just the indicator
 **Source basis.** Binance USDⓈ-M Futures documents `MARKET_LOT_SIZE` as the filter for market orders, distinct from `LOT_SIZE`; conditional `STOP_MARKET` entries execute as market orders when triggered. This is an exchange-contract correction, not a Williams strategy rule.
 
 **Verification.** Code and regression test are committed, but the CI run on the final head has not yet completed. No Demo order was sent.
+
+
+### 57. Android credential setup silently defaulted the decision interval to M5 — corrected; verification pending
+
+**Root cause.** The native Futures engine correctly refuses new entries unless the canonical decision timeframe is H1, but the credential-configuration endpoint used `5m` when the caller omitted `interval`. A client that legitimately omitted this optional field could therefore save an M5 configuration and leave the engine permanently blocked until the user manually changed the timeframe. This contradicted the H1 default used by the runtime and the existing H1-only entry gate.
+
+**Correction.** Introduced one shared `DEFAULT_FUTURES_DECISION_TIMEFRAME = "1h"` constant and use it for both credential payload fallback and persisted-preference fallback. Added an Android regression test for the canonical default. Explicit non-H1 configuration is still rejected for new entries; this fix does not silently convert a user-specified interval.
+
+**Verification boundary.** The file changes are committed to `audit/williams-2.1-futures-safety`; the GitHub connector has not reported a completed exact-head Android build/unit-test run for these commits. The test is added but must not be labelled passed until the workflow result is inspected.
+
+**Release decision unchanged: NO-GO for live trading.** The outstanding Android partial/racing-exit aggregation, cross-engine Williams golden-vector parity, complete funding/non-quote-commission ledger, and authorized Futures Demo LONG/SHORT lifecycle verification remain open.
