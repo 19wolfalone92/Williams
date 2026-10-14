@@ -91,15 +91,15 @@ class MarketHistoryStore(context: Context) :
                 )
                 """.trimIndent()
             )
-            db.execSQL(
-                "CREATE INDEX IF NOT EXISTS idx_candles_lookup " +
-                    "ON candles(symbol, interval, open_time DESC)"
-            )
             val candlesTableExists = db.rawQuery(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='candles' LIMIT 1",
                 null
             ).use { cursor -> cursor.moveToFirst() }
             if (candlesTableExists) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS idx_candles_lookup " +
+                        "ON candles(symbol, interval, open_time DESC)"
+                )
                 db.execSQL(
                     """
                     INSERT OR IGNORE INTO sync_state(
