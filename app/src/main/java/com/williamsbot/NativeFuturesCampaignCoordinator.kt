@@ -506,11 +506,13 @@ internal class NativeFuturesCampaignCoordinator(
                     matchingIntent?.put("protection_status", "UNRESOLVED_EXTRA_ORDER")
                     continue
                 }
-                var protective = findProtectiveStop(
-                    algos, direction,
-                    matchingIntent?.optString("protection_client_id"),
-                    matchingIntent?.optString("protective_stop")
-                )
+                var protective = if (currentStopSafe) {
+                    findProtectiveStop(
+                        algos, direction,
+                        matchingIntent?.optString("protection_client_id"),
+                        matchingIntent?.optString("protective_stop")
+                    )
+                } else null
 
                 // Recover a crash between journaling a new trailing-stop id and
                 // confirming that replacement. The exact previous stop is still
