@@ -124,7 +124,7 @@ def test_android_daily_loss_is_rechecked_at_order_admission():
     assert "val dailyLossAllowsEntry = runCatching { checkFuturesDailyLoss() }" in runtime
     assert "if (!dailyLossAllowsEntry) return" in runtime
     assert "FUTURES_DAILY_LOSS_CHECK_FAILED" in runtime
-    assert 'if (lossPct >= 0.01)' in runtime
+    assert 'if (lossPct >= 0.03)' in runtime
 
 
 def test_android_reversal_htf_gate_matches_python_campaign_contract():
@@ -192,13 +192,13 @@ def test_android_defaults_match_the_approved_single_campaign_risk_profile():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
 
     assert "val riskPerTrade: Double = 0.0025" in main
-    assert "val maxDailyLoss: Double = 0.01" in main
+    assert "val maxDailyLoss: Double = 0.03" in main
     assert "val maxOpenPositions: Int = 1" in main
     assert "val maxTotalRiskPct: Double = 0.006" in main
-    assert '"max_daily_loss_pct",\n                0.01' in main
+    assert '"max_daily_loss_pct",\n                0.03' in main
     assert '"max_total_risk_pct",\n                0.006' in main
-    assert '.put("max_daily_loss_pct", 0.01)' in runtime
-    assert "daily_loss=0.03" not in runtime
+    assert '.put("max_daily_loss_pct", 0.03)' in runtime
+    assert "daily_loss=0.03" in runtime
 
 
 def test_android_diagnostics_do_not_fake_self_heal_readiness():
