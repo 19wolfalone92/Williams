@@ -46,6 +46,8 @@ def test_android_exposes_battery_policy_diagnostic():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     assert "isIgnoringBatteryOptimizations" in main
     assert "Doze exemption" in main
+    assert "isLowPowerStandbyEnabled" in main
+    assert "isExemptFromLowPowerStandby" in main
     assert "ACTION_APPLICATION_DETAILS_SETTINGS" in main
 
 
