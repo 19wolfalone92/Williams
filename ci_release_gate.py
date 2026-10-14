@@ -46,7 +46,7 @@ def main() -> None:
         "TESTNET=true",
         "ALLOW_LIVE=false",
         "DRY_RUN=true",
-        "MAX_DAILY_LOSS_PCT=0.01",
+        "MAX_DAILY_LOSS_PCT=0.03",
         "RISK_PER_TRADE_PCT=0.0025",
         "MAX_CONSECUTIVE_LOSSES=2",
         "BINANCE_MARKET=futures_usdt",
@@ -75,7 +75,7 @@ def main() -> None:
     must(cfg, "min(2, _int(source, \"FUTURES_LEVERAGE\", 2))", "trading_config.py")
     must(cfg, 'FUTURES_MARGIN_TYPE must be ISOLATED', "trading_config.py")
     must(cfg, 'FUTURES_FORCE_ONE_WAY must remain enabled', "trading_config.py")
-    must(cfg, 'max_daily_loss_pct=max(0.0, min(0.01,', "trading_config.py")
+    must(cfg, 'max_daily_loss_pct=max(0.0, min(0.03,', "trading_config.py")
     must(cfg, "futures_leverage=futures_leverage", "trading_config.py")
     must(cfg, "futures_margin_type=futures_margin_type", "trading_config.py")
     must(cfg, "futures_force_one_way=futures_force_one_way", "trading_config.py")
@@ -89,7 +89,7 @@ def main() -> None:
         'market = str(source.get("BINANCE_MARKET", "futures_usdt"))',
         'risk_key = "MAX_RISK_PER_TRADE_PCT"',
         "min(0.0025",
-        "min(0.01",
+        "min(0.03",
     ):
         must(cfg, needle, "trading_config.py")
 
@@ -351,7 +351,7 @@ def main() -> None:
         must(baseline_test, needle, "DailyRiskBaselineTest.kt")
     must(legacy_runtime, '.put("ok", running && !reconcileRequired && !killLatched)', "StandaloneRuntime.kt")
     must(legacy_runtime, 'userStreamSyncRequired = true', "StandaloneRuntime.kt")
-    must(legacy_runtime, 'daily_loss=0.01', "StandaloneRuntime.kt")
+    must(legacy_runtime, 'daily_loss=0.03', "StandaloneRuntime.kt")
 
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
     for needle in (
@@ -368,7 +368,7 @@ def main() -> None:
     must_not(android, "Backend URL", "MainActivity.kt")
     for needle in (
         "val riskPerTrade: Double = 0.0025",
-        "val maxDailyLoss: Double = 0.01",
+        "val maxDailyLoss: Double = 0.03",
         "val maxOpenPositions: Int = 1",
         "val maxTotalRiskPct: Double = 0.006",
     ):
