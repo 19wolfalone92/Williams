@@ -369,7 +369,7 @@ def main() -> None:
     for needle in (
         "prefersAuthoritativeTotalMarginBalance",
         "fallsBackToWalletBalancePlusUnrealizedPnlWhenMarginBalanceMissing",
-        "rejectsMissingNonFiniteOrNonPositiveEquity",
+        "rejectsMissingNonFiniteOrNegativeEquity",
     ):
         must(equity_test, needle, "FuturesAccountEquityTest.kt")
     must_not(runtime_source, "private fun checkAutomaticCircuitBreaker()", "StandaloneRuntime.kt")
