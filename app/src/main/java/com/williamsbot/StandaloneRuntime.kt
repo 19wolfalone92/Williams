@@ -691,7 +691,7 @@ private class NativeEngine(
 
     private val userStream = BinanceUserDataStream(
         http = http,
-        endpoint = "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/listenKeyExpired",
+        endpoint = "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE,ACCOUNT_UPDATE,ALGO_UPDATE,ACCOUNT_CONFIG_UPDATE,CONDITIONAL_ORDER_TRIGGER_REJECT,listenKeyExpired",
         apiKeyProvider = { key() },
         apiSecretProvider = { secret() },
         timestampProvider = { signedTimestamp() },
