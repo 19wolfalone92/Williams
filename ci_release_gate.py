@@ -400,6 +400,27 @@ def main() -> None:
     must_not(service, "remote Futures backend", "TradingForegroundService.kt")
     must_not(service, "legacy native Spot runtime", "TradingForegroundService.kt")
 
+    # Device reboot/update recovery must respect the user's persisted opt-in.
+    manifest = read("app/src/main/AndroidManifest.xml")
+    for needle in (
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        'android:name=".TradingBootReceiver"',
+        "android.intent.action.BOOT_COMPLETED",
+        "android.intent.action.MY_PACKAGE_REPLACED",
+        'android:exported="false"',
+    ):
+        must(manifest, needle, "AndroidManifest.xml boot recovery")
+    boot_receiver = read("app/src/main/java/com/williamsbot/TradingBootReceiver.kt")
+    for needle in (
+        "Intent.ACTION_BOOT_COMPLETED",
+        "Intent.ACTION_MY_PACKAGE_REPLACED",
+        'getBoolean("auto_run", false)',
+        "ContextCompat.startForegroundService",
+        "TradingForegroundService.ACTION_START",
+        "Fail closed: do not resume trading if the persisted opt-in cannot be read",
+    ):
+        must(boot_receiver, needle, "TradingBootReceiver.kt")
+
     android_contract = read("test_android_remote_only.py")
     for needle in (
         "test_android_starts_native_futures_runtime_from_foreground_service",
