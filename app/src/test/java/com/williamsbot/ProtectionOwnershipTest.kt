@@ -10,6 +10,23 @@ import org.junit.Test
 
 class ProtectionOwnershipTest {
     @Test
+    fun onlyExplicitBinanceOrderNotFoundResponsesAreClassifiedAsAbsent() {
+        assertTrue(isDefinitiveBinanceOrderNotFound(
+            java.io.IOException("""Binance USD-M Futures HTTP 400: {"code":-2013,"msg":"Order does not exist."}""")
+        ))
+        assertTrue(isDefinitiveBinanceOrderNotFound(
+            java.io.IOException("""Binance USD-M Futures HTTP 400: {"code":-2011,"msg":"Unknown order sent."}""")
+        ))
+        assertFalse(isDefinitiveBinanceOrderNotFound(
+            java.io.IOException("timeout while querying order")
+        ))
+        assertFalse(isDefinitiveBinanceOrderNotFound(
+            java.io.IOException("""Binance USD-M Futures HTTP 500: {"code":-1000,"msg":"Internal error"}""")
+        ))
+    }
+
+
+    @Test
     fun emergencyCloseRequiresCurrentProtectedCampaignAndMatchingDirection() {
         assertTrue(isManagedOpenPositionIntent(
             "OPEN_PROTECTED", "LONG", "LONG", "PROTECTED", "W2PS_current"
