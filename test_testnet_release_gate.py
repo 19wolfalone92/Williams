@@ -150,6 +150,41 @@ def run_testnet_read_only(symbol: str = "BTCUSDT") -> dict:
     if bool((multi_assets or {}).get("multiAssetsMargin")):
         raise RuntimeError("Futures Demo account has Multi-Assets Mode enabled; Williams requires Single-Asset mode.")
 
+    contracts = [_validate_symbol_contract(client, item) for item in APPROVED_FUTURES_SYMBOLS]
+    # Gather fresh market snapshots for every approved contract. Use a second
+    # exchange-time read after the market requests so the freshness checks are
+    # compared with a clock at least as recent as the market-data responses.
+    raw_market_data = [
+        (item, client.mark_price(item), client.klines(item, "1h", limit=3))
+        for item in APPROVED_FUTURES_SYMBOLS
+    ]
+    final_clock = client.sync_time()
+    try:
+        exchange_time_ms = int(final_clock["serverTime"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("Futures Demo final exchange clock is missing or invalid") from exc
+    if exchange_time_ms <= 0:
+        raise RuntimeError("Futures Demo final exchange clock must be positive")
+    market_data = [
+        _validate_h1_market_snapshot(item, mark, candles, exchange_time_ms)
+        for item, mark, candles in raw_market_data
+    ]
+    return {
+        "ready": True,
+        "account_available": True,
+        "available_balance": float(account["availableBalance"]),
+        "symbol": requested_symbol,
+        "endpoint": client.base_url,
+        "exchange_server_time_ms": exchange_time_ms,
+        "position_mode": position_mode,
+        "multi_assets_mode": multi_assets,
+        "approved_contracts_checked": len(contracts),
+        "market_data_checked": len(market_data),
+        "contracts": contracts,
+        "market_data": market_data,
+    }
+
+
 def _validate_h1_market_snapshot(symbol: str, mark: dict, candles, exchange_time_ms: int) -> dict:
     """Fail closed unless mark price and at least one recent, closed H1 candle are valid."""
     if not isinstance(mark, dict):
@@ -216,42 +251,6 @@ def _validate_h1_market_snapshot(symbol: str, mark: dict, candles, exchange_time
         "latest_closed_h1_close": latest["close"],
         "closed_candle_age_ms": candle_age_ms,
     }
-
-
-    contracts = [_validate_symbol_contract(client, item) for item in APPROVED_FUTURES_SYMBOLS]
-    # Gather fresh market snapshots for every approved contract. Use a second
-    # exchange-time read after the market requests so the freshness checks are
-    # compared with a clock at least as recent as the market-data responses.
-    raw_market_data = [
-        (item, client.mark_price(item), client.klines(item, "1h", limit=3))
-        for item in APPROVED_FUTURES_SYMBOLS
-    ]
-    final_clock = client.sync_time()
-    try:
-        exchange_time_ms = int(final_clock["serverTime"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise RuntimeError("Futures Demo final exchange clock is missing or invalid") from exc
-    if exchange_time_ms <= 0:
-        raise RuntimeError("Futures Demo final exchange clock must be positive")
-    market_data = [
-        _validate_h1_market_snapshot(item, mark, candles, exchange_time_ms)
-        for item, mark, candles in raw_market_data
-    ]
-    return {
-        "ready": True,
-        "account_available": True,
-        "available_balance": float(account["availableBalance"]),
-        "symbol": requested_symbol,
-        "endpoint": client.base_url,
-        "exchange_server_time_ms": exchange_time_ms,
-        "position_mode": position_mode,
-        "multi_assets_mode": multi_assets,
-        "approved_contracts_checked": len(contracts),
-        "market_data_checked": len(market_data),
-        "contracts": contracts,
-        "market_data": market_data,
-    }
-
 
 def test_gate_manifest_has_all_required_release_steps():
     assert len(GATE_STEPS) == 30
