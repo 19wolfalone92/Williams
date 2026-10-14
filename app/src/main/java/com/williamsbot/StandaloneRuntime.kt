@@ -1385,10 +1385,15 @@ private class NativeEngine(
         }
 
         if (!persistSafetyFlag("reconcile_required", false)) {
+            prefs.edit().putBoolean("auto_run", false).commit()
+            reconcileRequired = true
+            val blocker = "SQLite could not persist the cleared reconciliation latch"
+            lastError = blocker
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, blocker)
             return JSONObject().put("started", false)
                 .put("state", "RECONCILE_REQUIRED")
                 .put("execution_enabled", false)
-                .put("blocker", "SQLite could not persist the cleared reconciliation latch")
+                .put("blocker", blocker)
         }
         reconcileRequired = false
         // Do not persist auto-run until the authenticated Futures account payload
@@ -1761,8 +1766,19 @@ private class NativeEngine(
         val result = futuresCampaignCoordinator.reconcile()
         val ok = result.optBoolean("ok", false)
         reconcileRequired = !ok
-        check(persistSafetyFlag("reconcile_required", !ok)) {
-            "SQLite could not persist recovery reconciliation state"
+        if (!persistSafetyFlag("reconcile_required", !ok)) {
+            // Persistence failure is itself a reconciliation blocker. Never let
+            // an in-memory success reopen the gate if the durable latch was not saved.
+            reconcileRequired = true
+            val blocker = "SQLite could not persist recovery reconciliation state"
+            lastError = blocker
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, blocker)
+            return JSONObject().put("recovered", false)
+                .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
+                .put("execution_enabled", false)
+                .put("blocker", blocker)
+                .put("futures_reconciliation", result)
+                .put("state", futuresCampaignCoordinator.state.name)
         }
         if (ok) {
             when (futuresCampaignCoordinator.state) {
@@ -9108,12 +9124,24 @@ private class NativeEngine(
                 actions.put("futures_history_reload_requested")
             }
             if (!startedHere) {
-                val reconciliation = runCatching { futuresCampaignCoordinator.reconcile() }.getOrNull()
-                if (reconciliation?.optBoolean("ok", false) == true) {
+                val attempt = runCatching { futuresCampaignCoordinator.reconcile() }
+                val reconciliation = attempt.getOrNull()
+                if (attempt.isSuccess && reconciliation?.optBoolean("ok", false) == true) {
                     actions.put("futures_exchange_reconciliation")
-                } else if (reconciliation != null) {
+                } else {
                     reconcileRequired = true
-                    persistSafetyFlag("reconcile_required", true)
+                    val persisted = persistSafetyFlag("reconcile_required", true)
+                    val reason = when {
+                        attempt.isFailure -> attempt.exceptionOrNull()?.message
+                            ?: attempt.exceptionOrNull()?.javaClass?.simpleName
+                        reconciliation != null -> reconciliation.optString(
+                            "blocker", "Futures reconciliation returned not-ready"
+                        )
+                        else -> "Futures reconciliation returned no result"
+                    }
+                    lastError = if (persisted) reason else
+                        "$reason; additionally failed to persist reconciliation latch"
+                    stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: reason)
                     actions.put("futures_reconciliation_blocked")
                 }
             }
