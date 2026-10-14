@@ -9,6 +9,17 @@ import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
+/** Single source of truth for the chart, market-data transport and execution universe. */
+internal val APPROVED_FUTURES_SYMBOLS = listOf(
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+    "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
+)
+internal val APPROVED_FUTURES_KLINE_INTERVALS = listOf(
+    "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h",
+    "6h", "8h", "12h", "1d", "3d", "1w", "1M"
+)
+
+
 /**
  * Public USDⓈ-M Futures Testnet market-data transport.
  *
@@ -43,14 +54,8 @@ internal class BinanceUsdMFuturesMarketData(
         return System.currentTimeMillis() + serverOffsetMs
     }
 
-    val approvedSymbols: Set<String> = setOf(
-        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-        "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
-    )
-    private val allowedIntervals = setOf(
-        "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h",
-        "6h", "8h", "12h", "1d", "3d", "1w", "1M"
-    )
+    val approvedSymbols: Set<String> = APPROVED_FUTURES_SYMBOLS.toSet()
+    internal val supportedIntervals: Set<String> = APPROVED_FUTURES_KLINE_INTERVALS.toSet()
 
     fun klines(
         symbol: String,
@@ -61,7 +66,7 @@ internal class BinanceUsdMFuturesMarketData(
     ): JSONArray {
         val normalizedSymbol = symbol.uppercase(Locale.US)
         require(normalizedSymbol in approvedSymbols) { "Symbol is outside the approved Futures universe" }
-        require(interval in allowedIntervals) { "Unsupported Futures kline interval: $interval" }
+        require(interval in supportedIntervals) { "Unsupported Futures kline interval: $interval" }
         require(limit in 1..1500) { "Futures kline limit must be in 1..1500" }
         require(startTime == null || startTime >= 0L) { "startTime must be non-negative" }
         require(endTime == null || endTime >= 0L) { "endTime must be non-negative" }
