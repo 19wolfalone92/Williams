@@ -2168,10 +2168,22 @@ private fun MarketChartPanel(
                 InfoRow("HTF-контекст", if (candidate.htfConfirmed) "подтверждён" else "не подтверждён")
                 InfoRow("Согласование направления", candidate.wiseManCount.toString() + "/3 (диагностика, не счётчик Three Wise Men)")
                 InfoRow("Волновая фаза", "W" + candidate.wavePosition + " • " + candidate.wavePhase)
+                InfoRow("Волновая уверенность / истощение", fmt(candidate.waveConfidence, 2) + " / " + fmt(candidate.waveExhaustionRisk, 1) + "%")
+                InfoRow("Вероятности W3 / W5", fmt(candidate.wave3Probability, 2) + " / " + fmt(candidate.wave5Probability, 2))
+                InfoRow("Режим рынка", candidate.regime + " • score " + fmt(candidate.regimeScore, 2))
+                InfoRow("OBI стакана", fmt(candidate.obi, 3))
+                InfoRow("Дисбаланс потока сделок", fmt(candidate.tradeFlowImbalance, 3))
+                InfoRow("Теневая оценка", candidate.shadowDirection + " • " + fmt(candidate.shadowConfidence, 2))
+                InfoRow("Количественная оценка", fmt(candidate.quantScore, 2))
                 InfoRow("Оценка риска", if (candidate.riskPct > 0.0) fmt(candidate.riskPct, 2) + "%" else "—")
                 InfoRow("Risk/reward", if (candidate.riskReward > 0.0) fmt(candidate.riskReward, 2) else "—")
+                InfoRow("Спред / ATR", fmt(candidate.spreadPct * 100.0, 3) + "% / " + fmt(candidate.atrPct * 100.0, 3) + "%")
                 InfoRow("Триггер условного STOP", fmt(candidate.entryTriggerPrice))
                 InfoRow("Структурный стоп", fmt(candidate.entryProtectivePrice))
+                if (candidate.shadowReason.isNotBlank()) Text("Теневая оценка: " + candidate.shadowReason,
+                    style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+                if (candidate.xaiTopFactor.isNotBlank()) Text("Главный фактор: " + candidate.xaiTopFactor,
+                    style = MaterialTheme.typography.bodySmall, color = AppColors.violet)
                 if (candidate.reason.isNotBlank()) Text("Почему сканер так решил: " + candidate.reason,
                     style = MaterialTheme.typography.bodySmall)
                 if (candidate.wavePath.isNotBlank()) Text("Контекст волны: " + candidate.wavePath,
