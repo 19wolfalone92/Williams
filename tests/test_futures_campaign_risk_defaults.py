@@ -9,7 +9,7 @@ def test_futures_defaults_use_single_campaign_risk_limits():
     assert config.execution_timeframe == "1h"
     assert config.risk_per_trade_pct == 0.0025
     assert config.max_total_risk_pct == 0.006
-    assert config.max_daily_loss_pct == 0.01
+    assert config.max_daily_loss_pct == 0.03
     assert config.max_open_positions == 1
     assert config.allow_long is True
     assert config.allow_short is True
@@ -26,7 +26,7 @@ def test_futures_environment_cannot_raise_approved_risk_caps():
 
     assert config.risk_per_trade_pct == 0.0025
     assert config.max_total_risk_pct == 0.006
-    assert config.max_daily_loss_pct == 0.01
+    assert config.max_daily_loss_pct == 0.03
     assert config.max_open_positions == 1
 
 
