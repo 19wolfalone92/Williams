@@ -46,7 +46,12 @@ def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
 
     assert "wss://demo-fstream.binance.com/market/stream?streams=" in runtime
     assert "wss://demo-fstream.binance.com/public/stream?streams=" in runtime
-    assert "wss://demo-fstream.binance.com/private/ws?events=ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/listenKeyExpired" in runtime
+    assert 'endpoint = "wss://demo-fstream.binance.com/private/ws"' in runtime
+    user_stream = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
+    assert 'private val EVENT_TYPES' in user_stream
+    assert "ORDER_TRADE_UPDATE,ACCOUNT_UPDATE,ALGO_UPDATE" in user_stream
+    assert 'endpoint + "?listenKey="' in user_stream
+    assert "events=" in user_stream
     assert "startMarketDataStream()" in runtime
     assert "startPublicDataStream()" in runtime
     assert "publicWebSocketFresh()" in runtime
@@ -249,3 +254,35 @@ def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
     assert "private val restartRequested = AtomicBoolean(false)" in user_stream
     assert "private fun workerExited(finishedWorker: Thread)" in user_stream
     assert "if (stopping.get()) restartRequested.set(true)" in user_stream
+
+
+def test_android_campaign_lifecycle_is_separate_from_exchange_order_status():
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    assert "fun campaignLifecycleStatus(intent: JSONObject)" in coordinator
+    assert 'intent.optString("campaign_status")' in coordinator
+    assert 'intent.optString("order_status")' in coordinator
+    assert '"FILL_CONFIRMATION_PENDING"' in coordinator
+    assert "isEntryCampaignReserved(row)" in coordinator
+    assert "latestEntryIntentIndex(intents, symbol)" in coordinator
+
+
+def test_android_exit_requires_exchange_position_protection_and_filled_order_confirmation():
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    assert "val adapterPreflight = adapterFactory()" in coordinator
+    assert "adapterPreflight.positions()" in coordinator
+    assert "adapterPreflight.openAlgoOrders(symbol)" in coordinator
+    assert "requestedQty.compareTo(liveAmount.abs()) != 0" in coordinator
+    assert "val confirmedOrder = adapter.order(symbol, clientOrderId)" in coordinator
+    assert 'if (finalOrderStatus != "FILLED")' in coordinator
+    assert 'managedEntry.put("campaign_status", "CLOSED_OR_STOPPED")' in coordinator
+    assert 'isOwnedClientOrderForSymbol(symbol, clientId, activeProtectionClientIdsBySymbol)' in coordinator
+
+
+def test_android_protection_must_match_owner_id_and_exact_trigger():
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    assert "if (expectedClientId.isNullOrBlank()) return null" in coordinator
+    assert 'row.optString("clientAlgoId") == expectedClientId' in coordinator
+    assert "trigger.compareTo(stop) == 0" in coordinator
+    assert 'protectionStatus == "SUBMISSION_UNKNOWN" || protectionStatus == "PROTECTED"' in coordinator
+    assert "unknownProtectiveStopExists" in coordinator
+
