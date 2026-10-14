@@ -241,11 +241,12 @@ def test_android_diagnostics_do_not_fake_self_heal_readiness():
     assert '.put("testnet_live_execution", false)' not in runtime
 
 
-def test_android_williams_indicator_decisions_use_current_time_alligator_and_canonical_ao():
+def test_android_williams_indicator_decisions_use_chart_aligned_alligator_and_canonical_ao():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
-    assert "williamsAlligatorCurrentLine(candles, 13)" in runtime
-    assert "williamsAlligatorCurrentLine(candles, 8)" in runtime
-    assert "williamsAlligatorCurrentLine(candles, 5)" in runtime
+    assert "williamsAlligatorLine(candles, 13, 8)" in runtime
+    assert "williamsAlligatorLine(candles, 8, 5)" in runtime
+    assert "williamsAlligatorLine(candles, 5, 3)" in runtime
+    assert "williamsAlligatorCurrentLine" not in runtime
     assert "val slowValues = medianPrices.subList(index - 33, index + 1)" in runtime
     assert "medianPrices.subList(index - 34, index + 1).average()" not in runtime
     assert "private fun alligator(" in runtime
