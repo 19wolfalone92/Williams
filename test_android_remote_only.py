@@ -611,3 +611,46 @@ def test_directional_alignment_diagnostics_check_short_values_with_short_geometr
     assert "aoValue < 0.0" in fn
     assert "signal.triggerPrice < close" in fn
     assert "signal.protectivePrice > signal.triggerPrice" in fn
+
+
+
+def test_android_futures_long_and_short_readiness_uses_h1_signal_not_m5_mtf_gate():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    enrich = runtime.split("private fun enrichWithMtf(", 1)[1].split(
+        "private fun toJson(", 1
+    )[0]
+    final_gate = enrich.split("val finalSignal =", 1)[1].split(
+        "if (!finalSignal && baseCandidate.signal)", 1
+    )[0]
+    assert "primaryDecisionSignal != null" in final_gate
+    assert "baseCandidate.atrPct in 0.0..0.08" in final_gate
+    assert "baseCandidate.spreadPct in 0.0..1.5E-3" in final_gate or "baseCandidate.spreadPct in 0.0..0.0015" in final_gate
+    assert "htfConfirmed &&" not in final_gate
+    assert "junior != null" not in final_gate
+    assert "entryInsideCorrection" not in final_gate
+    assert "middle?.position !in listOf(2, 4)" not in final_gate
+    assert "M15/M5 wave analysis is displayed as diagnostics only" in enrich
+    assert "submitNativeFuturesCampaignEntry performs" in enrich
+    submit = runtime.split("private fun submitNativeFuturesCampaignEntry(", 1)[1].split(
+        "private fun performCampaignScan(", 1
+    )[0]
+    assert 'signal.type.startsWith("SHORT_", true)' in submit
+    assert '(reversalSignal || h4Bear) && !d1Bull' in submit
+
+
+def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    wave = runtime.split("private fun waveInfo(", 1)[1].split(
+        "private fun bullishTrendHint(", 1
+    )[0]
+    enrich = runtime.split("private fun enrichWithMtf(", 1)[1].split(
+        "private fun toJson(", 1
+    )[0]
+    assert "val alligatorBearish" in runtime
+    assert "val bearish =" in wave
+    assert "alligatorBearish = bearish" in wave
+    assert 'primaryDecisionSignal?.type?.startsWith("SHORT_", ignoreCase = true) == true' in enrich
+    assert "htf4h.alligatorBearish && !htf4h.aoPositive" in enrich
+    assert "htf1d.alligatorBearish && !htf1d.aoPositive" in enrich
+    assert "it.position == 3 && it.direction == decisionDirection" in enrich
+    assert "junior.alligatorBearish && !junior.aoPositive" in enrich

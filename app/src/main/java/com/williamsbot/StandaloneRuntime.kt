@@ -353,6 +353,7 @@ private data class WaveInfo(
     val direction: String,
     val path: String,
     val alligatorBullish: Boolean,
+    val alligatorBearish: Boolean,
     val aoPositive: Boolean,
     val aoBearishDivergence: Boolean = false,
     val aoBullishDivergence: Boolean = false,
@@ -8195,28 +8196,37 @@ private class NativeEngine(
         var bonus = 0.0
         var exhaustion = setup.exhaustionRisk
 
+        val primaryDecisionSignal = campaignEntryCandidate(baseCandidate)
+        val shortSetup = primaryDecisionSignal?.type?.startsWith("SHORT_", ignoreCase = true) == true
+        val decisionDirection = if (primaryDecisionSignal == null) setup.direction
+            else if (shortSetup) "DOWN" else "UP"
         val htf4h = frames.firstOrNull { it.path.startsWith("4h:") }
         val htfConfirmed =
-            htf4h != null &&
-                htf4h.alligatorBullish &&
-                htf4h.aoPositive &&
-                htf4h.direction == "UP"
+            htf4h != null && htf4h.direction == decisionDirection &&
+                if (shortSetup) {
+                    htf4h.alligatorBearish && !htf4h.aoPositive
+                } else {
+                    htf4h.alligatorBullish && htf4h.aoPositive
+                }
+        val htf1d = frames.firstOrNull { it.path.startsWith("1d:") }
+        val dailyAligned = htf1d != null && htf1d.direction == decisionDirection &&
+            if (shortSetup) htf1d.alligatorBearish && !htf1d.aoPositive
+            else htf1d.alligatorBullish && htf1d.aoPositive
 
         if (htfConfirmed) bonus += 8.0
-        if (frames.any { it.path.startsWith("1d:") && it.direction == "UP" }) bonus += 4.0
+        if (dailyAligned) bonus += 4.0
         if (setup.position == 3) {
             bonus += 6.0
             exhaustion = min(exhaustion, 30.0)
         }
 
         val parentW5 = frames.filter {
-            it.position == 5 && it.direction == "UP"
+            it.position == 5 && it.direction == decisionDirection
         }
         val childW3 = frames.filter {
-            it.position == 3 &&
-                it.direction == "UP" &&
-                it.alligatorBullish &&
-                it.aoPositive
+            it.position == 3 && it.direction == decisionDirection &&
+                if (shortSetup) it.alligatorBearish && !it.aoPositive
+                else it.alligatorBullish && it.aoPositive
         }
 
         val nestedW3ParentW5 = parentW5.any { parent ->
@@ -8253,10 +8263,9 @@ private class NativeEngine(
         // timeframe; the 1h/4h wave is context, not necessarily the entry.
         val entryCandidates = frames
             .filter {
-                it.position == 3 &&
-                    it.direction == "UP" &&
-                    it.alligatorBullish &&
-                    it.aoPositive &&
+                it.position == 3 && it.direction == decisionDirection &&
+                    (if (shortSetup) it.alligatorBearish && !it.aoPositive
+                     else it.alligatorBullish && it.aoPositive) &&
                     !isCountertrendCorrectionImpulse(it, frames)
             }
             .sortedBy { frameSeconds(it.path.substringBefore(":")) }
@@ -8302,9 +8311,9 @@ private class NativeEngine(
                 !entryInsideCorrection &&
                 middle?.position !in listOf(2, 4) &&
                 junior.confidence >= 55.0 &&
-                junior.alligatorBullish &&
-                junior.aoPositive &&
-                junior.direction == "UP"
+                junior.direction == decisionDirection &&
+                (if (shortSetup) junior.alligatorBearish && !junior.aoPositive
+                 else junior.alligatorBullish && junior.aoPositive)
 
         if (entrySignal) {
             // A lower-TF Wave 3 is the preferred entry, especially when the
@@ -8320,18 +8329,16 @@ private class NativeEngine(
 
         var score = (baseCandidate.score + bonus).coerceIn(0.0, 100.0)
 
-        // Entry is no longer tied to the 1h candle's breakout. We enter on the
-        // lower-TF Wave 3 after higher-TF context confirms the direction.
+        // The campaign's sole decision is the confirmed-closed H1 Williams signal.
+        // M15/M5 wave analysis is displayed as diagnostics only: it must never veto
+        // or manufacture a campaign entry. submitNativeFuturesCampaignEntry performs
+        // the authoritative closed-H4 context check and D1 macro veto immediately
+        // before passing the signal through the risk gate and Execution Door.
         val finalSignal =
             if (campaignEngineEnabled) {
-                baseCandidate.campaignSignals.isNotEmpty() &&
-                    baseCandidate.atrPct <= 0.08 &&
-                    baseCandidate.spreadPct <= 0.0015 &&
-                    htfConfirmed &&
-                    !countertrendCorrectionImpulse &&
-                    junior != null &&
-                    !entryInsideCorrection &&
-                    middle?.position !in listOf(2, 4)
+                primaryDecisionSignal != null &&
+                    baseCandidate.atrPct in 0.0..0.08 &&
+                    baseCandidate.spreadPct in 0.0..0.0015
             } else {
                 entrySignal &&
                     baseCandidate.atrPct <= 0.08 &&
@@ -8357,16 +8364,19 @@ private class NativeEngine(
             middle?.path?.substringBefore(":") ?: ""
 
         val reason = when {
-            entrySignal && middle?.position == 3 ->
-                "MTF ENTRY: $entryFrame Wave 3 inside parent $parentFrame Wave 3"
-            countertrendCorrectionImpulse && !entrySignal ->
-                "MTF: countertrend 5-wave structure belongs to W2/W4 correction; no LONG entry"
-            entrySignal && nestedW3ParentW5 ->
-                "MTF ENTRY: $entryFrame Wave 3 inside parent Wave 5; allowed with reduced priority"
+            finalSignal && campaignEngineEnabled ->
+                "H1 Williams " + (if (shortSetup) "SHORT" else "LONG") +
+                    " conditional-stop candidate; closed H4 context, D1 veto, risk and exchange reconciliation are checked before any order"
+            countertrendCorrectionImpulse ->
+                "MTF diagnostic: possible countertrend correction structure; lower timeframes do not decide the campaign"
             setup.position == 5 && !nestedW3ParentW5 ->
-                "MTF: Wave 5/exhaustion context blocks entry"
+                "MTF diagnostic: estimated Wave 5/exhaustion context"
+            entrySignal && middle?.position == 3 ->
+                "MTF diagnostic: $entryFrame Wave 3 inside parent $parentFrame Wave 3"
+            entrySignal && nestedW3ParentW5 ->
+                "MTF diagnostic: $entryFrame Wave 3 inside parent Wave 5"
             finalSignal ->
-                "MTF ENTRY: lower-TF Wave 3 + higher-TF context confirmed"
+                "MTF context diagnostic completed; entry policy remains separate"
             else ->
                 baseCandidate.reason
         }
@@ -8385,11 +8395,11 @@ private class NativeEngine(
                 ),
                 exhaustionRisk = exhaustion,
                 path = path,
-                entryFrame = entryFrame,
-                entryWave = junior?.position ?: 0,
+                entryFrame = if (campaignEngineEnabled) campaignExecutionTimeframe else entryFrame,
+                entryWave = if (campaignEngineEnabled) setup.position else junior?.position ?: 0,
                 parentFrame = parentFrame,
                 parentWave = middle?.position ?: 0,
-                entryConfidence = junior?.confidence ?: 0.0,
+                entryConfidence = if (campaignEngineEnabled) setup.confidence else junior?.confidence ?: 0.0,
                 nestedW3ParentW5 = nestedW3ParentW5,
                 countertrendCorrectionImpulse = countertrendCorrectionImpulse
             ),
@@ -8752,6 +8762,13 @@ private class NativeEngine(
                 alligatorValues.jaw &&
                 current >
                 alligatorValues.lips
+        val bearish =
+            alligatorValues.lips <
+                alligatorValues.teeth &&
+                alligatorValues.teeth <
+                alligatorValues.jaw &&
+                current <
+                alligatorValues.lips
 
         val aoPositive =
             ao(candles, candles.lastIndex) > 0.0
@@ -8883,6 +8900,7 @@ private class NativeEngine(
             direction = direction,
             path = path,
             alligatorBullish = bullish,
+            alligatorBearish = bearish,
             aoPositive = aoPositive,
             aoBearishDivergence = aoBearDiv,
             aoBullishDivergence = aoBullDiv,
@@ -8916,6 +8934,7 @@ private class NativeEngine(
             direction = "NEUTRAL",
             path = frame + ":?",
             alligatorBullish = false,
+            alligatorBearish = false,
             aoPositive = false,
             aoBearishDivergence = false,
             aoBullishDivergence = false,
