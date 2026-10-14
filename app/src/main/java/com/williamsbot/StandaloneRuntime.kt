@@ -2715,6 +2715,7 @@ private class NativeEngine(
         val downFractal = if (i >= 4 && isDownFractal(candles, i - 2)) i - 2 else null
         return JSONObject()
             .put("symbol", symbol).put("interval", frame).put("ready", true)
+            .put("candle_count", candles.size)
             .put("time", candles[i].t).put("price", candles[i].c)
             .put("jaw", jawNow).put("teeth", teethNow).put("lips", lipsNow)
             .put("alligator_bullish", lipsNow > teethNow && teethNow > jawNow)
@@ -9530,6 +9531,7 @@ private class NativeEngine(
         val indicatorSnapshot = if (
             cachedIndicatorSnapshot != null &&
             cachedIndicatorSnapshot.optBoolean("ready", false) &&
+            cachedIndicatorSnapshot.optInt("candle_count", -1) == sourceCandles.size &&
             cachedIndicatorSnapshot.optLong("time", -1L) == latestClosedCandleTime
         ) {
             JSONObject(cachedIndicatorSnapshot.toString())
