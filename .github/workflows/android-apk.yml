@@ -10,6 +10,8 @@ on:
       - 'gradle/**'
       - 'settings.gradle.kts'
       - '.github/workflows/**'
+      - 'ci_release_gate.py'
+      - 'test_android_remote_only.py'
   pull_request:
     paths:
       - 'app/**'
@@ -18,6 +20,8 @@ on:
       - 'gradle/**'
       - 'settings.gradle.kts'
       - '.github/workflows/**'
+      - 'ci_release_gate.py'
+      - 'test_android_remote_only.py'
   workflow_dispatch:
 
 permissions:
