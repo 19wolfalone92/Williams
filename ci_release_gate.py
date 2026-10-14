@@ -339,7 +339,7 @@ def main() -> None:
     indicator_test = read("app/src/test/java/com/williamsbot/WilliamsIndicatorParityTest.kt")
     for needle in (
         "smmaUsesTheFirstPeriodSmaAsItsSeed",
-        "displayShiftIsSeparateFromCurrentTimeDecisionLine",
+        "displayedLineAtCurrentCandleUsesOnlyPastSmmaValue",
         "awesomeOscillatorUsesExactlyThirtyFourAndFiveMedianPrices",
         "invalidPeriodIsRejectedAndNonFiniteWindowsFailClosed",
     ):
