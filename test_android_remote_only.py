@@ -250,6 +250,9 @@ def test_android_williams_indicator_decisions_use_chart_aligned_alligator_and_ca
     assert "val slowValues = medianPrices.subList(index - 33, index + 1)" in runtime
     assert "medianPrices.subList(index - 34, index + 1).average()" not in runtime
     assert "private fun alligator(" in runtime
+    assert "teethS[center].isFinite() && level > teethS[center]" in runtime
+    assert "candles[fractalCenter].h > centerTeeth" in runtime
+    assert "trigger > currentTeeth" in runtime
 
 
 def test_android_kill_switch_never_closes_an_unmanaged_or_unreconciled_position():
