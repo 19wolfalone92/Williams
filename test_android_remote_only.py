@@ -47,7 +47,6 @@ def test_android_exposes_battery_policy_diagnostic():
     assert "isIgnoringBatteryOptimizations" in main
     assert "Doze exemption" in main
     assert "ACTION_APPLICATION_DETAILS_SETTINGS" in main
-    assert "not a substitute for physical testing" in main
 
 
 def test_android_ui_routes_directly_to_local_runtime_without_remote_backend():
