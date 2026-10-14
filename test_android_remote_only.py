@@ -212,7 +212,7 @@ def test_android_williams_indicator_decisions_use_current_time_alligator_and_can
     assert "williamsAlligatorCurrentLine(candles, 13)" in runtime
     assert "williamsAlligatorCurrentLine(candles, 8)" in runtime
     assert "williamsAlligatorCurrentLine(candles, 5)" in runtime
-    assert "medianPrices.subList(index - 33, index + 1).average()" in runtime
+    assert "val slowValues = medianPrices.subList(index - 33, index + 1)" in runtime
     assert "medianPrices.subList(index - 34, index + 1).average()" not in runtime
     assert "private fun alligator(" in runtime
 
