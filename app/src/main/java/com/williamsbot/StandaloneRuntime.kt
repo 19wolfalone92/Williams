@@ -825,6 +825,11 @@ private class NativeEngine(
     @Volatile private var lastUserEventMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
     @Volatile private var liveUsdtBalanceKnown = false
+    @Volatile private var cachedFuturesPositionsSnapshot: JSONArray? = null
+    @Volatile private var cachedFuturesPositionsSnapshotAtMs = 0L
+    @Volatile private var futuresPositionSnapshotRefreshRunning = false
+    @Volatile private var futuresPositionSnapshotLastAttemptMs = 0L
+    @Volatile private var futuresPositionSnapshotRefreshError: String? = null
     // Authoritative Futures account equity (totalMarginBalance, with wallet+UPnL fallback).
     // Never synthesize equity by adding position notional to free balance.
     @Volatile private var liveFuturesEquity = 0.0
@@ -4556,6 +4561,63 @@ private class NativeEngine(
         return true
     }
 
+    /**
+     * The dashboard polls fast status together with tickers/scanner. Do not make every
+     * UI refresh wait on a signed position REST call: serve a bounded-age snapshot and
+     * refresh it on a worker. Trading/reconciliation mutations still query Binance
+     * directly through the coordinator and never trust this display cache.
+     */
+    private fun fastFuturesPositionsSnapshot(): Pair<JSONArray, String?> {
+        val nowMs = System.currentTimeMillis()
+        val cached = cachedFuturesPositionsSnapshot
+        val cachedAt = cachedFuturesPositionsSnapshotAtMs
+        if (cached != null && cachedAt > 0L && nowMs >= cachedAt && nowMs - cachedAt <= 15_000L) {
+            return JSONArray(cached.toString()) to null
+        }
+
+        val shouldRefresh = synchronized(this) {
+            val lastAttempt = futuresPositionSnapshotLastAttemptMs
+            val retryAllowed = lastAttempt <= 0L || nowMs < lastAttempt || nowMs - lastAttempt >= 15_000L
+            if (!futuresPositionSnapshotRefreshRunning && retryAllowed &&
+                key().isNotBlank() && secret().isNotBlank()
+            ) {
+                futuresPositionSnapshotRefreshRunning = true
+                futuresPositionSnapshotLastAttemptMs = nowMs
+                true
+            } else false
+        }
+        if (shouldRefresh) {
+            Thread {
+                try {
+                    futuresPositionSnapshot()
+                    futuresPositionSnapshotRefreshError = null
+                } catch (failure: Exception) {
+                    val reason = failure.message ?: failure.javaClass.simpleName
+                    futuresPositionSnapshotRefreshError = reason
+                    reconcileRequired = true
+                    persistSafetyFlag("reconcile_required", true)
+                    lastError = "Fast-status Futures position refresh failed; trading blocked: " + reason
+                    stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: reason)
+                } finally {
+                    synchronized(this) { futuresPositionSnapshotRefreshRunning = false }
+                }
+            }.apply {
+                isDaemon = true
+                name = "williams-futures-position-snapshot"
+                start()
+            }
+        }
+
+        val fallback = cachedFuturesPositionsSnapshot
+        val error = futuresPositionSnapshotRefreshError
+            ?: if (fallback == null) {
+                "Exchange position snapshot is loading; no cached snapshot yet"
+            } else {
+                "Showing a stale cached Futures position snapshot while refresh runs"
+            }
+        return (fallback?.let { JSONArray(it.toString()) } ?: JSONArray()) to error
+    }
+
     private fun futuresPositionSnapshot(): JSONArray {
         val out = JSONArray()
         if (key().isBlank() || secret().isBlank()) return out
@@ -4592,6 +4654,10 @@ private class NativeEngine(
                 .put("unrealized_pnl_usdt", pnl).put("margin_type", row.optString("marginType"))
                 .put("leverage", row.optString("leverage")).put("exchange_confirmed", true))
         }
+        val snapshotNow = System.currentTimeMillis()
+        cachedFuturesPositionsSnapshot = JSONArray(out.toString())
+        cachedFuturesPositionsSnapshotAtMs = snapshotNow
+        futuresPositionSnapshotRefreshError = null
         return out
     }
 
@@ -8851,13 +8917,19 @@ private class NativeEngine(
         val credentialsConfigured = key().isNotBlank() && secret().isNotBlank()
         var futuresPositionSnapshotError: String? = null
         val futuresPositions = if (credentialsConfigured) {
-            runCatching { futuresPositionSnapshot() }.getOrElse { failure ->
-                futuresPositionSnapshotError = failure.message ?: failure.javaClass.simpleName
-                reconcileRequired = true
-                persistSafetyFlag("reconcile_required", true)
-                lastError = "Futures position snapshot unavailable; trading blocked: " + futuresPositionSnapshotError
-                stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures position snapshot unavailable")
-                JSONArray()
+            if (fast) {
+                val (snapshot, refreshError) = fastFuturesPositionsSnapshot()
+                futuresPositionSnapshotError = refreshError
+                snapshot
+            } else {
+                runCatching { futuresPositionSnapshot() }.getOrElse { failure ->
+                    futuresPositionSnapshotError = failure.message ?: failure.javaClass.simpleName
+                    reconcileRequired = true
+                    persistSafetyFlag("reconcile_required", true)
+                    lastError = "Futures position snapshot unavailable; trading blocked: " + futuresPositionSnapshotError
+                    stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures position snapshot unavailable")
+                    JSONArray()
+                }
             }
         } else {
             JSONArray()
@@ -8981,6 +9053,9 @@ private class NativeEngine(
                 .put("user_stream_sync_required", userStreamSyncRequired)
                 .put("kill_switch_latched", killLatched))
             .put("positions_snapshot_ok", futuresPositionsSnapshotOk)
+            .put("positions_snapshot_at_ms", cachedFuturesPositionsSnapshotAtMs)
+            .put("positions_snapshot_age_ms", if (cachedFuturesPositionsSnapshotAtMs > 0L)
+                (System.currentTimeMillis() - cachedFuturesPositionsSnapshotAtMs).coerceAtLeast(0L) else JSONObject.NULL)
             .put("positions_snapshot_error", futuresPositionSnapshotError ?: JSONObject.NULL)
             .put("pnl", if (futuresPositions.length() == 0 || !futuresPositionsSnapshotOk) JSONObject.NULL else livePnl)
             .put("pnl_pct", if (futuresPositions.length() == 0 || !futuresPositionsSnapshotOk) JSONObject.NULL else livePnlPct)
