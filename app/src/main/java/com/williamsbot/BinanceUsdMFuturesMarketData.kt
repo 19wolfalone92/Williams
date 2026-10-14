@@ -83,6 +83,18 @@ internal class BinanceUsdMFuturesMarketData(
     internal fun isCandleClosed(closeTimeMs: Long, exchangeNowMs: Long): Boolean =
         closeTimeMs >= 0L && exchangeNowMs > closeTimeMs
 
+    /** CandleN stores open time; derive the inclusive close timestamp without admitting a forming bar. */
+    internal fun isCandleOpenTimeClosed(
+        openTimeMs: Long,
+        candleDurationMs: Long,
+        exchangeNowMs: Long
+    ): Boolean {
+        if (openTimeMs < 0L || candleDurationMs <= 0L) return false
+        val closeTimeMs = openTimeMs + candleDurationMs - 1L
+        if (closeTimeMs < openTimeMs) return false // overflow
+        return isCandleClosed(closeTimeMs, exchangeNowMs)
+    }
+
     fun tickerPrices(): JSONArray = getArray("$base/fapi/v1/ticker/price")
     fun ticker24h(): JSONArray = getArray("$base/fapi/v1/ticker/24hr")
     fun bookTickers(): JSONArray = getArray("$base/fapi/v1/ticker/bookTicker")

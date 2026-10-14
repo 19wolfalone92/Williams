@@ -21,6 +21,19 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
+    fun liveCandleOpenTimeFilterNeverReturnsFormingOrFutureCandles() {
+        val marketData = BinanceUsdMFuturesMarketData()
+        val oneHour = 60L * 60L * 1000L
+        val closedOpen = 100L
+        val formingOpen = closedOpen + oneHour
+        val exchangeNow = formingOpen + 10L
+        assertTrue(marketData.isCandleOpenTimeClosed(closedOpen, oneHour, exchangeNow))
+        assertTrue(!marketData.isCandleOpenTimeClosed(formingOpen, oneHour, exchangeNow))
+        assertTrue(!marketData.isCandleOpenTimeClosed(formingOpen + oneHour, oneHour, exchangeNow))
+        assertTrue(!marketData.isCandleOpenTimeClosed(-1L, oneHour, exchangeNow))
+    }
+
+    @Test
     fun requestsUsdMFuturesKlinesAndPassesPaginationParameters() {
         var capturedUrl = ""
         val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->

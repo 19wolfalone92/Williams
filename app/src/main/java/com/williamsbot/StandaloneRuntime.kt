@@ -2166,8 +2166,16 @@ private class NativeEngine(
         val liveKey = normalizedSymbol + ":" + frame
         liveCandleCache[liveKey]?.let { live ->
             synchronized(live) {
-                if (live.size >= limit && candleSeriesCurrent(live, frame)) {
-                    return live.takeLast(limit)
+                // WS caches also contain the currently forming kline (x=false).
+                // It is valid for display, never for a trading decision. Strategy
+                // reads are restricted to bars closed according to Binance server time.
+                val exchangeNowMs = futuresMarketData.exchangeNowMs()
+                val durationMs = frameSeconds(frame).coerceAtLeast(60L) * 1000L
+                val closed = live.filter {
+                    futuresMarketData.isCandleOpenTimeClosed(it.t, durationMs, exchangeNowMs)
+                }
+                if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs)) {
+                    return closed.takeLast(limit)
                 }
             }
         }
