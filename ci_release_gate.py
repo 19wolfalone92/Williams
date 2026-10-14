@@ -120,6 +120,8 @@ def main() -> None:
         "risk_engine.py",
     )
     must(risk, "stop_price = structural_stop", "risk_engine.py")
+    must(risk, "max_daily_loss_pct: float = 0.03", "risk_engine.py")
+    must(risk, "min(0.03, raw_daily_loss)", "risk_engine.py")
     must_not(risk, "entry - fallback_stop_distance", "risk_engine.py")
     must_not(risk, "entry + fallback_stop_distance", "risk_engine.py")
 
