@@ -146,6 +146,7 @@ internal class NativeFuturesCampaignCoordinator(
             for (i in 0 until persisted.length()) {
                 val item = persisted.optJSONObject(i) ?: continue
                 val role = item.optString("intent_role", "ENTRY")
+                val symbol = item.optString("symbol").uppercase(Locale.US)
                 val status = item.optString("exchange_status").uppercase(Locale.US)
                 val entryId = item.optString("client_id")
                 if (role == "ENTRY" && status in activeStatuses && entryId.isNotBlank()) activeEntryClientIds += entryId
