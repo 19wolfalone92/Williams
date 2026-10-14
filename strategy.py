@@ -102,23 +102,26 @@ def calculate_indicators(df, cfg):
     # never an execution requirement by itself.
     median = (x["high"] + x["low"]) / 2
 
-    # Williams Alligator: 13/8, 8/5, 5/3 smoothed displaced lines.
+    # Williams Alligator: SMMA on median price, then forward chart
+    # displacement 13/8, 8/5, 5/3. At candle t, the line DRAWN at t is the
+    # underlying SMMA value from t-shift bars earlier. Using the unshifted
+    # SMMA at t would compare price with a value plotted in the future and
+    # would not reproduce the Alligator visible on a Williams chart.
     x["jaw"] = smma(median, cfg["jaw"])
     x["teeth"] = smma(median, cfg["teeth"])
     x["lips"] = smma(median, cfg["lips"])
     x["jaw_shifted"] = x["jaw"].shift(cfg["jaw_shift"])
     x["teeth_shifted"] = x["teeth"].shift(cfg["teeth_shift"])
     x["lips_shifted"] = x["lips"].shift(cfg["lips_shift"])
-    # Keep both semantic domains explicit: *_shifted is a legacy/display
-    # alignment column; executable decisions use the current-time SMMA values.
-    # The Alligator's forward chart displacement is not a licence to compare
-    # today's price against an eight/five/three-bar-old line.
-    x["jaw_current"] = x["jaw"]
-    x["teeth_current"] = x["teeth"]
-    x["lips_current"] = x["lips"]
+    # Explicitly separate unshifted calculation buffers from chart-aligned
+    # values used for same-candle market interpretation and order validation.
+    x["jaw_current"] = x["jaw_shifted"]
+    x["teeth_current"] = x["teeth_shifted"]
+    x["lips_current"] = x["lips_shifted"]
 
-    # Gator Oscillator: display-only convergence/divergence of displaced
-    # Alligator lines. Its bars are diagnostics, never an extra entry gate.
+    # Gator Oscillator uses the Alligator values aligned to the displayed
+    # chart candle. Its values remain diagnostic and are not a stand-alone
+    # entry trigger.
     x["gator_upper"] = (x["jaw_current"] - x["teeth_current"]).abs()
     x["gator_lower"] = -(x["teeth_current"] - x["lips_current"]).abs()
     x["gator_upper_expanding"] = (
@@ -304,7 +307,29 @@ def calculate_indicators(df, cfg):
         mouth_values.max(axis=1) - mouth_values.min(axis=1)
     ) / x["close"].replace(0, np.nan)
     x["alligator_spread_pct"] = spread
-    x["alligator_awake"] = spread >= cfg["min_alligator_spread_pct"]
+    spread_change = spread.diff()
+    x["alligator_state"] = "UNKNOWN"
+    for i in range(len(x)):
+        lines = mouth_values.iloc[i]
+        price = float(x["close"].iloc[i]) if pd.notna(x["close"].iloc[i]) else np.nan
+        width = spread.iloc[i]
+        change = spread_change.iloc[i]
+        if not (np.isfinite(lines.to_numpy(dtype=float)).all()
+                and np.isfinite(price) and np.isfinite(width)
+                and np.isfinite(change)):
+            state = "UNKNOWN"
+        elif bool(x["bullish_alligator"].iloc[i]) or bool(x["bearish_alligator"].iloc[i]):
+            state = "EATING" if change > 0 else "SATIATED"
+        elif change > 0:
+            state = "AWAKENING"
+        else:
+            state = "SLEEPING"
+        x.iloc[i, x.columns.get_loc("alligator_state")] = state
+
+    # Do not impose a percentage-width threshold: Williams describes Alligator
+    # phases qualitatively through line separation/order and price position.
+    # This flag is diagnostic only; it never authorizes an order by itself.
+    x["alligator_awake"] = x["alligator_state"].isin({"AWAKENING", "EATING"})
 
     # Williams' fractal/Balance-Line gate: a buy fractal is only actionable
     # when its peak is above the red Balance Line (Teeth); sells are mirrored.
