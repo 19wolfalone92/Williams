@@ -100,6 +100,24 @@ internal class BinanceUsdMFuturesMarketData(
     fun bookTickers(): JSONArray = getArray("$base/fapi/v1/ticker/bookTicker")
     fun exchangeInfo(): JSONObject = getObject("$base/fapi/v1/exchangeInfo")
 
+    /** Fresh bid/ask for the final entry-spread check; cached scanner spread is not execution authority. */
+    fun topOfBook(symbol: String): Pair<Double, Double> {
+        requireSymbol(symbol)
+        val url = "$base/fapi/v1/ticker/bookTicker".toHttpUrl().newBuilder()
+            .addQueryParameter("symbol", symbol.uppercase(Locale.US))
+            .build()
+            .toString()
+        val row = getObject(url)
+        val bid = row.optString("bidPrice").toDoubleOrNull()
+            ?: throw IOException("Malformed Futures best bid for $symbol")
+        val ask = row.optString("askPrice").toDoubleOrNull()
+            ?: throw IOException("Malformed Futures best ask for $symbol")
+        if (!bid.isFinite() || !ask.isFinite() || bid <= 0.0 || ask < bid) {
+            throw IOException("Invalid Futures top of book for $symbol")
+        }
+        return bid to ask
+    }
+
     fun price(symbol: String): Double {
         requireSymbol(symbol)
         val url = "$base/fapi/v1/ticker/price".toHttpUrl().newBuilder()
