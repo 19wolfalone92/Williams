@@ -6840,7 +6840,7 @@ private class NativeEngine(
             if (a > p) streak++ else break
             if (streak == 3) {
                 val priorFractalValid = lastValidFractalLevel(i - 1)?.let { (center, level) ->
-                    teethS[center + 2].isFinite() && level > teethS[center + 2]
+                    teethS[center].isFinite() && level > teethS[center]
                 } ?: false
                 if (priorFractalValid) {
                     val trigger = candles[i].h + tick
@@ -6867,8 +6867,17 @@ private class NativeEngine(
         val fractalCenter = latestUpFractal(candles.lastIndex - 2)
         if (fractalCenter != null) {
             val trigger = candles[fractalCenter].h + tick
+            val centerTeeth = teethS[fractalCenter]
             val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
-            if (candles[current].c < trigger && trigger > currentTeeth) {
+            // Book rule: qualify the middle bar against the Teeth value at
+            // the fractal's own chart coordinate, then re-check the live
+            // pending trigger against current Teeth after confirmation.
+            if (
+                centerTeeth.isFinite() &&
+                candles[fractalCenter].h > centerTeeth &&
+                candles[current].c < trigger &&
+                trigger > currentTeeth
+            ) {
                 out += CampaignSignalN(
                     signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[fractalCenter].t),
                     type = "FRACTAL",
