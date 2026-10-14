@@ -1005,8 +1005,20 @@ private class NativeEngine(
     private fun accountFundedForEntry(): Boolean =
         restAccountReady && futuresAccountFundedForEntry(liveUsdtBalance, liveFuturesEquity)
 
+    /**
+     * Runtime readiness and the campaign coordinator must agree. The coordinator
+     * owns the exchange-side campaign lifecycle; a healthy socket/account alone
+     * must never make the outer gate report execution-ready while it is reconciling.
+     */
+    private fun campaignCoordinatorReadyForEntry(): Boolean = runCatching {
+        val status = futuresCampaignCoordinator.status()
+        status.optBoolean("ready_for_new_entry", false) &&
+            status.optString("state") in setOf("READY", "OPEN_PROTECTED")
+    }.getOrDefault(false)
+
     private fun executionReady(): Boolean =
         futuresExecutionAdapterReady &&
+            campaignCoordinatorReadyForEntry() &&
             running &&
             !paused &&
             !reconcileRequired &&
@@ -1025,6 +1037,12 @@ private class NativeEngine(
     private fun executionBlockers(): List<String> =
         buildList {
             if (!futuresExecutionAdapterReady) add("futures_execution_adapter_disabled")
+            if (!campaignCoordinatorReadyForEntry()) {
+                val coordinator = runCatching { futuresCampaignCoordinator.status() }.getOrNull()
+                add("futures_campaign_coordinator_not_ready:" +
+                    (coordinator?.optString("state")?.takeIf { it.isNotBlank() } ?: "unknown") +
+                    ":" + (coordinator?.optString("blocker")?.takeIf { it.isNotBlank() && it != "null" } ?: "reconciliation_required"))
+            }
             if (!running) add("runtime_not_running")
             if (paused) add("paused")
             if (reconcileRequired) add("reconcile_required")
