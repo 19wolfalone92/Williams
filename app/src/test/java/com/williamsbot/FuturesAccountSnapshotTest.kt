@@ -17,6 +17,7 @@ class FuturesAccountSnapshotTest {
         assertEquals(123.45, parsed.availableUsdt, 0.0)
         assertEquals(125.00, parsed.walletUsdt, 0.0)
         assertEquals(123.50, parsed.equityUsdt, 0.0)
+        assertEquals(-1.50, parsed.unrealizedPnlUsdt!!, 0.0)
     }
 
     @Test
@@ -30,6 +31,7 @@ class FuturesAccountSnapshotTest {
         assertEquals(0.0, parsed.availableUsdt, 0.0)
         assertEquals(0.0, parsed.walletUsdt, 0.0)
         assertEquals(0.0, parsed.equityUsdt, 0.0)
+        assertEquals(0.0, parsed.unrealizedPnlUsdt!!, 0.0)
         assertEquals(false, futuresAccountFundedForEntry(parsed.availableUsdt, parsed.equityUsdt))
     }
 
@@ -54,6 +56,7 @@ class FuturesAccountSnapshotTest {
         assertEquals(9.5, parsed.availableUsdt, 0.0)
         assertEquals(10.0, parsed.walletUsdt, 0.0)
         assertEquals(9.75, parsed.equityUsdt, 0.0)
+        assertEquals(-0.25, parsed.unrealizedPnlUsdt!!, 0.0)
     }
 
     @Test
