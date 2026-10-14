@@ -7,7 +7,7 @@
 ## Latest verification evidence
 - Python backend CI — **PASS** at the audited code commit: [run 38558792479](https://github.com/19wolfalone92/Williams/actions/runs/38558792479). Release-contract gate, production Python compile, static safety audit, and offline tests passed. Pytest result: **206 passed, 4 warnings**.
 - Android CI — **PASS** at the audited code commit: [run 38558792532](https://github.com/19wolfalone92/Williams/actions/runs/38558792532). Android build and configured unit tests completed successfully.
-- Williams Campaign CI — Python tests **PASS** at the audited code commit; combined workflow still running at the last status check: [run 38558792579](https://github.com/19wolfalone92/Williams/actions/runs/38558792579).
+- Williams Campaign CI — aggregate run **CANCELLED**: [run 38558792579](https://github.com/19wolfalone92/Williams/actions/runs/38558792579). Both component jobs completed their main test/build steps successfully before cancellation: the Python tests job passed, and Android debug build, unit tests, and lint steps passed. The aggregate is not counted as a workflow PASS.
 - Android APK build — **PASS**: [run 38558505033](https://github.com/19wolfalone92/Williams/actions/runs/38558505033). It produced a signed debug APK and an unsigned release APK. This build was from `357bd2e5df2928aef668f34eedfe6b8fb9d3ced0`; Android/Kotlin source did not change between that commit and the latest audited code commit.
 
 ## Source checks confirmed
