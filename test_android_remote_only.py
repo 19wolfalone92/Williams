@@ -266,7 +266,11 @@ def test_android_williams_indicator_decisions_use_chart_aligned_alligator_and_ca
 def test_android_kill_switch_never_closes_an_unmanaged_or_unreconciled_position():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
-    assert "val ownershipReconciliation = runCatching { futuresCampaignCoordinator.reconcile() }" in runtime
+    # The unsafe direct call must stay absent: ownership reconciliation must pass through the durable Execution Door.
+    assert "val ownershipReconciliation = runCatching { futuresCampaignCoordinator.reconcile() }" not in runtime
+    assert 'val ownershipReconciliation = runCatching {' in runtime
+    assert 'reconcileFuturesThroughDoor(' in runtime
+    assert '"KILL_SWITCH_PRE_CLOSE_RECONCILIATION"' in runtime
     assert "futuresCampaignCoordinator.isManagedOpenPosition(symbol, direction)" in runtime
     assert "position left untouched" in runtime
     assert "an existing exit intent is active/ambiguous; reconcile before any new close request" in coordinator
