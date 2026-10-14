@@ -1626,7 +1626,7 @@ private class NativeEngine(
                     } catch (x: Exception) {
                         lastError = x.javaClass.simpleName + ": " + (x.message ?: "")
                     }
-                    try { Thread.sleep(10_000L) } catch (_: InterruptedException) { break }
+                    try { Thread.sleep(1_000L) } catch (_: InterruptedException) { break }
                 }
             } finally {
                 if (running && generation == runtimeGeneration) {
@@ -9458,9 +9458,12 @@ private class NativeEngine(
             }
         }
 
+        val liveQuote = livePrices[symbol]?.takeIf { it.isFinite() && it > 0.0 }
+            ?: runCatching { futuresMarketData.price(symbol) }.getOrNull()
         return JSONObject()
             .put("symbol", symbol)
             .put("interval", selectedInterval)
+            .put("live_price", liveQuote ?: JSONObject.NULL)
             .put("candles", output)
     }
 
