@@ -239,6 +239,31 @@ def main() -> None:
     futures_user_stream = read("app/src/main/java/com/williamsbot/BinanceUserDataStream.kt")
     must(futures_user_stream, '"/fapi/v1/listenKey"', "BinanceUserDataStream.kt")
     must_not(futures_user_stream, "userDataStream.subscribe.signature", "BinanceUserDataStream.kt")
+
+    # OkHttp Kotlin accessors are compiler errors under the current Kotlin toolchain.
+    for path in (
+        "app/src/main/java/com/williamsbot/BinanceUsdMFuturesMarketData.kt",
+        "app/src/main/java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt",
+        "app/src/test/java/com/williamsbot/BinanceUsdMFuturesMarketDataTest.kt",
+    ):
+        source = read(path)
+        for obsolete in ("HttpUrl.parse(", "response.body()", "response.code()", "MediaType.parse(", "ResponseBody.create(", "chain.request().url()"):
+            must_not(source, obsolete, path)
+
+    runtime_source = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
+    must(runtime_source, "internal fun conservativeRiskReservation", "StandaloneRuntime.kt")
+    must_not(
+        runtime_source,
+        "((it.entry - it.stop) / it.entry).coerceAtLeast(0.0)",
+        "StandaloneRuntime.kt",
+    )
+    risk_test = read("app/src/test/java/com/williamsbot/ReservedRiskBudgetTest.kt")
+    for needle in (
+        "validStoredRiskReservationIsPreservedWithinPortfolioCap",
+        "missingOrInvalidRiskReservationConsumesTheRemainingCampaignBudget",
+        "invalidPortfolioCapFailsClosed",
+    ):
+        must(risk_test, needle, "ReservedRiskBudgetTest.kt")
     must(legacy_runtime, '.put("ok", running && !reconcileRequired && !killLatched)', "StandaloneRuntime.kt")
     must(legacy_runtime, 'userStreamSyncRequired = true', "StandaloneRuntime.kt")
     must(legacy_runtime, 'daily_loss=0.01', "StandaloneRuntime.kt")
