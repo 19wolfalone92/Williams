@@ -8828,9 +8828,6 @@ private class NativeEngine(
             }
         }
 
-        // Zero is a valid available USDT balance. Show it once the account
-        // schema is verified; reserve null for an unknown/unvalidated balance.
-        var balance: Double? = liveUsdtBalance.takeIf { restAccountReady }
         // Dashboard positions/PnL must come from the Futures exchange snapshot,
         // never the retired Spot PositionState cache.
         val credentialsConfigured = key().isNotBlank() && secret().isNotBlank()
@@ -8884,7 +8881,6 @@ private class NativeEngine(
         if (!fast && key().isNotBlank() && secret().isNotBlank() && !restAccountReady) {
             runCatching {
                 val account = futuresCampaignCoordinator.accountSnapshot()
-                balance = account.optString("availableBalance").toDoubleOrNull()
                 check(updateCachedFuturesAccount(account)) {
                     "Futures account returned invalid balance/equity values"
                 }
@@ -8920,6 +8916,7 @@ private class NativeEngine(
                 "price",
                 livePrices[primarySymbol]
                     ?: primaryCandles.lastOrNull()?.c
+                    ?: restLastTickerPrice.takeIf { it.isFinite() && it > 0.0 }
                     ?: JSONObject.NULL
             )
             .put(
