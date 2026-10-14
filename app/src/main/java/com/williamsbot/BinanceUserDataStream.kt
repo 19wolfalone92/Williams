@@ -93,8 +93,15 @@ class BinanceUserDataStream(
                             if (event.has("e")) {
                                 runCatching { onEvent(event) }
                                     .onFailure {
+                                        connected = false
                                         onConnection(false, "event_handler_failed: " +
                                             (it.message ?: it.javaClass.simpleName))
+                                        // A failed account/order event means the local view can no
+                                        // longer be trusted. Force the reconnect loop to reconnect
+                                        // and let the caller complete REST reconciliation before
+                                        // any new entry is allowed.
+                                        webSocket.close(1011, "event_handler_failed")
+                                        closed.countDown()
                                     }
                             } else if (message.has("code") || message.has("error")) {
                                 onConnection(false, "Futures user stream error: " +

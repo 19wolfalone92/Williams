@@ -239,6 +239,8 @@ def main() -> None:
     futures_user_stream = read("app/src/main/java/com/williamsbot/BinanceUserDataStream.kt")
     must(futures_user_stream, '"/fapi/v1/listenKey"', "BinanceUserDataStream.kt")
     must_not(futures_user_stream, "userDataStream.subscribe.signature", "BinanceUserDataStream.kt")
+    must(futures_user_stream, 'webSocket.close(1011, "event_handler_failed")', "BinanceUserDataStream.kt")
+    must(futures_user_stream, "closed.countDown()", "BinanceUserDataStream.kt")
 
     # OkHttp Kotlin accessors are compiler errors under the current Kotlin toolchain.
     for path in (

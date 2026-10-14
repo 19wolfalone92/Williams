@@ -216,3 +216,5 @@ def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
     assert '"ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE"' in runtime
     assert "userStreamConnected &&" in runtime
     assert "!userStreamSyncRequired" in runtime
+    assert 'webSocket.close(1011, "event_handler_failed")' in user_stream
+    assert "closed.countDown()" in user_stream
