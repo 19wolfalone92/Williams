@@ -737,6 +737,10 @@ internal class NativeFuturesCampaignCoordinator(
                         intent.put("campaign_status", "CLOSED_OR_STOPPED")
                             .put("closed_observed_at_ms", nowMs)
                     }
+                    // Commit terminal campaign ownership before the first network
+                    // cleanup call. If the process dies or cancellation is ambiguous,
+                    // recovery will never revive this old campaign as a live one.
+                    saveIntents(persisted)
                     // A stop-triggered or manually closed position must not leave a
                     // closePosition algo armed to affect a future campaign on this symbol.
                     val knownProtectionIds = listOf(

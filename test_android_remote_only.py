@@ -266,6 +266,11 @@ def test_android_campaign_lifecycle_is_separate_from_exchange_order_status():
     assert '"FILL_CONFIRMATION_PENDING"' in coordinator
     assert "isEntryCampaignReserved(row)" in coordinator
     assert "latestEntryIntentIndex(intents, symbol)" in coordinator
+    flat_cleanup = coordinator.index("// Once Binance reports the symbol flat")
+    terminal_write = coordinator.index('intent.put("campaign_status", "CLOSED_OR_STOPPED")', flat_cleanup)
+    durable_save = coordinator.index("saveIntents(persisted)", terminal_write)
+    stop_cleanup = coordinator.index("val algos = adapter.openAlgoOrders(symbol)", terminal_write)
+    assert terminal_write < durable_save < stop_cleanup
     assert "internal fun shouldFinalizeFilledFlatCampaign(" in coordinator
     assert "filledEntryRequiresAStableFlatWindowAndNoUnresolvedExitBeforeTerminalization" in _read(ROOT / "app/src/test/java/com/williamsbot/ProtectionOwnershipTest.kt")
 
