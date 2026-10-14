@@ -90,8 +90,8 @@ class TradingConfig:
     initial_entry_risk_pct: float = 0.002
     campaign_risk_limit_pct: float = 0.006
     max_total_risk_pct: float = 0.006
-    # Canonical project policy: stop opening new campaigns at 1% daily loss.
-    max_daily_loss_pct: float = 0.01
+    # Canonical project policy: stop opening new campaigns at 3% daily loss.
+    max_daily_loss_pct: float = 0.03
     max_consecutive_losses: int = 2
     cooldown_minutes: int = 30
     max_open_positions: int = 1
@@ -195,7 +195,7 @@ class TradingConfig:
             initial_entry_risk_pct=initial_entry_risk,
             campaign_risk_limit_pct=campaign_risk,
             max_total_risk_pct=total_risk,
-            max_daily_loss_pct=max(0.0, min(0.01, _float(source, "MAX_DAILY_LOSS_PCT", 0.01))),
+            max_daily_loss_pct=max(0.0, min(0.03, _float(source, "MAX_DAILY_LOSS_PCT", 0.03))),
             max_consecutive_losses=min(2, max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 2))),
             cooldown_minutes=max(0, _int(source, "COOLDOWN_MINUTES", 30)),
             max_open_positions=max_positions,
