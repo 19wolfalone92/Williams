@@ -336,7 +336,18 @@ def main() -> None:
     must(runtime_source, "williamsAlligatorLine(candles, 8, 5)", "StandaloneRuntime.kt")
     must(runtime_source, "williamsAlligatorLine(candles, 5, 3)", "StandaloneRuntime.kt")
     must_not(runtime_source, "williamsAlligatorCurrentLine", "StandaloneRuntime.kt")
-    must(runtime_source, "teethS[center].isFinite() && level > teethS[center]", "StandaloneRuntime.kt")
+    # Super AO (WM2) is independent of the WM3/fractal filter; verify that
+    # Android uses the actual third rising AO bar and rejects already-consumed
+    # stop triggers instead of allowing a late entry after a scanner gap.
+    must(runtime_source, "val signalIndex = candles.lastIndex - (streak - 3)", "StandaloneRuntime.kt WM2")
+    must(runtime_source, "fun triggerStillPending(signalIndex: Int, trigger: Double): Boolean", "StandaloneRuntime.kt trigger chronology")
+    must(runtime_source, "triggerStillPending(signalIndex, trigger)", "StandaloneRuntime.kt WM2 trigger")
+    must(runtime_source, "triggerStillPending(fractalCenter, trigger)", "StandaloneRuntime.kt WM3 trigger")
+    must(runtime_source, "triggerStillPending(i, trigger)", "StandaloneRuntime.kt WM1 trigger")
+    must_not(runtime_source, "priorFractalValid", "StandaloneRuntime.kt WM2")
+    must(runtime_source, "val rawWorkCandles = candles", "StandaloneRuntime.kt H1 decision series")
+    must_not(runtime_source, "getOrElse { candles }", "StandaloneRuntime.kt H1 fallback")
+    must(runtime_source, '.put("take_profit_pct", 0.0)', "StandaloneRuntime.kt canonical Futures settings")
     must(runtime_source, "candles[fractalCenter].h > centerTeeth", "StandaloneRuntime.kt")
     must(runtime_source, "fun upGroupStart(i: Int): Int", "StandaloneRuntime.kt")
     must(runtime_source, "fun downGroupStart(i: Int): Int", "StandaloneRuntime.kt")
