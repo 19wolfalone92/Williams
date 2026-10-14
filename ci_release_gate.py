@@ -258,6 +258,11 @@ def main() -> None:
             must_not(source, obsolete, path)
 
     runtime_source = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
+    signed_account = runtime_source.split("private fun signedAccount(): JSONObject =", 1)[1].split(
+        "private fun signedRequest(", 1
+    )[0]
+    must(signed_account, 'path = "/fapi/v3/account"', "StandaloneRuntime.kt signed account")
+    must_not(signed_account, 'path = "/api/v3/account"', "StandaloneRuntime.kt signed account")
     must(runtime_source, "internal fun conservativeRiskReservation", "StandaloneRuntime.kt")
     must(runtime_source, "futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)", "StandaloneRuntime.kt")
     must(runtime_source, "isCandleOpenTimeClosed(it.t, durationMs, exchangeNowMs)", "StandaloneRuntime.kt")
