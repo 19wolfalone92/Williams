@@ -140,8 +140,18 @@ internal fun futuresAccountEquity(
         } else {
             return null
         }
-    return value.takeIf { it.isFinite() && it > 0.0 }
+    // Zero is a valid, known balance on a fresh/empty Demo account. Unknown is null;
+    // non-finite and negative values remain invalid. The order gate separately requires
+    // strictly positive available USDT and equity before any mutation can be attempted.
+    return value.takeIf { it.isFinite() && it >= 0.0 }
 }
+
+internal fun futuresAccountFundedForEntry(
+    availableUsdt: Double?,
+    equity: Double?
+): Boolean =
+    availableUsdt != null && availableUsdt.isFinite() && availableUsdt > 0.0 &&
+        equity != null && equity.isFinite() && equity > 0.0
 
 /** Reject future-dated and genuinely stale signal bars using Binance server time. */
 internal fun isSignalFresh(
@@ -683,6 +693,7 @@ private class NativeEngine(
     @Volatile private var futuresStreamReconcilePending = false
     @Volatile private var lastUserEventMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
+    @Volatile private var liveUsdtBalanceKnown = false
     // Authoritative Futures account equity (totalMarginBalance, with wallet+UPnL fallback).
     // Never synthesize equity by adding position notional to free balance.
     @Volatile private var liveFuturesEquity = 0.0
@@ -792,19 +803,35 @@ private class NativeEngine(
                 .mapNotNull { assets.optJSONObject(it) }
                 .firstOrNull { it.optString("asset").equals("USDT", ignoreCase = true) }
         }
+        fun number(objectValue: JSONObject?, key: String): Double? {
+            val raw = objectValue?.opt(key) ?: return null
+            val parsed = when (raw) {
+                is Number -> raw.toDouble()
+                is String -> raw.trim().toDoubleOrNull()
+                else -> null
+            }
+            return parsed?.takeIf { it.isFinite() }
+        }
         fun number(rootKey: String, assetKey: String): Double? =
-            account.optString(rootKey).toDoubleOrNull()
-                ?: usdt?.optString(assetKey)?.toDoubleOrNull()
+            number(account, rootKey) ?: number(usdt, assetKey)
+
         val available = number("availableBalance", "availableBalance")
         val wallet = number("totalWalletBalance", "walletBalance")
         val unrealized = number("totalUnrealizedProfit", "unrealizedProfit")
         val margin = number("totalMarginBalance", "marginBalance")
         val validAvailable = available?.takeIf { it.isFinite() && it >= 0.0 }
         val validWallet = wallet?.takeIf { it.isFinite() && it >= 0.0 }
-        val equity = futuresAccountEquity(margin, validWallet, unrealized?.takeIf { it.isFinite() })
+        // Preserve a parsed available USDT amount even when another account field is
+        // invalid, so the cockpit can distinguish a known zero from an unknown value.
+        if (validAvailable != null) {
+            liveUsdtBalance = validAvailable
+            liveUsdtBalanceKnown = true
+        } else {
+            liveUsdtBalanceKnown = false
+        }
+        val equity = futuresAccountEquity(margin, validWallet, unrealized)
         if (validAvailable == null || validWallet == null || equity == null) {
             restAccountReady = false
-            liveUsdtBalance = 0.0
             liveFuturesEquity = 0.0
             restAccountLastError = "Futures account missing valid USDT available balance/wallet/equity fields; rootKeys=" +
                 account.keys().asSequence().toList().sorted().joinToString(",") +
@@ -812,6 +839,7 @@ private class NativeEngine(
             return false
         }
         liveUsdtBalance = validAvailable
+        liveUsdtBalanceKnown = true
         liveFuturesEquity = equity
         restAccountReady = true
         restAccountLastError = null
@@ -849,6 +877,9 @@ private class NativeEngine(
             publicSocketLastEventMs > 0L &&
             System.currentTimeMillis() - publicSocketLastEventMs <= maxAgeMs
 
+    private fun accountFundedForEntry(): Boolean =
+        restAccountReady && futuresAccountFundedForEntry(liveUsdtBalance, liveFuturesEquity)
+
     private fun executionReady(): Boolean =
         futuresExecutionAdapterReady &&
             running &&
@@ -861,6 +892,7 @@ private class NativeEngine(
             userStreamConnected &&
             !userStreamSyncRequired &&
             restAccountReady &&
+            accountFundedForEntry() &&
             historyReady &&
             stateMachine.executionAllowed() &&
             !equityCircuitBreaker.isTripped()
@@ -877,6 +909,7 @@ private class NativeEngine(
             if (!publicWebSocketFresh()) add("public_depth_or_bookticker_stream_disconnected_or_stale")
             if (!userStreamConnected || userStreamSyncRequired) add("futures_user_stream_disconnected_or_unsynchronized")
             if (!restAccountReady) add("rest_account_not_ready")
+            else if (!accountFundedForEntry()) add("futures_account_unfunded_or_zero_usdt")
             if (!historyReady) add("history_not_ready")
             if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
             if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
@@ -1303,8 +1336,10 @@ private class NativeEngine(
             scannerState = "BLOCKED_ACCOUNT"
             scannerError = restAccountLastError
                 ?: "Futures account balance/equity fields failed validation"
+            lastError = scannerError
             throw IllegalStateException(
-                "Futures Testnet account returned invalid or incomplete equity/balance values"
+                "Futures Testnet account returned invalid or incomplete equity/balance values: " +
+                    (scannerError ?: "unknown account validation error")
             )
         }
         check(prefs.edit().putBoolean("auto_run", true).commit()) {
@@ -1367,12 +1402,11 @@ private class NativeEngine(
                         // Always evaluate the gate so the cockpit reports the true blocker
                         // instead of remaining indefinitely at WAITING_FOR_HISTORY.
                         requestScan()
-                    } else if (!checkFuturesDailyLoss()) {
-                        scannerState = "BLOCKED_DAILY_LOSS"
-                        scannerError = "Daily loss limit reached; new Futures entries are disabled"
-                        runCatching { manageNativeFuturesPositions() }
-                            .onFailure { lastError = "Futures position monitor: " + (it.message ?: it.javaClass.simpleName) }
                     } else {
+                        // Keep market discovery and diagnostics alive independently from
+                        // trade funding/daily-risk permission. submitNativeFuturesCampaignEntry
+                        // revalidates account funding, execution prerequisites and daily loss
+                        // immediately before each possible exchange mutation.
                         requestScan()
                     }
                 } catch (x: Exception) {
@@ -3882,14 +3916,25 @@ private class NativeEngine(
     }
 
     private fun checkFuturesDailyLoss(): Boolean {
-        val account = futuresCampaignCoordinator.accountSnapshot()
-        val wallet = account.optString("totalWalletBalance").toDoubleOrNull() ?: 0.0
-        val unrealized = account.optString("totalUnrealizedProfit").toDoubleOrNull() ?: 0.0
-        val equity = futuresAccountEquity(
-            account.optString("totalMarginBalance").toDoubleOrNull(), wallet, unrealized
-        ) ?: throw IllegalStateException("Futures equity is unavailable/non-positive")
-        check(updateCachedFuturesAccount(account)) {
-            "Futures account balance/equity data failed validation"
+        val account = try {
+            futuresCampaignCoordinator.accountSnapshot()
+        } catch (failure: Exception) {
+            restAccountReady = false
+            restAccountLastError = failure.message ?: failure.javaClass.simpleName
+            lastError = "FUTURES_ACCOUNT_REFRESH_FAILED: " + restAccountLastError
+            return false
+        }
+        if (!updateCachedFuturesAccount(account)) {
+            lastError = "FUTURES_ACCOUNT_INVALID: " +
+                (restAccountLastError ?: "account balance/equity fields failed validation")
+            return false
+        }
+        val equity = liveFuturesEquity
+        if (!futuresAccountFundedForEntry(liveUsdtBalance, equity)) {
+            // Empty Demo wallets are valid for diagnostics and scanning, but can never
+            // establish a meaningful percentage-loss baseline or authorize an order.
+            lastError = "FUTURES_ACCOUNT_UNFUNDED: positive available USDT and equity are required for entries"
+            return false
         }
         val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
         val exchangeNowMs = futuresMarketData.exchangeNowMs()
@@ -4179,8 +4224,12 @@ private class NativeEngine(
     }
 
     private fun submitNativeFuturesCampaignEntry(candidate: BaseAnalysis) {
-        // Re-check equity immediately before any order mutation. The periodic
-        // worker check is not sufficient because a manual scan can race it.
+        // Check the complete execution/funding barrier before touching daily-risk state.
+        // An unfunded Demo account must not pause or disable a healthy market scanner.
+        if (!executionReady() || !candidate.campaignReady) return
+
+        // Re-check daily equity immediately before the exchange mutation. If the account
+        // or loss baseline becomes unknown at this point, fail closed for this entry.
         val dailyLossAllowsEntry = runCatching { checkFuturesDailyLoss() }.getOrElse { failure ->
             paused = true
             prefs.edit().putBoolean("auto_run", false).commit()
@@ -4305,12 +4354,9 @@ private class NativeEngine(
             requestScan()
             return
         }
-        if (!checkFuturesDailyLoss()) {
-            scannerState = "BLOCKED_DAILY_LOSS"
-            scannerError = "Daily loss limit reached; new Futures entries are disabled"
-            runCatching { manageNativeFuturesPositions() }
-            return
-        }
+        // Do not suppress the scanner merely because the account is unfunded or the
+        // daily-loss baseline is not available. Candidate discovery is read-only;
+        // each candidate's entry path enforces funding, daily risk and ExecutionGate.
         if (!manageNativeFuturesPositions()) {
             scannerState = "BLOCKED_FUTURES_RECONCILIATION"
             scannerError = scannerError ?: "Futures position reconciliation/protection incomplete"
@@ -8314,8 +8360,11 @@ private class NativeEngine(
             )
             .put(
                 "quote_balance",
-                balance ?: JSONObject.NULL
+                if (liveUsdtBalanceKnown) liveUsdtBalance else JSONObject.NULL
             )
+            .put("futures_equity", if (restAccountReady) liveFuturesEquity else JSONObject.NULL)
+            .put("account_funded_for_entry", accountFundedForEntry())
+            .put("rest_account_error", restAccountLastError ?: JSONObject.NULL)
             .put(
                 "position",
                 firstPosition?.let {
