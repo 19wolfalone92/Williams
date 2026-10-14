@@ -3426,6 +3426,22 @@ private class NativeEngine(
 
         try {
             return block()
+        } catch (failure: Exception) {
+            // An exception after a mutation request may mean Binance accepted it but
+            // the response was lost. Do not reopen the execution path until exchange
+            // state has been reconciled, even if the caller forgets to latch the error.
+            reconcileRequired = true
+            persistSafetyFlag("reconcile_required", true)
+            val blocker = "Futures mutation outcome requires reconciliation ($purpose): " +
+                (failure.message ?: failure.javaClass.simpleName)
+            lastError = blocker
+            scannerError = blocker
+            stateMachine.force(
+                if (killLatched) TradingState.KILL_SWITCH_LATCHED
+                else TradingState.RECONCILE_REQUIRED,
+                blocker
+            )
+            throw failure
         } finally {
             // Clear the durable lease while still holding the in-memory reservation.
             // Releasing first creates a race where a second mutation writes its lease
