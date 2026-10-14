@@ -2459,7 +2459,7 @@ private fun PositionScreen(
                             sl = selectedPosition?.stop
                         ),
                         selectedPosition,
-                        interval,
+                        interval = interval,
                         onIntervalChange = onIntervalChange
                     )
                 }
