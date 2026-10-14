@@ -107,9 +107,11 @@ class BinanceUserDataStream(
 
             try {
                 val listenKey = createListenKey(apiKey)
-                val separator = if (endpoint.contains("?")) "&" else "?"
-                val streamUrl = endpoint + separator +
-                    "listenKey=" + URLEncoder.encode(listenKey, "UTF-8") +
+                check(!endpoint.contains("?")) {
+                    "Futures private stream endpoint must be a base path; query parameters are composed locally"
+                }
+                val streamUrl = endpoint + "?listenKey=" +
+                    URLEncoder.encode(listenKey, "UTF-8") +
                     "&events=" + EVENT_TYPES
                 val request = Request.Builder().url(streamUrl).build()
 
