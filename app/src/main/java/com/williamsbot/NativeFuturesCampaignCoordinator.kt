@@ -480,16 +480,21 @@ internal class NativeFuturesCampaignCoordinator(
                 val currentProtectionId = matchingIntent?.optString("protection_client_id").orEmpty()
                 val previousProtectionId = matchingIntent?.optString("previous_protection_client_id").orEmpty()
                 val knownProtectionIds = setOf(currentProtectionId, previousProtectionId).filter { it.isNotBlank() }.toSet()
-                if (matchingIntent != null) {
-                    val liveMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
-                    if (liveMark == null || !isProtectiveStopOnCorrectSide(
-                            direction, liveMark?.toString().orEmpty(), matchingIntent.optString("protective_stop")
-                        )
-                    ) {
-                        anyUnprotected = true
-                        lastBlocker = "$symbol structural stop is not confirmed on the protective side of the current Binance mark price; entries and automatic closure are blocked pending reconciliation"
-                        continue
-                    }
+                val liveMark = if (matchingIntent != null) {
+                    runCatching { adapter.markPrice(symbol) }.getOrNull()
+                } else null
+                val currentStopSafe = matchingIntent != null && liveMark != null &&
+                    isProtectiveStopOnCorrectSide(
+                        direction, liveMark.toString(), matchingIntent.optString("protective_stop")
+                    )
+                val previousStopPrice = matchingIntent?.optString("previous_protective_stop").orEmpty()
+                val previousStopSafe = matchingIntent != null && liveMark != null &&
+                    previousProtectionId.isNotBlank() && previousStopPrice.isNotBlank() &&
+                    isProtectiveStopOnCorrectSide(direction, liveMark.toString(), previousStopPrice)
+                if (matchingIntent != null && !currentStopSafe && !previousStopSafe) {
+                    anyUnprotected = true
+                    lastBlocker = "$symbol neither the current stop nor its tracked predecessor is confirmed on the protective side of Binance mark price; entries and automatic closure are blocked pending reconciliation"
+                    continue
                 }
                 val unknownProtectiveStopExists = (0 until algos.length()).any { j ->
                     val row = algos.optJSONObject(j) ?: return@any true
@@ -506,6 +511,35 @@ internal class NativeFuturesCampaignCoordinator(
                     matchingIntent?.optString("protection_client_id"),
                     matchingIntent?.optString("protective_stop")
                 )
+
+                // Recover a crash between journaling a new trailing-stop id and
+                // confirming that replacement. The exact previous stop is still
+                // exchange-visible, so restore it as primary and track the attempted
+                // replacement as the predecessor candidate for cleanup below.
+                if (protective == null && matchingIntent != null &&
+                    previousProtectionId.isNotBlank() && previousStopSafe
+                ) {
+                    val predecessor = findProtectiveStop(
+                        algos, direction, previousProtectionId, previousStopPrice
+                    )
+                    if (predecessor != null) {
+                        val attemptedClientId = currentProtectionId
+                        val attemptedStop = matchingIntent.optString("protective_stop")
+                        if (attemptedClientId.isBlank() || attemptedClientId == previousProtectionId) {
+                            anyUnprotected = true
+                            lastBlocker = "$symbol trailing-stop replacement journal is inconsistent; manual reconciliation required"
+                            continue
+                        }
+                        matchingIntent.put("protection_client_id", previousProtectionId)
+                            .put("protective_stop", previousStopPrice)
+                            .put("previous_protection_client_id", attemptedClientId)
+                            .put("previous_protective_stop", attemptedStop)
+                            .put("protection_status", "SUBMISSION_UNKNOWN")
+                            .put("trail_recovery_at_ms", System.currentTimeMillis())
+                        saveIntents(persisted)
+                        protective = predecessor
+                    }
+                }
 
                 if (protective == null) {
                     if (matchingIntent == null) {
@@ -615,6 +649,24 @@ internal class NativeFuturesCampaignCoordinator(
                         continue
                     }
                     if (previousClientId.isNotBlank()) {
+                        // Cancellation acknowledgement alone is insufficient. Verify
+                        // the primary stop still exists at its exact trigger and the
+                        // tracked predecessor is no longer present before forgetting its id.
+                        val afterCleanup = adapter.openAlgoOrders(symbol)
+                        val primaryStillConfirmed = findProtectiveStop(
+                            afterCleanup, direction, confirmedClientId, confirmedStop
+                        ) != null
+                        val trackedPredecessorStillOpen = (0 until afterCleanup.length()).any { k ->
+                            val row = afterCleanup.optJSONObject(k) ?: return@any true
+                            isProtectiveStop(row, direction) &&
+                                row.optString("clientAlgoId") == previousClientId
+                        }
+                        if (!primaryStillConfirmed || trackedPredecessorStillOpen) {
+                            anyUnprotected = true
+                            lastBlocker = "$symbol protective-stop replacement/cancellation has not been exchange-confirmed; prior and attempted ids remain journaled"
+                            matchingIntent.put("protection_status", "SUBMISSION_UNKNOWN")
+                            continue
+                        }
                         matchingIntent.remove("previous_protection_client_id")
                         matchingIntent.remove("previous_protective_stop")
                     }
