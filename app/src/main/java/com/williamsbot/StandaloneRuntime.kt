@@ -825,6 +825,10 @@ private class NativeEngine(
     @Volatile private var lastUserEventMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
     @Volatile private var liveUsdtBalanceKnown = false
+    @Volatile private var futuresAccountSnapshotUpdatedAtMs = 0L
+    @Volatile private var futuresAccountSnapshotRefreshRunning = false
+    @Volatile private var futuresAccountSnapshotLastAttemptMs = 0L
+    @Volatile private var futuresAccountSnapshotRefreshError: String? = null
     @Volatile private var cachedFuturesPositionsSnapshot: JSONArray? = null
     @Volatile private var cachedFuturesPositionsSnapshotAtMs = 0L
     @Volatile private var futuresPositionSnapshotRefreshRunning = false
@@ -957,6 +961,8 @@ private class NativeEngine(
         liveUsdtBalance = parsed.availableUsdt
         liveUsdtBalanceKnown = true
         liveFuturesEquity = parsed.equityUsdt
+        futuresAccountSnapshotUpdatedAtMs = System.currentTimeMillis()
+        futuresAccountSnapshotRefreshError = null
         restAccountReady = true
         restAccountLastError = null
         return true
@@ -4563,6 +4569,52 @@ private class NativeEngine(
             return false
         }
         return true
+    }
+
+    /**
+     * Signed account requests are network-bound. Fast dashboard polling must not block
+     * on them; refresh asynchronously and expose freshness/error diagnostics instead.
+     * Entry/risk authorization still uses the coordinator's direct exchange snapshot.
+     */
+    private fun refreshFuturesAccountSnapshotIfNeeded(maxAgeMs: Long = 15_000L) {
+        if (key().isBlank() || secret().isBlank()) return
+        val nowMs = System.currentTimeMillis()
+        val age = nowMs - futuresAccountSnapshotUpdatedAtMs
+        if (futuresAccountSnapshotUpdatedAtMs > 0L && age in 0..maxAgeMs) return
+        val start = synchronized(this) {
+            val last = futuresAccountSnapshotLastAttemptMs
+            val retryAllowed = last <= 0L || nowMs < last || nowMs - last >= maxAgeMs
+            if (!futuresAccountSnapshotRefreshRunning && retryAllowed) {
+                futuresAccountSnapshotRefreshRunning = true
+                futuresAccountSnapshotLastAttemptMs = nowMs
+                true
+            } else false
+        }
+        if (!start) return
+        Thread {
+            try {
+                val account = futuresCampaignCoordinator.accountSnapshot()
+                check(updateCachedFuturesAccount(account)) {
+                    restAccountLastError ?: "Futures account payload failed validation"
+                }
+                futuresAccountSnapshotRefreshError = null
+            } catch (failure: Exception) {
+                val reason = failure.message ?: failure.javaClass.simpleName
+                futuresAccountSnapshotRefreshError = reason
+                restAccountReady = false
+                restAccountLastError = reason
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+                lastError = "Futures account snapshot refresh failed; trading blocked: " + reason
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: reason)
+            } finally {
+                synchronized(this) { futuresAccountSnapshotRefreshRunning = false }
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-futures-account-snapshot"
+            start()
+        }
     }
 
     /**
@@ -8919,6 +8971,7 @@ private class NativeEngine(
         // Dashboard positions/PnL must come from the Futures exchange snapshot,
         // never the retired Spot PositionState cache.
         val credentialsConfigured = key().isNotBlank() && secret().isNotBlank()
+        if (credentialsConfigured && fast) refreshFuturesAccountSnapshotIfNeeded()
         var futuresPositionSnapshotError: String? = null
         val futuresPositions = if (credentialsConfigured) {
             if (fast) {
@@ -9113,6 +9166,11 @@ private class NativeEngine(
             .put("scanner_duration_ms", lastScanDurationMs)
             .put("rest_market_ready", restMarketReady)
             .put("rest_account_ready", restAccountReady)
+            .put("account_snapshot_at_ms", futuresAccountSnapshotUpdatedAtMs)
+            .put("account_snapshot_age_ms", if (futuresAccountSnapshotUpdatedAtMs > 0L)
+                (System.currentTimeMillis() - futuresAccountSnapshotUpdatedAtMs).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("account_snapshot_refresh_running", futuresAccountSnapshotRefreshRunning)
+            .put("account_snapshot_refresh_error", futuresAccountSnapshotRefreshError ?: JSONObject.NULL)
             .put("rest_last_success_ms", restLastSuccessMs)
             .put("rest_last_latency_ms", restLastLatencyMs)
             .put("rest_last_error", restLastError ?: JSONObject.NULL)
