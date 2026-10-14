@@ -508,9 +508,29 @@ fun WilliamsApp(context: Context) {
     fun command(path: String) {
         scope.launch(Dispatchers.IO) {
             try {
-                api.post(path)
+                val rawResponse = api.post(path)
+                val response = runCatching { JSONObject(rawResponse) }.getOrNull()
+                val label = if (path.endsWith("/control/start")) {
+                    if (response?.optBoolean("started", false) == true) {
+                        "Runtime запущен. Загружается закрытая H1-история; сканер должен показать RUNNING/READY или точную блокировку."
+                    } else if (response?.optString("reason") == "already_running") {
+                        "Runtime уже запущен; обновляю фактическое состояние сканера."
+                    } else {
+                        val directBlocker = response?.optString("blocker")
+                            ?.takeIf { !it.isNullOrBlank() && it != "null" }
+                        val reconcileBlocker = response?.optJSONObject("futures_reconciliation")
+                            ?.optString("blocker")
+                            ?.takeIf { !it.isNullOrBlank() && it != "null" }
+                        val reason = directBlocker ?: reconcileBlocker
+                            ?: response?.optString("state")?.takeIf { !it.isNullOrBlank() && it != "null" }
+                            ?: "Binance Futures reconciliation/account validation did not pass"
+                        "Runtime НЕ запущен: " + reason
+                    }
+                } else {
+                    commandLabel(path)
+                }
                 withContext(Dispatchers.Main) {
-                    message = commandLabel(path)
+                    message = label
                 }
                 loadAll(false)
             } catch (e: Exception) {
@@ -546,10 +566,12 @@ fun WilliamsApp(context: Context) {
                     status = parseStatus(verified)
                     diagnosticsMessage = ""
                     message = when {
-                        configured && testnet && executionEnabled ->
-                            "Binance Futures Testnet подтверждён; локальный Runtime готов"
+                        configured && testnet && verified.optBoolean("running", false) && executionEnabled ->
+                            "Binance Futures Testnet подтверждён; локальный Runtime и Execution Gate готовы"
+                        configured && testnet && !verified.optBoolean("running", false) ->
+                            "Ключи Futures Testnet проверены. Runtime остановлен: нажми START для сверки биржи, загрузки H1-истории и запуска сканера."
                         configured && testnet ->
-                            "Futures Testnet подтверждён; входы заблокированы проверками безопасности или сверки"
+                            "Futures Testnet подтверждён; входы пока заблокированы проверками безопасности, данных или сверки"
                         configured ->
                             "Ключи сохранены, но runtime не подтвердил TESTNET"
                         else ->
