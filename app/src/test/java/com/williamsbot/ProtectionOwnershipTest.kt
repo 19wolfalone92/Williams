@@ -133,3 +133,26 @@ class ProtectionOwnershipTest {
         assertFalse(hasValidStructuralStop("FLAT", "100", "95"))
     }
 }
+
+
+    @Test
+    fun filledEntryRequiresAStableFlatWindowAndNoUnresolvedExitBeforeTerminalization() {
+        assertFalse(shouldFinalizeFilledFlatCampaign(
+            "FILL_CONFIRMATION_PENDING", true, false, 0L, 10_000L
+        ))
+        assertFalse(shouldFinalizeFilledFlatCampaign(
+            "FILL_CONFIRMATION_PENDING", true, true, 1_000L, 10_000L
+        ))
+        assertFalse(shouldFinalizeFilledFlatCampaign(
+            "FILL_CONFIRMATION_PENDING", false, false, 1_000L, 10_000L
+        ))
+        assertFalse(shouldFinalizeFilledFlatCampaign(
+            "FILL_CONFIRMATION_PENDING", true, false, 10_000L, 9_000L
+        ))
+        assertFalse(shouldFinalizeFilledFlatCampaign(
+            "POSITION_OPEN", true, false, 1_000L, 10_000L
+        ))
+        assertTrue(shouldFinalizeFilledFlatCampaign(
+            "FILL_CONFIRMATION_PENDING", true, false, 1_000L, 4_000L
+        ))
+    }

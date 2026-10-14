@@ -259,6 +259,8 @@ def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
 def test_android_campaign_lifecycle_is_separate_from_exchange_order_status():
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     assert "fun campaignLifecycleStatus(intent: JSONObject)" in coordinator
+    assert "internal fun shouldFinalizeFilledFlatCampaign(" in coordinator
+    assert "flat_after_fill_first_seen_at_ms" in coordinator
     assert 'intent.optString("campaign_status")' in coordinator
     assert 'intent.optString("order_status")' in coordinator
     assert '"FILL_CONFIRMATION_PENDING"' in coordinator

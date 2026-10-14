@@ -102,6 +102,24 @@ internal fun isEntryCampaignReserved(intent: JSONObject): Boolean {
     return campaignLifecycleStatus(intent) !in TERMINAL_CAMPAIGN_STATUSES
 }
 
+/** Avoid retiring a filled entry while the exchange is still converging on position state. */
+internal fun shouldFinalizeFilledFlatCampaign(
+    lifecycleStatus: String,
+    symbolIsFlat: Boolean,
+    hasUnresolvedExit: Boolean,
+    firstFlatObservedAtMs: Long,
+    nowMs: Long,
+    minimumStableFlatMs: Long = 3_000L
+): Boolean =
+    lifecycleStatus.equals("FILL_CONFIRMATION_PENDING", ignoreCase = true) &&
+        symbolIsFlat &&
+        !hasUnresolvedExit &&
+        firstFlatObservedAtMs > 0L &&
+        minimumStableFlatMs >= 0L &&
+        nowMs >= firstFlatObservedAtMs &&
+        nowMs - firstFlatObservedAtMs >= minimumStableFlatMs
+
+
 /**
  * A protective order is bot-owned only when Binance clientAlgoId matches the
  * current or explicitly tracked predecessor id. Unknown orders are never
@@ -446,9 +464,14 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("order_status", exchangeStatus)
                     .put("last_reconciled_ms", System.currentTimeMillis())
                 when {
-                    exchangeStatus in setOf("FILLED", "FINISHED") ->
+                    exchangeStatus in setOf("FILLED", "FINISHED") -> {
+                        if (campaignLifecycleStatus(intent) != "FILL_CONFIRMATION_PENDING" ||
+                            intent.optLong("fill_observed_at_ms", 0L) <= 0L
+                        ) {
+                            intent.put("fill_observed_at_ms", System.currentTimeMillis())
+                        }
                         intent.put("campaign_status", "FILL_CONFIRMATION_PENDING")
-                            .put("fill_observed_at_ms", System.currentTimeMillis())
+                    }
                     exchangeStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED") ->
                         intent.put("campaign_status", "CLOSED_OR_STOPPED")
                             .put("closed_observed_at_ms", System.currentTimeMillis())
@@ -681,14 +704,38 @@ internal class NativeFuturesCampaignCoordinator(
                 if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
                 val symbol = intent.optString("symbol").uppercase(Locale.US)
                 val status = campaignLifecycleStatus(intent)
+                val unresolvedExitForSymbol = (0 until persisted.length()).any { j ->
+                    val exit = persisted.optJSONObject(j) ?: return@any true
+                    exit.optString("intent_role") == "EXIT" &&
+                        exit.optString("symbol").equals(symbol, true) &&
+                        exit.optString("exchange_status").uppercase(Locale.US) != "EXIT_CONFIRMED"
+                }
+                val nowMs = System.currentTimeMillis()
+                val firstFlatAfterFill = intent.optLong("flat_after_fill_first_seen_at_ms", 0L)
+                val filledCampaignCanNowClose = shouldFinalizeFilledFlatCampaign(
+                    lifecycleStatus = status,
+                    symbolIsFlat = symbol !in openBySymbol,
+                    hasUnresolvedExit = unresolvedExitForSymbol,
+                    firstFlatObservedAtMs = firstFlatAfterFill,
+                    nowMs = nowMs
+                )
+                if (symbol !in openBySymbol && status == "FILL_CONFIRMATION_PENDING" &&
+                    firstFlatAfterFill <= 0L
+                ) {
+                    intent.put("flat_after_fill_first_seen_at_ms", nowMs)
+                        .put("flat_after_fill_confirmation_count", 1)
+                }
                 if (
                     symbol !in openBySymbol &&
                     (status in TERMINAL_CAMPAIGN_STATUSES ||
-                        status in setOf("OPEN_PROTECTED", "POSITION_OPEN", "EXIT_PENDING"))
+                        status in setOf("OPEN_PROTECTED", "POSITION_OPEN", "EXIT_PENDING") ||
+                        filledCampaignCanNowClose)
                 ) {
-                    if (status in setOf("OPEN_PROTECTED", "POSITION_OPEN", "EXIT_PENDING")) {
+                    if (status in setOf("OPEN_PROTECTED", "POSITION_OPEN", "EXIT_PENDING") ||
+                        filledCampaignCanNowClose
+                    ) {
                         intent.put("campaign_status", "CLOSED_OR_STOPPED")
-                            .put("closed_observed_at_ms", System.currentTimeMillis())
+                            .put("closed_observed_at_ms", nowMs)
                     }
                     // A stop-triggered or manually closed position must not leave a
                     // closePosition algo armed to affect a future campaign on this symbol.
