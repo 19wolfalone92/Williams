@@ -35,27 +35,61 @@ class BinanceUserDataStream(
     @Volatile private var worker: Thread? = null
     @Volatile private var connected = false
     private val stopping = AtomicBoolean(false)
+    private val restartRequested = AtomicBoolean(false)
 
     fun isConnected(): Boolean = connected
 
     @Synchronized
     fun start() {
-        if (worker?.isAlive == true) return
+        val activeWorker = worker
+        if (activeWorker?.isAlive == true) {
+            // A runtime stop/start sequence can overlap the user-stream worker's
+            // final network cleanup. Queue exactly one restart rather than either
+            // abandoning the stream or starting a duplicate listener thread.
+            if (stopping.get()) restartRequested.set(true)
+            return
+        }
+        restartRequested.set(false)
+        launchWorkerLocked()
+    }
+
+    @Synchronized
+    private fun launchWorkerLocked() {
         stopping.set(false)
-        worker = Thread({ loop() }, "williams-futures-user-data-ws").apply {
+        worker = Thread({
+            try {
+                loop()
+            } finally {
+                workerExited(Thread.currentThread())
+            }
+        }, "williams-futures-user-data-ws").apply {
             isDaemon = true
             start()
         }
     }
 
     @Synchronized
+    private fun workerExited(finishedWorker: Thread) {
+        // A newer worker may already have started after this thread actually died;
+        // an old thread's finally block must never clear its reference.
+        if (worker !== finishedWorker) return
+        worker = null
+        if (restartRequested.getAndSet(false)) {
+            launchWorkerLocked()
+        }
+    }
+
+    @Synchronized
     fun stop() {
+        restartRequested.set(false)
         stopping.set(true)
         connected = false
-        socket?.close(1000, "Williams stopped")
+        val activeSocket = socket
         socket = null
+        activeSocket?.close(1000, "Williams stopped")
         worker?.interrupt()
-        worker = null
+        // Keep the thread reference until its finally block confirms termination.
+        // start() will queue a restart if teardown is still in progress.
         onConnection(false, "stopped")
     }
 

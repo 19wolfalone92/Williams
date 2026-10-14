@@ -228,3 +228,6 @@ def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
     assert "!userStreamSyncRequired" in runtime
     assert 'webSocket.close(1011, "event_handler_failed")' in user_stream
     assert "closed.countDown()" in user_stream
+    assert "private val restartRequested = AtomicBoolean(false)" in user_stream
+    assert "private fun workerExited(finishedWorker: Thread)" in user_stream
+    assert "if (stopping.get()) restartRequested.set(true)" in user_stream

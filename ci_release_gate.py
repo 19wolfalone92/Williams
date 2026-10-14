@@ -241,6 +241,9 @@ def main() -> None:
     must_not(futures_user_stream, "userDataStream.subscribe.signature", "BinanceUserDataStream.kt")
     must(futures_user_stream, 'webSocket.close(1011, "event_handler_failed")', "BinanceUserDataStream.kt")
     must(futures_user_stream, "closed.countDown()", "BinanceUserDataStream.kt")
+    must(futures_user_stream, "private val restartRequested = AtomicBoolean(false)", "BinanceUserDataStream.kt")
+    must(futures_user_stream, "private fun workerExited(finishedWorker: Thread)", "BinanceUserDataStream.kt")
+    must(futures_user_stream, "if (stopping.get()) restartRequested.set(true)", "BinanceUserDataStream.kt")
 
     # OkHttp Kotlin accessors are compiler errors under the current Kotlin toolchain.
     for path in (
