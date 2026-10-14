@@ -286,3 +286,13 @@ def test_android_protection_must_match_owner_id_and_exact_trigger():
     assert 'protectionStatus == "SUBMISSION_UNKNOWN" || protectionStatus == "PROTECTED"' in coordinator
     assert "unknownProtectiveStopExists" in coordinator
 
+
+
+def test_android_trailing_stop_retains_confirmed_protection_after_ambiguous_replacement():
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    assert "oldStopStillConfirmed" in coordinator
+    assert "replacementConfirmed == null" in coordinator
+    assert '.put("previous_protection_client_id", clientAlgoId)' in coordinator
+    assert 'state = State.RECONCILE_REQUIRED' in coordinator
+    assert "untrackedRemainder" in coordinator
+    assert '.remove("previous_protection_client_id")' in coordinator
