@@ -16,7 +16,7 @@ class WilliamsIndicatorParityTest {
     }
 
     @Test
-    fun displayShiftIsSeparateFromCurrentTimeDecisionLine() {
+    fun displayedLineAtCurrentCandleUsesOnlyPastSmmaValue() {
         val raw = smmaSeededValues((1..40).map { it.toDouble() }, 13)
         val displayed = shiftAlligatorForDisplay(raw, 8)
         assertNull(displayed[7])
