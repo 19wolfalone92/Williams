@@ -22,3 +22,11 @@ class BinanceUserDataStreamTest {
         assertFalse(shouldReconnectFuturesUserStream(JSONObject().put("e", "ORDER_TRADE_UPDATE")))
     }
 }
+
+
+    @Test
+    fun privateEventFilterUsesBinanceSlashSeparatedSubscriptionSyntax() {
+        assertTrue(FUTURES_USER_STREAM_EVENT_FILTER.contains("ORDER_TRADE_UPDATE/ACCOUNT_UPDATE"))
+        assertTrue(FUTURES_USER_STREAM_EVENT_FILTER.contains("ACCOUNT_UPDATE/ALGO_UPDATE"))
+        assertFalse(FUTURES_USER_STREAM_EVENT_FILTER.contains(","))
+    }

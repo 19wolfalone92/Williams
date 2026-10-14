@@ -14,6 +14,14 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * Binance's migrated USD-M private stream takes multiple event filters separated by "/".
+ * A comma-delimited list is treated as one invalid event filter and can silently starve
+ * ACCOUNT_UPDATE/ORDER_TRADE_UPDATE delivery while the WebSocket itself appears open.
+ */
+internal const val FUTURES_USER_STREAM_EVENT_FILTER =
+    "ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/listenKeyExpired"
+
 /** Return true when the Futures private stream must be re-established. */
 internal fun shouldReconnectFuturesUserStream(event: JSONObject): Boolean =
     event.optString("e") in setOf("listenKeyExpired", "serverShutdown")
@@ -256,9 +264,7 @@ class BinanceUserDataStream(
 
     companion object {
         private const val REST_BASE = "https://demo-fapi.binance.com"
-        // Binance USD-M private stream accepts comma-separated event filters.
-        private const val EVENT_TYPES =
-            "ORDER_TRADE_UPDATE,ACCOUNT_UPDATE,ALGO_UPDATE,ACCOUNT_CONFIG_UPDATE,CONDITIONAL_ORDER_TRIGGER_REJECT,listenKeyExpired"
+        private const val EVENT_TYPES = FUTURES_USER_STREAM_EVENT_FILTER
         private val FORM_MEDIA_TYPE = "application/x-www-form-urlencoded".toMediaType()
     }
 }
