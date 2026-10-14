@@ -240,6 +240,26 @@ internal fun scannerReadinessState(
     else -> "RUNNABLE"
 }
 
+/** START is the safe entry point for authoritative reconciliation. */
+internal fun runtimeStartButtonEnabled(
+    binanceConfigured: Boolean,
+    running: Boolean,
+    killLatched: Boolean
+): Boolean = binanceConfigured && !running && !killLatched
+
+/** Detect a socket that is open but has stopped delivering events or has a stalled handshake. */
+internal fun streamNeedsReconnect(
+    socketPresent: Boolean,
+    lastEventMs: Long,
+    startedAtMs: Long,
+    nowMs: Long,
+    maxIdleMs: Long = 45_000L
+): Boolean {
+    if (!socketPresent || maxIdleMs <= 0L) return false
+    val referenceMs = if (lastEventMs > 0L) lastEventMs else startedAtMs
+    return referenceMs > 0L && nowMs >= referenceMs && nowMs - referenceMs > maxIdleMs
+}
+
 /**
  * Keep read-only market discovery alive on an unfunded Demo account or when an
  * account refresh is temporarily unknown. A confirmed risk breach that latches
@@ -705,8 +725,12 @@ private class NativeEngine(
     private val orderBookCache = OrderBookCache()
     @Volatile private var marketSocketConnected = false
     @Volatile private var marketSocketLastEventMs = 0L
+    @Volatile private var marketSocketStartedMs = 0L
+    @Volatile private var marketReconnectRequested = false
     @Volatile private var publicSocketConnected = false
     @Volatile private var publicSocketLastEventMs = 0L
+    @Volatile private var publicSocketStartedMs = 0L
+    @Volatile private var publicReconnectRequested = false
     @Volatile private var historyWarmupRunning = false
     @Volatile private var historyReady = false
     private val activeHistoryTasks = java.util.concurrent.ConcurrentHashMap.newKeySet<java.util.concurrent.Future<Boolean>>()
@@ -786,6 +810,8 @@ private class NativeEngine(
     @Volatile private var runtimeGeneration = 0L
     @Volatile private var lastSelfHealMs = 0L
     @Volatile private var selfHealCount = 0
+    @Volatile private var workerRecoveryWindowStartedMs = 0L
+    @Volatile private var workerRecoveryAttemptsInWindow = 0
 
     @Volatile private var scannerState = "NOT_RUN"
     @Volatile private var scannerError: String? = null
@@ -1339,6 +1365,7 @@ private class NativeEngine(
         return JSONObject().put("configured", false).put("cleared", true)
     }
 
+    @Synchronized
     fun start(): JSONObject {
         if (killLatched) error("KILL_SWITCH_LATCHED: reset only after exchange reconciliation")
         require(key().isNotBlank() && secret().isNotBlank()) {
@@ -1415,10 +1442,14 @@ private class NativeEngine(
         marketSocket = null
         marketSocketConnected = false
         marketSocketLastEventMs = 0L
+        marketSocketStartedMs = 0L
+        marketReconnectRequested = false
         publicSocket?.close(1000, "Restart USD-M Futures public stream")
         publicSocket = null
         publicSocketConnected = false
         publicSocketLastEventMs = 0L
+        publicSocketStartedMs = 0L
+        publicReconnectRequested = false
         startMarketDataStream()
         startPublicDataStream()
         // Restart the Futures private event stream; its onConnection callback
@@ -1437,33 +1468,61 @@ private class NativeEngine(
         warmCoreHistoryAsync(generation)
 
         worker = Thread {
-            while (running && generation == runtimeGeneration) {
-                try {
-                    if (!historyReady) {
-                        scannerState = "WAITING_FOR_HISTORY"
-                        scannerError = historyLastError
-                        if (!historyWarmupRunning) warmCoreHistoryAsync(generation)
-                    } else if (paused) {
-                        scannerState = "PAUSED"
-                        scannerError = "Runtime is paused by the operator"
-                        // Existing positions still need protection management while paused.
-                        runCatching { manageNativeFuturesPositions() }
-                            .onFailure { lastError = "Futures position monitor: " + (it.message ?: it.javaClass.simpleName) }
-                    } else if (reconcileRequired || killLatched || !restAccountReady || !marketDataFresh()) {
-                        // Always evaluate the gate so the cockpit reports the true blocker
-                        // instead of remaining indefinitely at WAITING_FOR_HISTORY.
-                        requestScan()
-                    } else {
-                        // Keep market discovery and diagnostics alive independently from
-                        // trade funding/daily-risk permission. submitNativeFuturesCampaignEntry
-                        // revalidates account funding, execution prerequisites and daily loss
-                        // immediately before each possible exchange mutation.
-                        requestScan()
+            try {
+                while (running && generation == runtimeGeneration) {
+                    try {
+                        repairStaleMarketStreams()
+
+                        // Keep managing existing exposure while entry prerequisites are
+                        // degraded. manageNativeFuturesPositions reconciles with the exchange;
+                        // it does not weaken the new-entry Execution Gate.
+                        val campaignState = futuresCampaignCoordinator.state
+                        val campaignNeedsMonitoring = campaignState in setOf(
+                            NativeFuturesCampaignCoordinator.State.ENTRY_PENDING,
+                            NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED,
+                            NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
+                            NativeFuturesCampaignCoordinator.State.EXIT_PENDING,
+                            NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED
+                        )
+                        val prerequisitesDegraded =
+                            !historyReady || reconcileRequired || !restAccountReady ||
+                                !marketDataFresh() || !marketWebSocketFresh() ||
+                                !publicWebSocketFresh() || !userStreamConnected ||
+                                userStreamSyncRequired
+                        if (campaignNeedsMonitoring && prerequisitesDegraded && !paused && !killLatched) {
+                            runCatching { manageNativeFuturesPositions() }
+                                .onFailure {
+                                    lastError = "Futures degraded-mode position monitor: " +
+                                        (it.message ?: it.javaClass.simpleName)
+                                }
+                        }
+
+                        if (!historyReady) {
+                            scannerState = "WAITING_FOR_HISTORY"
+                            scannerError = historyLastError
+                            if (!historyWarmupRunning) warmCoreHistoryAsync(generation)
+                        } else if (paused) {
+                            scannerState = "PAUSED"
+                            scannerError = "Runtime is paused by the operator"
+                            runCatching { manageNativeFuturesPositions() }
+                                .onFailure { lastError = "Futures position monitor: " + (it.message ?: it.javaClass.simpleName) }
+                        } else {
+                            requestScan()
+                        }
+                    } catch (x: Exception) {
+                        lastError = x.javaClass.simpleName + ": " + (x.message ?: "")
                     }
-                } catch (x: Exception) {
-                    lastError = x.javaClass.simpleName + ": " + (x.message ?: "")
+                    try { Thread.sleep(10_000L) } catch (_: InterruptedException) { break }
                 }
-                try { Thread.sleep(10_000L) } catch (_: InterruptedException) { break }
+            } finally {
+                if (running && generation == runtimeGeneration) {
+                    running = false
+                    scannerState = "FAILED"
+                    scannerError = "Runtime worker exited unexpectedly"
+                    lastError = "Runtime worker exited unexpectedly; scheduling safe recovery"
+                    stateMachine.force(TradingState.STOPPED, lastError ?: "Runtime worker exited unexpectedly")
+                    scheduleUnexpectedWorkerRecovery(generation, lastError ?: "Runtime worker exited unexpectedly")
+                }
             }
         }.apply {
             isDaemon = true
@@ -1511,9 +1570,15 @@ private class NativeEngine(
         marketSocket?.close(1000, "Williams stopped")
         marketSocket = null
         marketSocketConnected = false
+        marketSocketLastEventMs = 0L
+        marketSocketStartedMs = 0L
+        marketReconnectRequested = false
         publicSocket?.close(1000, "Williams stopped")
         publicSocket = null
         publicSocketConnected = false
+        publicSocketLastEventMs = 0L
+        publicSocketStartedMs = 0L
+        publicReconnectRequested = false
         userStream.stop()
         userStreamConnected = false
         userStreamSyncRequired = true
@@ -1964,10 +2029,14 @@ private class NativeEngine(
     @Synchronized
     private fun startMarketDataStream() {
         if (marketSocket != null) return
+        marketSocketLastEventMs = 0L
+        marketSocketStartedMs = System.currentTimeMillis()
+        marketReconnectRequested = false
         val request = Request.Builder().url(wsStreamUrl()).build()
         marketSocket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 marketSocketConnected = true
+                marketSocketStartedMs = System.currentTimeMillis()
                 lastError = null
                 scheduleMarketReconnect(webSocket)
             }
@@ -1992,13 +2061,23 @@ private class NativeEngine(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 marketSocketConnected = false
-                if (marketSocket === webSocket) marketSocket = null
+                if (marketSocket === webSocket) {
+                    marketSocket = null
+                    marketSocketLastEventMs = 0L
+                    marketSocketStartedMs = 0L
+                    marketReconnectRequested = false
+                }
                 if (running) scheduleReconnect("williams-market-reconnect", 1500L) { startMarketDataStream() }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 marketSocketConnected = false
-                if (marketSocket === webSocket) marketSocket = null
+                if (marketSocket === webSocket) {
+                    marketSocket = null
+                    marketSocketLastEventMs = 0L
+                    marketSocketStartedMs = 0L
+                    marketReconnectRequested = false
+                }
                 lastError = "WS market: " + (t.message ?: t.javaClass.simpleName)
                 if (running) scheduleReconnect("williams-market-retry", 2500L) { startMarketDataStream() }
             }
@@ -2008,10 +2087,14 @@ private class NativeEngine(
     @Synchronized
     private fun startPublicDataStream() {
         if (publicSocket != null) return
+        publicSocketLastEventMs = 0L
+        publicSocketStartedMs = System.currentTimeMillis()
+        publicReconnectRequested = false
         val request = Request.Builder().url(publicStreamUrl()).build()
         publicSocket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 publicSocketConnected = true
+                publicSocketStartedMs = System.currentTimeMillis()
                 Thread {
                     warmOrderBookSnapshots()
                 }.apply {
@@ -2035,17 +2118,90 @@ private class NativeEngine(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 publicSocketConnected = false
-                if (publicSocket === webSocket) publicSocket = null
+                if (publicSocket === webSocket) {
+                    publicSocket = null
+                    publicSocketLastEventMs = 0L
+                    publicSocketStartedMs = 0L
+                    publicReconnectRequested = false
+                }
                 if (running) scheduleReconnect("williams-public-reconnect", 1500L) { startPublicDataStream() }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 publicSocketConnected = false
-                if (publicSocket === webSocket) publicSocket = null
+                if (publicSocket === webSocket) {
+                    publicSocket = null
+                    publicSocketLastEventMs = 0L
+                    publicSocketStartedMs = 0L
+                    publicReconnectRequested = false
+                }
                 lastError = "WS public: " + (t.message ?: t.javaClass.simpleName)
                 if (running) scheduleReconnect("williams-public-retry", 2500L) { startPublicDataStream() }
             }
         })
+    }
+
+    private fun scheduleUnexpectedWorkerRecovery(expectedGeneration: Long, reason: String) {
+        if (!prefs.getBoolean("auto_run", false) || killLatched) return
+        Thread {
+            try {
+                Thread.sleep(1_500L)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return@Thread
+            }
+            if (expectedGeneration != runtimeGeneration || running ||
+                killLatched || !prefs.getBoolean("auto_run", false)
+            ) return@Thread
+
+            val nowMs = System.currentTimeMillis()
+            val allowed = synchronized(this) {
+                if (workerRecoveryWindowStartedMs == 0L ||
+                    nowMs - workerRecoveryWindowStartedMs >= 15L * 60L * 1000L ||
+                    nowMs < workerRecoveryWindowStartedMs
+                ) {
+                    workerRecoveryWindowStartedMs = nowMs
+                    workerRecoveryAttemptsInWindow = 0
+                }
+                if (workerRecoveryAttemptsInWindow >= 3) false
+                else {
+                    workerRecoveryAttemptsInWindow++
+                    true
+                }
+            }
+            if (!allowed) {
+                prefs.edit().putBoolean("auto_run", false).commit()
+                scannerState = "FAILED"
+                scannerError = "Automatic runtime recovery stopped after three failures in 15 minutes"
+                lastError = scannerError
+                return@Thread
+            }
+
+            lastSelfHealMs = nowMs
+            selfHealCount++
+            val attempted = runCatching { start() }
+            val response = attempted.getOrNull()
+            val blocker = when {
+                attempted.isFailure -> attempted.exceptionOrNull()?.message
+                    ?: attempted.exceptionOrNull()?.javaClass?.simpleName
+                response?.optBoolean("started", false) == true -> null
+                response?.optString("reason") == "already_running" -> null
+                else -> response?.optString("blocker")
+                    ?: response?.optJSONObject("futures_reconciliation")?.optString("blocker")
+                    ?: response?.optString("state")
+                    ?: "Safe Runtime restart was rejected"
+            }
+            if (blocker != null) {
+                prefs.edit().putBoolean("auto_run", false).commit()
+                scannerState = "BLOCKED_RUNTIME_RECOVERY"
+                scannerError = blocker
+                lastError = "Runtime recovery blocked (" + reason + "): " + blocker
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-futures-runtime-recovery"
+            start()
+        }
     }
 
     private fun scheduleReconnect(name: String, delayMs: Long, action: () -> Unit) {
@@ -2075,6 +2231,60 @@ private class NativeEngine(
             isDaemon = true
             name = if (publicStream) "williams-public-planned-reconnect" else "williams-market-planned-reconnect"
             start()
+        }
+    }
+
+    @Synchronized
+    private fun repairStaleMarketStreams() {
+        if (!running) return
+        val nowMs = System.currentTimeMillis()
+
+        val observedMarket = marketSocket
+        if (streamNeedsReconnect(
+                socketPresent = observedMarket != null,
+                lastEventMs = marketSocketLastEventMs,
+                startedAtMs = marketSocketStartedMs,
+                nowMs = nowMs
+            ) && !marketReconnectRequested
+        ) {
+            marketReconnectRequested = true
+            observedMarket?.close(1001, "stale USD-M Futures market stream")
+            scheduleReconnect("williams-market-stale-reconnect", 1_000L) {
+                synchronized(this) {
+                    if (marketSocket === observedMarket) {
+                        marketSocket = null
+                        marketSocketConnected = false
+                        marketSocketLastEventMs = 0L
+                        marketSocketStartedMs = 0L
+                        startMarketDataStream()
+                    }
+                    marketReconnectRequested = false
+                }
+            }
+        }
+
+        val observedPublic = publicSocket
+        if (streamNeedsReconnect(
+                socketPresent = observedPublic != null,
+                lastEventMs = publicSocketLastEventMs,
+                startedAtMs = publicSocketStartedMs,
+                nowMs = nowMs
+            ) && !publicReconnectRequested
+        ) {
+            publicReconnectRequested = true
+            observedPublic?.close(1001, "stale USD-M Futures public stream")
+            scheduleReconnect("williams-public-stale-reconnect", 1_000L) {
+                synchronized(this) {
+                    if (publicSocket === observedPublic) {
+                        publicSocket = null
+                        publicSocketConnected = false
+                        publicSocketLastEventMs = 0L
+                        publicSocketStartedMs = 0L
+                        startPublicDataStream()
+                    }
+                    publicReconnectRequested = false
+                }
+            }
         }
     }
 
@@ -8474,6 +8684,13 @@ private class NativeEngine(
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
+            .put("execution_state_contract", JSONObject()
+                .put("version", 1)
+                .put("state", stateMachine.state.name)
+                .put("execution_enabled", executionReady())
+                .put("reconciliation_required", reconcileRequired)
+                .put("user_stream_sync_required", userStreamSyncRequired)
+                .put("kill_switch_latched", killLatched))
             .put("positions_snapshot_ok", futuresPositionsSnapshotOk)
             .put("positions_snapshot_error", futuresPositionSnapshotError ?: JSONObject.NULL)
             .put("pnl", if (futuresPositions.length() == 0 || !futuresPositionsSnapshotOk) JSONObject.NULL else livePnl)
@@ -8801,13 +9018,61 @@ private class NativeEngine(
     fun selfHeal(): JSONObject {
         val before = status(fast = true)
         val actions = JSONArray()
-        val reasons = JSONArray(executionBlockers())
-        if (killLatched || reconcileRequired) {
-            actions.put("blocked_by_safety_barrier")
+
+        // A kill latch is never cleared automatically.
+        if (killLatched) {
+            actions.put("blocked_by_kill_switch")
+            val after = status(fast = true)
             return JSONObject().put("changed", false).put("safe_only", true)
-                .put("actions", actions).put("execution_ready", executionReady())
-                .put("execution_blockers", reasons).put("before", before).put("after", before)
+                .put("actions", actions).put("execution_ready", false)
+                .put("execution_blockers", JSONArray(executionBlockers()))
+                .put("before", before).put("after", after)
         }
+
+        // Recovering a stopped worker must actually restart it. START performs fresh
+        // exchange position/order/protection reconciliation and validates the account.
+        var startedHere = false
+        if (!running) {
+            if (reconcileRequired) {
+                val recovery = runCatching { recover() }.getOrElse {
+                    JSONObject().put("recovered", false).put("blocker", it.message ?: it.javaClass.simpleName)
+                }
+                if (!recovery.optBoolean("recovered", false)) {
+                    actions.put("blocked_by_exchange_reconciliation")
+                    val after = status(fast = true)
+                    return JSONObject().put("changed", false).put("safe_only", true)
+                        .put("actions", actions).put("runtime_recovery", recovery)
+                        .put("execution_ready", false)
+                        .put("execution_blockers", JSONArray(executionBlockers()))
+                        .put("before", before).put("after", after)
+                }
+                actions.put("futures_exchange_reconciliation")
+            }
+            val started = runCatching { start() }.getOrElse {
+                JSONObject().put("started", false).put("blocker", it.message ?: it.javaClass.simpleName)
+            }
+            if (!started.optBoolean("started", false) && started.optString("reason") != "already_running") {
+                actions.put("runtime_start_blocked")
+                val after = status(fast = true)
+                return JSONObject().put("changed", false).put("safe_only", true)
+                    .put("actions", actions).put("runtime_start", started)
+                    .put("execution_ready", executionReady())
+                    .put("execution_blockers", JSONArray(executionBlockers()))
+                    .put("before", before).put("after", after)
+            }
+            startedHere = started.optBoolean("started", false)
+            if (startedHere) actions.put("runtime_started_after_exchange_reconciliation")
+        }
+
+        if (reconcileRequired) {
+            actions.put("blocked_by_reconciliation")
+            val after = status(fast = true)
+            return JSONObject().put("changed", actions.length() > 0).put("safe_only", true)
+                .put("actions", actions).put("execution_ready", executionReady())
+                .put("execution_blockers", JSONArray(executionBlockers()))
+                .put("before", before).put("after", after)
+        }
+
         lastSelfHealMs = System.currentTimeMillis()
         selfHealCount++
         if (running) {
@@ -8816,14 +9081,17 @@ private class NativeEngine(
                 warmCoreHistoryAsync(runtimeGeneration)
                 actions.put("futures_history_reload_requested")
             }
-            val reconciliation = runCatching { futuresCampaignCoordinator.reconcile() }.getOrNull()
-            if (reconciliation?.optBoolean("ok", false) == true) {
-                actions.put("futures_exchange_reconciliation")
-            } else if (reconciliation != null) {
-                reconcileRequired = true
-                persistSafetyFlag("reconcile_required", true)
-                actions.put("futures_reconciliation_blocked")
+            if (!startedHere) {
+                val reconciliation = runCatching { futuresCampaignCoordinator.reconcile() }.getOrNull()
+                if (reconciliation?.optBoolean("ok", false) == true) {
+                    actions.put("futures_exchange_reconciliation")
+                } else if (reconciliation != null) {
+                    reconcileRequired = true
+                    persistSafetyFlag("reconcile_required", true)
+                    actions.put("futures_reconciliation_blocked")
+                }
             }
+            repairStaleMarketStreams()
             if (historyReady && !scanning && !paused) {
                 requestScan()
                 actions.put("futures_scanner_reconnect_requested")
@@ -8833,11 +9101,13 @@ private class NativeEngine(
                     .onSuccess { actions.put("futures_position_monitor") }
                     .onFailure { actions.put("futures_position_monitor_failed") }
             }
-        } else actions.put("runtime_not_started")
+        }
+
         val after = status(fast = true)
         return JSONObject().put("changed", actions.length() > 0).put("safe_only", true)
             .put("actions", actions).put("execution_ready", executionReady())
-            .put("execution_blockers", JSONArray(executionBlockers())).put("before", before).put("after", after)
+            .put("execution_blockers", JSONArray(executionBlockers()))
+            .put("before", before).put("after", after)
     }
 
     fun settings(): JSONObject =

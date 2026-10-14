@@ -1689,10 +1689,11 @@ private fun ControlCard(
                     modifier = Modifier.weight(1f),
                     text = "START",
                     icon = Icons.Filled.PlayArrow,
-                    enabled = status.binanceConfigured &&
-                        !status.running &&
-                        !status.reconcileRequired &&
-                        !status.executionContractReconcileRequired,
+                    enabled = runtimeStartButtonEnabled(
+                        binanceConfigured = status.binanceConfigured,
+                        running = status.running,
+                        killLatched = status.executionKillLatched
+                    ),
                     accent = AppColors.green,
                     onClick = onStart
                 )
@@ -3268,9 +3269,15 @@ private fun parseStatus(json: JSONObject): Status {
         executionEnabled =
             executionContract?.optBoolean("execution_enabled", false) ?: false,
         executionContractReconcileRequired =
-            executionContract?.optBoolean("reconciliation_required", true) ?: true,
+            executionContract?.optBoolean(
+                "reconciliation_required",
+                json.optBoolean("reconcile_required", false)
+            ) ?: json.optBoolean("reconcile_required", false),
         executionKillLatched =
-            executionContract?.optBoolean("kill_switch_latched", false) ?: false,
+            executionContract?.optBoolean(
+                "kill_switch_latched",
+                json.optBoolean("kill_switch_latched", false)
+            ) ?: json.optBoolean("kill_switch_latched", false),
         p0GatePassed = json.optBoolean(
             "p0_gate_passed",
             executionContract?.optBoolean("execution_enabled", false) ?: false

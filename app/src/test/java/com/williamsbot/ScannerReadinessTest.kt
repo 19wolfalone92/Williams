@@ -74,4 +74,18 @@ class ScannerReadinessTest {
             killLatched = false
         ))
     }
+
+    @Test fun start_remains_available_to_run_safe_exchange_reconciliation() {
+        assertEquals(true, runtimeStartButtonEnabled(true, false, false))
+        assertEquals(false, runtimeStartButtonEnabled(false, false, false))
+        assertEquals(false, runtimeStartButtonEnabled(true, true, false))
+        assertEquals(false, runtimeStartButtonEnabled(true, false, true))
+    }
+
+    @Test fun websocket_reconnects_when_silent_or_handshake_stalls() {
+        assertEquals(true, streamNeedsReconnect(true, 10_000L, 1_000L, 55_001L, 45_000L))
+        assertEquals(true, streamNeedsReconnect(true, 0L, 10_000L, 55_001L, 45_000L))
+        assertEquals(false, streamNeedsReconnect(true, 40_000L, 10_000L, 55_000L, 45_000L))
+        assertEquals(false, streamNeedsReconnect(false, 1_000L, 1_000L, 100_000L, 45_000L))
+    }
 }
