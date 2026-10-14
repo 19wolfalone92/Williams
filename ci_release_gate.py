@@ -181,6 +181,8 @@ def main() -> None:
         "confirmed_up_center_index",
         "confirmed_up_group_start_index",
         "fractal_up_confirmed",
+        "middle-bar extreme must be",
+        "center_teeth",
         "side=side",
     ):
         must(signals, needle, "williams_signals.py")
