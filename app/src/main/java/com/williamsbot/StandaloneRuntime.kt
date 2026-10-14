@@ -6808,11 +6808,6 @@ private class NativeEngine(
             return max(0.0, now - then) / max(candles[i].c, 1e-9) * 100.0
         }
 
-        fun lastValidFractalLevel(at: Int): Pair<Int, Double>? {
-            val center = latestUpFractal(max(2, at - 2)) ?: return null
-            return center to candles[center].h
-        }
-
         val current = candles.lastIndex
         val out = mutableListOf<CampaignSignalN>()
 
@@ -6852,32 +6847,31 @@ private class NativeEngine(
             }
         }
 
-        // WM2: three consecutive rising AO histogram bars, with the previously
-        // valid buy-fractal/Balance-Line context still present.
+        // WM2 (Super AO) is an independent Wise-Man setup. Do not require a
+        // WM3/fractal event as a hidden prerequisite: the first presenting Wise-Man
+        // may initiate a campaign, while the pending stop entry still needs a valid
+        // trigger, risk approval, and exchange-side protection.
+        // WM2: three consecutive rising AO histogram bars. Super AO is
+        // independent of the WM3/fractal setup and can be the first presenting Wise-Man.
         var streak = 0
         for (i in candles.lastIndex downTo 35) {
             val a = ao(candles, i)
             val p = ao(candles, i - 1)
             if (a > p) streak++ else break
             if (streak == 3) {
-                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { (center, level) ->
-                    teethS[center].isFinite() && level > teethS[center]
-                } ?: false
-                if (priorFractalValid) {
-                    val trigger = candles[i].h + tick
-                    if (candles[current].c < trigger) {
-                        out += CampaignSignalN(
-                            signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
-                            type = "SUPER_AO",
-                            role = "ENTRY",
-                            signalBarTimeMs = candles[i].t,
-                            triggerPrice = trigger,
-                            protectivePrice = candles[i].l - tick,
-                            teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                            invalidationPrice = candles[i].l - tick,
-                            reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
-                        )
-                    }
+                val trigger = candles[i].h + tick
+                if (candles[current].c < trigger) {
+                    out += CampaignSignalN(
+                        signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
+                        type = "SUPER_AO",
+                        role = "ENTRY",
+                        signalBarTimeMs = candles[i].t,
+                        triggerPrice = trigger,
+                        protectivePrice = candles[i].l - tick,
+                        teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
+                        invalidationPrice = candles[i].l - tick,
+                        reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
+                    )
                 }
                 break
             }
@@ -6976,16 +6970,10 @@ private class NativeEngine(
         spread: Double,
         volume: Double
     ): BaseAnalysis {
-        val rawWorkCandles =
-            if (campaignEngineEnabled &&
-                campaignExecutionTimeframe != interval
-            ) {
-                runCatching {
-                    fetchCandles(symbol, campaignExecutionTimeframe, 150)
-                }.getOrElse { candles }
-            } else {
-                candles
-            }
+        // The caller supplies the decision series: performCampaignScan loads closed H1
+        // candles explicitly. Do not silently re-fetch/fall back to another interval here;
+        // relabelling M5/M15 candles as H1 would create false causal signals.
+        val rawWorkCandles = candles
         // Williams signals and fractals are evaluated only on exchange-confirmed
         // closed bars. A forming H1 candle must never become a decision candle.
         val decisionFrame = if (campaignEngineEnabled) campaignExecutionTimeframe else interval
@@ -8631,9 +8619,14 @@ private class NativeEngine(
             .put("campaign_trail_bars", campaignTrailBars)
             .put("symbol", primarySymbol)
             .put("interval", interval)
-            .put("position_fraction", 0.95)
-            .put("stop_loss_pct", 0.02)
-            .put("take_profit_pct", 0.04)
+            // Legacy fixed-size/percentage stops are not used by the Futures campaign.
+            // Expose neutral values so diagnostics cannot imply 95% sizing or a fixed TP.
+            .put("position_fraction", 0.0)
+            .put("stop_loss_pct", 0.0)
+            .put("take_profit_pct", 0.0)
+            .put("legacy_spot_settings_active", false)
+            .put("position_sizing_model", "STRUCTURAL_STOP_RISK_BUDGET")
+            .put("protective_stop_model", "STRUCTURAL_3_TO_5_H1_BARS")
             .put("poll_seconds", 10)
             .put("scan_mode", "adaptive_parallel_cached")
             .put("wave_timeframes", analysisFrames.joinToString(","))
