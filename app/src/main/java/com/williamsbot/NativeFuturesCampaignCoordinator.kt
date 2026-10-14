@@ -50,8 +50,8 @@ internal fun isDefinitiveBinanceOrderNotFound(failure: Throwable): Boolean {
     val text = generateSequence(failure) { it.cause }
         .mapNotNull { it.message }
         .joinToString(" ")
-    val notFound2013 = Regex("\\"code\\"\\s*:\\s*-2013").containsMatchIn(text)
-    val unknown2011 = Regex("\\"code\\"\\s*:\\s*-2011").containsMatchIn(text) &&
+    val notFound2013 = Regex("""\"code\"\s*:\s*-2013""").containsMatchIn(text)
+    val unknown2011 = Regex("""\"code\"\s*:\s*-2011""").containsMatchIn(text) &&
         listOf("unknown order", "order does not exist", "order not found")
             .any { text.contains(it, ignoreCase = true) }
     return notFound2013 || unknown2011
