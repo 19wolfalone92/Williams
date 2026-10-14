@@ -1479,13 +1479,29 @@ private fun ScanSummaryCard(
                             status.scannerConfiguredSymbols + " пар проверено • LONG " +
                             status.scannerLongCandidates + " / SHORT " +
                             status.scannerShortCandidates + " • " + formatMs(status.scanDurationMs)
-                        "PARTIAL" -> "Проверено " + status.scannerSymbols + "/" +
+                        "PARTIAL", "PARTIAL_BLOCKED" -> "Проверено " + status.scannerSymbols + "/" +
                             status.scannerConfiguredSymbols + "; новые входы заблокированы"
+                        "WAITING_FOR_HISTORY" -> "Ожидание закрытой истории H1: " +
+                            (status.scannerError ?: "нужно загрузить историю для 10 контрактов")
+                        "BLOCKED_ACCOUNT" -> "Баланс/счёт Futures заблокировал сканирование: " +
+                            (status.scannerError ?: "проверка аккаунта не пройдена")
+                        "WAITING_FOR_MARKET_DATA", "WAITING_FOR_REST" ->
+                            "Котировки Futures недоступны или устарели: " +
+                                (status.scannerError ?: "ожидание REST-данных")
+                        "BLOCKED_RECONCILE", "BLOCKED_FUTURES_RECONCILIATION" ->
+                            "Нужна сверка позиции/ордеров Futures: " +
+                                (status.scannerError ?: "торговля заблокирована")
+                        "BLOCKED_KILL" -> "Аварийная блокировка включена: " +
+                            (status.scannerError ?: "сначала сверить состояние биржи")
+                        "BLOCKED_DAILY_LOSS" -> "Достигнут дневной лимит потерь: новые входы запрещены"
+                        "PAUSED" -> "Runtime на паузе"
+                        "STOPPED" -> "Runtime остановлен; нажми START для запуска"
                         "BLOCKED" -> "Сканирование заблокировано: " +
                             (status.scannerError ?: "проверка конфигурации не пройдена")
-                        "ERROR" -> "Ошибка сканера: " +
+                        "ERROR", "FAILED" -> "Ошибка сканера: " +
                             (status.scannerError ?: "неизвестная ошибка")
-                        else -> "Сканирование ещё не запускалось"
+                        else -> status.scannerError?.takeIf { it.isNotBlank() }
+                            ?: "Состояние сканера: " + status.scannerState
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = AppColors.textMuted
@@ -1804,22 +1820,25 @@ private fun ScannerScreen(
                     Text("Market Scanner", style = MaterialTheme.typography.headlineSmall)
                     Text(
                         when (status.scannerState) {
-                            "RUNNING" ->
-                                "Сканирование выполняется…"
-                            "ERROR" ->
-                                "Ошибка сканера"
-                            "BLOCKED" ->
-                                "Сканирование заблокировано"
-                            "PARTIAL" ->
+                            "RUNNING" -> "Сканирование выполняется…"
+                            "ERROR", "FAILED" -> "Ошибка сканера"
+                            "BLOCKED", "BLOCKED_ACCOUNT", "BLOCKED_RECONCILE",
+                            "BLOCKED_KILL", "BLOCKED_DAILY_LOSS",
+                            "BLOCKED_FUTURES_RECONCILIATION" -> "Сканирование заблокировано"
+                            "PARTIAL", "PARTIAL_BLOCKED" ->
                                 "Неполное сканирование • новые входы заблокированы"
+                            "WAITING_FOR_HISTORY" -> "Ожидание истории закрытых H1-свечей"
+                            "WAITING_FOR_MARKET_DATA", "WAITING_FOR_REST" ->
+                                "Ожидание свежих котировок Futures"
+                            "PAUSED" -> "Runtime на паузе"
+                            "STOPPED" -> "Runtime остановлен"
                             "READY" ->
                                 status.scannerSymbols.toString() + "/" +
                                     status.scannerConfiguredSymbols + " утверждённых пар • LONG " +
                                     status.scannerLongCandidates + " / SHORT " +
                                     status.scannerShortCandidates + " • кандидатов " +
                                     candidates.size
-                            else ->
-                                "Сканирование ещё не запускалось"
+                            else -> "Состояние: " + status.scannerState
                         },
                         color = AppColors.textMuted
                     )
