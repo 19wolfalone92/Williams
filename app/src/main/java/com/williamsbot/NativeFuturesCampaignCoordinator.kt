@@ -1355,14 +1355,44 @@ internal class NativeFuturesCampaignCoordinator(
         }
     }
 
-    fun status(): JSONObject = JSONObject()
-        .put("engine", "USD_M_FUTURES_TESTNET")
-        .put("state", state.name)
-        .put("ready_for_new_entry", state == State.READY || state == State.OPEN_PROTECTED)
-        .put("blocker", lastBlocker ?: JSONObject.NULL)
-        .put("pending_intents", intents().length())
-        .put("testnet_only", true)
-        .put("position_sides", JSONArray().put("LONG").put("SHORT"))
+    fun status(): JSONObject {
+        val persisted = intents()
+        val pendingDetails = JSONArray()
+        val now = System.currentTimeMillis()
+        for (i in 0 until persisted.length()) {
+            val item = persisted.optJSONObject(i) ?: continue
+            val lifecycle = campaignLifecycleStatus(item)
+            if (lifecycle in TERMINAL_CAMPAIGN_STATUSES) continue
+            val role = item.optString("intent_role", "ENTRY")
+            val orderStatus = if (role == "EXIT") {
+                item.optString("exchange_status").uppercase(Locale.US)
+            } else {
+                exchangeOrderStatus(item)
+            }
+            pendingDetails.put(
+                JSONObject()
+                    .put("symbol", item.optString("symbol"))
+                    .put("direction", item.optString("direction"))
+                    .put("role", role)
+                    .put("kind", item.optString("kind"))
+                    .put("client_id_suffix", item.optString("client_id").takeLast(8))
+                    .put("order_status", orderStatus)
+                    .put("campaign_status", lifecycle)
+                    .put("created_at_ms", item.optLong("created_at_ms", 0L))
+                    .put("last_reconciled_ms", item.optLong("last_reconciled_ms", 0L))
+                    .put("age_ms", (now - item.optLong("created_at_ms", now)).coerceAtLeast(0L))
+            )
+        }
+        return JSONObject()
+            .put("engine", "USD_M_FUTURES_TESTNET")
+            .put("state", state.name)
+            .put("ready_for_new_entry", state == State.READY || state == State.OPEN_PROTECTED)
+            .put("blocker", lastBlocker ?: JSONObject.NULL)
+            .put("pending_intents", pendingDetails.length())
+            .put("pending_intent_details", pendingDetails)
+            .put("testnet_only", true)
+            .put("position_sides", JSONArray().put("LONG").put("SHORT"))
+    }
 
     private fun validatePlan(plan: EntryPlan) {
         require(plan.symbol.uppercase(Locale.US) in allowedSymbols) {
