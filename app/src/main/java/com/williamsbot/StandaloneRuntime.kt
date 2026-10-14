@@ -6747,20 +6747,41 @@ private class NativeEngine(
                 teethS[i] > jawS[i] &&
                 candles[i].c > lipsS[i]
 
+        fun upGroupStart(i: Int): Int {
+            var start = i
+            while (start > 0 && candles[start - 1].h == candles[i].h) start--
+            return start
+        }
+
+        fun downGroupStart(i: Int): Int {
+            var start = i
+            while (start > 0 && candles[start - 1].l == candles[i].l) start--
+            return start
+        }
+
+        // A plateau of equal extremes is one fractal group, not several
+        // artificial signals. Anchor it at the last equal-extreme bar so the
+        // two required right-hand bars are fully closed before confirmation.
         fun upFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].h > candles[i - 1].h &&
-                candles[i].h > candles[i - 2].h &&
-                candles[i].h > candles[i + 1].h &&
-                candles[i].h > candles[i + 2].h
+            if (i + 2 >= candles.size) return false
+            if (i + 1 < candles.size && candles[i + 1].h == candles[i].h) return false
+            val start = upGroupStart(i)
+            if (start < 2) return false
+            return candles[start - 1].h < candles[i].h &&
+                candles[start - 2].h < candles[i].h &&
+                candles[i + 1].h < candles[i].h &&
+                candles[i + 2].h < candles[i].h
         }
 
         fun downFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].l < candles[i - 1].l &&
-                candles[i].l < candles[i - 2].l &&
-                candles[i].l < candles[i + 1].l &&
-                candles[i].l < candles[i + 2].l
+            if (i + 2 >= candles.size) return false
+            if (i + 1 < candles.size && candles[i + 1].l == candles[i].l) return false
+            val start = downGroupStart(i)
+            if (start < 2) return false
+            return candles[start - 1].l > candles[i].l &&
+                candles[start - 2].l > candles[i].l &&
+                candles[i + 1].l > candles[i].l &&
+                candles[i + 2].l > candles[i].l
         }
 
         fun latestUpFractal(centerLimit: Int): Int? {
@@ -6884,9 +6905,11 @@ private class NativeEngine(
                     role = "ENTRY",
                     signalBarTimeMs = candles[fractalCenter].t,
                     triggerPrice = trigger,
-                    protectivePrice = candles[fractalCenter].l - tick,
+                    protectivePrice = (upGroupStart(fractalCenter)..fractalCenter)
+                        .minOf { candles[it].l } - tick,
                     teethAtDetection = currentTeeth,
-                    invalidationPrice = candles[fractalCenter].l - tick,
+                    invalidationPrice = (upGroupStart(fractalCenter)..fractalCenter)
+                        .minOf { candles[it].l } - tick,
                     reason = "WM3 confirmed buy fractal; trigger must remain above Teeth"
                 )
             }
