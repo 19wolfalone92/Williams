@@ -151,7 +151,10 @@ internal class NativeFuturesCampaignCoordinator(
                 if (role == "ENTRY" && status in activeStatuses && entryId.isNotBlank()) activeEntryClientIds += entryId
                 if (role == "EXIT" && status in activeStatuses && entryId.isNotBlank()) activeExitClientIds += entryId
                 if (role != "ENTRY") continue
-                if (status in activeStatuses || status in setOf("OPEN_PROTECTED", "POSITION_OPEN")) {
+                val protectionStillNeedsOwnership = status in activeStatuses ||
+                    status in setOf("OPEN_PROTECTED", "POSITION_OPEN") ||
+                    (symbol !in openBySymbol && status in terminalStatuses)
+                if (protectionStillNeedsOwnership) {
                     item.optString("protection_client_id").takeIf { it.isNotBlank() }
                         ?.let { activeProtectionClientIds += it }
                     item.optString("previous_protection_client_id").takeIf { it.isNotBlank() }
@@ -430,9 +433,14 @@ internal class NativeFuturesCampaignCoordinator(
                 if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
                 val symbol = intent.optString("symbol").uppercase(Locale.US)
                 val status = intent.optString("exchange_status").uppercase(Locale.US)
-                if (symbol !in openBySymbol && status in setOf("OPEN_PROTECTED", "POSITION_OPEN")) {
-                    intent.put("exchange_status", "CLOSED_OR_STOPPED")
-                        .put("closed_observed_at_ms", System.currentTimeMillis())
+                if (
+                    symbol !in openBySymbol &&
+                    status in (terminalStatuses + setOf("OPEN_PROTECTED", "POSITION_OPEN"))
+                ) {
+                    if (status in setOf("OPEN_PROTECTED", "POSITION_OPEN")) {
+                        intent.put("exchange_status", "CLOSED_OR_STOPPED")
+                            .put("closed_observed_at_ms", System.currentTimeMillis())
+                    }
                     // A stop-triggered or manually closed position must not leave a
                     // closePosition algo armed to affect a future campaign on this symbol.
                     val knownProtectionIds = listOf(
@@ -798,8 +806,14 @@ internal class NativeFuturesCampaignCoordinator(
                     row.optString("direction") == direction.name &&
                     row.optString("exchange_status").uppercase(Locale.US) in setOf("OPEN_PROTECTED", "POSITION_OPEN")
             }
-        val currentProtectionId = managedEntry?.optString("protection_client_id").orEmpty()
-        val previousProtectionId = managedEntry?.optString("previous_protection_client_id").orEmpty()
+        if (managedEntry == null) {
+            state = State.RECONCILE_REQUIRED
+            lastBlocker = "$symbol has no confirmed active Williams campaign; refusing to close an unmanaged position"
+            return@synchronized JSONObject().put("ok", false).put("state", state.name)
+                .put("blocker", lastBlocker)
+        }
+        val currentProtectionId = managedEntry.optString("protection_client_id")
+        val previousProtectionId = managedEntry.optString("previous_protection_client_id")
         val exitIntent = JSONObject()
             .put("intent_role", "EXIT")
             .put("symbol", symbol)
@@ -833,8 +847,15 @@ internal class NativeFuturesCampaignCoordinator(
                 return@synchronized JSONObject().put("ok", false).put("state", state.name)
                     .put("blocker", lastBlocker).put("order", result)
             }
+            val confirmedFlatAt = System.currentTimeMillis()
             exitIntent.put("exchange_status", "EXIT_CONFIRMED")
-                .put("confirmed_flat_at_ms", System.currentTimeMillis())
+                .put("confirmed_flat_at_ms", confirmedFlatAt)
+            // Persist campaign closure atomically with the confirmed exit before stop
+            // cleanup. Otherwise a restart can mistake a later manual position on the
+            // same symbol/direction for this stale, previously protected campaign.
+            managedEntry.put("exchange_status", "CLOSED_OR_STOPPED")
+                .put("closed_observed_at_ms", confirmedFlatAt)
+                .put("close_reason", reason)
             saveIntents(intents)
 
             // Cancel only protective orders whose ids belong to this persisted campaign.
