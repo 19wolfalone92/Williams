@@ -236,6 +236,21 @@ internal fun runtimeRecoveryContract(
     running == workerAlive &&
         (!autoRunRequested || (running && workerAlive && !killLatched))
 
+/** Prefer a live WS quote, then a fresh Futures REST ticker, then the last closed candle. */
+internal fun dashboardPrice(
+    websocketPrice: Double?,
+    restPrice: Double?,
+    lastClosedPrice: Double?,
+    websocketFresh: Boolean,
+    restTickerFresh: Boolean
+): Double? {
+    fun valid(value: Double?): Double? =
+        value?.takeIf { it.isFinite() && it > 0.0 }
+    return if (websocketFresh) valid(websocketPrice) else null
+        ?: if (restTickerFresh) valid(restPrice) else null
+        ?: valid(lastClosedPrice)
+}
+
 internal fun scannerReadinessState(
     running: Boolean,
     paused: Boolean,
@@ -8914,10 +8929,15 @@ private class NativeEngine(
             )
             .put(
                 "price",
-                livePrices[primarySymbol]
-                    ?: primaryCandles.lastOrNull()?.c
-                    ?: restLastTickerPrice.takeIf { it.isFinite() && it > 0.0 }
-                    ?: JSONObject.NULL
+                dashboardPrice(
+                    websocketPrice = livePrices[primarySymbol],
+                    restPrice = restLastTickerPrice,
+                    lastClosedPrice = primaryCandles.lastOrNull()?.c,
+                    websocketFresh = marketWebSocketFresh(),
+                    restTickerFresh = restLastSuccessMs > 0L &&
+                        System.currentTimeMillis() >= restLastSuccessMs &&
+                        System.currentTimeMillis() - restLastSuccessMs <= 30_000L
+                ) ?: JSONObject.NULL
             )
             .put(
                 "quote_balance",
