@@ -1,6 +1,8 @@
 name: Binance USD-M Futures Demo read-only gate
 
 on:
+  push:
+    branches: [futures-williams-campaign]
   workflow_dispatch:
     inputs:
       symbol:
@@ -50,4 +52,4 @@ jobs:
       - name: Run authenticated Futures Demo read-only gate
         run: python test_testnet_release_gate.py --read-only
         env:
-          TESTNET_SYMBOL: ${{ inputs.symbol }}
+          TESTNET_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
