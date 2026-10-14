@@ -73,17 +73,13 @@ internal fun hasValidStructuralStop(direction: String, entryPrice: String, stopP
 
 internal fun isEntryCampaignReserved(intent: JSONObject): Boolean {
     if (intent.optString("intent_role", "ENTRY") != "ENTRY") {
-        val status = intent.optString("exchange_status").uppercase(Locale.US)
-        return status in ENTRY_ORDER_ACTIVE_STATUSES || status == "EXIT_PENDING"
+        // Only explicit exit confirmation releases an EXIT intent. FILLED alone is
+        // insufficient because Binance position flatness must also be confirmed.
+        return intent.optString("exchange_status").uppercase(Locale.US) != "EXIT_CONFIRMED"
     }
-    val campaign = campaignLifecycleStatus(intent)
-    if (campaign in TERMINAL_CAMPAIGN_STATUSES) return false
-    if (campaign in ACTIVE_CAMPAIGN_STATUSES) return true
-    val orderStatus = exchangeOrderStatus(intent)
-    // Unknown legacy lifecycle is fail-closed even when its order says FILLED:
-    // order completion does not prove a campaign is flat.
-    if (campaign.isBlank()) return true
-    return orderStatus.isBlank() || orderStatus !in ENTRY_ORDER_TERMINAL_STATUSES
+    // Unknown, malformed or legacy state remains reserved. Only an explicit
+    // terminal campaign can release the one-campaign slot, whatever order says.
+    return campaignLifecycleStatus(intent) !in TERMINAL_CAMPAIGN_STATUSES
 }
 
 /**
@@ -326,16 +322,23 @@ internal class NativeFuturesCampaignCoordinator(
                     } else {
                         val exitStatus = order.optString("status").uppercase(Locale.US)
                         if (exitStatus == "FILLED") {
-                            if (position != null) {
-                                throw IllegalStateException(
-                                    "Exit order " + clientId + " reports FILLED but Binance still reports an open " + symbol + " position"
-                                )
+                            if (position == null) {
+                                intent.put("exchange_status", "EXIT_CONFIRMED")
+                                    .put("order_status", "FILLED")
+                                    .put("exchange_order_id", order.optString("orderId"))
+                                    .put("confirmed_flat_at_ms", System.currentTimeMillis())
+                            } else {
+                                // The order is terminal, but the account still reports exposure.
+                                // Never resend that client id; reconcile the remaining position
+                                // and its protection as a separate campaign-state decision.
+                                intent.put("exchange_status", "EXIT_TERMINAL_POSITION_OPEN")
+                                    .put("order_status", "FILLED")
+                                    .put("exchange_order_id", order.optString("orderId"))
+                                    .put("last_reconciled_ms", System.currentTimeMillis())
                             }
-                            intent.put("exchange_status", "EXIT_CONFIRMED")
-                                .put("exchange_order_id", order.optString("orderId"))
-                                .put("confirmed_flat_at_ms", System.currentTimeMillis())
                         } else if (exitStatus in setOf("CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH")) {
                             intent.put("exchange_status", if (position == null) "EXIT_CONFIRMED" else "EXIT_TERMINAL_POSITION_OPEN")
+                                .put("order_status", exitStatus)
                                 .put("exchange_order_id", order.optString("orderId"))
                                 .put("last_reconciled_ms", System.currentTimeMillis())
                         } else {
