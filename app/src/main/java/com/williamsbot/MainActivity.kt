@@ -2082,7 +2082,8 @@ private fun MarketChartPanel(
     }
     val displayStatus = status.copy(
         symbol = selectedSymbol,
-        price = livePrice ?: candles.lastOrNull()?.close,
+        // Do not mislabel the previous candle's close as a moving live price.
+        price = livePrice,
         entry = null,
         tp = null,
         sl = null
@@ -3127,20 +3128,12 @@ private fun TradingChart(
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text("Alligator: Jaw 13/8 • Teeth 8/5 • Lips 5/3  |  Fractals подтверждаются после двух правых закрытых баров",
                 color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("ТФ " + interval, style = MaterialTheme.typography.labelLarge)
-                CHART_VIEW_INTERVALS.forEach { tf ->
-                    FilterChip(
-                        selected = interval == tf,
-                        onClick = { onIntervalChange(tf) },
-                        label = { Text(tf) }
-                    )
-                }
-            }
+            Text(
+                "График • " + interval.uppercase(Locale.US) +
+                    " • H1 остаётся единственным таймфреймом торгового решения",
+                color = AppColors.textMuted,
+                style = MaterialTheme.typography.labelSmall
+            )
         }
         Canvas(
             modifier = Modifier
