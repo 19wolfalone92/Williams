@@ -12,6 +12,23 @@ import org.junit.Test
 
 class BinanceUsdMFuturesMarketDataTest {
     @Test
+    fun chartContractSharesTheExactTenSymbolsAndAllFifteenNativeIntervals() {
+        assertEquals(
+            listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+                "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"),
+            APPROVED_FUTURES_SYMBOLS
+        )
+        assertEquals(APPROVED_FUTURES_SYMBOLS.toSet(), BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS)
+        assertEquals(
+            listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h",
+                "6h", "8h", "12h", "1d", "3d", "1w", "1M"),
+            APPROVED_FUTURES_KLINE_INTERVALS
+        )
+        assertEquals(APPROVED_FUTURES_KLINE_INTERVALS.toSet(),
+            BinanceUsdMFuturesMarketData().supportedIntervals)
+    }
+
+    @Test
     fun closedCandleBoundaryUsesExchangeTimeAndNeverAdmitsTheFormingCandle() {
         val marketData = BinanceUsdMFuturesMarketData()
         assertTrue(marketData.isCandleClosed(99L, 100L))
