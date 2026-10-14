@@ -311,6 +311,18 @@ def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
     assert "if (stopping.get()) restartRequested.set(true)" in user_stream
 
 
+def test_android_execution_gate_requires_coordinator_and_stream_reconciliation():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    user_stream = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
+    assert "private fun campaignCoordinatorReadyForEntry(): Boolean" in runtime
+    assert "campaignCoordinatorReadyForEntry() &&" in runtime
+    assert '"futures_campaign_coordinator_not_ready:"' in runtime
+    assert "else if (!userStreamConnected)" in runtime
+    assert "userStreamSyncRequired = true" in runtime
+    assert "internal fun shouldReconnectFuturesUserStream(event: JSONObject): Boolean" in user_stream
+    assert "if (shouldReconnectFuturesUserStream(event))" in user_stream
+
+
 def test_android_campaign_lifecycle_is_separate_from_exchange_order_status():
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     assert "fun campaignLifecycleStatus(intent: JSONObject)" in coordinator
