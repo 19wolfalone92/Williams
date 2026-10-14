@@ -803,7 +803,7 @@ private class NativeEngine(
                 .mapNotNull { assets.optJSONObject(it) }
                 .firstOrNull { it.optString("asset").equals("USDT", ignoreCase = true) }
         }
-        fun number(objectValue: JSONObject?, key: String): Double? {
+        fun jsonNumber(objectValue: JSONObject?, key: String): Double? {
             val raw = objectValue?.opt(key) ?: return null
             val parsed = when (raw) {
                 is Number -> raw.toDouble()
@@ -813,7 +813,7 @@ private class NativeEngine(
             return parsed?.takeIf { it.isFinite() }
         }
         fun number(rootKey: String, assetKey: String): Double? =
-            number(account, rootKey) ?: number(usdt, assetKey)
+            jsonNumber(account, rootKey) ?: jsonNumber(usdt, assetKey)
 
         val available = number("availableBalance", "availableBalance")
         val wallet = number("totalWalletBalance", "walletBalance")
