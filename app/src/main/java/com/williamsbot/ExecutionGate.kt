@@ -1,3 +1,5 @@
+package com.williamsbot
+
 internal const val FUTURES_EXECUTION_DOOR_KEY = "__FUTURES_ACCOUNT__"
 
 /** Pure policy contract used by the runtime gate and deterministic unit tests. */
@@ -17,8 +19,6 @@ internal fun executionDoorBlocker(
     killLatched && !allowKillLatched -> "KILL_SWITCH_LATCHED"
     else -> null
 }
-
-package com.williamsbot
 
 /**
  * Atomic admission gate between scanner proposals and Binance execution.
