@@ -2890,22 +2890,36 @@ private class NativeEngine(
                     // persisting made a healthy stream keep the scanner stuck in
                     // WAITING_FOR_HISTORY on a fresh install.
                     val bucketMs = frameSeconds(frame).coerceAtLeast(60L) * 1000L
-                    historyStore.upsertBatch(
-                        normalizedSymbol,
-                        frame,
-                        closed.takeLast(limit).map {
-                            MarketHistoryStore.Candle(
-                                openTime = it.t,
-                                closeTime = it.t + bucketMs - 1L,
-                                open = it.o,
-                                high = it.h,
-                                low = it.l,
-                                close = it.c,
-                                volume = it.v
+                    val latestClosedTime = closed.lastOrNull()?.t ?: 0L
+                    val persistedNewest = historyStore.newest(normalizedSymbol, frame)
+                    val persistedCount = historyStore.count(normalizedSymbol, frame)
+                    // Do not rewrite 150-180 candles into SQLite on every scan tick.
+                    // Persist the initial warm cache once, then only newly closed bars.
+                    if (persistedCount < limit.toLong() || persistedNewest < latestClosedTime) {
+                        val rowsToPersist = if (persistedCount < limit.toLong() || persistedNewest <= 0L) {
+                            closed.takeLast(limit)
+                        } else {
+                            closed.filter { it.t > persistedNewest }
+                        }
+                        if (rowsToPersist.isNotEmpty()) {
+                            historyStore.upsertBatch(
+                                normalizedSymbol,
+                                frame,
+                                rowsToPersist.map {
+                                    MarketHistoryStore.Candle(
+                                        openTime = it.t,
+                                        closeTime = it.t + bucketMs - 1L,
+                                        open = it.o,
+                                        high = it.h,
+                                        low = it.l,
+                                        close = it.c,
+                                        volume = it.v
+                                    )
+                                },
+                                complete = false
                             )
-                        },
-                        complete = false
-                    )
+                        }
+                    }
                     return closed.takeLast(limit)
                 }
             }
