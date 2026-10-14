@@ -780,6 +780,12 @@ private class NativeEngine(
     @Volatile private var historyLastError: String? = null
 
     private val scanCacheTtlMs = 12_000L
+    private val scanUniverseCacheTtlMs = 15_000L
+    @Volatile private var cachedScanUniverse: Triple<List<String>, Map<String, Double>, Map<String, Double>>? = null
+    @Volatile private var scanUniverseCacheAtMs = 0L
+    @Volatile private var lastScanDailyRiskCheckAtMs = 0L
+    @Volatile private var lastScanDailyRiskCheckAllowed = false
+    @Volatile private var lastNativeManagementAttemptMs = 0L
     private val deepWatchTopN = 10
     private val scannerUniverseLabel = "USD_M_FUTURES_TESTNET_10"
 
@@ -1613,7 +1619,7 @@ private class NativeEngine(
                                 !marketDataFresh() || !marketWebSocketFresh() ||
                                 !publicWebSocketFresh() || !userStreamConnected ||
                                 userStreamSyncRequired
-                        if (campaignNeedsMonitoring && prerequisitesDegraded && !paused && !killLatched) {
+                        if (campaignNeedsMonitoring && prerequisitesDegraded && !killLatched) {
                             runCatching { manageNativeFuturesPositions() }
                                 .onFailure {
                                     lastError = "Futures degraded-mode position monitor: " +
@@ -1625,11 +1631,6 @@ private class NativeEngine(
                             scannerState = "WAITING_FOR_HISTORY"
                             scannerError = historyLastError
                             if (!historyWarmupRunning) warmCoreHistoryAsync(generation)
-                        } else if (paused) {
-                            scannerState = "PAUSED"
-                            scannerError = "Runtime is paused by the operator"
-                            runCatching { manageNativeFuturesPositions() }
-                                .onFailure { lastError = "Futures position monitor: " + (it.message ?: it.javaClass.simpleName) }
                         } else {
                             requestScan()
                         }
@@ -3242,7 +3243,19 @@ private class NativeEngine(
         }
     }
 
+    @Synchronized
     private fun loadUniverse(): Triple<List<String>, Map<String, Double>, Map<String, Double>> {
+        val nowMs = System.currentTimeMillis()
+        val cached = cachedScanUniverse
+        val cachedAt = scanUniverseCacheAtMs
+        if (cached != null && cachedAt > 0L && nowMs >= cachedAt &&
+            nowMs - cachedAt < scanUniverseCacheTtlMs
+        ) {
+            // Liquidity/24h volume is a coarse scan preselection only. The entry
+            // path independently obtains a fresh Futures top-of-book before mutation.
+            return Triple(cached.first.toList(), HashMap(cached.second), HashMap(cached.third))
+        }
+
         val volumes = HashMap<String, Double>()
         val volumeRows = futuresMarketData.ticker24h()
         for (i in 0 until volumeRows.length()) {
@@ -3262,7 +3275,10 @@ private class NativeEngine(
         }
         val missing = coreSymbols.filter { (volumes[it] ?: 0.0) <= 0.0 || spreads[it] == null }
         require(missing.isEmpty()) { "Futures market data missing approved contracts: " + missing.joinToString(",") }
-        return Triple(coreSymbols.toList(), volumes, spreads)
+        val snapshot = Triple(coreSymbols.toList(), volumes.toMap(), spreads.toMap())
+        cachedScanUniverse = snapshot
+        scanUniverseCacheAtMs = nowMs
+        return Triple(snapshot.first.toList(), HashMap(snapshot.second), HashMap(snapshot.third))
     }
 
     private fun markScanProgress() {
@@ -3277,9 +3293,9 @@ private class NativeEngine(
         // Gate failures are surfaced as actionable states rather than silent early returns.
         val gateState = scannerReadinessState(
             running = running,
-            paused = paused,
-            reconcileRequired = reconcileRequired,
-            killLatched = killLatched,
+            paused = false,
+            reconcileRequired = false,
+            killLatched = false,
             historyReady = historyReady,
             accountReady = restAccountReady,
             marketDataFresh = marketDataFresh()
@@ -3530,16 +3546,22 @@ private class NativeEngine(
         allowStopped: Boolean = false,
         allowKillLatched: Boolean = false,
         waitForDoorMs: Long = 50_000L
-    ): JSONObject = withCampaignMutation(
-        symbol = "FUTURES_ACCOUNT",
-        purpose = purpose,
-        allowPaused = true,
-        allowStopped = allowStopped,
-        allowKillLatched = allowKillLatched,
-        allowReconcileRequired = true,
-        waitForDoorMs = waitForDoorMs
-    ) {
-        futuresCampaignCoordinator.reconcile()
+    ): JSONObject {
+        val result = withCampaignMutation(
+            symbol = "FUTURES_ACCOUNT",
+            purpose = purpose,
+            allowPaused = true,
+            allowStopped = allowStopped,
+            allowKillLatched = allowKillLatched,
+            allowReconcileRequired = true,
+            waitForDoorMs = waitForDoorMs
+        ) {
+            futuresCampaignCoordinator.reconcile()
+        }
+        if (result.optBoolean("ok", false)) {
+            lastRestReconcileMs = System.currentTimeMillis()
+        }
+        return result
     }
 
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
@@ -4890,6 +4912,37 @@ private class NativeEngine(
     }
 
     private fun manageNativeFuturesPositions(): Boolean {
+        val nowMs = System.currentTimeMillis()
+        val priorState = futuresCampaignCoordinator.state
+        val minimumReconcileIntervalMs = when (priorState) {
+            NativeFuturesCampaignCoordinator.State.READY -> 10_000L
+            NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED -> 3_000L
+            NativeFuturesCampaignCoordinator.State.ENTRY_PENDING -> 2_500L
+            NativeFuturesCampaignCoordinator.State.EXIT_PENDING -> 1_500L
+            NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
+            NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED,
+            NativeFuturesCampaignCoordinator.State.UNINITIALIZED -> 0L
+        }
+        val lastSuccessfulReconcile = lastRestReconcileMs
+        val privateStreamSynchronized = userStreamConnected && !userStreamSyncRequired
+        if (!reconcileRequired && privateStreamSynchronized &&
+            minimumReconcileIntervalMs > 0L && lastSuccessfulReconcile > 0L &&
+            nowMs >= lastSuccessfulReconcile &&
+            nowMs - lastSuccessfulReconcile < minimumReconcileIntervalMs
+        ) {
+            // Private WS trade/account events schedule immediate reconciliation. This
+            // fallback cadence prevents the 1-second market scanner issuing a full
+            // signed account/open-order/algo-order reconciliation on every pass.
+            return true
+        }
+        val lastAttempt = lastNativeManagementAttemptMs
+        if (lastAttempt > 0L && nowMs >= lastAttempt && nowMs - lastAttempt < 2_000L) {
+            // Bound retries after transient exchange/door failures without pretending
+            // the failure was cleared. A reconciliation latch still blocks all entries.
+            return !reconcileRequired
+        }
+        lastNativeManagementAttemptMs = nowMs
+
         val reconciliation = reconcileFuturesThroughDoor(
             "POSITION_MANAGEMENT_RECONCILIATION",
             allowStopped = true,
@@ -5034,6 +5087,16 @@ private class NativeEngine(
         val direction = if (signal.type.startsWith("SHORT_", true))
             NativeFuturesCampaignCoordinator.Direction.SHORT else NativeFuturesCampaignCoordinator.Direction.LONG
         val symbol = candidate.symbol
+        val topOfBook = runCatching { futuresMarketData.topOfBook(symbol) }.getOrElse { failure ->
+            lastError = "FUTURES_ENTRY_TOP_OF_BOOK_FAILED: $symbol: " +
+                (failure.message ?: failure.javaClass.simpleName)
+            return
+        }
+        val currentSpreadPct = (topOfBook.second - topOfBook.first) / topOfBook.first
+        if (!currentSpreadPct.isFinite() || currentSpreadPct !in 0.0..maxSpreadPct) {
+            lastError = "FUTURES_ENTRY_SPREAD_BLOCKED: $symbol live spread=" + currentSpreadPct
+            return
+        }
         // Measure signal age against the exchange clock, not the signal candle's
         // open time. Comparing two candle open times under-counts age by up to one H1 bar.
         val contextNow = futuresMarketData.exchangeNowMs()
@@ -5145,23 +5208,40 @@ private class NativeEngine(
         }
     }
 
+    private fun scanDailyRiskAllowsEntry(): Boolean {
+        val nowMs = System.currentTimeMillis()
+        synchronized(this) {
+            val checkedAt = lastScanDailyRiskCheckAtMs
+            if (checkedAt > 0L && nowMs >= checkedAt && nowMs - checkedAt < 5_000L) {
+                return lastScanDailyRiskCheckAllowed
+            }
+            // Reserve the refresh slot before network I/O; entry submission has its own fresh check.
+            lastScanDailyRiskCheckAtMs = nowMs
+        }
+        val allowed = runCatching { checkFuturesDailyLoss() }.getOrElse { failure ->
+            lastError = "FUTURES_DAILY_LOSS_CHECK_FAILED: " +
+                (failure.message ?: failure.javaClass.simpleName)
+            false
+        }
+        synchronized(this) {
+            lastScanDailyRiskCheckAllowed = allowed
+            lastScanDailyRiskCheckAtMs = System.currentTimeMillis()
+        }
+        return allowed
+    }
+
     private fun performCampaignScan() {
-        if (!running || paused || reconcileRequired || killLatched) {
-            // Runtime state can change after scan scheduling; do not let the outer
-            // worker incorrectly promote a skipped scan to READY.
-            requestScan()
+        if (!running) {
+            scannerState = "STOPPED"
+            scannerError = "Runtime is stopped"
             return
         }
-        // Re-check funded-account equity every scan cycle, even if no candidate
-        // appears. Without this periodic check a daily-loss breach could go unnoticed
-        // indefinitely until a signal appeared. A zero/unfunded Demo wallet still
-        // runs read-only discovery; an unknown account cannot pass executionReady().
-        if (accountFundedForEntry()) {
-            val dailyRiskAllowed = runCatching { checkFuturesDailyLoss() }.getOrElse { failure ->
-                lastError = "FUTURES_DAILY_LOSS_CHECK_FAILED: " +
-                    (failure.message ?: failure.javaClass.simpleName)
-                false
-            }
+
+        // Discovery is read-only and should continue while entries are paused or
+        // exchange state is unresolved. Actual order mutations still require all
+        // durable risk, FSM, user-stream and Execution Door gates to pass.
+        if (!paused && !reconcileRequired && !killLatched && accountFundedForEntry()) {
+            val dailyRiskAllowed = scanDailyRiskAllowsEntry()
             if (dailyRiskBlocksScanner(
                     accountFunded = accountFundedForEntry(),
                     dailyRiskAllowed = dailyRiskAllowed,
@@ -5171,23 +5251,24 @@ private class NativeEngine(
             ) {
                 scannerState = if (killLatched) "BLOCKED_KILL" else "BLOCKED_DAILY_LOSS"
                 scannerError = lastError ?: "Daily Futures risk gate is latched; new entries are disabled"
-                // The 5% circuit breaker already schedules its emergency handler.
-                // At the ordinary 3% daily limit, continue managing existing protection.
-                if (!killLatched) {
-                    runCatching { manageNativeFuturesPositions() }
-                        .onFailure { lastError = "Futures position monitor: " + (it.message ?: it.javaClass.simpleName) }
-                }
-                return
             }
         }
 
-        // Candidate discovery is read-only; each individual entry also checks
-        // funding, daily risk and the Execution Gate immediately before mutation.
-        if (!manageNativeFuturesPositions()) {
-            scannerState = "BLOCKED_FUTURES_RECONCILIATION"
-            scannerError = scannerError ?: "Futures position reconciliation/protection incomplete"
-            return
+        // Reconcile/manage through the same Execution Door, but do not let a blocked
+        // entry gate hide market diagnostics for the ten approved contracts.
+        if (!killLatched) {
+            val managementOk = runCatching { manageNativeFuturesPositions() }.getOrElse { failure ->
+                lastError = "Futures position monitor: " + (failure.message ?: failure.javaClass.simpleName)
+                false
+            }
+            if (!managementOk) {
+                scannerState = "BLOCKED_FUTURES_RECONCILIATION"
+                scannerError = scannerError
+                    ?: futuresCampaignCoordinator.lastBlocker
+                    ?: "Futures position reconciliation/protection incomplete"
+            }
         }
+
         val universe = loadUniverse()
         scanSymbols = universe.first.toMutableList()
         val volumes = universe.second
