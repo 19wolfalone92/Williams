@@ -553,6 +553,7 @@ fun WilliamsApp(context: Context) {
     LaunchedEffect(tab, selectedChartSymbol, selectedChartInterval) {
         if (tab != 1) return@LaunchedEffect
         chartCandles = emptyList()
+        chartLivePrice = null
         chartError = null
         chartLoading = true
         while (isActive) {
@@ -2081,7 +2082,7 @@ private fun MarketChartPanel(
                     Text(selectedSymbol, style = MaterialTheme.typography.titleLarge)
                     Text("USDⓈ-M Futures Demo • выбранная пара", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
                 }
-                Text(candles.lastOrNull()?.close?.let { fmt(it) } ?: if (loading) "Загрузка…" else "—",
+                Text((livePrice ?: candles.lastOrNull()?.close)?.let { fmt(it) } ?: if (loading) "Загрузка…" else "—",
                     color = AppColors.primary, fontWeight = FontWeight.Bold)
             }
             Text("Бот независимо сканирует все 10 контрактов. Здесь показан только выбранный рынок.",
@@ -3095,6 +3096,8 @@ private fun TradingChart(
         colors = CardDefaults.cardColors(containerColor = AppColors.surface)
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text("Alligator: Jaw 13/8 • Teeth 8/5 • Lips 5/3  |  Fractals подтверждаются после правых баров",
+                color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
