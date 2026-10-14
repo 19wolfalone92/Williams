@@ -304,7 +304,7 @@ def _latest_confirmed_fractal(
         # This is distinct from the second, live check below that the pending
         # stop-entry trigger remains beyond the current Teeth after confirmation.
         center_teeth_raw = center.get(
-            "teeth_current", center.get("teeth_shifted", np.nan)
+            "teeth_current", center.get("teeth_shifted", float("nan"))
         )
         try:
             center_teeth = float(center_teeth_raw)
