@@ -382,6 +382,8 @@ def main() -> None:
     must_not(android, 'putString("api_key"', "MainActivity.kt")
     must_not(android, 'putString("api_secret"', "MainActivity.kt")
     must_not(android, "Backend URL", "MainActivity.kt")
+    must(android, "isIgnoringBatteryOptimizations", "MainActivity.kt")
+    must(android, "ACTION_APPLICATION_DETAILS_SETTINGS", "MainActivity.kt")
     for needle in (
         "val riskPerTrade: Double = 0.0025",
         "val maxDailyLoss: Double = 0.03",
@@ -425,6 +427,7 @@ def main() -> None:
     for needle in (
         "test_android_starts_native_futures_runtime_from_foreground_service",
         "test_android_boot_recovery_is_opt_in_and_keeps_reconciliation_gate",
+        "test_android_exposes_battery_policy_diagnostic",
         "test_android_ui_routes_directly_to_local_runtime_without_remote_backend",
         "test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries",
         "test_android_campaign_and_intents_are_sqlite_backed",
