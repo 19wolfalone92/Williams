@@ -2058,8 +2058,8 @@ private fun MarketChartPanel(
     )
     val direction = when {
         candidate == null -> "НЕТ КАНДИДАТА"
-        candidate.entrySignalType.startsWith("SHORT_", ignoreCase = true) -> "SHORT"
-        candidate.entrySignalType in setOf("REVERSAL", "SUPER_AO", "FRACTAL") -> "LONG"
+        candidateDirection(candidate) == "SHORT" -> "SHORT"
+        candidateDirection(candidate) == "LONG" -> "LONG"
         else -> "НЕ ОПРЕДЕЛЕНО"
     }
 
@@ -3694,9 +3694,20 @@ private fun candidateColor(candidate: Candidate): Color =
         else -> AppColors.textMuted
     }
 
+private fun candidateDirection(candidate: Candidate): String? =
+    when {
+        candidate.entrySignalType.startsWith("SHORT_", ignoreCase = true) -> "SHORT"
+        candidate.entrySignalType in setOf("REVERSAL", "SUPER_AO", "FRACTAL") -> "LONG"
+        else -> null
+    }
+
 private fun candidateState(candidate: Candidate): String =
     when {
-        candidate.signal -> "CONFIRMED LONG"
+        candidate.signal -> when (candidateDirection(candidate)) {
+            "LONG" -> "CONFIRMED LONG"
+            "SHORT" -> "CONFIRMED SHORT"
+            else -> "SIGNAL • DIRECTION UNKNOWN"
+        }
         candidate.nestedW3ParentW5 -> "NESTED W3"
         candidate.wavePosition == 5 -> "W5 • EXHAUSTION WATCH"
         candidate.wavePosition == 3 -> "W3 • PRIORITY"

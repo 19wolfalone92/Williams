@@ -576,3 +576,13 @@ def test_position_chart_only_draws_levels_from_the_selected_contract():
     assert "entry = selectedPosition?.entry" in ui
     assert "tp = selectedPosition?.take" in ui
     assert "sl = selectedPosition?.stop" in ui
+
+
+
+def test_android_candidate_state_never_labels_short_as_confirmed_long():
+    ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    assert 'candidate.entrySignalType.startsWith("SHORT_", ignoreCase = true) -> "SHORT"' in ui
+    assert '"CONFIRMED SHORT"' in ui
+    assert '"SIGNAL • DIRECTION UNKNOWN"' in ui
+    assert 'candidate.signal -> "CONFIRMED LONG"' not in ui
+    assert "candidateDirection(candidate) == \"SHORT\" -> \"SHORT\"" in ui
