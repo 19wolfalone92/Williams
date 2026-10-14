@@ -252,11 +252,25 @@ def main() -> None:
 
     runtime_source = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
     must(runtime_source, "internal fun conservativeRiskReservation", "StandaloneRuntime.kt")
+    must(runtime_source, "futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)", "StandaloneRuntime.kt")
+    must(runtime_source, "var endTime = futuresMarketData.exchangeNowMs()", "StandaloneRuntime.kt")
     must_not(
         runtime_source,
         "((it.entry - it.stop) / it.entry).coerceAtLeast(0.0)",
         "StandaloneRuntime.kt",
     )
+    must_not(
+        runtime_source,
+        "((p.entry - p.stop) / p.entry).coerceAtLeast(0.0)",
+        "StandaloneRuntime.kt",
+    )
+    must_not(
+        runtime_source,
+        "if (closeTime >= System.currentTimeMillis())",
+        "StandaloneRuntime.kt",
+    )
+    market_test = read("app/src/test/java/com/williamsbot/BinanceUsdMFuturesMarketDataTest.kt")
+    must(market_test, "closedCandleBoundaryUsesExchangeTimeAndNeverAdmitsTheFormingCandle", "BinanceUsdMFuturesMarketDataTest.kt")
     risk_test = read("app/src/test/java/com/williamsbot/ReservedRiskBudgetTest.kt")
     for needle in (
         "validStoredRiskReservationIsPreservedWithinPortfolioCap",
