@@ -3704,9 +3704,9 @@ private fun candidateDirection(candidate: Candidate): String? =
 private fun candidateState(candidate: Candidate): String =
     when {
         candidate.signal -> when (candidateDirection(candidate)) {
-            "LONG" -> "CONFIRMED LONG"
-            "SHORT" -> "CONFIRMED SHORT"
-            else -> "SIGNAL • DIRECTION UNKNOWN"
+            "LONG" -> "H1 SETUP • LONG"
+            "SHORT" -> "H1 SETUP • SHORT"
+            else -> "H1 SETUP • DIRECTION UNKNOWN"
         }
         candidate.nestedW3ParentW5 -> "NESTED W3"
         candidate.wavePosition == 5 -> "W5 • EXHAUSTION WATCH"
