@@ -119,6 +119,18 @@ class ScannerReadinessTest {
         ))
     }
 
+
+    @Test fun dashboard_uses_live_quote_then_fresh_rest_then_last_closed_candle() {
+        assertEquals(101.0, dashboardPrice(101.0, 100.0, 99.0, true, true)!!, 0.0)
+        assertEquals(100.0, dashboardPrice(101.0, 100.0, 99.0, false, true)!!, 0.0)
+        assertEquals(99.0, dashboardPrice(101.0, 100.0, 99.0, false, false)!!, 0.0)
+    }
+
+    @Test fun dashboard_rejects_non_finite_or_non_positive_prices() {
+        assertEquals(99.0, dashboardPrice(Double.NaN, Double.NEGATIVE_INFINITY, 99.0, true, true)!!, 0.0)
+        assertEquals(null, dashboardPrice(0.0, -1.0, Double.NaN, true, true))
+    }
+
     @Test fun websocket_reconnects_when_silent_or_handshake_stalls() {
         assertEquals(true, streamNeedsReconnect(true, 10_000L, 1_000L, 55_001L, 45_000L))
         assertEquals(true, streamNeedsReconnect(true, 0L, 10_000L, 55_001L, 45_000L))
