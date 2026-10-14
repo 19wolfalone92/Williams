@@ -1599,8 +1599,18 @@ private class NativeEngine(
         // Stopping the local worker must not leave an unfilled exchange-side
         // conditional entry armed to open a position after the phone stops.
         val cancellation = if (key().isNotBlank() && secret().isNotBlank()) {
-            runCatching { futuresCampaignCoordinator.cancelPendingEntries("RUNTIME_STOP") }
-                .getOrElse { JSONObject().put("ok", false).put("error", it.message ?: it.javaClass.simpleName) }
+            runCatching {
+                withCampaignMutation(
+                    symbol = "FUTURES_ACCOUNT",
+                    purpose = "RUNTIME_STOP_CANCEL_PENDING",
+                    allowPaused = true,
+                    allowStopped = true,
+                    allowKillLatched = true,
+                    allowReconcileRequired = true
+                ) {
+                    futuresCampaignCoordinator.cancelPendingEntries("RUNTIME_STOP")
+                }
+            }.getOrElse { JSONObject().put("ok", false).put("error", it.message ?: it.javaClass.simpleName) }
         } else {
             JSONObject().put("ok", false).put("error", "Futures credentials unavailable; exchange cancellation cannot be confirmed")
         }
@@ -1697,7 +1707,16 @@ private class NativeEngine(
         }
 
         val cancellation = runCatching {
-            futuresCampaignCoordinator.cancelPendingEntries("KILL_SWITCH")
+            withCampaignMutation(
+                symbol = "FUTURES_ACCOUNT",
+                purpose = "KILL_SWITCH_CANCEL_PENDING",
+                allowPaused = true,
+                allowStopped = true,
+                allowKillLatched = true,
+                allowReconcileRequired = true
+            ) {
+                futuresCampaignCoordinator.cancelPendingEntries("KILL_SWITCH")
+            }
         }.getOrElse {
             JSONObject().put("ok", false).put("error", it.message ?: it.javaClass.simpleName)
         }
@@ -1733,7 +1752,18 @@ private class NativeEngine(
                 val qty = floorStep(kotlin.math.abs(signedQty), if (rules.marketStep > 0.0) rules.marketStep else rules.step)
                 require(qty >= rules.minQty) { "Cannot safely round exchange position qty for $symbol" }
                 val cid = ("W2K_" + symbol.take(8) + "_" + System.nanoTime().toString(16).takeLast(12)).take(36)
-                val result = futuresCampaignCoordinator.closePosition(symbol, direction, fmtQty(qty, rules.decimals), cid, "KILL_SWITCH")
+                val result = withCampaignMutation(
+                    symbol = symbol,
+                    purpose = "KILL_SWITCH_CLOSE",
+                    allowPaused = true,
+                    allowStopped = true,
+                    allowKillLatched = true,
+                    allowReconcileRequired = ownershipVerified
+                ) {
+                    futuresCampaignCoordinator.closePosition(
+                        symbol, direction, fmtQty(qty, rules.decimals), cid, "KILL_SWITCH"
+                    )
+                }
                 if (!result.optBoolean("ok", false)) errors += "$symbol: " + result.optString("blocker", result.optString("error"))
             } catch (x: Exception) {
                 errors += "$symbol: " + (x.message ?: x.javaClass.simpleName)
@@ -4469,7 +4499,16 @@ private class NativeEngine(
             paused = true
             prefs.edit().putBoolean("auto_run", false).commit()
             lastError = "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"
-            runCatching { futuresCampaignCoordinator.cancelPendingEntries("DAILY_LOSS_LIMIT") }
+            runCatching {
+                withCampaignMutation(
+                    symbol = "FUTURES_ACCOUNT",
+                    purpose = "DAILY_LOSS_CANCEL_PENDING",
+                    allowPaused = true,
+                    allowReconcileRequired = true
+                ) {
+                    futuresCampaignCoordinator.cancelPendingEntries("DAILY_LOSS_LIMIT")
+                }
+            }
             return false
         }
         return true
@@ -4534,7 +4573,17 @@ private class NativeEngine(
         val qty = floorStep(kotlin.math.abs(signedQty), step)
         require(qty >= rules.minQty) { "Futures close quantity below minimum for " + symbol }
         val clientId = ("W2X_" + symbol.take(8) + "_" + System.nanoTime().toString(16).takeLast(12)).take(36)
-        val result = futuresCampaignCoordinator.closePosition(symbol, direction, fmtQty(qty, rules.decimals), clientId, "MANUAL_EXIT")
+        val result = withCampaignMutation(
+            symbol = symbol,
+            purpose = "MANUAL_FUTURES_EXIT",
+            allowPaused = true,
+            allowStopped = true,
+            allowKillLatched = true
+        ) {
+            futuresCampaignCoordinator.closePosition(
+                symbol, direction, fmtQty(qty, rules.decimals), clientId, "MANUAL_EXIT"
+            )
+        }
         if (!result.optBoolean("ok", false)) lastError = result.optString("blocker", result.optString("error"))
         return JSONObject().put("sold", result.optBoolean("ok", false)).put("symbol", symbol)
             .put("direction_closed", direction.name).put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
@@ -4615,10 +4664,16 @@ private class NativeEngine(
                 val qty = floorStep(kotlin.math.abs(signedQty), step)
                 require(qty >= rules.minQty) { "Futures exit qty below filter for " + symbol }
                 val clientId = ("W2O_" + symbol.take(8) + "_" + System.nanoTime().toString(16).takeLast(12)).take(36)
-                val result = futuresCampaignCoordinator.closePosition(
-                    symbol, direction, fmtQty(qty, rules.decimals), clientId,
-                    if (structuralExit) "H1_CLOSE_CROSSED_ALLIGATOR_TEETH" else "OPPOSITE_WILLIAMS_SIGNAL"
-                )
+                val result = withCampaignMutation(
+                    symbol = symbol,
+                    purpose = if (structuralExit) "STRUCTURAL_FUTURES_EXIT" else "OPPOSING_WILLIAMS_EXIT",
+                    allowPaused = true
+                ) {
+                    futuresCampaignCoordinator.closePosition(
+                        symbol, direction, fmtQty(qty, rules.decimals), clientId,
+                        if (structuralExit) "H1_CLOSE_CROSSED_ALLIGATOR_TEETH" else "OPPOSITE_WILLIAMS_SIGNAL"
+                    )
+                }
                 if (!result.optBoolean("ok", false)) throw IllegalStateException(result.optString("blocker", result.optString("error")))
                 continue
             }
@@ -4640,7 +4695,15 @@ private class NativeEngine(
                 else proposed < oldStop && proposed > mark
             if (tighter) {
                 val clientId = ("W2T_" + symbol.take(8) + "_" + latest.t.toString(16)).take(36)
-                val result = futuresCampaignCoordinator.trailProtectiveStop(symbol, direction, fmtPrice(proposed, rules.tick), clientId)
+                val result = withCampaignMutation(
+                    symbol = symbol,
+                    purpose = "STRUCTURAL_STOP_TRAIL",
+                    allowPaused = true
+                ) {
+                    futuresCampaignCoordinator.trailProtectiveStop(
+                        symbol, direction, fmtPrice(proposed, rules.tick), clientId
+                    )
+                }
                 if (!result.optBoolean("ok", false)) throw IllegalStateException(result.optString("blocker", result.optString("error")))
             }
         }
@@ -4760,7 +4823,12 @@ private class NativeEngine(
             clientId = clientId,
             riskPct = riskPct
         )
-        val result = futuresCampaignCoordinator.submitPendingEntry(plan)
+        val result = withCampaignMutation(
+            symbol = symbol,
+            purpose = "WILLIAMS_PENDING_ENTRY"
+        ) {
+            futuresCampaignCoordinator.submitPendingEntry(plan)
+        }
         lastOrder = result
         if (!result.optBoolean("accepted", false)) {
             lastError = result.optString("blocker", result.optString("error"))
