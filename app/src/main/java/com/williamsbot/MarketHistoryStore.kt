@@ -15,7 +15,7 @@ import org.json.JSONObject
  * working set for calculations, so the complete history is never retained in RAM.
  */
 class MarketHistoryStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_market_history.db", null, 1) {
+    SQLiteOpenHelper(context, "williams_market_history.db", null, 2) {
 
     data class Candle(
         val openTime: Long,
@@ -71,7 +71,50 @@ class MarketHistoryStore(context: Context) :
         db: SQLiteDatabase,
         oldVersion: Int,
         newVersion: Int
-    ) = Unit
+    ) {
+        if (oldVersion < 2) {
+            // Older installs may have the candles table but predate sync_state.
+            // Create the readiness journal in-place and seed counts from the saved
+            // candles so a schema upgrade cannot leave history permanently at zero.
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS sync_state(
+                    symbol TEXT NOT NULL,
+                    interval TEXT NOT NULL,
+                    oldest_open_time INTEGER NOT NULL DEFAULT 0,
+                    newest_open_time INTEGER NOT NULL DEFAULT 0,
+                    candle_count INTEGER NOT NULL DEFAULT 0,
+                    complete INTEGER NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    PRIMARY KEY(symbol, interval)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS idx_candles_lookup " +
+                    "ON candles(symbol, interval, open_time DESC)"
+            )
+            val candlesTableExists = db.rawQuery(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='candles' LIMIT 1",
+                null
+            ).use { cursor -> cursor.moveToFirst() }
+            if (candlesTableExists) {
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO sync_state(
+                        symbol, interval, oldest_open_time, newest_open_time,
+                        candle_count, complete, updated_at, last_error
+                    )
+                    SELECT symbol, interval, MIN(open_time), MAX(open_time),
+                           COUNT(*), 0, 0, NULL
+                    FROM candles
+                    GROUP BY symbol, interval
+                    """.trimIndent()
+                )
+            }
+        }
+    }
 
     @Synchronized
     fun upsertBatch(
