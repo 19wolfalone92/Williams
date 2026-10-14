@@ -3698,15 +3698,18 @@ private class NativeEngine(
                     amount == null || !amount.isFinite() || amount != 0.0
                 }
 
-                val activeStatuses = setOf(
-                    "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED",
-                    "SUBMISSION_UNKNOWN", "ACCEPTED", "TRIGGERED",
-                    "OPEN_PROTECTED", "POSITION_OPEN", "EXIT_PENDING"
+                // Explicit terminal allowlist: any unknown, ambiguous, or unrecognized
+                // intent status prevents resetting the daily loss baseline.
+                val terminalStatuses = setOf(
+                    "FILLED", "FINISHED", "EXPIRED", "EXPIRED_IN_MATCH",
+                    "CANCELED", "CANCELLED", "REJECTED",
+                    "CLOSED_OR_STOPPED", "EXIT_CONFIRMED"
                 )
                 val intents = futuresCampaignCoordinator.intentsSnapshot()
                 val hasActiveExecution = (0 until intents.length()).any { index ->
                     val row = intents.optJSONObject(index) ?: return@any true
-                    row.optString("exchange_status").uppercase(Locale.US) in activeStatuses
+                    val status = row.optString("exchange_status").uppercase(Locale.US)
+                    status.isBlank() || status !in terminalStatuses
                 }
 
                 val income = futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
