@@ -207,7 +207,7 @@ data class Status(
     val error: String? = null,
     val binanceConfigured: Boolean = false,
     val riskPerTrade: Double = 0.0025,
-    val maxDailyLoss: Double = 0.01,
+    val maxDailyLoss: Double = 0.03,
     val tradesToday: Int = 0,
     val consecutiveLosses: Int = 0,
     val dailyPnlUsdt: Double = 0.0,
@@ -3076,7 +3076,7 @@ private fun parseStatus(json: JSONObject): Status {
         maxDailyLoss =
             json.optDouble(
                 "max_daily_loss_pct",
-                0.01
+                0.03
             ),
         tradesToday =
             json.optInt("trades_today", 0),
