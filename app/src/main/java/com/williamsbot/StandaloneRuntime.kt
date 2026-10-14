@@ -2737,6 +2737,28 @@ private class NativeEngine(
                     futuresMarketData.isCandleOpenTimeClosed(it.t, durationMs, exchangeNowMs)
                 }
                 if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs)) {
+                    // A WebSocket warm cache is not proof that the SQLite history
+                    // journal is populated. Startup readiness checks both the live
+                    // closed-bar count and persisted count; returning here without
+                    // persisting made a healthy stream keep the scanner stuck in
+                    // WAITING_FOR_HISTORY on a fresh install.
+                    val bucketMs = frameSeconds(frame).coerceAtLeast(60L) * 1000L
+                    historyStore.upsertBatch(
+                        normalizedSymbol,
+                        frame,
+                        closed.takeLast(limit).map {
+                            MarketHistoryStore.Candle(
+                                openTime = it.t,
+                                closeTime = it.t + bucketMs - 1L,
+                                open = it.o,
+                                high = it.h,
+                                low = it.l,
+                                close = it.c,
+                                volume = it.v
+                            )
+                        },
+                        complete = false
+                    )
                     return closed.takeLast(limit)
                 }
             }
