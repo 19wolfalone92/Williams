@@ -171,7 +171,8 @@ internal fun futuresAccountEquity(
 internal data class FuturesAccountSnapshot(
     val availableUsdt: Double,
     val walletUsdt: Double,
-    val equityUsdt: Double
+    val equityUsdt: Double,
+    val unrealizedPnlUsdt: Double?
 )
 
 /** Parse both numeric JSON values and numeric strings from the official USD-M account shape. */
@@ -200,7 +201,12 @@ internal fun parseFuturesAccountSnapshot(account: JSONObject): FuturesAccountSna
     val unrealized = rootOrUsdt("totalUnrealizedProfit", "unrealizedProfit")
     val margin = rootOrUsdt("totalMarginBalance", "marginBalance")
     val equity = futuresAccountEquity(margin, wallet, unrealized) ?: return null
-    return FuturesAccountSnapshot(available, wallet, equity)
+    return FuturesAccountSnapshot(
+        availableUsdt = available,
+        walletUsdt = wallet,
+        equityUsdt = equity,
+        unrealizedPnlUsdt = unrealized
+    )
 }
 
 internal fun futuresAccountFundedForEntry(
@@ -221,6 +227,15 @@ internal fun isSignalFresh(
 }
 
 /** Canonical, side-effect-free startup gate so UI diagnostics never hide the blocking prerequisite. */
+internal fun runtimeRecoveryContract(
+    autoRunRequested: Boolean,
+    running: Boolean,
+    workerAlive: Boolean,
+    killLatched: Boolean
+): Boolean =
+    running == workerAlive &&
+        (!autoRunRequested || (running && workerAlive && !killLatched))
+
 internal fun scannerReadinessState(
     running: Boolean,
     paused: Boolean,
@@ -8993,12 +9008,14 @@ private class NativeEngine(
         check(updateCachedFuturesAccount(account)) {
             "Futures account returned invalid balance/equity values"
         }
-        val wallet = account.optString("totalWalletBalance").toDoubleOrNull() ?: 0.0
-        val unrealized = account.optString("totalUnrealizedProfit").toDoubleOrNull() ?: 0.0
-        val equity = futuresAccountEquity(
-            account.optString("totalMarginBalance").toDoubleOrNull(), wallet, unrealized
-        ) ?: throw IllegalStateException("Futures equity is unavailable")
-        val available = account.optString("availableBalance").toDoubleOrNull() ?: 0.0
+        // Use the same validated normalized snapshot as risk/entry sizing. Reading
+        // only root-level fields here silently displayed zero for valid Demo payloads
+        // that expose USDT values under assets[] instead of the summary fields.
+        val accountValues = parseFuturesAccountSnapshot(account)
+            ?: throw IllegalStateException("Futures account snapshot changed during validation")
+        val wallet = accountValues.walletUsdt
+        val equity = accountValues.equityUsdt
+        val available = accountValues.availableUsdt
         val positions = futuresPositionSnapshot()
         var notional = 0.0
         var posPnl = 0.0
@@ -9017,7 +9034,8 @@ private class NativeEngine(
             .put("account_type", "USD_M_FUTURES")
             .put("total_equity_usdt", equity).put("free_equity_usdt", available)
             .put("locked_equity_usdt", (wallet - available).coerceAtLeast(0.0))
-            .put("wallet_balance_usdt", wallet).put("unrealized_pnl_usdt", unrealized)
+            .put("wallet_balance_usdt", wallet)
+            .put("unrealized_pnl_usdt", accountValues.unrealizedPnlUsdt ?: JSONObject.NULL)
             .put("position_notional_usdt", notional).put("positions_unrealized_pnl_usdt", posPnl)
             .put("assets", assets).put("positions", positions)
     }
@@ -9071,12 +9089,22 @@ private class NativeEngine(
         test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
         test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss=0.03")
+        val autoRunRequested = prefs.getBoolean("auto_run", false)
+        val workerAlive = worker?.isAlive == true
         test(
             "self_heal_contract",
             "runtime",
-            running && !reconcileRequired && !killLatched,
+            runtimeRecoveryContract(
+                autoRunRequested = autoRunRequested,
+                running = running,
+                workerAlive = workerAlive,
+                killLatched = killLatched
+            ),
             "FAIL",
-            "running=" + running + "; safe_only=true; reconcile_required=" + reconcileRequired +
+            "auto_run_requested=" + autoRunRequested +
+                "; running=" + running +
+                "; worker_alive=" + workerAlive +
+                "; reconcile_required=" + reconcileRequired +
                 "; kill_latched=" + killLatched
         )
         return tests
