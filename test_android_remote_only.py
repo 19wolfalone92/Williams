@@ -398,6 +398,22 @@ def test_android_campaign_analysis_never_relabels_fallback_candles_as_h1():
     assert 'fetchCandles(symbol, "1h", 180)' in runtime
 
 
+def test_android_websocket_closed_candles_are_persisted_before_history_readiness():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    fetch = runtime.split("private fun fetchCandles(", 1)[1].split(
+        "\n    private fun ", 1
+    )[0]
+    live_cache = fetch.split("liveCandleCache[liveKey]?.let", 1)[1].split(
+        "val cacheKey =", 1
+    )[0]
+    assert "historyStore.upsertBatch(" in live_cache
+    assert "closed.takeLast(limit).map" in live_cache
+    assert "return closed.takeLast(limit)" in live_cache
+    assert live_cache.index("historyStore.upsertBatch(") < live_cache.index(
+        "return closed.takeLast(limit)"
+    )
+
+
 def test_android_settings_do_not_advertise_legacy_fixed_tp_or_position_sizing():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     settings = runtime.split("fun settings(): JSONObject", 1)[1]
