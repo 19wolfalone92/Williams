@@ -291,6 +291,20 @@ def main() -> None:
     must(runtime_source, "5% Futures equity circuit breaker tripped", "StandaloneRuntime.kt")
     must(runtime_source, "internal fun futuresAccountEquity", "StandaloneRuntime.kt")
     must(runtime_source, "internal fun isSignalFresh", "StandaloneRuntime.kt")
+    must(runtime_source, "internal fun smmaSeededValues", "StandaloneRuntime.kt")
+    must(runtime_source, "internal fun awesomeOscillatorAt", "StandaloneRuntime.kt")
+    must(runtime_source, "williamsAlligatorCurrentLine(candles, 13)", "StandaloneRuntime.kt")
+    must(runtime_source, "medianPrices.subList(index - 33, index + 1).average()", "StandaloneRuntime.kt")
+    must_not(runtime_source, "medians.subList(index - 34, index + 1).average()", "StandaloneRuntime.kt")
+    indicator_test = read("app/src/test/java/com/williamsbot/WilliamsIndicatorParityTest.kt")
+    for needle in (
+        "smmaUsesTheFirstPeriodSmaAsItsSeed",
+        "displayShiftIsSeparateFromCurrentTimeDecisionLine",
+        "awesomeOscillatorUsesExactlyThirtyFourAndFiveMedianPrices",
+        "invalidPeriodIsRejectedAndNonFiniteWindowsFailClosed",
+    ):
+        must(indicator_test, needle, "WilliamsIndicatorParityTest.kt")
+
     must(runtime_source, "isSignalFresh(signal.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)", "StandaloneRuntime.kt")
     must(runtime_source, "private fun estimateManagedEquity(): Double =\n        liveFuturesEquity", "StandaloneRuntime.kt")
     equity_test = read("app/src/test/java/com/williamsbot/FuturesAccountEquityTest.kt")

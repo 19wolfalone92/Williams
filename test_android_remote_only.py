@@ -207,6 +207,16 @@ def test_android_diagnostics_do_not_fake_self_heal_readiness():
     assert '.put("testnet_live_execution", false)' not in runtime
 
 
+def test_android_williams_indicator_decisions_use_current_time_alligator_and_canonical_ao():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert "williamsAlligatorCurrentLine(candles, 13)" in runtime
+    assert "williamsAlligatorCurrentLine(candles, 8)" in runtime
+    assert "williamsAlligatorCurrentLine(candles, 5)" in runtime
+    assert "medianPrices.subList(index - 33, index + 1).average()" in runtime
+    assert "medianPrices.subList(index - 34, index + 1).average()" not in runtime
+    assert "private fun alligator(" in runtime
+
+
 def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
     user_stream = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")

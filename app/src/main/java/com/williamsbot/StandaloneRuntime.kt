@@ -92,6 +92,43 @@ object StandaloneRuntime {
  * An absent/invalid reservation is unknown exposure and therefore consumes the
  * entire campaign budget until exchange reconciliation restores the persisted value.
  */
+/**
+ * Seed SMMA with the first-period simple average, matching the canonical Python
+ * indicator implementation. Unwarmed values are null rather than guessed.
+ */
+internal fun smmaSeededValues(values: List<Double>, period: Int): List<Double?> {
+    require(period > 0) { "SMMA period must be positive" }
+    val output = MutableList<Double?>(values.size) { null }
+    if (values.size < period || values.take(period).any { !it.isFinite() }) return output
+    var seed = 0.0
+    for (i in 0 until period) seed += values[i]
+    output[period - 1] = seed / period
+    for (i in period until values.size) {
+        val previous = output[i - 1] ?: continue
+        if (!values[i].isFinite()) continue
+        output[i] = (previous * (period - 1) + values[i]) / period
+    }
+    return output
+}
+
+/** Display-only future chart displacement. Execution paths use current-time SMMA values instead. */
+internal fun shiftAlligatorForDisplay(raw: List<Double?>, displacement: Int): List<Double?> {
+    require(displacement >= 0) { "Alligator displacement must be non-negative" }
+    return List(raw.size) { displayIndex ->
+        val sourceIndex = displayIndex - displacement
+        if (sourceIndex >= 0) raw.getOrNull(sourceIndex) else null
+    }
+}
+
+/** Awesome Oscillator: SMA(5, median price) minus SMA(34, median price). */
+internal fun awesomeOscillatorAt(medianPrices: List<Double>, index: Int): Double {
+    if (index < 33 || index >= medianPrices.size) return Double.NaN
+    val fastValues = medianPrices.subList(index - 4, index + 1)
+    val slowValues = medianPrices.subList(index - 33, index + 1)
+    if (fastValues.any { !it.isFinite() } || slowValues.any { !it.isFinite() }) return Double.NaN
+    return fastValues.average() - slowValues.average()
+}
+
 internal fun futuresAccountEquity(
     totalMarginBalance: Double?,
     totalWalletBalance: Double?,
@@ -6667,9 +6704,9 @@ private class NativeEngine(
     ): List<CampaignSignalN> {
         if (candles.size < 45 || tick <= 0.0) return emptyList()
 
-        val jawS = williamsAlligatorLine(candles, 13, 8).map { it ?: Double.NaN }
-        val teethS = williamsAlligatorLine(candles, 8, 5).map { it ?: Double.NaN }
-        val lipsS = williamsAlligatorLine(candles, 5, 3).map { it ?: Double.NaN }
+        val jawS = williamsAlligatorCurrentLine(candles, 13).map { it ?: Double.NaN }
+        val teethS = williamsAlligatorCurrentLine(candles, 8).map { it ?: Double.NaN }
+        val lipsS = williamsAlligatorCurrentLine(candles, 5).map { it ?: Double.NaN }
 
         fun bullishAlligator(i: Int): Boolean =
             i in candles.indices &&
@@ -7445,19 +7482,20 @@ private class NativeEngine(
         displacement: Int
     ): List<Double?> {
         val median = candles.map { (it.h + it.l) / 2.0 }
-        val raw = MutableList<Double?>(median.size) { null }
-        if (median.size < period) return raw
-        var seed = 0.0
-        for (i in 0 until period) seed += median[i]
-        raw[period - 1] = seed / period
-        for (i in period until median.size) {
-            val previous = raw[i - 1] ?: continue
-            raw[i] = (previous * (period - 1) + median[i]) / period
-        }
-        return List(candles.size) { displayIndex ->
-            val sourceIndex = displayIndex - displacement
-            if (sourceIndex >= 0) raw.getOrNull(sourceIndex) else null
-        }
+        return shiftAlligatorForDisplay(smmaSeededValues(median, period), displacement)
+    }
+
+    /**
+     * Executable context uses the current bar's SMMA. The 8/5/3 offsets are
+     * chart-display displacement only; they must not substitute stale values
+     * into today's signal or higher-timeframe gate.
+     */
+    private fun williamsAlligatorCurrentLine(
+        candles: List<CandleN>,
+        period: Int
+    ): List<Double?> {
+        val median = candles.map { (it.h + it.l) / 2.0 }
+        return smmaSeededValues(median, period)
     }
 
     private fun alligator(
@@ -7467,9 +7505,9 @@ private class NativeEngine(
         if (candles.isEmpty() || index !in candles.indices) {
             return TripleValues(0.0, 0.0, 0.0)
         }
-        val jaw = williamsAlligatorLine(candles, 13, 8).getOrNull(index) ?: 0.0
-        val teeth = williamsAlligatorLine(candles, 8, 5).getOrNull(index) ?: 0.0
-        val lips = williamsAlligatorLine(candles, 5, 3).getOrNull(index) ?: 0.0
+        val jaw = williamsAlligatorCurrentLine(candles, 13).getOrNull(index) ?: 0.0
+        val teeth = williamsAlligatorCurrentLine(candles, 8).getOrNull(index) ?: 0.0
+        val lips = williamsAlligatorCurrentLine(candles, 5).getOrNull(index) ?: 0.0
         return TripleValues(jaw, teeth, lips)
     }
 
@@ -7500,18 +7538,8 @@ private class NativeEngine(
         candles: List<CandleN>,
         index: Int
     ): Double {
-        if (index < 34) return 0.0
-
-        val medians =
-            candles.map { (it.h + it.l) / 2.0 }
-
-        val fast =
-            medians.subList(index - 4, index + 1).average()
-
-        val slow =
-            medians.subList(index - 34, index + 1).average()
-
-        return fast - slow
+        val medians = candles.map { (it.h + it.l) / 2.0 }
+        return awesomeOscillatorAt(medians, index)
     }
 
     private fun aoBearishDivergence(candles: List<CandleN>): Boolean {
