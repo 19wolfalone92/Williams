@@ -1656,9 +1656,11 @@ private class NativeEngine(
     }
 
     private fun signedAccount(): JSONObject =
+        // USD-M Futures account endpoint. A Spot-shaped /api/v3/account route is
+        // rejected by signedRequest's Futures-only boundary and breaks account refresh.
         signedRequest(
             method = "GET",
-            path = "/api/v3/account",
+            path = "/fapi/v3/account",
             params = ""
         )
 
