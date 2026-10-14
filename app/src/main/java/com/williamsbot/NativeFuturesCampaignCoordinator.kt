@@ -412,19 +412,84 @@ internal class NativeFuturesCampaignCoordinator(
                                 "; manual reconciliation required"
                         )
                     }
-                    // A partially filled entry still on Binance can add exposure after
-                    // protection sizing. Do not declare it managed until terminal.
-                    val entryOrderStillOpen = (0 until allOpenOrders.length()).any { j ->
-                        val row = allOpenOrders.optJSONObject(j) ?: return@any true
-                        row.optString("symbol").equals(symbol, true) && row.optString("clientOrderId") == clientId
-                    } || (0 until allOpenAlgoOrders.length()).any { j ->
-                        val row = allOpenAlgoOrders.optJSONObject(j) ?: return@any true
-                        row.optString("symbol").equals(symbol, true) && row.optString("clientAlgoId") == clientId
+                    // A partially-filled LIMIT entry can leave additional quantity live on Binance.
+                    // Cancel its remainder through the same coordinator reconciliation, then
+                    // confirm the terminal exchange status before sizing/confirming protection.
+                    val matchingOpenOrder = (0 until allOpenOrders.length()).mapNotNull { j ->
+                        allOpenOrders.optJSONObject(j)
+                    }.firstOrNull {
+                        it.optString("symbol").equals(symbol, true) &&
+                            it.optString("clientOrderId") == clientId
                     }
+                    val matchingOpenAlgo = (0 until allOpenAlgoOrders.length()).mapNotNull { j ->
+                        allOpenAlgoOrders.optJSONObject(j)
+                    }.firstOrNull {
+                        it.optString("symbol").equals(symbol, true) &&
+                            it.optString("clientAlgoId") == clientId
+                    }
+                    val entryOrderStillOpen = matchingOpenOrder != null || matchingOpenAlgo != null
                     if (entryOrderStillOpen) {
-                        throw IllegalStateException(
-                            "Live " + symbol + " position still has an open/partially-filled entry order; cancel/reconcile before management"
-                        )
+                        val finalOrderStatus = when {
+                            matchingOpenOrder != null -> {
+                                val observed = matchingOpenOrder.optString("status").uppercase(Locale.US)
+                                if (observed in activeStatuses) adapter.cancelOrder(symbol, clientId)
+                                val confirmed = adapter.order(symbol, clientId)
+                                val status = confirmed.optString("status").uppercase(Locale.US)
+                                if (status !in ENTRY_ORDER_TERMINAL_STATUSES) {
+                                    throw IllegalStateException(
+                                        "Live $symbol entry remainder cancellation is not exchange-confirmed (status=$status)"
+                                    )
+                                }
+                                status
+                            }
+                            matchingOpenAlgo != null -> {
+                                val observed = matchingOpenAlgo.optString("algoStatus", matchingOpenAlgo.optString("status"))
+                                    .uppercase(Locale.US)
+                                if (observed !in ENTRY_ORDER_TERMINAL_STATUSES) {
+                                    adapter.cancelAlgoOrder(symbol, clientId)
+                                }
+                                val confirmed = adapter.queryAlgoOrder(symbol, clientId)
+                                val status = confirmed.optString("algoStatus", confirmed.optString("status"))
+                                    .uppercase(Locale.US)
+                                if (status !in ENTRY_ORDER_TERMINAL_STATUSES) {
+                                    throw IllegalStateException(
+                                        "Live $symbol conditional-entry remainder cancellation is not exchange-confirmed (status=$status)"
+                                    )
+                                }
+                                status
+                            }
+                            else -> throw IllegalStateException(
+                                "Live $symbol entry-order ownership is ambiguous; refusing protection or a second entry"
+                            )
+                        }
+                        intent.put("exchange_status", finalOrderStatus)
+                            .put("order_status", finalOrderStatus)
+                            .put("remainder_cancel_confirmed_at_ms", System.currentTimeMillis())
+                            .put("last_reconciled_ms", System.currentTimeMillis())
+
+                        // Re-fetch exchange positions after cancellation: the final slice may
+                        // fill while DELETE is in flight, or the position may be flat already.
+                        val afterCancelPositions = adapter.positions()
+                        val confirmedPosition = (0 until afterCancelPositions.length())
+                            .mapNotNull { j -> afterCancelPositions.optJSONObject(j) }
+                            .firstOrNull { it.optString("symbol").equals(symbol, true) }
+                        val confirmedAmount = confirmedPosition?.optString("positionAmt")?.toBigDecimalOrNull()
+                            ?: if (confirmedPosition == null) java.math.BigDecimal.ZERO
+                            else throw IllegalStateException("Malformed $symbol position after entry-remainder cancellation")
+                        if (confirmedAmount.signum() == 0) {
+                            openBySymbol.remove(symbol)
+                            intent.put("campaign_status", "CLOSED_OR_STOPPED")
+                                .put("closed_observed_at_ms", System.currentTimeMillis())
+                            saveIntents(persisted)
+                            continue
+                        }
+                        val confirmedDirection = if (confirmedAmount.signum() > 0) "LONG" else "SHORT"
+                        if (!intent.optString("direction").equals(confirmedDirection, true)) {
+                            throw IllegalStateException(
+                                "$symbol position direction changed during entry-remainder cancellation; reconciliation required"
+                            )
+                        }
+                        openBySymbol[symbol] = confirmedPosition
                     }
                     intent.put("campaign_status", "POSITION_OPEN")
                         .put("last_reconciled_ms", System.currentTimeMillis())
