@@ -1426,6 +1426,8 @@ private class NativeEngine(
             restAccountLastError = x.message ?: x.javaClass.simpleName
             scannerState = "BLOCKED_ACCOUNT"
             scannerError = "Futures account request failed before runtime start: " + restAccountLastError
+            lastError = scannerError
+            stateMachine.force(TradingState.STOPPED, lastError ?: "Futures account request failed")
             throw IllegalStateException(
                 "Futures Testnet account request failed before Runtime start: " +
                     (x.message ?: x.javaClass.simpleName),
@@ -1438,13 +1440,19 @@ private class NativeEngine(
             scannerError = restAccountLastError
                 ?: "Futures account balance/equity fields failed validation"
             lastError = scannerError
+            stateMachine.force(TradingState.STOPPED, lastError ?: "Futures account validation failed")
             throw IllegalStateException(
                 "Futures Testnet account returned invalid or incomplete equity/balance values: " +
                     (scannerError ?: "unknown account validation error")
             )
         }
-        check(prefs.edit().putBoolean("auto_run", true).commit()) {
-            "Could not persist the explicit Runtime auto-run preference"
+        if (!prefs.edit().putBoolean("auto_run", true).commit()) {
+            prefs.edit().putBoolean("auto_run", false).commit()
+            lastError = "Could not persist the explicit Runtime auto-run preference"
+            scannerState = "FAILED"
+            scannerError = lastError
+            stateMachine.force(TradingState.STOPPED, lastError ?: "Runtime preference persistence failed")
+            throw IllegalStateException(lastError ?: "Runtime preference persistence failed")
         }
         stateMachine.force(
             when (futuresCampaignCoordinator.state) {
