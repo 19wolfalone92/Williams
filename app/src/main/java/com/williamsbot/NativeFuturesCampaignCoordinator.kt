@@ -964,8 +964,8 @@ internal class NativeFuturesCampaignCoordinator(
             intent.put("protection_status", "PROTECTED")
                 .put("protective_stop", finalStop.optString("triggerPrice", proposed.toPlainString()))
                 .put("trailing_at_ms", System.currentTimeMillis())
-                .remove("previous_protection_client_id")
-                .remove("previous_protective_stop")
+            intent.remove("previous_protection_client_id")
+            intent.remove("previous_protective_stop")
             saveIntents(persisted)
             JSONObject().put("ok", true).put("state", state.name).put("stop", finalStop)
         } catch (failure: Exception) {
