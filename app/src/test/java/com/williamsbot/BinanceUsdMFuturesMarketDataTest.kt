@@ -34,6 +34,15 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
+    fun signalFreshnessUsesExchangeNowNotDecisionCandleOpen() {
+        val fiveHours = 5L * 60L * 60L * 1000L
+        assertTrue(isSignalFresh(1_000L, 1_000L + fiveHours, fiveHours))
+        assertTrue(!isSignalFresh(1_000L, 1_001L + fiveHours, fiveHours))
+        assertTrue(!isSignalFresh(1_001L, 1_000L, fiveHours))
+        assertTrue(!isSignalFresh(0L, 1_000L, fiveHours))
+    }
+
+    @Test
     fun requestsUsdMFuturesKlinesAndPassesPaginationParameters() {
         var capturedUrl = ""
         val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->

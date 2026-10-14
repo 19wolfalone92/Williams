@@ -106,6 +106,16 @@ internal fun futuresAccountEquity(
     return value.takeIf { it.isFinite() && it > 0.0 }
 }
 
+/** Reject future-dated and genuinely stale signal bars using Binance server time. */
+internal fun isSignalFresh(
+    signalBarTimeMs: Long,
+    exchangeNowMs: Long,
+    maximumAgeMs: Long
+): Boolean {
+    if (signalBarTimeMs <= 0L || exchangeNowMs < signalBarTimeMs || maximumAgeMs < 0L) return false
+    return exchangeNowMs - signalBarTimeMs <= maximumAgeMs
+}
+
 internal fun conservativeRiskReservation(storedRiskPct: Double, maxTotalRiskPct: Double): Double {
     if (!maxTotalRiskPct.isFinite() || maxTotalRiskPct <= 0.0) return 1.0
     if (!storedRiskPct.isFinite() || storedRiskPct <= 0.0) return maxTotalRiskPct
@@ -4043,13 +4053,13 @@ private class NativeEngine(
         val direction = if (signal.type.startsWith("SHORT_", true))
             NativeFuturesCampaignCoordinator.Direction.SHORT else NativeFuturesCampaignCoordinator.Direction.LONG
         val symbol = candidate.symbol
-        val decisionBarTime = candidate.candles.lastOrNull()?.t ?: return
-        val signalAgeMs = decisionBarTime - signal.signalBarTimeMs
-        if (signalAgeMs < 0L || signalAgeMs > 5L * 60L * 60L * 1000L) return
+        // Measure signal age against the exchange clock, not the signal candle's
+        // open time. Comparing two candle open times under-counts age by up to one H1 bar.
+        val contextNow = futuresMarketData.exchangeNowMs()
+        if (!isSignalFresh(signal.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)) return
 
         // Macro D1 is an airbag; H4 supplies context; H1 is the only decision/entry TF.
         // M15/M5 are deliberately not read here and cannot create an entry.
-        val contextNow = futuresMarketData.exchangeNowMs()
         val d1BarMs = frameSeconds("1d") * 1000L
         val h4BarMs = frameSeconds("4h") * 1000L
         val d1 = fetchCandles(symbol, "1d", 90)

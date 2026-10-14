@@ -273,6 +273,7 @@ def main() -> None:
         "StandaloneRuntime.kt",
     )
     market_test = read("app/src/test/java/com/williamsbot/BinanceUsdMFuturesMarketDataTest.kt")
+    must(market_test, "signalFreshnessUsesExchangeNowNotDecisionCandleOpen", "BinanceUsdMFuturesMarketDataTest.kt")
     must(market_test, "closedCandleBoundaryUsesExchangeTimeAndNeverAdmitsTheFormingCandle", "BinanceUsdMFuturesMarketDataTest.kt")
     must(market_test, "liveCandleOpenTimeFilterNeverReturnsFormingOrFutureCandles", "BinanceUsdMFuturesMarketDataTest.kt")
     risk_test = read("app/src/test/java/com/williamsbot/ReservedRiskBudgetTest.kt")
@@ -289,6 +290,8 @@ def main() -> None:
     must(runtime_source, 'persistSafetyFlag("kill_latched", true)', "StandaloneRuntime.kt")
     must(runtime_source, "5% Futures equity circuit breaker tripped", "StandaloneRuntime.kt")
     must(runtime_source, "internal fun futuresAccountEquity", "StandaloneRuntime.kt")
+    must(runtime_source, "internal fun isSignalFresh", "StandaloneRuntime.kt")
+    must(runtime_source, "isSignalFresh(signal.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)", "StandaloneRuntime.kt")
     must(runtime_source, "private fun estimateManagedEquity(): Double =\n        liveFuturesEquity", "StandaloneRuntime.kt")
     equity_test = read("app/src/test/java/com/williamsbot/FuturesAccountEquityTest.kt")
     for needle in (
