@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import androidx.core.database.sqlite.transaction
 
 /**
  * Durable on-device source of truth for Futures execution intents and campaign state.
@@ -38,8 +39,7 @@ internal class FuturesExecutionStore(context: Context) :
     @Synchronized
     fun migrateLegacyState(legacy: SharedPreferences, keys: List<String>) {
         val db = writableDatabase
-        db.beginTransaction()
-        try {
+        db.transaction {
             keys.forEach { key ->
                 val exists = db.rawQuery(
                     "SELECT 1 FROM runtime_state WHERE state_key = ? LIMIT 1",
@@ -47,7 +47,7 @@ internal class FuturesExecutionStore(context: Context) :
                 ).use { it.moveToFirst() }
                 if (!exists) {
                     // Legacy state includes String snapshots and Boolean safety latches.
-                    // Convert the stored value by type so migration cannot crash on getString().
+                    // Convert by type so migration cannot crash on getString().
                     val oldValue = legacy.all[key]?.toString() ?: return@forEach
                     val values = ContentValues().apply {
                         put("state_key", key)
@@ -59,9 +59,6 @@ internal class FuturesExecutionStore(context: Context) :
                     }
                 }
             }
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
         }
     }
 
@@ -97,8 +94,7 @@ internal class FuturesExecutionStore(context: Context) :
     private fun writeStates(values: Map<String, String>): Boolean {
         return try {
             val db = writableDatabase
-            db.beginTransaction()
-            try {
+            db.transaction {
                 values.forEach { (key, value) ->
                     val row = ContentValues().apply {
                         put("state_key", key)
@@ -114,9 +110,6 @@ internal class FuturesExecutionStore(context: Context) :
                         ) != -1L
                     ) { "SQLite write failed for $key" }
                 }
-                db.setTransactionSuccessful()
-            } finally {
-                db.endTransaction()
             }
             true
         } catch (_: Exception) {
