@@ -1395,6 +1395,10 @@ private class NativeEngine(
         candidates = JSONArray()
         primaryCandles = emptyList()
         scanSymbols = mutableListOf()
+        cachedFuturesPositionsSnapshot = null
+        cachedFuturesPositionsSnapshotAtMs = 0L
+        futuresPositionSnapshotLastAttemptMs = 0L
+        futuresPositionSnapshotRefreshError = null
         historyReady = false
         historyWarmupRunning = false
         historyState = "IDLE"
