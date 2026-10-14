@@ -284,6 +284,15 @@ def main() -> None:
     must(runtime_source, "canInitializeDailyRiskBaseline", "StandaloneRuntime.kt")
     must(runtime_source, "observeFuturesEquityFromPersistedBaseline", "StandaloneRuntime.kt")
     must(runtime_source, "AUTOMATIC FUTURES EQUITY CIRCUIT BREAKER", "StandaloneRuntime.kt")
+    must(runtime_source, "internal fun futuresAccountEquity", "StandaloneRuntime.kt")
+    must(runtime_source, "private fun estimateManagedEquity(): Double =\n        liveFuturesEquity", "StandaloneRuntime.kt")
+    equity_test = read("app/src/test/java/com/williamsbot/FuturesAccountEquityTest.kt")
+    for needle in (
+        "prefersAuthoritativeTotalMarginBalance",
+        "fallsBackToWalletBalancePlusUnrealizedPnlWhenMarginBalanceMissing",
+        "rejectsMissingNonFiniteOrNonPositiveEquity",
+    ):
+        must(equity_test, needle, "FuturesAccountEquityTest.kt")
     must_not(runtime_source, "private fun checkAutomaticCircuitBreaker()", "StandaloneRuntime.kt")
     coordinator_source = read("app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     must(coordinator_source, "fun incomeHistory(startTimeMs: Long, endTimeMs: Long): JSONArray", "NativeFuturesCampaignCoordinator.kt")

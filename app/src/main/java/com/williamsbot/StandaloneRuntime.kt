@@ -92,6 +92,20 @@ object StandaloneRuntime {
  * An absent/invalid reservation is unknown exposure and therefore consumes the
  * entire campaign budget until exchange reconciliation restores the persisted value.
  */
+internal fun futuresAccountEquity(
+    totalMarginBalance: Double?,
+    totalWalletBalance: Double?,
+    totalUnrealizedProfit: Double?
+): Double? {
+    val value = totalMarginBalance
+        ?: if (totalWalletBalance != null && totalUnrealizedProfit != null) {
+            totalWalletBalance + totalUnrealizedProfit
+        } else {
+            return null
+        }
+    return value.takeIf { it.isFinite() && it > 0.0 }
+}
+
 internal fun conservativeRiskReservation(storedRiskPct: Double, maxTotalRiskPct: Double): Double {
     if (!maxTotalRiskPct.isFinite() || maxTotalRiskPct <= 0.0) return 1.0
     if (!storedRiskPct.isFinite() || storedRiskPct <= 0.0) return maxTotalRiskPct
@@ -602,6 +616,9 @@ private class NativeEngine(
     @Volatile private var futuresStreamReconcilePending = false
     @Volatile private var lastUserEventMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
+    // Authoritative Futures account equity (totalMarginBalance, with wallet+UPnL fallback).
+    // Never synthesize equity by adding position notional to free balance.
+    @Volatile private var liveFuturesEquity = 0.0
     @Volatile private var restMarketReady = false
     @Volatile private var restAccountReady = false
     @Volatile private var restLastSuccessMs = 0L
@@ -697,6 +714,25 @@ private class NativeEngine(
 
     private fun positionList(): List<PositionState> =
         synchronized(positions) { positions.values.toList() }
+
+    private fun updateCachedFuturesAccount(account: JSONObject): Boolean {
+        val available = account.optString("availableBalance").toDoubleOrNull()
+        val wallet = account.optString("totalWalletBalance").toDoubleOrNull()
+        val unrealized = account.optString("totalUnrealizedProfit").toDoubleOrNull()
+        val margin = account.optString("totalMarginBalance").toDoubleOrNull()
+        val validAvailable = available?.takeIf { it.isFinite() && it >= 0.0 }
+        val equity = futuresAccountEquity(margin, wallet, unrealized)
+        if (validAvailable == null || wallet == null || !wallet.isFinite() || wallet < 0.0 || equity == null) {
+            restAccountReady = false
+            liveUsdtBalance = 0.0
+            liveFuturesEquity = 0.0
+            return false
+        }
+        liveUsdtBalance = validAvailable
+        liveFuturesEquity = equity
+        restAccountReady = true
+        return true
+    }
 
     private fun reservedRiskPct(): Double {
         val openRisk = positionList().sumOf {
@@ -1072,8 +1108,9 @@ private class NativeEngine(
             futures.serverTime()
             val account = futures.account()
             futures.requireOneWayMode()
-            restAccountReady = account.has("availableBalance") &&
-                account.has("totalWalletBalance") && account.has("totalMarginBalance")
+            check(updateCachedFuturesAccount(account)) {
+                "Futures Testnet account returned invalid or incomplete equity/balance values"
+            }
             restLastError = null
             JSONObject()
                 .put("configured", true)
@@ -1164,9 +1201,9 @@ private class NativeEngine(
         reconcileRequired = false
         prefs.edit().putBoolean("auto_run", true).commit()
         val account = futuresCampaignCoordinator.accountSnapshot()
-        liveUsdtBalance = account.optString("availableBalance").toDoubleOrNull() ?: 0.0
-        restAccountReady = account.has("availableBalance") &&
-            account.has("totalWalletBalance") && account.has("totalMarginBalance")
+        check(updateCachedFuturesAccount(account)) {
+            "Futures Testnet account returned invalid or incomplete equity/balance values"
+        }
         stateMachine.force(
             when (futuresCampaignCoordinator.state) {
                 NativeFuturesCampaignCoordinator.State.ENTRY_PENDING -> TradingState.ENTRY_PENDING
@@ -3692,8 +3729,12 @@ private class NativeEngine(
         val account = futuresCampaignCoordinator.accountSnapshot()
         val wallet = account.optString("totalWalletBalance").toDoubleOrNull() ?: 0.0
         val unrealized = account.optString("totalUnrealizedProfit").toDoubleOrNull() ?: 0.0
-        val equity = account.optString("totalMarginBalance").toDoubleOrNull() ?: (wallet + unrealized)
-        require(equity.isFinite() && equity > 0.0) { "Futures equity is unavailable/non-positive" }
+        val equity = futuresAccountEquity(
+            account.optString("totalMarginBalance").toDoubleOrNull(), wallet, unrealized
+        ) ?: throw IllegalStateException("Futures equity is unavailable/non-positive")
+        check(updateCachedFuturesAccount(account)) {
+            "Futures account balance/equity data failed validation"
+        }
         val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
         val exchangeNowMs = futuresMarketData.exchangeNowMs()
         utc.timeInMillis = exchangeNowMs
@@ -5909,17 +5950,12 @@ private class NativeEngine(
         return vwap to slippage
     }
 
-    private fun estimateManagedEquity(): Double {
-        var equity = liveUsdtBalance.coerceAtLeast(0.0)
-        positionList().forEach { position ->
-            val mark = livePrices[position.symbol]
-                ?: if (position.symbol == primarySymbol) {
-                    primaryCandles.lastOrNull()?.c ?: 0.0
-                } else 0.0
-            if (mark > 0.0) equity += position.qty * mark
-        }
-        return equity
-    }
+    /**
+     * UI / legacy callers only receive last confirmed Futures account equity.
+     * An unavailable account is 0, not a synthetic free-balance-plus-notional estimate.
+     */
+    private fun estimateManagedEquity(): Double =
+        liveFuturesEquity.takeIf { it.isFinite() && it > 0.0 } ?: 0.0
 
     private fun executeBuyWithProtection(
         candidate: BaseAnalysis,
@@ -7930,12 +7966,9 @@ private class NativeEngine(
                     ) {
                         lastAccountProbe = System.currentTimeMillis()
                         val account = futuresCampaignCoordinator.accountSnapshot()
-                        val available = account.optString("availableBalance").toDoubleOrNull()
-                        val wallet = account.optString("totalWalletBalance").toDoubleOrNull()
-                        val equity = account.optString("totalMarginBalance").toDoubleOrNull()
-                        restAccountReady = available != null && wallet != null && equity != null
-                        if (available != null) liveUsdtBalance = available
-                        if (!restAccountReady) throw IllegalStateException("Futures account omitted required balance fields")
+                        if (!updateCachedFuturesAccount(account)) {
+                            throw IllegalStateException("Futures account omitted valid balance/equity fields")
+                        }
                     } else if (key().isBlank() || secret().isBlank()) {
                         restAccountReady = false
                     }
@@ -8058,9 +8091,9 @@ private class NativeEngine(
             runCatching {
                 val account = futuresCampaignCoordinator.accountSnapshot()
                 balance = account.optString("availableBalance").toDoubleOrNull()
-                liveUsdtBalance = balance ?: 0.0
-                restAccountReady = balance != null &&
-                    account.has("totalWalletBalance") && account.has("totalMarginBalance")
+                check(updateCachedFuturesAccount(account)) {
+                    "Futures account returned invalid balance/equity values"
+                }
             }.onFailure { lastError = "Futures account status: " + (it.message ?: it.javaClass.simpleName) }
         }
 
@@ -8309,9 +8342,14 @@ private class NativeEngine(
                 .put("positions", JSONArray()).put("assets", JSONArray())
         }
         val account = futuresCampaignCoordinator.accountSnapshot()
+        check(updateCachedFuturesAccount(account)) {
+            "Futures account returned invalid balance/equity values"
+        }
         val wallet = account.optString("totalWalletBalance").toDoubleOrNull() ?: 0.0
         val unrealized = account.optString("totalUnrealizedProfit").toDoubleOrNull() ?: 0.0
-        val equity = account.optString("totalMarginBalance").toDoubleOrNull() ?: wallet + unrealized
+        val equity = futuresAccountEquity(
+            account.optString("totalMarginBalance").toDoubleOrNull(), wallet, unrealized
+        ) ?: throw IllegalStateException("Futures equity is unavailable")
         val available = account.optString("availableBalance").toDoubleOrNull() ?: 0.0
         val positions = futuresPositionSnapshot()
         var notional = 0.0
