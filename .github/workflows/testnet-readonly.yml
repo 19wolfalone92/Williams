@@ -43,13 +43,25 @@ jobs:
       - name: Validate repository release contract
         run: python3 ci_release_gate.py
 
-      - name: Validate secret presence without printing values
+      - name: Check optional CI Demo credentials
+        id: check-ci-testnet-credentials
+        shell: bash
         run: |
           set -euo pipefail
-          test -n "${BINANCE_API_KEY}" || { echo "::error::WILLIAMS_TESTNET_API_KEY is not configured."; exit 1; }
-          test -n "${BINANCE_API_SECRET}" || { echo "::error::WILLIAMS_TESTNET_API_SECRET is not configured."; exit 1; }
+          if [[ -n "${BINANCE_API_KEY}" && -n "${BINANCE_API_SECRET}" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::CI Demo credentials are present; authenticated read-only gate will run."
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Authenticated Futures Demo read-only gate skipped: repository Actions secrets are not configured. This is separate from credentials saved locally in the Android app."
+          fi
 
       - name: Run authenticated Futures Demo read-only gate
+        if: steps.check-ci-testnet-credentials.outputs.configured == 'true'
         run: python test_testnet_release_gate.py --read-only
         env:
           TESTNET_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
+
+      - name: Report skipped authenticated gate
+        if: steps.check-ci-testnet-credentials.outputs.configured != 'true'
+        run: echo "::notice::No authenticated Futures Demo account check was performed in this workflow run."

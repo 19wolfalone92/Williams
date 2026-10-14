@@ -159,6 +159,12 @@ object AppColors {
     val textMuted = Color(0xFF98A8BD)
 }
 
+private val APPROVED_FUTURES_CHART_SYMBOLS = listOf(
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+    "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
+)
+private val CHART_VIEW_INTERVALS = listOf("1d", "4h", "1h", "15m", "5m")
+
 @Composable
 private fun WilliamsTheme(content: @Composable () -> Unit) {
     val colors = androidx.compose.material3.darkColorScheme(
@@ -301,7 +307,11 @@ data class Candidate(
     val shadowDirection: String = "HOLD",
     val shadowConfidence: Double = 0.0,
     val shadowReason: String = "",
-    val xaiTopFactor: String = ""
+    val xaiTopFactor: String = "",
+    val campaignReady: Boolean = false,
+    val entrySignalType: String = "",
+    val entryTriggerPrice: Double? = null,
+    val entryProtectivePrice: Double? = null
 )
 
 data class Trade(
@@ -362,7 +372,8 @@ data class PositionView(
     val pnlUsdt: Double = 0.0,
     val pnlPct: Double = 0.0,
     val ocoListId: String = "",
-    val ocoListClientId: String = ""
+    val ocoListClientId: String = "",
+    val direction: String = ""
 )
 
 private class LocalRuntimeApi(context: Context) {
@@ -389,6 +400,10 @@ fun WilliamsApp(context: Context) {
     var marketPairs by remember { mutableStateOf(emptyList<MarketPair>()) }
     var selectedPositionSymbol by remember { mutableStateOf<String?>(null) }
     var candles by remember { mutableStateOf(emptyList<Candle>()) }
+    var selectedChartSymbol by remember { mutableStateOf("BTCUSDT") }
+    var chartCandles by remember { mutableStateOf(emptyList<Candle>()) }
+    var chartLoading by remember { mutableStateOf(false) }
+    var chartError by remember { mutableStateOf<String?>(null) }
     var selectedChartInterval by remember { mutableStateOf("1h") }
     var candidates by remember { mutableStateOf(emptyList<Candidate>()) }
     var trades by remember { mutableStateOf(emptyList<Trade>()) }
@@ -502,6 +517,39 @@ fun WilliamsApp(context: Context) {
                 val parsed = parseCandles(json.optJSONArray("candles") ?: JSONArray())
                 withContext(Dispatchers.Main) { candles = parsed }
             }
+        }
+    }
+
+    // Read-only market view; the Runtime scanner independently evaluates all ten contracts.
+    LaunchedEffect(tab, selectedChartSymbol, selectedChartInterval) {
+        if (tab != 1) return@LaunchedEffect
+        chartCandles = emptyList()
+        chartError = null
+        chartLoading = true
+        while (isActive) {
+            val requestSymbol = selectedChartSymbol
+            val requestInterval = selectedChartInterval
+            try {
+                val raw = withContext(Dispatchers.IO) {
+                    api.get("/api/v1/market/klines?symbol=" + requestSymbol + "&interval=" + requestInterval)
+                }
+                val payload = JSONObject(raw)
+                require(payload.optString("symbol") == requestSymbol) { "Runtime вернул график другой пары" }
+                require(payload.optString("interval") == requestInterval) { "Runtime вернул другой таймфрейм; молчаливая подмена запрещена" }
+                val loaded = parseCandles(payload.optJSONArray("candles") ?: JSONArray())
+                if (loaded.isEmpty()) {
+                    chartError = "$requestSymbol $requestInterval: закрытые свечи не получены"
+                } else {
+                    chartCandles = loaded
+                    chartError = null
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                chartError = failure.message ?: failure.javaClass.simpleName
+            }
+            chartLoading = false
+            delay(15_000L)
         }
     }
 
@@ -775,7 +823,7 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    val titles = listOf("Overview", "Wave Map", "Positions", "Incidents", "Diagnostics", "Config")
+    val titles = listOf("Overview", "Chart/AI", "Positions", "Incidents", "Diagnostics", "Config")
     val icons = listOf(
         Icons.Filled.Dashboard,
         Icons.Filled.Radar,
@@ -825,7 +873,7 @@ fun WilliamsApp(context: Context) {
                 },
                 actions = {
                     StatusDot("P0", if (status.p0GatePassed) AppColors.green else AppColors.red)
-                    StatusDot("WSS", if (status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber)
+                    StatusDot("WSS", if (status.marketWsConnected && status.userWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber)
                     StatusDot("BINANCE", if (status.binanceConfigured) AppColors.green else AppColors.amber)
                     ModeChip("TESTNET", AppColors.green)
                     IconButton(onClick = { refresh(true) }) {
@@ -902,6 +950,13 @@ fun WilliamsApp(context: Context) {
                 status = status,
                 refreshing = refreshing,
                 message = message,
+                chartSymbol = selectedChartSymbol,
+                chartInterval = selectedChartInterval,
+                chartCandles = chartCandles,
+                chartLoading = chartLoading,
+                chartError = chartError,
+                onChartSymbolChange = { selectedChartSymbol = it },
+                onChartIntervalChange = { selectedChartInterval = it },
                 onRefresh = { refresh(true) }
             )
 
@@ -911,18 +966,26 @@ fun WilliamsApp(context: Context) {
                 candles = candles,
                 selectedSymbol = selectedPositionSymbol,
                 interval = selectedChartInterval,
-                onIntervalChange = { selectedChartInterval = it; refresh(false) },
+                onIntervalChange = { selectedChartInterval = it },
                 onSelect = { selectedPositionSymbol = it },
                 onSell = { symbol ->
                     scope.launch(Dispatchers.IO) {
                         try {
-                            api.post(
-                                "/api/v1/control/sell?symbol=" +
-                                    symbol
+                            val result = JSONObject(
+                                api.post("/api/v1/control/sell?symbol=" + symbol)
                             )
+                            val confirmed = result.optBoolean("sold", false)
+                            val direction = result.optString("direction_closed", "Futures")
+                            val detail = result.optJSONObject("result")
+                                ?.optString("blocker")
+                                ?.takeIf { it.isNotBlank() && it != "null" }
+                                ?: result.optString("reason", "биржа не подтвердила закрытие")
                             withContext(Dispatchers.Main) {
-                                message =
-                                    "SELL отправлен: " + symbol
+                                message = if (confirmed) {
+                                    "$direction позиция $symbol закрыта и подтверждена Futures Runtime"
+                                } else {
+                                    "Закрытие $symbol НЕ подтверждено: $detail. Не отправляй повторную заявку вслепую."
+                                }
                             }
                             loadAll(false)
                         } catch (e: Exception) {
@@ -995,7 +1058,7 @@ private fun SystemHealthBar(status: Status) {
             )
             StatusDot(
                 "WSS",
-                if (status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber
+                if (status.marketWsConnected && status.userWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber
             )
             StatusDot(
                 "EXEC",
@@ -1823,6 +1886,13 @@ private fun ScannerScreen(
     status: Status,
     refreshing: Boolean,
     message: String,
+    chartSymbol: String,
+    chartInterval: String,
+    chartCandles: List<Candle>,
+    chartLoading: Boolean,
+    chartError: String?,
+    onChartSymbolChange: (String) -> Unit,
+    onChartIntervalChange: (String) -> Unit,
     onRefresh: () -> Unit
 ) {
     LazyColumn(
@@ -1840,7 +1910,7 @@ private fun ScannerScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("Market Scanner", style = MaterialTheme.typography.headlineSmall)
+                    Text("График рынка и решение бота", style = MaterialTheme.typography.headlineSmall)
                     Text(
                         when (status.scannerState) {
                             "RUNNING" -> "Сканирование выполняется…"
@@ -1875,6 +1945,20 @@ private fun ScannerScreen(
                     Text("СКАН")
                 }
             }
+        }
+
+        item {
+            MarketChartPanel(
+                selectedSymbol = chartSymbol,
+                interval = chartInterval,
+                candles = chartCandles,
+                loading = chartLoading,
+                error = chartError,
+                candidate = candidates.firstOrNull { it.symbol.equals(chartSymbol, ignoreCase = true) },
+                status = status,
+                onSymbolChange = onChartSymbolChange,
+                onIntervalChange = onChartIntervalChange
+            )
         }
 
         item {
@@ -1913,6 +1997,117 @@ private fun ScannerScreen(
 
         items(candidates) {
             CandidateCardModern(it)
+        }
+    }
+}
+
+
+@Composable
+private fun MarketChartPanel(
+    selectedSymbol: String,
+    interval: String,
+    candles: List<Candle>,
+    loading: Boolean,
+    error: String?,
+    candidate: Candidate?,
+    status: Status,
+    onSymbolChange: (String) -> Unit,
+    onIntervalChange: (String) -> Unit
+) {
+    val selectedPosition = status.positions.firstOrNull {
+        it.symbol.equals(selectedSymbol, ignoreCase = true)
+    }
+    val displayStatus = status.copy(
+        symbol = selectedSymbol,
+        price = candles.lastOrNull()?.close,
+        entry = null,
+        tp = null,
+        sl = null
+    )
+    val direction = when {
+        candidate == null -> "НЕТ КАНДИДАТА"
+        candidate.entrySignalType.startsWith("SHORT_", ignoreCase = true) -> "SHORT"
+        candidate.entrySignalType in setOf("REVERSAL", "SUPER_AO", "FRACTAL") -> "LONG"
+        else -> "НЕ ОПРЕДЕЛЕНО"
+    }
+
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(selectedSymbol, style = MaterialTheme.typography.titleLarge)
+                    Text("USDⓈ-M Futures Demo • выбранная пара", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
+                }
+                Text(candles.lastOrNull()?.close?.let { fmt(it) } ?: if (loading) "Загрузка…" else "—",
+                    color = AppColors.primary, fontWeight = FontWeight.Bold)
+            }
+            Text("Бот независимо сканирует все 10 контрактов. Здесь показан только выбранный рынок.",
+                color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                APPROVED_FUTURES_CHART_SYMBOLS.forEach { symbol ->
+                    FilterChip(selected = selectedSymbol == symbol, onClick = { onSymbolChange(symbol) },
+                        label = { Text(symbol.removeSuffix("USDT")) })
+                }
+            }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                CHART_VIEW_INTERVALS.forEach { frame ->
+                    FilterChip(selected = interval == frame, onClick = { onIntervalChange(frame) },
+                        label = { Text(frame.uppercase(Locale.US)) })
+                }
+            }
+            Text("Роли ТФ: D1 — макроконтекст • H4 — контекст • H1 — единственный ТФ решения • M15 — мониторинг • M5 — диагностика. Переключение графика не меняет логику входа.",
+                color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
+            if (candles.isEmpty()) {
+                if (loading) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Получение свечей Futures…", color = AppColors.textMuted)
+                    }
+                } else {
+                    EmptyState(icon = Icons.Filled.ShowChart, title = "Нет данных графика",
+                        subtitle = error ?: "Закрытые свечи ещё не получены из локального Futures Runtime.")
+                }
+            } else {
+                TradingChart(candles = candles, status = displayStatus, position = selectedPosition,
+                    interval = interval, onIntervalChange = onIntervalChange)
+            }
+            if (!error.isNullOrBlank() && candles.isNotEmpty()) {
+                Text("Обновление графика: " + error, color = AppColors.amber, style = MaterialTheme.typography.bodySmall)
+            }
+            Divider(color = AppColors.surface2)
+            Text("РЕШЕНИЕ ДВИЖКА ПО ВЫБРАННОЙ ПАРЕ", style = MaterialTheme.typography.titleMedium)
+            Text("Показан последний результат сканера, а не команда немедленной покупки/продажи. Ордер требует отдельного H1-триггера, проверки риска и биржевой сверки.",
+                color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
+            if (candidate == null) {
+                Text("Нет результата сканера для $selectedSymbol. Направление LONG/SHORT не выводится только из графика.",
+                    color = AppColors.amber, style = MaterialTheme.typography.bodyMedium)
+            } else {
+                InfoRow("Направление кандидата", direction)
+                InfoRow("Состояние стратегии", when {
+                    candidate.campaignReady -> "кандидат передан на проверку допуска"
+                    candidate.signal -> "сигнал наблюдается; допуск не подтверждён"
+                    else -> "наблюдение / вход не подтверждён"
+                })
+                InfoRow("Семейство Williams", candidate.entrySignalType.ifBlank { "не указано" })
+                InfoRow("HTF-контекст", if (candidate.htfConfirmed) "подтверждён" else "не подтверждён")
+                InfoRow("Wise Men evidence", candidate.wiseManCount.toString() + "/3 (диагностика)")
+                InfoRow("Волновая фаза", "W" + candidate.wavePosition + " • " + candidate.wavePhase)
+                InfoRow("Оценка риска", if (candidate.riskPct > 0.0) fmt(candidate.riskPct, 2) + "%" else "—")
+                InfoRow("Risk/reward", if (candidate.riskReward > 0.0) fmt(candidate.riskReward, 2) else "—")
+                InfoRow("Триггер условного STOP", fmt(candidate.entryTriggerPrice))
+                InfoRow("Структурный стоп", fmt(candidate.entryProtectivePrice))
+                if (candidate.reason.isNotBlank()) Text("Почему сканер так решил: " + candidate.reason,
+                    style = MaterialTheme.typography.bodySmall)
+                if (candidate.wavePath.isNotBlank()) Text("Контекст волны: " + candidate.wavePath,
+                    color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 }
@@ -2107,7 +2302,8 @@ private fun PositionScreen(
                                 Alignment.CenterVertically
                         ) {
                             Text(
-                                "LONG " + p.symbol,
+                                (p.direction.takeIf { it == "LONG" || it == "SHORT" }
+                                    ?: if (p.qty < 0.0) "SHORT" else "LONG") + " " + p.symbol,
                                 modifier = Modifier.clickable { onSelect(p.symbol) },
                                 style =
                                     MaterialTheme.typography.headlineSmall
@@ -2134,7 +2330,7 @@ private fun PositionScreen(
                                         onSell(p.symbol)
                                     }
                                 ) {
-                                    Text("SELL")
+                                    Text("ЗАКРЫТЬ")
                                 }
                             }
                         }
@@ -2172,8 +2368,9 @@ private fun PositionScreen(
                             fmt(p.take)
                         )
                         InfoRow(
-                            "OCO",
-                            if (p.ocoListId.isNotBlank()) "ACTIVE" else "MISSING"
+                            "Защита",
+                            if (p.stop != null) "Уровень SL есть; подтверждение сверяй в Futures Runtime"
+                            else "SL не указан в статусе"
                         )
                     }
                 }
@@ -2836,8 +3033,7 @@ private fun TradingChart(
     var scale by remember(candles.size) { mutableStateOf(1f) }
     var pan by remember(candles.size) { mutableStateOf(0f) }
 
-    val visibleCount =
-        (candles.size / scale).toInt().coerceIn(24, candles.size)
+    val visibleCount = min(candles.size, max(1, (candles.size / scale).toInt()))
 
     val maxStart = max(0, candles.size - visibleCount)
     val shift =
@@ -2859,7 +3055,7 @@ private fun TradingChart(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("ТФ " + interval, style = MaterialTheme.typography.labelLarge)
-                listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M").forEach { tf ->
+                CHART_VIEW_INTERVALS.forEach { tf ->
                     FilterChip(
                         selected = interval == tf,
                         onClick = { onIntervalChange(tf) },
@@ -2929,6 +3125,12 @@ private fun TradingChart(
                         max(2f, bottom - top)
                     )
                 )
+                if (candle.fractalUp) {
+                    drawCircle(AppColors.red, radius = 4f, center = Offset(center, y(candle.high) - 7f))
+                }
+                if (candle.fractalDown) {
+                    drawCircle(AppColors.green, radius = 4f, center = Offset(center, y(candle.low) + 7f))
+                }
             }
 
             fun indicatorLine(
@@ -3075,6 +3277,7 @@ private fun parseStatus(json: JSONObject): Status {
             parsed += PositionView(
                 symbol = symbol,
                 qty = item.optDouble("qty", 0.0),
+                direction = item.optString("direction", "").uppercase(Locale.US),
                 entry = item.optDouble("avg_entry_price", item.optDouble("entry", 0.0)),
                 stop = item.optDouble("stop_loss", item.optDouble("stop"))
                     .takeUnless { it.isNaN() || it == 0.0 },
@@ -3363,7 +3566,11 @@ private fun parseCandidates(array: JSONArray): List<Candidate> =
             shadowDirection = x.optJSONObject("shadow_intent")?.optString("direction", "HOLD") ?: "HOLD",
             shadowConfidence = x.optJSONObject("shadow_intent")?.optDouble("confidence", 0.0) ?: 0.0,
             shadowReason = x.optJSONObject("shadow_intent")?.optString("reason", "") ?: "",
-            xaiTopFactor = topXaiFactor(x.optJSONObject("xai_factors"))
+            xaiTopFactor = topXaiFactor(x.optJSONObject("xai_factors")),
+            campaignReady = x.optBoolean("campaign_ready", false),
+            entrySignalType = x.optString("entry_signal_type", "").takeUnless { it == "null" } ?: "",
+            entryTriggerPrice = x.optDouble("entry_trigger_price", Double.NaN).takeIf { it.isFinite() && it > 0.0 },
+            entryProtectivePrice = x.optDouble("entry_protective_price", Double.NaN).takeIf { it.isFinite() && it > 0.0 }
         )
     }.sortedByDescending { it.score }
 

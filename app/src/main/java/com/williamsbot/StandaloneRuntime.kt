@@ -9349,15 +9349,17 @@ private class NativeEngine(
         requestedSymbol: String? = null,
         requestedInterval: String? = null
     ): JSONObject {
-        val symbol = requestedSymbol?.trim()?.uppercase(Locale.US)?.takeIf { it.isNotBlank() } ?: primarySymbol
-        val selectedInterval = requestedInterval?.trim()
-            ?.takeIf { it in listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M") }
-            ?: interval
+        val symbol = if (requestedSymbol == null) primarySymbol else requestedSymbol.trim().uppercase(Locale.US)
+        require(symbol in coreSymbols) { "Chart symbol is outside the approved Futures universe: $symbol" }
+        val supportedChartIntervals = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
+        val selectedInterval = if (requestedInterval == null) interval else requestedInterval.trim()
+        require(selectedInterval in supportedChartIntervals) { "Unsupported Futures chart interval: $selectedInterval" }
+        // Never return plausible H1 candles mislabeled as another symbol/interval after an invalid request or REST error.
         val sourceCandles = if (symbol == primarySymbol && selectedInterval == interval) {
-            if (primaryCandles.isEmpty()) runCatching { primaryCandles = fetchCandles(primarySymbol, selectedInterval, 150) }
+            if (primaryCandles.isEmpty()) primaryCandles = fetchCandles(primarySymbol, selectedInterval, 150)
             primaryCandles
         } else {
-            runCatching { fetchCandles(symbol, selectedInterval, 150) }.getOrElse { emptyList() }
+            fetchCandles(symbol, selectedInterval, 150)
         }
 
         val output = JSONArray()
@@ -9529,7 +9531,19 @@ private class NativeEngine(
         test("public_websocket", "websocket", publicSocketConnected && publicWebSocketFresh(), "WARN", if (publicSocketConnected && publicWebSocketFresh()) "Public depth/bookTicker stream connected and fresh" else "Public stream disconnected or stale")
         test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream degraded; connected=" + userStreamConnected + "; sync_required=" + userStreamSyncRequired + "; reconcile_running=" + futuresStreamReconcileRunning + "; last_error=" + (userStreamLastError ?: "none"))
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
-        test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning && scanProgressSymbols > 0), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt + "; age_ms=" + (System.currentTimeMillis() - scanLastProgressAt).coerceAtLeast(0L))
+        val scannerProgressAgeMs = (System.currentTimeMillis() - scanLastProgressAt).coerceAtLeast(0L)
+        val scannerUniverseMatches = scanSymbols.size == coreSymbols.size && scanSymbols.toSet() == coreSymbols.toSet()
+        val scannerComplete = scannerState == "READY" && !scanning && scannerUniverseMatches &&
+            scanProgressSymbols == coreSymbols.size && lastSymbolsScanned == coreSymbols.size
+        val scannerActivelyProgressing = scannerState == "RUNNING" && scanning && scannerUniverseMatches &&
+            scanProgressSymbols in 1..coreSymbols.size && scannerProgressAgeMs <= 60_000L
+        test(
+            "scanner_state", "scanner", scannerComplete || scannerActivelyProgressing, "WARN",
+            "state=" + scannerState + "; complete=" + scannerComplete +
+                "; universe_matches=" + scannerUniverseMatches + "; run_id=" + scanRunId +
+                "; progress=" + scanProgressSymbols + "/" + scanSymbols.size +
+                "; last_symbols_scanned=" + lastSymbolsScanned + "; age_ms=" + scannerProgressAgeMs
+        )
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
         test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss=0.03")
         val autoRunRequested = prefs.getBoolean("auto_run", false)

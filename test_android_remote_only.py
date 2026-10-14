@@ -466,3 +466,64 @@ def test_android_williams_stop_entries_reject_any_intervening_trigger_cross():
     assert "if (triggerStillPending(signalIndex, trigger))" in long_signals
     assert "triggerStillPending(fractalCenter, trigger)" in long_signals
 
+
+
+
+def test_chart_cockpit_switches_all_approved_futures_symbols_without_changing_scan_universe():
+    ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    symbols = [
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+    ]
+    for symbol in symbols:
+        assert f'"{symbol}"' in ui
+        assert f'"{symbol}"' in runtime
+    assert "private fun MarketChartPanel(" in ui
+    assert 'Text("РЕШЕНИЕ ДВИЖКА ПО ВЫБРАННОЙ ПАРЕ"' in ui
+    assert "Почему сканер так решил:" in ui
+    assert "entry_trigger_price" in ui
+    assert "entry_protective_price" in ui
+    assert "Переключение графика не меняет логику входа." in ui
+    assert 'fetchCandles(symbol, "1h", 180)' in runtime
+    assert 'scannerState = if (ranked.size == coreSymbols.size) "READY" else "PARTIAL"' in runtime
+
+
+def test_chart_viewport_handles_fewer_than_twenty_four_candles():
+    ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    assert "min(candles.size, max(1, (candles.size / scale).toInt()))" in ui
+    assert ".coerceIn(24, candles.size)" not in ui
+
+
+def test_chart_endpoint_rejects_unknown_symbol_or_interval_instead_of_silent_fallback():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    chart = runtime.split("fun klines(", 1)[1].split("fun marketTickers()", 1)[0]
+    assert 'require(symbol in coreSymbols)' in chart
+    assert 'require(selectedInterval in supportedChartIntervals)' in chart
+    assert "fetchCandles(symbol, selectedInterval, 150)" in chart
+    assert "getOrElse { emptyList() }" not in chart
+    assert "Unsupported Futures chart interval" in chart
+
+
+def test_scanner_diagnostic_does_not_pass_ready_at_zero_of_ten_or_stale_progress():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    tests = runtime.split("private fun diagnosticSelfTests()", 1)[1].split(
+        "fun diagnostics()", 1
+    )[0]
+    assert "val scannerUniverseMatches" in tests
+    assert "scanSymbols.size == coreSymbols.size && scanSymbols.toSet() == coreSymbols.toSet()" in tests
+    assert 'scannerState == "READY" && !scanning && scannerUniverseMatches' in tests
+    assert "scanProgressSymbols == coreSymbols.size" in tests
+    assert "lastSymbolsScanned == coreSymbols.size" in tests
+    assert "scannerProgressAgeMs <= 60_000L" in tests
+    assert 'scannerState == "READY" || (scannerState == "RUNNING"' not in tests
+
+
+def test_actions_testnet_gate_skips_when_ci_secrets_absent_without_claiming_test_passed():
+    workflow = _read(ROOT / ".github/workflows/testnet-readonly.yml")
+    assert "id: check-ci-testnet-credentials" in workflow
+    assert "configured=false" in workflow
+    assert "Authenticated Futures Demo read-only gate skipped" in workflow
+    assert "No authenticated Futures Demo account check was performed" in workflow
+    assert "if: steps.check-ci-testnet-credentials.outputs.configured == 'true'" in workflow
+    assert "exit 1" not in workflow
