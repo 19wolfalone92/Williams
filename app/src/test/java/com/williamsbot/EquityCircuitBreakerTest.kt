@@ -26,6 +26,23 @@ class EquityCircuitBreakerTest {
     }
 
     @Test
+    fun restoredPersistedUtcBaselineStillTripsBreakerAfterProcessRestart() {
+        val now = 86_400_000L * 20_000L + 12_000L
+        val persistedDayStartEquity = 1000.0
+        val restarted = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+
+        val snapshot = observeFuturesEquityFromPersistedBaseline(
+            breaker = restarted,
+            dailyBaseline = persistedDayStartEquity,
+            equity = 949.0,
+            nowMs = now
+        )
+
+        assertTrue(snapshot.tripped)
+        assertTrue(snapshot.drawdownPct >= 0.05)
+    }
+
+    @Test
     fun resetsAtUtcDayBoundary() {
         val b = EquityCircuitBreaker()
         b.observe(1000.0, 1_000L)

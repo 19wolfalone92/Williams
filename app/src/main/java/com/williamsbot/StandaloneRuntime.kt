@@ -109,6 +109,17 @@ internal fun canInitializeDailyRiskBaseline(
     hasTradingIncome: Boolean
 ): Boolean = !hasOpenPosition && !hasActiveExecution && !hasTradingIncome
 
+/** Rebuild the in-memory circuit breaker from the durable UTC baseline after process restart. */
+internal fun observeFuturesEquityFromPersistedBaseline(
+    breaker: EquityCircuitBreaker,
+    dailyBaseline: Double,
+    equity: Double,
+    nowMs: Long
+): EquityCircuitBreaker.Snapshot {
+    breaker.observe(dailyBaseline, nowMs)
+    return breaker.observe(equity, nowMs)
+}
+
 private data class CandleN(
     val t: Long,
     val o: Double,
@@ -577,7 +588,6 @@ private class NativeEngine(
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
     private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
-    @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
     @Volatile private var serverTimeOffsetMs = 0L
@@ -3758,6 +3768,31 @@ private class NativeEngine(
         ) {
             "SQLite commit failed while persisting daily Futures equity/PnL measurement"
         }
+        if (observeFuturesEquityCircuitBreaker(
+                equityCircuitBreaker, baseline, equity, exchangeNowMs
+            ).tripped
+        ) {
+            if (!killLatched && !circuitBreakerTripInProgress) {
+                circuitBreakerTripInProgress = true
+                paused = true
+                prefs.edit().putBoolean("auto_run", false).commit()
+                val drawdownPct = ((baseline - equity) / baseline).coerceAtLeast(0.0) * 100.0
+                lastError = "AUTOMATIC FUTURES EQUITY CIRCUIT BREAKER: daily drawdown " +
+                    "%.2f%% reached; kill switch engaged".format(Locale.US, drawdownPct)
+                Thread {
+                    try {
+                        kill()
+                    } finally {
+                        circuitBreakerTripInProgress = false
+                    }
+                }.apply {
+                    isDaemon = true
+                    name = "williams-futures-equity-circuit-breaker"
+                    start()
+                }
+            }
+            return false
+        }
         if (lossPct >= 0.01) {
             paused = true
             prefs.edit().putBoolean("auto_run", false).commit()
@@ -5876,56 +5911,6 @@ private class NativeEngine(
             if (mark > 0.0) equity += position.qty * mark
         }
         return equity
-    }
-
-    private fun checkAutomaticCircuitBreaker() {
-        if (!running || paused || killLatched || circuitBreakerTripInProgress) return
-        val now = System.currentTimeMillis()
-        if (now - lastEquityCheckMs < 60_000L) return
-        lastEquityCheckMs = now
-
-        runCatching {
-            val account = signedAccount()
-            val balances = account.getJSONArray("balances")
-            var usdt = 0.0
-            for (i in 0 until balances.length()) {
-                val b = balances.getJSONObject(i)
-                if (b.optString("asset") == "USDT") {
-                    usdt = b.optString("free").toDoubleOrNull() ?: 0.0
-                    break
-                }
-            }
-            liveUsdtBalance = usdt
-
-            val snapshot = equityCircuitBreaker.observe(
-                estimateManagedEquity(),
-                now
-            )
-            if (snapshot.tripped) {
-                circuitBreakerTripInProgress = true
-                lastError =
-                    "AUTOMATIC CIRCUIT BREAKER: managed equity drawdown " +
-                        "%.2f%%".format(
-                            Locale.US,
-                            snapshot.drawdownPct * 100.0
-                        )
-                Thread {
-                    try {
-                        kill()
-                    } finally {
-                        circuitBreakerTripInProgress = false
-                    }
-                }.apply {
-                    isDaemon = true
-                    name = "williams-equity-circuit-breaker"
-                    start()
-                }
-            }
-        }.onFailure {
-            lastError =
-                "equity monitor: " +
-                    (it.message ?: it.javaClass.simpleName)
-        }
     }
 
     private fun executeBuyWithProtection(
