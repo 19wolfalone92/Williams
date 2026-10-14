@@ -671,6 +671,7 @@ private class NativeEngine(
     @Volatile private var restLastSuccessMs = 0L
     @Volatile private var restLastLatencyMs = 0L
     @Volatile private var restLastError: String? = null
+    @Volatile private var restAccountLastError: String? = null
     @Volatile private var restLastTickerPrice = 0.0
     @Volatile private var restProbeRunning = false
     private var restProbeThread: Thread? = null
@@ -763,21 +764,37 @@ private class NativeEngine(
         synchronized(positions) { positions.values.toList() }
 
     private fun updateCachedFuturesAccount(account: JSONObject): Boolean {
-        val available = account.optString("availableBalance").toDoubleOrNull()
-        val wallet = account.optString("totalWalletBalance").toDoubleOrNull()
-        val unrealized = account.optString("totalUnrealizedProfit").toDoubleOrNull()
-        val margin = account.optString("totalMarginBalance").toDoubleOrNull()
+        // Binance account payloads can expose summary fields at the root and
+        // asset-specific values in assets[]. Prefer root summaries, then USDT.
+        // Never substitute another asset or position notional for USDT equity.
+        val usdt = (account.optJSONArray("assets") ?: JSONArray()).let { assets ->
+            (0 until assets.length()).asSequence()
+                .mapNotNull { assets.optJSONObject(it) }
+                .firstOrNull { it.optString("asset").equals("USDT", ignoreCase = true) }
+        }
+        fun number(rootKey: String, assetKey: String): Double? =
+            account.optString(rootKey).toDoubleOrNull()
+                ?: usdt?.optString(assetKey)?.toDoubleOrNull()
+        val available = number("availableBalance", "availableBalance")
+        val wallet = number("totalWalletBalance", "walletBalance")
+        val unrealized = number("totalUnrealizedProfit", "unrealizedProfit")
+        val margin = number("totalMarginBalance", "marginBalance")
         val validAvailable = available?.takeIf { it.isFinite() && it >= 0.0 }
-        val equity = futuresAccountEquity(margin, wallet, unrealized)
-        if (validAvailable == null || wallet == null || !wallet.isFinite() || wallet < 0.0 || equity == null) {
+        val validWallet = wallet?.takeIf { it.isFinite() && it >= 0.0 }
+        val equity = futuresAccountEquity(margin, validWallet, unrealized?.takeIf { it.isFinite() })
+        if (validAvailable == null || validWallet == null || equity == null) {
             restAccountReady = false
             liveUsdtBalance = 0.0
             liveFuturesEquity = 0.0
+            restAccountLastError = "Futures account missing valid USDT available balance/wallet/equity fields; rootKeys=" +
+                account.keys().asSequence().toList().sorted().joinToString(",") +
+                "; usdtAssetPresent=" + (usdt != null)
             return false
         }
         liveUsdtBalance = validAvailable
         liveFuturesEquity = equity
         restAccountReady = true
+        restAccountLastError = null
         return true
     }
 
@@ -8043,6 +8060,8 @@ private class NativeEngine(
             var lastAccountProbe = 0L
             while (restProbeRunning) {
                 val started = System.currentTimeMillis()
+                // Market and account health are independent. An account schema/auth
+                // error must not erase a successful public ticker snapshot.
                 try {
                     val rows = futuresMarketData.tickerPrices()
                     var found = 0
@@ -8050,7 +8069,7 @@ private class NativeEngine(
                         val row = rows.optJSONObject(i) ?: continue
                         val symbol = row.optString("symbol").uppercase(Locale.US)
                         val price = row.optString("price").toDoubleOrNull() ?: 0.0
-                        if (symbol in coreSymbols && price > 0.0) {
+                        if (symbol in coreSymbols && price.isFinite() && price > 0.0) {
                             livePrices[symbol] = price
                             if (symbol == primarySymbol) restLastTickerPrice = price
                             found++
@@ -8059,23 +8078,32 @@ private class NativeEngine(
                     restMarketReady = found == coreSymbols.size
                     restLastSuccessMs = System.currentTimeMillis()
                     restLastLatencyMs = System.currentTimeMillis() - started
-                    restLastError = if (restMarketReady) null else "Futures ticker returned $found/${coreSymbols.size} contracts"
-                    if (key().isNotBlank() && secret().isNotBlank() &&
-                        System.currentTimeMillis() - lastAccountProbe >= 15_000L
-                    ) {
-                        lastAccountProbe = System.currentTimeMillis()
-                        val account = futuresCampaignCoordinator.accountSnapshot()
-                        if (!updateCachedFuturesAccount(account)) {
-                            throw IllegalStateException("Futures account omitted valid balance/equity fields")
-                        }
-                    } else if (key().isBlank() || secret().isBlank()) {
-                        restAccountReady = false
-                    }
+                    restLastError = if (restMarketReady) null else
+                        "Futures ticker returned $found/${coreSymbols.size} approved contracts"
                 } catch (x: Exception) {
                     restLastError = x.javaClass.simpleName + ": " + (x.message ?: "")
                     restLastLatencyMs = System.currentTimeMillis() - started
                     restMarketReady = false
-                    if (key().isNotBlank() && secret().isNotBlank()) restAccountReady = false
+                }
+
+                if (key().isNotBlank() && secret().isNotBlank() &&
+                    System.currentTimeMillis() - lastAccountProbe >= 15_000L
+                ) {
+                    lastAccountProbe = System.currentTimeMillis()
+                    try {
+                        val account = futuresCampaignCoordinator.accountSnapshot()
+                        if (!updateCachedFuturesAccount(account)) {
+                            // Keep the specific sanitized schema diagnostic from the parser.
+                            restAccountLastError = restAccountLastError
+                                ?: "Futures account balance/equity validation failed"
+                        }
+                    } catch (x: Exception) {
+                        restAccountReady = false
+                        restAccountLastError = x.javaClass.simpleName + ": " + (x.message ?: "")
+                    }
+                } else if (key().isBlank() || secret().isBlank()) {
+                    restAccountReady = false
+                    restAccountLastError = "Binance Futures credentials not configured"
                 }
                 try { Thread.sleep(5_000L) }
                 catch (_: InterruptedException) { break }
@@ -8085,41 +8113,6 @@ private class NativeEngine(
             name = "williams-futures-rest-probe"
             start()
         }
-    }
-
-    private fun scannerSnapshot(): JSONObject =
-        JSONObject()
-            .put("version", BuildConfig.VERSION_NAME)
-            .put("cached", true)
-            .put("scanning", scanning)
-            .put("scanner_state", scannerState)
-            .put("scanner_error", scannerError ?: JSONObject.NULL)
-            .put("run_id", scanRunId)
-            .put("progress_symbols", scanProgressSymbols)
-            .put("progress_total", scanSymbols.size)
-            .put("last_progress_at", scanLastProgressAt)
-            .put("last_error", lastError ?: JSONObject.NULL)
-            .put("last_scan_at", lastScanAt)
-            .put("last_scan_duration_ms", lastScanDurationMs)
-            .put("symbols_scanned", lastSymbolsScanned)
-            .put("scan_universe", scannerUniverseLabel)
-            .put("deep_wave_targets", waveTopN)
-            .put("candidates", candidates)
-            .put(
-                "best_candidate",
-                if (candidates.length() > 0) {
-                    candidates.getJSONObject(0)
-                } else {
-                    JSONObject().put("symbol", primarySymbol)
-                }
-            )
-
-    fun scanner(refresh: Boolean): JSONObject {
-        if (refresh) {
-            requestScan()
-        }
-
-        return scannerSnapshot()
     }
 
     fun status(fast: Boolean = false): JSONObject {
@@ -8512,7 +8505,7 @@ private class NativeEngine(
         test("history_lifecycle", "database", historyReady || historyState in setOf("IDLE","LOADING","WAITING_RETRY","STOPPED"), "FAIL", "state=" + historyState + "; active_tasks=" + activeHistoryTasks.size)
         test("credentials_state", "binance", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
         test("rest_market_data", "binance", restMarketReady, "FAIL", if (restMarketReady) "Ticker REST OK; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market failed: " + (restLastError ?: "pending"))
-        test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT=" + liveUsdtBalance else "Account REST failed: " + (restLastError ?: "pending"))
+        test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT available=" + liveUsdtBalance + "; equity=" + liveFuturesEquity else "Account REST failed: " + (restAccountLastError ?: "pending"))
         test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market kline/aggTrade stream connected" else "Market stream disconnected")
         test("public_websocket", "websocket", publicSocketConnected && publicWebSocketFresh(), "WARN", if (publicSocketConnected && publicWebSocketFresh()) "Public depth/bookTicker stream connected and fresh" else "Public stream disconnected or stale")
         test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream degraded; REST reconciliation active")
