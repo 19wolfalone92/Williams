@@ -271,7 +271,8 @@ data class Candle(
     val fractalUp: Boolean,
     val fractalDown: Boolean,
     val ao: Double? = null,
-    val ac: Double? = null
+    val ac: Double? = null,
+    val mfiProxy: Double? = null
 )
 
 data class Candidate(
@@ -2140,7 +2141,7 @@ private fun MarketChartPanel(
                 }
             } else {
                 TradingChart(candles = candles, status = displayStatus, position = selectedPosition,
-                    interval = interval, onIntervalChange = onIntervalChange)
+                    candidate = candidate, interval = interval, onIntervalChange = onIntervalChange)
             }
             if (!error.isNullOrBlank() && candles.isNotEmpty()) {
                 Text("Обновление графика: " + error, color = AppColors.amber, style = MaterialTheme.typography.bodySmall)
@@ -3098,6 +3099,7 @@ private fun TradingChart(
     candles: List<Candle>,
     status: Status,
     position: PositionView? = null,
+    candidate: Candidate? = null,
     interval: String = "1h",
     onIntervalChange: (String) -> Unit = {}
 ) {
@@ -3150,7 +3152,10 @@ private fun TradingChart(
                     }
                 }
         ) {
-            val levels = listOfNotNull(status.tp, status.entry, status.sl, status.price)
+            val levels = listOfNotNull(
+                status.tp, status.entry, status.sl, status.price,
+                candidate?.entryTriggerPrice, candidate?.entryProtectivePrice
+            )
             val minPrice = min(
                 visible.minOf { it.low },
                 levels.minOrNull() ?: Double.MAX_VALUE
@@ -3264,6 +3269,8 @@ private fun TradingChart(
             level(position?.entry ?: status.entry, AppColors.primary, "ENTRY")
             level(position?.take ?: status.tp, AppColors.green, "TP")
             level(position?.stop ?: status.sl, AppColors.red, "SL")
+            level(candidate?.entryTriggerPrice, AppColors.amber, "H1 TRIGGER")
+            level(candidate?.entryProtectivePrice, AppColors.red.copy(alpha = 0.9f), "H1 STRUCTURAL STOP")
         }
         Text("Awesome Oscillator (AO) • зелёный: выше нуля, красный: ниже нуля",
             color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
@@ -3302,6 +3309,27 @@ private fun TradingChart(
                     drawRect(color = if (value >= 0.0) AppColors.green else AppColors.red,
                         topLeft = Offset(left, if (value >= 0.0) zeroY - height else zeroY),
                         size = Size(max(1f, step * 0.7f), max(1f, height)))
+                }
+            }
+        }
+        Text("Williams MFI proxy = (High − Low) / Volume • это диагностический прокси потока, не классический MFI 0–100",
+            color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 8.dp))
+        Canvas(modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 8.dp, vertical = 4.dp)) {
+            val finite = visible.mapNotNull { it.mfiProxy?.takeIf { v -> v.isFinite() && v >= 0.0 } }
+            val maxValue = finite.maxOrNull() ?: 0.0
+            if (maxValue > 0.0 && visible.isNotEmpty()) {
+                val step = size.width / visible.size.toFloat()
+                var previous: Double? = null
+                visible.forEachIndexed { index, candle ->
+                    val value = candle.mfiProxy?.takeIf { it.isFinite() && it >= 0.0 } ?: return@forEachIndexed
+                    val height = (value / maxValue * (size.height * 0.8f)).toFloat()
+                    val left = index * step + step * 0.15f
+                    val rising = previous?.let { value < it } ?: false
+                    drawRect(color = if (rising) AppColors.green else AppColors.amber,
+                        topLeft = Offset(left, size.height - height),
+                        size = Size(max(1f, step * 0.7f), max(1f, height)))
+                    previous = value
                 }
             }
         }
@@ -3690,7 +3718,8 @@ private fun parseCandles(array: JSONArray): List<Candle> =
             fractalUp = x.optBoolean("fractal_up"),
             fractalDown = x.optBoolean("fractal_down"),
             ao = x.optDouble("ao").takeUnless { it.isNaN() || x.isNull("ao") },
-            ac = x.optDouble("ac").takeUnless { it.isNaN() || x.isNull("ac") }
+            ac = x.optDouble("ac").takeUnless { it.isNaN() || x.isNull("ac") },
+            mfiProxy = x.optDouble("mfi_proxy").takeUnless { it.isNaN() || x.isNull("mfi_proxy") }
         )
     }
 
