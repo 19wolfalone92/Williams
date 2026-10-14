@@ -1373,15 +1373,33 @@ private class NativeEngine(
         }
         if (running) return JSONObject().put("started", false).put("reason", "already_running")
 
-        val reconciliation = futuresCampaignCoordinator.reconcile()
-        if (!reconciliation.optBoolean("ok", false)) {
+        // A thrown/empty REST reconciliation must transition to a durable blocked
+        // state just like an explicit exchange "not ready" response. Do not leave
+        // stale READY_FLAT status or an old auto_run flag after startup failure.
+        val reconciliationAttempt = runCatching { futuresCampaignCoordinator.reconcile() }
+        val reconciliation = reconciliationAttempt.getOrNull()
+        if (reconciliation == null || !reconciliation.optBoolean("ok", false)) {
             reconcileRequired = true
-            persistSafetyFlag("reconcile_required", true)
+            val persisted = persistSafetyFlag("reconcile_required", true)
             prefs.edit().putBoolean("auto_run", false).commit()
-            lastError = reconciliation.optString("blocker", "Futures reconciliation failed")
-            stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures reconciliation failed")
-            return JSONObject().put("started", false).put("state", futuresCampaignCoordinator.state.name)
-                .put("execution_enabled", false).put("futures_reconciliation", reconciliation)
+            val failure = when {
+                reconciliationAttempt.isFailure -> reconciliationAttempt.exceptionOrNull()?.message
+                    ?: reconciliationAttempt.exceptionOrNull()?.javaClass?.simpleName
+                    ?: "Futures reconciliation threw an unknown exception"
+                reconciliation != null -> reconciliation.optString("blocker", "Futures reconciliation failed")
+                    .ifBlank { "Futures reconciliation failed" }
+                else -> "Futures reconciliation returned no result"
+            }
+            lastError = if (persisted) failure else
+                "$failure; additionally failed to persist reconciliation safety latch"
+            scannerState = "BLOCKED_FUTURES_RECONCILIATION"
+            scannerError = lastError
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: failure)
+            val reconciliationResult = reconciliation ?: JSONObject()
+                .put("ok", false).put("blocker", lastError ?: failure)
+            return JSONObject().put("started", false).put("state", "RECONCILE_REQUIRED")
+                .put("execution_enabled", false).put("blocker", lastError ?: failure)
+                .put("futures_reconciliation", reconciliationResult)
         }
 
         if (!persistSafetyFlag("reconcile_required", false)) {
@@ -1763,7 +1781,27 @@ private class NativeEngine(
         require(key().isNotBlank() && secret().isNotBlank()) {
             "Configure Binance USD-M Futures Testnet credentials first"
         }
-        val result = futuresCampaignCoordinator.reconcile()
+        val reconciliationAttempt = runCatching { futuresCampaignCoordinator.reconcile() }
+        val result = reconciliationAttempt.getOrNull()
+        if (result == null) {
+            reconcileRequired = true
+            val persisted = persistSafetyFlag("reconcile_required", true)
+            prefs.edit().putBoolean("auto_run", false).commit()
+            val reason = reconciliationAttempt.exceptionOrNull()?.message
+                ?: reconciliationAttempt.exceptionOrNull()?.javaClass?.simpleName
+                ?: "Futures reconciliation returned no result"
+            lastError = if (persisted) "Futures reconciliation failed: $reason"
+                else "Futures reconciliation failed: $reason; safety latch persistence failed"
+            scannerState = "BLOCKED_FUTURES_RECONCILIATION"
+            scannerError = lastError
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: reason)
+            return JSONObject().put("recovered", false)
+                .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
+                .put("execution_enabled", false)
+                .put("blocker", lastError ?: reason)
+                .put("futures_reconciliation", JSONObject().put("ok", false).put("blocker", lastError ?: reason))
+                .put("state", "RECONCILE_REQUIRED")
+        }
         val ok = result.optBoolean("ok", false)
         reconcileRequired = !ok
         if (!persistSafetyFlag("reconcile_required", !ok)) {
