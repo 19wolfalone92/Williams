@@ -466,6 +466,19 @@ def main() -> None:
         workflow = read(path)
         must(workflow, "ci_release_gate.py", path)
 
+    # The authenticated preflight is read-only and runs on campaign-branch pushes,
+    # as well as retaining the explicit manual dispatch option.
+    testnet_workflow = read(".github/workflows/testnet-readonly.yml")
+    must(testnet_workflow, "push:", ".github/workflows/testnet-readonly.yml")
+    must(testnet_workflow, "branches: [futures-williams-campaign]", ".github/workflows/testnet-readonly.yml")
+    must(testnet_workflow, "workflow_dispatch:", ".github/workflows/testnet-readonly.yml")
+    must(testnet_workflow, "WILLIAMS_TESTNET_API_KEY", ".github/workflows/testnet-readonly.yml")
+    must(testnet_workflow, "WILLIAMS_TESTNET_API_SECRET", ".github/workflows/testnet-readonly.yml")
+    must(testnet_workflow, "WILLIAMS_TESTNET_E2E: \"1\"", ".github/workflows/testnet-readonly.yml")
+    must(testnet_workflow, "inputs.symbol || 'BTCUSDT'", ".github/workflows/testnet-readonly.yml")
+    must(testnet_workflow, "python test_testnet_release_gate.py --read-only", ".github/workflows/testnet-readonly.yml")
+    must_not(testnet_workflow, "python test_testnet_release_gate.py --trade", ".github/workflows/testnet-readonly.yml")
+
     for path in (".github/workflows/python-ci.yml", ".github/workflows/campaign-ci.yml"):
         workflow = read(path)
         for test_path in (
