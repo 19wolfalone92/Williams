@@ -14,6 +14,10 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** Return true when the Futures private stream must be re-established. */
+internal fun shouldReconnectFuturesUserStream(event: JSONObject): Boolean =
+    event.optString("e") in setOf("listenKeyExpired", "serverShutdown")
+
 /**
  * USDⓈ-M Futures Demo user-data stream.
  *
@@ -140,6 +144,16 @@ class BinanceUserDataStream(
                                         webSocket.close(1011, "event_handler_failed")
                                         closed.countDown()
                                     }
+                                // The listenKey can expire without a WebSocket close. Reconnect
+                                // immediately so a fresh key is created and the runtime's onOpen
+                                // path performs REST reconciliation before the entry gate clears.
+                                if (shouldReconnectFuturesUserStream(event)) {
+                                    val reason = event.optString("e")
+                                    connected = false
+                                    onConnection(false, reason)
+                                    webSocket.close(1000, "Futures private stream $reason; reconnect")
+                                    closed.countDown()
+                                }
                             } else if (message.has("code") || message.has("error")) {
                                 onConnection(false, "Futures user stream error: " +
                                     message.optString("msg", message.optString("error", "unknown")))

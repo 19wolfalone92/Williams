@@ -820,6 +820,7 @@ private class NativeEngine(
     @Volatile private var killLatched = false
     @Volatile private var userStreamConnected = false
     @Volatile private var userStreamSyncRequired = true
+    @Volatile private var userStreamLastError: String? = null
     @Volatile private var futuresStreamReconcileRunning = false
     @Volatile private var futuresStreamReconcilePending = false
     @Volatile private var lastUserEventMs = 0L
@@ -871,13 +872,15 @@ private class NativeEngine(
         timestampProvider = { signedTimestamp() },
         onConnection = { connected, error ->
             userStreamConnected = connected
+            userStreamLastError = if (connected) null else error?.takeUnless { it == "stopped" }
             if (connected) {
                 scheduleFuturesStreamReconciliation("user stream connected")
             } else if (!error.equals("stopped")) {
                 userStreamSyncRequired = true
-                if (positions.isNotEmpty() && !killLatched) {
-                    lastError = "user ws: " + (error ?: "disconnected")
-                }
+                // Keep the failure visible even while flat. A disconnected private
+                // stream blocks new entries and its actual reason must not disappear
+                // just because there are no open positions.
+                if (!killLatched) lastError = "user ws: " + (error ?: "disconnected")
             }
         },
         onEvent = { event ->
@@ -1249,6 +1252,8 @@ private class NativeEngine(
             .put("user_stream_connected", userStreamConnected)
             .put("user_stream_sync_required", userStreamSyncRequired)
             .put("user_stream_last_event_ms", lastUserEventMs)
+            .put("user_stream_last_error", userStreamLastError ?: JSONObject.NULL)
+            .put("user_stream_reconcile_running", futuresStreamReconcileRunning)
             .put("fsm_state", stateMachine.state.name)
             .put("history_warmup_running", historyWarmupRunning)
             .put("history_ready", historyReady)
@@ -5842,7 +5847,13 @@ private class NativeEngine(
                 return
             }
             "listenKeyExpired" -> {
-                setReconcileRequired("Futures listenKey expired; reconcile before any new entry")
+                // Binance sends this event before the private connection may close.
+                // Do not stop the entire Android runtime: the stream worker creates a
+                // fresh listenKey, reconnects, and the onOpen reconciliation keeps the
+                // Execution Gate closed until REST confirms orders, positions and stops.
+                userStreamSyncRequired = true
+                userStreamLastError = "Futures listenKey expired; reconnecting and reconciling"
+                lastError = userStreamLastError
                 return
             }
             "executionReport" -> {
@@ -9253,6 +9264,8 @@ private class NativeEngine(
             .put("user_ws_connected", userStreamConnected)
             .put("user_stream_sync_required", userStreamSyncRequired)
             .put("user_stream_last_event_ms", lastUserEventMs)
+            .put("user_stream_last_error", userStreamLastError ?: JSONObject.NULL)
+            .put("user_stream_reconcile_running", futuresStreamReconcileRunning)
             .put("history_ready", historyReady)
             .put("history_state", historyState)
             .put("history_last_error", historyLastError ?: JSONObject.NULL)
@@ -9488,9 +9501,9 @@ private class NativeEngine(
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT available=" + liveUsdtBalance + "; equity=" + liveFuturesEquity else "Account REST failed: " + (restAccountLastError ?: "pending"))
         test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market kline/aggTrade stream connected" else "Market stream disconnected")
         test("public_websocket", "websocket", publicSocketConnected && publicWebSocketFresh(), "WARN", if (publicSocketConnected && publicWebSocketFresh()) "Public depth/bookTicker stream connected and fresh" else "Public stream disconnected or stale")
-        test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream degraded; REST reconciliation active")
+        test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream degraded; connected=" + userStreamConnected + "; sync_required=" + userStreamSyncRequired + "; reconcile_running=" + futuresStreamReconcileRunning + "; last_error=" + (userStreamLastError ?: "none"))
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
-        test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
+        test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning && scanProgressSymbols > 0), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt + "; age_ms=" + (System.currentTimeMillis() - scanLastProgressAt).coerceAtLeast(0L))
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
         test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss=0.03")
         val autoRunRequested = prefs.getBoolean("auto_run", false)
