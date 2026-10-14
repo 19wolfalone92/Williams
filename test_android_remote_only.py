@@ -227,7 +227,7 @@ def test_android_kill_switch_never_closes_an_unmanaged_or_unreconciled_position(
     assert "manual reconciliation required" in coordinator
 
 
-def test_android_user_data_stream_is_not_the_spot_signed_subscription_protocol():
+def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
     user_stream = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     assert '"/fapi/v1/listenKey"' in user_stream
