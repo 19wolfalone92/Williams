@@ -424,6 +424,7 @@ def main() -> None:
     android_contract = read("test_android_remote_only.py")
     for needle in (
         "test_android_starts_native_futures_runtime_from_foreground_service",
+        "test_android_boot_recovery_is_opt_in_and_keeps_reconciliation_gate",
         "test_android_ui_routes_directly_to_local_runtime_without_remote_backend",
         "test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries",
         "test_android_campaign_and_intents_are_sqlite_backed",
