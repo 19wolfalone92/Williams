@@ -1280,10 +1280,35 @@ private class NativeEngine(
                 .put("blocker", "SQLite could not persist the cleared reconciliation latch")
         }
         reconcileRequired = false
-        prefs.edit().putBoolean("auto_run", true).commit()
-        val account = futuresCampaignCoordinator.accountSnapshot()
-        check(updateCachedFuturesAccount(account)) {
-            "Futures Testnet account returned invalid or incomplete equity/balance values"
+        // Do not persist auto-run until the authenticated Futures account payload
+        // has passed schema/balance validation. Previously this flag could remain
+        // true even though START threw before running=true, producing a dead runtime
+        // that appeared enabled after service recreation.
+        val account = try {
+            futuresCampaignCoordinator.accountSnapshot()
+        } catch (x: Exception) {
+            prefs.edit().putBoolean("auto_run", false).commit()
+            restAccountReady = false
+            restAccountLastError = x.message ?: x.javaClass.simpleName
+            scannerState = "BLOCKED_ACCOUNT"
+            scannerError = "Futures account request failed before runtime start: " + restAccountLastError
+            throw IllegalStateException(
+                "Futures Testnet account request failed before Runtime start: " +
+                    (x.message ?: x.javaClass.simpleName),
+                x
+            )
+        }
+        if (!updateCachedFuturesAccount(account)) {
+            prefs.edit().putBoolean("auto_run", false).commit()
+            scannerState = "BLOCKED_ACCOUNT"
+            scannerError = restAccountLastError
+                ?: "Futures account balance/equity fields failed validation"
+            throw IllegalStateException(
+                "Futures Testnet account returned invalid or incomplete equity/balance values"
+            )
+        }
+        check(prefs.edit().putBoolean("auto_run", true).commit()) {
+            "Could not persist the explicit Runtime auto-run preference"
         }
         stateMachine.force(
             when (futuresCampaignCoordinator.state) {
@@ -8193,7 +8218,9 @@ private class NativeEngine(
             }
         }
 
-        var balance: Double? = liveUsdtBalance.takeIf { it > 0.0 }
+        // Zero is a valid available USDT balance. Show it once the account
+        // schema is verified; reserve null for an unknown/unvalidated balance.
+        var balance: Double? = liveUsdtBalance.takeIf { restAccountReady }
         // Dashboard positions/PnL must come from the Futures exchange snapshot,
         // never the retired Spot PositionState cache.
         val credentialsConfigured = key().isNotBlank() && secret().isNotBlank()
