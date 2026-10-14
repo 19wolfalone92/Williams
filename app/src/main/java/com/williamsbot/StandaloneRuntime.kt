@@ -4720,10 +4720,26 @@ private class NativeEngine(
                 NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED
             )
         ) return
-        val openSymbols = (0 until futuresCampaignCoordinator.positionsSnapshot().length())
-            .mapNotNull { futuresCampaignCoordinator.positionsSnapshot().optJSONObject(it) }
-            .filter { kotlin.math.abs(it.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0 }
-            .map { it.optString("symbol") }.toSet()
+        // Fetch the exchange snapshot exactly once. The previous implementation
+        // performed a signed REST request for every array element while iterating;
+        // this multiplied latency and rate-limit usage by the account's row count.
+        val livePositionSnapshot = futuresCampaignCoordinator.positionsSnapshot()
+        val openSymbols = mutableSetOf<String>()
+        for (index in 0 until livePositionSnapshot.length()) {
+            val row = livePositionSnapshot.optJSONObject(index)
+                ?: throw IllegalStateException("Malformed Futures position snapshot row at index $index")
+            val amount = row.optString("positionAmt").toDoubleOrNull()
+                ?: throw IllegalStateException("Malformed Futures position amount for " + row.optString("symbol"))
+            require(amount.isFinite()) {
+                "Non-finite Futures position amount for " + row.optString("symbol")
+            }
+            if (amount == 0.0) continue
+            val symbol = row.optString("symbol").uppercase(Locale.US)
+            require(symbol in coreSymbols) {
+                "Unapproved live Futures position $symbol detected during scan; reconciliation required"
+            }
+            openSymbols.add(symbol)
+        }
         for (candidate in ranked
             .filter { it.campaignReady && it.symbol !in openSymbols }
             .sortedWith(compareByDescending<BaseAnalysis> { it.score }.thenBy { it.wave.exhaustionRisk })
