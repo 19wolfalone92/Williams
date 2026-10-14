@@ -3425,7 +3425,24 @@ private class NativeEngine(
         }
 
         try {
-            return block()
+            val result = block()
+            val reportedFailure =
+                (result.has("ok") && !result.optBoolean("ok", false)) ||
+                    (result.has("accepted") && !result.optBoolean("accepted", false))
+            if (reportedFailure) {
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+                val blocker = "Futures mutation returned an unresolved/non-success result ($purpose): " +
+                    result.optString("blocker", result.optString("error", result.optString("state", "not_ok")))
+                lastError = blocker
+                scannerError = blocker
+                stateMachine.force(
+                    if (killLatched) TradingState.KILL_SWITCH_LATCHED
+                    else TradingState.RECONCILE_REQUIRED,
+                    blocker
+                )
+            }
+            return result
         } catch (failure: Exception) {
             // An exception after a mutation request may mean Binance accepted it but
             // the response was lost. Do not reopen the execution path until exchange
