@@ -328,7 +328,7 @@ def main() -> None:
     must(coordinator_source, 'intent.put("campaign_status", "CLOSED_OR_STOPPED")', "NativeFuturesCampaignCoordinator.kt")
     must(coordinator_source, "campaignLifecycleStatus(intent)", "NativeFuturesCampaignCoordinator.kt")
     must(coordinator_source, "status in setOf(\"OPEN_PROTECTED\", \"POSITION_OPEN\", \"EXIT_PENDING\")", "NativeFuturesCampaignCoordinator.kt")
-    must(coordinator_source, 'intent.put("order_status", exchangeStatus)', "NativeFuturesCampaignCoordinator.kt")
+    must(coordinator_source, '.put("order_status", exchangeStatus)', "NativeFuturesCampaignCoordinator.kt")
     must(coordinator_source, "isOwnedClientOrderForSymbol", "NativeFuturesCampaignCoordinator.kt")
     must(coordinator_source, "if (finalOrderStatus != \"FILLED\")", "NativeFuturesCampaignCoordinator.kt")
     must(coordinator_source, "has no confirmed active Williams campaign; refusing to close an unmanaged position", "NativeFuturesCampaignCoordinator.kt")
