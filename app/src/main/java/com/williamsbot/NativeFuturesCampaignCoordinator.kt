@@ -925,6 +925,13 @@ internal class NativeFuturesCampaignCoordinator(
             saveIntents(persisted)
             return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
         }
+        // Do not build an unbounded chain of uncertain stop ids. Reconciliation must
+        // remove a tracked predecessor before a new replacement attempt is admitted.
+        if (previousId.isNotBlank() && previous.any { it.optString("clientAlgoId") == previousId }) {
+            state = State.RECONCILE_REQUIRED
+            lastBlocker = "$symbol has a tracked predecessor stop still open; reconcile its cancellation before trailing again"
+            return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
+        }
         intent.put("previous_protective_stop", oldStop.toPlainString())
             .put("previous_protection_client_id", intent.optString("protection_client_id"))
             .put("protective_stop", proposed.stripTrailingZeros().toPlainString())
@@ -955,13 +962,44 @@ internal class NativeFuturesCampaignCoordinator(
             saveIntents(persisted)
             JSONObject().put("ok", true).put("state", state.name).put("stop", finalStop)
         } catch (failure: Exception) {
+            val failureText = failure.message ?: failure.javaClass.simpleName
+            val refreshed = runCatching { adapter.openAlgoOrders(symbol) }.getOrNull()
+            val visibleStops = refreshed?.let { orders ->
+                (0 until orders.length()).mapNotNull { orders.optJSONObject(it) }
+                    .filter { isProtectiveStop(it, direction.name) }
+            }.orEmpty()
+            val oldStopStillConfirmed = refreshed?.let {
+                findProtectiveStop(it, direction.name, currentProtectionId, oldStop.toPlainString())
+            }
+            val replacementConfirmed = refreshed?.let {
+                findProtectiveStop(it, direction.name, clientAlgoId, proposed.toPlainString())
+            }
+            val noUnownedStop = visibleStops.all { it.optString("clientAlgoId") == currentProtectionId }
+            if (oldStopStillConfirmed != null && replacementConfirmed == null && noUnownedStop) {
+                // If the replacement was not found, keep the last confirmed stop as
+                // the campaign's current protection. Track the uncertain new id as a
+                // possible predecessor so a delayed Binance acknowledgement cannot
+                // turn it into an unowned order on the next reconciliation.
+                intent.put("protective_stop", oldStop.toPlainString())
+                    .put("protection_client_id", currentProtectionId)
+                    .put("previous_protective_stop", proposed.toPlainString())
+                    .put("previous_protection_client_id", clientAlgoId)
+                    .put("protection_status", "PROTECTED")
+                    .put("campaign_status", "OPEN_PROTECTED")
+                    .put("trail_error", failureText)
+                saveIntents(persisted)
+                state = State.OPEN_PROTECTED
+                lastBlocker = "$symbol stop trail was not confirmed; previous exchange-confirmed stop remains active and the uncertain replacement is tracked for cleanup"
+                return@synchronized JSONObject().put("ok", false).put("state", state.name)
+                    .put("blocker", lastBlocker).put("retained_stop", oldStop.toPlainString())
+            }
             state = State.RECONCILE_REQUIRED
             lastBlocker = "ambiguous_trailing_stop_replacement_manual_reconciliation_required"
             intent.put("protection_status", "SUBMISSION_UNKNOWN")
-                .put("trail_error", failure.message ?: failure.javaClass.simpleName)
+                .put("trail_error", failureText)
             saveIntents(persisted)
             JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
-                .put("error", failure.message ?: failure.javaClass.simpleName)
+                .put("error", failureText)
         }
     }
 
