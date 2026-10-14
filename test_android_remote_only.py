@@ -117,7 +117,10 @@ def test_android_reconcile_and_kill_latches_are_sqlite_durable():
     assert 'persistSafetyFlag("kill_latched", true)' in runtime
     assert "SQLite safety-latch write failed" in runtime
     assert 'check(persistSafetyFlag("kill_latched", false))' in runtime
-    assert 'check(persistSafetyFlag("reconcile_required", !ok))' in runtime
+    # Recovery now handles a failed durable latch write explicitly instead of
+    # relying on check(), so the runtime remains fail-closed and reports a blocker.
+    assert 'if (!persistSafetyFlag("reconcile_required", !ok))' in runtime
+    assert "SQLite could not persist recovery reconciliation state" in runtime
     assert '"reconcile_required"' in runtime and '"kill_latched"' in runtime
     assert "CREATE TABLE IF NOT EXISTS runtime_state" in store
 
