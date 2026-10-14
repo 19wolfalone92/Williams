@@ -2286,6 +2286,12 @@ private fun SettingsScreen(
     val batteryExemptionGranted =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
             batteryPowerManager.isIgnoringBatteryOptimizations(context.packageName)
+    val lowPowerStandbyEnabled =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            batteryPowerManager.isLowPowerStandbyEnabled
+    val lowPowerStandbyExempt =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+            batteryPowerManager.isExemptFromLowPowerStandby()
 
     LazyColumn(
         modifier = Modifier
@@ -2344,6 +2350,15 @@ private fun SettingsScreen(
                     InfoRow(
                         "Doze exemption",
                         if (batteryExemptionGranted) "Разрешено" else "Не подтверждено системой"
+                    )
+                    InfoRow(
+                        "Low Power Standby",
+                        when {
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU -> "Недоступен"
+                            !lowPowerStandbyEnabled -> "Выключен"
+                            lowPowerStandbyExempt -> "Для приложения ограничения сняты"
+                            else -> "Включён: ограничения сети могут применяться"
+                        }
                     )
                     Text(
                         "Для автономной работы откройте системные настройки приложения и проверьте режим батареи/фоновой активности. Поведение также зависит от производителя телефона; этот статус не заменяет физический тест.",
