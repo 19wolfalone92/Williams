@@ -229,13 +229,11 @@ def test_android_kill_switch_never_closes_an_unmanaged_or_unreconciled_position(
 
 def test_android_private_futures_stream_uses_supported_event_query_delimiters():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
-    endpoint = next(
-        line for line in runtime.splitlines()
-        if 'endpoint = "wss://demo-fstream.binance.com/private/ws?events=' in line
-    )
-    assert "ORDER_TRADE_UPDATE,ACCOUNT_UPDATE,ALGO_UPDATE" in endpoint
-    assert "CONDITIONAL_ORDER_TRIGGER_REJECT,listenKeyExpired" in endpoint
-    assert "ORDER_TRADE_UPDATE/ACCOUNT_UPDATE" not in endpoint
+    user_stream = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
+    assert 'endpoint = "wss://demo-fstream.binance.com/private/ws"' in runtime
+    assert '"&events=" + EVENT_TYPES' in user_stream
+    assert '"ORDER_TRADE_UPDATE,ACCOUNT_UPDATE,ALGO_UPDATE,ACCOUNT_CONFIG_UPDATE,CONDITIONAL_ORDER_TRIGGER_REJECT,listenKeyExpired"' in user_stream
+    assert "ORDER_TRADE_UPDATE/ACCOUNT_UPDATE" not in runtime + user_stream
 
 def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
     user_stream = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
