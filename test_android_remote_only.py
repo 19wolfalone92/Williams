@@ -381,7 +381,7 @@ def test_android_super_ao_is_independent_of_the_wm3_fractal_gate():
     wm2 = long_signals.split("// WM2:", 1)[1].split("// WM3:", 1)[0]
     assert 'type = "SUPER_AO"' in wm2
     assert "triggerPrice = trigger" in wm2
-    assert "protectivePrice = candles[i].l - tick" in wm2
+    assert "protectivePrice = candles[signalIndex].l - tick" in wm2
 
 
 def test_android_campaign_analysis_never_relabels_fallback_candles_as_h1():
