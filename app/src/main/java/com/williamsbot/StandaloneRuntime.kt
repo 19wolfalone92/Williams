@@ -240,6 +240,18 @@ internal fun scannerReadinessState(
     else -> "RUNNABLE"
 }
 
+/**
+ * Keep read-only market discovery alive on an unfunded Demo account or when an
+ * account refresh is temporarily unknown. A confirmed risk breach that latches
+ * PAUSE/KILL must stop scanning for entries and invoke position management.
+ */
+internal fun dailyRiskBlocksScanner(
+    accountFunded: Boolean,
+    dailyRiskAllowed: Boolean,
+    paused: Boolean,
+    killLatched: Boolean
+): Boolean = accountFunded && !dailyRiskAllowed && (paused || killLatched)
+
 internal fun conservativeRiskReservation(storedRiskPct: Double, maxTotalRiskPct: Double): Double {
     if (!maxTotalRiskPct.isFinite() || maxTotalRiskPct <= 0.0) return 1.0
     if (!storedRiskPct.isFinite() || storedRiskPct <= 0.0) return maxTotalRiskPct
@@ -4402,9 +4414,37 @@ private class NativeEngine(
             requestScan()
             return
         }
-        // Do not suppress the scanner merely because the account is unfunded or the
-        // daily-loss baseline is not available. Candidate discovery is read-only;
-        // each candidate's entry path enforces funding, daily risk and ExecutionGate.
+        // Re-check funded-account equity every scan cycle, even if no candidate
+        // appears. Without this periodic check a daily-loss breach could go unnoticed
+        // indefinitely until a signal appeared. A zero/unfunded Demo wallet still
+        // runs read-only discovery; an unknown account cannot pass executionReady().
+        if (accountFundedForEntry()) {
+            val dailyRiskAllowed = runCatching { checkFuturesDailyLoss() }.getOrElse { failure ->
+                lastError = "FUTURES_DAILY_LOSS_CHECK_FAILED: " +
+                    (failure.message ?: failure.javaClass.simpleName)
+                false
+            }
+            if (dailyRiskBlocksScanner(
+                    accountFunded = accountFundedForEntry(),
+                    dailyRiskAllowed = dailyRiskAllowed,
+                    paused = paused,
+                    killLatched = killLatched
+                )
+            ) {
+                scannerState = if (killLatched) "BLOCKED_KILL" else "BLOCKED_DAILY_LOSS"
+                scannerError = lastError ?: "Daily Futures risk gate is latched; new entries are disabled"
+                // The 5% circuit breaker already schedules its emergency handler.
+                // At the ordinary 3% daily limit, continue managing existing protection.
+                if (!killLatched) {
+                    runCatching { manageNativeFuturesPositions() }
+                        .onFailure { lastError = "Futures position monitor: " + (it.message ?: it.javaClass.simpleName) }
+                }
+                return
+            }
+        }
+
+        // Candidate discovery is read-only; each individual entry also checks
+        // funding, daily risk and the Execution Gate immediately before mutation.
         if (!manageNativeFuturesPositions()) {
             scannerState = "BLOCKED_FUTURES_RECONCILIATION"
             scannerError = scannerError ?: "Futures position reconciliation/protection incomplete"

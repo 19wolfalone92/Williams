@@ -41,4 +41,37 @@ class ScannerReadinessTest {
     @Test fun scanner_is_runnable_only_when_all_required_gates_pass() {
         assertEquals("RUNNABLE", state())
     }
+
+    @Test fun empty_demo_wallet_does_not_suppress_read_only_scanning() {
+        assertEquals(false, dailyRiskBlocksScanner(
+            accountFunded = false,
+            dailyRiskAllowed = false,
+            paused = false,
+            killLatched = false
+        ))
+    }
+
+    @Test fun known_daily_loss_breach_blocks_scan_and_preserves_kill_priority() {
+        assertEquals(true, dailyRiskBlocksScanner(
+            accountFunded = true,
+            dailyRiskAllowed = false,
+            paused = true,
+            killLatched = false
+        ))
+        assertEquals(true, dailyRiskBlocksScanner(
+            accountFunded = true,
+            dailyRiskAllowed = false,
+            paused = true,
+            killLatched = true
+        ))
+    }
+
+    @Test fun account_refresh_unknown_does_not_claim_a_confirmed_risk_breach() {
+        assertEquals(false, dailyRiskBlocksScanner(
+            accountFunded = true,
+            dailyRiskAllowed = false,
+            paused = false,
+            killLatched = false
+        ))
+    }
 }
