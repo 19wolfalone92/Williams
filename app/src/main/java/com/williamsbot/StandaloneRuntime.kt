@@ -1193,10 +1193,7 @@ private class NativeEngine(
             val intents = futuresCampaignCoordinator.intentsSnapshot()
             val pending = (0 until intents.length()).any { i ->
                 val intent = intents.optJSONObject(i) ?: return@any true
-                intent.optString("exchange_status").uppercase(Locale.US) in setOf(
-                    "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN",
-                    "ACCEPTED", "TRIGGERED", "OPEN_PROTECTED", "POSITION_OPEN"
-                )
+                isEntryCampaignReserved(intent)
             }
             require(!open && !pending) { "Close/reconcile every Futures position and pending intent before deleting credentials" }
         }
@@ -1507,10 +1504,11 @@ private class NativeEngine(
         val intents = futuresCampaignCoordinator.intentsSnapshot()
         val hasPendingOrder = (0 until intents.length()).any { i ->
             val row = intents.optJSONObject(i) ?: return@any true
-            row.optString("exchange_status").uppercase(Locale.US) in setOf(
-                "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN",
-                "ACCEPTED", "TRIGGERED", "CANCEL_SUBMISSION_UNKNOWN"
-            )
+            isEntryCampaignReserved(row) ||
+                row.optString("exchange_status").uppercase(Locale.US) in setOf(
+                    "SUBMISSION_UNKNOWN", "CANCEL_SUBMISSION_UNKNOWN", "EXIT_PENDING",
+                    "EXIT_TERMINAL_POSITION_OPEN"
+                )
         }
         require(!hasPendingOrder && futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.READY) {
             "Kill switch reset refused: pending or unresolved Futures intent remains."
@@ -3840,18 +3838,12 @@ private class NativeEngine(
                     amount == null || !amount.isFinite() || amount != 0.0
                 }
 
-                // Explicit terminal allowlist: any unknown, ambiguous, or unrecognized
-                // intent status prevents resetting the daily loss baseline.
-                val terminalStatuses = setOf(
-                    "FILLED", "FINISHED", "EXPIRED", "EXPIRED_IN_MATCH",
-                    "CANCELED", "CANCELLED", "REJECTED",
-                    "CLOSED_OR_STOPPED", "EXIT_CONFIRMED"
-                )
+                // Campaign lifecycle, rather than order status alone, controls whether
+                // the daily-loss baseline can be reset. A FILLED entry may be OPEN_PROTECTED.
                 val intents = futuresCampaignCoordinator.intentsSnapshot()
                 val hasActiveExecution = (0 until intents.length()).any { index ->
                     val row = intents.optJSONObject(index) ?: return@any true
-                    val status = row.optString("exchange_status").uppercase(Locale.US)
-                    status.isBlank() || status !in terminalStatuses
+                    isEntryCampaignReserved(row)
                 }
 
                 val income = futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
@@ -3965,11 +3957,12 @@ private class NativeEngine(
                 )
             }
             val direction = if (signedQty > 0.0) "LONG" else "SHORT"
-            val intent = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.lastOrNull {
-                it.optString("intent_role", "ENTRY") == "ENTRY" &&
-                    it.optString("symbol") == symbol && it.optString("direction") == direction &&
-                    it.optString("exchange_status") == "OPEN_PROTECTED"
-            }
+            val intentIndex = latestEntryIntentIndex(intents, symbol)
+            val intent = intentIndex?.let { intents.optJSONObject(it) }
+                ?.takeIf {
+                    it.optString("direction").equals(direction, ignoreCase = true) &&
+                        campaignLifecycleStatus(it) == "OPEN_PROTECTED"
+                }
             val entry = row.optString("entryPrice").toDoubleOrNull() ?: 0.0
             val mark = row.optString("markPrice").toDoubleOrNull()
                 ?: runCatching { futuresMarketData.markPrice(symbol) }.getOrDefault(0.0)
@@ -4085,11 +4078,12 @@ private class NativeEngine(
                 if (!result.optBoolean("ok", false)) throw IllegalStateException(result.optString("blocker", result.optString("error")))
                 continue
             }
-            val intent = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.lastOrNull {
-                it.optString("intent_role", "ENTRY") == "ENTRY" &&
-                    it.optString("symbol") == symbol && it.optString("direction") == dir &&
-                    it.optString("exchange_status") == "OPEN_PROTECTED"
-            } ?: throw IllegalStateException(symbol + " has no exchange-confirmed structural stop intent")
+            val intentIndex = latestEntryIntentIndex(intents, symbol)
+            val intent = intentIndex?.let { intents.optJSONObject(it) }
+                ?.takeIf {
+                    it.optString("direction").equals(dir, ignoreCase = true) &&
+                        campaignLifecycleStatus(it) == "OPEN_PROTECTED"
+                } ?: throw IllegalStateException(symbol + " has no latest exchange-confirmed protected campaign")
             val oldStop = intent.optString("protective_stop").toDoubleOrNull()
                 ?: throw IllegalStateException(symbol + " structural stop is missing")
             val trail = candles.takeLast(campaignTrailBars)
@@ -4172,11 +4166,9 @@ private class NativeEngine(
         if (openPositions.size >= maxOpenPositions || openPositions.any { it.optString("symbol") == symbol }) return
 
         val riskUsed = (0 until entries.length()).mapNotNull { entries.optJSONObject(it) }.sumOf { intent ->
-            val status = intent.optString("exchange_status").uppercase(Locale.US)
-            if (intent.optString("intent_role", "ENTRY") == "ENTRY" && status in setOf(
-                "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN",
-                "ACCEPTED", "TRIGGERED", "OPEN_PROTECTED", "POSITION_OPEN"
-            )) intent.optDouble("risk_pct", 0.0) else 0.0
+            if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
+                intent.optDouble("risk_pct", 0.0)
+            } else 0.0
         }
         val riskPct = min(campaignInitialRiskPct, min(maxRiskPerTradePct, maxTotalRiskPct - riskUsed))
         if (riskPct <= 0.0) return
@@ -8153,11 +8145,9 @@ private class NativeEngine(
         val futuresIntents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
         val futuresReservedRiskPct = (0 until futuresIntents.length()).sumOf { i ->
             val intent = futuresIntents.optJSONObject(i) ?: return@sumOf 0.0
-            val status = intent.optString("exchange_status").uppercase(Locale.US)
-            if (intent.optString("intent_role", "ENTRY") == "ENTRY" && status in setOf(
-                "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN",
-                "ACCEPTED", "TRIGGERED", "OPEN_PROTECTED", "POSITION_OPEN"
-            )) intent.optDouble("risk_pct", 0.0) else 0.0
+            if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
+                intent.optDouble("risk_pct", 0.0)
+            } else 0.0
         }
         val utcDayStart = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
             timeInMillis = runCatching { futuresMarketData.exchangeNowMs() }.getOrElse { System.currentTimeMillis() }
