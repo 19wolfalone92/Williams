@@ -480,7 +480,14 @@ internal class NativeFuturesCampaignCoordinator(
                         val finalOrderStatus = when {
                             matchingOpenOrder != null -> {
                                 val observed = matchingOpenOrder.optString("status").uppercase(Locale.US)
-                                if (observed in activeStatuses) adapter.cancelOrder(symbol, clientId)
+                                if (observed in activeStatuses) {
+                                    // Persist the cancel mutation before network I/O. If DELETE
+                                    // times out, the next reconcile resolves this same client id.
+                                    intent.put("order_status", "CANCEL_SUBMISSION_UNKNOWN")
+                                        .put("cancel_remainder_requested_at_ms", System.currentTimeMillis())
+                                    saveIntents(persisted)
+                                    adapter.cancelOrder(symbol, clientId)
+                                }
                                 val confirmed = adapter.order(symbol, clientId)
                                 val status = confirmed.optString("status").uppercase(Locale.US)
                                 if (status !in ENTRY_ORDER_TERMINAL_STATUSES) {
@@ -494,6 +501,11 @@ internal class NativeFuturesCampaignCoordinator(
                                 val observed = matchingOpenAlgo.optString("algoStatus", matchingOpenAlgo.optString("status"))
                                     .uppercase(Locale.US)
                                 if (observed !in ENTRY_ORDER_TERMINAL_STATUSES) {
+                                    // Durable intent precedes the Algo Order DELETE just as it
+                                    // does for standard orders; a timeout cannot permit a retry.
+                                    intent.put("order_status", "CANCEL_SUBMISSION_UNKNOWN")
+                                        .put("cancel_remainder_requested_at_ms", System.currentTimeMillis())
+                                    saveIntents(persisted)
                                     adapter.cancelAlgoOrder(symbol, clientId)
                                 }
                                 val confirmed = adapter.queryAlgoOrder(symbol, clientId)
