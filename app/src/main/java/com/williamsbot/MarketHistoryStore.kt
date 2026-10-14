@@ -279,17 +279,51 @@ class MarketHistoryStore(context: Context) :
 
     @Synchronized
     fun status(symbols: List<String>, intervals: List<String>): JSONObject {
+        // UI/diagnostics poll status frequently. Reading each symbol/timeframe with
+        // four independent SQLite queries caused hundreds of DB reads per refresh.
+        // sync_state is updated transactionally with every candle batch, so one scan
+        // of that compact table gives the same history readiness/count contract.
+        val known = HashMap<Pair<String, String>, JSONObject>()
+        readableDatabase.query(
+            "sync_state",
+            arrayOf(
+                "symbol",
+                "interval",
+                "complete",
+                "candle_count",
+                "oldest_open_time",
+                "newest_open_time"
+            ),
+            null,
+            null,
+            null,
+            null,
+            null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val symbol = cursor.getString(0)
+                val interval = cursor.getString(1)
+                known[symbol to interval] = JSONObject()
+                    .put("symbol", symbol)
+                    .put("interval", interval)
+                    .put("complete", cursor.getInt(2) == 1)
+                    .put("count", cursor.getLong(3))
+                    .put("oldest_open_time", cursor.getLong(4))
+                    .put("newest_open_time", cursor.getLong(5))
+            }
+        }
+
         val rows = JSONArray()
         for (symbol in symbols) {
             for (interval in intervals) {
                 rows.put(
-                    JSONObject()
+                    known[symbol to interval] ?: JSONObject()
                         .put("symbol", symbol)
                         .put("interval", interval)
-                        .put("complete", isComplete(symbol, interval))
-                        .put("count", count(symbol, interval))
-                        .put("oldest_open_time", oldest(symbol, interval))
-                        .put("newest_open_time", newest(symbol, interval))
+                        .put("complete", false)
+                        .put("count", 0L)
+                        .put("oldest_open_time", 0L)
+                        .put("newest_open_time", 0L)
                 )
             }
         }
