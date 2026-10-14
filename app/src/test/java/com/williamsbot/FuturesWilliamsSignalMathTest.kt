@@ -1,5 +1,6 @@
 package com.williamsbot
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -63,5 +64,10 @@ class FuturesWilliamsSignalMathTest {
         assertFalse(isActionableWilliamsTrigger("LONG", Double.NaN, 102.0, 98.0))
         assertFalse(isActionableWilliamsTrigger("SHORT", 100.0, 98.0, 99.0))
         assertFalse(isActionableWilliamsTrigger("UNKNOWN", 100.0, 102.0, 98.0))
+    }
+
+    @Test
+    fun nativeDefaultDecisionTimeframeIsCanonicalH1() {
+        assertEquals("1h", DEFAULT_FUTURES_DECISION_TIMEFRAME)
     }
 }
