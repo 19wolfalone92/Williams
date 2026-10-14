@@ -250,7 +250,8 @@ def test_android_williams_indicator_decisions_use_chart_aligned_alligator_and_ca
     assert "val slowValues = medianPrices.subList(index - 33, index + 1)" in runtime
     assert "medianPrices.subList(index - 34, index + 1).average()" not in runtime
     assert "private fun alligator(" in runtime
-    assert "teethS[center].isFinite() && level > teethS[center]" in runtime
+    assert "Super AO is independent of WM3/fractals." in runtime
+    assert "priorFractalValid" not in runtime
     assert "candles[fractalCenter].h > centerTeeth" in runtime
     assert "trigger > currentTeeth" in runtime
     assert "fun upGroupStart(i: Int): Int" in runtime
@@ -370,7 +371,7 @@ def test_android_trailing_stops_are_mark_relative_not_entry_relative():
 
 def test_android_super_ao_is_independent_of_the_wm3_fractal_gate():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
-    assert "Super AO is\n        // independent of the WM3/fractal setup" in runtime
+    assert "Super AO is independent of WM3/fractals." in runtime
     assert "priorFractalValid" not in runtime
     assert "lastValidFractalLevel" not in runtime
 
