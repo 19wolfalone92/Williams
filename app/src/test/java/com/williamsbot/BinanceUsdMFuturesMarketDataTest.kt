@@ -72,6 +72,36 @@ class BinanceUsdMFuturesMarketDataTest {
         assertTrue(!capturedUrl.contains("/api/v3/"))
     }
 
+    @Test
+    fun topOfBookReadsFreshUsdMFuturesBidAskForSelectedSymbol() {
+        var capturedUrl = ""
+        val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            capturedUrl = chain.request().url.toString()
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .body("""{"symbol":"ETHUSDT","bidPrice":"2499.5","askPrice":"2500.0"}"""
+                    .toResponseBody("application/json".toMediaType()))
+                .build()
+        }).build()
+
+        val (bid, ask) = BinanceUsdMFuturesMarketData(client).topOfBook("ETHUSDT")
+        assertEquals(2499.5, bid, 0.0)
+        assertEquals(2500.0, ask, 0.0)
+        assertTrue(capturedUrl.startsWith("https://demo-fapi.binance.com/fapi/v1/ticker/bookTicker?"))
+        assertTrue(capturedUrl.contains("symbol=ETHUSDT"))
+    }
+
+    @Test
+    fun acceleratorOscillatorSubtractsFiveBarAoAverageAndRejectsWarmup() {
+        val ao = listOf(1.0, 2.0, 3.0, 4.0, 8.0, 10.0)
+        assertTrue(acceleratorOscillatorAt(ao, 3).isNaN())
+        assertEquals(4.4, acceleratorOscillatorAt(ao, 4), 1e-12)
+        assertEquals(4.6, acceleratorOscillatorAt(ao, 5), 1e-12)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun rejectsSymbolsOutsideTheApprovedFuturesUniverse() {
         BinanceUsdMFuturesMarketData().klines("UNKNOWNUSDT", "1h", 100)
