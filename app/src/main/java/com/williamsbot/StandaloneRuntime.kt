@@ -1405,6 +1405,14 @@ private class NativeEngine(
         cachedFuturesPositionsSnapshotAtMs = 0L
         futuresPositionSnapshotLastAttemptMs = 0L
         futuresPositionSnapshotRefreshError = null
+        liveUsdtBalance = 0.0
+        liveUsdtBalanceKnown = false
+        liveFuturesEquity = 0.0
+        restAccountReady = false
+        restAccountLastError = null
+        futuresAccountSnapshotUpdatedAtMs = 0L
+        futuresAccountSnapshotLastAttemptMs = 0L
+        futuresAccountSnapshotRefreshError = null
         historyReady = false
         historyWarmupRunning = false
         historyState = "IDLE"
@@ -4600,9 +4608,16 @@ private class NativeEngine(
             } else false
         }
         if (!start) return
+        val generationAtStart = runtimeGeneration
+        val apiKeyAtStart = key()
         Thread {
             try {
                 val account = futuresCampaignCoordinator.accountSnapshot()
+                // A credentials reset/reconfiguration may race this background request.
+                // Never publish a snapshot fetched under a previous credential set.
+                if (generationAtStart != runtimeGeneration || apiKeyAtStart != key()) {
+                    return@Thread
+                }
                 check(updateCachedFuturesAccount(account)) {
                     restAccountLastError ?: "Futures account payload failed validation"
                 }
