@@ -159,11 +159,8 @@ object AppColors {
     val textMuted = Color(0xFF98A8BD)
 }
 
-private val APPROVED_FUTURES_CHART_SYMBOLS = listOf(
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-    "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
-)
-private val CHART_VIEW_INTERVALS = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
+private val APPROVED_FUTURES_CHART_SYMBOLS = APPROVED_FUTURES_SYMBOLS
+private val CHART_VIEW_INTERVALS = APPROVED_FUTURES_KLINE_INTERVALS
 
 @Composable
 private fun WilliamsTheme(content: @Composable () -> Unit) {
