@@ -1606,7 +1606,8 @@ private class NativeEngine(
                     allowPaused = true,
                     allowStopped = true,
                     allowKillLatched = true,
-                    allowReconcileRequired = true
+                    allowReconcileRequired = true,
+                    waitForDoorMs = 50_000L
                 ) {
                     futuresCampaignCoordinator.cancelPendingEntries("RUNTIME_STOP")
                 }
@@ -1641,9 +1642,11 @@ private class NativeEngine(
         userStream.stop()
         userStreamConnected = false
         userStreamSyncRequired = true
-        prefs.edit()
-            .putBoolean("auto_run", false)
-            .apply()
+        if (!prefs.edit().putBoolean("auto_run", false).commit()) {
+            lastError = "Runtime stopped locally, but auto-run OFF could not be committed to preferences"
+            persistSafetyFlag("reconcile_required", true)
+            reconcileRequired = true
+        }
         worker?.interrupt()
         worker = null
         scanning = false
@@ -1713,7 +1716,8 @@ private class NativeEngine(
                 allowPaused = true,
                 allowStopped = true,
                 allowKillLatched = true,
-                allowReconcileRequired = true
+                allowReconcileRequired = true,
+                waitForDoorMs = 50_000L
             ) {
                 futuresCampaignCoordinator.cancelPendingEntries("KILL_SWITCH")
             }
@@ -1758,7 +1762,8 @@ private class NativeEngine(
                     allowPaused = true,
                     allowStopped = true,
                     allowKillLatched = true,
-                    allowReconcileRequired = ownershipVerified
+                    allowReconcileRequired = ownershipVerified,
+                    waitForDoorMs = 10_000L
                 ) {
                     futuresCampaignCoordinator.closePosition(
                         symbol, direction, fmtQty(qty, rules.decimals), cid, "KILL_SWITCH"
@@ -3312,6 +3317,7 @@ private class NativeEngine(
         allowStopped: Boolean = false,
         allowKillLatched: Boolean = false,
         allowReconcileRequired: Boolean = false,
+        waitForDoorMs: Long = 0L,
         block: () -> JSONObject
     ): JSONObject {
         executionDoorBlocker(
@@ -3328,7 +3334,19 @@ private class NativeEngine(
         // Campaign policy is account-wide (one active campaign), so distinct symbols
         // must not obtain concurrent mutation reservations.
         val reservationKey = FUTURES_EXECUTION_DOOR_KEY
-        require(executionGate.tryReserve(reservationKey)) {
+        val deadlineNanos = System.nanoTime() +
+            TimeUnit.MILLISECONDS.toNanos(waitForDoorMs.coerceAtLeast(0L))
+        var reserved = executionGate.tryReserve(reservationKey)
+        while (!reserved && waitForDoorMs > 0L && System.nanoTime() < deadlineNanos) {
+            try {
+                Thread.sleep(25L)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                error("Interrupted while waiting for the Futures Execution Door")
+            }
+            reserved = executionGate.tryReserve(reservationKey)
+        }
+        require(reserved) {
             "Futures Execution Door is already reserved by another mutation"
         }
 
@@ -4510,7 +4528,8 @@ private class NativeEngine(
                     symbol = "FUTURES_ACCOUNT",
                     purpose = "DAILY_LOSS_CANCEL_PENDING",
                     allowPaused = true,
-                    allowReconcileRequired = true
+                    allowReconcileRequired = true,
+                    waitForDoorMs = 50_000L
                 ) {
                     futuresCampaignCoordinator.cancelPendingEntries("DAILY_LOSS_LIMIT")
                 }
