@@ -559,7 +559,8 @@ def test_futures_position_panel_maps_mark_price_and_computes_missing_notional_fi
     assert 'val accountEquity = json.optDouble("futures_equity", Double.NaN)' in ui
     assert 'val allocation = item.optDouble(' in ui
     assert 'val pnlFraction = item.optDouble(' in ui
-    assert 'InfoRow("Current", fmt(p.currentPrice))' in ui
+    assert "fmt(p.currentPrice)" in ui
+    assert "fmt(p.currentPrice ?: status.price)" not in ui
     assert '.put("mark_price", mark)' in runtime
     assert '.put("futures_equity", if (restAccountReady) liveFuturesEquity else JSONObject.NULL)' in runtime
 
