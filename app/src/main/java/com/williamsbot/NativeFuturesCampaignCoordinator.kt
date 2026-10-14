@@ -71,6 +71,26 @@ internal fun hasValidStructuralStop(direction: String, entryPrice: String, stopP
     }
 }
 
+/**
+ * An active/trailing stop is valid relative to the live mark, not necessarily the
+ * original entry. Long stops can move above entry and short stops below entry
+ * while locking profit; they must still remain on the protective side of mark.
+ */
+internal fun isProtectiveStopOnCorrectSide(
+    direction: String,
+    markPrice: String,
+    stopPrice: String
+): Boolean {
+    val mark = markPrice.toBigDecimalOrNull() ?: return false
+    val stop = stopPrice.toBigDecimalOrNull() ?: return false
+    if (mark.signum() <= 0 || stop.signum() <= 0) return false
+    return when (direction.uppercase(Locale.US)) {
+        "LONG" -> stop < mark
+        "SHORT" -> stop > mark
+        else -> false
+    }
+}
+
 internal fun isEntryCampaignReserved(intent: JSONObject): Boolean {
     if (intent.optString("intent_role", "ENTRY") != "ENTRY") {
         // Only explicit exit confirmation releases an EXIT intent. FILLED alone is
@@ -452,13 +472,25 @@ internal class NativeFuturesCampaignCoordinator(
                             run {
                                 val entry = it.optString("entry_price").toBigDecimalOrNull()
                                 val stop = it.optString("protective_stop").toBigDecimalOrNull()
-                                entry != null && stop != null && entry.signum() > 0 && stop.signum() > 0 &&
-                                    if (direction == "LONG") stop < entry else stop > entry
+                                // Historical structural invalidation is entry-relative only at
+                                // initial placement. A trailing profit stop may cross entry.
+                                entry != null && stop != null && entry.signum() > 0 && stop.signum() > 0
                             }
                     }
                 val currentProtectionId = matchingIntent?.optString("protection_client_id").orEmpty()
                 val previousProtectionId = matchingIntent?.optString("previous_protection_client_id").orEmpty()
                 val knownProtectionIds = setOf(currentProtectionId, previousProtectionId).filter { it.isNotBlank() }.toSet()
+                if (matchingIntent != null) {
+                    val liveMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                    if (liveMark == null || !isProtectiveStopOnCorrectSide(
+                            direction, liveMark?.toString().orEmpty(), matchingIntent.optString("protective_stop")
+                        )
+                    ) {
+                        anyUnprotected = true
+                        lastBlocker = "$symbol structural stop is not confirmed on the protective side of the current Binance mark price; entries and automatic closure are blocked pending reconciliation"
+                        continue
+                    }
+                }
                 val unknownProtectiveStopExists = (0 until algos.length()).any { j ->
                     val row = algos.optJSONObject(j) ?: return@any true
                     isProtectiveStop(row, direction) && row.optString("clientAlgoId") !in knownProtectionIds
@@ -1052,7 +1084,11 @@ internal class NativeFuturesCampaignCoordinator(
                         protectionStatus = row.optString("protection_status"),
                         protectionClientId = row.optString("protection_client_id")
                     ) &&
-                    hasValidStructuralStop(direction.name, row.optString("entry_price"), row.optString("protective_stop"))
+                    run {
+                        val entry = row.optString("entry_price").toBigDecimalOrNull()
+                        val stop = row.optString("protective_stop").toBigDecimalOrNull()
+                        entry != null && stop != null && entry.signum() > 0 && stop.signum() > 0
+                    }
             }
         if (managedEntry == null) {
             state = State.RECONCILE_REQUIRED
@@ -1236,12 +1272,11 @@ internal class NativeFuturesCampaignCoordinator(
         require(plan.riskPct.isFinite() && plan.riskPct > 0.0 && plan.riskPct <= 0.0025) {
             "Per-entry risk must be positive and no greater than 0.25% equity"
         }
-        when (plan.direction) {
-            Direction.LONG -> {
-                require(stop < price) { "LONG protective stop must be below entry" }
-            }
-            Direction.SHORT -> {
-                require(stop > price) { "SHORT protective stop must be above entry" }
+        require(hasValidStructuralStop(plan.direction.name, plan.entryPrice, plan.protectiveStop)) {
+            if (plan.direction == Direction.LONG) {
+                "LONG initial structural stop must be below entry"
+            } else {
+                "SHORT initial structural stop must be above entry"
             }
         }
         require(plan.clientId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client order ID" }
