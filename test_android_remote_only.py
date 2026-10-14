@@ -304,5 +304,5 @@ def test_android_trailing_stops_are_mark_relative_not_entry_relative():
     assert "val liveMark = runCatching { adapter.markPrice(symbol) }.getOrNull()" in coordinator
     assert "Historical structural invalidation is entry-relative only at" in coordinator
     assert "hasValidStructuralStop(plan.direction.name, plan.entryPrice, plan.protectiveStop)" in coordinator
-    unit_test = _read(ANDROID / "src/test/java/com/williamsbot/ProtectionOwnershipTest.kt")
+    unit_test = _read(ROOT / "app/src/test/java/com/williamsbot/ProtectionOwnershipTest.kt")
     assert "profitLockingTrailingStopsMayCrossEntryButMustRemainBeyondLiveMark" in unit_test
