@@ -3824,6 +3824,19 @@ private class NativeEngine(
             if (!killLatched && !circuitBreakerTripInProgress) {
                 circuitBreakerTripInProgress = true
                 paused = true
+                // Persist the kill latch synchronously before scheduling network work.
+                // A process death between threshold detection and the close routine
+                // must not silently re-arm trading after the restart.
+                val killLatchPersisted = persistSafetyFlag("kill_latched", true)
+                killLatched = true
+                if (!killLatchPersisted) {
+                    reconcileRequired = true
+                    persistSafetyFlag("reconcile_required", true)
+                }
+                stateMachine.force(
+                    TradingState.KILL_SWITCH_LATCHED,
+                    "5% Futures equity circuit breaker tripped"
+                )
                 prefs.edit().putBoolean("auto_run", false).commit()
                 val drawdownPct = ((baseline - equity) / baseline).coerceAtLeast(0.0) * 100.0
                 lastError = "AUTOMATIC FUTURES EQUITY CIRCUIT BREAKER: daily drawdown " +

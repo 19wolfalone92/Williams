@@ -286,6 +286,8 @@ def main() -> None:
     must(runtime_source, "canInitializeDailyRiskBaseline", "StandaloneRuntime.kt")
     must(runtime_source, "observeFuturesEquityFromPersistedBaseline", "StandaloneRuntime.kt")
     must(runtime_source, "AUTOMATIC FUTURES EQUITY CIRCUIT BREAKER", "StandaloneRuntime.kt")
+    must(runtime_source, 'persistSafetyFlag("kill_latched", true)', "StandaloneRuntime.kt")
+    must(runtime_source, "5% Futures equity circuit breaker tripped", "StandaloneRuntime.kt")
     must(runtime_source, "internal fun futuresAccountEquity", "StandaloneRuntime.kt")
     must(runtime_source, "private fun estimateManagedEquity(): Double =\n        liveFuturesEquity", "StandaloneRuntime.kt")
     equity_test = read("app/src/test/java/com/williamsbot/FuturesAccountEquityTest.kt")
