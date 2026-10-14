@@ -493,9 +493,6 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             return if (direction == "LONG") "SELL" else "BUY"
         }
 
-        val APPROVED_SYMBOLS: Set<String> = setOf(
-            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-            "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
-        )
+        val APPROVED_SYMBOLS: Set<String> = APPROVED_FUTURES_SYMBOLS.toSet()
     }
 }
