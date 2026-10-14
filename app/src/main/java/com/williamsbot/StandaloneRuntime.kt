@@ -1433,7 +1433,9 @@ private class NativeEngine(
         // A thrown/empty REST reconciliation must transition to a durable blocked
         // state just like an explicit exchange "not ready" response. Do not leave
         // stale READY_FLAT status or an old auto_run flag after startup failure.
-        val reconciliationAttempt = runCatching { futuresCampaignCoordinator.reconcile() }
+        val reconciliationAttempt = runCatching {
+            reconcileFuturesThroughDoor("STARTUP_RECONCILIATION", allowStopped = true)
+        }
         val reconciliation = reconciliationAttempt.getOrNull()
         if (reconciliation == null || !reconciliation.optBoolean("ok", false)) {
             reconcileRequired = true
@@ -1733,8 +1735,13 @@ private class NativeEngine(
 
         // Classify exposure before canceling intents. Terminal campaign history must
         // never be revived as ownership evidence for an unrelated/manual live position.
-        val ownershipReconciliation = runCatching { futuresCampaignCoordinator.reconcile() }
-            .getOrElse {
+        val ownershipReconciliation = runCatching {
+            reconcileFuturesThroughDoor(
+                "KILL_SWITCH_PRE_CLOSE_RECONCILIATION",
+                allowStopped = true,
+                allowKillLatched = true
+            )
+        }.getOrElse {
                 JSONObject().put("ok", false).put("error", it.message ?: it.javaClass.simpleName)
             }
         val ownershipVerified = ownershipReconciliation.optBoolean("ok", false)
@@ -1813,7 +1820,13 @@ private class NativeEngine(
                 errors += "$symbol: " + (x.message ?: x.javaClass.simpleName)
             }
         }
-        val reconciliation = runCatching { futuresCampaignCoordinator.reconcile() }.getOrElse {
+        val reconciliation = runCatching {
+            reconcileFuturesThroughDoor(
+                "KILL_SWITCH_FINAL_RECONCILIATION",
+                allowStopped = true,
+                allowKillLatched = true
+            )
+        }.getOrElse {
             JSONObject().put("ok", false).put("error", it.message ?: it.javaClass.simpleName)
         }
         stateMachine.force(TradingState.KILL_SWITCH_LATCHED, "USD-M Futures kill switch; restart blocked")
@@ -1881,7 +1894,13 @@ private class NativeEngine(
         require(key().isNotBlank() && secret().isNotBlank()) {
             "Configure Binance USD-M Futures Testnet credentials first"
         }
-        val reconciliationAttempt = runCatching { futuresCampaignCoordinator.reconcile() }
+        val reconciliationAttempt = runCatching {
+            reconcileFuturesThroughDoor(
+                "RECOVERY_RECONCILIATION",
+                allowStopped = true,
+                allowKillLatched = true
+            )
+        }
         val result = reconciliationAttempt.getOrNull()
         if (result == null) {
             reconcileRequired = true
@@ -3435,6 +3454,27 @@ private class NativeEngine(
         }
     }
 
+    /**
+     * Reconciliation can place, replace, or cancel protective algo orders. It therefore
+     * belongs behind the same durable account-wide Execution Door as entries/exits.
+     */
+    private fun reconcileFuturesThroughDoor(
+        purpose: String,
+        allowStopped: Boolean = false,
+        allowKillLatched: Boolean = false,
+        waitForDoorMs: Long = 50_000L
+    ): JSONObject = withCampaignMutation(
+        symbol = "FUTURES_ACCOUNT",
+        purpose = purpose,
+        allowPaused = true,
+        allowStopped = allowStopped,
+        allowKillLatched = allowKillLatched,
+        allowReconcileRequired = true,
+        waitForDoorMs = waitForDoorMs
+    ) {
+        futuresCampaignCoordinator.reconcile()
+    }
+
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
         // Select the most recent still-valid confirmed setup, never the oldest one
         // returned by a historical scan.
@@ -4749,7 +4789,11 @@ private class NativeEngine(
             it.optString("symbol") == symbol &&
                 kotlin.math.abs(it.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0
         } ?: run {
-            val rec = futuresCampaignCoordinator.reconcile()
+            val rec = reconcileFuturesThroughDoor(
+                "MANUAL_EXIT_POSITION_NOT_FOUND_RECONCILIATION",
+                allowStopped = true,
+                allowKillLatched = true
+            )
             return JSONObject().put("sold", false).put("symbol", symbol)
                 .put("reason", "exchange_position_not_found").put("reconciliation", rec)
         }
@@ -4779,7 +4823,11 @@ private class NativeEngine(
     }
 
     private fun manageNativeFuturesPositions(): Boolean {
-        val reconciliation = futuresCampaignCoordinator.reconcile()
+        val reconciliation = reconcileFuturesThroughDoor(
+            "POSITION_MANAGEMENT_RECONCILIATION",
+            allowStopped = true,
+            allowKillLatched = true
+        )
         if (!reconciliation.optBoolean("ok", false)) {
             scannerError = reconciliation.optString("blocker", "Futures reconciliation failed")
             reconcileRequired = true
@@ -5694,7 +5742,11 @@ private class NativeEngine(
             try {
                 while (true) {
                     synchronized(this) { futuresStreamReconcilePending = false }
-                    val result = futuresCampaignCoordinator.reconcile()
+                    val result = reconcileFuturesThroughDoor(
+                        "USER_STREAM_RECONCILIATION",
+                        allowStopped = true,
+                        allowKillLatched = true
+                    )
                     check(result.optBoolean("ok", false)) {
                         result.optString("blocker", "Futures reconciliation returned not-ok")
                     }
@@ -9545,7 +9597,13 @@ private class NativeEngine(
                 actions.put("futures_history_reload_requested")
             }
             if (!startedHere) {
-                val attempt = runCatching { futuresCampaignCoordinator.reconcile() }
+                val attempt = runCatching {
+                    reconcileFuturesThroughDoor(
+                        "SELF_HEAL_RECONCILIATION",
+                        allowStopped = true,
+                        allowKillLatched = true
+                    )
+                }
                 val reconciliation = attempt.getOrNull()
                 if (attempt.isSuccess && reconciliation?.optBoolean("ok", false) == true) {
                     actions.put("futures_exchange_reconciliation")
