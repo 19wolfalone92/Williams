@@ -12,6 +12,15 @@ import org.junit.Test
 
 class BinanceUsdMFuturesMarketDataTest {
     @Test
+    fun closedCandleBoundaryUsesExchangeTimeAndNeverAdmitsTheFormingCandle() {
+        val marketData = BinanceUsdMFuturesMarketData()
+        assertTrue(marketData.isCandleClosed(99L, 100L))
+        assertTrue(!marketData.isCandleClosed(100L, 100L))
+        assertTrue(!marketData.isCandleClosed(101L, 100L))
+        assertTrue(!marketData.isCandleClosed(-1L, 100L))
+    }
+
+    @Test
     fun requestsUsdMFuturesKlinesAndPassesPaginationParameters() {
         var capturedUrl = ""
         val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->

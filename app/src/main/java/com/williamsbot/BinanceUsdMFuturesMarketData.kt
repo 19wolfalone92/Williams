@@ -79,6 +79,10 @@ internal class BinanceUsdMFuturesMarketData(
         return rows
     }
 
+    /** True only after Binance's exchange clock has passed the candle close timestamp. */
+    internal fun isCandleClosed(closeTimeMs: Long, exchangeNowMs: Long): Boolean =
+        closeTimeMs >= 0L && exchangeNowMs > closeTimeMs
+
     fun tickerPrices(): JSONArray = getArray("$base/fapi/v1/ticker/price")
     fun ticker24h(): JSONArray = getArray("$base/fapi/v1/ticker/24hr")
     fun bookTickers(): JSONArray = getArray("$base/fapi/v1/ticker/bookTicker")

@@ -2163,7 +2163,7 @@ private class NativeEngine(
         if (cached != null &&
             cached.second.size >= limit &&
             now - cached.first < scanCacheTtlMs &&
-            candleSeriesCurrent(cached.second, frame, now)
+            candleSeriesCurrent(cached.second, frame, futuresMarketData.exchangeNowMs())
         ) {
             return cached.second.takeLast(limit)
         }
@@ -2330,9 +2330,9 @@ private class NativeEngine(
         }
         flush()
 
-        val now = System.currentTimeMillis()
+        val exchangeNowMs = futuresMarketData.exchangeNowMs()
         return out
-            .filter { it.t + bucketMs <= now }
+            .filter { it.t + bucketMs <= exchangeNowMs }
             .takeLast(limit)
     }
 
@@ -2344,7 +2344,7 @@ private class NativeEngine(
         val normalizedSymbol = symbol.uppercase()
 
         if (!historyStore.isComplete(normalizedSymbol, frame)) {
-            var endTime = System.currentTimeMillis()
+            var endTime = futuresMarketData.exchangeNowMs()
             var page = 0
             var reachedHistoryBeginning = false
             val pageLimit = maxPages.coerceIn(1, 100)
@@ -2373,7 +2373,7 @@ private class NativeEngine(
                         val closeTime = row.getLong(6)
                         oldest = min(oldest, openTime)
 
-                        if (closeTime >= System.currentTimeMillis()) {
+                        if (!futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)) {
                             continue
                         }
 
@@ -2436,11 +2436,13 @@ private class NativeEngine(
             ).toString()
             val array = JSONArray(body)
             val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
+            val exchangeNowMs = futuresMarketData.exchangeNowMs()
+                        val exchangeNowMs = futuresMarketData.exchangeNowMs()
 
             for (i in 0 until array.length()) {
                 val row = array.getJSONArray(i)
                 val closeTime = row.getLong(6)
-                if (closeTime >= System.currentTimeMillis()) continue
+                if (!futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)) continue
                 batch += MarketHistoryStore.Candle(
                     openTime = row.getLong(0),
                     closeTime = closeTime,
@@ -2571,18 +2573,17 @@ private class NativeEngine(
 
     private fun campaignPendingRiskPct(): Double =
         synchronized(pendingEntries) {
-            pendingEntries.values.sumOf { it.riskReservedPct }
+            pendingEntries.values.sumOf {
+                conservativeRiskReservation(it.riskReservedPct, maxTotalRiskPct)
+            }.coerceAtMost(maxTotalRiskPct)
         }
 
     private fun campaignRiskUsedPct(): Double =
         (
-            positionList().sumOf { p ->
-                if (p.riskPct > 0.0) p.riskPct
-                else if (p.entry > 0.0 && p.stop > 0.0) {
-                    ((p.entry - p.stop) / p.entry).coerceAtLeast(0.0)
-                } else 0.0
+            positionList().sumOf {
+                conservativeRiskReservation(it.riskPct, maxTotalRiskPct)
             } + campaignPendingRiskPct()
-        ).coerceAtLeast(0.0)
+        ).coerceAtMost(maxTotalRiskPct)
 
     private fun campaignRemainingRiskPct(equity: Double): Double =
         if (equity <= 0.0) 0.0
