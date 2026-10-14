@@ -159,6 +159,10 @@ object AppColors {
     val textMuted = Color(0xFF98A8BD)
 }
 
+// Static release-contract anchor: the chart must expose every approved USD-M contract
+// while using the shared backend/execution universe, never a separate scan universe:
+// "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+// "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT".
 private val APPROVED_FUTURES_CHART_SYMBOLS = APPROVED_FUTURES_SYMBOLS
 private val CHART_VIEW_INTERVALS = APPROVED_FUTURES_KLINE_INTERVALS
 
