@@ -3400,12 +3400,18 @@ private class NativeEngine(
         try {
             return block()
         } finally {
-            executionGate.release(reservationKey)
-            val sqliteCleared = executionStore.writeExecutionGate("", "")
-            val preferencesCleared = prefs.edit()
-                .remove("execution_gate_symbol")
-                .remove("execution_gate_purpose")
-                .commit()
+            // Clear the durable lease while still holding the in-memory reservation.
+            // Releasing first creates a race where a second mutation writes its lease
+            // and the first mutation then erases that new lease.
+            val sqliteCleared = runCatching {
+                executionStore.writeExecutionGate("", "")
+            }.getOrDefault(false)
+            val preferencesCleared = runCatching {
+                prefs.edit()
+                    .remove("execution_gate_symbol")
+                    .remove("execution_gate_purpose")
+                    .commit()
+            }.getOrDefault(false)
             if (!sqliteCleared || !preferencesCleared) {
                 reconcileRequired = true
                 persistSafetyFlag("reconcile_required", true)
@@ -3413,8 +3419,11 @@ private class NativeEngine(
                 lastError = blocker
                 scannerError = blocker
                 stateMachine.force(TradingState.RECONCILE_REQUIRED, blocker)
+                // Intentionally keep the in-memory reservation: unresolved durable
+                // execution state must not permit another exchange mutation.
                 throw IllegalStateException(blocker)
             }
+            executionGate.release(reservationKey)
         }
     }
 
