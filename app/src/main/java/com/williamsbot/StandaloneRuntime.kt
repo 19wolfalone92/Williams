@@ -3876,7 +3876,7 @@ private class NativeEngine(
                 prefs.edit().putBoolean("auto_run", false).commit()
                 lastError =
                     "FUTURES_DAILY_BASELINE_UNKNOWN: exchange exposure or trading PnL exists since UTC midnight; " +
-                    "refusing to reset the 1% daily-loss limit to current equity"
+                    "refusing to reset the 3% daily-loss limit to current equity"
                 return false
             }
             check(executionStore.writeState(baselineKey, equity.toString())) {
@@ -3932,10 +3932,10 @@ private class NativeEngine(
             }
             return false
         }
-        if (lossPct >= 0.01) {
+        if (lossPct >= 0.03) {
             paused = true
             prefs.edit().putBoolean("auto_run", false).commit()
-            lastError = "FUTURES_DAILY_LOSS_LIMIT: 1% reached; new entries blocked"
+            lastError = "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"
             runCatching { futuresCampaignCoordinator.cancelPendingEntries("DAILY_LOSS_LIMIT") }
             return false
         }
@@ -8245,7 +8245,7 @@ private class NativeEngine(
             .put("stop_loss_pct", if (firstPosition == null || firstPosition.optString("stop").toDoubleOrNull()?.let { it > 0.0 } != true) JSONObject.NULL else kotlin.math.abs((firstPosition.optString("entry").toDoubleOrNull() ?: 0.0) - (firstPosition.optString("stop").toDoubleOrNull() ?: 0.0)) / (firstPosition.optString("entry").toDoubleOrNull() ?: 1.0))
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.01)
+            .put("max_daily_loss_pct", 0.03)
             .put("trades_today", futuresTradesToday)
             .put("daily_pnl_usdt", futuresDailyPnl)
             .put("consecutive_losses", JSONObject.NULL)
@@ -8293,7 +8293,7 @@ private class NativeEngine(
             .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
             .put("execution_mode", "AUTONOMOUS_ANDROID")
             .put("decision_timeframe", "1h")
-            .put("max_daily_loss_pct", 0.01)
+            .put("max_daily_loss_pct", 0.03)
             .put("futures_runtime", futuresRuntimeStatus)
             .put("futures_positions", futuresPositions)
     }
@@ -8501,7 +8501,7 @@ private class NativeEngine(
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
         test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
-        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss=0.01")
+        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss=0.03")
         test(
             "self_heal_contract",
             "runtime",
@@ -8629,7 +8629,7 @@ private class NativeEngine(
             .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
             .put("execution_block_reason", "Entries require reconciled Futures account, fresh H1 market data, risk approval, and exchange-confirmed protection")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.01)
+            .put("max_daily_loss_pct", 0.03)
             .put("max_trades_per_day", 0)
             .put("max_consecutive_losses", 2)
             .put("cooldown_minutes", 30)
