@@ -6734,9 +6734,9 @@ private class NativeEngine(
     ): List<CampaignSignalN> {
         if (candles.size < 45 || tick <= 0.0) return emptyList()
 
-        val jawS = williamsAlligatorCurrentLine(candles, 13).map { it ?: Double.NaN }
-        val teethS = williamsAlligatorCurrentLine(candles, 8).map { it ?: Double.NaN }
-        val lipsS = williamsAlligatorCurrentLine(candles, 5).map { it ?: Double.NaN }
+        val jawS = williamsAlligatorLine(candles, 13, 8).map { it ?: Double.NaN }
+        val teethS = williamsAlligatorLine(candles, 8, 5).map { it ?: Double.NaN }
+        val lipsS = williamsAlligatorLine(candles, 5, 3).map { it ?: Double.NaN }
 
         fun bullishAlligator(i: Int): Boolean =
             i in candles.indices &&
@@ -7515,19 +7515,6 @@ private class NativeEngine(
         return shiftAlligatorForDisplay(smmaSeededValues(median, period), displacement)
     }
 
-    /**
-     * Executable context uses the current bar's SMMA. The 8/5/3 offsets are
-     * chart-display displacement only; they must not substitute stale values
-     * into today's signal or higher-timeframe gate.
-     */
-    private fun williamsAlligatorCurrentLine(
-        candles: List<CandleN>,
-        period: Int
-    ): List<Double?> {
-        val median = candles.map { (it.h + it.l) / 2.0 }
-        return smmaSeededValues(median, period)
-    }
-
     private fun alligator(
         candles: List<CandleN>,
         index: Int
@@ -7535,9 +7522,9 @@ private class NativeEngine(
         if (candles.isEmpty() || index !in candles.indices) {
             return TripleValues(0.0, 0.0, 0.0)
         }
-        val jaw = williamsAlligatorCurrentLine(candles, 13).getOrNull(index) ?: 0.0
-        val teeth = williamsAlligatorCurrentLine(candles, 8).getOrNull(index) ?: 0.0
-        val lips = williamsAlligatorCurrentLine(candles, 5).getOrNull(index) ?: 0.0
+        val jaw = williamsAlligatorLine(candles, 13, 8).getOrNull(index) ?: 0.0
+        val teeth = williamsAlligatorLine(candles, 8, 5).getOrNull(index) ?: 0.0
+        val lips = williamsAlligatorLine(candles, 5, 3).getOrNull(index) ?: 0.0
         return TripleValues(jaw, teeth, lips)
     }
 
