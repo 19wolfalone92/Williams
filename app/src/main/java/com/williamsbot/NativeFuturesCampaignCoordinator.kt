@@ -41,6 +41,22 @@ internal fun exchangeOrderStatus(intent: JSONObject): String {
     )) "" else legacy
 }
 
+/**
+ * Only a definitive Binance "order not found" API response may be treated as absent.
+ * Timeouts, connection failures, rate limits and server errors are never converted
+ * into a flat/terminal campaign.
+ */
+internal fun isDefinitiveBinanceOrderNotFound(failure: Throwable): Boolean {
+    val text = generateSequence(failure) { it.cause }
+        .mapNotNull { it.message }
+        .joinToString(" ")
+    val notFound2013 = Regex("\\"code\\"\\s*:\\s*-2013").containsMatchIn(text)
+    val unknown2011 = Regex("\\"code\\"\\s*:\\s*-2011").containsMatchIn(text) &&
+        listOf("unknown order", "order does not exist", "order not found")
+            .any { text.contains(it, ignoreCase = true) }
+    return notFound2013 || unknown2011
+}
+
 internal fun latestEntryIntentIndex(intents: JSONArray, symbol: String): Int? {
     var latest: Int? = null
     for (i in 0 until intents.length()) {
@@ -215,6 +231,26 @@ internal class NativeFuturesCampaignCoordinator(
         adapterFactory().incomeHistory(startTimeMs, endTimeMs)
 
     /** Must finish successfully before the scanner may submit a new entry. */
+    private fun standardOrderOrNull(
+        adapter: BinanceUsdMFuturesTestnetAdapter,
+        symbol: String,
+        clientId: String
+    ): JSONObject? = try {
+        adapter.order(symbol, clientId)
+    } catch (failure: IOException) {
+        if (isDefinitiveBinanceOrderNotFound(failure)) null else throw failure
+    }
+
+    private fun conditionalOrderOrNull(
+        adapter: BinanceUsdMFuturesTestnetAdapter,
+        symbol: String,
+        clientId: String
+    ): JSONObject? = try {
+        adapter.queryAlgoOrder(symbol, clientId)
+    } catch (failure: IOException) {
+        if (isDefinitiveBinanceOrderNotFound(failure)) null else throw failure
+    }
+
     fun reconcile(): JSONObject = synchronized(lock) {
         state = State.RECONCILE_REQUIRED
         lastBlocker = "exchange_reconciliation_in_progress"
@@ -347,14 +383,26 @@ internal class NativeFuturesCampaignCoordinator(
                 val prior = campaignLifecycleStatus(intent)
                 val priorOrderStatus = exchangeOrderStatus(intent)
                 if (role == "EXIT") {
-                    val order = runCatching { adapter.order(symbol, clientId) }.getOrNull()
+                    val order = standardOrderOrNull(adapter, symbol, clientId)
                     if (order == null) {
-                        if (position == null) {
+                        val stillOpenStandard = (0 until allOpenOrders.length()).any { j ->
+                            val row = allOpenOrders.optJSONObject(j) ?: return@any true
+                            row.optString("symbol").equals(symbol, true) &&
+                                row.optString("clientOrderId") == clientId
+                        }
+                        val stillOpenConditional = (0 until allOpenAlgoOrders.length()).any { j ->
+                            val row = allOpenAlgoOrders.optJSONObject(j) ?: return@any true
+                            row.optString("symbol").equals(symbol, true) &&
+                                row.optString("clientAlgoId") == clientId
+                        }
+                        if (position == null && !stillOpenStandard && !stillOpenConditional) {
                             intent.put("exchange_status", "EXIT_CONFIRMED")
+                                .put("order_status", "NOT_FOUND_FLAT_CONFIRMED")
                                 .put("confirmed_flat_at_ms", System.currentTimeMillis())
                         } else {
                             throw IllegalStateException(
-                                "Exit intent " + clientId + " is unresolved while " + symbol + " remains open; no retry permitted"
+                                "Exit intent " + clientId + " is not queryable while " + symbol +
+                                    " still has a position or matching open order; no retry permitted"
                             )
                         }
                     } else {
@@ -512,13 +560,38 @@ internal class NativeFuturesCampaignCoordinator(
                 }
                 val kind = intent.optString("kind")
                 val order = when (kind) {
-                    EntryKind.LIMIT.name -> runCatching { adapter.order(symbol, clientId) }.getOrNull()
+                    EntryKind.LIMIT.name -> standardOrderOrNull(adapter, symbol, clientId)
                     EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name ->
-                        runCatching { adapter.queryAlgoOrder(symbol, clientId) }.getOrNull()
-                    else -> null
-                } ?: throw IllegalStateException(
-                    "Cannot reconcile persisted entry $clientId; no exchange record, no resubmission allowed"
-                )
+                        conditionalOrderOrNull(adapter, symbol, clientId)
+                    else -> throw IllegalStateException("Unknown entry kind for $clientId")
+                }
+                if (order == null) {
+                    val stillOpenStandard = (0 until allOpenOrders.length()).any { j ->
+                        val row = allOpenOrders.optJSONObject(j) ?: return@any true
+                        row.optString("symbol").equals(symbol, true) &&
+                            row.optString("clientOrderId") == clientId
+                    }
+                    val stillOpenConditional = (0 until allOpenAlgoOrders.length()).any { j ->
+                        val row = allOpenAlgoOrders.optJSONObject(j) ?: return@any true
+                        row.optString("symbol").equals(symbol, true) &&
+                            row.optString("clientAlgoId") == clientId
+                    }
+                    if (position == null && !stillOpenStandard && !stillOpenConditional) {
+                        // Binance definitively reports no historical order and its fresh
+                        // position/open-order snapshots show no remaining exposure. Do not
+                        // resend the client id; retire the stale local intent durably.
+                        intent.put("exchange_status", "NOT_FOUND_FLAT_CONFIRMED")
+                            .put("order_status", "NOT_FOUND")
+                            .put("campaign_status", "CLOSED_OR_STOPPED")
+                            .put("closed_observed_at_ms", System.currentTimeMillis())
+                            .put("last_reconciled_ms", System.currentTimeMillis())
+                        continue
+                    }
+                    throw IllegalStateException(
+                        "Cannot reconcile persisted entry $clientId: order is not queryable while " +
+                            "$symbol has a position or matching open order; resubmission is forbidden"
+                    )
+                }
                 val exchangeStatus = order.optString("status").ifBlank {
                     order.optString("algoStatus")
                 }.uppercase(Locale.US)
