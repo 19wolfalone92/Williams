@@ -230,6 +230,8 @@ data class Status(
     val scannerError: String? = null,
     val scannerSymbols: Int = 0,
     val scannerConfiguredSymbols: Int = 10,
+    val scannerProgressSymbols: Int = 0,
+    val scannerProgressTotal: Int = 10,
     val scannerUniverse: List<String> = emptyList(),
     val scannerLongCandidates: Int = 0,
     val scannerShortCandidates: Int = 0,
@@ -453,6 +455,31 @@ fun WilliamsApp(context: Context) {
                         candidates = parseCandidates(
                             scannerJson.optJSONArray("candidates") ?: JSONArray()
                         )
+                        val scannedUniverse = scannerJson.optJSONArray("scan_symbols")?.let { symbols ->
+                            List(symbols.length()) { index -> symbols.optString(index) }
+                                .filter { it.isNotBlank() }
+                        } ?: status.scannerUniverse
+                        val reportedTotal = scannerJson.optInt("progress_total", 10)
+                            .let { if (it > 0) it.coerceAtMost(10) else 10 }
+                        status = status.copy(
+                            scannerScanning = scannerJson.optBoolean("scanning", false),
+                            scannerState = scannerJson.optString("scanner_state", status.scannerState),
+                            scannerError = scannerJson.optString("scanner_error")
+                                .takeUnless { it.isBlank() || it == "null" },
+                            scannerSymbols = scannerJson.optInt(
+                                "symbols_scanned",
+                                scannerJson.optInt("progress_symbols", 0)
+                            ),
+                            scannerConfiguredSymbols = reportedTotal,
+                            scannerProgressSymbols = scannerJson.optInt("progress_symbols", 0)
+                                .coerceIn(0, reportedTotal),
+                            scannerProgressTotal = reportedTotal,
+                            scannerUniverse = scannedUniverse,
+                            scanDurationMs = scannerJson.optLong(
+                                "last_scan_duration_ms",
+                                status.scanDurationMs
+                            )
+                        )
                     }
                 }.onFailure {
                     failures += "scanner: " + (it.message ?: it.javaClass.simpleName)
@@ -476,7 +503,7 @@ fun WilliamsApp(context: Context) {
 
                 withContext(Dispatchers.Main) {
                     val scannerError =
-                        scannerJson.optString("scanner_error").takeIf { it.isNotBlank() }
+                        scannerJson.optString("scanner_error").takeIf { it.isNotBlank() && it != "null" }
                     message = when {
                         failures.isNotEmpty() ->
                             "Частичная ошибка: " + failures.joinToString(" • ")
@@ -534,6 +561,9 @@ fun WilliamsApp(context: Context) {
                     api.get("/api/v1/market/klines?symbol=" + requestSymbol + "&interval=" + requestInterval)
                 }
                 val payload = JSONObject(raw)
+                payload.optString("error").takeIf { it.isNotBlank() && it != "null" }?.let {
+                    throw IllegalStateException(it)
+                }
                 require(payload.optString("symbol") == requestSymbol) { "Runtime вернул график другой пары" }
                 require(payload.optString("interval") == requestInterval) { "Runtime вернул другой таймфрейм; молчаливая подмена запрещена" }
                 val loaded = parseCandles(payload.optJSONArray("candles") ?: JSONArray())
@@ -1913,7 +1943,8 @@ private fun ScannerScreen(
                     Text("График рынка и решение бота", style = MaterialTheme.typography.headlineSmall)
                     Text(
                         when (status.scannerState) {
-                            "RUNNING" -> "Сканирование выполняется…"
+                            "RUNNING" -> "Сканирование выполняется • " +
+                                status.scannerProgressSymbols + "/" + status.scannerProgressTotal
                             "ERROR", "FAILED" -> "Ошибка сканера"
                             "BLOCKED", "BLOCKED_ACCOUNT", "BLOCKED_RECONCILE",
                             "BLOCKED_KILL", "BLOCKED_DAILY_LOSS",
@@ -1988,7 +2019,8 @@ private fun ScannerScreen(
                                 " утверждённых Futures-пар; сейчас нет условий для входа."
                             "BLOCKED" -> "Проверка конфигурации или биржевых фильтров заблокировала сканирование."
                             "PARTIAL" -> "Проверены не все пары. Новые входы остаются заблокированы."
-                            "RUNNING" -> "Сканер проверяет утверждённые пары."
+                            "RUNNING" -> "Сканер проверяет утверждённые пары: " +
+                                status.scannerProgressSymbols + "/" + status.scannerProgressTotal + "."
                             else -> "Нажми «СКАН», чтобы проверить утверждённые десять Futures-пар."
                         }
                 )

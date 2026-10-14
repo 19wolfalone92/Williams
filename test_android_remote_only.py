@@ -527,3 +527,23 @@ def test_actions_testnet_gate_skips_when_ci_secrets_absent_without_claiming_test
     assert "No authenticated Futures Demo account check was performed" in workflow
     assert "if: steps.check-ci-testnet-credentials.outputs.configured == 'true'" in workflow
     assert "exit 1" not in workflow
+
+
+
+def test_android_ui_uses_scanner_endpoint_for_real_state_progress_and_universe():
+    ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert 'scannerJson.optString("scanner_state", status.scannerState)' in ui
+    assert 'scannerJson.optInt("progress_symbols", 0)' in ui
+    assert 'scannerJson.optJSONArray("scan_symbols")' in ui
+    assert 'scannerJson.optString("scanner_error")' in ui
+    assert 'scannerJson.optInt("progress_total", 10)' in ui
+    assert '.put("progress_total", coreSymbols.size)' in runtime
+    assert '.put("scan_symbols", JSONArray().apply { scanSymbols.forEach { put(it) } })' in runtime
+    assert '"Сканирование выполняется • "' in ui
+
+
+def test_android_ui_does_not_display_json_null_as_a_scanner_error():
+    ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    assert 'takeIf { it.isNotBlank() && it != "null" }' in ui
+    assert 'takeUnless { it.isBlank() || it == "null" }' in ui
