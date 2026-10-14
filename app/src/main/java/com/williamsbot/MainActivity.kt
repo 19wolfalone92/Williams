@@ -2129,7 +2129,7 @@ private fun MarketChartPanel(
                 })
                 InfoRow("Семейство Williams", candidate.entrySignalType.ifBlank { "не указано" })
                 InfoRow("HTF-контекст", if (candidate.htfConfirmed) "подтверждён" else "не подтверждён")
-                InfoRow("Wise Men evidence", candidate.wiseManCount.toString() + "/3 (диагностика)")
+                InfoRow("Согласование направления", candidate.wiseManCount.toString() + "/3 (диагностика, не счётчик Three Wise Men)")
                 InfoRow("Волновая фаза", "W" + candidate.wavePosition + " • " + candidate.wavePhase)
                 InfoRow("Оценка риска", if (candidate.riskPct > 0.0) fmt(candidate.riskPct, 2) + "%" else "—")
                 InfoRow("Risk/reward", if (candidate.riskReward > 0.0) fmt(candidate.riskReward, 2) else "—")
@@ -2214,7 +2214,7 @@ private fun CandidateCardModern(candidate: Candidate) {
                 MiniMetric("RR", fmt(candidate.riskReward, 2))
                 MiniMetric("ATR", fmt(candidate.atrPct * 100, 2) + "%")
                 MiniMetric("SPREAD", fmt(candidate.spreadPct * 100, 3) + "%")
-                MiniMetric("WM", candidate.wiseManCount.toString() + "/3")
+                MiniMetric("Align", candidate.wiseManCount.toString() + "/3")
             }
 
             if (candidate.nestedW3ParentW5) {

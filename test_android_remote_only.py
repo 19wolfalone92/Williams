@@ -586,3 +586,28 @@ def test_android_candidate_state_never_labels_short_as_confirmed_long():
     assert '"SIGNAL • DIRECTION UNKNOWN"' in ui
     assert 'candidate.signal -> "CONFIRMED LONG"' not in ui
     assert "candidateDirection(candidate) == \"SHORT\" -> \"SHORT\"" in ui
+
+
+
+def test_scanner_explains_the_same_newest_signal_that_execution_selects():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    assert "val primarySignal = campaignEntryCandidate(candidate)" in runtime
+    assert '.put("entry_signal_type", primarySignal?.type ?: JSONObject.NULL)' in runtime
+    assert '.put("entry_trigger_price", primarySignal?.triggerPrice ?: JSONObject.NULL)' in runtime
+    assert '.put("entry_protective_price", primarySignal?.protectivePrice ?: JSONObject.NULL)' in runtime
+    assert "candidate.campaignSignals.firstOrNull()?.type" not in runtime
+    assert "directionalAlignmentCount(candidate, primarySignal)" in runtime
+    assert 'InfoRow("Согласование направления"' in ui
+
+
+def test_directional_alignment_diagnostics_check_short_values_with_short_geometry():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    fn = runtime.split("private fun directionalAlignmentCount(", 1)[1].split(
+        "private fun williamsAlligatorLine(", 1
+    )[0]
+    assert 'signal.type.startsWith("SHORT_", ignoreCase = true)' in fn
+    assert "lines.lips < lines.teeth && lines.teeth < lines.jaw && close < lines.lips" in fn
+    assert "aoValue < 0.0" in fn
+    assert "signal.triggerPrice < close" in fn
+    assert "signal.protectivePrice > signal.triggerPrice" in fn

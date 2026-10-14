@@ -8400,6 +8400,9 @@ private class NativeEngine(
 
     private fun toJson(candidate: BaseAnalysis): JSONObject {
         val wave = candidate.wave
+        // Match the exact signal selected by execution, rather than displaying
+        // the oldest item in the candidate list as if it were the pending entry.
+        val primarySignal = campaignEntryCandidate(candidate)
         val signalStrength =
             if (candidate.signal) "CONFIRMED" else "WATCHING"
 
@@ -8463,19 +8466,10 @@ private class NativeEngine(
                     }
                 }
             )
-            .put(
-                "entry_signal_type",
-                candidate.campaignSignals.firstOrNull()?.type ?: JSONObject.NULL
-            )
-            .put(
-                "entry_trigger_price",
-                candidate.campaignSignals.firstOrNull()?.triggerPrice ?: JSONObject.NULL
-            )
-            .put(
-                "entry_protective_price",
-                candidate.campaignSignals.firstOrNull()?.protectivePrice ?: JSONObject.NULL
-            )
-            .put("wise_man_count", wiseManCount(candidate))
+            .put("entry_signal_type", primarySignal?.type ?: JSONObject.NULL)
+            .put("entry_trigger_price", primarySignal?.triggerPrice ?: JSONObject.NULL)
+            .put("entry_protective_price", primarySignal?.protectivePrice ?: JSONObject.NULL)
+            .put("wise_man_count", directionalAlignmentCount(candidate, primarySignal))
             .put("signal_family", "ALLIGATOR_AO_FRACTAL")
             .put("wave_score", displayWaveScore)
             .put("wave_position", wave.position)
@@ -8499,12 +8493,38 @@ private class NativeEngine(
             )
     }
 
-    private fun wiseManCount(candidate: BaseAnalysis): Int {
-        var count = 0
-        if (candidate.wave.alligatorBullish) count++
-        if (candidate.wave.aoPositive) count++
-        if (candidate.breakoutDistancePct > 0.0) count++
-        return count.coerceIn(0, 3)
+    /**
+     * Directional alignment proxy for the cockpit, not a substitute for the
+     * book-defined Three Wise Men sequence. All three checks use the direction
+     * and levels of the same primary signal that the execution path evaluates.
+     */
+    private fun directionalAlignmentCount(
+        candidate: BaseAnalysis,
+        signal: CampaignSignalN?
+    ): Int {
+        if (signal == null || candidate.candles.isEmpty()) return 0
+        val short = signal.type.startsWith("SHORT_", ignoreCase = true)
+        val lastIndex = candidate.candles.lastIndex
+        val close = candidate.candles[lastIndex].c
+        val lines = alligator(candidate.candles, lastIndex)
+        val alligatorAligned = if (short) {
+            lines.lips < lines.teeth && lines.teeth < lines.jaw && close < lines.lips
+        } else {
+            lines.lips > lines.teeth && lines.teeth > lines.jaw && close > lines.lips
+        }
+        val aoValue = ao(candidate.candles, lastIndex)
+        val momentumAligned = if (short) aoValue.isFinite() && aoValue < 0.0
+            else aoValue.isFinite() && aoValue > 0.0
+        val triggerGeometryValid = if (short) {
+            signal.triggerPrice.isFinite() && signal.protectivePrice.isFinite() &&
+                signal.triggerPrice > 0.0 && signal.protectivePrice > signal.triggerPrice &&
+                signal.triggerPrice < close
+        } else {
+            signal.triggerPrice.isFinite() && signal.protectivePrice.isFinite() &&
+                signal.triggerPrice > close && signal.protectivePrice > 0.0 &&
+                signal.protectivePrice < signal.triggerPrice
+        }
+        return listOf(alligatorAligned, momentumAligned, triggerGeometryValid).count { it }
     }
 
     /**
