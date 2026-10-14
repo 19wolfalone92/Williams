@@ -121,14 +121,14 @@ def run_testnet_read_only(symbol: str = "BTCUSDT") -> dict:
         raise RuntimeError(
             f"Refusing Futures Demo Gate: unexpected endpoint {client.base_url!r}"
         )
+    requested_symbol = symbol.upper()
+    if requested_symbol not in APPROVED_FUTURES_SYMBOLS:
+        raise RuntimeError(f"{requested_symbol}: outside the approved ten-symbol Futures universe")
+
     # Synchronize the client's signed-request clock before the account read.
     initial_clock = client.sync_time()
     if not isinstance(initial_clock, dict) or int(initial_clock.get("serverTime", 0) or 0) <= 0:
         raise RuntimeError("Futures Demo exchange clock is missing or invalid")
-
-    requested_symbol = symbol.upper()
-    if requested_symbol not in APPROVED_FUTURES_SYMBOLS:
-        raise RuntimeError(f"{requested_symbol}: outside the approved ten-symbol Futures universe")
 
     account = client.account()
     if not isinstance(account, dict):
@@ -389,6 +389,9 @@ def test_read_only_gate_blocks_unfunded_account_before_symbol_checks(monkeypatch
 
         def __init__(self, *args, **kwargs):
             pass
+
+        def sync_time(self):
+            return {"serverTime": 1_800_000_012_345}
 
         def account(self):
             return {
