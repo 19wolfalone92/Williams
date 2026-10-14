@@ -9360,16 +9360,10 @@ private class NativeEngine(
                             "ao",
                             ao(sourceCandles, i)
                         )
-                        .put(
-                            "long_signal",
-                            i >= 40 &&
-                                alligator(sourceCandles, i).let { values ->
-                                    values.lips > values.teeth &&
-                                        values.teeth > values.jaw &&
-                                        prices[i] > values.lips &&
-                                        ao(sourceCandles, i) > 0.0
-                                }
-                        )
+                        // Chart payload is diagnostic only. Never synthesize an
+                        // entry marker from Alligator+AO on the selected display TF;
+                        // H1 campaign logic is the sole signal authority.
+                        .put("signal_source", "DIAGNOSTIC_ONLY_H1_CAMPAIGN_AUTHORITY")
                         .put(
                             "fractal_up",
                             isUpFractal(sourceCandles, i)
