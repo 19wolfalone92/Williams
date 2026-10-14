@@ -9521,7 +9521,25 @@ private class NativeEngine(
         val medianPrices = sourceCandles.map { (it.h + it.l) / 2.0 }
         val aoValues = medianPrices.indices.map { index -> awesomeOscillatorAt(medianPrices, index) }
         val acValues = aoValues.indices.map { index -> acceleratorOscillatorAt(aoValues, index) }
-        val indicatorSnapshot = buildIndicatorSnapshot(sourceCandles, symbol, selectedInterval)
+        // The chart fetches a moving quote frequently, but Williams indicators use only
+        // confirmed closed candles. Cache the expensive wave/indicator explanation by
+        // latest closed-bar timestamp so one-second quote refreshes do not recompute it.
+        val indicatorKey = symbol + ":" + selectedInterval
+        val latestClosedCandleTime = sourceCandles.lastOrNull()?.t ?: 0L
+        val cachedIndicatorSnapshot = indicatorSnapshots[indicatorKey]
+        val indicatorSnapshot = if (
+            cachedIndicatorSnapshot != null &&
+            cachedIndicatorSnapshot.optBoolean("ready", false) &&
+            cachedIndicatorSnapshot.optLong("time", -1L) == latestClosedCandleTime
+        ) {
+            JSONObject(cachedIndicatorSnapshot.toString())
+        } else {
+            buildIndicatorSnapshot(sourceCandles, symbol, selectedInterval).also { snapshot ->
+                if (snapshot.optBoolean("ready", false) && latestClosedCandleTime > 0L) {
+                    indicatorSnapshots[indicatorKey] = JSONObject(snapshot.toString())
+                }
+            }
+        }
 
         if (prices.isNotEmpty()) {
             val jaw = williamsAlligatorLine(sourceCandles, 13, 8)
