@@ -83,6 +83,17 @@ object StandaloneRuntime {
     }
 }
 
+/**
+ * Risk reservations are fractions of account equity, not price-distance percentages.
+ * An absent/invalid reservation is unknown exposure and therefore consumes the
+ * entire campaign budget until exchange reconciliation restores the persisted value.
+ */
+internal fun conservativeRiskReservation(storedRiskPct: Double, maxTotalRiskPct: Double): Double {
+    if (!maxTotalRiskPct.isFinite() || maxTotalRiskPct <= 0.0) return 1.0
+    if (!storedRiskPct.isFinite() || storedRiskPct <= 0.0) return maxTotalRiskPct
+    return minOf(storedRiskPct, maxTotalRiskPct)
+}
+
 private data class CandleN(
     val t: Long,
     val o: Double,
@@ -664,19 +675,18 @@ private class NativeEngine(
 
     private fun reservedRiskPct(): Double {
         val openRisk = positionList().sumOf {
-            if (it.riskPct > 0.0) it.riskPct
-            else if (it.entry > 0.0) {
-                ((it.entry - it.stop) / it.entry).coerceAtLeast(0.0)
-            } else 0.0
+            conservativeRiskReservation(it.riskPct, maxTotalRiskPct)
         }
         val pendingRisk = if (campaignEngineEnabled) {
             synchronized(pendingEntries) {
-                pendingEntries.values.sumOf { it.riskReservedPct }
+                pendingEntries.values.sumOf {
+                    conservativeRiskReservation(it.riskReservedPct, maxTotalRiskPct)
+                }
             }
         } else {
             0.0
         }
-        return (openRisk + pendingRisk).coerceAtMost(1.0)
+        return (openRisk + pendingRisk).coerceAtMost(maxTotalRiskPct)
     }
 
     private fun marketDataFresh(maxAgeMs: Long = 30_000L): Boolean =

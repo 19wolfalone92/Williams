@@ -1,6 +1,6 @@
 package com.williamsbot
 
-import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -68,7 +68,7 @@ internal class BinanceUsdMFuturesMarketData(
         require(startTime == null || endTime == null || startTime <= endTime) {
             "startTime must not exceed endTime"
         }
-        val builder = HttpUrl.parse("$base/fapi/v1/klines")!!.newBuilder()
+        val builder = "$base/fapi/v1/klines".toHttpUrl().newBuilder()
             .addQueryParameter("symbol", normalizedSymbol)
             .addQueryParameter("interval", interval)
             .addQueryParameter("limit", limit.toString())
@@ -86,7 +86,7 @@ internal class BinanceUsdMFuturesMarketData(
 
     fun price(symbol: String): Double {
         requireSymbol(symbol)
-        val url = HttpUrl.parse("$base/fapi/v1/ticker/price")!!.newBuilder()
+        val url = "$base/fapi/v1/ticker/price".toHttpUrl().newBuilder()
             .addQueryParameter("symbol", symbol.uppercase(Locale.US)).build().toString()
         val value = getObject(url).optString("price").toDoubleOrNull()
             ?: throw IOException("Malformed Futures ticker price for $symbol")
@@ -96,7 +96,7 @@ internal class BinanceUsdMFuturesMarketData(
 
     fun markPrice(symbol: String): Double {
         requireSymbol(symbol)
-        val url = HttpUrl.parse("$base/fapi/v1/premiumIndex")!!.newBuilder()
+        val url = "$base/fapi/v1/premiumIndex".toHttpUrl().newBuilder()
             .addQueryParameter("symbol", symbol.uppercase(Locale.US)).build().toString()
         val value = getObject(url).optString("markPrice").toDoubleOrNull()
             ?: throw IOException("Malformed Futures mark price for $symbol")
@@ -123,9 +123,9 @@ internal class BinanceUsdMFuturesMarketData(
     private fun execute(url: String): String {
         val request = Request.Builder().url(url).header("Accept", "application/json").get().build()
         http.newCall(request).execute().use { response ->
-            val body = response.body()?.string().orEmpty()
+            val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw IOException("USD-M Futures market data HTTP ${response.code()}: ${body.take(300)}")
+                throw IOException("USD-M Futures market data HTTP ${response.code}: ${body.take(300)}")
             }
             return body
         }

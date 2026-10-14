@@ -1,7 +1,7 @@
 package com.williamsbot
 
 import okhttp3.FormBody
-import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
@@ -55,13 +55,13 @@ internal class BinanceUsdMFuturesTestnetAdapter(
 
     fun markPrice(symbol: String): Double {
         requireSymbol(symbol)
-        val url = HttpUrl.parse("$base/fapi/v1/premiumIndex")!!.newBuilder()
+        val url = "$base/fapi/v1/premiumIndex".toHttpUrl().newBuilder()
             .addQueryParameter("symbol", symbol)
             .build()
         val request = Request.Builder().url(url).get().build()
         http.newCall(request).execute().use { response ->
-            val body = response.body()?.string().orEmpty()
-            if (!response.isSuccessful) throw IOException("Futures mark price HTTP ${response.code()}: ${body.take(300)}")
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IOException("Futures mark price HTTP ${response.code}: ${body.take(300)}")
             val value = JSONObject(body).optString("markPrice").toDoubleOrNull()
                 ?: throw IOException("Futures mark price response is malformed")
             if (!value.isFinite() || value <= 0.0) throw IOException("Futures mark price is invalid")
@@ -73,15 +73,15 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         requireSymbol(symbol)
         require(interval in setOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"))
         require(limit in 1..1500)
-        val url = HttpUrl.parse("$base/fapi/v1/klines")!!.newBuilder()
+        val url = "$base/fapi/v1/klines".toHttpUrl().newBuilder()
             .addQueryParameter("symbol", symbol)
             .addQueryParameter("interval", interval)
             .addQueryParameter("limit", limit.toString())
             .build()
         val request = Request.Builder().url(url).get().build()
         http.newCall(request).execute().use { response ->
-            val body = response.body()?.string().orEmpty()
-            if (!response.isSuccessful) throw IOException("Futures klines HTTP ${response.code()}: ${body.take(300)}")
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IOException("Futures klines HTTP ${response.code}: ${body.take(300)}")
             return JSONArray(body)
         }
     }
@@ -442,7 +442,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             all["recvWindow"] = "5000"
             all["signature"] = sign(encode(all))
         }
-        val url = HttpUrl.parse(base + path)!!.newBuilder()
+        val url = (base + path).toHttpUrl().newBuilder()
         val body: RequestBody?
         if (method == "GET" || method == "DELETE") {
             all.forEach { (key, value) -> url.addQueryParameter(key, value) }
@@ -461,8 +461,8 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             else -> throw IllegalArgumentException("Unsupported HTTP method")
         }
         http.newCall(builder.build()).execute().use { response ->
-            val text = response.body()?.string().orEmpty()
-            if (!response.isSuccessful) throw IOException("Binance USD-M Futures HTTP ${response.code()}: ${text.take(500)}")
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IOException("Binance USD-M Futures HTTP ${response.code}: ${text.take(500)}")
             return text
         }
     }

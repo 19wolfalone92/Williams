@@ -1,11 +1,11 @@
 package com.williamsbot
 
 import okhttp3.Interceptor
-import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Response
-import okhttp3.ResponseBody
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,13 +15,13 @@ class BinanceUsdMFuturesMarketDataTest {
     fun requestsUsdMFuturesKlinesAndPassesPaginationParameters() {
         var capturedUrl = ""
         val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
-            capturedUrl = chain.request().url().toString()
+            capturedUrl = chain.request().url.toString()
             Response.Builder()
                 .request(chain.request())
                 .protocol(Protocol.HTTP_1_1)
                 .code(200)
                 .message("OK")
-                .body(ResponseBody.create(MediaType.parse("application/json"), "[]"))
+                .body("[]".toResponseBody("application/json".toMediaType()))
                 .build()
         }).build()
 
