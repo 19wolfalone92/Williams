@@ -163,7 +163,7 @@ private val APPROVED_FUTURES_CHART_SYMBOLS = listOf(
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
     "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
 )
-private val CHART_VIEW_INTERVALS = listOf("1d", "4h", "1h", "15m", "5m")
+private val CHART_VIEW_INTERVALS = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
 
 @Composable
 private fun WilliamsTheme(content: @Composable () -> Unit) {
@@ -270,7 +270,8 @@ data class Candle(
     val longSignal: Boolean,
     val fractalUp: Boolean,
     val fractalDown: Boolean,
-    val ao: Double? = null
+    val ao: Double? = null,
+    val ac: Double? = null
 )
 
 data class Candidate(
@@ -408,6 +409,9 @@ fun WilliamsApp(context: Context) {
     var chartLoading by remember { mutableStateOf(false) }
     var chartError by remember { mutableStateOf<String?>(null) }
     var chartLivePrice by remember { mutableStateOf<Double?>(null) }
+    var chartQuoteSource by remember { mutableStateOf("UNAVAILABLE") }
+    var chartQuoteUpdatedAtMs by remember { mutableLongStateOf(0L) }
+    var chartIndicatorSummary by remember { mutableStateOf("Загрузка индикаторов…") }
     var selectedChartInterval by remember { mutableStateOf("1h") }
     var candidates by remember { mutableStateOf(emptyList<Candidate>()) }
     var trades by remember { mutableStateOf(emptyList<Trade>()) }
@@ -571,6 +575,9 @@ fun WilliamsApp(context: Context) {
                 require(payload.optString("interval") == requestInterval) { "Runtime вернул другой таймфрейм; молчаливая подмена запрещена" }
                 val loaded = parseCandles(payload.optJSONArray("candles") ?: JSONArray())
                 chartLivePrice = payload.optDouble("live_price").takeIf { it.isFinite() && it > 0.0 }
+                chartQuoteSource = payload.optString("live_price_source", "UNAVAILABLE")
+                chartQuoteUpdatedAtMs = payload.optLong("live_price_at_ms", 0L)
+                chartIndicatorSummary = chartIndicatorSummary(payload.optJSONObject("indicator_snapshot"))
                 if (loaded.isEmpty()) {
                     chartError = "$requestSymbol $requestInterval: закрытые свечи не получены"
                 } else {
@@ -583,7 +590,7 @@ fun WilliamsApp(context: Context) {
                 chartError = failure.message ?: failure.javaClass.simpleName
             }
             chartLoading = false
-            delay(15_000L)
+            delay(1_000L)
         }
     }
 
@@ -988,6 +995,9 @@ fun WilliamsApp(context: Context) {
                 chartInterval = selectedChartInterval,
                 chartCandles = chartCandles,
                 chartLivePrice = chartLivePrice,
+                chartQuoteSource = chartQuoteSource,
+                chartQuoteUpdatedAtMs = chartQuoteUpdatedAtMs,
+                chartIndicatorSummary = chartIndicatorSummary,
                 chartLoading = chartLoading,
                 chartError = chartError,
                 onChartSymbolChange = { selectedChartSymbol = it },
@@ -1925,6 +1935,9 @@ private fun ScannerScreen(
     chartInterval: String,
     chartCandles: List<Candle>,
     chartLivePrice: Double?,
+    chartQuoteSource: String,
+    chartQuoteUpdatedAtMs: Long,
+    chartIndicatorSummary: String,
     chartLoading: Boolean,
     chartError: String?,
     onChartSymbolChange: (String) -> Unit,
@@ -1990,6 +2003,9 @@ private fun ScannerScreen(
                 interval = chartInterval,
                 candles = chartCandles,
                 livePrice = chartLivePrice,
+                quoteSource = chartQuoteSource,
+                quoteUpdatedAtMs = chartQuoteUpdatedAtMs,
+                indicatorSummary = chartIndicatorSummary,
                 loading = chartLoading,
                 error = chartError,
                 candidate = candidates.firstOrNull { it.symbol.equals(chartSymbol, ignoreCase = true) },
@@ -2047,6 +2063,9 @@ private fun MarketChartPanel(
     interval: String,
     candles: List<Candle>,
     livePrice: Double?,
+    quoteSource: String,
+    quoteUpdatedAtMs: Long,
+    indicatorSummary: String,
     loading: Boolean,
     error: String?,
     candidate: Candidate?,
@@ -2101,8 +2120,13 @@ private fun MarketChartPanel(
                         label = { Text(frame.uppercase(Locale.US)) })
                 }
             }
-            Text("Роли ТФ: D1 — макроконтекст • H4 — контекст • H1 — единственный ТФ решения • M15 — мониторинг • M5 — диагностика. Переключение графика не меняет логику входа.",
+            Text("Все таймфреймы здесь — визуальный анализ. Торговое решение создаётся только на закрытом H1; D1/H4 — контекст, M15/M5 — мониторинг и диагностика.",
                 color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
+            Text("Котировка: " + (livePrice?.let { fmt(it) } ?: "нет") + " • источник: " + quoteSource +
+                (if (quoteUpdatedAtMs > 0L) " • " + ((System.currentTimeMillis() - quoteUpdatedAtMs).coerceAtLeast(0L) / 1000L) + "с назад" else ""),
+                color = if (livePrice != null) AppColors.green else AppColors.amber,
+                style = MaterialTheme.typography.labelSmall)
+            Text(indicatorSummary, color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
             if (candles.isEmpty()) {
                 if (loading) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3096,7 +3120,7 @@ private fun TradingChart(
         colors = CardDefaults.cardColors(containerColor = AppColors.surface)
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text("Alligator: Jaw 13/8 • Teeth 8/5 • Lips 5/3  |  Fractals подтверждаются после правых баров",
+            Text("Alligator: Jaw 13/8 • Teeth 8/5 • Lips 5/3  |  Fractals подтверждаются после двух правых закрытых баров",
                 color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
             Row(
                 Modifier.fillMaxWidth(),
@@ -3118,7 +3142,7 @@ private fun TradingChart(
                 .fillMaxWidth()
                 .height(340.dp)
                 .padding(8.dp)
-                .pointerInput(candles) {
+                .pointerInput(visible.size) {
                     detectTransformGestures { _, drag, zoom, _ ->
                         scale =
                             (scale * zoom).coerceIn(1f, 5f)
@@ -3253,6 +3277,26 @@ private fun TradingChart(
                 val step = size.width / visible.size.toFloat()
                 visible.forEachIndexed { index, candle ->
                     val value = candle.ao?.takeIf(Double::isFinite) ?: return@forEachIndexed
+                    val height = (kotlin.math.abs(value) / maxAbs * (size.height * 0.42f)).toFloat()
+                    val left = index * step + step * 0.15f
+                    drawRect(color = if (value >= 0.0) AppColors.green else AppColors.red,
+                        topLeft = Offset(left, if (value >= 0.0) zeroY - height else zeroY),
+                        size = Size(max(1f, step * 0.7f), max(1f, height)))
+                }
+            }
+        }
+        Text("Accelerator Oscillator (AC = AO − SMA5(AO)) • это свидетельство импульса, не самостоятельный вход",
+            color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 8.dp))
+        Canvas(modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 8.dp, vertical = 4.dp)) {
+            val finite = visible.mapNotNull { it.ac?.takeIf(Double::isFinite) }
+            val maxAbs = finite.maxOfOrNull { kotlin.math.abs(it) } ?: 0.0
+            val zeroY = size.height / 2f
+            drawLine(AppColors.textMuted.copy(alpha = 0.65f), Offset(0f, zeroY), Offset(size.width, zeroY), 1f)
+            if (maxAbs > 0.0 && visible.isNotEmpty()) {
+                val step = size.width / visible.size.toFloat()
+                visible.forEachIndexed { index, candle ->
+                    val value = candle.ac?.takeIf(Double::isFinite) ?: return@forEachIndexed
                     val height = (kotlin.math.abs(value) / maxAbs * (size.height * 0.42f)).toFloat()
                     val left = index * step + step * 0.15f
                     drawRect(color = if (value >= 0.0) AppColors.green else AppColors.red,
@@ -3602,6 +3646,34 @@ private fun parseStatus(json: JSONObject): Status {
     )
 }
 
+private fun chartIndicatorSummary(snapshot: JSONObject?): String {
+    if (snapshot == null || !snapshot.optBoolean("ready", false)) {
+        return "Индикаторы: недостаточно закрытых свечей для корректного расчёта"
+    }
+    fun value(key: String): Double? = snapshot.optDouble(key).takeIf { it.isFinite() && !snapshot.isNull(key) }
+    val jaw = value("jaw")
+    val teeth = value("teeth")
+    val lips = value("lips")
+    val alligator = when {
+        lips != null && teeth != null && jaw != null && lips > teeth && teeth > jaw -> "бычий порядок"
+        lips != null && teeth != null && jaw != null && lips < teeth && teeth < jaw -> "медвежий порядок"
+        else -> "переплетён / не направлен"
+    }
+    val zone = when (snapshot.optString("zone")) { "GREEN" -> "зелёная"; "RED" -> "красная"; else -> "нейтральная" }
+    val divergence = when {
+        snapshot.optBoolean("ao_bullish_divergence") && snapshot.optBoolean("ao_bearish_divergence") -> "оба экстремума (проверить вручную)"
+        snapshot.optBoolean("ao_bullish_divergence") -> "бычья"
+        snapshot.optBoolean("ao_bearish_divergence") -> "медвежья"
+        else -> "нет подтверждённой"
+    }
+    val upFractal = !snapshot.isNull("fractal_up_index")
+    val downFractal = !snapshot.isNull("fractal_down_index")
+    val mfi = value("mfi_proxy")?.let { fmt(it, 6) } ?: "—"
+    return "ЧТО ВИДИТ ДВИЖОК: Alligator $alligator • AO " + (value("ao")?.let { fmt(it, 5) } ?: "—") +
+        " • AC " + (value("ac")?.let { fmt(it, 5) } ?: "—") + " • зона $zone • " +
+        "MFI proxy (H−L)/volume=$mfi, рост=" + snapshot.optBoolean("mfi_up") + " • AO divergence=$divergence • " +
+        "подтверждённые фракталы: UP=$upFractal / DOWN=$downFractal • wave=" + snapshot.optString("wave").ifBlank { "недостаточно данных" }
+}
 private fun parseCandles(array: JSONArray): List<Candle> =
     List(array.length()) { i ->
         val x = array.getJSONObject(i)
@@ -3617,7 +3689,8 @@ private fun parseCandles(array: JSONArray): List<Candle> =
             longSignal = x.optBoolean("long_signal"),
             fractalUp = x.optBoolean("fractal_up"),
             fractalDown = x.optBoolean("fractal_down"),
-            ao = x.optDouble("ao").takeUnless { it.isNaN() || x.isNull("ao") }
+            ao = x.optDouble("ao").takeUnless { it.isNaN() || x.isNull("ao") },
+            ac = x.optDouble("ac").takeUnless { it.isNaN() || x.isNull("ac") }
         )
     }
 
