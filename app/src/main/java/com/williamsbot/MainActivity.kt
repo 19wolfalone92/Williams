@@ -559,6 +559,9 @@ fun WilliamsApp(context: Context) {
         if (tab != 1) return@LaunchedEffect
         chartCandles = emptyList()
         chartLivePrice = null
+        chartQuoteSource = "UNAVAILABLE"
+        chartQuoteUpdatedAtMs = 0L
+        chartIndicatorSummary = "Загрузка индикаторов…"
         chartError = null
         chartLoading = true
         while (isActive) {
@@ -3272,7 +3275,7 @@ private fun TradingChart(
             level(candidate?.entryTriggerPrice, AppColors.amber, "H1 TRIGGER")
             level(candidate?.entryProtectivePrice, AppColors.red.copy(alpha = 0.9f), "H1 STRUCTURAL STOP")
         }
-        Text("Awesome Oscillator (AO) • зелёный: выше нуля, красный: ниже нуля",
+        Text("Awesome Oscillator (AO) • зелёный: столбец растёт, красный: столбец снижается",
             color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 8.dp))
         Canvas(modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 8.dp, vertical = 4.dp)) {
@@ -3286,13 +3289,15 @@ private fun TradingChart(
                     val value = candle.ao?.takeIf(Double::isFinite) ?: return@forEachIndexed
                     val height = (kotlin.math.abs(value) / maxAbs * (size.height * 0.42f)).toFloat()
                     val left = index * step + step * 0.15f
-                    drawRect(color = if (value >= 0.0) AppColors.green else AppColors.red,
+                    val previous = if (index > 0) visible[index - 1].ao else null
+                    val rising = previous?.let { value > it } ?: false
+                    drawRect(color = if (rising) AppColors.green else AppColors.red,
                         topLeft = Offset(left, if (value >= 0.0) zeroY - height else zeroY),
                         size = Size(max(1f, step * 0.7f), max(1f, height)))
                 }
             }
         }
-        Text("Accelerator Oscillator (AC = AO − SMA5(AO)) • это свидетельство импульса, не самостоятельный вход",
+        Text("Accelerator Oscillator (AC = AO − SMA5(AO)) • зелёный: растёт, красный: снижается; не самостоятельный вход",
             color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 8.dp))
         Canvas(modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 8.dp, vertical = 4.dp)) {
@@ -3306,7 +3311,9 @@ private fun TradingChart(
                     val value = candle.ac?.takeIf(Double::isFinite) ?: return@forEachIndexed
                     val height = (kotlin.math.abs(value) / maxAbs * (size.height * 0.42f)).toFloat()
                     val left = index * step + step * 0.15f
-                    drawRect(color = if (value >= 0.0) AppColors.green else AppColors.red,
+                    val previous = if (index > 0) visible[index - 1].ac else null
+                    val rising = previous?.let { value > it } ?: false
+                    drawRect(color = if (rising) AppColors.green else AppColors.red,
                         topLeft = Offset(left, if (value >= 0.0) zeroY - height else zeroY),
                         size = Size(max(1f, step * 0.7f), max(1f, height)))
                 }
@@ -3325,7 +3332,7 @@ private fun TradingChart(
                     val value = candle.mfiProxy?.takeIf { it.isFinite() && it >= 0.0 } ?: return@forEachIndexed
                     val height = (value / maxValue * (size.height * 0.8f)).toFloat()
                     val left = index * step + step * 0.15f
-                    val rising = previous?.let { value < it } ?: false
+                    val rising = previous?.let { value > it } ?: false
                     drawRect(color = if (rising) AppColors.green else AppColors.amber,
                         topLeft = Offset(left, size.height - height),
                         size = Size(max(1f, step * 0.7f), max(1f, height)))
@@ -3698,7 +3705,7 @@ private fun chartIndicatorSummary(snapshot: JSONObject?): String {
     val downFractal = !snapshot.isNull("fractal_down_index")
     val mfi = value("mfi_proxy")?.let { fmt(it, 6) } ?: "—"
     return "ЧТО ВИДИТ ДВИЖОК: Alligator $alligator • AO " + (value("ao")?.let { fmt(it, 5) } ?: "—") +
-        " • AC " + (value("ac")?.let { fmt(it, 5) } ?: "—") + " • зона $zone • " +
+        " • AC " + (value("ac")?.let { fmt(it, 5) } ?: "—") + " • AO zero-cross-up=" + snapshot.optBoolean("ao_cross_up") + " • зона $zone • " +
         "MFI proxy (H−L)/volume=$mfi, рост=" + snapshot.optBoolean("mfi_up") + " • AO divergence=$divergence • " +
         "подтверждённые фракталы: UP=$upFractal / DOWN=$downFractal • wave=" + snapshot.optString("wave").ifBlank { "недостаточно данных" }
 }
