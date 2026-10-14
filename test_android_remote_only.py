@@ -253,6 +253,10 @@ def test_android_williams_indicator_decisions_use_chart_aligned_alligator_and_ca
     assert "teethS[center].isFinite() && level > teethS[center]" in runtime
     assert "candles[fractalCenter].h > centerTeeth" in runtime
     assert "trigger > currentTeeth" in runtime
+    assert "fun upGroupStart(i: Int): Int" in runtime
+    assert "fun downGroupStart(i: Int): Int" in runtime
+    assert "candles[i + 1].h == candles[i].h" in runtime
+    assert ".minOf { candles[it].l } - tick" in runtime
 
 
 def test_android_kill_switch_never_closes_an_unmanaged_or_unreconciled_position():
