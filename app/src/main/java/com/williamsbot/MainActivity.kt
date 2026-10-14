@@ -410,7 +410,7 @@ fun WilliamsApp(context: Context) {
     var chartError by remember { mutableStateOf<String?>(null) }
     var chartLivePrice by remember { mutableStateOf<Double?>(null) }
     var chartQuoteSource by remember { mutableStateOf("UNAVAILABLE") }
-    var chartQuoteUpdatedAtMs by remember { mutableLongStateOf(0L) }
+    var chartQuoteUpdatedAtMs by remember { mutableStateOf(0L) }
     var chartIndicatorSummary by remember { mutableStateOf("Загрузка индикаторов…") }
     var selectedChartInterval by remember { mutableStateOf("1h") }
     var candidates by remember { mutableStateOf(emptyList<Candidate>()) }
@@ -2120,7 +2120,7 @@ private fun MarketChartPanel(
                         label = { Text(frame.uppercase(Locale.US)) })
                 }
             }
-            Text("Все таймфреймы здесь — визуальный анализ. Торговое решение создаётся только на закрытом H1; D1/H4 — контекст, M15/M5 — мониторинг и диагностика.",
+            Text("Все таймфреймы здесь — визуальный анализ. Торговое решение создаётся только на закрытом H1; D1/H4 — контекст, M15/M5 — мониторинг и диагностика. Переключение графика не меняет логику входа.",
                 color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
             Text("Котировка: " + (livePrice?.let { fmt(it) } ?: "нет") + " • источник: " + quoteSource +
                 (if (quoteUpdatedAtMs > 0L) " • " + ((System.currentTimeMillis() - quoteUpdatedAtMs).coerceAtLeast(0L) / 1000L) + "с назад" else ""),
