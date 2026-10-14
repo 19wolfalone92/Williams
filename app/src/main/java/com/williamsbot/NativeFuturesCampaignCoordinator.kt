@@ -927,9 +927,9 @@ internal class NativeFuturesCampaignCoordinator(
         }
         // Do not build an unbounded chain of uncertain stop ids. Reconciliation must
         // remove a tracked predecessor before a new replacement attempt is admitted.
-        if (previousId.isNotBlank() && previous.any { it.optString("clientAlgoId") == previousId }) {
+        if (previousId.isNotBlank()) {
             state = State.RECONCILE_REQUIRED
-            lastBlocker = "$symbol has a tracked predecessor stop still open; reconcile its cancellation before trailing again"
+            lastBlocker = "$symbol has a tracked predecessor or uncertain replacement id; reconcile it before trailing again"
             return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
         }
         intent.put("previous_protective_stop", oldStop.toPlainString())
@@ -956,9 +956,16 @@ internal class NativeFuturesCampaignCoordinator(
             val finalOrders = adapter.openAlgoOrders(symbol)
             val finalStop = findProtectiveStop(finalOrders, direction.name, clientAlgoId, proposed.toPlainString())
                 ?: throw IOException("Replacement stop is no longer open at the requested trigger")
+            val untrackedRemainder = (0 until finalOrders.length()).mapNotNull { finalOrders.optJSONObject(it) }
+                .any { isProtectiveStop(it, direction.name) && it.optString("clientAlgoId") != clientAlgoId }
+            if (untrackedRemainder) {
+                throw IOException("A predecessor or unrecognized protective stop remains after trailing replacement")
+            }
             intent.put("protection_status", "PROTECTED")
                 .put("protective_stop", finalStop.optString("triggerPrice", proposed.toPlainString()))
                 .put("trailing_at_ms", System.currentTimeMillis())
+                .remove("previous_protection_client_id")
+                .remove("previous_protective_stop")
             saveIntents(persisted)
             JSONObject().put("ok", true).put("state", state.name).put("stop", finalStop)
         } catch (failure: Exception) {
@@ -988,8 +995,8 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("campaign_status", "OPEN_PROTECTED")
                     .put("trail_error", failureText)
                 saveIntents(persisted)
-                state = State.OPEN_PROTECTED
-                lastBlocker = "$symbol stop trail was not confirmed; previous exchange-confirmed stop remains active and the uncertain replacement is tracked for cleanup"
+                state = State.RECONCILE_REQUIRED
+                lastBlocker = "$symbol stop trail was not confirmed; prior stop is still exchange-confirmed and the uncertain replacement remains tracked pending reconciliation"
                 return@synchronized JSONObject().put("ok", false).put("state", state.name)
                     .put("blocker", lastBlocker).put("retained_stop", oldStop.toPlainString())
             }
