@@ -42,6 +42,14 @@ def test_android_boot_recovery_is_opt_in_and_keeps_reconciliation_gate():
     assert "futuresCampaignCoordinator.reconcile()" in runtime
 
 
+def test_android_exposes_battery_policy_diagnostic():
+    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    assert "isIgnoringBatteryOptimizations" in main
+    assert "Doze exemption" in main
+    assert "ACTION_APPLICATION_DETAILS_SETTINGS" in main
+    assert "not a substitute for physical testing" in main
+
+
 def test_android_ui_routes_directly_to_local_runtime_without_remote_backend():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
