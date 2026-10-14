@@ -98,6 +98,17 @@ internal fun conservativeRiskReservation(storedRiskPct: Double, maxTotalRiskPct:
     return minOf(storedRiskPct, maxTotalRiskPct)
 }
 
+/**
+ * A new daily-loss baseline is trustworthy only when there is no exchange exposure,
+ * pending execution, or trading PnL from earlier in this UTC day. Otherwise resetting
+ * it to current equity could erase an already-incurred daily loss.
+ */
+internal fun canInitializeDailyRiskBaseline(
+    hasOpenPosition: Boolean,
+    hasActiveExecution: Boolean,
+    hasTradingIncome: Boolean
+): Boolean = !hasOpenPosition && !hasActiveExecution && !hasTradingIncome
+
 private data class CandleN(
     val t: Long,
     val o: Double,
@@ -3666,17 +3677,74 @@ private class NativeEngine(
         val equity = account.optString("totalMarginBalance").toDoubleOrNull() ?: (wallet + unrealized)
         require(equity.isFinite() && equity > 0.0) { "Futures equity is unavailable/non-positive" }
         val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
-        utc.timeInMillis = futuresMarketData.exchangeNowMs()
+        val exchangeNowMs = futuresMarketData.exchangeNowMs()
+        utc.timeInMillis = exchangeNowMs
         utc.set(java.util.Calendar.HOUR_OF_DAY, 0)
         utc.set(java.util.Calendar.MINUTE, 0)
         utc.set(java.util.Calendar.SECOND, 0)
         utc.set(java.util.Calendar.MILLISECOND, 0)
-        val baselineKey = "futures_day_start_equity_" + utc.timeInMillis
+        val utcDayStartMs = utc.timeInMillis
+        val baselineKey = "futures_day_start_equity_" + utcDayStartMs
+
         if (executionStore.readState(baselineKey) == null) {
+            // Never silently reset the loss counter to current equity if storage was
+            // lost after today's trading began. A flat, idle account with only transfers
+            // can safely establish a fresh baseline (common on a newly funded Testnet).
+            val baselineContext = try {
+                val positions = futuresCampaignCoordinator.positionsSnapshot()
+                val hasOpenOrUnknownPosition = (0 until positions.length()).any { index ->
+                    val row = positions.optJSONObject(index) ?: return@any true
+                    val amount = row.optString("positionAmt").toDoubleOrNull()
+                    amount == null || !amount.isFinite() || amount != 0.0
+                }
+
+                val activeStatuses = setOf(
+                    "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED",
+                    "SUBMISSION_UNKNOWN", "ACCEPTED", "TRIGGERED",
+                    "OPEN_PROTECTED", "POSITION_OPEN", "EXIT_PENDING"
+                )
+                val intents = futuresCampaignCoordinator.intentsSnapshot()
+                val hasActiveExecution = (0 until intents.length()).any { index ->
+                    val row = intents.optJSONObject(index) ?: return@any true
+                    row.optString("exchange_status").uppercase(Locale.US) in activeStatuses
+                }
+
+                val income = futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
+                val nonTradingIncomeTypes = setOf(
+                    "TRANSFER", "INTERNAL_TRANSFER", "WELCOME_BONUS", "BONUS", "DEPOSIT", "WITHDRAW"
+                )
+                val hasTradingIncome = (0 until income.length()).any { index ->
+                    val row = income.optJSONObject(index) ?: return@any true
+                    val incomeType = row.optString("incomeType").uppercase(Locale.US)
+                    incomeType.isBlank() || incomeType !in nonTradingIncomeTypes
+                }
+                Triple(hasOpenOrUnknownPosition, hasActiveExecution, hasTradingIncome)
+            } catch (failure: Exception) {
+                paused = true
+                prefs.edit().putBoolean("auto_run", false).commit()
+                lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: cannot verify today's Futures exposure/activity: " +
+                    (failure.message ?: failure.javaClass.simpleName) + "; new entries blocked"
+                return false
+            }
+
+            if (!canInitializeDailyRiskBaseline(
+                    hasOpenPosition = baselineContext.first,
+                    hasActiveExecution = baselineContext.second,
+                    hasTradingIncome = baselineContext.third
+                )
+            ) {
+                paused = true
+                prefs.edit().putBoolean("auto_run", false).commit()
+                lastError =
+                    "FUTURES_DAILY_BASELINE_UNKNOWN: exchange exposure or trading PnL exists since UTC midnight; " +
+                    "refusing to reset the 1% daily-loss limit to current equity"
+                return false
+            }
             check(executionStore.writeState(baselineKey, equity.toString())) {
                 "SQLite commit failed while persisting Futures daily equity baseline"
             }
         }
+
         val baseline = executionStore.readState(baselineKey)?.toDoubleOrNull() ?: 0.0
         require(baseline > 0.0 && baseline.isFinite()) { "Futures daily equity baseline is invalid" }
         val dailyPnlQuote = equity - baseline

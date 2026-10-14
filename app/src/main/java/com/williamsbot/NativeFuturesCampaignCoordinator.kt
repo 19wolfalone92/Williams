@@ -54,6 +54,10 @@ internal class NativeFuturesCampaignCoordinator(
     fun positionsSnapshot(): JSONArray = adapterFactory().positions()
     fun intentsSnapshot(): JSONArray = JSONArray(intents().toString())
 
+    /** Read-only exchange income history used to prevent resetting an unknown daily-loss baseline. */
+    fun incomeHistory(startTimeMs: Long, endTimeMs: Long): JSONArray =
+        adapterFactory().incomeHistory(startTimeMs, endTimeMs)
+
     /** Must finish successfully before the scanner may submit a new entry. */
     fun reconcile(): JSONObject = synchronized(lock) {
         state = State.RECONCILE_REQUIRED

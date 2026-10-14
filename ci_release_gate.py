@@ -278,6 +278,16 @@ def main() -> None:
         "invalidPortfolioCapFailsClosed",
     ):
         must(risk_test, needle, "ReservedRiskBudgetTest.kt")
+    must(runtime_source, "FUTURES_DAILY_BASELINE_UNKNOWN", "StandaloneRuntime.kt")
+    must(runtime_source, "canInitializeDailyRiskBaseline", "StandaloneRuntime.kt")
+    coordinator_source = read("app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    must(coordinator_source, "fun incomeHistory(startTimeMs: Long, endTimeMs: Long): JSONArray", "NativeFuturesCampaignCoordinator.kt")
+    baseline_test = read("app/src/test/java/com/williamsbot/DailyRiskBaselineTest.kt")
+    for needle in (
+        "baselineCanBeInitializedForFlatIdleAccountWithNoTradingIncome",
+        "baselineCannotResetAfterOpenPositionPendingExecutionOrTradingPnl",
+    ):
+        must(baseline_test, needle, "DailyRiskBaselineTest.kt")
     must(legacy_runtime, '.put("ok", running && !reconcileRequired && !killLatched)', "StandaloneRuntime.kt")
     must(legacy_runtime, 'userStreamSyncRequired = true', "StandaloneRuntime.kt")
     must(legacy_runtime, 'daily_loss=0.01', "StandaloneRuntime.kt")
