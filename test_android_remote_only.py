@@ -217,7 +217,17 @@ def test_android_williams_indicator_decisions_use_current_time_alligator_and_can
     assert "private fun alligator(" in runtime
 
 
-def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
+def test_android_kill_switch_never_closes_an_unmanaged_or_unreconciled_position():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    assert "val ownershipReconciliation = runCatching { futuresCampaignCoordinator.reconcile() }" in runtime
+    assert "futuresCampaignCoordinator.isManagedOpenPosition(symbol, direction)" in runtime
+    assert "position left untouched" in runtime
+    assert "an existing exit intent is active/ambiguous; reconcile before any new close request" in coordinator
+    assert "manual reconciliation required" in coordinator
+
+
+def test_android_user_data_stream_is_not_the_spot_signed_subscription_protocol():
     user_stream = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     assert '"/fapi/v1/listenKey"' in user_stream

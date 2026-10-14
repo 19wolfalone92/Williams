@@ -19,6 +19,23 @@ internal fun isOwnedProtectionClientId(
     (candidateClientId == currentClientId || candidateClientId == previousClientId)
 
 /**
+ * Emergency close is permitted only for a confirmed active campaign with its
+ * expected exchange-side protection. Stale terminal intents and unknown/manual
+ * positions must be left untouched for explicit reconciliation.
+ */
+internal fun isManagedOpenPositionIntent(
+    status: String,
+    direction: String,
+    expectedDirection: String,
+    protectionStatus: String,
+    protectionClientId: String
+): Boolean =
+    status.uppercase(Locale.US) == "OPEN_PROTECTED" &&
+        direction.equals(expectedDirection, ignoreCase = true) &&
+        protectionStatus.equals("PROTECTED", ignoreCase = true) &&
+        protectionClientId.isNotBlank()
+
+/**
  * Local, durable USDⓈ-M Futures Testnet execution boundary.
  *
  * Every exchange mutation has a committed local intent first. Ambiguous writes are
@@ -66,6 +83,24 @@ internal class NativeFuturesCampaignCoordinator(
     fun accountSnapshot(): JSONObject = adapterFactory().account()
     fun positionsSnapshot(): JSONArray = adapterFactory().positions()
     fun intentsSnapshot(): JSONArray = JSONArray(intents().toString())
+
+    /** True only for the latest durable campaign whose position and stop are exchange-confirmed. */
+    fun isManagedOpenPosition(symbol: String, direction: Direction): Boolean = synchronized(lock) {
+        if (symbol !in allowedSymbols) return@synchronized false
+        val rows = intents()
+        val latest = (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+            .lastOrNull {
+                it.optString("intent_role", "ENTRY") == "ENTRY" &&
+                    it.optString("symbol").uppercase(Locale.US) == symbol.uppercase(Locale.US)
+            } ?: return@synchronized false
+        isManagedOpenPositionIntent(
+            status = latest.optString("exchange_status"),
+            direction = latest.optString("direction"),
+            expectedDirection = direction.name,
+            protectionStatus = latest.optString("protection_status"),
+            protectionClientId = latest.optString("protection_client_id")
+        )
+    }
 
     /** Read-only exchange income history used to prevent resetting an unknown daily-loss baseline. */
     fun incomeHistory(startTimeMs: Long, endTimeMs: Long): JSONArray =
@@ -205,20 +240,36 @@ internal class NativeFuturesCampaignCoordinator(
                 }
                 val direction = if ((position?.optString("positionAmt")?.toDoubleOrNull() ?: 0.0) > 0.0) "LONG" else "SHORT"
                 val isLatestCampaign = latestEntryIndexBySymbol[symbol] == i
-                if (position != null && isLatestCampaign && intent.optString("direction") == direction) {
+                if (position != null && isLatestCampaign) {
+                    if (intent.optString("direction") != direction) {
+                        throw IllegalStateException(
+                            "Live " + symbol + " Futures position direction conflicts with persisted campaign"
+                        )
+                    }
+                    // A terminal entry intent is not proof of ownership of a newly
+                    // observed live position. Never revive CLOSED_OR_STOPPED/CANCELED/
+                    // FILLED/FINISHED history into a new active campaign; that could
+                    // adopt and later close a manually opened position on the same symbol.
+                    if (prior in terminalStatuses) {
+                        throw IllegalStateException(
+                            "Live " + symbol + " position conflicts with terminal Futures campaign " +
+                                clientId + " (" + prior + "); manual reconciliation required"
+                        )
+                    }
+                    if (prior !in activeStatuses && prior !in setOf("OPEN_PROTECTED", "POSITION_OPEN")) {
+                        throw IllegalStateException(
+                            "Live " + symbol + " position has an unknown campaign status " + prior +
+                                "; manual reconciliation required"
+                        )
+                    }
                     intent.put("exchange_status", "POSITION_OPEN")
-                    intent.put("last_reconciled_ms", System.currentTimeMillis())
+                        .put("last_reconciled_ms", System.currentTimeMillis())
                     continue
                 }
                 if (position != null && !isLatestCampaign && prior !in terminalStatuses) {
                     intent.put("exchange_status", "CLOSED_OR_STOPPED")
                         .put("closed_observed_at_ms", System.currentTimeMillis())
                     continue
-                }
-                if (position != null && isLatestCampaign && intent.optString("direction") != direction) {
-                    throw IllegalStateException(
-                        "Live " + symbol + " Futures position direction conflicts with persisted campaign"
-                    )
                 }
                 if (prior in terminalStatuses || prior == "OPEN_PROTECTED" || prior == "POSITION_OPEN") {
                     if (prior == "OPEN_PROTECTED" || prior == "POSITION_OPEN") {
@@ -727,6 +778,19 @@ internal class NativeFuturesCampaignCoordinator(
         require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
         val adapter = adapterFactory()
         val intents = intents()
+        val unresolvedExit = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }
+            .lastOrNull {
+                it.optString("intent_role") == "EXIT" &&
+                    it.optString("symbol").uppercase(Locale.US) == symbol.uppercase(Locale.US) &&
+                    it.optString("exchange_status").uppercase(Locale.US) in (activeStatuses + "EXIT_PENDING")
+            }
+        if (unresolvedExit != null) {
+            state = State.RECONCILE_REQUIRED
+            lastBlocker = "an existing exit intent is active/ambiguous; reconcile before any new close request"
+            return@synchronized JSONObject().put("ok", false).put("state", state.name)
+                .put("blocker", lastBlocker)
+                .put("existing_exit_client_id", unresolvedExit.optString("client_id"))
+        }
         val managedEntry = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }
             .lastOrNull { row ->
                 row.optString("intent_role", "ENTRY") == "ENTRY" &&

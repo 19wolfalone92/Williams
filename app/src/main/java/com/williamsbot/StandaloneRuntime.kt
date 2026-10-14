@@ -1391,7 +1391,11 @@ private class NativeEngine(
         killLatched = true
         paused = true
         running = false
-        persistSafetyFlag("kill_latched", true)
+        val killLatchPersisted = persistSafetyFlag("kill_latched", true)
+        if (!killLatchPersisted) {
+            reconcileRequired = true
+            persistSafetyFlag("reconcile_required", true)
+        }
         prefs.edit().putBoolean("auto_run", false).commit()
         worker?.interrupt()
         worker = null
@@ -1406,6 +1410,27 @@ private class NativeEngine(
         userStreamSyncRequired = true
 
         val errors = mutableListOf<String>()
+        if (!killLatchPersisted) {
+            errors += "kill-switch latch could not be durably confirmed in SQLite"
+        }
+
+        // Classify exposure before canceling intents. Terminal campaign history must
+        // never be revived as ownership evidence for an unrelated/manual live position.
+        val ownershipReconciliation = runCatching { futuresCampaignCoordinator.reconcile() }
+            .getOrElse {
+                JSONObject().put("ok", false).put("error", it.message ?: it.javaClass.simpleName)
+            }
+        val ownershipVerified = ownershipReconciliation.optBoolean("ok", false)
+        if (!ownershipVerified) {
+            errors += "pre-close Futures ownership/protection reconciliation failed; no position is auto-closed: " +
+                ownershipReconciliation.optString(
+                    "blocker",
+                    ownershipReconciliation.optString("error", "unknown exchange state")
+                )
+            reconcileRequired = true
+            persistSafetyFlag("reconcile_required", true)
+        }
+
         val cancellation = runCatching {
             futuresCampaignCoordinator.cancelPendingEntries("KILL_SWITCH")
         }.getOrElse {
@@ -1417,6 +1442,7 @@ private class NativeEngine(
             reconcileRequired = true
             persistSafetyFlag("reconcile_required", true)
         }
+
         val rows = runCatching { futuresCampaignCoordinator.positionsSnapshot() }.getOrElse {
             errors += "Futures position query: " + (it.message ?: it.javaClass.simpleName)
             JSONArray()
@@ -1427,12 +1453,20 @@ private class NativeEngine(
             if (symbol !in coreSymbols) continue
             val signedQty = row.optString("positionAmt").toDoubleOrNull() ?: 0.0
             if (signedQty == 0.0) continue
+            val direction = if (signedQty > 0.0) NativeFuturesCampaignCoordinator.Direction.LONG
+                else NativeFuturesCampaignCoordinator.Direction.SHORT
+            if (!ownershipVerified ||
+                !futuresCampaignCoordinator.isManagedOpenPosition(symbol, direction)
+            ) {
+                errors += "$symbol: live Futures position has no confirmed active Williams campaign/protective stop; position left untouched"
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+                continue
+            }
             try {
                 val rules = symbolFilters(symbol)
                 val qty = floorStep(kotlin.math.abs(signedQty), if (rules.marketStep > 0.0) rules.marketStep else rules.step)
                 require(qty >= rules.minQty) { "Cannot safely round exchange position qty for $symbol" }
-                val direction = if (signedQty > 0.0) NativeFuturesCampaignCoordinator.Direction.LONG
-                    else NativeFuturesCampaignCoordinator.Direction.SHORT
                 val cid = ("W2K_" + symbol.take(8) + "_" + System.nanoTime().toString(16).takeLast(12)).take(36)
                 val result = futuresCampaignCoordinator.closePosition(symbol, direction, fmtQty(qty, rules.decimals), cid, "KILL_SWITCH")
                 if (!result.optBoolean("ok", false)) errors += "$symbol: " + result.optString("blocker", result.optString("error"))
@@ -1449,7 +1483,9 @@ private class NativeEngine(
             else "KILL_SWITCH: unresolved exchange close/reconciliation warning"
         return JSONObject().put("killed", true).put("latched", true)
             .put("exchange", "BINANCE_USDM_FUTURES_TESTNET").put("state", "KILL_SWITCH_LATCHED")
-            .put("errors", JSONArray(errors)).put("futures_reconciliation", reconciliation)
+            .put("errors", JSONArray(errors)).put("ownership_reconciliation", ownershipReconciliation)
+            .put("pending_entry_cancellation", cancellation)
+            .put("futures_reconciliation", reconciliation)
     }
 
     fun resetKillSwitch(): JSONObject {
