@@ -56,6 +56,20 @@ class ProtectionOwnershipTest {
             .put("campaign_status", "CLOSED_OR_STOPPED")
         assertEquals("CLOSED_OR_STOPPED", campaignLifecycleStatus(closed))
         assertFalse(isEntryCampaignReserved(closed))
+
+        val ambiguousExit = JSONObject()
+            .put("intent_role", "EXIT")
+            .put("exchange_status", "FILLED")
+        assertTrue("An exit marked FILLED is not terminal until flatness is confirmed",
+            isEntryCampaignReserved(ambiguousExit))
+        ambiguousExit.put("exchange_status", "EXIT_CONFIRMED")
+        assertFalse(isEntryCampaignReserved(ambiguousExit))
+
+        val invalidLifecycle = JSONObject()
+            .put("exchange_status", "FILLED")
+            .put("campaign_status", "UNKNOWN_CORRUPT_STATE")
+        assertTrue("Unknown campaign lifecycle must reserve the slot",
+            isEntryCampaignReserved(invalidLifecycle))
     }
 
     @Test
