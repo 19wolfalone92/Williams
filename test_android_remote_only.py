@@ -547,3 +547,27 @@ def test_android_ui_does_not_display_json_null_as_a_scanner_error():
     ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     assert 'takeIf { it.isNotBlank() && it != "null" }' in ui
     assert 'takeUnless { it.isBlank() || it == "null" }' in ui
+
+
+
+def test_futures_position_panel_maps_mark_price_and_computes_missing_notional_fields():
+    ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert 'item.optDouble("mark_price", Double.NaN)' in ui
+    assert 'val positionValue = item.optDouble(' in ui
+    assert '(currentPrice ?: entryPrice) * kotlin.math.abs(quantity)' in ui
+    assert 'val accountEquity = json.optDouble("futures_equity", Double.NaN)' in ui
+    assert 'val allocation = item.optDouble(' in ui
+    assert 'val pnlFraction = item.optDouble(' in ui
+    assert 'InfoRow("Current", fmt(p.currentPrice))' in ui
+    assert '.put("mark_price", mark)' in runtime
+    assert '.put("futures_equity", if (restAccountReady) liveFuturesEquity else JSONObject.NULL)' in runtime
+
+
+def test_position_chart_only_draws_levels_from_the_selected_contract():
+    ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    assert 'val selectedPosition = status.positions.firstOrNull { it.symbol == selectedSymbol }' in ui
+    assert 'status.copy(
+                            entry = selectedPosition?.entry,
+                            tp = selectedPosition?.take,
+                            sl = selectedPosition?.stop' in ui

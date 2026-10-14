@@ -2376,7 +2376,7 @@ private fun PositionScreen(
                         )
                         InfoRow(
                             "Current",
-                            fmt(p.currentPrice ?: status.price)
+                            fmt(p.currentPrice)
                         )
                         InfoRow(
                             "Position value",
@@ -2413,13 +2413,20 @@ private fun PositionScreen(
             item { Text("График позиции • " + selectedSymbol, style = MaterialTheme.typography.titleMedium) }
             item {
                 if (candles.isEmpty()) EmptyState(icon = Icons.Filled.ShowChart, title = "Нет графика", subtitle = "Выбери позицию и обнови данные.")
-                else TradingChart(
-                    candles,
-                    status,
-                    status.positions.firstOrNull { it.symbol == selectedSymbol },
-                    interval,
-                    onIntervalChange = onIntervalChange
-                )
+                else {
+                    val selectedPosition = status.positions.firstOrNull { it.symbol == selectedSymbol }
+                    TradingChart(
+                        candles,
+                        status.copy(
+                            entry = selectedPosition?.entry,
+                            tp = selectedPosition?.take,
+                            sl = selectedPosition?.stop
+                        ),
+                        selectedPosition,
+                        interval,
+                        onIntervalChange = onIntervalChange
+                    )
+                }
             }
         }
     }
@@ -3302,26 +3309,50 @@ private fun parseStatus(json: JSONObject): Status {
         for (i in 0 until array.length()) {
             val item =
                 array.optJSONObject(i) ?: continue
-            val symbol =
-                item.optString("symbol", "").trim()
+            val symbol = item.optString("symbol", "").trim()
             if (symbol.isBlank()) continue
+
+            val quantity = item.optDouble("qty", 0.0)
+            val entryPrice = item.optDouble("avg_entry_price", item.optDouble("entry", 0.0))
+            val currentPrice = item.optDouble(
+                "current_price",
+                item.optDouble("mark_price", Double.NaN)
+            ).takeIf { it.isFinite() && it > 0.0 }
+            val unrealizedPnl = item.optDouble("unrealized_pnl_usdt", 0.0)
+            val accountEquity = json.optDouble("futures_equity", Double.NaN)
+                .takeIf { it.isFinite() && it > 0.0 }
+            val positionValue = item.optDouble(
+                "position_value_usdt",
+                (currentPrice ?: entryPrice) * kotlin.math.abs(quantity)
+            ).takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
+            val allocation = item.optDouble(
+                "allocation_pct",
+                if (accountEquity != null) positionValue / accountEquity else 0.0
+            ).takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
+            val pnlFraction = item.optDouble(
+                "unrealized_pnl_pct",
+                if (entryPrice > 0.0 && quantity != 0.0) {
+                    unrealizedPnl / (entryPrice * kotlin.math.abs(quantity))
+                } else {
+                    0.0
+                }
+            ).takeIf { it.isFinite() } ?: 0.0
 
             parsed += PositionView(
                 symbol = symbol,
-                qty = item.optDouble("qty", 0.0),
+                qty = quantity,
                 direction = item.optString("direction", "").uppercase(Locale.US),
-                entry = item.optDouble("avg_entry_price", item.optDouble("entry", 0.0)),
+                entry = entryPrice,
                 stop = item.optDouble("stop_loss", item.optDouble("stop"))
                     .takeUnless { it.isNaN() || it == 0.0 },
                 take = item.optDouble("take_profit", item.optDouble("take"))
                     .takeUnless { it.isNaN() || it == 0.0 },
                 riskPct = item.optDouble("risk_pct", 0.0),
-                currentPrice = item.optDouble("current_price")
-                    .takeUnless { it.isNaN() || it == 0.0 },
-                positionValueUsdt = item.optDouble("position_value_usdt", 0.0),
-                allocationPct = item.optDouble("allocation_pct", 0.0),
-                pnlUsdt = item.optDouble("unrealized_pnl_usdt", 0.0),
-                pnlPct = item.optDouble("unrealized_pnl_pct", 0.0),
+                currentPrice = currentPrice,
+                positionValueUsdt = positionValue,
+                allocationPct = allocation,
+                pnlUsdt = unrealizedPnl,
+                pnlPct = pnlFraction,
                 ocoListId = item.optString("oco_list_id"),
                 ocoListClientId = item.optString("oco_list_client_id")
             )
