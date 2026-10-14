@@ -129,6 +129,28 @@ internal fun awesomeOscillatorAt(medianPrices: List<Double>, index: Int): Double
     return fastValues.average() - slowValues.average()
 }
 
+internal data class StartupHistoryPolicy(
+    val requestedCount: Int,
+    val minimumCount: Int
+)
+
+/**
+ * Each startup timeframe has its own real data requirement. H1 is the strategy
+ * decision series; D1/H4/M15 are context/monitoring series and must not
+ * prevent H1 startup by demanding the same history depth.
+ */
+internal fun startupHistoryPolicy(
+    frame: String,
+    h1RequestedCount: Int = 180,
+    h1MinimumCount: Int = 150
+): StartupHistoryPolicy = when (frame) {
+    "1h" -> StartupHistoryPolicy(h1RequestedCount, h1MinimumCount)
+    "4h" -> StartupHistoryPolicy(120, 45)
+    "1d" -> StartupHistoryPolicy(90, 45)
+    "15m" -> StartupHistoryPolicy(90, 45)
+    else -> StartupHistoryPolicy(h1RequestedCount, h1MinimumCount)
+}
+
 internal fun futuresAccountEquity(
     totalMarginBalance: Double?,
     totalWalletBalance: Double?,
@@ -610,19 +632,11 @@ private class NativeEngine(
     private val startupHistoryLimit = 180
     private val minStartupHistoryCandles = 150
 
-    private fun startupHistoryLimit(frame: String): Int = when (frame) {
-        "1h" -> startupHistoryLimit
-        "4h" -> 120
-        "1d" -> 90
-        "15m" -> 90
-        else -> startupHistoryLimit
-    }
+    private fun startupHistoryLimit(frame: String): Int =
+        startupHistoryPolicy(frame, startupHistoryLimit, minStartupHistoryCandles).requestedCount
 
-    private fun minStartupHistoryCandles(frame: String): Int = when (frame) {
-        "1h" -> 150
-        "4h", "1d", "15m" -> 45
-        else -> minStartupHistoryCandles
-    }
+    private fun minStartupHistoryCandles(frame: String): Int =
+        startupHistoryPolicy(frame, startupHistoryLimit, minStartupHistoryCandles).minimumCount
     private val maxScanSymbols = 10
     private val waveTopN = 5
     private val scanExecutor = Executors.newFixedThreadPool(12)

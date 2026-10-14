@@ -112,7 +112,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
-// Williams 4.24.0 autonomous Futures Testnet runtime.
+// Williams 4.25.0 autonomous Futures Testnet runtime.
 // The phone owns the autonomous USD-M Futures Testnet runtime.
 // CI compile-log capture enabled
 // Diagnostic contract v2: runtime self-tests are exposed through /api/v1/diagnostics.

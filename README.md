@@ -189,19 +189,25 @@ Startup performs a Futures-specific preflight:
 
 When `DRY_RUN=true`, account-mode mutations are not performed.
 
-## Android
+## Android 4.25.0 — autonomous Futures runtime
 
-Android 4.24.0 is a remote cockpit, not a trading engine.
+Android runs the USDⓈ-M Futures Demo/Testnet engine on the phone; no VPS or remote
+execution backend is required. The foreground service starts the local runtime after
+an explicit START request and restores it only when auto-run was persisted.
 
-The phone:
+- REST is pinned to `https://demo-fapi.binance.com`; market/public/private streams use the
+  Futures Demo WebSocket hosts and paths.
+- The approved universe is exactly ten USDT-M perpetual contracts.
+- H1 is the only decision timeframe; D1 is the macro veto, H4 supplies context, and M15
+  is monitoring only. M5 is diagnostics/replay only.
+- LONG and SHORT entries are both supported through the native Futures campaign coordinator.
+- Closed candles are persisted in SQLite. A valid zero USDT balance is displayed as zero,
+  while order execution remains blocked until positive available balance/equity, current
+  market streams, history, and exchange reconciliation all pass the execution gate.
+- API credentials remain on-device in encrypted storage and are not sent to a remote backend.
 
-- talks to the backend over HTTPS;
-- stores the backend URL and mobile token using encrypted Android storage;
-- never starts `StandaloneRuntime`;
-- keeps the legacy foreground service only as a compatibility shell;
-- does not place Binance orders locally.
-
-The authoritative trading process is the Futures backend/VPS.
+A CI APK build verifies source compilation and automated tests. It does not replace
+device-level diagnostics or authenticated Futures Demo verification.
 
 ## Release and testing
 
@@ -227,11 +233,11 @@ python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2
 
 Исторический `fetch_klines()` поддерживает как live-вызов через Binance client, так и позиционный вызов `fetch_klines(symbol, interval, start, end)`.
 
-## Android
+## Historical Android build notes (4.22.3; superseded)
 
 Открыть корень проекта в Android Studio и собрать `app`.
 
-Версия приложения: **4.22.3**, versionCode формируется GitHub Actions.
+Архивная версия приложения: **4.22.3**; versionCode формируется GitHub Actions.
 
 Среда, в которой подготовлен этот архив, не содержит Android SDK/Gradle distribution, поэтому APK здесь не заявляется как собранный. Исходники Gradle-проекта подготовлены для сборки Android Studio.
 
