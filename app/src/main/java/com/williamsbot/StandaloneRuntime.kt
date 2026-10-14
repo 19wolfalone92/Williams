@@ -5791,6 +5791,14 @@ private class NativeEngine(
                     val repeat = synchronized(this) {
                         if (futuresStreamReconcilePending) {
                             true
+                        } else if (!userStreamConnected) {
+                            // The socket can drop while REST reconciliation is in flight.
+                            // Never let a successful REST snapshot from a now-disconnected
+                            // stream clear the synchronization barrier; on reconnect a fresh
+                            // reconciliation is scheduled from onOpen.
+                            userStreamSyncRequired = true
+                            futuresStreamReconcileRunning = false
+                            false
                         } else {
                             userStreamSyncRequired = false
                             futuresStreamReconcileRunning = false
