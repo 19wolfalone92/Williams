@@ -9134,6 +9134,7 @@ private class NativeEngine(
                     val reason = when {
                         attempt.isFailure -> attempt.exceptionOrNull()?.message
                             ?: attempt.exceptionOrNull()?.javaClass?.simpleName
+                            ?: "Futures reconciliation threw an unknown exception"
                         reconciliation != null -> reconciliation.optString(
                             "blocker", "Futures reconciliation returned not-ready"
                         )
