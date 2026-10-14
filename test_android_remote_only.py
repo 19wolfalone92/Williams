@@ -296,3 +296,13 @@ def test_android_trailing_stop_retains_confirmed_protection_after_ambiguous_repl
     assert 'state = State.RECONCILE_REQUIRED' in coordinator
     assert "untrackedRemainder" in coordinator
     assert '.remove("previous_protection_client_id")' in coordinator
+
+
+def test_android_trailing_stops_are_mark_relative_not_entry_relative():
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    assert "internal fun isProtectiveStopOnCorrectSide(" in coordinator
+    assert "val liveMark = runCatching { adapter.markPrice(symbol) }.getOrNull()" in coordinator
+    assert "Historical structural invalidation is entry-relative only at" in coordinator
+    assert "hasValidStructuralStop(plan.direction.name, plan.entryPrice, plan.protectiveStop)" in coordinator
+    unit_test = _read(ANDROID / "src/test/java/com/williamsbot/ProtectionOwnershipTest.kt")
+    assert "profitLockingTrailingStopsMayCrossEntryButMustRemainBeyondLiveMark" in unit_test
