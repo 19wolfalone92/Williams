@@ -6811,6 +6811,17 @@ private class NativeEngine(
         val current = candles.lastIndex
         val out = mutableListOf<CampaignSignalN>()
 
+        // Reject a pending stop-entry if any later closed bar already crossed it.
+        // Otherwise a restart/scan gap could resurrect a consumed signal and enter late.
+        fun triggerStillPending(signalIndex: Int, trigger: Double): Boolean {
+            if (signalIndex !in candles.indices || !trigger.isFinite() || trigger <= 0.0) return false
+            if (candles[current].c >= trigger) return false
+            for (later in signalIndex + 1..current) {
+                if (candles[later].h >= trigger) return false
+            }
+            return true
+        }
+
         // WM1: bullish reversal bar. It is the context bar; execution waits
         // for a break above its high. Countertrend WM1 is intentionally allowed.
         val reversalStart = max(2, candles.lastIndex - 20)
@@ -6830,7 +6841,7 @@ private class NativeEngine(
                 angulationScore(i) > 0.0
             ) {
                 val trigger = candles[i].h + tick
-                if (candles[current].c < trigger) {
+                if (triggerStillPending(i, trigger)) {
                     out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "REVERSAL", candles[i].t),
                         type = "REVERSAL",
@@ -6851,29 +6862,29 @@ private class NativeEngine(
         // WM3/fractal event as a hidden prerequisite: the first presenting Wise-Man
         // may initiate a campaign, while the pending stop entry still needs a valid
         // trigger, risk approval, and exchange-side protection.
-        // WM2: three consecutive rising AO histogram bars. Super AO is
-        // independent of the WM3/fractal setup and can be the first presenting Wise-Man.
+        // WM2: the trigger belongs to the third AO rising bar, not the first
+        // bar found while walking backward. Super AO is independent of WM3/fractals.
         var streak = 0
         for (i in candles.lastIndex downTo 35) {
-            val a = ao(candles, i)
-            val p = ao(candles, i - 1)
-            if (a > p) streak++ else break
-            if (streak == 3) {
-                val trigger = candles[i].h + tick
-                if (candles[current].c < trigger) {
+            if (ao(candles, i) > ao(candles, i - 1)) streak++ else break
+        }
+        if (streak >= 3) {
+            val signalIndex = candles.lastIndex - (streak - 3)
+            if (signalIndex in 35..candles.lastIndex) {
+                val trigger = candles[signalIndex].h + tick
+                if (triggerStillPending(signalIndex, trigger)) {
                     out += CampaignSignalN(
-                        signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
+                        signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[signalIndex].t),
                         type = "SUPER_AO",
                         role = "ENTRY",
-                        signalBarTimeMs = candles[i].t,
+                        signalBarTimeMs = candles[signalIndex].t,
                         triggerPrice = trigger,
-                        protectivePrice = candles[i].l - tick,
-                        teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                        invalidationPrice = candles[i].l - tick,
+                        protectivePrice = candles[signalIndex].l - tick,
+                        teethAtDetection = teethS[signalIndex].takeIf { it.isFinite() } ?: 0.0,
+                        invalidationPrice = candles[signalIndex].l - tick,
                         reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
                     )
                 }
-                break
             }
         }
 
@@ -6890,7 +6901,7 @@ private class NativeEngine(
             if (
                 centerTeeth.isFinite() &&
                 candles[fractalCenter].h > centerTeeth &&
-                candles[current].c < trigger &&
+                triggerStillPending(fractalCenter, trigger) &&
                 trigger > currentTeeth
             ) {
                 out += CampaignSignalN(
