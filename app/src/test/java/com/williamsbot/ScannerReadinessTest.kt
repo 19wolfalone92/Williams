@@ -82,6 +82,43 @@ class ScannerReadinessTest {
         assertEquals(false, runtimeStartButtonEnabled(true, false, true))
     }
 
+
+    @Test fun recovery_contract_accepts_an_intentional_stop_without_auto_run() {
+        assertEquals(true, runtimeRecoveryContract(
+            autoRunRequested = false,
+            running = false,
+            workerAlive = false,
+            killLatched = false
+        ))
+    }
+
+    @Test fun recovery_contract_rejects_a_dead_worker_when_auto_run_is_requested() {
+        assertEquals(false, runtimeRecoveryContract(
+            autoRunRequested = true,
+            running = false,
+            workerAlive = false,
+            killLatched = false
+        ))
+    }
+
+    @Test fun recovery_contract_rejects_runtime_worker_state_mismatch() {
+        assertEquals(false, runtimeRecoveryContract(
+            autoRunRequested = false,
+            running = true,
+            workerAlive = false,
+            killLatched = false
+        ))
+    }
+
+    @Test fun recovery_contract_never_accepts_auto_run_with_kill_latched() {
+        assertEquals(false, runtimeRecoveryContract(
+            autoRunRequested = true,
+            running = true,
+            workerAlive = true,
+            killLatched = true
+        ))
+    }
+
     @Test fun websocket_reconnects_when_silent_or_handshake_stalls() {
         assertEquals(true, streamNeedsReconnect(true, 10_000L, 1_000L, 55_001L, 45_000L))
         assertEquals(true, streamNeedsReconnect(true, 0L, 10_000L, 55_001L, 45_000L))
