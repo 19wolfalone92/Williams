@@ -71,10 +71,14 @@ def test_fractal_confirmation_is_not_backdated_to_the_pivot():
         # A confirmation can only exist at the close where its required
         # right-hand bars are available. Centre markers are retrospective UI.
         for side in ("up", "down"):
-            confirmation = result[f"fractal_{side}_confirmation_index"]
             confirmed = result[f"fractal_{side}_confirmed"].astype(bool)
+            center_column = f"confirmed_{side}_center_index"
             for idx in confirmed[confirmed].index:
-                assert int(confirmation.iloc[int(idx) - 2]) == int(idx) if int(idx) >= 2 else True
+                center = result[center_column].iloc[int(idx)]
+                assert pd.notna(center)
+                # The signal is timestamped at the close of the second
+                # right-hand bar, never at the earlier pivot bar.
+                assert int(center) + 2 == int(idx)
 
 
 def test_canonical_futures_contract_keeps_both_directions_and_exact_universe():
