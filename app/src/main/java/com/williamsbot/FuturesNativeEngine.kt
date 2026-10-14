@@ -16,6 +16,8 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+internal const val DEFAULT_FUTURES_DECISION_TIMEFRAME = "1h"
+
 /** True only while a conditional entry's structural stop and trigger remain un-crossed. */
 internal fun isActionableWilliamsTrigger(
     direction: String,
@@ -239,7 +241,7 @@ internal class FuturesNativeEngine(
             "Mainnet Futures is disabled in the native Android runtime; only Demo is supported"
         }
         val symbols = normalizeSymbols(body.optJSONArray("symbols"))
-        val interval = normalizeInterval(body.optString("interval", "5m"))
+        val interval = normalizeInterval(body.optString("interval", DEFAULT_FUTURES_DECISION_TIMEFRAME))
         val trial = BinanceUsdmFuturesClient(
             apiKey = key,
             apiSecret = secret,
@@ -600,7 +602,7 @@ internal class FuturesNativeEngine(
         return parsed.filter { it.matches(Regex("^[A-Z0-9]{2,20}USDT$")) }.take(10).ifEmpty { DEFAULT_SYMBOLS }
     }
 
-    private fun interval(): String = normalizeInterval(prefs.getString("futures_interval", "1h") ?: "1h")
+    private fun interval(): String = normalizeInterval(prefs.getString("futures_interval", DEFAULT_FUTURES_DECISION_TIMEFRAME) ?: DEFAULT_FUTURES_DECISION_TIMEFRAME)
 
     private fun normalizeSymbols(array: JSONArray?): List<String> {
         val raw = if (array != null && array.length() > 0) {
