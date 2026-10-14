@@ -48,7 +48,7 @@ def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
     assert "wss://demo-fstream.binance.com/public/stream?streams=" in runtime
     assert 'endpoint = "wss://demo-fstream.binance.com/private/ws"' in runtime
     user_stream = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
-    assert 'private val EVENT_TYPES' in user_stream
+    assert 'private const val EVENT_TYPES' in user_stream
     assert "ORDER_TRADE_UPDATE,ACCOUNT_UPDATE,ALGO_UPDATE" in user_stream
     assert 'endpoint + "?listenKey="' in user_stream
     assert "events=" in user_stream
