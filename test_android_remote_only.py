@@ -367,3 +367,40 @@ def test_android_trailing_stops_are_mark_relative_not_entry_relative():
     assert "hasValidStructuralStop(plan.direction.name, plan.entryPrice, plan.protectiveStop)" in coordinator
     unit_test = _read(ROOT / "app/src/test/java/com/williamsbot/ProtectionOwnershipTest.kt")
     assert "profitLockingTrailingStopsMayCrossEntryButMustRemainBeyondLiveMark" in unit_test
+
+def test_android_super_ao_is_independent_of_the_wm3_fractal_gate():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert "Super AO is\n        // independent of the WM3/fractal setup" in runtime
+    assert "priorFractalValid" not in runtime
+    assert "lastValidFractalLevel" not in runtime
+
+    long_signals = runtime.split("private fun longCampaignSignals(", 1)[1].split(
+        "private fun shortCampaignSignals(", 1
+    )[0]
+    wm2 = long_signals.split("// WM2:", 1)[1].split("// WM3:", 1)[0]
+    assert 'type = "SUPER_AO"' in wm2
+    assert "triggerPrice = trigger" in wm2
+    assert "protectivePrice = candles[i].l - tick" in wm2
+
+
+def test_android_campaign_analysis_never_relabels_fallback_candles_as_h1():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    analysis = runtime.split("private fun analyseBase(", 1)[1].split(
+        "\\n    private fun ", 1
+    )[0]
+    assert "val rawWorkCandles = candles" in analysis
+    assert "getOrElse { candles }" not in analysis
+    assert "performCampaignScan()" in runtime
+    assert 'fetchCandles(symbol, "1h", 180)' in runtime
+
+
+def test_android_settings_do_not_advertise_legacy_fixed_tp_or_position_sizing():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    settings = runtime.split("fun settings(): JSONObject", 1)[1]
+    assert '.put("campaign_fixed_take_profit", false)' in settings
+    assert '.put("position_fraction", 0.0)' in settings
+    assert '.put("stop_loss_pct", 0.0)' in settings
+    assert '.put("take_profit_pct", 0.0)' in settings
+    assert '.put("legacy_spot_settings_active", false)' in settings
+    assert '.put("position_sizing_model", "STRUCTURAL_STOP_RISK_BUDGET")' in settings
+
