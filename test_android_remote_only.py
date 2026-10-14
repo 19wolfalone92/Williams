@@ -568,7 +568,8 @@ def test_futures_position_panel_maps_mark_price_and_computes_missing_notional_fi
 def test_position_chart_only_draws_levels_from_the_selected_contract():
     ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     assert 'val selectedPosition = status.positions.firstOrNull { it.symbol == selectedSymbol }' in ui
-    assert 'status.copy(
-                            entry = selectedPosition?.entry,
-                            tp = selectedPosition?.take,
-                            sl = selectedPosition?.stop' in ui
+    assert "val selectedPosition = status.positions.firstOrNull { it.symbol == selectedSymbol }" in ui
+    assert "status.copy(" in ui
+    assert "entry = selectedPosition?.entry" in ui
+    assert "tp = selectedPosition?.take" in ui
+    assert "sl = selectedPosition?.stop" in ui
