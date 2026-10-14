@@ -132,9 +132,6 @@ class ProtectionOwnershipTest {
         assertFalse(hasValidStructuralStop("SHORT", "100", "95"))
         assertFalse(hasValidStructuralStop("FLAT", "100", "95"))
     }
-}
-
-
     @Test
     fun filledEntryRequiresAStableFlatWindowAndNoUnresolvedExitBeforeTerminalization() {
         assertFalse(shouldFinalizeFilledFlatCampaign(
@@ -156,3 +153,4 @@ class ProtectionOwnershipTest {
             "FILL_CONFIRMATION_PENDING", true, false, 1_000L, 4_000L
         ))
     }
+}
