@@ -34,6 +34,7 @@ def main() -> None:
         "db.py",
         "execution_barrier.py",
         "williams_signals.py",
+        "test_williams_causality_contract.py",
         "test_testnet_release_gate.py",
         "risk_engine.py",
         "test_risk_engine.py",
@@ -138,6 +139,16 @@ def main() -> None:
     must(risk, "min(0.03, raw_daily_loss)", "risk_engine.py")
     must_not(risk, "entry - fallback_stop_distance", "risk_engine.py")
     must_not(risk, "entry + fallback_stop_distance", "risk_engine.py")
+
+    causality_test = read("test_williams_causality_contract.py")
+    for needle in (
+        "def test_executable_indicator_values_are_prefix_causal",
+        "def test_fractal_confirmation_is_not_backdated_to_the_pivot",
+        "def test_canonical_futures_contract_keeps_both_directions_and_exact_universe",
+        "confirmed_up_level",
+        "confirmed_down_level",
+    ):
+        must(causality_test, needle, "test_williams_causality_contract.py")
 
     strategy = read("strategy.py")
     for needle in (
