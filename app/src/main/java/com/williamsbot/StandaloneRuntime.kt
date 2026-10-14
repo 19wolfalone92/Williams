@@ -3314,14 +3314,20 @@ private class NativeEngine(
         allowReconcileRequired: Boolean = false,
         block: () -> JSONObject
     ): JSONObject {
-        if (!running && !allowStopped) error("Runtime is not running")
-        if (paused && !allowPaused) error("Runtime is paused")
-        if (reconcileRequired && !allowReconcileRequired) error("RECONCILE_REQUIRED")
-        if (killLatched && !allowKillLatched) error("KILL_SWITCH_LATCHED")
+        executionDoorBlocker(
+            running = running,
+            paused = paused,
+            reconcileRequired = reconcileRequired,
+            killLatched = killLatched,
+            allowPaused = allowPaused,
+            allowStopped = allowStopped,
+            allowKillLatched = allowKillLatched,
+            allowReconcileRequired = allowReconcileRequired
+        )?.let { error(it) }
 
         // Campaign policy is account-wide (one active campaign), so distinct symbols
         // must not obtain concurrent mutation reservations.
-        val reservationKey = "__FUTURES_ACCOUNT__"
+        val reservationKey = FUTURES_EXECUTION_DOOR_KEY
         require(executionGate.tryReserve(reservationKey)) {
             "Futures Execution Door is already reserved by another mutation"
         }
