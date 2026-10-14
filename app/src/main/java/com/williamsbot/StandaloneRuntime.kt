@@ -2035,6 +2035,10 @@ private class NativeEngine(
         val request = Request.Builder().url(wsStreamUrl()).build()
         marketSocket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (marketSocket !== webSocket) {
+                    webSocket.close(1000, "superseded market stream")
+                    return
+                }
                 marketSocketConnected = true
                 marketSocketStartedMs = System.currentTimeMillis()
                 lastError = null
@@ -2042,12 +2046,13 @@ private class NativeEngine(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (marketSocket !== webSocket) return
                 marketSocketLastEventMs = System.currentTimeMillis()
                 runCatching { consumeMarketStream(JSONObject(text), publicStream = false) }
                     .onFailure { lastError = "WS market: " + (it.message ?: it.javaClass.simpleName) }
                 runCatching {
                     val data = JSONObject(text).optJSONObject("data")
-                    if (data?.optString("e") == "serverShutdown") {
+                    if (data?.optString("e") == "serverShutdown" && marketSocket === webSocket) {
                         marketSocketConnected = false
                         webSocket.close(1000, "serverShutdown")
                     }
@@ -2055,31 +2060,31 @@ private class NativeEngine(
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                marketSocketConnected = false
+                if (marketSocket === webSocket) marketSocketConnected = false
                 webSocket.close(code, reason)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                marketSocketConnected = false
                 if (marketSocket === webSocket) {
+                    marketSocketConnected = false
                     marketSocket = null
                     marketSocketLastEventMs = 0L
                     marketSocketStartedMs = 0L
                     marketReconnectRequested = false
+                    if (running) scheduleReconnect("williams-market-reconnect", 1500L) { startMarketDataStream() }
                 }
-                if (running) scheduleReconnect("williams-market-reconnect", 1500L) { startMarketDataStream() }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                marketSocketConnected = false
                 if (marketSocket === webSocket) {
+                    marketSocketConnected = false
                     marketSocket = null
                     marketSocketLastEventMs = 0L
                     marketSocketStartedMs = 0L
                     marketReconnectRequested = false
+                    lastError = "WS market: " + (t.message ?: t.javaClass.simpleName)
+                    if (running) scheduleReconnect("williams-market-retry", 2500L) { startMarketDataStream() }
                 }
-                lastError = "WS market: " + (t.message ?: t.javaClass.simpleName)
-                if (running) scheduleReconnect("williams-market-retry", 2500L) { startMarketDataStream() }
             }
         })
     }
@@ -2093,6 +2098,10 @@ private class NativeEngine(
         val request = Request.Builder().url(publicStreamUrl()).build()
         publicSocket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (publicSocket !== webSocket) {
+                    webSocket.close(1000, "superseded public stream")
+                    return
+                }
                 publicSocketConnected = true
                 publicSocketStartedMs = System.currentTimeMillis()
                 Thread {
@@ -2106,37 +2115,38 @@ private class NativeEngine(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (publicSocket !== webSocket) return
                 publicSocketLastEventMs = System.currentTimeMillis()
                 runCatching { consumeMarketStream(JSONObject(text), publicStream = true) }
                     .onFailure { lastError = "WS public: " + (it.message ?: it.javaClass.simpleName) }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                publicSocketConnected = false
+                if (publicSocket === webSocket) publicSocketConnected = false
                 webSocket.close(code, reason)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                publicSocketConnected = false
                 if (publicSocket === webSocket) {
+                    publicSocketConnected = false
                     publicSocket = null
                     publicSocketLastEventMs = 0L
                     publicSocketStartedMs = 0L
                     publicReconnectRequested = false
+                    if (running) scheduleReconnect("williams-public-reconnect", 1500L) { startPublicDataStream() }
                 }
-                if (running) scheduleReconnect("williams-public-reconnect", 1500L) { startPublicDataStream() }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                publicSocketConnected = false
                 if (publicSocket === webSocket) {
+                    publicSocketConnected = false
                     publicSocket = null
                     publicSocketLastEventMs = 0L
                     publicSocketStartedMs = 0L
                     publicReconnectRequested = false
+                    lastError = "WS public: " + (t.message ?: t.javaClass.simpleName)
+                    if (running) scheduleReconnect("williams-public-retry", 2500L) { startPublicDataStream() }
                 }
-                lastError = "WS public: " + (t.message ?: t.javaClass.simpleName)
-                if (running) scheduleReconnect("williams-public-retry", 2500L) { startPublicDataStream() }
             }
         })
     }
