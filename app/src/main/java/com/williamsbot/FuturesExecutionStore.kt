@@ -81,6 +81,19 @@ internal class FuturesExecutionStore(context: Context) :
     fun writeState(key: String, value: String): Boolean =
         writeStates(mapOf(key to value))
 
+    /**
+     * Persist the account-wide execution-door lease atomically before an exchange
+     * mutation. Empty values clear the lease after the mutation has been reconciled.
+     */
+    @Synchronized
+    fun writeExecutionGate(symbol: String, purpose: String): Boolean =
+        writeStates(
+            mapOf(
+                "execution_gate_symbol" to symbol,
+                "execution_gate_purpose" to purpose
+            )
+        )
+
     /** Commit positions and pending entries atomically so a crash cannot split a snapshot. */
     @Synchronized
     fun writeRuntimeState(positionsJson: String, pendingEntriesJson: String): Boolean =
