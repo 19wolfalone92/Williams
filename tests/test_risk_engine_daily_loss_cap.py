@@ -7,7 +7,7 @@ def test_risk_engine_defaults_to_three_percent_daily_loss_limit():
 
 
 def test_risk_engine_cannot_be_configured_above_three_percent_daily_loss():
-    engine = RiskEngine(balance_quote=10_000, max_daily_loss_pct=0.03)
+    engine = RiskEngine(balance_quote=10_000, max_daily_loss_pct=0.10)
     assert engine.max_daily_loss_pct == 0.03
 
 
