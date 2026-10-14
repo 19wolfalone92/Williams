@@ -269,7 +269,8 @@ data class Candle(
     val lips: Double?,
     val longSignal: Boolean,
     val fractalUp: Boolean,
-    val fractalDown: Boolean
+    val fractalDown: Boolean,
+    val ao: Double? = null
 )
 
 data class Candidate(
@@ -406,6 +407,7 @@ fun WilliamsApp(context: Context) {
     var chartCandles by remember { mutableStateOf(emptyList<Candle>()) }
     var chartLoading by remember { mutableStateOf(false) }
     var chartError by remember { mutableStateOf<String?>(null) }
+    var chartLivePrice by remember { mutableStateOf<Double?>(null) }
     var selectedChartInterval by remember { mutableStateOf("1h") }
     var candidates by remember { mutableStateOf(emptyList<Candidate>()) }
     var trades by remember { mutableStateOf(emptyList<Trade>()) }
@@ -567,6 +569,7 @@ fun WilliamsApp(context: Context) {
                 require(payload.optString("symbol") == requestSymbol) { "Runtime вернул график другой пары" }
                 require(payload.optString("interval") == requestInterval) { "Runtime вернул другой таймфрейм; молчаливая подмена запрещена" }
                 val loaded = parseCandles(payload.optJSONArray("candles") ?: JSONArray())
+                chartLivePrice = payload.optDouble("live_price").takeIf { it.isFinite() && it > 0.0 }
                 if (loaded.isEmpty()) {
                     chartError = "$requestSymbol $requestInterval: закрытые свечи не получены"
                 } else {
@@ -983,6 +986,7 @@ fun WilliamsApp(context: Context) {
                 chartSymbol = selectedChartSymbol,
                 chartInterval = selectedChartInterval,
                 chartCandles = chartCandles,
+                chartLivePrice = chartLivePrice,
                 chartLoading = chartLoading,
                 chartError = chartError,
                 onChartSymbolChange = { selectedChartSymbol = it },
@@ -1919,6 +1923,7 @@ private fun ScannerScreen(
     chartSymbol: String,
     chartInterval: String,
     chartCandles: List<Candle>,
+    chartLivePrice: Double?,
     chartLoading: Boolean,
     chartError: String?,
     onChartSymbolChange: (String) -> Unit,
@@ -1983,6 +1988,7 @@ private fun ScannerScreen(
                 selectedSymbol = chartSymbol,
                 interval = chartInterval,
                 candles = chartCandles,
+                livePrice = chartLivePrice,
                 loading = chartLoading,
                 error = chartError,
                 candidate = candidates.firstOrNull { it.symbol.equals(chartSymbol, ignoreCase = true) },
@@ -2039,6 +2045,7 @@ private fun MarketChartPanel(
     selectedSymbol: String,
     interval: String,
     candles: List<Candle>,
+    livePrice: Double?,
     loading: Boolean,
     error: String?,
     candidate: Candidate?,
@@ -2051,7 +2058,7 @@ private fun MarketChartPanel(
     }
     val displayStatus = status.copy(
         symbol = selectedSymbol,
-        price = candles.lastOrNull()?.close,
+        price = livePrice ?: candles.lastOrNull()?.close,
         entry = null,
         tp = null,
         sl = null
@@ -3116,7 +3123,7 @@ private fun TradingChart(
                     }
                 }
         ) {
-            val levels = listOfNotNull(status.tp, status.entry, status.sl)
+            val levels = listOfNotNull(status.tp, status.entry, status.sl, status.price)
             val minPrice = min(
                 visible.minOf { it.low },
                 levels.minOrNull() ?: Double.MAX_VALUE
@@ -3226,9 +3233,30 @@ private fun TradingChart(
                 )
             }
 
+            level(status.price, AppColors.primary, "LIVE")
             level(position?.entry ?: status.entry, AppColors.primary, "ENTRY")
             level(position?.take ?: status.tp, AppColors.green, "TP")
             level(position?.stop ?: status.sl, AppColors.red, "SL")
+        }
+        Text("Awesome Oscillator (AO) • зелёный: выше нуля, красный: ниже нуля",
+            color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 8.dp))
+        Canvas(modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 8.dp, vertical = 4.dp)) {
+            val finite = visible.mapNotNull { it.ao?.takeIf(Double::isFinite) }
+            val maxAbs = finite.maxOfOrNull { kotlin.math.abs(it) } ?: 0.0
+            val zeroY = size.height / 2f
+            drawLine(AppColors.textMuted.copy(alpha = 0.65f), Offset(0f, zeroY), Offset(size.width, zeroY), 1f)
+            if (maxAbs > 0.0 && visible.isNotEmpty()) {
+                val step = size.width / visible.size.toFloat()
+                visible.forEachIndexed { index, candle ->
+                    val value = candle.ao?.takeIf(Double::isFinite) ?: return@forEachIndexed
+                    val height = (kotlin.math.abs(value) / maxAbs * (size.height * 0.42f)).toFloat()
+                    val left = index * step + step * 0.15f
+                    drawRect(color = if (value >= 0.0) AppColors.green else AppColors.red,
+                        topLeft = Offset(left, if (value >= 0.0) zeroY - height else zeroY),
+                        size = Size(max(1f, step * 0.7f), max(1f, height)))
+                }
+            }
         }
     }
 }
@@ -3585,7 +3613,8 @@ private fun parseCandles(array: JSONArray): List<Candle> =
             lips = x.optDouble("lips").takeUnless { it.isNaN() },
             longSignal = x.optBoolean("long_signal"),
             fractalUp = x.optBoolean("fractal_up"),
-            fractalDown = x.optBoolean("fractal_down")
+            fractalDown = x.optBoolean("fractal_down"),
+            ao = x.optDouble("ao").takeUnless { it.isNaN() || x.isNull("ao") }
         )
     }
 
