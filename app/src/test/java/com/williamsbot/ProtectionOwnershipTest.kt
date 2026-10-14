@@ -110,6 +110,20 @@ class ProtectionOwnershipTest {
     }
 
     @Test
+    fun profitLockingTrailingStopsMayCrossEntryButMustRemainBeyondLiveMark() {
+        // A long stop moved above entry is still protective while mark remains higher.
+        assertTrue(isProtectiveStopOnCorrectSide("LONG", "110", "105"))
+        assertFalse(isProtectiveStopOnCorrectSide("LONG", "104", "105"))
+
+        // A short stop moved below entry is still protective while mark remains lower.
+        assertTrue(isProtectiveStopOnCorrectSide("SHORT", "90", "95"))
+        assertFalse(isProtectiveStopOnCorrectSide("SHORT", "96", "95"))
+
+        assertFalse(isProtectiveStopOnCorrectSide("FLAT", "100", "95"))
+        assertFalse(isProtectiveStopOnCorrectSide("LONG", "0", "95"))
+    }
+
+    @Test
     fun structuralStopMustBeOnTheCorrectSideForDirection() {
         assertTrue(hasValidStructuralStop("LONG", "100", "95"))
         assertFalse(hasValidStructuralStop("LONG", "100", "100"))
