@@ -80,7 +80,9 @@ internal fun isEntryCampaignReserved(intent: JSONObject): Boolean {
     if (campaign in TERMINAL_CAMPAIGN_STATUSES) return false
     if (campaign in ACTIVE_CAMPAIGN_STATUSES) return true
     val orderStatus = exchangeOrderStatus(intent)
-    // Unknown legacy order/campaign state remains reserved until reconciliation.
+    // Unknown legacy lifecycle is fail-closed even when its order says FILLED:
+    // order completion does not prove a campaign is flat.
+    if (campaign.isBlank()) return true
     return orderStatus.isBlank() || orderStatus !in ENTRY_ORDER_TERMINAL_STATUSES
 }
 
@@ -592,7 +594,8 @@ internal class NativeFuturesCampaignCoordinator(
                 val status = campaignLifecycleStatus(intent)
                 if (
                     symbol !in openBySymbol &&
-                    (status in TERMINAL_CAMPAIGN_STATUSES || status in setOf("OPEN_PROTECTED", "POSITION_OPEN"))
+                    (status in TERMINAL_CAMPAIGN_STATUSES ||
+                        status in setOf("OPEN_PROTECTED", "POSITION_OPEN", "EXIT_PENDING"))
                 ) {
                     if (status in setOf("OPEN_PROTECTED", "POSITION_OPEN", "EXIT_PENDING")) {
                         intent.put("campaign_status", "CLOSED_OR_STOPPED")
