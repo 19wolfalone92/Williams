@@ -976,7 +976,6 @@ internal class NativeFuturesCampaignCoordinator(
         require(symbol in allowedSymbols)
         require(quantity.toBigDecimalOrNull()?.signum() == 1)
         require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
-        val adapter = adapterFactory()
         val intents = intents()
         val unresolvedExit = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }
             .lastOrNull {
