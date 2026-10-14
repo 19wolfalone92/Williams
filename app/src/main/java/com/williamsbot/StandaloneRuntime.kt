@@ -168,6 +168,41 @@ internal fun futuresAccountEquity(
     return value.takeIf { it.isFinite() && it >= 0.0 }
 }
 
+internal data class FuturesAccountSnapshot(
+    val availableUsdt: Double,
+    val walletUsdt: Double,
+    val equityUsdt: Double
+)
+
+/** Parse both numeric JSON values and numeric strings from the official USD-M account shape. */
+internal fun parseFuturesAccountSnapshot(account: JSONObject): FuturesAccountSnapshot? {
+    val usdt = (account.optJSONArray("assets") ?: JSONArray()).let { assets ->
+        (0 until assets.length()).asSequence()
+            .mapNotNull { assets.optJSONObject(it) }
+            .firstOrNull { it.optString("asset").equals("USDT", ignoreCase = true) }
+    }
+    fun number(objectValue: JSONObject?, key: String): Double? {
+        val raw = objectValue?.opt(key) ?: return null
+        val parsed = when (raw) {
+            is Number -> raw.toDouble()
+            is String -> raw.trim().toDoubleOrNull()
+            else -> null
+        }
+        return parsed?.takeIf { it.isFinite() }
+    }
+    fun rootOrUsdt(rootKey: String, assetKey: String): Double? =
+        number(account, rootKey) ?: number(usdt, assetKey)
+
+    val available = rootOrUsdt("availableBalance", "availableBalance")
+        ?.takeIf { it >= 0.0 } ?: return null
+    val wallet = rootOrUsdt("totalWalletBalance", "walletBalance")
+        ?.takeIf { it >= 0.0 } ?: return null
+    val unrealized = rootOrUsdt("totalUnrealizedProfit", "unrealizedProfit")
+    val margin = rootOrUsdt("totalMarginBalance", "marginBalance")
+    val equity = futuresAccountEquity(margin, wallet, unrealized) ?: return null
+    return FuturesAccountSnapshot(available, wallet, equity)
+}
+
 internal fun futuresAccountFundedForEntry(
     availableUsdt: Double?,
     equity: Double?
@@ -824,52 +859,27 @@ private class NativeEngine(
         synchronized(positions) { positions.values.toList() }
 
     private fun updateCachedFuturesAccount(account: JSONObject): Boolean {
-        // Binance account payloads can expose summary fields at the root and
-        // asset-specific values in assets[]. Prefer root summaries, then USDT.
-        // Never substitute another asset or position notional for USDT equity.
-        val usdt = (account.optJSONArray("assets") ?: JSONArray()).let { assets ->
-            (0 until assets.length()).asSequence()
-                .mapNotNull { assets.optJSONObject(it) }
-                .firstOrNull { it.optString("asset").equals("USDT", ignoreCase = true) }
-        }
-        fun jsonNumber(objectValue: JSONObject?, key: String): Double? {
-            val raw = objectValue?.opt(key) ?: return null
-            val parsed = when (raw) {
-                is Number -> raw.toDouble()
-                is String -> raw.trim().toDoubleOrNull()
-                else -> null
+        // A single tested parser is used by startup, diagnostics, risk and entry sizing.
+        // Never substitute Spot balances, another asset, or position notional for USDT.
+        val parsed = parseFuturesAccountSnapshot(account)
+        if (parsed == null) {
+            val usdtPresent = (account.optJSONArray("assets") ?: JSONArray()).let { assets ->
+                (0 until assets.length()).any { i ->
+                    assets.optJSONObject(i)?.optString("asset").equals("USDT", ignoreCase = true)
+                }
             }
-            return parsed?.takeIf { it.isFinite() }
-        }
-        fun number(rootKey: String, assetKey: String): Double? =
-            jsonNumber(account, rootKey) ?: jsonNumber(usdt, assetKey)
-
-        val available = number("availableBalance", "availableBalance")
-        val wallet = number("totalWalletBalance", "walletBalance")
-        val unrealized = number("totalUnrealizedProfit", "unrealizedProfit")
-        val margin = number("totalMarginBalance", "marginBalance")
-        val validAvailable = available?.takeIf { it.isFinite() && it >= 0.0 }
-        val validWallet = wallet?.takeIf { it.isFinite() && it >= 0.0 }
-        // Preserve a parsed available USDT amount even when another account field is
-        // invalid, so the cockpit can distinguish a known zero from an unknown value.
-        if (validAvailable != null) {
-            liveUsdtBalance = validAvailable
-            liveUsdtBalanceKnown = true
-        } else {
             liveUsdtBalanceKnown = false
-        }
-        val equity = futuresAccountEquity(margin, validWallet, unrealized)
-        if (validAvailable == null || validWallet == null || equity == null) {
             restAccountReady = false
             liveFuturesEquity = 0.0
             restAccountLastError = "Futures account missing valid USDT available balance/wallet/equity fields; rootKeys=" +
                 account.keys().asSequence().toList().sorted().joinToString(",") +
-                "; usdtAssetPresent=" + (usdt != null)
+                "; usdtAssetPresent=" + usdtPresent
             return false
         }
-        liveUsdtBalance = validAvailable
+
+        liveUsdtBalance = parsed.availableUsdt
         liveUsdtBalanceKnown = true
-        liveFuturesEquity = equity
+        liveFuturesEquity = parsed.equityUsdt
         restAccountReady = true
         restAccountLastError = null
         return true
@@ -4332,11 +4342,14 @@ private class NativeEngine(
         val riskPct = min(campaignInitialRiskPct, min(maxRiskPerTradePct, maxTotalRiskPct - riskUsed))
         if (riskPct <= 0.0) return
         val account = futuresCampaignCoordinator.accountSnapshot()
-        val wallet = account.optString("totalWalletBalance").toDoubleOrNull() ?: 0.0
-        val equity = account.optString("totalMarginBalance").toDoubleOrNull()
-            ?: wallet + (account.optString("totalUnrealizedProfit").toDoubleOrNull() ?: 0.0)
-        val available = account.optString("availableBalance").toDoubleOrNull() ?: 0.0
-        if (equity <= 0.0 || available <= 0.0) return
+        val parsedAccount = parseFuturesAccountSnapshot(account) ?: run {
+            updateCachedFuturesAccount(account)
+            lastError = restAccountLastError ?: "Futures account snapshot is invalid"
+            return
+        }
+        val equity = parsedAccount.equityUsdt
+        val available = parsedAccount.availableUsdt
+        if (!futuresAccountFundedForEntry(available, equity)) return
         val mark = futuresMarketData.markPrice(symbol)
         val rules = symbolFilters(symbol)
         val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
