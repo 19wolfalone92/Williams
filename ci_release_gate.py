@@ -317,6 +317,10 @@ def main() -> None:
     must_not(runtime_source, "private fun checkAutomaticCircuitBreaker()", "StandaloneRuntime.kt")
     coordinator_source = read("app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     must(coordinator_source, "fun incomeHistory(startTimeMs: Long, endTimeMs: Long): JSONArray", "NativeFuturesCampaignCoordinator.kt")
+    must(coordinator_source, "isOwnedProtectionClientId(cid, currentProtectionId, previousProtectionId)", "NativeFuturesCampaignCoordinator.kt")
+    must(coordinator_source, "Unmanaged close-position protective stop remains open", "NativeFuturesCampaignCoordinator.kt")
+    protection_test = read("app/src/test/java/com/williamsbot/ProtectionOwnershipTest.kt")
+    must(protection_test, "onlyCurrentOrExplicitlyTrackedPredecessorProtectionIsBotOwned", "ProtectionOwnershipTest.kt")
     baseline_test = read("app/src/test/java/com/williamsbot/DailyRiskBaselineTest.kt")
     for needle in (
         "baselineCanBeInitializedForFlatIdleAccountWithNoTradingIncome",

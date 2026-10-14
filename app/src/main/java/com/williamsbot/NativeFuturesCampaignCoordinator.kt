@@ -2,8 +2,21 @@ package com.williamsbot
 
 import org.json.JSONArray
 import org.json.JSONObject
+
 import java.io.IOException
 import java.util.Locale
+
+/**
+ * A protective order is bot-owned only when Binance clientAlgoId matches the
+ * current or explicitly tracked predecessor id. Unknown orders are never
+ * canceled just because they share a symbol or stop type.
+ */
+internal fun isOwnedProtectionClientId(
+    candidateClientId: String,
+    currentClientId: String,
+    previousClientId: String
+): Boolean = candidateClientId.isNotBlank() &&
+    (candidateClientId == currentClientId || candidateClientId == previousClientId)
 
 /**
  * Local, durable USDⓈ-M Futures Testnet execution boundary.
@@ -714,6 +727,15 @@ internal class NativeFuturesCampaignCoordinator(
         require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
         val adapter = adapterFactory()
         val intents = intents()
+        val managedEntry = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }
+            .lastOrNull { row ->
+                row.optString("intent_role", "ENTRY") == "ENTRY" &&
+                    row.optString("symbol").uppercase(Locale.US) == symbol.uppercase(Locale.US) &&
+                    row.optString("direction") == direction.name &&
+                    row.optString("exchange_status").uppercase(Locale.US) in setOf("OPEN_PROTECTED", "POSITION_OPEN")
+            }
+        val currentProtectionId = managedEntry?.optString("protection_client_id").orEmpty()
+        val previousProtectionId = managedEntry?.optString("previous_protection_client_id").orEmpty()
         val exitIntent = JSONObject()
             .put("intent_role", "EXIT")
             .put("symbol", symbol)
@@ -750,29 +772,47 @@ internal class NativeFuturesCampaignCoordinator(
             exitIntent.put("exchange_status", "EXIT_CONFIRMED")
                 .put("confirmed_flat_at_ms", System.currentTimeMillis())
             saveIntents(intents)
-            // Cancel only close-position protective stops after the exchange is confirmed flat.
+
+            // Cancel only protective orders whose ids belong to this persisted campaign.
+            // A manual/foreign stop is never canceled; it blocks release until reconciled.
             val algos = adapter.openAlgoOrders(symbol)
             for (i in 0 until algos.length()) {
-                val row = algos.optJSONObject(i) ?: continue
+                val row = algos.optJSONObject(i) ?: throw IOException("Malformed algo-order row after $symbol exit")
                 if (!row.optString("type", row.optString("orderType")).equals("STOP_MARKET", true) ||
                     !row.optString("closePosition").equals("true", true)
                 ) continue
-                val algoId = row.optString("algoId")
                 val cid = row.optString("clientAlgoId")
+                if (!isOwnedProtectionClientId(cid, currentProtectionId, previousProtectionId)) {
+                    throw IOException("Unmanaged close-position protective stop remains open after $symbol exit; manual reconciliation required")
+                }
+                val algoId = row.optString("algoId")
                 if (algoId.isNotBlank()) adapter.cancelAlgoOrderById(symbol, algoId)
                 else if (cid.isNotBlank()) adapter.cancelAlgoOrder(symbol, cid)
-                else throw IOException("Cannot identify orphaned protective stop after exit")
+                else throw IOException("Cannot identify owned protective stop after $symbol exit")
+            }
+            val remainingAlgos = adapter.openAlgoOrders(symbol)
+            val orphanedStopRemains = (0 until remainingAlgos.length()).any { i ->
+                val row = remainingAlgos.optJSONObject(i) ?: return@any true
+                row.optString("type", row.optString("orderType")).equals("STOP_MARKET", true) &&
+                    row.optString("closePosition").equals("true", true)
+            }
+            if (orphanedStopRemains) {
+                throw IOException("A close-position protective stop remains after $symbol was confirmed flat")
             }
             state = State.READY
             lastBlocker = null
             JSONObject().put("ok", true).put("state", state.name).put("order", result)
                 .put("flat_confirmed", true).put("reason", reason)
         } catch (failure: Exception) {
-            exitIntent.put("exchange_status", "SUBMISSION_UNKNOWN")
-                .put("error", failure.message ?: failure.javaClass.simpleName)
+            // Preserve the known flat/exit result if only protective-order cleanup
+            // failed; reconciliation still blocks entry until the orphan is resolved.
+            if (exitIntent.optString("exchange_status").uppercase(Locale.US) != "EXIT_CONFIRMED") {
+                exitIntent.put("exchange_status", "SUBMISSION_UNKNOWN")
+            }
+            exitIntent.put("error", failure.message ?: failure.javaClass.simpleName)
             saveIntents(intents)
             state = State.RECONCILE_REQUIRED
-            lastBlocker = "ambiguous_exit_submission_reconcile_before_any_retry"
+            lastBlocker = "exit/protection cleanup unresolved; reconciliation before any retry"
             JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
                 .put("error", failure.message ?: failure.javaClass.simpleName)
         }
