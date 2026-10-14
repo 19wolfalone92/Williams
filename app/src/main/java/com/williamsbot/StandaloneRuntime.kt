@@ -153,6 +153,26 @@ internal fun isSignalFresh(
     return exchangeNowMs - signalBarTimeMs <= maximumAgeMs
 }
 
+/** Canonical, side-effect-free startup gate so UI diagnostics never hide the blocking prerequisite. */
+internal fun scannerReadinessState(
+    running: Boolean,
+    paused: Boolean,
+    reconcileRequired: Boolean,
+    killLatched: Boolean,
+    historyReady: Boolean,
+    accountReady: Boolean,
+    marketDataFresh: Boolean
+): String = when {
+    !running -> "STOPPED"
+    paused -> "PAUSED"
+    reconcileRequired -> "BLOCKED_RECONCILE"
+    killLatched -> "BLOCKED_KILL"
+    !historyReady -> "WAITING_FOR_HISTORY"
+    !accountReady -> "BLOCKED_ACCOUNT"
+    !marketDataFresh -> "WAITING_FOR_MARKET_DATA"
+    else -> "RUNNABLE"
+}
+
 internal fun conservativeRiskReservation(storedRiskPct: Double, maxTotalRiskPct: Double): Double {
     if (!maxTotalRiskPct.isFinite() || maxTotalRiskPct <= 0.0) return 1.0
     if (!storedRiskPct.isFinite() || storedRiskPct <= 0.0) return maxTotalRiskPct
@@ -1309,19 +1329,26 @@ private class NativeEngine(
             while (running && generation == runtimeGeneration) {
                 try {
                     if (!historyReady) {
+                        scannerState = "WAITING_FOR_HISTORY"
+                        scannerError = historyLastError
                         if (!historyWarmupRunning) warmCoreHistoryAsync(generation)
-                    } else if (marketDataFresh() && restAccountReady) {
-                        // Reconcile existing positions and manage exchange-side protection
-                        // even while paused or after the daily-loss entry lock engages.
-                        if (!checkFuturesDailyLoss()) {
-                            runCatching { manageNativeFuturesPositions() }
-                                .onFailure { lastError = "Futures position monitor: " + (it.message ?: it.javaClass.simpleName) }
-                        } else if (paused) {
-                            runCatching { manageNativeFuturesPositions() }
-                                .onFailure { lastError = "Futures position monitor: " + (it.message ?: it.javaClass.simpleName) }
-                        } else if (!reconcileRequired && !killLatched) {
-                            requestScan()
-                        }
+                    } else if (paused) {
+                        scannerState = "PAUSED"
+                        scannerError = "Runtime is paused by the operator"
+                        // Existing positions still need protection management while paused.
+                        runCatching { manageNativeFuturesPositions() }
+                            .onFailure { lastError = "Futures position monitor: " + (it.message ?: it.javaClass.simpleName) }
+                    } else if (reconcileRequired || killLatched || !restAccountReady || !marketDataFresh()) {
+                        // Always evaluate the gate so the cockpit reports the true blocker
+                        // instead of remaining indefinitely at WAITING_FOR_HISTORY.
+                        requestScan()
+                    } else if (!checkFuturesDailyLoss()) {
+                        scannerState = "BLOCKED_DAILY_LOSS"
+                        scannerError = "Daily loss limit reached; new Futures entries are disabled"
+                        runCatching { manageNativeFuturesPositions() }
+                            .onFailure { lastError = "Futures position monitor: " + (it.message ?: it.javaClass.simpleName) }
+                    } else {
+                        requestScan()
                     }
                 } catch (x: Exception) {
                     lastError = x.javaClass.simpleName + ": " + (x.message ?: "")
@@ -2680,24 +2707,28 @@ private class NativeEngine(
     }
 
     private fun requestScan() {
-        // Scanner requires REST market data + history only. WebSockets are
-        // realtime acceleration and diagnostics, not a hard scanner dependency.
-        if (
-            !running ||
-            paused ||
-            reconcileRequired ||
-            killLatched ||
-            !historyReady ||
-            !restMarketReady
-        ) {
-            scannerState = when {
-                !running -> "STOPPED"
-                paused -> "PAUSED"
-                reconcileRequired -> "BLOCKED_RECONCILE"
-                killLatched -> "BLOCKED_KILL"
-                !historyReady -> "WAITING_FOR_HISTORY"
-                !restMarketReady -> "WAITING_FOR_REST"
-                else -> "WAITING"
+        // The scanner uses REST market data/history; WS remains an execution prerequisite.
+        // Gate failures are surfaced as actionable states rather than silent early returns.
+        val gateState = scannerReadinessState(
+            running = running,
+            paused = paused,
+            reconcileRequired = reconcileRequired,
+            killLatched = killLatched,
+            historyReady = historyReady,
+            accountReady = restAccountReady,
+            marketDataFresh = marketDataFresh()
+        )
+        if (gateState != "RUNNABLE") {
+            scannerState = gateState
+            scannerError = when (gateState) {
+                "STOPPED" -> "Runtime is stopped; press START after Futures credentials are configured"
+                "PAUSED" -> "Runtime is paused by the operator"
+                "BLOCKED_RECONCILE" -> "Futures positions/orders/protection reconciliation is required"
+                "BLOCKED_KILL" -> "Kill switch is latched; reconcile exchange state before reset"
+                "WAITING_FOR_HISTORY" -> historyLastError ?: "Waiting for closed H1 history for all 10 approved contracts"
+                "BLOCKED_ACCOUNT" -> restAccountLastError ?: "Authenticated Futures USDT balance/equity is not ready"
+                "WAITING_FOR_MARKET_DATA" -> restLastError ?: "Futures REST market data is stale or unavailable"
+                else -> "Scanner gate is not ready: " + gateState
             }
             return
         }
@@ -4243,8 +4274,15 @@ private class NativeEngine(
     }
 
     private fun performCampaignScan() {
-        if (!running || paused || reconcileRequired || killLatched) return
+        if (!running || paused || reconcileRequired || killLatched) {
+            // Runtime state can change after scan scheduling; do not let the outer
+            // worker incorrectly promote a skipped scan to READY.
+            requestScan()
+            return
+        }
         if (!checkFuturesDailyLoss()) {
+            scannerState = "BLOCKED_DAILY_LOSS"
+            scannerError = "Daily loss limit reached; new Futures entries are disabled"
             runCatching { manageNativeFuturesPositions() }
             return
         }
@@ -8113,6 +8151,35 @@ private class NativeEngine(
             name = "williams-futures-rest-probe"
             start()
         }
+    }
+
+    private fun scannerSnapshot(): JSONObject =
+        JSONObject()
+            .put("version", BuildConfig.VERSION_NAME)
+            .put("cached", true)
+            .put("scanning", scanning)
+            .put("scanner_state", scannerState)
+            .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("run_id", scanRunId)
+            .put("progress_symbols", scanProgressSymbols)
+            .put("progress_total", scanSymbols.size)
+            .put("last_progress_at", scanLastProgressAt)
+            .put("last_error", lastError ?: JSONObject.NULL)
+            .put("last_scan_at", lastScanAt)
+            .put("last_scan_duration_ms", lastScanDurationMs)
+            .put("symbols_scanned", lastSymbolsScanned)
+            .put("scan_universe", scannerUniverseLabel)
+            .put("deep_wave_targets", waveTopN)
+            .put("candidates", candidates)
+            .put(
+                "best_candidate",
+                if (candidates.length() > 0) candidates.getJSONObject(0)
+                else JSONObject().put("symbol", primarySymbol)
+            )
+
+    fun scanner(refresh: Boolean): JSONObject {
+        if (refresh) requestScan()
+        return scannerSnapshot()
     }
 
     fun status(fast: Boolean = false): JSONObject {
