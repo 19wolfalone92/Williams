@@ -388,6 +388,9 @@ def main() -> None:
         "test_android_signed_execution_boundary_rejects_legacy_spot_routes",
         "test_android_user_stream_is_not_the_spot_signed_subscription_protocol",
         "test_android_private_futures_stream_uses_supported_event_query_delimiters",
+        "test_android_campaign_lifecycle_is_separate_from_exchange_order_status",
+        "test_android_exit_requires_exchange_position_protection_and_filled_order_confirmation",
+        "test_android_protection_must_match_owner_id_and_exact_trigger",
         "test_android_diagnostics_do_not_fake_self_heal_readiness",
     ):
         must(android_contract, needle, "Android autonomous runtime contract")
