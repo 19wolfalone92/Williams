@@ -3768,7 +3768,7 @@ private class NativeEngine(
         ) {
             "SQLite commit failed while persisting daily Futures equity/PnL measurement"
         }
-        if (observeFuturesEquityCircuitBreaker(
+        if (observeFuturesEquityFromPersistedBaseline(
                 equityCircuitBreaker, baseline, equity, exchangeNowMs
             ).tripped
         ) {
