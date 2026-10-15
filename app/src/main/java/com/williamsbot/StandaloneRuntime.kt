@@ -479,6 +479,43 @@ internal fun reconstructFuturesDailyRiskBaseline(
     return baseline.takeIf { it.isFinite() && it > 0.0 }
 }
 
+internal data class FuturesDailyBaselineDecision(
+    val baselineEquityUsdt: Double,
+    val source: String
+)
+
+/**
+ * Never replace a missing daily baseline with current equity if the exchange reports
+ * income rows or an open/unknown exposure. Capital transfers must be removed from
+ * reconstructed starting equity even when there is no trading income today.
+ */
+internal fun selectFuturesDailyBaseline(
+    currentEquityUsdt: Double,
+    unrealizedPnlUsdt: Double?,
+    incomeRows: JSONArray,
+    hasOpenOrUnknownPositionOrPendingExecution: Boolean
+): FuturesDailyBaselineDecision? {
+    if (!currentEquityUsdt.isFinite() || currentEquityUsdt <= 0.0) return null
+    val summary = summarizeFuturesDailyIncome(incomeRows) ?: return null
+    if (incomeRows.length() > 0) {
+        val reconstructed = reconstructFuturesDailyRiskBaseline(
+            currentEquityUsdt = currentEquityUsdt,
+            unrealizedPnlUsdt = unrealizedPnlUsdt,
+            incomeRows = incomeRows
+        ) ?: return null
+        return FuturesDailyBaselineDecision(
+            baselineEquityUsdt = reconstructed,
+            source = if (summary.hasTradingActivity) {
+                "RECONSTRUCTED_FROM_FUTURES_INCOME"
+            } else {
+                "RECONSTRUCTED_FROM_CAPITAL_FLOW_LEDGER"
+            }
+        )
+    }
+    if (hasOpenOrUnknownPositionOrPendingExecution) return null
+    return FuturesDailyBaselineDecision(currentEquityUsdt, "INITIAL_FLAT_SNAPSHOT")
+}
+
 internal data class ForcedH1EntryLevels(
     val triggerPrice: Double,
     val protectiveStop: Double
@@ -5247,21 +5284,16 @@ private class NativeEngine(
                     } else 0.0
                 }
 
-                val reconstructed = when {
-                    income.length() > 0 -> reconstructFuturesDailyRiskBaseline(
-                        currentEquityUsdt = equity,
-                        unrealizedPnlUsdt = unrealized,
-                        incomeRows = income
-                    ) ?: throw IllegalStateException("Futures income history could not reconstruct a positive starting equity")
-                    hasOpenOrUnknownPosition || hasActiveExecution ->
-                        throw IllegalStateException("Exchange exposure/pending campaign exists but the UTC-day income ledger is empty")
-                    else -> equity
-                }
-                reconstructed to when {
-                    hasTradingIncome -> "RECONSTRUCTED_FROM_FUTURES_INCOME"
-                    income.length() > 0 -> "RECONSTRUCTED_FROM_CAPITAL_FLOW_LEDGER"
-                    else -> "INITIAL_FLAT_SNAPSHOT"
-                }
+                val baselineDecision = selectFuturesDailyBaseline(
+                    currentEquityUsdt = equity,
+                    unrealizedPnlUsdt = unrealized,
+                    incomeRows = income,
+                    hasOpenOrUnknownPositionOrPendingExecution =
+                        hasOpenOrUnknownPosition || hasActiveExecution
+                ) ?: throw IllegalStateException(
+                    "Cannot safely reconstruct UTC-day Futures baseline from income, unrealized PnL, and exchange exposure"
+                )
+                baselineDecision.baselineEquityUsdt to baselineDecision.source
             }
             val baselineResult = baselineAttempt.getOrElse { failure ->
                 paused = true
