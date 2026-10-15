@@ -2,6 +2,9 @@ package com.williamsbot
 
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import java.util.Calendar
+import java.util.Locale
+import java.util.TimeZone
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.max
@@ -302,4 +305,86 @@ object TradeJournal {
     private fun trim(value: JSONArray) {
         while (value.length() > MAX_ROWS) value.remove(0)
     }
+}
+
+/** Result of the entry-only Futures loss-streak circuit breaker. */
+internal data class FuturesLossStreakDecision(
+    val available: Boolean,
+    val consecutiveLosses: Int,
+    val allowNewEntries: Boolean,
+    val cooldownUntilMs: Long?,
+    val reason: String?
+)
+
+/**
+ * Evaluate only exchange-reconciled native Futures closes for the current UTC day.
+ * Unknown fee/PnL on a newer closed Futures campaign fails closed: it must not be
+ * silently counted as a win or skipped while calculating the loss streak.
+ */
+internal fun evaluateFuturesLossStreak(
+    tradeRows: JSONArray,
+    nowMs: Long,
+    maximumConsecutiveLosses: Int = 2,
+    cooldownMs: Long = 30L * 60L * 1000L,
+    hardPauseAt: Int = 3
+): FuturesLossStreakDecision {
+    if (nowMs <= 0L || maximumConsecutiveLosses <= 0 || cooldownMs < 0L ||
+        hardPauseAt <= maximumConsecutiveLosses
+    ) return FuturesLossStreakDecision(false, 0, false, null, "FUTURES_LOSS_STREAK_CONFIG_INVALID")
+
+    val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+    utc.timeInMillis = nowMs
+    utc.set(Calendar.HOUR_OF_DAY, 0)
+    utc.set(Calendar.MINUTE, 0)
+    utc.set(Calendar.SECOND, 0)
+    utc.set(Calendar.MILLISECOND, 0)
+    val dayStart = utc.timeInMillis
+
+    val closed = (0 until tradeRows.length()).mapNotNull { index ->
+        tradeRows.optJSONObject(index)
+    }.filter { row ->
+        val source = row.optString("trade_audit_source")
+        val id = row.optString("id")
+        val isNativeFutures = source == "BINANCE_USDM_USER_TRADES" || id.startsWith("FUTURES:")
+        isNativeFutures && row.optString("status").equals("CLOSED", true) &&
+            row.optLong("closed_at", 0L) >= dayStart && row.optLong("closed_at", 0L) <= nowMs
+    }.sortedByDescending { it.optLong("closed_at", 0L) }
+
+    var losses = 0
+    var mostRecentLossAt = 0L
+    for (row in closed) {
+        val outcome = row.optString("outcome").trim().uppercase(Locale.US)
+        when (outcome) {
+            "WIN", "BREAKEVEN" -> break
+            "LOSS" -> {
+                if (!row.optBoolean("pnl_complete", true) ||
+                    !row.optDouble("pnl", Double.NaN).isFinite()
+                ) {
+                    return FuturesLossStreakDecision(
+                        false, losses, false, null, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
+                    )
+                }
+                losses++
+                if (mostRecentLossAt == 0L) mostRecentLossAt = row.optLong("closed_at", 0L)
+            }
+            else -> return FuturesLossStreakDecision(
+                false, losses, false, null, "FUTURES_LOSS_STREAK_OUTCOME_UNKNOWN"
+            )
+        }
+    }
+
+    if (losses >= hardPauseAt) {
+        return FuturesLossStreakDecision(
+            true, losses, false, null, "FUTURES_CONSECUTIVE_LOSS_HARD_PAUSE"
+        )
+    }
+    if (losses >= maximumConsecutiveLosses && mostRecentLossAt > 0L) {
+        val cooldownUntil = mostRecentLossAt + cooldownMs
+        if (nowMs < cooldownUntil) {
+            return FuturesLossStreakDecision(
+                true, losses, false, cooldownUntil, "FUTURES_CONSECUTIVE_LOSS_COOLDOWN"
+            )
+        }
+    }
+    return FuturesLossStreakDecision(true, losses, true, null, null)
 }
