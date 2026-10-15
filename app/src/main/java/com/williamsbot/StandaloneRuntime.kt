@@ -743,6 +743,10 @@ private class NativeEngine(
     private val futuresCampaignCoordinator by lazy {
         NativeFuturesCampaignCoordinator(executionStore) {
             BinanceUsdMFuturesTestnetAdapter(key(), secret(), http)
+        }.also { coordinator ->
+            coordinator.setStructuralStopRecoveryProvider { symbol, direction, mark, quantity, entry ->
+                recoverMissingStructuralStop(symbol, direction, mark, quantity, entry)
+            }
         }
     }
     private val historyStore = MarketHistoryStore(context)
@@ -7020,6 +7024,66 @@ private class NativeEngine(
         if (!newClientOrderId.isNullOrBlank()) params.append("&newClientOrderId=").append(newClientOrderId)
         return signedPost("/api/v3/order/cancelReplace", params.toString())
     }
+
+    /**
+     * Derive a recovery stop only for a known bot-owned active Futures campaign.
+     * Uses the last five confirmed closed H1 bars, plus one exchange tick outside
+     * their structure. A fresh mark and validated equity are mandatory; no default
+     * price or guessed risk is accepted.
+     */
+    private fun recoverMissingStructuralStop(
+        symbol: String,
+        direction: String,
+        markPrice: Double,
+        quantity: Double,
+        entryPrice: Double
+    ): RecoveredStructuralStop? = runCatching {
+        require(symbol.uppercase(Locale.US) in coreSymbols)
+        require(markPrice.isFinite() && markPrice > 0.0)
+        require(quantity.isFinite() && quantity > 0.0)
+        require(entryPrice.isFinite() && entryPrice > 0.0)
+
+        val nowMs = futuresMarketData.exchangeNowMs()
+        val oneHourMs = frameSeconds("1h") * 1000L
+        val closed = fetchCandles(symbol, "1h", 180).filter { candle ->
+            futuresMarketData.isCandleOpenTimeClosed(candle.t, oneHourMs, nowMs)
+        }
+        require(closed.size >= 5) { "Five confirmed H1 bars are required for structural-stop recovery" }
+        val latest = closed.last()
+        require(nowMs >= latest.t + oneHourMs &&
+            nowMs - (latest.t + oneHourMs) <= 2L * oneHourMs
+        ) { "Latest closed H1 structure is stale" }
+
+        val rules = symbolFilters(symbol)
+        require(rules.tick.isFinite() && rules.tick > 0.0)
+        val structure = closed.takeLast(5)
+        val rawStop = when (direction.uppercase(Locale.US)) {
+            "LONG" -> (structure.minOfOrNull { it.l } ?: return@runCatching null) - rules.tick
+            "SHORT" -> (structure.maxOfOrNull { it.h } ?: return@runCatching null) + rules.tick
+            else -> return@runCatching null
+        }
+        val stop = when (direction.uppercase(Locale.US)) {
+            "LONG" -> normalizePrice(rawStop, rules.tick)
+            "SHORT" -> normalizeTriggerPrice(rawStop, rules.tick)
+            else -> return@runCatching null
+        }
+        require(stop.isFinite() && stop > 0.0 &&
+            isProtectiveStopOnCorrectSide(direction, markPrice.toString(), stop.toString())
+        ) { "Closed H1 structure cannot produce a stop on the protective side of current Futures mark" }
+        if (rules.minPrice > 0.0) require(stop >= rules.minPrice)
+        if (rules.maxPrice.isFinite()) require(stop <= rules.maxPrice)
+
+        val account = parseFuturesAccountSnapshot(futuresCampaignCoordinator.accountSnapshot())
+            ?: throw IllegalStateException("Futures account equity is unavailable for recovery-risk calculation")
+        val riskPct = (kotlin.math.abs(entryPrice - stop) * quantity / account.equityUsdt)
+        require(riskPct.isFinite() && riskPct > 0.0) {
+            "Recovered structural-stop risk is unknown"
+        }
+        RecoveredStructuralStop(
+            stopPrice = fmtPrice(stop, rules.tick),
+            riskPct = riskPct
+        )
+    }.getOrNull()
 
     private fun normalizePrice(price: Double, tick: Double): Double {
         if (price <= 0.0 || tick <= 0.0) return price
