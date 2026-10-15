@@ -180,6 +180,7 @@ def test_android_manual_direction_override_is_demo_only_and_keeps_execution_safe
     assert 'path == "/api/v1/control/testnet-force-entry"' in runtime
     assert 'require(baseUrl == "https://demo-fapi.binance.com")' in runtime
     assert "require(executionGate.tryReserve(FUTURES_EXECUTION_DOOR_KEY))" in runtime
+    assert 'prefs.getBoolean("force_testnet_mode", false) ||' in runtime
     assert "executionGate.release(FUTURES_EXECUTION_DOOR_KEY)" in runtime
     assert "Futures positions/orders/protection must be reconciled" in runtime
     assert "checkFuturesDailyLoss()" in runtime
