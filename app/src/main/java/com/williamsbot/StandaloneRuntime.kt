@@ -5967,9 +5967,8 @@ private class NativeEngine(
         // At equal H1 timestamps, prefer a direction aligned with H4 over a reversal
         // that is allowed by the macro airbag alone.
         val signal = freshSignals.maxWithOrNull(
-            compareBy<CampaignSignalN> {
-                directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)
-            }.thenBy { it.signalBarTimeMs }
+            compareBy<CampaignSignalN> { it.signalBarTimeMs }
+                .thenBy { directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear) }
         )?.takeIf {
             directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear) > 0
         } ?: run {
