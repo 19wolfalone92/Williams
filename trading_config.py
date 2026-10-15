@@ -148,7 +148,7 @@ class TradingConfig:
             # Legacy Spot mode retains its own market-specific configuration.
             symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
 
-        max_positions = min(1, max(1, _int(source, "MAX_OPEN_POSITIONS", 1)))
+        max_positions = min(len(DEFAULT_FUTURES_SYMBOLS), max(1, _int(source, "MAX_OPEN_POSITIONS", len(DEFAULT_FUTURES_SYMBOLS))))
         # Parse outer caps first. A user may tighten any cap, but no lower-level
         # risk parameter may silently override a stricter campaign/portfolio cap.
         total_risk = max(0.0, min(0.006, _float(source, "MAX_TOTAL_RISK_PCT", 0.006)))
