@@ -563,6 +563,20 @@ internal fun forcedH1EntryLevels(
 }
 
 /** Resolve only explicit strategy signal types; unknown types must never default to LONG. */
+internal fun isCampaignAddOnSignalForDirection(signalType: String, positionSignalType: String): Boolean {
+    val signal = signalType.trim().uppercase(Locale.US)
+    val position = positionSignalType.trim().uppercase(Locale.US)
+    val signalIsShort = signal.startsWith("SHORT_")
+    val positionIsShort = position.startsWith("SHORT_")
+    val family = if (signalIsShort) signal.removePrefix("SHORT_") else signal
+    // Unknown position direction must not inherit the LONG default.
+    if (position.isBlank() || (!positionIsShort && position !in setOf("REVERSAL", "SUPER_AO", "FRACTAL") && !position.startsWith("LONG_"))) {
+        return false
+    }
+    return signalIsShort == positionIsShort && family in setOf("SUPER_AO", "FRACTAL")
+}
+
+/** Resolve only explicit strategy signal types; unknown types must never default to LONG. */
 internal fun campaignSignalDirection(signalType: String): String? {
     val type = signalType.trim().uppercase(Locale.US)
     return when {
@@ -5127,7 +5141,7 @@ private class NativeEngine(
                 ?: position.openedAt
         val signal = candidate.campaignSignals
             .filter {
-                it.type in setOf("SUPER_AO", "FRACTAL") &&
+                isCampaignAddOnSignalForDirection(it.type, position.signalType) &&
                     it.signalBarTimeMs > latestSignalTime
             }
             .sortedBy { it.signalBarTimeMs }
