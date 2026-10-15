@@ -156,8 +156,9 @@ object TradeJournal {
         require(openedAtMs > 0L && closedAtMs >= openedAtMs)
         val notional = entryPrice * qty
         val netPnl = grossPnlUsdt - feeUsdt
-        val complete = feeKnown && netPnl.isFinite()
+        val complete = feeKnown && netPnl.isFinite() && notional.isFinite()
         val rMultiple = netPnl / initialRiskUsdt
+        val equitySnapshot = entrySnapshot.optDouble("risk_equity_snapshot_usdt", 0.0)
         val outcome = if (!complete) "UNKNOWN_FEES" else when {
             netPnl > 0.0 -> "WIN"
             netPnl < 0.0 -> "LOSS"
@@ -184,7 +185,7 @@ object TradeJournal {
             .put("pnl_basis", if (complete) "EXCHANGE_REALIZED_PNL_LESS_FEES" else "PARTIAL_FEES_UNKNOWN")
             .put("pnl_pct", if (notional > 0.0) netPnl / notional else 0.0)
             .put("initial_risk_usdt", initialRiskUsdt)
-            .put("risk_pct", initialRiskUsdt / entrySnapshot.optDouble("risk_equity_snapshot_usdt", 0.0).takeIf { it > 0.0 })
+            .put("risk_pct", if (equitySnapshot > 0.0) initialRiskUsdt / equitySnapshot else 0.0)
             .put("r_multiple", rMultiple)
             .put("outcome", outcome)
             .put("exit_reason", reason)
