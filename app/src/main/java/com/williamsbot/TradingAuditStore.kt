@@ -386,7 +386,7 @@ class TradingAuditStore(context: Context) :
         order.put("executed_qty", payload.optString("z").toDoubleOrNull() ?: 0.0)
         val quote = payload.optString("Z").toDoubleOrNull() ?: 0.0
         order.put("cumulative_quote_qty", quote)
-        val executed = event.optString("z").toDoubleOrNull() ?: 0.0
+        val executed = payload.optString("z").toDoubleOrNull() ?: 0.0
         order.put("avg_price", if (executed > 0.0) quote / executed else 0.0)
         order.put("last_event_time", executionEventTime)
         order.put("updated_at", System.currentTimeMillis())
