@@ -94,7 +94,7 @@ class TradingConfig:
     max_daily_loss_pct: float = 0.03
     max_consecutive_losses: int = 2
     cooldown_minutes: int = 30
-    max_open_positions: int = 1
+    max_open_positions: int = 10
 
     min_risk_reward: float = 1.5
     atr_period: int = 14
