@@ -7231,7 +7231,7 @@ private class NativeEngine(
             }
         }
         require(step > 0.0 && tick > 0.0 && minQty > 0.0) { "Futures contract filters are incomplete for $normalized" }
-        val decimals = max(0, step.toString().substringAfter('.', "").trimEnd('0').length)
+        val decimals = ExecutionMath.decimalPlacesForIncrement(step)
         return SymbolRules(
             step = step, tick = tick, decimals = decimals, minQty = minQty, maxQty = maxQty,
             marketStep = marketStep, marketMinQty = marketMinQty, marketMaxQty = marketMaxQty,
@@ -7254,10 +7254,7 @@ private class NativeEngine(
         val rounded = if (tick > 0.0) {
             ExecutionMath.priceToTick(value, tick)
         } else value
-        val decimals = max(
-            0,
-            tick.toString().substringAfter('.', "").trimEnd('0').length
-        )
+        val decimals = ExecutionMath.decimalPlacesForIncrement(tick)
         return ExecutionMath.floorToScale(rounded, decimals)
     }
 
