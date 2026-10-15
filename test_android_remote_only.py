@@ -335,7 +335,9 @@ def test_android_campaign_lifecycle_is_separate_from_exchange_order_status():
     assert 'intent.optString("campaign_status")' in coordinator
     assert 'intent.optString("order_status")' in coordinator
     assert '"FILL_CONFIRMATION_PENDING"' in coordinator
-    assert "isEntryCampaignReserved(row)" in coordinator
+    assert "isEntryCampaignReserved(intent)" in coordinator
+    assert "futuresPositionSlotBlocker(" in coordinator
+    assert "maxPositions = allowedSymbols.size" in coordinator
     assert "latestEntryIntentIndex(intents, symbol)" in coordinator
     flat_cleanup = coordinator.index("// Once Binance reports the symbol flat")
     terminal_write = coordinator.index('intent.put("campaign_status", "CLOSED_OR_STOPPED")', flat_cleanup)
@@ -386,8 +388,10 @@ def test_android_trailing_stop_retains_confirmed_protection_after_ambiguous_repl
 def test_android_trailing_stops_are_mark_relative_not_entry_relative():
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     assert "internal fun isProtectiveStopOnCorrectSide(" in coordinator
-    assert "val liveMark = if (matchingIntent != null)" in coordinator
-    assert "Historical structural invalidation is entry-relative only at" in coordinator
+    assert "var liveMark: Double? = null" in coordinator
+    assert "val currentStopSafe = matchingIntent != null && liveMark != null" in coordinator
+    assert "isProtectiveStopOnCorrectSide(" in coordinator
+    assert "val liveMark = if (matchingIntent != null)" not in coordinator
     assert "hasValidStructuralStop(plan.direction.name, plan.entryPrice, plan.protectiveStop)" in coordinator
     unit_test = _read(ROOT / "app/src/test/java/com/williamsbot/ProtectionOwnershipTest.kt")
     assert "profitLockingTrailingStopsMayCrossEntryButMustRemainBeyondLiveMark" in unit_test
@@ -490,7 +494,10 @@ def test_chart_cockpit_switches_all_approved_futures_symbols_without_changing_sc
     assert "entry_protective_price" in ui
     assert "Переключение графика не меняет логику входа." in ui
     assert 'fetchCandles(symbol, "1h", 180)' in runtime
-    assert 'scannerState = if (ranked.size == coreSymbols.size) "READY" else "PARTIAL"' in runtime
+    assert "val completeScan = ranked.size == coreSymbols.size" in runtime
+    assert "scannerState = when {" in runtime
+    assert '"READY_BLOCKED"' in runtime
+    assert '"PARTIAL_BLOCKED"' in runtime
 
 
 def test_chart_viewport_handles_fewer_than_twenty_four_candles():
@@ -516,7 +523,8 @@ def test_scanner_diagnostic_does_not_pass_ready_at_zero_of_ten_or_stale_progress
     )[0]
     assert "val scannerUniverseMatches" in tests
     assert "scanSymbols.size == coreSymbols.size && scanSymbols.toSet() == coreSymbols.toSet()" in tests
-    assert 'scannerState == "READY" && !scanning && scannerUniverseMatches' in tests
+    assert 'scannerState in setOf("READY", "READY_BLOCKED") &&' in tests
+    assert "!scanning && scannerUniverseMatches" in tests
     assert "scanProgressSymbols == coreSymbols.size" in tests
     assert "lastSymbolsScanned == coreSymbols.size" in tests
     assert "scannerProgressAgeMs <= 60_000L" in tests
