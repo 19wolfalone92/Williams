@@ -35,7 +35,7 @@ class TestnetForcedEntryPolicyTest {
         repeat(1000) {
             fullPage.put(JSONObject().put("incomeType", "COMMISSION").put("income", "-0.01").put("time", 1792000000000L))
         }
-        assertNull(summarizeFuturesDailyIncome(fullPage))
+        assertNull(summarizeFuturesDailyIncome(fullPage, maximumRows = 1000))
         assertNull(summarizeFuturesDailyIncome(JSONArray().put(JSONObject().put("incomeType", "TRANSFER"))))
     }
 
@@ -46,7 +46,7 @@ class TestnetForcedEntryPolicyTest {
         repeat(1000) {
             fullPage.put(JSONObject().put("incomeType", "COMMISSION").put("income", "-0.01").put("time", 1792000000000L))
         }
-        assertNull(reconstructFuturesDailyRiskBaseline(5000.0, 0.0, fullPage))
+        assertNull(reconstructFuturesDailyRiskBaseline(5000.0, 0.0, fullPage, maximumRows = 1000))
     }
 
     @Test
