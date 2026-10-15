@@ -1449,6 +1449,52 @@ internal class NativeFuturesCampaignCoordinator(
         }
         try {
             val failures = mutableListOf<String>()
+            fun persistConfirmedCancellation(intent: JSONObject, symbol: String, clientId: String, status: String, resultJson: String? = null) {
+                val exchangeStatus = status.uppercase(Locale.US)
+                if (exchangeStatus !in ENTRY_ORDER_TERMINAL_STATUSES) {
+                    throw IOException("Binance did not confirm a terminal status for $clientId (status=$exchangeStatus)")
+                }
+                // Refresh position state after the cancel/query, not from the stale
+                // snapshot taken before the mutation. An order may fill while DELETE
+                // is in flight, and marking that campaign CLOSED would strand exposure.
+                val refreshedPositions = adapter.positions()
+                val livePosition = (0 until refreshedPositions.length()).mapNotNull { j ->
+                    val row = refreshedPositions.optJSONObject(j)
+                        ?: throw IOException("Malformed position row after cancel for $symbol")
+                    if (row.optString("symbol").equals(symbol, ignoreCase = true)) row else null
+                }.firstOrNull { row ->
+                    val amount = row.optString("positionAmt").toBigDecimalOrNull()
+                        ?: throw IOException("Malformed $symbol position amount after cancel")
+                    amount.signum() != 0
+                }
+                val liveAmount = livePosition?.optString("positionAmt")?.toBigDecimalOrNull()
+                    ?: java.math.BigDecimal.ZERO
+                if (liveAmount.signum() != 0) {
+                    val exchangeDirection = if (liveAmount.signum() > 0) "LONG" else "SHORT"
+                    if (!intent.optString("direction").equals(exchangeDirection, ignoreCase = true)) {
+                        throw IOException("$symbol direction changed during entry cancellation; reconciliation required")
+                    }
+                    openSymbols.add(symbol.uppercase(Locale.US))
+                } else {
+                    openSymbols.remove(symbol.uppercase(Locale.US))
+                }
+                val campaignStatus = when {
+                    exchangeStatus == "FINISHED" -> "FILL_CONFIRMATION_PENDING"
+                    liveAmount.signum() != 0 -> "POSITION_OPEN"
+                    else -> "CLOSED_OR_STOPPED"
+                }
+                intent.put("exchange_status", exchangeStatus)
+                    .put("order_status", exchangeStatus)
+                    .put("campaign_status", campaignStatus)
+                    .put("cancel_reconciled_status", exchangeStatus)
+                    .put("cancel_reconciled_at_ms", System.currentTimeMillis())
+                    .put("position_observed_after_cancel", liveAmount.toPlainString())
+                if (exchangeStatus == "FINISHED") {
+                    intent.put("fill_observed_at_ms", System.currentTimeMillis())
+                }
+                if (resultJson != null) intent.put("cancel_result", resultJson)
+                saveIntents(all)
+            }
             for (i in 0 until all.length()) {
                 val intent = all.optJSONObject(i) ?: continue
                 if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
@@ -1469,13 +1515,8 @@ internal class NativeFuturesCampaignCoordinator(
                     val observedStatus = observed
                         ?.let { it.optString("status", it.optString("algoStatus", "")) }
                         ?.uppercase(Locale.US).orEmpty()
-                    if (observedStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED", "FINISHED")) {
-                        intent.put("exchange_status", observedStatus)
-                            .put("order_status", observedStatus)
-                            .put("campaign_status", if (symbol.uppercase(Locale.US) in openSymbols) "POSITION_OPEN" else "CLOSED_OR_STOPPED")
-                            .put("cancel_reconciled_status", observedStatus)
-                            .put("canceled_at_ms", System.currentTimeMillis())
-                        saveIntents(all)
+                    if (observedStatus in ENTRY_ORDER_TERMINAL_STATUSES) {
+                        persistConfirmedCancellation(intent, symbol, clientId, observedStatus)
                         continue
                     }
                     throw IOException("Cancellation outcome for $clientId remains ambiguous; no repeated cancel sent")
@@ -1490,12 +1531,20 @@ internal class NativeFuturesCampaignCoordinator(
                     EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name -> adapter.cancelAlgoOrder(symbol, clientId)
                     else -> throw IllegalStateException("Unknown pending-entry type; cannot cancel safely")
                 }
-                intent.put("exchange_status", "CANCELED")
-                    .put("order_status", "CANCELED")
-                    .put("campaign_status", if (symbol.uppercase(Locale.US) in openSymbols) "POSITION_OPEN" else "CLOSED_OR_STOPPED")
-                    .put("cancel_result", result.toString())
-                    .put("canceled_at_ms", System.currentTimeMillis())
-                saveIntents(all)
+                // A successful DELETE response is not enough to declare cancellation:
+                // read back the exact client id and require a terminal exchange status.
+                val confirmed = when (intent.optString("kind")) {
+                    EntryKind.LIMIT.name -> adapter.order(symbol, clientId)
+                    EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name -> adapter.queryAlgoOrder(symbol, clientId)
+                    else -> throw IllegalStateException("Unknown pending-entry type; cannot confirm cancellation")
+                }
+                val confirmedStatus = confirmed.optString("status").ifBlank {
+                    confirmed.optString("algoStatus")
+                }.uppercase(Locale.US)
+                if (confirmedStatus !in ENTRY_ORDER_TERMINAL_STATUSES) {
+                    throw IOException("Cancellation for $clientId is not exchange-confirmed terminal (status=$confirmedStatus)")
+                }
+                persistConfirmedCancellation(intent, symbol, clientId, confirmedStatus, result.toString())
                 } catch (failure: Exception) {
                     val detail = "$symbol/$clientId: " + (failure.message ?: failure.javaClass.simpleName)
                     failures += detail
