@@ -6,7 +6,9 @@ import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.util.Calendar
 import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 /** Single source of truth for the chart, market-data transport and execution universe. */
@@ -87,6 +89,58 @@ internal class BinanceUsdMFuturesMarketData(
     /** True only after Binance's exchange clock has passed the candle close timestamp. */
     internal fun isCandleClosed(closeTimeMs: Long, exchangeNowMs: Long): Boolean =
         closeTimeMs >= 0L && exchangeNowMs > closeTimeMs
+
+    /**
+     * Compute the true close boundary for a native Binance interval.
+     * Monthly klines are calendar months, not fixed 30-day windows; using
+     * 30 days can admit a still-forming January candle or hide a closed February candle.
+     */
+    internal fun klineCloseTimeMs(openTimeMs: Long, interval: String): Long {
+        require(openTimeMs >= 0L) { "Kline open time must be non-negative" }
+        require(interval in supportedIntervals) { "Unsupported Futures kline interval: $interval" }
+        val nextOpenTimeMs = if (interval == "1M") {
+            Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+                timeInMillis = openTimeMs
+                set(Calendar.DAY_OF_MONTH, 1)
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+                add(Calendar.MONTH, 1)
+            }.timeInMillis
+        } else {
+            val seconds = when (interval) {
+                "1m" -> 60L
+                "3m" -> 180L
+                "5m" -> 300L
+                "15m" -> 900L
+                "30m" -> 1_800L
+                "1h" -> 3_600L
+                "2h" -> 7_200L
+                "4h" -> 14_400L
+                "6h" -> 21_600L
+                "8h" -> 28_800L
+                "12h" -> 43_200L
+                "1d" -> 86_400L
+                "3d" -> 259_200L
+                "1w" -> 604_800L
+                else -> error("Unsupported fixed-duration Futures interval: $interval")
+            }
+            if (openTimeMs > Long.MAX_VALUE - seconds * 1_000L) {
+                throw IllegalArgumentException("Kline close time overflows Long")
+            }
+            openTimeMs + seconds * 1_000L
+        }
+        require(nextOpenTimeMs > openTimeMs) { "Kline next-open boundary is invalid" }
+        return nextOpenTimeMs - 1L
+    }
+
+    internal fun isKlineOpenTimeClosed(
+        openTimeMs: Long,
+        interval: String,
+        exchangeNowMs: Long
+    ): Boolean = openTimeMs >= 0L &&
+        exchangeNowMs > klineCloseTimeMs(openTimeMs, interval)
 
     /** CandleN stores open time; derive the inclusive close timestamp without admitting a forming bar. */
     internal fun isCandleOpenTimeClosed(
