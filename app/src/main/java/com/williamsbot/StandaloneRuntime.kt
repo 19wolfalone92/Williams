@@ -435,10 +435,7 @@ internal data class FuturesDailyIncomeSummary(
 
 internal fun summarizeFuturesDailyIncome(
     incomeRows: JSONArray,
-    // Binance income-history is fetched as one page capped at 1000 rows. Treat a
-    // full page as possibly truncated by default at every call site; callers must
-    // explicitly pass a larger limit only when they have actually paginated all rows.
-    maximumRows: Int = 1000
+    maximumRows: Int = Int.MAX_VALUE
 ): FuturesDailyIncomeSummary? {
     if (maximumRows <= 0 || incomeRows.length() >= maximumRows) return null
     var total = 0.0
