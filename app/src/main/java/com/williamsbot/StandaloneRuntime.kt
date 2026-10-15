@@ -3975,13 +3975,7 @@ private class NativeEngine(
                         "&quantity=" + fmtQty(
                             qty,
                             if (rules.marketStep > 0.0) {
-                                max(
-                                    0,
-                                    rules.marketStep.toString()
-                                        .substringAfter('.', "")
-                                        .trimEnd('0')
-                                        .length
-                                )
+                                ExecutionMath.decimalPlacesForIncrement(rules.marketStep)
                             } else rules.decimals
                         ) +
                         "&newClientOrderId=" + cid
@@ -4366,13 +4360,7 @@ private class NativeEngine(
                             fmtQty(
                                 emergencyQty,
                                 if (rules.marketStep > 0.0) {
-                                    max(
-                                        0,
-                                        rules.marketStep.toString()
-                                            .substringAfter('.', "")
-                                            .trimEnd('0')
-                                            .length
-                                    )
+                                    ExecutionMath.decimalPlacesForIncrement(rules.marketStep)
                                 } else rules.decimals
                             ) +
                             "&newClientOrderId=" + cid
