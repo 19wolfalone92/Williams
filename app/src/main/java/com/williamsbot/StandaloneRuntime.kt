@@ -1110,8 +1110,17 @@ private class NativeEngine(
     private fun campaignCoordinatorReadyForEntry(): Boolean = runCatching {
         val status = futuresCampaignCoordinator.status()
         status.optBoolean("ready_for_new_entry", false) &&
-            status.optString("state") in setOf("READY", "OPEN_PROTECTED")
+            status.optString("state") in setOf("READY", "OPEN_PROTECTED", "ENTRY_PENDING")
     }.getOrDefault(false)
+
+    /**
+     * ENTRY_PENDING can still admit another symbol only when the coordinator has
+     * reconciled the existing pending order(s) and confirms admission is safe.
+     * Generic state-machine executionAllowed() stays restrictive for other callers.
+     */
+    private fun futuresFsmAllowsEntry(): Boolean =
+        stateMachine.executionAllowed() ||
+            (stateMachine.state == TradingState.ENTRY_PENDING && campaignCoordinatorReadyForEntry())
 
     private fun executionReady(): Boolean =
         futuresExecutionAdapterReady &&
@@ -1128,7 +1137,7 @@ private class NativeEngine(
             restAccountReady &&
             accountFundedForEntry() &&
             historyReady &&
-            stateMachine.executionAllowed() &&
+            futuresFsmAllowsEntry() &&
             !equityCircuitBreaker.isTripped()
 
     private fun executionBlockers(): List<String> =
@@ -1151,7 +1160,7 @@ private class NativeEngine(
             if (!restAccountReady) add("rest_account_not_ready")
             else if (!accountFundedForEntry()) add("futures_account_unfunded_or_zero_usdt")
             if (!historyReady) add("history_not_ready")
-            if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
+            if (!futuresFsmAllowsEntry()) add("fsm_not_execution_allowed")
             if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
         }
 
@@ -5577,8 +5586,9 @@ private class NativeEngine(
         if (!restAccountReady || !marketDataFresh()) return
         if (futuresCampaignCoordinator.state !in setOf(
                 NativeFuturesCampaignCoordinator.State.READY,
-                NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED
-            )
+                NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED,
+                NativeFuturesCampaignCoordinator.State.ENTRY_PENDING
+            ) || !campaignCoordinatorReadyForEntry()
         ) return
         // Fetch the exchange snapshot exactly once. The previous implementation
         // performed a signed REST request for every array element while iterating;
