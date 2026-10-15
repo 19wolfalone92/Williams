@@ -579,7 +579,27 @@ internal class NativeFuturesCampaignCoordinator(
 
     fun accountSnapshot(): JSONObject = adapterFactory().account()
     fun positionsSnapshot(): JSONArray = adapterFactory().positions()
+    fun userTrades(symbol: String, startTime: Long, endTime: Long, limit: Int = 1000): JSONArray =
+        adapterFactory().userTrades(symbol, startTime, endTime, limit)
     fun intentsSnapshot(): JSONArray = JSONArray(intents().toString())
+
+    /** Persist the outcome of read-only trade-stat reconstruction; never alters exchange state. */
+    fun markTradeJournalStatus(clientId: String, status: String, detail: String? = null): Boolean =
+        synchronized(lock) {
+            if (clientId.isBlank() || status.isBlank()) return@synchronized false
+            val rows = intents()
+            val row = (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+                .lastOrNull {
+                    it.optString("intent_role", "ENTRY") == "ENTRY" &&
+                        it.optString("client_id") == clientId
+                } ?: return@synchronized false
+            row.put("trade_journal_status", status)
+                .put("trade_journal_updated_at_ms", System.currentTimeMillis())
+            if (detail.isNullOrBlank()) row.remove("trade_journal_detail")
+            else row.put("trade_journal_detail", detail.take(500))
+            saveIntents(rows)
+            true
+        }
 
     /** True only for the latest durable campaign whose position and stop are exchange-confirmed. */
     fun isManagedOpenPosition(symbol: String, direction: Direction): Boolean = synchronized(lock) {
@@ -1331,11 +1351,25 @@ internal class NativeFuturesCampaignCoordinator(
                     val confirmedStop = protective?.optString("triggerPrice")?.takeIf { it.isNotBlank() }
                         ?: protective?.optString("stopPrice")?.takeIf { it.isNotBlank() }
                         ?: matchingIntent.optString("protective_stop")
+                    val positionEntry = position.optString("entryPrice").toDoubleOrNull()
+                        ?: throw IllegalStateException("$symbol exchange position entry price is malformed")
+                    val positionQty = kotlin.math.abs(
+                        position.optString("positionAmt").toDoubleOrNull()
+                            ?: throw IllegalStateException("$symbol exchange position quantity is malformed")
+                    )
+                    check(positionEntry.isFinite() && positionEntry > 0.0 &&
+                        positionQty.isFinite() && positionQty > 0.0
+                    ) { "$symbol exchange position lacks a valid entry price/quantity for audit" }
+                    val confirmedAt = System.currentTimeMillis()
                     matchingIntent.put("campaign_status", "OPEN_PROTECTED")
                         .put("protection_status", "PROTECTED")
                         .put("protection_client_id", confirmedClientId)
                         .put("protective_stop", confirmedStop)
-                        .put("last_reconciled_ms", System.currentTimeMillis())
+                        .put("actual_entry_price", positionEntry.toString())
+                        .put("confirmed_position_qty", positionQty.toString())
+                        .put("position_open_observed_at_ms",
+                            matchingIntent.optLong("position_open_observed_at_ms", confirmedAt).takeIf { it > 0L } ?: confirmedAt)
+                        .put("last_reconciled_ms", confirmedAt)
                     if (!matchingIntent.optBoolean("strategy_ownership_verified", true)) {
                         // Emergency protection is not proof of a Williams entry signal.
                         // Keep the position protected and manually closable, but do not
