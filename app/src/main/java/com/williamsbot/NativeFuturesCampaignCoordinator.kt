@@ -1944,10 +1944,47 @@ internal class NativeFuturesCampaignCoordinator(
             if (orphanedStopRemains) {
                 throw IOException("A close-position protective stop remains after $symbol was confirmed flat")
             }
-            state = State.READY
+            // Closing one symbol must not label the whole account READY_FLAT
+            // when other concurrent campaigns remain open. Refresh and verify their
+            // position/stop ownership before declaring the coordinator entry-ready.
+            val accountPositionsAfterExit = adapter.positions()
+            val latestIntentsAfterExit = intents()
+            var remainingProtectedPositions = 0
+            for (i in 0 until accountPositionsAfterExit.length()) {
+                val row = accountPositionsAfterExit.optJSONObject(i)
+                    ?: throw IOException("Malformed account position after closing $symbol")
+                val otherSymbol = row.optString("symbol").uppercase(Locale.US)
+                val otherAmount = row.optString("positionAmt").toBigDecimalOrNull()
+                    ?: throw IOException("Malformed account position amount for $otherSymbol after close")
+                if (otherAmount.signum() == 0) continue
+                if (otherSymbol !in allowedSymbols || otherSymbol == symbol) {
+                    throw IOException("Unexpected open Futures exposure remains for $otherSymbol after closing $symbol")
+                }
+                val otherDirection = if (otherAmount.signum() > 0) Direction.LONG.name else Direction.SHORT.name
+                val ownerIndex = latestEntryIntentIndex(latestIntentsAfterExit, otherSymbol)
+                    ?: throw IOException("$otherSymbol still has exposure but no persisted campaign owner after closing $symbol")
+                val owner = latestIntentsAfterExit.optJSONObject(ownerIndex)
+                    ?: throw IOException("Malformed campaign owner for $otherSymbol after close")
+                val ownerStop = owner.optString("protective_stop")
+                val ownerStopId = owner.optString("protection_client_id")
+                val otherMark = adapter.markPrice(otherSymbol)
+                val otherAlgos = adapter.openAlgoOrders(otherSymbol)
+                if (!isManagedOpenPositionIntent(
+                        campaignLifecycleStatus(owner), owner.optString("direction"), otherDirection,
+                        owner.optString("protection_status"), ownerStopId
+                    ) ||
+                    !isProtectiveStopOnCorrectSide(otherDirection, otherMark.toString(), ownerStop) ||
+                    findProtectiveStop(otherAlgos, otherDirection, ownerStopId, ownerStop) == null
+                ) {
+                    throw IOException("$otherSymbol remaining exposure is not confirmed protected after closing $symbol")
+                }
+                remainingProtectedPositions++
+            }
+            state = if (remainingProtectedPositions > 0) State.OPEN_PROTECTED else State.READY
             lastBlocker = null
             JSONObject().put("ok", true).put("state", state.name).put("order", result)
-                .put("flat_confirmed", true).put("reason", reason)
+                .put("flat_confirmed", true).put("open_positions_remaining", remainingProtectedPositions)
+                .put("reason", reason)
         } catch (failure: Exception) {
             // Preserve the known flat/exit result if only protective-order cleanup
             // failed; reconciliation still blocks entry until the orphan is resolved.
