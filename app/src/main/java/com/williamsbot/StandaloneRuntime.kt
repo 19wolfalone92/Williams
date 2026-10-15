@@ -234,7 +234,11 @@ internal fun isSignalFresh(
     return exchangeNowMs - signalBarTimeMs <= maximumAgeMs
 }
 
-/** Canonical, side-effect-free startup gate so UI diagnostics never hide the blocking prerequisite. */
+/**
+ * Auto-run means keep the on-device monitor alive. The Kill Switch forbids order
+ * mutations through Execution Gate; it does not forbid safe diagnostics/reconciliation.
+ */
+@Suppress("UNUSED_PARAMETER")
 internal fun runtimeRecoveryContract(
     autoRunRequested: Boolean,
     running: Boolean,
@@ -242,7 +246,7 @@ internal fun runtimeRecoveryContract(
     killLatched: Boolean
 ): Boolean =
     running == workerAlive &&
-        (!autoRunRequested || (running && workerAlive && !killLatched))
+        (!autoRunRequested || (running && workerAlive))
 
 /** Prefer a live WS quote, then a fresh Futures REST ticker, then the last closed candle. */
 internal fun dashboardPrice(
@@ -9999,7 +10003,8 @@ private class NativeEngine(
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
         val scannerProgressAgeMs = (System.currentTimeMillis() - scanLastProgressAt).coerceAtLeast(0L)
         val scannerUniverseMatches = scanSymbols.size == coreSymbols.size && scanSymbols.toSet() == coreSymbols.toSet()
-        val scannerComplete = scannerState == "READY" && !scanning && scannerUniverseMatches &&
+        val scannerComplete = scannerState in setOf("READY", "READY_BLOCKED") &&
+            !scanning && scannerUniverseMatches &&
             scanProgressSymbols == coreSymbols.size && lastSymbolsScanned == coreSymbols.size
         val scannerActivelyProgressing = scannerState == "RUNNING" && scanning && scannerUniverseMatches &&
             scanProgressSymbols in 1..coreSymbols.size && scannerProgressAgeMs <= 60_000L
