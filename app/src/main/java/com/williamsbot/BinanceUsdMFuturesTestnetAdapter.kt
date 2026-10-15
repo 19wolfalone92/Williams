@@ -172,7 +172,8 @@ internal class BinanceUsdMFuturesTestnetAdapter(
 
     fun incomeHistory(startTime: Long, endTime: Long = System.currentTimeMillis()): JSONArray {
         require(startTime >= 0L && endTime >= startTime)
-        val rows = readIncomeRange(startTime, endTime, depth = 0)
+        val budget = IncomeHistoryReadBudget()
+        val rows = readIncomeRange(startTime, endTime, depth = 0, budget = budget)
         // Time ranges are non-overlapping; sort defensively so reconstruction
         // and audit output are deterministic across recursive subdivisions.
         return JSONArray().apply {
@@ -185,19 +186,39 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         }
     }
 
+    private data class IncomeHistoryReadBudget(
+        var requests: Int = 0,
+        var rows: Int = 0
+    )
+
     /**
      * Binance's income endpoint caps each response at 1000 rows and has no fromId cursor.
      * Split saturated intervals at millisecond boundaries until each response is
-     * demonstrably complete. If even a 1ms interval is saturated, fail closed.
+     * demonstrably complete. Bound request count and row count to avoid a runaway
+     * recursive read during pathological account activity; exceeding the budget fails
+     * closed, and the risk gate does not accept a partial ledger.
      */
-    private fun readIncomeRange(startTime: Long, endTime: Long, depth: Int): List<JSONObject> {
+    private fun readIncomeRange(
+        startTime: Long,
+        endTime: Long,
+        depth: Int,
+        budget: IncomeHistoryReadBudget
+    ): List<JSONObject> {
         require(depth <= 40) { "USD-M Futures income history pagination depth exceeded" }
+        budget.requests++
+        if (budget.requests > 64) {
+            throw IOException("USD-M Futures income history exceeded the 64-request completeness budget")
+        }
         val response = JSONArray(requestRaw("GET", "/fapi/v1/income", mapOf(
             "startTime" to startTime.toString(),
             "endTime" to endTime.toString(),
             "limit" to "1000"
         ), signed = true))
         if (response.length() < 1000) {
+            budget.rows += response.length()
+            if (budget.rows > 32_000) {
+                throw IOException("USD-M Futures income history exceeded the 32000-row completeness budget")
+            }
             return (0 until response.length()).map { index ->
                 response.optJSONObject(index)
                     ?: throw IOException("Binance returned a malformed USD-M Futures income row at index $index")
@@ -210,8 +231,8 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         if (mid < startTime || mid >= endTime) {
             throw IOException("Cannot safely subdivide saturated USD-M Futures income history interval")
         }
-        return readIncomeRange(startTime, mid, depth + 1) +
-            readIncomeRange(mid + 1L, endTime, depth + 1)
+        return readIncomeRange(startTime, mid, depth + 1, budget) +
+            readIncomeRange(mid + 1L, endTime, depth + 1, budget)
     }
 
     fun positions(): JSONArray =
