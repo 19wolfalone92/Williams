@@ -5043,7 +5043,11 @@ private class NativeEngine(
             purpose = "MANUAL_FUTURES_EXIT",
             allowPaused = true,
             allowStopped = true,
-            allowKillLatched = true
+            allowKillLatched = true,
+            // Closing exposure is an explicitly requested risk-reducing mutation.
+            // It must pass the Execution Door even while new entries are blocked
+            // by reconciliation; the coordinator still verifies live side and size.
+            allowReconcileRequired = true
         ) {
             futuresCampaignCoordinator.closePosition(
                 symbol, direction, fmtQty(qty, rules.decimals), clientId, "MANUAL_EXIT"
