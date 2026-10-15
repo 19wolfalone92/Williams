@@ -10519,7 +10519,11 @@ private class NativeEngine(
             intent.optString("intent_role") == "EXIT" &&
                 intent.optLong("created_at_ms", 0L) >= utcDayStart
         }
-        val futuresDailyPnl = executionStore.readState("futures_daily_pnl_usdt") ?: "0"
+        val futuresDailyPnl = executionStore.readState("futures_daily_pnl_usdt")
+            ?.toDoubleOrNull() ?: 0.0
+        val futuresDailyLossPct = executionStore.readState("futures_daily_loss_pct")
+            ?.toDoubleOrNull() ?: 0.0
+        val futuresDailyCapitalFlow = executionStore.readState("futures_daily_capital_flow_usdt")
             ?.toDoubleOrNull() ?: 0.0
 
         if (!fast && key().isNotBlank() && secret().isNotBlank() && !restAccountReady) {
@@ -10646,6 +10650,8 @@ private class NativeEngine(
             .put("daily_risk_baseline_source", dailyRiskBaselineSource())
             .put("trades_today", futuresTradesToday)
             .put("daily_pnl_usdt", futuresDailyPnl)
+            .put("daily_loss_pct", futuresDailyLossPct)
+            .put("daily_capital_flow_usdt", futuresDailyCapitalFlow)
             .put("consecutive_losses", JSONObject.NULL)
             .put("consecutive_losses_available", false)
             .put("trading_mode", when {
