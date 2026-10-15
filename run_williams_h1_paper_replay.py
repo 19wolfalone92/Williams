@@ -248,11 +248,28 @@ def run_symbol_replay(
         for key in ("trend_regime", "volatility_regime", "trend_30d_pct", "realized_vol_14d_annualized"):
             trades[key] = [x[key] for x in regime_records]
 
+    regime_summary = []
+    quarterly_summary = []
+    if not trades.empty:
+        for (trend_name, vol_name), group in trades.groupby(["trend_regime", "volatility_regime"], dropna=False):
+            row = {"symbol": symbol, "trend_regime": str(trend_name), "volatility_regime": str(vol_name)}
+            row.update(_metrics_for_trades(group))
+            regime_summary.append(row)
+        trades["entry_quarter"] = trades["entry_time"].dt.tz_convert(None).dt.to_period("Q").astype(str)
+        for quarter, group in trades.groupby("entry_quarter", dropna=False):
+            row = {"symbol": symbol, "entry_quarter": str(quarter)}
+            row.update(_metrics_for_trades(group))
+            quarterly_summary.append(row)
+
     output_dir.mkdir(parents=True, exist_ok=True)
     trades_path = output_dir / f"{symbol}_trades.csv"
     equity_path = output_dir / f"{symbol}_equity.csv"
+    regime_path = output_dir / f"{symbol}_regime_metrics.csv"
+    quarter_path = output_dir / f"{symbol}_quarterly_metrics.csv"
     trades.to_csv(trades_path, index=False)
     equity.to_csv(equity_path)
+    pd.DataFrame(regime_summary).to_csv(regime_path, index=False)
+    pd.DataFrame(quarterly_summary).to_csv(quarter_path, index=False)
     # JSON output must never silently emit NaN/Infinity (e.g. profit factor with
     # no losing trades). Preserve an unbounded PF as null plus an explicit flag.
     if not math.isfinite(float(metrics.get("profit_factor", 0.0))):
@@ -275,8 +292,12 @@ def run_symbol_replay(
         "ohlc_source": "public Binance USD-M Futures historical klines; closed H1 candles only",
         "execution_model": "independent causal paper replay; stop-entry, structural stop, no fixed TP; conservative stop-first on intrabar ambiguity",
         "trade_metrics": _metrics_for_trades(trades),
+        "regime_metrics": regime_summary,
+        "quarterly_metrics": quarterly_summary,
         "trades_csv": str(trades_path),
         "equity_csv": str(equity_path),
+        "regime_metrics_csv": str(regime_path),
+        "quarterly_metrics_csv": str(quarter_path),
     })
     metrics_path = output_dir / f"{symbol}_metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2, allow_nan=False), encoding="utf-8")
