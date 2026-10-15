@@ -25,14 +25,23 @@ object TradeJournal {
         take: Double,
         riskPct: Double,
         notional: Double,
-        candidate: JSONObject
+        candidate: JSONObject,
+        direction: String = run {
+            val signal = candidate.optString("direction")
+                .ifBlank { candidate.optString("signal_type").ifBlank { candidate.optString("signal") } }
+            if (signal.contains("SHORT", ignoreCase = true) ||
+                signal.equals("SELL", ignoreCase = true)
+            ) "SHORT" else "LONG"
+        }
     ): String {
+        require(direction == "LONG" || direction == "SHORT") { "Trade direction must be LONG or SHORT" }
         val id = "J" + System.currentTimeMillis() + "_" +
             symbol + "_" + (1000..9999).random()
         val row = JSONObject()
             .put("id", id)
             .put("symbol", symbol)
-            .put("side", "BUY")
+            .put("side", if (direction == "LONG") "BUY" else "SELL")
+            .put("direction", direction)
             .put("status", "OPEN")
             .put("opened_at", System.currentTimeMillis())
             .put("entry_price", entry)
@@ -70,8 +79,12 @@ object TradeJournal {
             val entry = row.optDouble("entry_price", 0.0)
             val stop = row.optDouble("stop_price", 0.0)
             if (entry <= 0.0) continue
-            val movePct = (price - entry) / entry
-            val riskPct = max((entry - stop) / entry, 0.000001)
+            val direction = row.optString("direction").ifBlank {
+                if (row.optString("side").equals("SELL", true)) "SHORT" else "LONG"
+            }
+            val rawMovePct = (price - entry) / entry
+            val movePct = if (direction == "SHORT") -rawMovePct else rawMovePct
+            val riskPct = max(kotlin.math.abs(entry - stop) / entry, 0.000001)
             row.put("mfe_pct", max(row.optDouble("mfe_pct", 0.0), movePct))
             row.put("mae_pct", kotlin.math.min(row.optDouble("mae_pct", 0.0), movePct))
             row.put("mfe_r", max(row.optDouble("mfe_r", 0.0), movePct / riskPct))
@@ -97,9 +110,13 @@ object TradeJournal {
             val entry = row.optDouble("entry_price", 0.0)
             val qty = row.optDouble("qty", 0.0)
             val notional = row.optDouble("notional_usdt", 0.0)
-            val pnl = if (entry > 0.0) (exitPrice - entry) * qty else 0.0
+            val direction = row.optString("direction").ifBlank {
+                if (row.optString("side").equals("SELL", true)) "SHORT" else "LONG"
+            }
+            val rawMove = if (entry > 0.0) exitPrice - entry else 0.0
+            val pnl = (if (direction == "SHORT") -rawMove else rawMove) * qty
             val pnlPct = if (notional > 0.0) pnl / notional else 0.0
-            val riskPct = max((entry - row.optDouble("stop_price", entry)) / entry, 0.000001)
+            val riskPct = max(kotlin.math.abs(entry - row.optDouble("stop_price", entry)) / entry, 0.000001)
             row.put("status", "CLOSED")
                 .put("closed_at", System.currentTimeMillis())
                 .put("exit_price", exitPrice)
