@@ -102,7 +102,10 @@ class FuturesContractRulesTest {
     fun enforcesOptionalMaximumNotionalWhenExchangePublishesIt() {
         val info = exchangeInfo()
         val filters = info.getJSONArray("symbols").getJSONObject(0).getJSONArray("filters")
-        filters.getJSONObject(2).put("maxNotional", "100")
+        val notionalFilter = (0 until filters.length())
+            .map { filters.getJSONObject(it) }
+            .first { it.optString("filterType") == "MIN_NOTIONAL" }
+        notionalFilter.put("maxNotional", "100")
         assertNotNull(futuresContractRuleBlocker(info, "BTCUSDT", "0.010", "65000.1", "64900.2"))
     }
 
