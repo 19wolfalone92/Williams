@@ -71,6 +71,30 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
+    fun monthlyLastClosedCacheExpiresWhenTheNextCalendarMonthHasClosed() {
+        val marketData = BinanceUsdMFuturesMarketData()
+        val januaryOpen = java.time.Instant.parse("2026-01-01T00:00:00Z").toEpochMilli()
+        val februaryOpen = java.time.Instant.parse("2026-02-01T00:00:00Z").toEpochMilli()
+        val marchOpen = java.time.Instant.parse("2026-03-01T00:00:00Z").toEpochMilli()
+        val aprilOpen = java.time.Instant.parse("2026-04-01T00:00:00Z").toEpochMilli()
+        val februaryEnd = februaryOpen + 28L * 24L * 60L * 60L * 1000L - 1L
+        val marchEnd = aprilOpen - 1L
+
+        assertTrue(marketData.isLastClosedCandleCurrent(
+            januaryOpen, "1M", februaryEnd
+        ))
+        assertTrue(!marketData.isLastClosedCandleCurrent(
+            januaryOpen, "1M", marchOpen
+        ))
+        assertTrue(marketData.isLastClosedCandleCurrent(
+            februaryOpen, "1M", marchEnd
+        ))
+        assertTrue(!marketData.isLastClosedCandleCurrent(
+            februaryOpen, "1M", aprilOpen
+        ))
+    }
+
+    @Test
     fun signalFreshnessUsesExchangeNowNotDecisionCandleOpen() {
         val fiveHours = 5L * 60L * 60L * 1000L
         assertTrue(isSignalFresh(1_000L, 1_000L + fiveHours, fiveHours))
