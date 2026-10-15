@@ -494,7 +494,7 @@ def main() -> None:
         "test_android_private_futures_stream_uses_supported_event_query_delimiters",
         "test_android_campaign_lifecycle_is_separate_from_exchange_order_status",
         "test_android_exit_requires_exchange_position_protection_and_filled_order_confirmation",
-        "test_android_protection_must_match_owner_id_and_exact_trigger",
+        "test_android_protection_must_match_owner_id_exact_trigger_direction_and_active_exchange_status",
         "test_android_trailing_stop_retains_confirmed_protection_after_ambiguous_replacement",
         "test_android_trailing_stops_are_mark_relative_not_entry_relative",
         "test_android_diagnostics_do_not_fake_self_heal_readiness",
