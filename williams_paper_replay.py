@@ -139,7 +139,7 @@ def run_williams_paper_replay(
             "initial_risk_usdt": p["initial_risk"], "r_multiple": net / p["initial_risk"],
             "entry_slippage_pct": ((p["entry"] - p["trigger"]) / p["trigger"]
                 if p["side"] == "BUY" else (p["trigger"] - p["entry"]) / p["trigger"]),
-            "exit_slippage_pct": (abs(exit_price - p["unadjusted_exit"]) / p["unadjusted_exit"]
+            "exit_slippage_pct": (abs(exit_px - p["unadjusted_exit"]) / p["unadjusted_exit"]
                 if p.get("unadjusted_exit", 0) > 0 else None),
             "exit_reason": reason, "bars_held": max(0, i - p["entry_i"]),
         })
