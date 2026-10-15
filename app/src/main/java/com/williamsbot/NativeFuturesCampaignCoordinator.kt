@@ -1658,21 +1658,30 @@ internal class NativeFuturesCampaignCoordinator(
             lastBlocker = "client order id was already used by a persisted Futures intent; id reuse blocked"
             return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
         }
+        val manualExit = reason == "MANUAL_EXIT"
         val latestIndex = latestEntryIntentIndex(intents, symbol)
         val managedEntry = latestIndex?.let { intents.optJSONObject(it) }
             ?.takeIf { row ->
                 row.optString("intent_role", "ENTRY") == "ENTRY" &&
-                    isManagedOpenPositionIntent(
-                        status = campaignLifecycleStatus(row),
-                        direction = row.optString("direction"),
-                        expectedDirection = direction.name,
-                        protectionStatus = row.optString("protection_status"),
-                        protectionClientId = row.optString("protection_client_id")
-                    ) &&
-                    run {
-                        val entry = row.optString("entry_price").toBigDecimalOrNull()
-                        val stop = row.optString("protective_stop").toBigDecimalOrNull()
-                        entry != null && stop != null && entry.signum() > 0 && stop.signum() > 0
+                    if (manualExit) {
+                        // An explicit user close must remain possible when protection
+                        // metadata was lost. It still requires a persisted active campaign
+                        // and exact agreement with the exchange-confirmed position direction.
+                        campaignLifecycleStatus(row) in ACTIVE_CAMPAIGN_STATUSES &&
+                            row.optString("direction").equals(direction.name, ignoreCase = true)
+                    } else {
+                        isManagedOpenPositionIntent(
+                            status = campaignLifecycleStatus(row),
+                            direction = row.optString("direction"),
+                            expectedDirection = direction.name,
+                            protectionStatus = row.optString("protection_status"),
+                            protectionClientId = row.optString("protection_client_id")
+                        ) &&
+                            run {
+                                val entry = row.optString("entry_price").toBigDecimalOrNull()
+                                val stop = row.optString("protective_stop").toBigDecimalOrNull()
+                                entry != null && stop != null && entry.signum() > 0 && stop.signum() > 0
+                            }
                     }
             }
         if (managedEntry == null) {
@@ -1706,15 +1715,17 @@ internal class NativeFuturesCampaignCoordinator(
                 lastBlocker = "$symbol exit direction/quantity does not exactly match the live Binance position; exit mutation blocked"
                 return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
             }
-            val expectedProtectionId = managedEntry.optString("protection_client_id")
-            val expectedStop = managedEntry.optString("protective_stop")
-            val openAlgos = adapterPreflight.openAlgoOrders(symbol)
-            if (findProtectiveStop(openAlgos, direction.name, expectedProtectionId, expectedStop) == null) {
-                state = State.RECONCILE_REQUIRED
-                lastBlocker = "$symbol current campaign stop is not exchange-confirmed by exact client id and structural trigger; exit mutation blocked"
-                managedEntry.put("protection_status", "SUBMISSION_UNKNOWN")
-                saveIntents(intents)
-                return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
+            if (!manualExit) {
+                val expectedProtectionId = managedEntry.optString("protection_client_id")
+                val expectedStop = managedEntry.optString("protective_stop")
+                val openAlgos = adapterPreflight.openAlgoOrders(symbol)
+                if (findProtectiveStop(openAlgos, direction.name, expectedProtectionId, expectedStop) == null) {
+                    state = State.RECONCILE_REQUIRED
+                    lastBlocker = "$symbol current campaign stop is not exchange-confirmed by exact client id and structural trigger; exit mutation blocked"
+                    managedEntry.put("protection_status", "SUBMISSION_UNKNOWN")
+                    saveIntents(intents)
+                    return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
+                }
             }
         } catch (failure: Exception) {
             state = State.RECONCILE_REQUIRED
