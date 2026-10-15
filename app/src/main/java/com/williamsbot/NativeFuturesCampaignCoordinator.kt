@@ -916,14 +916,51 @@ internal class NativeFuturesCampaignCoordinator(
                     }
                 var liveMark: Double? = null
                 if (matchingIntent == null && latestIntentIndex == null) {
-                    // A live Futures position without a durable, direction-matching
-                    // Williams entry intent is not proof that this bot opened it.
-                    // Do not silently adopt it, trail it, or exit it on a strategy
-                    // signal. Preserve the exchange exposure, block new entries, and
-                    // leave the explicit MANUAL_EXIT path available to the operator.
+                    // The exchange is authoritative, but an orphan position must not
+                    // be mistaken for a strategy-generated signal. Reconstruct only a
+                    // deterministic emergency structural stop from closed H1 bars;
+                    // keep the recovered campaign explicitly tagged and block new
+                    // entries until the exchange position and protection are reconciled.
+                    val exchangeEntry = position.optString("entryPrice").toDoubleOrNull() ?: 0.0
+                    liveMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                    val recovered = if (exchangeEntry.isFinite() && exchangeEntry > 0.0 && liveMark != null) {
+                        runCatching {
+                            structuralStopRecoveryProvider?.invoke(
+                                symbol, direction, liveMark!!, kotlin.math.abs(amount), exchangeEntry
+                            )
+                        }.getOrNull()
+                    } else null
+                    if (recovered == null ||
+                        recovered.stopPrice.toDoubleOrNull()?.let {
+                            isProtectiveStopOnCorrectSide(direction, liveMark.toString(), it.toString())
+                        } != true ||
+                        !recovered.riskPct.isFinite() || recovered.riskPct <= 0.0
+                    ) {
+                        anyUnprotected = true
+                        lastBlocker = "$symbol has an exchange position without a recoverable protective H1 stop; manual close remains available, new entries blocked"
+                        continue
+                    }
+                    val recoveryClientId = "W2E_RECOVER_${symbol.take(6)}_${System.currentTimeMillis().toString(16).takeLast(8)}"
+                    matchingIntent = JSONObject()
+                        .put("intent_role", "ENTRY")
+                        .put("symbol", symbol)
+                        .put("direction", direction)
+                        .put("kind", "RECOVERED_EXCHANGE_POSITION")
+                        .put("client_id", recoveryClientId)
+                        .put("exchange_status", "POSITION_OPEN")
+                        .put("campaign_status", "POSITION_OPEN")
+                        .put("order_status", "FILLED")
+                        .put("entry_price", exchangeEntry.toString())
+                        .put("protective_stop", recovered.stopPrice)
+                        .put("risk_pct", recovered.riskPct)
+                        .put("protection_status", "NOT_SUBMITTED")
+                        .put("recovery_source", "EXCHANGE_POSITION_PLUS_FIVE_CLOSED_H1_BARS")
+                        .put("strategy_ownership_verified", false)
+                        .put("recovered_position_at_ms", System.currentTimeMillis())
+                    persisted.put(matchingIntent)
+                    saveIntents(persisted)
                     anyUnprotected = true
-                    lastBlocker = "$symbol has an exchange position without a current active Williams entry journal; automatic adoption is blocked, explicit manual close remains available, new entries blocked"
-                    continue
+                    lastBlocker = "$symbol orphan exchange position is being emergency-protected from closed H1 structure; strategy ownership remains unverified and new entries are blocked"
                 }
                 if (matchingIntent != null) {
                     val exchangeEntry = position.optString("entryPrice").toDoubleOrNull() ?: 0.0
