@@ -228,6 +228,49 @@ internal fun isEntryCampaignReserved(intent: JSONObject): Boolean {
     return campaignLifecycleStatus(intent) !in TERMINAL_CAMPAIGN_STATUSES
 }
 
+/**
+ * A single pending conditional order must not freeze the whole ten-symbol scanner.
+ * Concurrent entry admission is allowed only when every existing entry is either
+ * a confirmed live pending order or an exchange-confirmed protected position.
+ * Ambiguous orders, pending fills, and unresolved exits keep the account fail-closed.
+ */
+internal fun confirmedPendingEntriesAllowConcurrentAdmission(intents: JSONArray): Boolean {
+    val confirmedLiveEntryStatuses = setOf(
+        "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "ACCEPTED", "TRIGGERED"
+    )
+    var foundPendingEntry = false
+    for (i in 0 until intents.length()) {
+        val intent = intents.optJSONObject(i) ?: return false
+        val role = intent.optString("intent_role", "ENTRY")
+        if (role == "EXIT") {
+            if (intent.optString("exchange_status").uppercase(Locale.US) != "EXIT_CONFIRMED") {
+                return false
+            }
+            continue
+        }
+        if (role != "ENTRY") return false
+        val lifecycle = campaignLifecycleStatus(intent)
+        if (lifecycle in TERMINAL_CAMPAIGN_STATUSES) continue
+        val orderStatus = exchangeOrderStatus(intent).uppercase(Locale.US)
+        if (orderStatus in setOf("SUBMISSION_UNKNOWN", "CANCEL_SUBMISSION_UNKNOWN", "EXIT_PENDING", "")) {
+            return false
+        }
+        when (lifecycle) {
+            "ENTRY_PENDING" -> {
+                if (orderStatus !in confirmedLiveEntryStatuses) return false
+                foundPendingEntry = true
+            }
+            "POSITION_OPEN", "OPEN_PROTECTED" -> {
+                if (orderStatus !in confirmedLiveEntryStatuses &&
+                    orderStatus !in ENTRY_ORDER_TERMINAL_STATUSES
+                ) return false
+            }
+            else -> return false
+        }
+    }
+    return foundPendingEntry
+}
+
 
 /**
  * Count occupied account-wide slots without double-counting an exchange position
