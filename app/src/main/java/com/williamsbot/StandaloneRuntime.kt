@@ -5371,9 +5371,22 @@ private class NativeEngine(
         val effectiveLoss = stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct
         val maxRiskQuote = equity * riskPct
         val notional = min(equity * 0.25, min(available * 2.0 * 0.95, maxRiskQuote / effectiveLoss))
-        val qty = floorStep(notional / trigger, rules.step)
-        if (!qty.isFinite() || qty < rules.minQty || qty > rules.maxQty ||
-            qty * trigger < rules.minNotional || qty * trigger > rules.maxNotional) return
+        // STOP_MARKET entries become market executions when triggered. Size them
+        // to the common exact increment of LOT_SIZE and MARKET_LOT_SIZE; using
+        // LOT_SIZE alone can leave a perfectly valid pending order that Binance
+        // rejects or cannot execute when its trigger fires.
+        val marketLotEnabled = rules.marketStep.isFinite() && rules.marketStep > 0.0
+        val quantityStep = ExecutionMath.commonQuantityStep(rules.step, rules.marketStep)
+        val minQuantity = if (marketLotEnabled) max(rules.minQty, rules.marketMinQty) else rules.minQty
+        val maxQuantity = if (marketLotEnabled) min(rules.maxQty, rules.marketMaxQty) else rules.maxQty
+        val qty = floorStep(notional / trigger, quantityStep)
+        if (!qty.isFinite() || qty < minQuantity || qty > maxQuantity ||
+            !ExecutionMath.isMultiple(qty, rules.step) ||
+            (marketLotEnabled && !ExecutionMath.isMultiple(qty, rules.marketStep)) ||
+            qty * trigger < rules.minNotional || qty * trigger > rules.maxNotional) {
+            lastError = "FUTURES_QUANTITY_FILTER_BLOCKED: $symbol quantity does not satisfy LOT_SIZE and MARKET_LOT_SIZE"
+            return
+        }
 
         val plan = NativeFuturesCampaignCoordinator.EntryPlan(
             symbol = symbol,
