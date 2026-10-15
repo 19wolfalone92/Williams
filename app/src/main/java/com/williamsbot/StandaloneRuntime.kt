@@ -814,9 +814,10 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
-    // One active Futures campaign maximum; aggregate campaign risk is capped at 0.6%.
+    // Concurrent campaigns may span the approved Futures universe. One campaign per symbol,
+    // unresolved intents occupying slots, and the 0.6% aggregate risk cap remain mandatory.
     private val maxOpenPositions: Int
-        get() = 1
+        get() = APPROVED_FUTURES_SYMBOLS.size
     private val campaignEngineEnabled: Boolean
         get() = true
     private val campaignExecutionTimeframe: String
@@ -3617,9 +3618,13 @@ private class NativeEngine(
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
         if (reconcileRequired || paused || killLatched) return
-        if (positionList().any { it.symbol == candidate.symbol }) return
-        if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
-        if (positionList().size >= maxOpenPositions) return
+        val openSymbolsAtScan = positionList().map { it.symbol.uppercase(Locale.US) }.toSet()
+        val pendingSymbolsAtScan = synchronized(pendingEntries) {
+            pendingEntries.keys.map { it.uppercase(Locale.US) }.toSet()
+        }
+        val occupiedAtScan = openSymbolsAtScan + pendingSymbolsAtScan
+        if (candidate.symbol.uppercase(Locale.US) in occupiedAtScan) return
+        if (occupiedAtScan.size >= maxOpenPositions) return
 
         val signal = campaignEntryCandidate(candidate) ?: return
         val equity = estimateManagedEquity()
@@ -3678,6 +3683,13 @@ private class NativeEngine(
             signalType = signal.type
         )
         synchronized(pendingEntries) {
+            // Recheck under the pending-entry lock so simultaneous scanner callbacks
+            // cannot overbook the portfolio's remaining position slots.
+            val openSymbols = positionList().map { it.symbol.uppercase(Locale.US) }.toSet()
+            val occupiedSymbols = openSymbols + pendingEntries.keys.map { it.uppercase(Locale.US) }.toSet()
+            val normalizedSymbol = candidate.symbol.uppercase(Locale.US)
+            if (normalizedSymbol in occupiedSymbols) return
+            if (occupiedSymbols.size >= maxOpenPositions) return
             pendingEntries[candidate.symbol] = pending
         }
         stateMachine.force(
@@ -5212,7 +5224,16 @@ private class NativeEngine(
         val exchangePositions = futuresCampaignCoordinator.positionsSnapshot()
         val openPositions = (0 until exchangePositions.length()).mapNotNull { exchangePositions.optJSONObject(it) }
             .filter { kotlin.math.abs(it.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0 }
-        if (openPositions.size >= maxOpenPositions || openPositions.any { it.optString("symbol") == symbol }) return
+        val slotBlocker = futuresPositionSlotBlocker(
+            symbol = symbol,
+            openPositionSymbols = openPositions.map { it.optString("symbol") },
+            intents = entries,
+            maxPositions = maxOpenPositions
+        )
+        if (slotBlocker != null) {
+            lastError = slotBlocker
+            return
+        }
 
         val riskUsed = (0 until entries.length()).mapNotNull { entries.optJSONObject(it) }.sumOf { intent ->
             if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
