@@ -334,6 +334,24 @@ def test_android_execution_gate_requires_coordinator_and_stream_reconciliation()
     assert "if (shouldReconnectFuturesUserStream(event))" in user_stream
 
 
+def test_android_h1_is_the_only_directional_decision_and_m15_is_execution_readiness_only():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    entry = runtime.split("private fun submitNativeFuturesCampaignEntry(", 1)[1].split(
+        "private fun performCampaignScan(", 1
+    )[0]
+    assert "M15_EXECUTION_BLOCKED" in entry
+    assert "latest closed M15 candle is stale" in entry
+    assert "submitM15Bull" not in entry
+    assert "submitM15Bear" not in entry
+    assert "m15Confirmed" not in entry
+    assert "M15_CONFIRMATION_BLOCKED" not in entry
+    # H1 signals still pass through D1 macro veto and H4 context, then the
+    # exchange-side conditional entry uses the H1 trigger/structural stop.
+    assert "signal.triggerPrice" in entry
+    assert "signal.protectivePrice" in entry
+    assert "futuresCampaignCoordinator.submitPendingEntry(plan)" in entry
+
+
 def test_android_campaign_lifecycle_is_separate_from_exchange_order_status():
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     assert "fun campaignLifecycleStatus(intent: JSONObject)" in coordinator
