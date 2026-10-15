@@ -100,11 +100,11 @@ class ScannerReadinessTest {
         ))
     }
 
-    @Test fun start_remains_available_to_run_safe_exchange_reconciliation() {
+    @Test fun start_remains_available_for_safe_reconciliation_even_when_kill_is_latched() {
         assertEquals(true, runtimeStartButtonEnabled(true, false, false))
         assertEquals(false, runtimeStartButtonEnabled(false, false, false))
         assertEquals(false, runtimeStartButtonEnabled(true, true, false))
-        assertEquals(false, runtimeStartButtonEnabled(true, false, true))
+        assertEquals(true, runtimeStartButtonEnabled(true, false, true))
     }
 
 
