@@ -5423,7 +5423,16 @@ private class NativeEngine(
             require(submitNow - (submitM15Last.t + m15BarMs) <= 30L * 60L * 1000L) {
                 "M15_EXECUTION_BLOCKED: latest closed M15 candle is stale at submission"
             }
-            // Revalidate H1 trigger chronology and current Futures mark separately;
+            // Revalidate the actual H1 trigger against the latest Futures mark
+            // after network/door waits. Never convert a consumed stop-entry into a late
+            // entry at the current market price.
+            val submitMark = futuresMarketData.markPrice(symbol)
+            require(
+                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
+                else submitMark > trigger
+            ) {
+                "H1_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
+            }
             // M15 contributes only execution readiness, never a new direction.
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
