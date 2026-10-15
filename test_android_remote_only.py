@@ -404,6 +404,17 @@ def test_android_exit_keeps_account_state_open_protected_when_other_positions_re
     assert "findProtectiveStop(otherAlgos, otherDirection, ownerStopId, ownerStop)" in close
 
 
+def test_android_protective_stop_is_not_suppressed_by_price_protect_divergence():
+    adapter = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
+    protective = adapter.split("fun placeProtectiveStop(", 1)[1].split(
+        "private fun request(", 1
+    )[0]
+    assert '"type" to "STOP_MARKET"' in protective
+    assert '"closePosition" to "true"' in protective
+    assert '"workingType" to "MARK_PRICE"' in protective
+    assert '"priceProtect" to "FALSE"' in protective
+
+
 def test_android_protection_must_match_owner_id_and_exact_trigger():
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     assert "if (expectedClientId.isNullOrBlank()) return null" in coordinator
