@@ -5610,6 +5610,16 @@ private class NativeEngine(
             }
             openSymbols.add(symbol)
         }
+        // A pending conditional order reserves its symbol before a position appears
+        // in positionRisk. Excluding these symbols here lets the next scan consider
+        // other contracts instead of repeatedly hitting the same occupied slot.
+        val existingCampaignIntents = futuresCampaignCoordinator.intentsSnapshot()
+        for (index in 0 until existingCampaignIntents.length()) {
+            val intent = existingCampaignIntents.optJSONObject(index) ?: continue
+            if (intent.optString("intent_role", "ENTRY") != "ENTRY" || !isEntryCampaignReserved(intent)) continue
+            val reservedSymbol = intent.optString("symbol").uppercase(Locale.US)
+            if (reservedSymbol in coreSymbols) openSymbols.add(reservedSymbol)
+        }
         for (candidate in ranked
             .filter { it.campaignReady && it.symbol !in openSymbols }
             .sortedWith(compareByDescending<BaseAnalysis> { it.score }.thenBy { it.wave.exhaustionRisk })
