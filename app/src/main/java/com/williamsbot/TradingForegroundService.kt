@@ -39,7 +39,7 @@ class TradingForegroundService : Service() {
 
         val notification =
             NotificationCompat.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_launcher)
+                .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("Williams Trader")
                 .setContentText(
                     "Autonomous USDⓈ-M Futures Testnet runtime on this device"
