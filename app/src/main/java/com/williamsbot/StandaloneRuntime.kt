@@ -5141,7 +5141,7 @@ private class NativeEngine(
         for (i in 0 until intents.length()) {
             val intent = intents.optJSONObject(i) ?: continue
             if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
-            if (campaignLifecycleStatus(intent) !in TERMINAL_CAMPAIGN_STATUSES) continue
+            if (campaignLifecycleStatus(intent) != "CLOSED_OR_STOPPED") continue
             val clientId = intent.optString("client_id")
             if (clientId.isBlank()) continue
             val journalStatus = intent.optString("trade_journal_status")
