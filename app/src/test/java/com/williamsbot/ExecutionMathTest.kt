@@ -41,4 +41,46 @@ class ExecutionMathTest {
         assertEquals("0.12015", ExecutionMath.floorToScale(0.120159, 5))
         assertEquals("0.000000015", ExecutionMath.floorToScale(0.000000015, 9))
     }
+
+    @Test
+    fun exactFullMarketClosePreservesExchangeQuantityAndBothLotFilters() {
+        assertEquals(
+            "0.02",
+            ExecutionMath.exactFullMarketCloseQuantity(
+                positionAmount = "-0.020",
+                lotMinQty = "0.001",
+                lotMaxQty = "1000",
+                lotStep = "0.001",
+                marketMinQty = "0.005",
+                marketMaxQty = "100",
+                marketStep = "0.005"
+            )
+        )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun exactFullMarketCloseRefusesToRoundOffStepPositionIntoPartialClose() {
+        ExecutionMath.exactFullMarketCloseQuantity(
+            positionAmount = "0.012",
+            lotMinQty = "0.001",
+            lotMaxQty = "1000",
+            lotStep = "0.001",
+            marketMinQty = "0.005",
+            marketMaxQty = "100",
+            marketStep = "0.005"
+        )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun exactFullMarketCloseRespectsMarketMinimum() {
+        ExecutionMath.exactFullMarketCloseQuantity(
+            positionAmount = "0.003",
+            lotMinQty = "0.001",
+            lotMaxQty = "1000",
+            lotStep = "0.001",
+            marketMinQty = "0.005",
+            marketMaxQty = "100",
+            marketStep = "0.001"
+        )
+    }
 }
