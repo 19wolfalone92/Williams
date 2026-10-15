@@ -51,6 +51,26 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
+    fun monthlyKlinesCloseOnUtcCalendarMonthBoundaryNotFixedThirtyDays() {
+        val marketData = BinanceUsdMFuturesMarketData()
+        val januaryOpen = java.time.Instant.parse("2026-01-01T00:00:00Z").toEpochMilli()
+        val februaryOpen = java.time.Instant.parse("2026-02-01T00:00:00Z").toEpochMilli()
+        val marchOpen = java.time.Instant.parse("2026-03-01T00:00:00Z").toEpochMilli()
+
+        assertEquals(februaryOpen - 1L, marketData.klineCloseTimeMs(januaryOpen, "1M"))
+        assertTrue(!marketData.isKlineOpenTimeClosed(
+            januaryOpen, "1M",
+            java.time.Instant.parse("2026-01-31T12:00:00Z").toEpochMilli()
+        ))
+        assertTrue(marketData.isKlineOpenTimeClosed(januaryOpen, "1M", februaryOpen))
+
+        // February is shorter than 30 days in 2026. Its closed candle must be
+        // admitted at the real March boundary, not hidden for two more days.
+        assertEquals(marchOpen - 1L, marketData.klineCloseTimeMs(februaryOpen, "1M"))
+        assertTrue(marketData.isKlineOpenTimeClosed(februaryOpen, "1M", marchOpen))
+    }
+
+    @Test
     fun signalFreshnessUsesExchangeNowNotDecisionCandleOpen() {
         val fiveHours = 5L * 60L * 60L * 1000L
         assertTrue(isSignalFresh(1_000L, 1_000L + fiveHours, fiveHours))
