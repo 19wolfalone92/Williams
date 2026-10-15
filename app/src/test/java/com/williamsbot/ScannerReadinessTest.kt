@@ -42,6 +42,31 @@ class ScannerReadinessTest {
         assertEquals("RUNNABLE", state())
     }
 
+    @Test fun read_only_scanner_continues_when_execution_is_paused_or_reconciling() {
+        assertEquals("RUNNABLE", scannerDataReadinessState(true, true, true))
+        assertEquals("WAITING_FOR_HISTORY", scannerDataReadinessState(true, false, true))
+        assertEquals("WAITING_FOR_MARKET_DATA", scannerDataReadinessState(true, true, false))
+    }
+
+    @Test fun completed_scan_never_hides_execution_blockers() {
+        assertEquals("BLOCKED_KILL", scannerExecutionBlocker(
+            paused = true, reconcileRequired = true, killLatched = true,
+            accountReady = true, marketDataFresh = true, coordinatorState = "POSITION_UNPROTECTED"
+        ))
+        assertEquals("BLOCKED_FUTURES_RECONCILIATION", scannerExecutionBlocker(
+            paused = false, reconcileRequired = false, killLatched = false,
+            accountReady = true, marketDataFresh = true, coordinatorState = "POSITION_UNPROTECTED"
+        ))
+        assertEquals("PAUSED", scannerExecutionBlocker(
+            paused = true, reconcileRequired = false, killLatched = false,
+            accountReady = true, marketDataFresh = true, coordinatorState = "READY"
+        ))
+        assertEquals(null, scannerExecutionBlocker(
+            paused = false, reconcileRequired = false, killLatched = false,
+            accountReady = true, marketDataFresh = true, coordinatorState = "OPEN_PROTECTED"
+        ))
+    }
+
     @Test fun empty_demo_wallet_does_not_suppress_read_only_scanning() {
         assertEquals(false, dailyRiskBlocksScanner(
             accountFunded = false,
