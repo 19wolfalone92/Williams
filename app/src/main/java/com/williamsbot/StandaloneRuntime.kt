@@ -571,14 +571,18 @@ internal fun directionalSignalContextRank(
     h4Bear: Boolean
 ): Int {
     val type = signalType.trim().uppercase(Locale.US)
-    val isLong = type.startsWith("LONG_")
+    // longCampaignSignals emits its canonical bullish types without a LONG_ prefix;
+    // shortCampaignSignals explicitly prefixes the mirrored types with SHORT_.
+    // Treat only those known canonical bullish types as LONG and reject all unknowns.
+    val isLong = type.startsWith("LONG_") || type in setOf("REVERSAL", "SUPER_AO", "FRACTAL")
     val isShort = type.startsWith("SHORT_")
     if (!isLong && !isShort) return 0
     if (isLong && d1Bear || isShort && d1Bull) return 0
     val h4Aligned = if (isLong) h4Bull else h4Bear
+    val isReversal = type == "REVERSAL" || type.endsWith("_REVERSAL")
     return when {
         h4Aligned -> 2
-        type.contains("REVERSAL") -> 1
+        isReversal -> 1
         else -> 0
     }
 }
