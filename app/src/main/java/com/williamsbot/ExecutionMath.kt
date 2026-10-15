@@ -21,6 +21,12 @@ object ExecutionMath {
 
     fun decimal(value: Double): BigDecimal = BigDecimal.valueOf(value)
 
+    /** Number of decimal places required to represent an exchange tick/step exactly. */
+    fun decimalPlacesForIncrement(increment: Double): Int {
+        require(increment.isFinite() && increment > 0.0)
+        return BigDecimal.valueOf(increment).stripTrailingZeros().scale().coerceAtLeast(0)
+    }
+
     fun decimal(value: String): BigDecimal =
         value.toBigDecimalOrNull() ?: BigDecimal.ZERO
 
