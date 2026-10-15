@@ -1696,6 +1696,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("quantity", plan.quantity)
             .put("entry_price", plan.entryPrice)
             .put("protective_stop", plan.protectiveStop)
+            .put("initial_protective_stop", plan.protectiveStop)
             .put("risk_pct", plan.riskPct)
             .put("risk_budget_usdt", preflightAccount.equityUsdt * plan.riskPct)
             .put("risk_equity_snapshot_usdt", preflightAccount.equityUsdt)
