@@ -1720,12 +1720,12 @@ internal class NativeFuturesCampaignCoordinator(
             }
             if (!manualExit) {
                 val expectedProtectionId = managedEntry!!.optString("protection_client_id")
-                val expectedStop = managedEntry.optString("protective_stop")
+                val expectedStop = managedEntry!!.optString("protective_stop")
                 val openAlgos = adapterPreflight.openAlgoOrders(symbol)
                 if (findProtectiveStop(openAlgos, direction.name, expectedProtectionId, expectedStop) == null) {
                     state = State.RECONCILE_REQUIRED
                     lastBlocker = "$symbol current campaign stop is not exchange-confirmed by exact client id and structural trigger; exit mutation blocked"
-                    managedEntry.put("protection_status", "SUBMISSION_UNKNOWN")
+                    managedEntry!!.put("protection_status", "SUBMISSION_UNKNOWN")
                     saveIntents(intents)
                     return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
                 }
