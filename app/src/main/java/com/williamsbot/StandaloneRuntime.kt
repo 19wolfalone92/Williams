@@ -5441,7 +5441,11 @@ private class NativeEngine(
                 stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures submission unresolved")
             }
         } else {
-            stateMachine.force(TradingState.ENTRY_PENDING, "Futures conditional entry submitted; waiting for exchange fill")
+            // Force the next management pass to reconcile the new client id with
+            // Binance before another symbol can be admitted. A fresh POST response
+            // alone must not let the scanner skip position/protection reconciliation.
+            lastRestReconcileMs = 0L
+            stateMachine.force(TradingState.ENTRY_PENDING, "Futures conditional entry submitted; waiting for exchange fill/reconciliation")
         }
     }
 
@@ -5624,9 +5628,16 @@ private class NativeEngine(
             .filter { it.campaignReady && it.symbol !in openSymbols }
             .sortedWith(compareByDescending<BaseAnalysis> { it.score }.thenBy { it.wave.exhaustionRisk })
         ) {
+            val intentsBefore = futuresCampaignCoordinator.intentsSnapshot().length()
             submitNativeFuturesCampaignEntry(candidate)
-            if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.ENTRY_PENDING ||
-                futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED) break
+            val intentsAfter = futuresCampaignCoordinator.intentsSnapshot().length()
+            if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED ||
+                !executionReady()
+            ) break
+            // At most one new account mutation per scan pass. If a candidate is
+            // rejected before its intent is persisted, try the next valid symbol
+            // instead of treating an older pending campaign as this attempt.
+            if (intentsAfter > intentsBefore) break
         }
     }
 
