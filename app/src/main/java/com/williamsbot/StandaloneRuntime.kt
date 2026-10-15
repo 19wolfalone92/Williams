@@ -9248,8 +9248,9 @@ private class NativeEngine(
             }
         }
 
-        // WM3: most recent confirmed buy fractal. The signal is persistent,
-        // but the trigger is armable only while it remains above current Teeth.
+        // WM3: most recent confirmed buy fractal. The pivot defines the level, but
+        // the signal timestamp is the second right-hand bar close when the
+        // five-bar fractal first becomes knowable. Never backdate a decision.
         val fractalCenter = latestUpFractal(candles.lastIndex - 2)
         if (fractalCenter != null) {
             val trigger = candles[fractalCenter].h + tick
@@ -9268,7 +9269,7 @@ private class NativeEngine(
                     signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[fractalCenter].t),
                     type = "FRACTAL",
                     role = "ENTRY",
-                    signalBarTimeMs = candles[fractalCenter].t,
+                    signalBarTimeMs = candles[fractalCenter + 2].t,
                     triggerPrice = trigger,
                     protectivePrice = (upGroupStart(fractalCenter)..fractalCenter)
                         .minOf { candles[it].l } - tick,
