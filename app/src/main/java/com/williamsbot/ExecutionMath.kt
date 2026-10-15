@@ -37,7 +37,7 @@ object ExecutionMath {
 
     fun floorToScale(value: Double, scale: Int): String =
         BigDecimal.valueOf(value)
-            .setScale(scale.coerceIn(0, 8), RoundingMode.DOWN)
+            .setScale(scale.coerceIn(0, 18), RoundingMode.DOWN)
             .toPlainString()
 
     fun priceToTick(value: Double, tick: Double): Double =
