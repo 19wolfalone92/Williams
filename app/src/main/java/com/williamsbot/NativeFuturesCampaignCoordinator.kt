@@ -4,7 +4,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 import java.io.IOException
+import java.util.Calendar
 import java.util.Locale
+import java.util.TimeZone
 
 
 private val ENTRY_ORDER_ACTIVE_STATUSES = setOf(
@@ -28,6 +30,19 @@ internal data class RecoveredStructuralStop(
 )
 
 /** Keeps exchange order completion separate from campaign lifecycle. */
+/**
+ * Strategy entry-session overlay in UTC. This gate applies to new entry orders only;
+ * existing positions must still be protected, trailed, reconciled, and closable 24/7.
+ */
+internal fun isWithinWilliamsEntrySessionUtc(epochMs: Long): Boolean {
+    if (epochMs <= 0L) return false
+    val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+        timeInMillis = epochMs
+    }
+    val hour = utc.get(Calendar.HOUR_OF_DAY)
+    return hour in 8 until 20
+}
+
 internal fun campaignLifecycleStatus(intent: JSONObject): String {
     val explicit = intent.optString("campaign_status").uppercase(Locale.US)
     if (explicit.isNotBlank()) return explicit
