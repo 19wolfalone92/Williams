@@ -366,7 +366,9 @@ def main() -> None:
     ):
         must(indicator_test, needle, "WilliamsIndicatorParityTest.kt")
 
-    must(runtime_source, "isSignalFresh(signal.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)", "StandaloneRuntime.kt")
+    must(runtime_source, "val freshSignals = candidate.campaignSignals.filter", "StandaloneRuntime.kt directional hypotheses")
+    must(runtime_source, "isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)", "StandaloneRuntime.kt H1 signal freshness")
+    must(runtime_source, "directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)", "StandaloneRuntime.kt D1/H4 directional selection")
     must(runtime_source, "private fun estimateManagedEquity(): Double =\n        liveFuturesEquity", "StandaloneRuntime.kt")
     equity_test = read("app/src/test/java/com/williamsbot/FuturesAccountEquityTest.kt")
     for needle in (
