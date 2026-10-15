@@ -3,8 +3,13 @@ package com.williamsbot
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Calendar
+import java.util.GregorianCalendar
+import java.util.TimeZone
 
 class FuturesPositionSlotsTest {
     private fun entry(symbol: String, status: String? = null): JSONObject =
@@ -104,5 +109,22 @@ class FuturesPositionSlotsTest {
             .put(JSONObject().put("intent_role", "EXIT")
                 .put("symbol", "ETHUSDT").put("exchange_status", "SUBMISSION_UNKNOWN"))
         org.junit.Assert.assertFalse(confirmedPendingEntriesAllowConcurrentAdmission(unresolvedExit))
+    }
+
+    private fun utcMillis(hour: Int, minute: Int): Long =
+        GregorianCalendar(TimeZone.getTimeZone("UTC")).apply {
+            clear()
+            set(2026, Calendar.OCTOBER, 15, hour, minute, 0)
+        }.timeInMillis
+
+    @Test
+    fun entrySessionIsUtcEightToTwentyAndDoesNotDisablePositionManagement() {
+        assertFalse(isWithinWilliamsEntrySessionUtc(0L))
+        assertFalse(isWithinWilliamsEntrySessionUtc(utcMillis(7, 59)))
+        assertTrue(isWithinWilliamsEntrySessionUtc(utcMillis(8, 0)))
+        assertTrue(isWithinWilliamsEntrySessionUtc(utcMillis(19, 59)))
+        assertFalse(isWithinWilliamsEntrySessionUtc(utcMillis(20, 0)))
+        // The helper is exclusively an entry gate; position management is called
+        // independently by the scanner and remains outside this time predicate.
     }
 }
