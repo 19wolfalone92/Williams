@@ -562,6 +562,16 @@ internal fun forcedH1EntryLevels(
     return levels
 }
 
+/** Resolve only explicit strategy signal types; unknown types must never default to LONG. */
+internal fun campaignSignalDirection(signalType: String): String? {
+    val type = signalType.trim().uppercase(Locale.US)
+    return when {
+        type.startsWith("SHORT_") -> "SHORT"
+        type.startsWith("LONG_") || type in setOf("REVERSAL", "SUPER_AO", "FRACTAL") -> "LONG"
+        else -> null
+    }
+}
+
 /** 0 means the direction is vetoed, 1 is an allowed reversal, 2 is aligned H4 context. */
 internal fun directionalSignalContextRank(
     signalType: String,
@@ -571,12 +581,9 @@ internal fun directionalSignalContextRank(
     h4Bear: Boolean
 ): Int {
     val type = signalType.trim().uppercase(Locale.US)
-    // longCampaignSignals emits its canonical bullish types without a LONG_ prefix;
-    // shortCampaignSignals explicitly prefixes the mirrored types with SHORT_.
-    // Treat only those known canonical bullish types as LONG and reject all unknowns.
-    val isLong = type.startsWith("LONG_") || type in setOf("REVERSAL", "SUPER_AO", "FRACTAL")
-    val isShort = type.startsWith("SHORT_")
-    if (!isLong && !isShort) return 0
+    val direction = campaignSignalDirection(type) ?: return 0
+    val isLong = direction == "LONG"
+    val isShort = direction == "SHORT"
     if (isLong && d1Bear || isShort && d1Bull) return 0
     val h4Aligned = if (isLong) h4Bull else h4Bear
     val isReversal = type == "REVERSAL" || type.endsWith("_REVERSAL")
@@ -6090,8 +6097,14 @@ private class NativeEngine(
             lastError = "WILLIAMS_DIRECTIONAL_CONTEXT_BLOCKED: neither LONG nor SHORT is allowed by D1/H4 for $symbol"
             return
         }
-        val direction = if (signal.type.startsWith("SHORT_", true))
-            NativeFuturesCampaignCoordinator.Direction.SHORT else NativeFuturesCampaignCoordinator.Direction.LONG
+        val direction = when (campaignSignalDirection(signal.type)) {
+            "LONG" -> NativeFuturesCampaignCoordinator.Direction.LONG
+            "SHORT" -> NativeFuturesCampaignCoordinator.Direction.SHORT
+            else -> {
+                lastError = "WILLIAMS_SIGNAL_DIRECTION_UNKNOWN: refusing to default an unknown signal to LONG for $symbol"
+                return
+            }
+        }
 
         // M15 is execution/fill monitoring only. It must not invent a second
         // directional signal or veto a causally valid H1 Williams decision.
