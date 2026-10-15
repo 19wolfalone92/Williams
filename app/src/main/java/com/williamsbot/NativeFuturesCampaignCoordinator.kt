@@ -141,6 +141,78 @@ internal fun assessFuturesEntryRisk(
     return assessment
 }
 
+internal data class FuturesActualPositionRiskCheck(
+    val blocker: String?,
+    val grossStopLossUsdt: Double = 0.0,
+    val estimatedFeesAndSlippageUsdt: Double = 0.0,
+    val estimatedAllInLossUsdt: Double = 0.0,
+    val actualAllInRiskPct: Double = 0.0,
+    val reservedRiskUsdt: Double = 0.0
+)
+
+/**
+ * Reconcile actual exchange position quantity/entry against the original structural
+ * stop. This catches gap/slippage or later quantity changes that a preflight estimate
+ * cannot prove. A missing original stop/reservation fails closed.
+ */
+internal fun assessActualFuturesPositionRisk(
+    direction: String,
+    quantity: Double,
+    actualEntryPrice: Double,
+    originalStructuralStop: Double,
+    equityUsdt: Double,
+    reservedRiskPct: Double,
+    feeBufferPerSidePct: Double = 0.001,
+    maxSlippagePct: Double = 0.0015
+): FuturesActualPositionRiskCheck {
+    fun blocked(reason: String) = FuturesActualPositionRiskCheck(blocker = reason)
+    if (direction !in setOf("LONG", "SHORT")) return blocked("Actual Futures risk direction is invalid")
+    if (!quantity.isFinite() || quantity <= 0.0 ||
+        !actualEntryPrice.isFinite() || actualEntryPrice <= 0.0 ||
+        !originalStructuralStop.isFinite() || originalStructuralStop <= 0.0
+    ) return blocked("Actual Futures quantity/entry/original structural stop is invalid")
+    if (!equityUsdt.isFinite() || equityUsdt <= 0.0) {
+        return blocked("Actual Futures equity is unavailable; risk cannot be reconciled")
+    }
+    if (!reservedRiskPct.isFinite() || reservedRiskPct <= 0.0 ||
+        reservedRiskPct > FUTURES_MAX_ENTRY_RISK_PCT
+    ) return blocked("Persisted Futures risk reservation is missing, invalid, or exceeds the 0.25% cap")
+    if (!feeBufferPerSidePct.isFinite() || feeBufferPerSidePct < 0.0 ||
+        !maxSlippagePct.isFinite() || maxSlippagePct < 0.0
+    ) return blocked("Actual Futures fee/slippage assumptions are invalid")
+    if (direction == "LONG" && originalStructuralStop >= actualEntryPrice) {
+        return blocked("LONG original structural stop is not below actual exchange entry")
+    }
+    if (direction == "SHORT" && originalStructuralStop <= actualEntryPrice) {
+        return blocked("SHORT original structural stop is not above actual exchange entry")
+    }
+
+    val notional = quantity * actualEntryPrice
+    val grossStopLoss = quantity * kotlin.math.abs(actualEntryPrice - originalStructuralStop)
+    val feesAndSlippage = notional * (2.0 * feeBufferPerSidePct + maxSlippagePct)
+    val allInLoss = grossStopLoss + feesAndSlippage
+    val actualRiskPct = allInLoss / equityUsdt
+    val reservedRiskUsdt = equityUsdt * reservedRiskPct
+    if (listOf(notional, grossStopLoss, feesAndSlippage, allInLoss, actualRiskPct, reservedRiskUsdt)
+            .any { !it.isFinite() || it < 0.0 }
+    ) return blocked("Actual Futures risk arithmetic became invalid")
+    val result = FuturesActualPositionRiskCheck(
+        blocker = null,
+        grossStopLossUsdt = grossStopLoss,
+        estimatedFeesAndSlippageUsdt = feesAndSlippage,
+        estimatedAllInLossUsdt = allInLoss,
+        actualAllInRiskPct = actualRiskPct,
+        reservedRiskUsdt = reservedRiskUsdt
+    )
+    if (allInLoss > reservedRiskUsdt + 1e-9) {
+        return result.copy(
+            blocker = "ACTUAL_FUTURES_RISK_EXCEEDS_RESERVATION: " +
+                "actual stop+fee+slippage loss ${allInLoss} USDT exceeds reserved ${reservedRiskUsdt} USDT"
+        )
+    }
+    return result
+}
+
 /** Structural H1 recovery result for a known bot-owned position whose stop journal is missing. */
 internal data class RecoveredStructuralStop(
     val stopPrice: String,
@@ -759,6 +831,8 @@ internal class NativeFuturesCampaignCoordinator(
             }
             var hasPendingExit = false
             var anyUnprotected = false
+            var actualRiskAuditBlocked = false
+            var actualRiskAuditBlocker: String? = null
             // Resolve persisted entry and exit intents against Binance. Older completed
             // campaigns on a symbol must not be mistaken for the campaign now in market.
             for (i in 0 until persisted.length()) {
@@ -1036,6 +1110,9 @@ internal class NativeFuturesCampaignCoordinator(
             }
 
             val protectiveOrdersBySymbol = mutableMapOf<String, JSONArray>()
+            val actualRiskAccount = if (openBySymbol.isNotEmpty()) {
+                runCatching { parseFuturesAccountSnapshot(adapter.account()) }.getOrNull()
+            } else null
             for ((symbol, position) in openBySymbol) {
                 val amount = position.optString("positionAmt").toDoubleOrNull() ?: 0.0
                 val direction = if (amount > 0.0) "LONG" else "SHORT"
@@ -1090,6 +1167,7 @@ internal class NativeFuturesCampaignCoordinator(
                         .put("order_status", "FILLED")
                         .put("entry_price", exchangeEntry.toString())
                         .put("protective_stop", recovered.stopPrice)
+                        .put("initial_protective_stop", recovered.stopPrice)
                         .put("risk_pct", recovered.riskPct)
                         .put("protection_status", "NOT_SUBMITTED")
                         .put("recovery_source", "EXCHANGE_POSITION_PLUS_FIVE_CLOSED_H1_BARS")
@@ -1370,6 +1448,51 @@ internal class NativeFuturesCampaignCoordinator(
                         .put("position_open_observed_at_ms",
                             matchingIntent.optLong("position_open_observed_at_ms", confirmedAt).takeIf { it > 0L } ?: confirmedAt)
                         .put("last_reconciled_ms", confirmedAt)
+
+                    // A currently active stop is not proof that the filled quantity still
+                    // fits the original risk allocation. Recompute against live exchange
+                    // quantity/entry, original structural stop, and fresh Futures equity.
+                    val originalStop = matchingIntent.optString("initial_protective_stop")
+                        .toDoubleOrNull()
+                    if (actualRiskAccount == null) {
+                        actualRiskAuditBlocked = true
+                        actualRiskAuditBlocker =
+                            "$symbol stop is exchange-confirmed but actual risk cannot be proven without a fresh Futures equity snapshot"
+                        matchingIntent.put("actual_risk_audit_status", "UNKNOWN_ACCOUNT")
+                    } else if (originalStop == null) {
+                        actualRiskAuditBlocked = true
+                        actualRiskAuditBlocker =
+                            "$symbol stop is exchange-confirmed but original structural stop is missing; manual risk reconciliation required"
+                        matchingIntent.put("actual_risk_audit_status", "UNKNOWN_ORIGINAL_STOP")
+                    } else {
+                        val reservedPct = matchingIntent.optDouble("risk_pct", Double.NaN)
+                        val riskAudit = assessActualFuturesPositionRisk(
+                            direction = direction,
+                            quantity = positionQty,
+                            actualEntryPrice = positionEntry,
+                            originalStructuralStop = originalStop,
+                            equityUsdt = actualRiskAccount.equityUsdt,
+                            reservedRiskPct = reservedPct
+                        )
+                        matchingIntent
+                            .put("actual_gross_stop_loss_usdt", riskAudit.grossStopLossUsdt)
+                            .put("actual_fee_slippage_allowance_usdt", riskAudit.estimatedFeesAndSlippageUsdt)
+                            .put("actual_all_in_stop_loss_usdt", riskAudit.estimatedAllInLossUsdt)
+                            .put("actual_all_in_risk_pct", riskAudit.actualAllInRiskPct)
+                            .put("actual_risk_equity_snapshot_usdt", actualRiskAccount.equityUsdt)
+                            .put("actual_risk_audited_at_ms", confirmedAt)
+                        if (riskAudit.blocker != null) {
+                            actualRiskAuditBlocked = true
+                            actualRiskAuditBlocker = riskAudit.blocker
+                            matchingIntent.put("actual_risk_audit_status", "BLOCKED")
+                        } else {
+                            matchingIntent.put("actual_risk_audit_status", "PASS")
+                            matchingIntent.remove("actual_risk_audit_blocker")
+                        }
+                        if (actualRiskAuditBlocker != null) {
+                            matchingIntent.put("actual_risk_audit_blocker", actualRiskAuditBlocker)
+                        }
+                    }
                     if (!matchingIntent.optBoolean("strategy_ownership_verified", true)) {
                         // Emergency protection is not proof of a Williams entry signal.
                         // Keep the position protected and manually closable, but do not
@@ -1512,20 +1635,25 @@ internal class NativeFuturesCampaignCoordinator(
             }
             state = when {
                 anyUnprotected -> State.POSITION_UNPROTECTED
+                actualRiskAuditBlocked -> State.RECONCILE_REQUIRED
                 hasPendingExit -> State.EXIT_PENDING
                 hasPendingEntry -> State.ENTRY_PENDING
                 openBySymbol.isNotEmpty() -> State.OPEN_PROTECTED
                 else -> State.READY
             }
             if (!anyUnprotected) {
-                lastBlocker = when (state) {
-                    State.ENTRY_PENDING -> "exchange_confirmed_pending_entry_or_fill_not_yet_resolved"
-                    State.EXIT_PENDING -> "exit_order_status_pending_exchange_confirmation"
+                lastBlocker = when {
+                    actualRiskAuditBlocked ->
+                        actualRiskAuditBlocker ?: "Actual Futures position risk audit is unresolved"
+                    state == State.ENTRY_PENDING -> "exchange_confirmed_pending_entry_or_fill_not_yet_resolved"
+                    state == State.EXIT_PENDING -> "exit_order_status_pending_exchange_confirmation"
                     else -> null
                 }
             }
             JSONObject()
-                .put("ok", !anyUnprotected && !hasPendingExit)
+                .put("ok", !anyUnprotected && !actualRiskAuditBlocked && !hasPendingExit)
+                .put("actual_risk_audit_blocked", actualRiskAuditBlocked)
+                .put("actual_risk_audit_blocker", actualRiskAuditBlocker ?: JSONObject.NULL)
                 .put("engine", "USD_M_FUTURES_TESTNET")
                 .put("state", state.name)
                 .put("positions_checked", exchangePositions.length())
