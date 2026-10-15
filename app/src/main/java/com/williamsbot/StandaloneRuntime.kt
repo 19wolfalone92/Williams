@@ -1334,6 +1334,12 @@ private class NativeEngine(
         stateMachine.executionAllowed() ||
             (stateMachine.state == TradingState.ENTRY_PENDING && campaignCoordinatorReadyForEntry())
 
+    private fun futuresLossStreakGuard(): FuturesLossStreakDecision =
+        evaluateFuturesLossStreak(
+            tradeRows = TradeJournal.trades(prefs),
+            nowMs = System.currentTimeMillis()
+        )
+
     private fun executionReady(): Boolean =
         futuresExecutionAdapterReady &&
             campaignCoordinatorReadyForEntry() &&
@@ -1350,6 +1356,7 @@ private class NativeEngine(
             accountFundedForEntry() &&
             historyReady &&
             futuresFsmAllowsEntry() &&
+            futuresLossStreakGuard().allowNewEntries &&
             !equityCircuitBreaker.isTripped()
 
     private fun executionBlockers(): List<String> =
@@ -1373,6 +1380,9 @@ private class NativeEngine(
             else if (!accountFundedForEntry()) add("futures_account_unfunded_or_zero_usdt")
             if (!historyReady) add("history_not_ready")
             if (!futuresFsmAllowsEntry()) add("fsm_not_execution_allowed")
+            val lossStreak = futuresLossStreakGuard()
+            if (!lossStreak.available) add(lossStreak.reason ?: "futures_loss_streak_unknown")
+            else if (!lossStreak.allowNewEntries) add(lossStreak.reason ?: "futures_consecutive_loss_guard")
             if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
         }
 
@@ -10705,8 +10715,10 @@ private class NativeEngine(
             .put("daily_pnl_usdt", futuresDailyPnl)
             .put("daily_loss_pct", futuresDailyLossPct)
             .put("daily_capital_flow_usdt", futuresDailyCapitalFlow)
-            .put("consecutive_losses", JSONObject.NULL)
-            .put("consecutive_losses_available", false)
+            .put("consecutive_losses", futuresLossStreakGuard().consecutiveLosses)
+            .put("consecutive_losses_available", futuresLossStreakGuard().available)
+            .put("consecutive_loss_blocker", futuresLossStreakGuard().reason ?: JSONObject.NULL)
+            .put("consecutive_loss_cooldown_until_ms", futuresLossStreakGuard().cooldownUntilMs ?: JSONObject.NULL)
             .put("trading_mode", when {
                 killLatched -> "KILL_SWITCH_LATCHED"
                 reconcileRequired -> "RECONCILE_REQUIRED"
