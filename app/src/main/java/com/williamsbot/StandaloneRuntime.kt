@@ -1188,6 +1188,10 @@ private class NativeEngine(
             userStreamConnected = connected
             userStreamLastError = if (connected) null else error?.takeUnless { it == "stopped" }
             if (connected) {
+                // A recovered socket must not leave the old close reason displayed as
+                // the current Runtime error. Clear only this stream's stale diagnostic;
+                // preserve unrelated REST, risk, persistence and reconciliation errors.
+                if (lastError?.startsWith("user ws: ") == true) lastError = null
                 scheduleFuturesStreamReconciliation("user stream connected", force = true)
             } else if (!error.equals("stopped")) {
                 userStreamSyncRequired = true
