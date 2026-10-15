@@ -1312,7 +1312,6 @@ private class NativeEngine(
         // required fresh exchange evidence.
         reconcileRequired = true
         persistSafetyFlag("reconcile_required", true)
-        paused = true
         val blocker = "RECONCILE_REQUIRED: " + reason
         scannerState = "BLOCKED_FUTURES_RECONCILIATION"
         scannerError = blocker
@@ -1640,7 +1639,9 @@ private class NativeEngine(
         )
         val generation = ++runtimeGeneration
         running = true
-        paused = killLatched || reconcileRequired || !restAccountReady
+        // Independent reconciliation/account gates block entries. Only an explicit
+        // kill latch needs to force the pause flag during safe monitoring.
+        paused = killLatched
         // The Futures Demo market stream is a live execution prerequisite. REST remains
         // authoritative for recovery and account/position reconciliation.
         marketSocket?.close(1000, "Restart USD-M Futures market stream")
@@ -1991,6 +1992,7 @@ private class NativeEngine(
             "SQLite could not persist kill-switch reset; kill switch remains latched"
         }
         killLatched = false
+        paused = false
         stateMachine.force(TradingState.READY_FLAT, "Futures account flat and kill switch reset")
         lastError = null
         return JSONObject()
