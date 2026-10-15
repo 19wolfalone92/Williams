@@ -141,6 +141,17 @@ class ProtectionOwnershipTest {
     }
 
     @Test
+    fun missingOrUnknownExchangeAlgoStatusNeverCountsAsConfirmedProtection() {
+        assertTrue(isActiveFuturesProtectionStatus("NEW"))
+        assertTrue(isActiveFuturesProtectionStatus("WORKING"))
+        assertFalse(isActiveFuturesProtectionStatus(""))
+        assertFalse(isActiveFuturesProtectionStatus("UNKNOWN"))
+        assertFalse(isActiveFuturesProtectionStatus("TRIGGERED"))
+        assertFalse(isActiveFuturesProtectionStatus("CANCELED"))
+        assertFalse(isActiveFuturesProtectionStatus("EXPIRED"))
+    }
+
+    @Test
     fun structuralStopMustBeOnTheCorrectSideForDirection() {
         assertTrue(hasValidStructuralStop("LONG", "100", "95"))
         assertFalse(hasValidStructuralStop("LONG", "100", "100"))
