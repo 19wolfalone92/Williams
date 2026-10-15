@@ -169,6 +169,8 @@ def test_android_reversal_htf_gate_matches_python_campaign_contract():
     assert "internal fun directionalSignalContextRank(" in android
     assert "val freshSignals = candidate.campaignSignals.filter" in android
     assert "directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)" in android
+    assert "internal fun campaignSignalDirection(signalType: String): String?" in android
+    assert "WILLIAMS_SIGNAL_DIRECTION_UNKNOWN: refusing to default an unknown signal to LONG" in android
     assert "return signal_type != SignalType.REVERSAL" in python
 
 
