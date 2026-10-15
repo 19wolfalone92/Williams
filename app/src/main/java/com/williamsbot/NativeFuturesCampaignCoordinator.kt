@@ -1625,6 +1625,7 @@ internal class NativeFuturesCampaignCoordinator(
                 val status = exchangeOrderStatus(intent)
                 if (status !in activeStatuses) continue
                 val clientId = intent.optString("client_id")
+                var confirmedLiveOrderStatusForCancel: String? = null
                 try {
                 if (status == "CANCEL_SUBMISSION_UNKNOWN") {
                     // A previous cancellation may have reached Binance before process death.
@@ -1644,9 +1645,17 @@ internal class NativeFuturesCampaignCoordinator(
                         )
                         continue
                     }
-                    throw IOException("Cancellation outcome for $clientId remains ambiguous; no repeated cancel sent")
+                    if (observedStatus !in setOf(
+                            "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "ACCEPTED", "TRIGGERED"
+                        )
+                    ) {
+                        throw IOException("Cancellation outcome for $clientId remains ambiguous (observed status=$observedStatus); no cancel retry sent")
+                    }
+                    // A read-after-unknown result proves the order is still live on
+                    // Binance; retrying the idempotent DELETE is now informed, not blind.
+                    confirmedLiveOrderStatusForCancel = observedStatus
                 }
-                intent.put("cancel_prior_order_status", status)
+                intent.put("cancel_prior_order_status", confirmedLiveOrderStatusForCancel ?: status)
                     .put("exchange_status", "CANCEL_SUBMISSION_UNKNOWN")
                     .put("order_status", "CANCEL_SUBMISSION_UNKNOWN")
                     .put("cancel_reason", reason)
