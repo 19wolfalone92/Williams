@@ -789,7 +789,7 @@ def test_android_futures_long_and_short_readiness_uses_h1_signal_not_m5_mtf_gate
     assert "val freshSignals = candidate.campaignSignals.filter" in submit
     assert "directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)" in submit
     assert "neither LONG nor SHORT is allowed by D1/H4" in submit
-    assert "private fun directionalSignalContextRank(" in runtime
+    assert "internal fun directionalSignalContextRank(" in runtime
 
 
 def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
