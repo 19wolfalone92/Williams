@@ -3524,10 +3524,9 @@ private class NativeEngine(
 
     private fun candleSeriesCurrent(candles: List<CandleN>, frame: String, nowMs: Long = futuresMarketData.exchangeNowMs()): Boolean {
         val last = candles.lastOrNull() ?: return false
-        val durationMs = frameSeconds(frame).coerceAtLeast(60L) * 1000L
-        // CandleN.t is the candle open time. The last closed candle remains current
-        // until the next candle of this timeframe has closed.
-        return last.t > 0L && nowMs < last.t + 2L * durationMs
+        // CandleN.t is the candle open time. Use native exchange boundaries so a
+        // 28/29/31-day month cannot leave the chart/history cache stale for days.
+        return futuresMarketData.isLastClosedCandleCurrent(last.t, frame, nowMs)
     }
 
     private fun fetchCandles(
