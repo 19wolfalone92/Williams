@@ -172,11 +172,46 @@ internal class BinanceUsdMFuturesTestnetAdapter(
 
     fun incomeHistory(startTime: Long, endTime: Long = System.currentTimeMillis()): JSONArray {
         require(startTime >= 0L && endTime >= startTime)
-        return JSONArray(requestRaw("GET", "/fapi/v1/income", mapOf(
+        val rows = readIncomeRange(startTime, endTime, depth = 0)
+        // Time ranges are non-overlapping; sort defensively so reconstruction
+        // and audit output are deterministic across recursive subdivisions.
+        return JSONArray().apply {
+            rows.sortedWith(
+                compareBy<JSONObject> { it.optLong("time", Long.MIN_VALUE) }
+                    .thenBy { it.optString("incomeType") }
+                    .thenBy { it.optString("tranId") }
+                    .thenBy { it.optString("tradeId") }
+            ).forEach { put(it) }
+        }
+    }
+
+    /**
+     * Binance's income endpoint caps each response at 1000 rows and has no fromId cursor.
+     * Split saturated intervals at millisecond boundaries until each response is
+     * demonstrably complete. If even a 1ms interval is saturated, fail closed.
+     */
+    private fun readIncomeRange(startTime: Long, endTime: Long, depth: Int): List<JSONObject> {
+        require(depth <= 40) { "USD-M Futures income history pagination depth exceeded" }
+        val response = JSONArray(requestRaw("GET", "/fapi/v1/income", mapOf(
             "startTime" to startTime.toString(),
             "endTime" to endTime.toString(),
             "limit" to "1000"
         ), signed = true))
+        if (response.length() < 1000) {
+            return (0 until response.length()).map { index ->
+                response.optJSONObject(index)
+                    ?: throw IOException("Binance returned a malformed USD-M Futures income row at index $index")
+            }
+        }
+        if (startTime >= endTime) {
+            throw IOException("USD-M Futures income history has 1000 rows in a <=1ms interval; completeness is unknown")
+        }
+        val mid = startTime + (endTime - startTime) / 2L
+        if (mid < startTime || mid >= endTime) {
+            throw IOException("Cannot safely subdivide saturated USD-M Futures income history interval")
+        }
+        return readIncomeRange(startTime, mid, depth + 1) +
+            readIncomeRange(mid + 1L, endTime, depth + 1)
     }
 
     fun positions(): JSONArray =
