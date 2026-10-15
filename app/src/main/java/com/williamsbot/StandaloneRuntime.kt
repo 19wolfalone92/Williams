@@ -1735,7 +1735,7 @@ private class NativeEngine(
                         // transient REST/Execution-Door failure. Retry reconciliation with
                         // bounded backoff instead of leaving the runtime permanently blocked
                         // until another socket reconnect happens. The gate remains fail-closed.
-                        if (userStreamConnected && userStreamSyncRequired) {
+                        if (userStreamConnected && userStreamSyncRequired && !futuresStreamReconcileRunning) {
                             scheduleFuturesStreamReconciliation("automatic sync retry")
                         }
 
