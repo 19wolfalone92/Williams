@@ -40,6 +40,46 @@ class TestnetForcedEntryPolicyTest {
     }
 
     @Test
+    fun capital_flow_only_ledger_reconstructs_baseline_and_does_not_hide_unrealized_loss() {
+        val transferOnly = JSONArray()
+            .put(JSONObject().put("incomeType", "TRANSFER").put("income", "100.0").put("time", 1792000000000L))
+        val decision = selectFuturesDailyBaseline(
+            currentEquityUsdt = 5100.0,
+            unrealizedPnlUsdt = -20.0,
+            incomeRows = transferOnly,
+            hasOpenOrUnknownPositionOrPendingExecution = false
+        )
+        assertNotNull(decision)
+        assertEquals(5020.0, decision!!.baselineEquityUsdt, 1e-9)
+        assertEquals("RECONSTRUCTED_FROM_CAPITAL_FLOW_LEDGER", decision.source)
+        val summary = summarizeFuturesDailyIncome(transferOnly)!!
+        assertEquals(0.0, summary.tradingIncomeUsdt, 0.0)
+        assertEquals(-20.0, summary.tradingIncomeUsdt - 0.0 + (-20.0), 1e-9)
+    }
+
+    @Test
+    fun empty_income_ledger_is_allowed_only_for_a_flat_reconciled_account() {
+        val flat = selectFuturesDailyBaseline(
+            currentEquityUsdt = 5000.0,
+            unrealizedPnlUsdt = 0.0,
+            incomeRows = JSONArray(),
+            hasOpenOrUnknownPositionOrPendingExecution = false
+        )
+        assertNotNull(flat)
+        assertEquals(5000.0, flat!!.baselineEquityUsdt, 0.0)
+        assertEquals("INITIAL_FLAT_SNAPSHOT", flat.source)
+
+        assertNull(
+            selectFuturesDailyBaseline(
+                currentEquityUsdt = 5000.0,
+                unrealizedPnlUsdt = 0.0,
+                incomeRows = JSONArray(),
+                hasOpenOrUnknownPositionOrPendingExecution = true
+            )
+        )
+    }
+
+    @Test
     fun baseline_reconstruction_fails_closed_on_missing_unrealized_pnl_or_truncated_income() {
         assertNull(reconstructFuturesDailyRiskBaseline(5000.0, null, JSONArray()))
         val fullPage = JSONArray()
