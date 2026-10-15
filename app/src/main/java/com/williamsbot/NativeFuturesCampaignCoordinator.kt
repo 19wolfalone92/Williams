@@ -23,6 +23,10 @@ private val TERMINAL_CAMPAIGN_STATUSES = setOf("CLOSED_OR_STOPPED")
 private const val FUTURES_MAX_ENTRY_RISK_PCT = 0.0025
 private const val FUTURES_MAX_PORTFOLIO_RISK_PCT = 0.006
 
+/** Missing/unknown algo status is never proof of an active exchange-side stop. */
+internal fun isActiveFuturesProtectionStatus(status: String): Boolean =
+    status.trim().uppercase(Locale.US) in setOf("NEW", "WORKING")
+
 
 /**
  * Independent pre-mutation risk assessment. Recomputes the quantity's stop risk
@@ -2376,8 +2380,10 @@ internal class NativeFuturesCampaignCoordinator(
         val side = order.optString("side").uppercase(Locale.US)
         if (direction == "LONG" && side != "SELL") return false
         if (direction == "SHORT" && side != "BUY") return false
-        val status = order.optString("algoStatus", order.optString("status", "NEW")).uppercase(Locale.US)
-        return status !in terminalStatuses
+        // Do not default a missing status to NEW. Only an explicitly active
+        // exchange status can prove that the stop is currently resting on Binance.
+        val status = order.optString("algoStatus").ifBlank { order.optString("status") }
+        return isActiveFuturesProtectionStatus(status)
     }
 
     private fun stableProtectionId(symbol: String, entryClientId: String): String =
