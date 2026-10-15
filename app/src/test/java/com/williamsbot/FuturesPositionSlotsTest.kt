@@ -62,4 +62,47 @@ class FuturesPositionSlotsTest {
         val terminal = JSONArray().put(entry("BTCUSDT", "CLOSED_OR_STOPPED"))
         assertNull(futuresPositionSlotBlocker("ETHUSDT", emptyList(), terminal, 10))
     }
+
+    private fun confirmedEntry(symbol: String, lifecycle: String, orderStatus: String) =
+        entry(symbol, lifecycle)
+            .put("direction", "LONG")
+            .put("exchange_status", orderStatus)
+            .put("order_status", orderStatus)
+
+    @Test
+    fun multipleExchangeConfirmedPendingEntriesDoNotFreezeOtherSymbols() {
+        val intents = JSONArray()
+            .put(confirmedEntry("BTCUSDT", "ENTRY_PENDING", "NEW"))
+            .put(confirmedEntry("ETHUSDT", "ENTRY_PENDING", "ACCEPTED"))
+        org.junit.Assert.assertTrue(confirmedPendingEntriesAllowConcurrentAdmission(intents))
+    }
+
+    @Test
+    fun concurrentAdmissionAllowsProtectedPositionsBesideAConfirmedPendingEntry() {
+        val intents = JSONArray()
+            .put(confirmedEntry("BTCUSDT", "OPEN_PROTECTED", "FILLED")
+                .put("protection_status", "PROTECTED")
+                .put("protection_client_id", "W2PS_BTC"))
+            .put(confirmedEntry("ETHUSDT", "ENTRY_PENDING", "NEW"))
+        org.junit.Assert.assertTrue(confirmedPendingEntriesAllowConcurrentAdmission(intents))
+    }
+
+    @Test
+    fun concurrentAdmissionBlocksUnknownOrPartiallyReconciledExecution() {
+        val ambiguous = JSONArray().put(
+            confirmedEntry("BTCUSDT", "ENTRY_PENDING", "SUBMISSION_UNKNOWN")
+        )
+        org.junit.Assert.assertFalse(confirmedPendingEntriesAllowConcurrentAdmission(ambiguous))
+
+        val fillUnknown = JSONArray().put(
+            confirmedEntry("BTCUSDT", "FILL_CONFIRMATION_PENDING", "FILLED")
+        )
+        org.junit.Assert.assertFalse(confirmedPendingEntriesAllowConcurrentAdmission(fillUnknown))
+
+        val unresolvedExit = JSONArray()
+            .put(confirmedEntry("BTCUSDT", "ENTRY_PENDING", "NEW"))
+            .put(JSONObject().put("intent_role", "EXIT")
+                .put("symbol", "ETHUSDT").put("exchange_status", "SUBMISSION_UNKNOWN"))
+        org.junit.Assert.assertFalse(confirmedPendingEntriesAllowConcurrentAdmission(unresolvedExit))
+    }
 }
