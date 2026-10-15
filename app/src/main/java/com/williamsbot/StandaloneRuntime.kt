@@ -5147,8 +5147,9 @@ private class NativeEngine(
         val contextNow = futuresMarketData.exchangeNowMs()
         if (!isSignalFresh(signal.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)) return
 
-        // Macro D1 is an airbag; H4 supplies context; H1 is the only decision/entry TF.
-        // M15/M5 are deliberately not read here and cannot create an entry.
+        // Macro D1 is an airbag; H4 supplies context; H1 is the only decision TF.
+        // M15 can only confirm or veto the H1 scenario; it cannot create an entry.
+        // M5 remains diagnostics/replay only.
         val d1BarMs = frameSeconds("1d") * 1000L
         val h4BarMs = frameSeconds("4h") * 1000L
         val d1 = fetchCandles(symbol, "1d", 90)
