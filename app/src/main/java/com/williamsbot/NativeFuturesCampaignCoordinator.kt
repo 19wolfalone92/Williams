@@ -1749,7 +1749,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("exchange_status", "SUBMISSION_UNKNOWN")
             .put("created_at_ms", System.currentTimeMillis())
         intents.put(exitIntent)
-        managedEntry.put("campaign_status", "EXIT_PENDING")
+        managedEntry?.put("campaign_status", "EXIT_PENDING")
         saveIntents(intents)
         state = State.EXIT_PENDING
         lastBlocker = "exit_submission_and_exchange_confirmation_pending"
