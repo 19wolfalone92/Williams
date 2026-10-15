@@ -488,7 +488,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             // A protective stop must not be suppressed merely because MARK_PRICE
             // and CONTRACT_PRICE diverge during volatility. Trigger directly on the
             // chosen MARK_PRICE basis; priceProtect=true can delay the loss exit.
-            "priceProtect" to "FALSE",
+            "priceProtect" to "false",
             "clientAlgoId" to clientOrderId
         )
         return JSONObject(requestRaw("POST", "/fapi/v1/algoOrder", params, signed = true))
