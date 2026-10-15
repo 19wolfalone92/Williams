@@ -375,6 +375,25 @@ def test_android_exit_requires_exchange_position_protection_and_filled_order_con
     assert 'isOwnedClientOrderForSymbol(symbol, clientId, activeProtectionClientIdsBySymbol)' in coordinator
 
 
+def test_android_pre_order_candidate_rejection_does_not_fake_unknown_mutation():
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    submit = coordinator.split("fun submitPendingEntry(", 1)[1].split(
+        "fun cancelPendingEntries(", 1
+    )[0]
+    door = runtime.split("private fun withCampaignMutation(", 1)[1].split(
+        "private fun reconcileFuturesThroughDoor(", 1
+    )[0]
+    assert "private fun safePreflightRejection(blocker: String)" in coordinator
+    assert '.put("safe_rejection", true)' in coordinator
+    assert '.put("mutation_attempted", false)' in coordinator
+    assert "return@synchronized safePreflightRejection(contractBlocker)" in submit
+    assert "return@synchronized safePreflightRejection(slotBlocker)" in submit
+    assert "return@synchronized safePreflightRejection(riskBlocker)" in submit
+    assert "val safePreflightRejection = result.optBoolean(\"safe_rejection\", false)" in door
+    assert "!safePreflightRejection && (" in door
+
+
 def test_android_entry_cancellation_rechecks_order_and_partial_fill_before_retiring_campaign():
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     cancel = coordinator.split("fun cancelPendingEntries(", 1)[1].split(
