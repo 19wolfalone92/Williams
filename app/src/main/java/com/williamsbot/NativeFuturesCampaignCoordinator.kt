@@ -1336,11 +1336,14 @@ internal class NativeFuturesCampaignCoordinator(
 
     /** Persist the entry request before any account/order mutation. */
     fun submitPendingEntry(plan: EntryPlan): JSONObject = synchronized(lock) {
-        check(state == State.READY || state == State.OPEN_PROTECTED) {
+        val currentIntents = intents()
+        val coordinatorCanAdmit = state == State.READY || state == State.OPEN_PROTECTED ||
+            (state == State.ENTRY_PENDING &&
+                confirmedPendingEntriesAllowConcurrentAdmission(currentIntents))
+        check(coordinatorCanAdmit) {
             "Futures execution blocked: ${lastBlocker ?: state.name}"
         }
         validatePlan(plan)
-        val currentIntents = intents()
         val preflightAdapter = adapterFactory()
         val contractBlocker = futuresContractRuleBlocker(
             preflightAdapter.exchangeInfo(),
@@ -2077,11 +2080,14 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("age_ms", (now - item.optLong("created_at_ms", now)).coerceAtLeast(0L))
             )
         }
+        val readyForNewEntry = state == State.READY || state == State.OPEN_PROTECTED ||
+            (state == State.ENTRY_PENDING &&
+                confirmedPendingEntriesAllowConcurrentAdmission(persisted))
         return JSONObject()
             .put("engine", "USD_M_FUTURES_TESTNET")
             .put("state", state.name)
-            .put("ready_for_new_entry", state == State.READY || state == State.OPEN_PROTECTED)
-            .put("blocker", lastBlocker ?: JSONObject.NULL)
+            .put("ready_for_new_entry", readyForNewEntry)
+            .put("blocker", if (readyForNewEntry) JSONObject.NULL else (lastBlocker ?: JSONObject.NULL))
             .put("pending_intents", pendingDetails.length())
             .put("pending_intent_details", pendingDetails)
             .put("testnet_only", true)
