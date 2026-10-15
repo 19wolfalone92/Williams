@@ -435,7 +435,7 @@ internal data class FuturesDailyIncomeSummary(
 
 internal fun summarizeFuturesDailyIncome(
     incomeRows: JSONArray,
-    maximumRows: Int = 1000
+    maximumRows: Int = Int.MAX_VALUE
 ): FuturesDailyIncomeSummary? {
     if (maximumRows <= 0 || incomeRows.length() >= maximumRows) return null
     var total = 0.0
@@ -467,7 +467,7 @@ internal fun reconstructFuturesDailyRiskBaseline(
     currentEquityUsdt: Double,
     unrealizedPnlUsdt: Double?,
     incomeRows: JSONArray,
-    maximumRows: Int = 1000
+    maximumRows: Int = Int.MAX_VALUE
 ): Double? {
     if (!currentEquityUsdt.isFinite() || currentEquityUsdt <= 0.0 ||
         unrealizedPnlUsdt == null || !unrealizedPnlUsdt.isFinite()
