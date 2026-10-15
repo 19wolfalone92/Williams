@@ -7,6 +7,7 @@ adverse slippage. No fixed take-profit, no market chase, no exchange/UI calls.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Mapping, Sequence
 
 import pandas as pd
@@ -28,7 +29,7 @@ class PaperReplayConfig:
 
     def validate(self) -> None:
         positive = (self.starting_equity_usdt, self.risk_pct_per_entry, self.leverage, self.tick_size)
-        if any(not pd.notna(x) or not float(x) > 0 for x in positive):
+        if any(not math.isfinite(float(x)) or float(x) <= 0 for x in positive):
             raise ValueError("starting equity, risk, leverage and tick size must be positive")
         if self.risk_pct_per_entry > 0.0025:
             raise ValueError("paper replay entry risk cannot exceed 0.25%")
@@ -138,6 +139,8 @@ def run_williams_paper_replay(
             "initial_risk_usdt": p["initial_risk"], "r_multiple": net / p["initial_risk"],
             "entry_slippage_pct": ((p["entry"] - p["trigger"]) / p["trigger"]
                 if p["side"] == "BUY" else (p["trigger"] - p["entry"]) / p["trigger"]),
+            "exit_slippage_pct": (abs(exit_price - p["unadjusted_exit"]) / p["unadjusted_exit"]
+                if p.get("unadjusted_exit", 0) > 0 else None),
             "exit_reason": reason, "bars_held": max(0, i - p["entry_i"]),
         })
         position = None
@@ -235,7 +238,14 @@ def run_williams_paper_replay(
     if position is not None:
         last_time, last_close = work.index[-1], float(work.close.iloc[-1])
         exit_px = last_close * (1 - slip if position["side"] == "BUY" else 1 + slip)
+        position["unadjusted_exit"] = last_close
         close_pos(exit_px, last_time, len(work) - 1, "END_OF_DATA")
+        # Keep the realized ending equity consistent with the forced end-of-data close.
+        if equity_rows:
+            equity_rows[-1]["balance_usdt"] = balance
+            equity_rows[-1]["unrealized_pnl_usdt"] = 0.0
+            equity_rows[-1]["equity_usdt"] = balance
+            equity_rows[-1]["position"] = "FLAT"
 
     equity = pd.DataFrame(equity_rows).set_index("time")
     trades = pd.DataFrame(trade_rows)
@@ -244,7 +254,7 @@ def run_williams_paper_replay(
             "symbol", "direction", "signal_type", "signal_id", "entry_time", "exit_time",
             "trigger_price", "entry_price", "exit_price", "initial_stop", "qty",
             "gross_pnl_usdt", "fees_usdt", "net_pnl_usdt", "initial_risk_usdt",
-            "r_multiple", "entry_slippage_pct", "exit_reason", "bars_held",
+            "r_multiple", "entry_slippage_pct", "exit_slippage_pct", "exit_reason", "bars_held",
         ])
     pnl = pd.to_numeric(trades.get("net_pnl_usdt", pd.Series(dtype=float)), errors="coerce").fillna(0)
     wins, losses = int((pnl > 0).sum()), int((pnl < 0).sum())
