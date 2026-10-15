@@ -412,6 +412,19 @@ def test_android_pre_order_candidate_rejection_does_not_fake_unknown_mutation():
     assert "!safePreflightRejection && (" in door
 
 
+def test_android_orphan_futures_position_gets_only_a_deterministic_emergency_stop_and_stays_entry_blocked():
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    recovery = coordinator.split(
+        "if (matchingIntent == null && latestIntentIndex == null)", 1
+    )[1].split("if (matchingIntent != null) {", 1)[0]
+    assert "structuralStopRecoveryProvider?.invoke" in recovery
+    assert "EXCHANGE_POSITION_PLUS_FIVE_CLOSED_H1_BARS" in recovery
+    assert '"strategy_ownership_verified", false' in recovery
+    assert "manual close remains available" in recovery
+    assert "automatic adoption is blocked" not in recovery
+    assert "strategy ownership is unverified; new entries remain blocked" in coordinator
+
+
 def test_android_entry_cancellation_rechecks_order_and_partial_fill_before_retiring_campaign():
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     cancel = coordinator.split("fun cancelPendingEntries(", 1)[1].split(
