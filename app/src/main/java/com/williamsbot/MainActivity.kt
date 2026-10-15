@@ -220,6 +220,8 @@ data class Status(
     val tradesToday: Int = 0,
     val consecutiveLosses: Int = 0,
     val dailyPnlUsdt: Double = 0.0,
+    val dailyLossPct: Double = 0.0,
+    val dailyCapitalFlowUsdt: Double = 0.0,
     val tradingMode: String = "ACTIVE",
     val openPositions: Int = 0,
     val maxOpenPositions: Int = APPROVED_FUTURES_CHART_SYMBOLS.size,
@@ -1272,14 +1274,14 @@ private fun TestnetForceTradingCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Принудительное направление", style = MaterialTheme.typography.titleMedium)
+                Text("Принудительная торговля", style = MaterialTheme.typography.titleMedium)
                 ModeChip(
                     if (status.forceTestnetMode) "ARMED • DEMO" else "DEMO ONLY",
                     if (status.forceTestnetMode) AppColors.amber else AppColors.primary
                 )
             }
             Text(
-                "Ручной LONG/SHORT для поиска ошибок в Futures Demo. При включении автоматические входы по сигналам приостанавливаются, сканер продолжает анализ.",
+                "Ручной выбор LONG или SHORT для поиска ошибок на Futures Demo. Автоматические входы по сигналам отключаются, рыночный сканер и управление открытыми позициями продолжаются.",
                 style = MaterialTheme.typography.bodySmall,
                 color = AppColors.textMuted
             )
@@ -1321,7 +1323,7 @@ private fun TestnetForceTradingCard(
                         !status.reconcileRequired && !status.executionKillLatched,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("ВКЛЮЧИТЬ РЕЖИМ TESTNET")
+                    Text("ВКЛЮЧИТЬ ПРИНУДИТЕЛЬНУЮ ТОРГОВЛЮ")
                 }
                 Text(
                     if (!status.running) "Сначала запусти Runtime."
@@ -1730,14 +1732,6 @@ private fun DashboardScreen(
         }
 
         item {
-            TestnetForceTradingCard(
-                status = status,
-                onSetMode = onSetTestnetForceMode,
-                onSubmitEntry = onForcedEntry
-            )
-        }
-
-        item {
             HeroCard(status = status, best = best)
         }
 
@@ -1783,6 +1777,14 @@ private fun DashboardScreen(
 
         item {
             RiskCard(status)
+        }
+
+        item {
+            TestnetForceTradingCard(
+                status = status,
+                onSetMode = onSetTestnetForceMode,
+                onSubmitEntry = onForcedEntry
+            )
         }
 
         item {
@@ -2065,9 +2067,26 @@ private fun RiskCard(status: Status) {
                 MiniMetric("Loss", status.consecutiveLosses.toString())
             }
             Text(
-                status.tradingMode + " • PnL сегодня " + fmt(status.dailyPnlUsdt, 2) + " USDT",
+                status.tradingMode + " • торговый PnL сегодня " + fmt(status.dailyPnlUsdt, 2) + " USDT",
                 style = MaterialTheme.typography.labelSmall,
                 color = if (status.tradingMode == "PAUSED") AppColors.red else AppColors.textMuted
+            )
+            val lossPct = status.dailyLossPct * 100.0
+            Text(
+                "Дневной лимит: " + fmt(lossPct, 2) + "% / " +
+                    fmt(status.maxDailyLoss * 100.0, 0) + "%",
+                style = MaterialTheme.typography.labelSmall,
+                color = when {
+                    lossPct >= status.maxDailyLoss * 100.0 -> AppColors.red
+                    lossPct >= status.maxDailyLoss * 75.0 -> AppColors.amber
+                    else -> AppColors.textMuted
+                }
+            )
+            Text(
+                "Капитальные движения за UTC-день: " +
+                    fmt(status.dailyCapitalFlowUsdt, 2) + " USDT (не считаются торговым PnL)",
+                style = MaterialTheme.typography.labelSmall,
+                color = AppColors.textMuted
             )
         }
     }
@@ -3890,6 +3909,8 @@ private fun parseStatus(json: JSONObject): Status {
             json.optInt("trades_today", 0),
         consecutiveLosses = json.optInt("consecutive_losses", 0),
         dailyPnlUsdt = json.optDouble("daily_pnl_usdt", 0.0),
+        dailyLossPct = json.optDouble("daily_loss_pct", 0.0).coerceAtLeast(0.0),
+        dailyCapitalFlowUsdt = json.optDouble("daily_capital_flow_usdt", 0.0),
         tradingMode = json.optString("trading_mode", "ACTIVE"),
         openPositions =
             json.optInt(
