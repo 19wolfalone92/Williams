@@ -1703,7 +1703,7 @@ internal class NativeFuturesCampaignCoordinator(
             lastBlocker = "client order id was already used by a persisted Futures intent; id reuse blocked"
             return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
         }
-        val manualExit = reason == "MANUAL_EXIT"
+        val manualExit = reason == "MANUAL_EXIT" || reason == "KILL_SWITCH"
         val latestIndex = latestEntryIntentIndex(intents, symbol)
         val managedEntry = latestIndex?.let { intents.optJSONObject(it) }
             ?.takeIf { row ->
