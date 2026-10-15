@@ -57,6 +57,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -256,7 +257,8 @@ data class Status(
     val p0GateReason: String = "NOT_READY",
     val maxOpenPositionsLocked: Boolean = false,
     val unresolvedSymbols: List<String> = emptyList(),
-    val pendingEntrySymbols: List<String> = emptyList()
+    val pendingEntrySymbols: List<String> = emptyList(),
+    val forceTestnetMode: Boolean = false
 )
 
 data class Candle(
@@ -643,7 +645,68 @@ fun WilliamsApp(context: Context) {
     }
 
     fun saveCredentials() {
+        scope.launch(Dispatchers.IO) {    fun setTestnetForceMode(enabled: Boolean) {
         scope.launch(Dispatchers.IO) {
+            try {
+                val payload = JSONObject()
+                    .put("enabled", enabled)
+                    .put("acknowledge", true)
+                val response = JSONObject(
+                    api.post("/api/v1/control/testnet-force-mode", payload.toString())
+                )
+                val label = response.optString(
+                    "message",
+                    if (response.optBoolean("enabled", false)) {
+                        "Режим ручного направления TESTNET включён."
+                    } else {
+                        "Режим отключён; Runtime оставлен на паузе."
+                    }
+                )
+                withContext(Dispatchers.Main) { message = label }
+                loadAll(false)
+            } catch (failure: Exception) {
+                withContext(Dispatchers.Main) {
+                    message = failure.message ?: "Не удалось изменить режим TESTNET"
+                }
+                loadAll(false)
+            }
+        }
+    }
+
+    fun submitForcedTestnetEntry(symbol: String, direction: String) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val payload = JSONObject()
+                    .put("symbol", symbol)
+                    .put("direction", direction)
+                    .put("acknowledge", true)
+                val response = JSONObject(
+                    api.post("/api/v1/control/testnet-force-entry", payload.toString())
+                )
+                val detail = response.optString(
+                    "message",
+                    response.optString("blocker", "Нет подробностей от Runtime")
+                )
+                val label = if (response.optBoolean("accepted", false)) {
+                    "$detail • ${response.optString("symbol")} ${response.optString("direction")}, " +
+                        "trigger ${response.optString("trigger_price")}, " +
+                        "SL ${response.optString("protective_stop")}, " +
+                        "risk ${(response.optDouble("risk_pct", 0.0) * 100.0)}%"
+                } else {
+                    "Условный вход не принят: $detail"
+                }
+                withContext(Dispatchers.Main) { message = label }
+                loadAll(false)
+            } catch (failure: Exception) {
+                withContext(Dispatchers.Main) {
+                    message = failure.message ?: "Ошибка принудительного входа TESTNET"
+                }
+                loadAll(false)
+            }
+        }
+    }
+
+
             try {
                 require(apiKey.isNotBlank()) { "Введите API Key" }
                 require(apiSecret.isNotBlank()) { "Введите API Secret" }
@@ -876,13 +939,13 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    val titles = listOf("Overview", "Chart/AI", "Positions", "Incidents", "Diagnostics", "Config")
+    // Four primary destinations keep the trading view compact. Advanced tools stay
+    // grouped under "Ещё" instead of taking space from market/position monitoring.
+    val titles = listOf("Главная", "Рынок", "Позиции", "Ещё")
     val icons = listOf(
         Icons.Filled.Dashboard,
         Icons.Filled.Radar,
         Icons.Filled.AccountBalanceWallet,
-        Icons.Filled.ShowChart,
-        Icons.Filled.History,
         Icons.Filled.Settings
     )
 
@@ -913,11 +976,11 @@ fun WilliamsApp(context: Context) {
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text(
-                                "WILLIAMS COCKPIT",
+                                "ЦЕНТР WILLIAMS",
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                "AUTONOMOUS FUTURES • Execution on device",
+                                "USDⓈ-M FUTURES DEMO • автономно на устройстве",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AppColors.textMuted
                             )
@@ -946,9 +1009,10 @@ fun WilliamsApp(context: Context) {
                 containerColor = AppColors.surface
             ) {
                 titles.forEachIndexed { index, title ->
+                    val targetTab = if (index == 3) 6 else index
                     NavigationBarItem(
-                        selected = tab == index,
-                        onClick = { tab = index },
+                        selected = if (index == 3) tab >= 3 else tab == targetTab,
+                        onClick = { tab = targetTab },
                         icon = {
                             Icon(
                                 icons[index],
@@ -993,8 +1057,10 @@ fun WilliamsApp(context: Context) {
                     command("/api/v1/control/kill")
                 },
                 onScan = { refresh(true) },
-                onSettings = { tab = 5 },
-                onRecoverDashboard = { command("/api/v1/control/recover") }
+                onSettings = { tab = 6 },
+                onRecoverDashboard = { command("/api/v1/control/recover") },
+                onSetTestnetForceMode = ::setTestnetForceMode,
+                onForcedEntry = ::submitForcedTestnetEntry
             )
 
             1 -> ScannerScreen(
@@ -1074,6 +1140,13 @@ fun WilliamsApp(context: Context) {
                 message = diagnosticsMessage
             )
 
+            6 -> MoreScreen(
+                padding = padding,
+                onIncidents = { tab = 3 },
+                onDiagnostics = { tab = 4 },
+                onConfig = { tab = 5 }
+            )
+
             else -> SettingsScreen(
                 padding = padding,
                 status = status,
@@ -1094,6 +1167,208 @@ fun WilliamsApp(context: Context) {
                 message = message
             )
         }
+    }
+}
+
+@Composable
+private fun SystemHealthBar(status: Status) {@Composable
+private fun MoreScreen(
+    padding: PaddingValues,
+    onIncidents: () -> Unit,
+    onDiagnostics: () -> Unit,
+    onConfig: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp)
+    ) {
+        item {
+            Text("Ещё", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "История, диагностика и настройки собраны здесь, чтобы главные экраны оставались компактными.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppColors.textMuted
+            )
+        }
+        item {
+            MoreDestinationCard(
+                title = "История и журнал",
+                description = "Закрытые сделки, события Runtime и причины отказов.",
+                action = "ОТКРЫТЬ ИСТОРИЮ",
+                onClick = onIncidents
+            )
+        }
+        item {
+            MoreDestinationCard(
+                title = "Диагностика",
+                description = "REST, WebSocket, история свечей, сканер, Execution Gate и экспорт ZIP.",
+                action = "ОТКРЫТЬ ДИАГНОСТИКУ",
+                onClick = onDiagnostics
+            )
+        }
+        item {
+            MoreDestinationCard(
+                title = "Настройки и резервная копия",
+                description = "Binance Futures Demo API, резервное копирование и восстановление.",
+                action = "ОТКРЫТЬ НАСТРОЙКИ",
+                onClick = onConfig
+            )
+        }
+    }
+}
+
+@Composable
+private fun MoreDestinationCard(
+    title: String,
+    description: String,
+    action: String,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(description, style = MaterialTheme.typography.bodyMedium, color = AppColors.textMuted)
+            OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) { Text(action) }
+        }
+    }
+}
+
+@Composable
+private fun TestnetForceTradingCard(
+    status: Status,
+    onSetMode: (Boolean) -> Unit,
+    onSubmitEntry: (String, String) -> Unit
+) {
+    val approvedSymbols = listOf(
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
+    )
+    var symbol by remember { mutableStateOf("SOLUSDT") }
+    var direction by remember { mutableStateOf("SHORT") }
+    var confirmEntry by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (status.forceTestnetMode) AppColors.surface2 else AppColors.surface
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Принудительное направление", style = MaterialTheme.typography.titleMedium)
+                ModeChip(
+                    if (status.forceTestnetMode) "ARMED • DEMO" else "DEMO ONLY",
+                    if (status.forceTestnetMode) AppColors.amber else AppColors.primary
+                )
+            }
+            Text(
+                "Ручной LONG/SHORT для поиска ошибок в Futures Demo. При включении автоматические входы по сигналам приостанавливаются, сканер продолжает анализ.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AppColors.textMuted
+            )
+            Text("Инструмент", style = MaterialTheme.typography.labelLarge)
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                approvedSymbols.forEach { approved ->
+                    FilterChip(
+                        selected = symbol == approved,
+                        onClick = { symbol = approved },
+                        label = { Text(approved.removeSuffix("USDT")) }
+                    )
+                }
+            }
+            Text("Направление", style = MaterialTheme.typography.labelLarge)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = direction == "LONG",
+                    onClick = { direction = "LONG" },
+                    label = { Text("LONG • покупка") }
+                )
+                FilterChip(
+                    selected = direction == "SHORT",
+                    onClick = { direction = "SHORT" },
+                    label = { Text("SHORT • продажа") }
+                )
+            }
+            Text(
+                "Вход остаётся условным STOP по закрытым H1-уровням. Перед отправкой Runtime повторно проверяет направление, структурный стоп, доступный баланс, лимит риска 0,25% на сделку / 0,60% суммарно, дневной лимит 3%, фильтры биржи и состояние защиты. Это не рыночный вход и не обход аварийных блокировок.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AppColors.textMuted
+            )
+            if (!status.forceTestnetMode) {
+                Button(
+                    onClick = { onSetMode(true) },
+                    enabled = status.running && status.binanceConfigured &&
+                        !status.reconcileRequired && !status.executionKillLatched,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("ВКЛЮЧИТЬ РЕЖИМ TESTNET")
+                }
+                Text(
+                    if (!status.running) "Сначала запусти Runtime."
+                    else if (status.reconcileRequired || status.executionKillLatched)
+                        "Сначала восстанови состояние биржи; режим не обходит RECONCILE/KILL."
+                    else "После включения ручной выбор стороны будет использовать H1-структуру, даже если AI-гипотеза указывает противоположное направление.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.amber
+                )
+            } else {
+                Button(
+                    onClick = { confirmEntry = true },
+                    enabled = status.running && !status.paused &&
+                        !status.reconcileRequired && !status.executionKillLatched &&
+                        status.p0GatePassed,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("РАЗМЕСТИТЬ УСЛОВНЫЙ $direction • $symbol")
+                }
+                OutlinedButton(
+                    onClick = { onSetMode(false) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("ВЫКЛЮЧИТЬ РЕЖИМ И ОСТАНОВИТЬ ВХОДЫ") }
+            }
+        }
+    }
+
+    if (confirmEntry) {
+        AlertDialog(
+            onDismissRequest = { confirmEntry = false },
+            title = { Text("Подтвердить $direction $symbol?") },
+            text = {
+                Text(
+                    "Будет рассчитан новый условный H1 STOP по структуре последних закрытых свечей. LONG и SHORT используют разные стороны пробоя и противоположно расположенный защитный стоп. Если уровень уже пройден, данные устарели или любая обязательная проверка не пройдёт, ордер не отправится. Принудительный режим влияет только на выбор направления и работает только на Futures Demo."
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    confirmEntry = false
+                    onSubmitEntry(symbol, direction)
+                }) { Text("ПОДТВЕРДИТЬ DEMO-ОРДЕР") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmEntry = false }) { Text("ОТМЕНА") }
+            }
+        )
     }
 }
 
@@ -1401,7 +1676,9 @@ private fun DashboardScreen(
     onKill: () -> Unit,
     onScan: () -> Unit,
     onSettings: () -> Unit,
-    onRecoverDashboard: () -> Unit
+    onRecoverDashboard: () -> Unit,
+    onSetTestnetForceMode: (Boolean) -> Unit,
+    onForcedEntry: (String, String) -> Unit
 ) {
     val best = candidates.firstOrNull()
 
@@ -1450,6 +1727,14 @@ private fun DashboardScreen(
                 onResume = onResume,
                 onStop = onStop,
                 onKill = onKill
+            )
+        }
+
+        item {
+            TestnetForceTradingCard(
+                status = status,
+                onSetMode = onSetTestnetForceMode,
+                onSubmitEntry = onForcedEntry
             )
         }
 
@@ -3723,7 +4008,8 @@ private fun parseStatus(json: JSONObject): Status {
         pendingEntrySymbols = json.optJSONArray("pending_entry_symbols")?.let { array ->
             List(array.length()) { i -> array.optString(i) }
                 .filter { it.isNotBlank() }
-        } ?: emptyList()
+        } ?: emptyList(),
+        forceTestnetMode = json.optBoolean("force_testnet_mode", false)
     )
 }
 
