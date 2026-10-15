@@ -818,9 +818,22 @@ internal class NativeFuturesCampaignCoordinator(
                         }
                         intent.put("campaign_status", "FILL_CONFIRMATION_PENDING")
                     }
-                    exchangeStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED") ->
-                        intent.put("campaign_status", "CLOSED_OR_STOPPED")
-                            .put("closed_observed_at_ms", System.currentTimeMillis())
+                    exchangeStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED") -> {
+                        val executedQty = order.optString("executedQty").toBigDecimalOrNull()
+                            ?: order.optString("cumQty").toBigDecimalOrNull()
+                        val possiblePartialFill = prior == "FILL_CONFIRMATION_PENDING" ||
+                            (executedQty?.signum() ?: 0) > 0 ||
+                            intent.optString("cancel_prior_order_status").uppercase(Locale.US) == "PARTIALLY_FILLED"
+                        if (possiblePartialFill) {
+                            intent.put("campaign_status", "FILL_CONFIRMATION_PENDING")
+                            if (intent.optLong("fill_observed_at_ms", 0L) <= 0L) {
+                                intent.put("fill_observed_at_ms", System.currentTimeMillis())
+                            }
+                        } else {
+                            intent.put("campaign_status", "CLOSED_OR_STOPPED")
+                                .put("closed_observed_at_ms", System.currentTimeMillis())
+                        }
+                    }
                     exchangeStatus in activeStatuses -> intent.put("campaign_status", "ENTRY_PENDING")
                     else -> throw IllegalStateException("Entry $clientId has unsupported exchange status $exchangeStatus")
                 }
@@ -1449,7 +1462,14 @@ internal class NativeFuturesCampaignCoordinator(
         }
         try {
             val failures = mutableListOf<String>()
-            fun persistConfirmedCancellation(intent: JSONObject, symbol: String, clientId: String, status: String, resultJson: String? = null) {
+            fun persistConfirmedCancellation(
+                intent: JSONObject,
+                symbol: String,
+                clientId: String,
+                status: String,
+                resultJson: String? = null,
+                confirmedOrder: JSONObject? = null
+            ) {
                 val exchangeStatus = status.uppercase(Locale.US)
                 if (exchangeStatus !in ENTRY_ORDER_TERMINAL_STATUSES) {
                     throw IOException("Binance did not confirm a terminal status for $clientId (status=$exchangeStatus)")
@@ -1478,20 +1498,29 @@ internal class NativeFuturesCampaignCoordinator(
                 } else {
                     openSymbols.remove(symbol.uppercase(Locale.US))
                 }
+                val reportedExecuted = listOf("executedQty", "cumQty", "cumBase", "filledQty")
+                    .mapNotNull { key -> confirmedOrder?.optString(key)?.toBigDecimalOrNull() }
+                    .any { it.signum() > 0 }
+                val priorCancelStatus = intent.optString("cancel_prior_order_status").uppercase(Locale.US)
+                val possiblePartialFill = exchangeStatus == "FINISHED" || reportedExecuted ||
+                    priorCancelStatus == "PARTIALLY_FILLED" ||
+                    campaignLifecycleStatus(intent) == "FILL_CONFIRMATION_PENDING"
                 val campaignStatus = when {
-                    exchangeStatus == "FINISHED" -> "FILL_CONFIRMATION_PENDING"
                     liveAmount.signum() != 0 -> "POSITION_OPEN"
+                    possiblePartialFill -> "FILL_CONFIRMATION_PENDING"
                     else -> "CLOSED_OR_STOPPED"
                 }
+                val nowMs = System.currentTimeMillis()
                 intent.put("exchange_status", exchangeStatus)
                     .put("order_status", exchangeStatus)
                     .put("campaign_status", campaignStatus)
                     .put("cancel_reconciled_status", exchangeStatus)
-                    .put("cancel_reconciled_at_ms", System.currentTimeMillis())
+                    .put("cancel_reconciled_at_ms", nowMs)
                     .put("position_observed_after_cancel", liveAmount.toPlainString())
-                if (exchangeStatus == "FINISHED") {
-                    intent.put("fill_observed_at_ms", System.currentTimeMillis())
+                if (possiblePartialFill && intent.optLong("fill_observed_at_ms", 0L) <= 0L) {
+                    intent.put("fill_observed_at_ms", nowMs)
                 }
+                if (campaignStatus == "CLOSED_OR_STOPPED") intent.put("closed_observed_at_ms", nowMs)
                 if (resultJson != null) intent.put("cancel_result", resultJson)
                 saveIntents(all)
             }
@@ -1516,12 +1545,15 @@ internal class NativeFuturesCampaignCoordinator(
                         ?.let { it.optString("status", it.optString("algoStatus", "")) }
                         ?.uppercase(Locale.US).orEmpty()
                     if (observedStatus in ENTRY_ORDER_TERMINAL_STATUSES) {
-                        persistConfirmedCancellation(intent, symbol, clientId, observedStatus)
+                        persistConfirmedCancellation(
+                            intent, symbol, clientId, observedStatus, confirmedOrder = observed
+                        )
                         continue
                     }
                     throw IOException("Cancellation outcome for $clientId remains ambiguous; no repeated cancel sent")
                 }
-                intent.put("exchange_status", "CANCEL_SUBMISSION_UNKNOWN")
+                intent.put("cancel_prior_order_status", status)
+                    .put("exchange_status", "CANCEL_SUBMISSION_UNKNOWN")
                     .put("order_status", "CANCEL_SUBMISSION_UNKNOWN")
                     .put("cancel_reason", reason)
                     .put("cancel_attempt_at_ms", System.currentTimeMillis())
@@ -1544,7 +1576,9 @@ internal class NativeFuturesCampaignCoordinator(
                 if (confirmedStatus !in ENTRY_ORDER_TERMINAL_STATUSES) {
                     throw IOException("Cancellation for $clientId is not exchange-confirmed terminal (status=$confirmedStatus)")
                 }
-                persistConfirmedCancellation(intent, symbol, clientId, confirmedStatus, result.toString())
+                persistConfirmedCancellation(
+                    intent, symbol, clientId, confirmedStatus, result.toString(), confirmed
+                )
                 } catch (failure: Exception) {
                     val detail = "$symbol/$clientId: " + (failure.message ?: failure.javaClass.simpleName)
                     failures += detail
