@@ -29,13 +29,35 @@ class StartupHistoryPolicyTest {
     }
 
     @Test
-    fun strategy_context_frames_use_their_own_minimums() {
-        for ((frame, count) in listOf("4h" to 119L, "1d" to 89L, "15m" to 90L)) {
+    fun h1_is_the_only_decision_frame() {
+        val h1 = historyReadinessStatus("1h", 179L, false)
+        org.junit.Assert.assertEquals(true, h1.decisionFrame)
+        org.junit.Assert.assertEquals(true, h1.decisionReady)
+        org.junit.Assert.assertEquals(false, h1.contextFrame)
+        org.junit.Assert.assertEquals(false, h1.executionMonitoringFrame)
+    }
+
+    @Test
+    fun d1_and_h4_are_context_while_m15_is_execution_monitoring() {
+        for ((frame, count) in listOf("4h" to 119L, "1d" to 89L)) {
             val status = historyReadinessStatus(frame, count, false)
             org.junit.Assert.assertEquals(true, status.workingSetReady)
-            org.junit.Assert.assertEquals(true, status.decisionReady)
+            org.junit.Assert.assertEquals(false, status.decisionFrame)
+            org.junit.Assert.assertEquals(false, status.decisionReady)
+            org.junit.Assert.assertEquals(true, status.contextFrame)
+            org.junit.Assert.assertEquals(true, status.contextReady)
+            org.junit.Assert.assertEquals(false, status.executionMonitoringFrame)
             assertEquals("WORKING_SET_READY", status.scope)
         }
+
+        val m15 = historyReadinessStatus("15m", 90L, false)
+        org.junit.Assert.assertEquals(true, m15.workingSetReady)
+        org.junit.Assert.assertEquals(false, m15.decisionFrame)
+        org.junit.Assert.assertEquals(false, m15.decisionReady)
+        org.junit.Assert.assertEquals(false, m15.contextFrame)
+        org.junit.Assert.assertEquals(true, m15.executionMonitoringFrame)
+        org.junit.Assert.assertEquals(true, m15.executionReady)
+        assertEquals("WORKING_SET_READY", m15.scope)
     }
 
     @Test
