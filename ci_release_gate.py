@@ -297,7 +297,13 @@ def main() -> None:
     must_not(signed_account, 'path = "/api/v3/account"', "StandaloneRuntime.kt signed account")
     must(runtime_source, "internal fun conservativeRiskReservation", "StandaloneRuntime.kt")
     must(runtime_source, "futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)", "StandaloneRuntime.kt")
-    must(runtime_source, "isCandleOpenTimeClosed(it.t, durationMs, exchangeNowMs)", "StandaloneRuntime.kt")
+    must(runtime_source, "futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)", "StandaloneRuntime.kt")
+    must(runtime_source, "futuresMarketData.klineCloseTimeMs(candle.t, frame)", "StandaloneRuntime.kt")
+    market_data_source = read("app/src/main/java/com/williamsbot/BinanceUsdMFuturesMarketData.kt")
+    must(market_data_source, "internal fun klineCloseTimeMs(openTimeMs: Long, interval: String)", "BinanceUsdMFuturesMarketData.kt")
+    must(market_data_source, 'if (interval == "1M")', "BinanceUsdMFuturesMarketData.kt")
+    must(market_data_source, "Calendar.MONTH", "BinanceUsdMFuturesMarketData.kt")
+    must(runtime_source, "APPROVED_FUTURES_KLINE_INTERVALS", "StandaloneRuntime.kt chart interval contract")
     must(runtime_source, "var endTime = futuresMarketData.exchangeNowMs()", "StandaloneRuntime.kt")
     must_not(
         runtime_source,
