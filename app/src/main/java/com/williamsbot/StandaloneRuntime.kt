@@ -278,6 +278,43 @@ internal fun scannerReadinessState(
     else -> "RUNNABLE"
 }
 
+/**
+ * Read-only discovery has fewer prerequisites than order execution. A pause,
+ * kill switch, or unresolved exchange position must not stop H1 diagnostics;
+ * the independent Execution Gate still blocks every new order mutation.
+ */
+internal fun scannerDataReadinessState(
+    running: Boolean,
+    historyReady: Boolean,
+    marketDataFresh: Boolean
+): String = when {
+    !running -> "STOPPED"
+    !historyReady -> "WAITING_FOR_HISTORY"
+    !marketDataFresh -> "WAITING_FOR_MARKET_DATA"
+    else -> "RUNNABLE"
+}
+
+/** Execution blockers remain visible after a successful read-only market scan. */
+internal fun scannerExecutionBlocker(
+    paused: Boolean,
+    reconcileRequired: Boolean,
+    killLatched: Boolean,
+    accountReady: Boolean,
+    marketDataFresh: Boolean,
+    coordinatorState: String
+): String? = when {
+    killLatched -> "BLOCKED_KILL"
+    reconcileRequired -> "BLOCKED_FUTURES_RECONCILIATION"
+    coordinatorState.uppercase(Locale.US) in setOf(
+        "UNINITIALIZED", "RECONCILE_REQUIRED", "POSITION_UNPROTECTED",
+        "ENTRY_PENDING", "EXIT_PENDING"
+    ) -> "BLOCKED_FUTURES_RECONCILIATION"
+    paused -> "PAUSED"
+    !accountReady -> "BLOCKED_ACCOUNT"
+    !marketDataFresh -> "WAITING_FOR_MARKET_DATA"
+    else -> null
+}
+
 /** START is the safe entry point for authoritative reconciliation. */
 internal fun runtimeStartButtonEnabled(
     binanceConfigured: Boolean,
@@ -3347,36 +3384,18 @@ private class NativeEngine(
         // Do not pass hard-coded "safe" values into the scanner gate. The scanner
         // must reflect the real runtime safety latches and the authoritative Futures
         // coordinator; otherwise a manual scan can appear RUNNING during reconciliation.
-        val coordinatorStateForScan = runCatching {
-            futuresCampaignCoordinator.status().optString("state", "RECONCILE_REQUIRED")
-                .uppercase(Locale.US)
-        }.getOrDefault("RECONCILE_REQUIRED")
-        val coordinatorNeedsReconciliation = campaignEngineEnabled &&
-            coordinatorStateForScan in setOf(
-                "UNINITIALIZED",
-                "RECONCILE_REQUIRED",
-                "POSITION_UNPROTECTED"
-            )
-        val gateState = scannerReadinessState(
+        val gateState = scannerDataReadinessState(
             running = running,
-            paused = paused,
-            reconcileRequired = reconcileRequired || coordinatorNeedsReconciliation,
-            killLatched = killLatched,
             historyReady = historyReady,
-            accountReady = restAccountReady,
             marketDataFresh = marketDataFresh()
         )
         if (gateState != "RUNNABLE") {
             scannerState = gateState
             scannerError = when (gateState) {
                 "STOPPED" -> "Runtime is stopped; press START after Futures credentials are configured"
-                "PAUSED" -> "Runtime is paused by the operator"
-                "BLOCKED_RECONCILE" -> "Futures positions/orders/protection reconciliation is required"
-                "BLOCKED_KILL" -> "Kill switch is latched; reconcile exchange state before reset"
                 "WAITING_FOR_HISTORY" -> historyLastError ?: "Waiting for closed H1 history for all 10 approved contracts"
-                "BLOCKED_ACCOUNT" -> restAccountLastError ?: "Authenticated Futures USDT balance/equity is not ready"
                 "WAITING_FOR_MARKET_DATA" -> restLastError ?: "Futures REST market data is stale or unavailable"
-                else -> "Scanner gate is not ready: " + gateState
+                else -> "Read-only scanner data gate is not ready: " + gateState
             }
             return
         }
@@ -5402,19 +5421,17 @@ private class NativeEngine(
             }
         }
 
-        // Reconcile/manage through the same Execution Door, but do not let a blocked
-        // entry gate hide market diagnostics for the ten approved contracts.
-        if (!killLatched) {
-            val managementOk = runCatching { manageNativeFuturesPositions() }.getOrElse { failure ->
-                lastError = "Futures position monitor: " + (failure.message ?: failure.javaClass.simpleName)
-                false
-            }
-            if (!managementOk) {
-                scannerState = "BLOCKED_FUTURES_RECONCILIATION"
-                scannerError = scannerError
-                    ?: futuresCampaignCoordinator.lastBlocker
-                    ?: "Futures position reconciliation/protection incomplete"
-            }
+        // Reconcile/manage through the same Execution Door, including under a kill
+        // latch. This can monitor/maintain already-owned exposure; it never unlatches
+        // the kill switch or bypasses entry authorization. Unknown exposure remains blocked.
+        val managementOk = runCatching { manageNativeFuturesPositions() }.getOrElse { failure ->
+            lastError = "Futures position monitor: " + (failure.message ?: failure.javaClass.simpleName)
+            false
+        }
+        if (!managementOk) {
+            scannerError = scannerError
+                ?: futuresCampaignCoordinator.lastBlocker
+                ?: "Futures position reconciliation/protection incomplete"
         }
 
         val universe = loadUniverse()
@@ -5452,15 +5469,50 @@ private class NativeEngine(
         lastSymbolsScanned = ranked.size
         lastScanAt = System.currentTimeMillis()
         scanRunId = "futures-" + lastScanAt
-        scannerState = if (ranked.size == coreSymbols.size) "READY" else "PARTIAL"
         runCatching { PositionsWidgetProvider.refresh(context) }
         runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 180) }
-        if (ranked.size != coreSymbols.size) {
-            val missing = coreSymbols - ranked.map { it.symbol }.toSet()
-            scannerError = "Futures entry blocked; all ten contracts need H1 data. Missing: " + missing.joinToString(",")
-            scannerState = if (ranked.isEmpty()) "FAILED" else "PARTIAL_BLOCKED"
-            return
+
+        // Never overwrite a safety blocker with READY merely because market data was
+        // scanned. Market-analysis success and permission to execute are separate facts.
+        val coordinatorStateForCompletion = runCatching {
+            futuresCampaignCoordinator.status().optString("state", "RECONCILE_REQUIRED")
+                .uppercase(Locale.US)
+        }.getOrDefault("RECONCILE_REQUIRED")
+        val completeScan = ranked.size == coreSymbols.size
+        val executionBlocker = scannerExecutionBlocker(
+            paused = paused,
+            reconcileRequired = reconcileRequired,
+            killLatched = killLatched,
+            accountReady = restAccountReady,
+            marketDataFresh = marketDataFresh(),
+            coordinatorState = coordinatorStateForCompletion
+        )
+        val missing = coreSymbols - ranked.map { it.symbol }.toSet()
+        scannerState = when {
+            !completeScan && ranked.isEmpty() -> "FAILED"
+            !completeScan && executionBlocker != null -> "PARTIAL_BLOCKED"
+            !completeScan -> "PARTIAL"
+            executionBlocker != null -> "READY_BLOCKED"
+            else -> "READY"
         }
+        scannerError = when {
+            executionBlocker != null -> {
+                when (executionBlocker) {
+                    "BLOCKED_KILL" -> "Kill switch is latched; read-only market scan completed, new entries remain disabled"
+                    "BLOCKED_FUTURES_RECONCILIATION" -> futuresCampaignCoordinator.lastBlocker
+                        ?: lastError
+                        ?: "Futures positions/orders/protection reconciliation is required"
+                    "PAUSED" -> lastError ?: "Runtime is paused; read-only market scan completed"
+                    "BLOCKED_ACCOUNT" -> restAccountLastError ?: "Futures account snapshot is not ready; entries remain disabled"
+                    "WAITING_FOR_MARKET_DATA" -> restLastError ?: "Futures market data is stale; entries remain disabled"
+                    else -> executionBlocker
+                }
+            }
+            !completeScan -> "Futures H1 scan incomplete. Missing: " + missing.joinToString(",")
+            else -> null
+        }
+        if (executionBlocker != null) return
+        if (!completeScan) return
         if (!restAccountReady || !marketDataFresh()) return
         if (futuresCampaignCoordinator.state !in setOf(
                 NativeFuturesCampaignCoordinator.State.READY,
