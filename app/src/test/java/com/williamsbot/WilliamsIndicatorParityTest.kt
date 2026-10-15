@@ -61,4 +61,16 @@ class WilliamsIndicatorParityTest {
         assertEquals(2, directionalSignalContextRank("SHORT_FRACTAL", false, true, false, true))
         assertEquals(1, directionalSignalContextRank("SHORT_REVERSAL", false, false, false, false))
     }
+
+    @Test
+    fun campaignAddOnsMustMatchTheOpenPositionDirection() {
+        assertTrue(isCampaignAddOnSignalForDirection("SUPER_AO", "REVERSAL"))
+        assertTrue(isCampaignAddOnSignalForDirection("FRACTAL", "FRACTAL"))
+        assertTrue(isCampaignAddOnSignalForDirection("SHORT_SUPER_AO", "SHORT_REVERSAL"))
+        assertTrue(isCampaignAddOnSignalForDirection("SHORT_FRACTAL", "SHORT_FRACTAL"))
+        assertTrue(!isCampaignAddOnSignalForDirection("SHORT_SUPER_AO", "REVERSAL"))
+        assertTrue(!isCampaignAddOnSignalForDirection("SUPER_AO", "SHORT_REVERSAL"))
+        assertTrue(!isCampaignAddOnSignalForDirection("SHORT_REVERSAL", "SHORT_REVERSAL"))
+        assertTrue(!isCampaignAddOnSignalForDirection("SHORT_FRACTAL", ""))
+    }
 }
