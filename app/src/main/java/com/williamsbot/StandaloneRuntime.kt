@@ -1316,7 +1316,7 @@ private class NativeEngine(
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
             .put("futures_coordinator_state", coordinatorState)
-            .put("futures_coordinator_blocker", futuresRuntimeStatus.optString("blocker").ifBlank { JSONObject.NULL.toString() })
+            .put("futures_coordinator_blocker", futuresRuntimeStatus.opt("blocker") ?: JSONObject.NULL)
             .put("futures_reconciliation_in_progress", coordinatorReconciliationInProgress)
             .put("execution_state_contract", JSONObject()
                 .put("version", 1)
