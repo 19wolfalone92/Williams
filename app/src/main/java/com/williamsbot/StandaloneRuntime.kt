@@ -2266,22 +2266,29 @@ private class NativeEngine(
             lastError = null
         }
 
-        require(executionReady()) {
-            "Testnet override cannot be armed: " + executionBlockers().joinToString(", ")
+        require(executionGate.tryReserve(FUTURES_EXECUTION_DOOR_KEY)) {
+            "Futures Execution Door is busy; retry after the in-flight exchange operation is reconciled"
         }
-        forceTestnetMode = true
-        val preferenceSaved = prefs.edit()
-            .putBoolean("force_testnet_mode", true)
-            .putBoolean("auto_run", true)
-            .commit()
-        val databaseSaved = executionStore.writeState("futures_testnet_force_mode", "true")
-        if (!preferenceSaved || !databaseSaved) {
-            forceTestnetMode = false
-            paused = true
-            prefs.edit().putBoolean("auto_run", false).putBoolean("force_testnet_mode", false).commit()
-            executionStore.writeState("futures_testnet_force_mode", "false")
-            lastError = "TESTNET_FORCE_MODE_PERSISTENCE_FAILED: forced entries remain disabled"
-            throw IllegalStateException(lastError)
+        try {
+            require(executionReady()) {
+                "Testnet override cannot be armed: " + executionBlockers().joinToString(", ")
+            }
+            forceTestnetMode = true
+            val preferenceSaved = prefs.edit()
+                .putBoolean("force_testnet_mode", true)
+                .putBoolean("auto_run", true)
+                .commit()
+            val databaseSaved = executionStore.writeState("futures_testnet_force_mode", "true")
+            if (!preferenceSaved || !databaseSaved) {
+                forceTestnetMode = false
+                paused = true
+                prefs.edit().putBoolean("auto_run", false).putBoolean("force_testnet_mode", false).commit()
+                executionStore.writeState("futures_testnet_force_mode", "false")
+                lastError = "TESTNET_FORCE_MODE_PERSISTENCE_FAILED: forced entries remain disabled"
+                throw IllegalStateException(lastError)
+            }
+        } finally {
+            executionGate.release(FUTURES_EXECUTION_DOOR_KEY)
         }
         lastError = null
         return JSONObject()
@@ -2325,6 +2332,15 @@ private class NativeEngine(
             "Forced entry blocked after daily-risk refresh: " + executionBlockers().joinToString(", ")
         }
 
+        val book = futuresMarketData.topOfBook(symbol)
+        val liveSpreadPct = (book.second - book.first) / book.first
+        require(
+            book.first.isFinite() && book.first > 0.0 &&
+                book.second.isFinite() && book.second >= book.first &&
+                liveSpreadPct.isFinite() && liveSpreadPct in 0.0..maxSpreadPct
+        ) {
+            "FUTURES_ENTRY_SPREAD_BLOCKED: $symbol live spread=$liveSpreadPct"
+        }
         val nowMs = futuresMarketData.exchangeNowMs()
         require(isWithinWilliamsEntrySessionUtc(nowMs)) {
             "Williams/Testnet entry window is closed; conditional entries are permitted only 08:00–20:00 UTC"
@@ -2458,6 +2474,7 @@ private class NativeEngine(
             .put("quantity", plan.quantity)
             .put("trigger_price", plan.entryPrice)
             .put("protective_stop", plan.protectiveStop)
+            .put("spread_pct", liveSpreadPct)
             .put("risk_pct", riskPct)
             .put("max_daily_loss_pct", 0.03)
             .put("blocker", result.optString("blocker", JSONObject.NULL.toString()))
@@ -5895,6 +5912,9 @@ private class NativeEngine(
     }
 
     private fun submitNativeFuturesCampaignEntry(candidate: BaseAnalysis) {
+        // The operator-directed mode suppresses automatic direction selection even
+        // when this scan began before the mode was armed.
+        if (forceTestnetMode) return
         // Entry-session overlay is UTC 08:00 inclusive to 20:00 exclusive.
         // Position protection/management and explicit exits remain active 24/7.
         if (!executionReady() || !candidate.campaignReady) return
@@ -6077,6 +6097,15 @@ private class NativeEngine(
             symbol = symbol,
             purpose = "WILLIAMS_PENDING_ENTRY"
         ) {
+            // A scan may have started just before an operator enabled manual direction.
+            // Reject the automatic entry safely instead of trading the opposite side.
+            if (forceTestnetMode) {
+                return@withCampaignMutation JSONObject()
+                    .put("accepted", false)
+                    .put("safe_rejection", true)
+                    .put("mutation_attempted", false)
+                    .put("blocker", "TESTNET_FORCE_MODE_ACTIVE: automatic entries suspended")
+            }
             // Revalidate the H1 scenario at the last possible point before mutation.
             // A queued/stale candidate must never survive a slow scan or a door wait.
             val submitNow = futuresMarketData.exchangeNowMs()
