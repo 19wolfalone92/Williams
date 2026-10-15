@@ -1960,11 +1960,12 @@ private class NativeEngine(
                                 !publicWebSocketFresh() || !userStreamConnected ||
                                 userStreamSyncRequired
                         if (campaignNeedsMonitoring && (prerequisitesDegraded || killLatched || paused)) {
-                            runCatching { manageNativeFuturesPositions() }
-                                .onFailure {
-                                    lastError = "Futures degraded-mode position monitor: " +
-                                        (it.message ?: it.javaClass.simpleName)
-                                }
+                            // Do not run a second account-wide reconciliation on the scanner
+                            // worker. Route every monitor request through the single-flight
+                            // scheduler; overlapping REST reconciliation used to leave the
+                            // coordinator observable in RECONCILE_REQUIRED/in-progress and
+                            // starve scans while another reconcile held the Execution Door.
+                            scheduleNativePositionManagement()
                         }
 
                         if (!historyReady) {
@@ -11244,9 +11245,9 @@ private class NativeEngine(
                 actions.put("futures_scanner_reconnect_requested")
             }
             if (paused) {
-                runCatching { manageNativeFuturesPositions() }
-                    .onSuccess { actions.put("futures_position_monitor") }
-                    .onFailure { actions.put("futures_position_monitor_failed") }
+                // Self-heal shares the same single-flight monitor as the runtime worker.
+                scheduleNativePositionManagement()
+                actions.put("futures_position_monitor_scheduled")
             }
         }
 
