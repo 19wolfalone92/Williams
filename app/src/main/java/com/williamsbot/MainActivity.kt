@@ -644,8 +644,7 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    fun saveCredentials() {
-        scope.launch(Dispatchers.IO) {    fun setTestnetForceMode(enabled: Boolean) {
+    fun setTestnetForceMode(enabled: Boolean) {
         scope.launch(Dispatchers.IO) {
             try {
                 val payload = JSONObject()
@@ -706,7 +705,8 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-
+    fun saveCredentials() {
+        scope.launch(Dispatchers.IO) {
             try {
                 require(apiKey.isNotBlank()) { "Введите API Key" }
                 require(apiSecret.isNotBlank()) { "Введите API Secret" }
