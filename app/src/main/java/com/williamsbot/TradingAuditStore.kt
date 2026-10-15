@@ -212,12 +212,14 @@ class TradingAuditStore(context: Context) :
         reason: String,
         rawJson: String?,
         feeUsdt: Double = 0.0,
-        feeKnown: Boolean = true
+        feeKnown: Boolean = true,
+        side: String = "BUY"
     ) {
+        require(side == "BUY" || side == "SELL") { "Trade entry side must be BUY (LONG) or SELL (SHORT)" }
         val values = ContentValues()
         values.put("trade_id", tradeId)
         values.put("symbol", symbol)
-        values.put("side", "BUY")
+        values.put("side", side)
         values.put("entry_price", entryPrice)
         values.put("exit_price", exitPrice)
         values.put("qty", qty)
