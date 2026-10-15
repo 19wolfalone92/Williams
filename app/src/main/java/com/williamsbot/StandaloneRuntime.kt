@@ -419,23 +419,29 @@ internal fun canInitializeDailyRiskBaseline(
 // income history. Transfers are neutral capital movements; trading income and
 // unrealized PnL are removed from current equity to reconstruct the day's starting
 // trading equity. A full 1000-row response is treated as possibly truncated.
-internal fun reconstructFuturesDailyRiskBaseline(
-    currentEquityUsdt: Double,
-    unrealizedPnlUsdt: Double?,
+private val FUTURES_CAPITAL_FLOW_TYPES = setOf(
+    "TRANSFER", "INTERNAL_TRANSFER", "DEPOSIT", "WITHDRAW",
+    "WELCOME_BONUS", "BONUS", "AUTO_EXCHANGE",
+    "COIN_SWAP_DEPOSIT", "COIN_SWAP_WITHDRAW",
+    "CROSS_COLLATERAL_TRANSFER", "PORTFOLIO_MARGIN_TRANSFER"
+)
+
+internal data class FuturesDailyIncomeSummary(
+    val totalIncomeUsdt: Double,
+    val tradingIncomeUsdt: Double,
+    val capitalFlowUsdt: Double,
+    val hasTradingActivity: Boolean
+)
+
+internal fun summarizeFuturesDailyIncome(
     incomeRows: JSONArray,
     maximumRows: Int = 1000
-): Double? {
-    if (!currentEquityUsdt.isFinite() || currentEquityUsdt <= 0.0 ||
-        unrealizedPnlUsdt == null || !unrealizedPnlUsdt.isFinite() ||
-        incomeRows.length() < 0 || maximumRows <= 0 || incomeRows.length() >= maximumRows
-    ) return null
-
-    val nonTradingTypes = setOf(
-        "TRANSFER", "INTERNAL_TRANSFER", "DEPOSIT", "WITHDRAW",
-        "WELCOME_BONUS", "BONUS", "AUTO_EXCHANGE",
-        "COIN_SWAP_DEPOSIT", "COIN_SWAP_WITHDRAW"
-    )
-    var tradingIncomeUsdt = 0.0
+): FuturesDailyIncomeSummary? {
+    if (maximumRows <= 0 || incomeRows.length() >= maximumRows) return null
+    var total = 0.0
+    var trading = 0.0
+    var capitalFlow = 0.0
+    var hasTradingActivity = false
     for (index in 0 until incomeRows.length()) {
         val row = incomeRows.optJSONObject(index) ?: return null
         val type = row.optString("incomeType").trim().uppercase(Locale.US)
@@ -445,10 +451,31 @@ internal fun reconstructFuturesDailyRiskBaseline(
             else -> null
         } ?: return null
         if (type.isBlank() || !amount.isFinite()) return null
-        if (type !in nonTradingTypes) tradingIncomeUsdt += amount
-        if (!tradingIncomeUsdt.isFinite()) return null
+        total += amount
+        if (type in FUTURES_CAPITAL_FLOW_TYPES) {
+            capitalFlow += amount
+        } else {
+            trading += amount
+            hasTradingActivity = true
+        }
+        if (!total.isFinite() || !trading.isFinite() || !capitalFlow.isFinite()) return null
     }
-    val baseline = currentEquityUsdt - tradingIncomeUsdt - unrealizedPnlUsdt
+    return FuturesDailyIncomeSummary(total, trading, capitalFlow, hasTradingActivity)
+}
+
+internal fun reconstructFuturesDailyRiskBaseline(
+    currentEquityUsdt: Double,
+    unrealizedPnlUsdt: Double?,
+    incomeRows: JSONArray,
+    maximumRows: Int = 1000
+): Double? {
+    if (!currentEquityUsdt.isFinite() || currentEquityUsdt <= 0.0 ||
+        unrealizedPnlUsdt == null || !unrealizedPnlUsdt.isFinite()
+    ) return null
+    val summary = summarizeFuturesDailyIncome(incomeRows, maximumRows) ?: return null
+    // Equity includes both trading results and capital movements. Remove all Futures
+    // income-ledger movements plus current unrealized PnL to recover the day baseline.
+    val baseline = currentEquityUsdt - summary.totalIncomeUsdt - unrealizedPnlUsdt
     return baseline.takeIf { it.isFinite() && it > 0.0 }
 }
 
@@ -5181,6 +5208,7 @@ private class NativeEngine(
         utc.set(java.util.Calendar.MILLISECOND, 0)
         val utcDayStartMs = utc.timeInMillis
         val baselineKey = "futures_day_start_equity_" + utcDayStartMs
+        var incomeRowsForDay: JSONArray? = null
 
         if (executionStore.readState(baselineKey) == null) {
             // Reconstruct from the full UTC-day income ledger when trades already
@@ -5199,26 +5227,10 @@ private class NativeEngine(
                     isEntryCampaignReserved(row)
                 }
                 val income = futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
-                if (income.length() >= 1000) {
-                    throw IllegalStateException("UTC-day Futures income history reached 1000 rows and may be truncated")
-                }
-                val transferTypes = setOf(
-                    "TRANSFER", "INTERNAL_TRANSFER", "DEPOSIT", "WITHDRAW",
-                    "WELCOME_BONUS", "BONUS", "AUTO_EXCHANGE",
-                    "COIN_SWAP_DEPOSIT", "COIN_SWAP_WITHDRAW"
-                )
-                var hasTradingIncome = false
-                for (index in 0 until income.length()) {
-                    val row = income.optJSONObject(index)
-                        ?: throw IllegalStateException("Malformed Futures income row at index $index")
-                    val type = row.optString("incomeType").trim().uppercase(Locale.US)
-                    val amount = row.optString("income").toDoubleOrNull()
-                        ?: throw IllegalStateException("Missing numeric income at row $index")
-                    require(type.isNotBlank() && amount.isFinite()) {
-                        "Malformed Futures income type/amount at row $index"
-                    }
-                    if (type !in transferTypes) hasTradingIncome = true
-                }
+                incomeRowsForDay = income
+                val incomeSummary = summarizeFuturesDailyIncome(income)
+                    ?: throw IllegalStateException("UTC-day Futures income is malformed or reached the 1000-row truncation guard")
+                val hasTradingIncome = incomeSummary.hasTradingActivity
                 val accountSnapshot = parseFuturesAccountSnapshot(account)
                     ?: throw IllegalStateException("Cannot reconstruct daily baseline without a parsed Futures account snapshot")
                 val unrealized = accountSnapshot.unrealizedPnlUsdt ?: run {
@@ -5267,16 +5279,60 @@ private class NativeEngine(
 
         val baseline = executionStore.readState(baselineKey)?.toDoubleOrNull() ?: 0.0
         require(baseline > 0.0 && baseline.isFinite()) { "Futures daily equity baseline is invalid" }
-        val dailyPnlQuote = equity - baseline
-        val lossPct = ((baseline - equity) / baseline).coerceAtLeast(0.0)
+        val dailyIncomeRows = incomeRowsForDay ?: runCatching {
+            futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
+        }.getOrElse { failure ->
+            paused = true
+            prefs.edit().putBoolean("auto_run", false).commit()
+            lastError = "FUTURES_DAILY_INCOME_UNKNOWN: cannot verify the UTC-day PnL ledger: " +
+                (failure.message ?: failure.javaClass.simpleName)
+            return false
+        }
+        val dailyIncome = summarizeFuturesDailyIncome(dailyIncomeRows) ?: run {
+            paused = true
+            prefs.edit().putBoolean("auto_run", false).commit()
+            lastError = "FUTURES_DAILY_INCOME_UNKNOWN: income rows are malformed or truncated; entries remain blocked"
+            return false
+        }
+        val accountSnapshot = parseFuturesAccountSnapshot(account)
+        val currentUnrealizedPnl = accountSnapshot?.unrealizedPnlUsdt ?: runCatching {
+            val positions = futuresCampaignCoordinator.positionsSnapshot()
+            val values = (0 until positions.length()).map { index ->
+                val row = positions.optJSONObject(index)
+                    ?: throw IllegalStateException("Malformed Futures position row $index")
+                row.optString("unRealizedProfit").toDoubleOrNull()
+                    ?.takeIf { it.isFinite() }
+                    ?: throw IllegalStateException("Missing unrealized PnL for Futures position row $index")
+            }
+            values.sum().takeIf { it.isFinite() }
+                ?: throw IllegalStateException("Invalid aggregate Futures unrealized PnL")
+        }.getOrElse { failure ->
+            paused = true
+            prefs.edit().putBoolean("auto_run", false).commit()
+            lastError = "FUTURES_DAILY_UNREALIZED_PNL_UNKNOWN: " +
+                (failure.message ?: failure.javaClass.simpleName)
+            return false
+        }
+        // Calculate trading drawdown independently of transfers/deposits/withdrawals.
+        // Otherwise a deposit can hide a loss and a withdrawal can manufacture one.
+        val dailyPnlQuote = dailyIncome.tradingIncomeUsdt + currentUnrealizedPnl
+        val riskAdjustedEquity = baseline + dailyPnlQuote
+        if (!dailyPnlQuote.isFinite() || !riskAdjustedEquity.isFinite() || riskAdjustedEquity <= 0.0) {
+            paused = true
+            prefs.edit().putBoolean("auto_run", false).commit()
+            lastError = "FUTURES_DAILY_PNL_INVALID: risk-adjusted equity is not finite and positive"
+            return false
+        }
+        val lossPct = ((baseline - riskAdjustedEquity) / baseline).coerceAtLeast(0.0)
         check(
             executionStore.writeState("futures_daily_loss_pct", lossPct.toString()) &&
-                executionStore.writeState("futures_daily_pnl_usdt", dailyPnlQuote.toString())
+                executionStore.writeState("futures_daily_pnl_usdt", dailyPnlQuote.toString()) &&
+                executionStore.writeState("futures_daily_capital_flow_usdt", dailyIncome.capitalFlowUsdt.toString())
         ) {
             "SQLite commit failed while persisting daily Futures equity/PnL measurement"
         }
         if (observeFuturesEquityFromPersistedBaseline(
-                equityCircuitBreaker, baseline, equity, exchangeNowMs
+                equityCircuitBreaker, baseline, riskAdjustedEquity, exchangeNowMs
             ).tripped
         ) {
             if (!killLatched && !circuitBreakerTripInProgress) {
@@ -5296,7 +5352,7 @@ private class NativeEngine(
                     "5% Futures equity circuit breaker tripped"
                 )
                 prefs.edit().putBoolean("auto_run", false).commit()
-                val drawdownPct = ((baseline - equity) / baseline).coerceAtLeast(0.0) * 100.0
+                val drawdownPct = ((baseline - riskAdjustedEquity) / baseline).coerceAtLeast(0.0) * 100.0
                 lastError = "AUTOMATIC FUTURES EQUITY CIRCUIT BREAKER: daily drawdown " +
                     "%.2f%% reached; kill switch engaged".format(Locale.US, drawdownPct)
                 Thread {
