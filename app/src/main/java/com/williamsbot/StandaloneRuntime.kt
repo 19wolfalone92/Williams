@@ -3323,11 +3323,24 @@ private class NativeEngine(
     private fun requestScan() {
         // The scanner uses REST market data/history; WS remains an execution prerequisite.
         // Gate failures are surfaced as actionable states rather than silent early returns.
+        // Do not pass hard-coded "safe" values into the scanner gate. The scanner
+        // must reflect the real runtime safety latches and the authoritative Futures
+        // coordinator; otherwise a manual scan can appear RUNNING during reconciliation.
+        val coordinatorStateForScan = runCatching {
+            futuresCampaignCoordinator.status().optString("state", "RECONCILE_REQUIRED")
+                .uppercase(Locale.US)
+        }.getOrDefault("RECONCILE_REQUIRED")
+        val coordinatorNeedsReconciliation = campaignEngineEnabled &&
+            coordinatorStateForScan in setOf(
+                "UNINITIALIZED",
+                "RECONCILE_REQUIRED",
+                "POSITION_UNPROTECTED"
+            )
         val gateState = scannerReadinessState(
             running = running,
-            paused = false,
-            reconcileRequired = false,
-            killLatched = false,
+            paused = paused,
+            reconcileRequired = reconcileRequired || coordinatorNeedsReconciliation,
+            killLatched = killLatched,
             historyReady = historyReady,
             accountReady = restAccountReady,
             marketDataFresh = marketDataFresh()
