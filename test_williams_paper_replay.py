@@ -41,7 +41,7 @@ def test_long_paper_campaign_uses_conditional_entry_structural_stop_and_real_cos
         leverage=2.0, tick_size=0.1, trailing_lookback_bars=5,
     )
     equity, trades, metrics = run_williams_paper_replay(
-        frame, {0: [signal("BUY", trigger=101.0, stop=98.0, ts=int(frame.index[0].timestamp()*1000)]}, cfg
+        frame, {0: [signal("BUY", trigger=101.0, stop=98.0, ts=int(frame.index[0].timestamp() * 1000))]}, cfg
     )
     assert len(trades) == 1
     trade = trades.iloc[0]
@@ -69,7 +69,7 @@ def test_short_paper_campaign_accounts_for_short_direction_and_exit_slippage():
         tick_size=0.1, trailing_lookback_bars=5,
     )
     _, trades, metrics = run_williams_paper_replay(
-        frame, {0: [signal("SELL", trigger=99.0, stop=102.0, ts=int(frame.index[0].timestamp()*1000)]}, cfg
+        frame, {0: [signal("SELL", trigger=99.0, stop=102.0, ts=int(frame.index[0].timestamp() * 1000))]}, cfg
     )
     assert len(trades) == 1
     trade = trades.iloc[0]
