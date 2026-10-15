@@ -78,7 +78,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -423,7 +425,7 @@ fun WilliamsApp(context: Context) {
     var chartError by remember { mutableStateOf<String?>(null) }
     var chartLivePrice by remember { mutableStateOf<Double?>(null) }
     var chartQuoteSource by remember { mutableStateOf("UNAVAILABLE") }
-    var chartQuoteUpdatedAtMs by remember { mutableStateOf(0L) }
+    var chartQuoteUpdatedAtMs by remember { mutableLongStateOf(0L) }
     var chartIndicatorSummary by remember { mutableStateOf("Загрузка индикаторов…") }
     var selectedChartInterval by remember { mutableStateOf("1h") }
     var candidates by remember { mutableStateOf(emptyList<Candidate>()) }
@@ -3470,8 +3472,8 @@ private fun TradingChart(
     interval: String = "1h",
     onIntervalChange: (String) -> Unit = {}
 ) {
-    var scale by remember(candles.size) { mutableStateOf(1f) }
-    var pan by remember(candles.size) { mutableStateOf(0f) }
+    var scale by remember(candles.size) { mutableFloatStateOf(1f) }
+    var pan by remember(candles.size) { mutableFloatStateOf(0f) }
 
     val visibleCount = min(candles.size, max(1, (candles.size / scale).toInt()))
 
