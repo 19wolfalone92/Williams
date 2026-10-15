@@ -356,6 +356,23 @@ internal fun runtimeStartButtonEnabled(
     return binanceConfigured && !running
 }
 
+/**
+ * Permit a throttled retry when a connected private stream remains unsynchronized.
+ * This schedules reconciliation only; it never clears the safety barrier itself.
+ */
+internal fun shouldRetryUserStreamReconciliation(
+    connected: Boolean,
+    syncRequired: Boolean,
+    reconciliationRunning: Boolean,
+    lastAttemptMs: Long,
+    nowMs: Long,
+    minIntervalMs: Long = 10_000L
+): Boolean {
+    if (!connected || !syncRequired || reconciliationRunning || minIntervalMs < 0L || nowMs < 0L) return false
+    if (lastAttemptMs <= 0L) return true
+    return nowMs >= lastAttemptMs && nowMs - lastAttemptMs >= minIntervalMs
+}
+
 /** Detect a socket that is open but has stopped delivering events or has a stalled handshake. */
 internal fun streamNeedsReconnect(
     socketPresent: Boolean,
@@ -920,6 +937,7 @@ private class NativeEngine(
     @Volatile private var userStreamLastError: String? = null
     @Volatile private var futuresStreamReconcileRunning = false
     @Volatile private var futuresStreamReconcilePending = false
+    @Volatile private var lastUserStreamReconcileAttemptMs = 0L
     @Volatile private var lastUserEventMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
     @Volatile private var liveUsdtBalanceKnown = false
@@ -971,7 +989,7 @@ private class NativeEngine(
             userStreamConnected = connected
             userStreamLastError = if (connected) null else error?.takeUnless { it == "stopped" }
             if (connected) {
-                scheduleFuturesStreamReconciliation("user stream connected")
+                scheduleFuturesStreamReconciliation("user stream connected", force = true)
             } else if (!error.equals("stopped")) {
                 userStreamSyncRequired = true
                 // Keep the failure visible even while flat. A disconnected private
@@ -1713,6 +1731,13 @@ private class NativeEngine(
                 while (running && generation == runtimeGeneration) {
                     try {
                         repairStaleMarketStreams()
+                        // A connected private stream can still be unsynchronized after a
+                        // transient REST/Execution-Door failure. Retry reconciliation with
+                        // bounded backoff instead of leaving the runtime permanently blocked
+                        // until another socket reconnect happens. The gate remains fail-closed.
+                        if (userStreamConnected && userStreamSyncRequired) {
+                            scheduleFuturesStreamReconciliation("automatic sync retry")
+                        }
 
                         // Keep managing existing exposure while entry prerequisites are
                         // degraded. manageNativeFuturesPositions reconciles with the exchange;
@@ -6223,13 +6248,22 @@ private class NativeEngine(
         )
     }
 
-    private fun scheduleFuturesStreamReconciliation(reason: String) {
+    private fun scheduleFuturesStreamReconciliation(reason: String, force: Boolean = false) {
         userStreamSyncRequired = true
         synchronized(this) {
             if (futuresStreamReconcileRunning) {
                 futuresStreamReconcilePending = true
                 return
             }
+            val nowMs = System.currentTimeMillis()
+            if (!force && !shouldRetryUserStreamReconciliation(
+                    connected = userStreamConnected,
+                    syncRequired = userStreamSyncRequired,
+                    reconciliationRunning = futuresStreamReconcileRunning,
+                    lastAttemptMs = lastUserStreamReconcileAttemptMs,
+                    nowMs = nowMs
+                )) return
+            lastUserStreamReconcileAttemptMs = nowMs
             futuresStreamReconcileRunning = true
             futuresStreamReconcilePending = false
         }
@@ -10174,8 +10208,12 @@ private class NativeEngine(
         val scannerComplete = scannerState in setOf("READY", "READY_BLOCKED") &&
             !scanning && scannerUniverseMatches &&
             scanProgressSymbols == coreSymbols.size && lastSymbolsScanned == coreSymbols.size
+        val scannerStartupGrace = scanStartedAt > 0L &&
+            System.currentTimeMillis() >= scanStartedAt &&
+            System.currentTimeMillis() - scanStartedAt <= 15_000L
         val scannerActivelyProgressing = scannerState == "RUNNING" && scanning && scannerUniverseMatches &&
-            scanProgressSymbols in 1..coreSymbols.size && scannerProgressAgeMs <= 60_000L
+            scanProgressSymbols in 0..coreSymbols.size &&
+            (scannerProgressAgeMs <= 60_000L || (scanProgressSymbols == 0 && scannerStartupGrace))
         test(
             "scanner_state", "scanner", scannerComplete || scannerActivelyProgressing, "WARN",
             "state=" + scannerState + "; complete=" + scannerComplete +

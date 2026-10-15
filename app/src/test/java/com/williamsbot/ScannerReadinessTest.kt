@@ -196,6 +196,16 @@ class ScannerReadinessTest {
         assertEquals(null, dashboardPrice(0.0, -1.0, Double.NaN, true, true))
     }
 
+    @Test fun private_stream_reconciliation_retries_only_when_connected_and_throttled() {
+        assertEquals(true, shouldRetryUserStreamReconciliation(true, true, false, 0L, 10_000L))
+        assertEquals(false, shouldRetryUserStreamReconciliation(false, true, false, 0L, 10_000L))
+        assertEquals(false, shouldRetryUserStreamReconciliation(true, false, false, 0L, 10_000L))
+        assertEquals(false, shouldRetryUserStreamReconciliation(true, true, true, 0L, 10_000L))
+        assertEquals(false, shouldRetryUserStreamReconciliation(true, true, false, 5_000L, 14_999L))
+        assertEquals(true, shouldRetryUserStreamReconciliation(true, true, false, 5_000L, 15_000L))
+        assertEquals(false, shouldRetryUserStreamReconciliation(true, true, false, 15_000L, 14_000L))
+    }
+
     @Test fun websocket_reconnects_when_silent_or_handshake_stalls() {
         assertEquals(true, streamNeedsReconnect(true, 10_000L, 1_000L, 55_001L, 45_000L))
         assertEquals(true, streamNeedsReconnect(true, 0L, 10_000L, 55_001L, 45_000L))
