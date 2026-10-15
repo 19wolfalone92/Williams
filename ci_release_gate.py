@@ -414,7 +414,7 @@ def main() -> None:
     must(execution_math, "exactFullMarketCloseQuantity(", "ExecutionMath.kt")
     must(execution_math, "refusing a rounded partial close", "ExecutionMath.kt")
     adapter_source = read("app/src/main/java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
-    must(adapter_source, '"priceProtect" to "FALSE"', "BinanceUsdMFuturesTestnetAdapter.kt")
+    must(adapter_source, '"priceProtect" to "false"', "BinanceUsdMFuturesTestnetAdapter.kt")
     must(adapter_source, '"closePosition" to "true"', "BinanceUsdMFuturesTestnetAdapter.kt")
     must(runtime_source, "cancelPendingEntriesOutsideWilliamsSession()", "StandaloneRuntime.kt")
     must(runtime_source, "OUTSIDE_WILLIAMS_ENTRY_SESSION", "StandaloneRuntime.kt")
