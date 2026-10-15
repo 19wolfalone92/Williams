@@ -119,6 +119,98 @@ object TradeJournal {
         write(prefs, all)
     }
 
+    /**
+     * Idempotently write a completed native USD-M Futures campaign reconstructed from
+     * authenticated exchange trade fills. A trade with unconvertible commissions is
+     * retained but marked incomplete and excluded from aggregate net-PnL statistics.
+     */
+    @Synchronized
+    fun recordExchangeCompleted(
+        prefs: SharedPreferences,
+        id: String,
+        symbol: String,
+        direction: String,
+        entryPrice: Double,
+        exitPrice: Double,
+        qty: Double,
+        grossPnlUsdt: Double,
+        feeUsdt: Double,
+        feeKnown: Boolean,
+        initialRiskUsdt: Double,
+        openedAtMs: Long,
+        closedAtMs: Long,
+        reason: String,
+        entrySnapshot: JSONObject,
+        entrySlippagePct: Double,
+        fillCount: Int
+    ) {
+        require(id.isNotBlank() && symbol.isNotBlank())
+        require(direction == "LONG" || direction == "SHORT")
+        require(entryPrice.isFinite() && entryPrice > 0.0 &&
+            exitPrice.isFinite() && exitPrice > 0.0 &&
+            qty.isFinite() && qty > 0.0
+        )
+        require(grossPnlUsdt.isFinite() && feeUsdt.isFinite() &&
+            initialRiskUsdt.isFinite() && initialRiskUsdt > 0.0
+        )
+        require(openedAtMs > 0L && closedAtMs >= openedAtMs)
+        val notional = entryPrice * qty
+        val netPnl = grossPnlUsdt - feeUsdt
+        val complete = feeKnown && netPnl.isFinite()
+        val rMultiple = netPnl / initialRiskUsdt
+        val outcome = if (!complete) "UNKNOWN_FEES" else when {
+            netPnl > 0.0 -> "WIN"
+            netPnl < 0.0 -> "LOSS"
+            else -> "BREAKEVEN"
+        }
+        val row = JSONObject()
+            .put("id", id)
+            .put("symbol", symbol)
+            .put("side", if (direction == "LONG") "BUY" else "SELL")
+            .put("direction", direction)
+            .put("status", "CLOSED")
+            .put("opened_at", openedAtMs)
+            .put("closed_at", closedAtMs)
+            .put("entry_price", entryPrice)
+            .put("exit_price", exitPrice)
+            .put("qty", qty)
+            .put("notional_usdt", notional)
+            .put("gross_pnl_usdt", grossPnlUsdt)
+            .put("fee_usdt", feeUsdt)
+            .put("fee_known", feeKnown)
+            .put("pnl", netPnl)
+            .put("net_pnl_usdt", netPnl)
+            .put("pnl_complete", complete)
+            .put("pnl_basis", if (complete) "EXCHANGE_REALIZED_PNL_LESS_FEES" else "PARTIAL_FEES_UNKNOWN")
+            .put("pnl_pct", if (notional > 0.0) netPnl / notional else 0.0)
+            .put("initial_risk_usdt", initialRiskUsdt)
+            .put("risk_pct", initialRiskUsdt / entrySnapshot.optDouble("risk_equity_snapshot_usdt", 0.0).takeIf { it > 0.0 })
+            .put("r_multiple", rMultiple)
+            .put("outcome", outcome)
+            .put("exit_reason", reason)
+            .put("entry_reason", entrySnapshot.optString("kind"))
+            .put("entry_snapshot", entrySnapshot)
+            .put("strategy_version", BuildConfig.VERSION_NAME)
+            .put("trade_audit_source", "BINANCE_USDM_USER_TRADES")
+            .put("entry_slippage_pct", entrySlippagePct)
+            .put("fill_count", fillCount)
+            .put("classification", if (complete) "exchange_reconciled" else "fees_incomplete")
+            .put("post_trade_classification", if (complete) "exchange_reconciled" else "fees_incomplete")
+        val all = read(prefs)
+        var replaced = false
+        for (i in 0 until all.length()) {
+            val old = all.optJSONObject(i) ?: continue
+            if (old.optString("id") == id) {
+                all.put(i, row)
+                replaced = true
+                break
+            }
+        }
+        if (!replaced) all.put(row)
+        trim(all)
+        write(prefs, all)
+    }
+
     @Synchronized
     fun trades(prefs: SharedPreferences): JSONArray {
         val src = read(prefs)
@@ -135,15 +227,22 @@ object TradeJournal {
         var losses = 0
         var pnl = 0.0
         var r = 0.0
+        var pnlComplete = 0
+        var pnlIncomplete = 0
         for (i in 0 until rows.length()) {
             val x = rows.getJSONObject(i)
             if (x.optString("status") != "CLOSED") continue
             closed++
-            pnl += x.optDouble("pnl", 0.0)
-            r += x.optDouble("r_multiple", 0.0)
-            when (x.optString("outcome")) {
-                "WIN" -> wins++
-                "LOSS" -> losses++
+            if (x.optBoolean("pnl_complete", true)) {
+                pnl += x.optDouble("pnl", 0.0)
+                r += x.optDouble("r_multiple", 0.0)
+                pnlComplete++
+                when (x.optString("outcome")) {
+                    "WIN" -> wins++
+                    "LOSS" -> losses++
+                }
+            } else {
+                pnlIncomplete++
             }
         }
         return JSONObject()
@@ -152,9 +251,11 @@ object TradeJournal {
             .put("closed", closed)
             .put("wins", wins)
             .put("losses", losses)
-            .put("win_rate", if (closed > 0) wins.toDouble()/closed else 0.0)
+            .put("win_rate", if (pnlComplete > 0) wins.toDouble()/pnlComplete else 0.0)
             .put("pnl", pnl)
             .put("sum_r", r)
+            .put("pnl_complete_trades", pnlComplete)
+            .put("pnl_incomplete_trades", pnlIncomplete)
     }
 
     private fun classify(row: JSONObject, pnl: Double, reason: String): String {
