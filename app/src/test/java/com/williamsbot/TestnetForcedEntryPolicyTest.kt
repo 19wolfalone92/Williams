@@ -9,12 +9,34 @@ import org.junit.Test
 
 class TestnetForcedEntryPolicyTest {
     @Test
-    fun baseline_reconstruction_excludes_transfers_but_counts_trading_pnl() {
+    fun baseline_reconstruction_subtracts_all_income_but_daily_trading_pnl_excludes_capital_flow() {
         val income = JSONArray()
             .put(JSONObject().put("incomeType", "REALIZED_PNL").put("income", "50.0").put("time", 1792000000000L))
             .put(JSONObject().put("incomeType", "COMMISSION").put("income", "-5.0").put("time", 1792000001000L))
             .put(JSONObject().put("incomeType", "TRANSFER").put("income", "100.0").put("time", 1792000002000L))
-        assertEquals(5075.0, reconstructFuturesDailyRiskBaseline(5100.0, -20.0, income)!!, 1e-9)
+
+        val summary = summarizeFuturesDailyIncome(income)!!
+        assertEquals(145.0, summary.totalIncomeUsdt, 1e-9)
+        assertEquals(45.0, summary.tradingIncomeUsdt, 1e-9)
+        assertEquals(100.0, summary.capitalFlowUsdt, 1e-9)
+        assertEquals(true, summary.hasTradingActivity)
+
+        // Current equity = opening equity 4975 + trading PnL 45 + transfer 100
+        // + current unrealized PnL (-20) = 5100. Reconstructed opening equity
+        // must not treat the external transfer as trading performance.
+        assertEquals(4975.0, reconstructFuturesDailyRiskBaseline(5100.0, -20.0, income)!!, 1e-9)
+        val dailyTradingPnl = summary.tradingIncomeUsdt - 20.0
+        assertEquals(25.0, dailyTradingPnl, 1e-9)
+    }
+
+    @Test
+    fun daily_income_summary_rejects_truncated_or_malformed_ledger() {
+        val fullPage = JSONArray()
+        repeat(1000) {
+            fullPage.put(JSONObject().put("incomeType", "COMMISSION").put("income", "-0.01").put("time", 1792000000000L))
+        }
+        assertNull(summarizeFuturesDailyIncome(fullPage))
+        assertNull(summarizeFuturesDailyIncome(JSONArray().put(JSONObject().put("incomeType", "TRANSFER"))))
     }
 
     @Test
