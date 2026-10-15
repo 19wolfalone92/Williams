@@ -359,12 +359,12 @@ def test_android_exit_requires_exchange_position_protection_and_filled_order_con
     # Explicit operator exits are a risk-reducing escape hatch when the
     # campaign journal or stop metadata was lost. They still require exchange
     # position, direction, exact quantity, order-FILLED and flat confirmation.
-    assert 'val manualExit = reason == "MANUAL_EXIT"' in coordinator
+    assert 'val manualExit = reason == "MANUAL_EXIT" || reason == "KILL_SWITCH"' in coordinator
     assert 'if (managedEntry == null && !manualExit)' in coordinator
     assert 'if (!manualExit)' in coordinator
     assert 'managedEntry?.put("campaign_status", "CLOSED_OR_STOPPED")' in coordinator
     assert 'exitIntent.put("exchange_status", "EXIT_CONFIRMED")' in coordinator
-    assert 'allowReconcileRequired = true' in _read(ANDROID / "StandaloneRuntime.kt")
+    assert 'allowReconcileRequired = true' in _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     assert 'isOwnedClientOrderForSymbol(symbol, clientId, activeProtectionClientIdsBySymbol)' in coordinator
 
 
