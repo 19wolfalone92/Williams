@@ -400,7 +400,10 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             "triggerPrice" to stop.stripTrailingZeros().toPlainString(),
             "closePosition" to "true",
             "workingType" to "MARK_PRICE",
-            "priceProtect" to "TRUE",
+            // A protective stop must not be suppressed merely because MARK_PRICE
+            // and CONTRACT_PRICE diverge during volatility. Trigger directly on the
+            // chosen MARK_PRICE basis; priceProtect=true can delay the loss exit.
+            "priceProtect" to "FALSE",
             "clientAlgoId" to clientOrderId
         )
         return JSONObject(requestRaw("POST", "/fapi/v1/algoOrder", params, signed = true))
