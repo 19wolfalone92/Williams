@@ -76,6 +76,77 @@ internal fun isOwnedClientOrderForSymbol(
 ): Boolean = clientId.isNotBlank() &&
     ownerIdsBySymbol[symbol.uppercase(Locale.US)]?.contains(clientId) == true
 
+/**
+ * Validate entry quantity and prices against the live USD-M exchangeInfo filters.
+ * Returns a blocker message; null means every required filter was present and passed.
+ * Missing/malformed filters fail closed instead of sending a guessed quantity.
+ */
+internal fun futuresContractRuleBlocker(
+    exchangeInfo: JSONObject,
+    symbol: String,
+    quantity: String,
+    entryPrice: String,
+    protectiveStop: String
+): String? {
+    val symbols = exchangeInfo.optJSONArray("symbols")
+        ?: return "Binance exchangeInfo has no symbols array"
+    val contract = (0 until symbols.length()).mapNotNull { symbols.optJSONObject(it) }
+        .firstOrNull { it.optString("symbol").equals(symbol, ignoreCase = true) }
+        ?: return "$symbol is missing from Binance USD-M exchangeInfo"
+    if (!contract.optString("status").equals("TRADING", ignoreCase = true)) {
+        return "$symbol is not TRADING on Binance USD-M"
+    }
+    val filters = contract.optJSONArray("filters")
+        ?: return "$symbol exchangeInfo has no filters"
+    fun filter(type: String): JSONObject? =
+        (0 until filters.length()).mapNotNull { filters.optJSONObject(it) }
+            .firstOrNull { it.optString("filterType") == type }
+    val lot = filter("LOT_SIZE")
+        ?: return "$symbol is missing LOT_SIZE filter"
+    val priceFilter = filter("PRICE_FILTER")
+        ?: return "$symbol is missing PRICE_FILTER"
+    val qty = quantity.toBigDecimalOrNull()
+        ?: return "$symbol quantity is not numeric"
+    val entry = entryPrice.toBigDecimalOrNull()
+        ?: return "$symbol entry price is not numeric"
+    val stop = protectiveStop.toBigDecimalOrNull()
+        ?: return "$symbol protective stop is not numeric"
+    val minQty = lot.optString("minQty").toBigDecimalOrNull()
+        ?: return "$symbol LOT_SIZE minQty is invalid"
+    val maxQty = lot.optString("maxQty").toBigDecimalOrNull()
+        ?: return "$symbol LOT_SIZE maxQty is invalid"
+    val step = lot.optString("stepSize").toBigDecimalOrNull()
+        ?: return "$symbol LOT_SIZE stepSize is invalid"
+    if (qty.signum() <= 0 || minQty.signum() <= 0 || maxQty < minQty || step.signum() <= 0) {
+        return "$symbol LOT_SIZE limits or requested quantity are invalid"
+    }
+    if (qty < minQty || qty > maxQty || qty.remainder(step).signum() != 0) {
+        return "$symbol quantity violates LOT_SIZE min/max/stepSize"
+    }
+    val tick = priceFilter.optString("tickSize").toBigDecimalOrNull()
+        ?: return "$symbol PRICE_FILTER tickSize is invalid"
+    val minPrice = priceFilter.optString("minPrice").toBigDecimalOrNull()
+        ?: return "$symbol PRICE_FILTER minPrice is invalid"
+    val maxPrice = priceFilter.optString("maxPrice").toBigDecimalOrNull()
+        ?: return "$symbol PRICE_FILTER maxPrice is invalid"
+    if (tick.signum() <= 0 || entry < minPrice || entry > maxPrice || stop < minPrice || stop > maxPrice ||
+        entry.remainder(tick).signum() != 0 || stop.remainder(tick).signum() != 0
+    ) {
+        return "$symbol entry/stop price violates PRICE_FILTER tickSize/range"
+    }
+    val minNotionalFilter = filter("MIN_NOTIONAL") ?: filter("NOTIONAL")
+    if (minNotionalFilter != null) {
+        val rawMinimum = minNotionalFilter.optString("notional")
+            .ifBlank { minNotionalFilter.optString("minNotional") }
+        val minimum = rawMinimum.toBigDecimalOrNull()
+            ?: return "$symbol minimum notional filter is invalid"
+        if (qty.multiply(entry) < minimum) {
+            return "$symbol entry notional is below exchange minimum"
+        }
+    }
+    return null
+}
+
 internal fun hasValidStructuralStop(direction: String, entryPrice: String, stopPrice: String): Boolean {
     val entry = entryPrice.toBigDecimalOrNull() ?: return false
     val stop = stopPrice.toBigDecimalOrNull() ?: return false
@@ -987,6 +1058,16 @@ internal class NativeFuturesCampaignCoordinator(
         // Also inspect exchange authority before writing an entry intent. Any live
         // position (including manual/unmanaged exposure) blocks a fresh campaign.
         val preflightAdapter = adapterFactory()
+        val contractBlocker = futuresContractRuleBlocker(
+            preflightAdapter.exchangeInfo(),
+            plan.symbol,
+            plan.quantity,
+            plan.entryPrice,
+            plan.protectiveStop
+        )
+        check(contractBlocker == null) {
+            contractBlocker ?: "Binance USD-M contract rules rejected the entry plan"
+        }
         val livePositions = preflightAdapter.positions()
         check((0 until livePositions.length()).none { i ->
             val row = livePositions.optJSONObject(i)
