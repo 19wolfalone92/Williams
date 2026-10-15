@@ -5264,6 +5264,37 @@ private class NativeEngine(
             symbol = symbol,
             purpose = "WILLIAMS_PENDING_ENTRY"
         ) {
+            // Revalidate the H1 scenario at the last possible point before mutation.
+            // A queued/stale candidate must never survive a slow scan or a door wait.
+            val submitNow = futuresMarketData.exchangeNowMs()
+            require(isSignalFresh(signal.signalBarTimeMs, submitNow, 5L * 60L * 60L * 1000L)) {
+                "STALE_H1_SCENARIO: signal expired before Futures submission"
+            }
+            val submitM15 = fetchCandles(symbol, "15m", 120)
+                .filter { it.t > 0L && it.t + m15BarMs <= submitNow }
+            require(submitM15.size >= 45) {
+                "M15_CONFIRMATION_BLOCKED: closed M15 history unavailable at submission"
+            }
+            val submitM15Last = submitM15.last()
+            require(submitNow - (submitM15Last.t + m15BarMs) <= 30L * 60L * 1000L) {
+                "M15_CONFIRMATION_BLOCKED: latest closed M15 candle is stale"
+            }
+            val submitM15Line = alligator(submitM15, submitM15.lastIndex)
+            val submitM15Ao = ao(submitM15, submitM15.lastIndex)
+            val submitM15Bull = submitM15Line.lips > submitM15Line.teeth &&
+                submitM15Line.teeth > submitM15Line.jaw &&
+                submitM15.last().c > submitM15Line.lips && submitM15Ao > 0.0
+            val submitM15Bear = submitM15Line.lips < submitM15Line.teeth &&
+                submitM15Line.teeth < submitM15Line.jaw &&
+                submitM15.last().c < submitM15Line.lips && submitM15Ao < 0.0
+            require(
+                when (direction) {
+                    NativeFuturesCampaignCoordinator.Direction.LONG -> submitM15Bull
+                    NativeFuturesCampaignCoordinator.Direction.SHORT -> submitM15Bear
+                }
+            ) {
+                "M15_CONFIRMATION_BLOCKED: direction no longer confirmed at submission"
+            }
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
         lastOrder = result
