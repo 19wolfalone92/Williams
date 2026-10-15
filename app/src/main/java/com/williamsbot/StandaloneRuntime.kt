@@ -1472,23 +1472,28 @@ private class NativeEngine(
 
     @Synchronized
     fun start(): JSONObject {
-        if (killLatched) error("KILL_SWITCH_LATCHED: reset only after exchange reconciliation")
         require(key().isNotBlank() && secret().isNotBlank()) {
             "Configure Binance USD-M Futures Testnet credentials first"
         }
         if (running) return JSONObject().put("started", false).put("reason", "already_running")
 
-        // A thrown/empty REST reconciliation must transition to a durable blocked
-        // state just like an explicit exchange "not ready" response. Do not leave
-        // stale READY_FLAT status or an old auto_run flag after startup failure.
+        // Reconciliation is allowed to run under a persisted kill latch because it
+        // only queries exchange state and performs explicitly owned protection cleanup.
+        // A failed reconciliation must block entries, not prevent read-only market
+        // streams and history from starting; otherwise the operator cannot diagnose or
+        // repair the state that caused the latch.
+        var startupBlocker: String? = null
         val reconciliationAttempt = runCatching {
-            reconcileFuturesThroughDoor("STARTUP_RECONCILIATION", allowStopped = true)
+            reconcileFuturesThroughDoor(
+                "STARTUP_RECONCILIATION",
+                allowStopped = true,
+                allowKillLatched = true
+            )
         }
         val reconciliation = reconciliationAttempt.getOrNull()
         if (reconciliation == null || !reconciliation.optBoolean("ok", false)) {
             reconcileRequired = true
             val persisted = persistSafetyFlag("reconcile_required", true)
-            prefs.edit().putBoolean("auto_run", false).commit()
             val failure = when {
                 reconciliationAttempt.isFailure -> reconciliationAttempt.exceptionOrNull()?.message
                     ?: reconciliationAttempt.exceptionOrNull()?.javaClass?.simpleName
@@ -1497,83 +1502,89 @@ private class NativeEngine(
                     .ifBlank { "Futures reconciliation failed" }
                 else -> "Futures reconciliation returned no result"
             }
-            lastError = if (persisted) failure else
-                "$failure; additionally failed to persist reconciliation safety latch"
+            startupBlocker = if (persisted) failure
+                else "$failure; additionally failed to persist reconciliation safety latch"
+            lastError = startupBlocker
             scannerState = "BLOCKED_FUTURES_RECONCILIATION"
-            scannerError = lastError
-            stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: failure)
-            val reconciliationResult = reconciliation ?: JSONObject()
-                .put("ok", false).put("blocker", lastError ?: failure)
-            return JSONObject().put("started", false).put("state", "RECONCILE_REQUIRED")
-                .put("execution_enabled", false).put("blocker", lastError ?: failure)
-                .put("futures_reconciliation", reconciliationResult)
-        }
-
-        if (!persistSafetyFlag("reconcile_required", false)) {
-            prefs.edit().putBoolean("auto_run", false).commit()
+            scannerError = startupBlocker
+            stateMachine.force(
+                if (killLatched) TradingState.KILL_SWITCH_LATCHED else TradingState.RECONCILE_REQUIRED,
+                startupBlocker ?: failure
+            )
+        } else if (!persistSafetyFlag("reconcile_required", false)) {
             reconcileRequired = true
             val blocker = "SQLite could not persist the cleared reconciliation latch"
+            startupBlocker = blocker
             lastError = blocker
-            stateMachine.force(TradingState.RECONCILE_REQUIRED, blocker)
-            return JSONObject().put("started", false)
-                .put("state", "RECONCILE_REQUIRED")
-                .put("execution_enabled", false)
-                .put("blocker", blocker)
+            scannerState = "BLOCKED_FUTURES_RECONCILIATION"
+            scannerError = blocker
+            stateMachine.force(
+                if (killLatched) TradingState.KILL_SWITCH_LATCHED else TradingState.RECONCILE_REQUIRED,
+                blocker
+            )
+        } else {
+            reconcileRequired = false
         }
-        reconcileRequired = false
-        // Do not persist auto-run until the authenticated Futures account payload
-        // has passed schema/balance validation. Previously this flag could remain
-        // true even though START threw before running=true, producing a dead runtime
-        // that appeared enabled after service recreation.
-        val account = try {
-            futuresCampaignCoordinator.accountSnapshot()
+
+        // Account failure also blocks execution, but must not strand local history
+        // warmup or market streams. Keep the runtime in safe-monitoring mode so the
+        // cockpit can display the actual REST/account error and recovery can retry.
+        try {
+            val account = futuresCampaignCoordinator.accountSnapshot()
+            if (!updateCachedFuturesAccount(account)) {
+                restAccountReady = false
+                val reason = restAccountLastError
+                    ?: "Futures account balance/equity fields failed validation"
+                startupBlocker = startupBlocker ?: reason
+                scannerState = "BLOCKED_ACCOUNT"
+                scannerError = reason
+                lastError = reason
+            }
         } catch (x: Exception) {
-            prefs.edit().putBoolean("auto_run", false).commit()
             restAccountReady = false
             restAccountLastError = x.message ?: x.javaClass.simpleName
+            val reason = "Futures account request failed before Runtime start: $restAccountLastError"
+            startupBlocker = startupBlocker ?: reason
             scannerState = "BLOCKED_ACCOUNT"
-            scannerError = "Futures account request failed before runtime start: " + restAccountLastError
-            lastError = scannerError
-            stateMachine.force(TradingState.STOPPED, lastError ?: "Futures account request failed")
-            throw IllegalStateException(
-                "Futures Testnet account request failed before Runtime start: " +
-                    (x.message ?: x.javaClass.simpleName),
-                x
-            )
+            scannerError = reason
+            lastError = reason
         }
-        if (!updateCachedFuturesAccount(account)) {
-            prefs.edit().putBoolean("auto_run", false).commit()
-            scannerState = "BLOCKED_ACCOUNT"
-            scannerError = restAccountLastError
-                ?: "Futures account balance/equity fields failed validation"
-            lastError = scannerError
-            stateMachine.force(TradingState.STOPPED, lastError ?: "Futures account validation failed")
-            throw IllegalStateException(
-                "Futures Testnet account returned invalid or incomplete equity/balance values: " +
-                    (scannerError ?: "unknown account validation error")
-            )
-        }
+
+        // Explicit START persists the user's request to keep local monitoring alive.
+        // The independent kill/reconciliation/account gates remain authoritative and
+        // no failed startup check is interpreted as permission to place an entry.
         if (!prefs.edit().putBoolean("auto_run", true).commit()) {
             prefs.edit().putBoolean("auto_run", false).commit()
-            lastError = "Could not persist the explicit Runtime auto-run preference"
+            val blocker = "Could not persist the explicit Runtime auto-run preference"
+            lastError = blocker
             scannerState = "FAILED"
-            scannerError = lastError
-            stateMachine.force(TradingState.STOPPED, lastError ?: "Runtime preference persistence failed")
-            throw IllegalStateException(lastError ?: "Runtime preference persistence failed")
+            scannerError = blocker
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, blocker)
+            throw IllegalStateException(blocker)
         }
         stateMachine.force(
-            when (futuresCampaignCoordinator.state) {
-                NativeFuturesCampaignCoordinator.State.ENTRY_PENDING -> TradingState.ENTRY_PENDING
-                NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED -> TradingState.PROTECTED
-                NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
-                NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED -> TradingState.RECONCILE_REQUIRED
-                else -> TradingState.READY_FLAT
+            when {
+                killLatched -> TradingState.KILL_SWITCH_LATCHED
+                reconcileRequired -> TradingState.RECONCILE_REQUIRED
+                else -> when (futuresCampaignCoordinator.state) {
+                    NativeFuturesCampaignCoordinator.State.ENTRY_PENDING -> TradingState.ENTRY_PENDING
+                    NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED -> TradingState.PROTECTED
+                    NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
+                    NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED -> TradingState.RECONCILE_REQUIRED
+                    else -> TradingState.READY_FLAT
+                }
             },
-            "USD-M Futures account reconciled on Android"
+            startupBlocker ?: if (killLatched) {
+                "Kill switch latched; runtime started for safe monitoring only"
+            } else if (reconcileRequired) {
+                "Futures reconciliation unresolved; runtime started for safe monitoring only"
+            } else {
+                "USD-M Futures account reconciliation checked on Android"
+            }
         )
         val generation = ++runtimeGeneration
         running = true
-        paused = false
+        paused = killLatched || reconcileRequired || !restAccountReady
         // The Futures Demo market stream is a live execution prerequisite. REST remains
         // authoritative for recovery and account/position reconciliation.
         marketSocket?.close(1000, "Restart USD-M Futures market stream")
@@ -1627,7 +1638,7 @@ private class NativeEngine(
                                 !marketDataFresh() || !marketWebSocketFresh() ||
                                 !publicWebSocketFresh() || !userStreamConnected ||
                                 userStreamSyncRequired
-                        if (campaignNeedsMonitoring && prerequisitesDegraded && !killLatched) {
+                        if (campaignNeedsMonitoring && (prerequisitesDegraded || killLatched || paused)) {
                             runCatching { manageNativeFuturesPositions() }
                                 .onFailure {
                                     lastError = "Futures degraded-mode position monitor: " +
@@ -1668,8 +1679,17 @@ private class NativeEngine(
             .put("execution_mode", "AUTONOMOUS_ANDROID")
             .put("timeframe", "1h")
             .put("direction_support", JSONArray().put("LONG").put("SHORT"))
-            .put("startup_state", "LOADING_CLOSED_FUTURES_HISTORY")
-            .put("futures_reconciliation", reconciliation)
+            .put(
+                "startup_state",
+                if (killLatched || reconcileRequired || !restAccountReady) {
+                    "SAFE_MONITORING_BLOCKED"
+                } else {
+                    "LOADING_CLOSED_FUTURES_HISTORY"
+                }
+            )
+            .put("startup_blocker", startupBlocker ?: JSONObject.NULL)
+            .put("kill_switch_latched", killLatched)
+            .put("futures_reconciliation", reconciliation ?: JSONObject().put("ok", false).put("blocker", startupBlocker ?: "no result"))
             .put("execution_ready", executionReady())
             .put("execution_blockers", JSONArray(executionBlockers()))
             .put("interval_seconds", 10)
@@ -5023,26 +5043,30 @@ private class NativeEngine(
             return false
         }
         reconcileRequired = false
-        when (futuresCampaignCoordinator.state) {
-            NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED ->
-                stateMachine.force(TradingState.PROTECTED, "Exchange confirms Futures position protected")
-            NativeFuturesCampaignCoordinator.State.ENTRY_PENDING ->
-                stateMachine.force(TradingState.ENTRY_PENDING, "Futures entry intent pending exchange fill")
-            NativeFuturesCampaignCoordinator.State.READY ->
-                stateMachine.force(TradingState.READY_FLAT, "Futures account reconciled and flat")
-            NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
-            NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED -> {
-                reconcileRequired = true
-                persistSafetyFlag("reconcile_required", true)
-                stateMachine.force(TradingState.RECONCILE_REQUIRED, futuresCampaignCoordinator.lastBlocker ?: "Futures protection missing")
-                return false
-            }
-            NativeFuturesCampaignCoordinator.State.EXIT_PENDING,
-            NativeFuturesCampaignCoordinator.State.UNINITIALIZED -> {
-                reconcileRequired = true
-                persistSafetyFlag("reconcile_required", true)
-                stateMachine.force(TradingState.RECONCILE_REQUIRED, "Futures coordinator not in a tradable reconciled state")
-                return false
+        if (killLatched) {
+            stateMachine.force(TradingState.KILL_SWITCH_LATCHED, "Kill switch remains latched; managing exposure without new entries")
+        } else {
+            when (futuresCampaignCoordinator.state) {
+                NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED ->
+                    stateMachine.force(TradingState.PROTECTED, "Exchange confirms Futures position protected")
+                NativeFuturesCampaignCoordinator.State.ENTRY_PENDING ->
+                    stateMachine.force(TradingState.ENTRY_PENDING, "Futures entry intent pending exchange fill")
+                NativeFuturesCampaignCoordinator.State.READY ->
+                    stateMachine.force(TradingState.READY_FLAT, "Futures account reconciled and flat")
+                NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
+                NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED -> {
+                    reconcileRequired = true
+                    persistSafetyFlag("reconcile_required", true)
+                    stateMachine.force(TradingState.RECONCILE_REQUIRED, futuresCampaignCoordinator.lastBlocker ?: "Futures protection missing")
+                    return false
+                }
+                NativeFuturesCampaignCoordinator.State.EXIT_PENDING,
+                NativeFuturesCampaignCoordinator.State.UNINITIALIZED -> {
+                    reconcileRequired = true
+                    persistSafetyFlag("reconcile_required", true)
+                    stateMachine.force(TradingState.RECONCILE_REQUIRED, "Futures coordinator not in a tradable reconciled state")
+                    return false
+                }
             }
         }
         val positions = futuresCampaignCoordinator.positionsSnapshot()
