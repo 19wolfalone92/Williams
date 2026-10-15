@@ -107,6 +107,8 @@ internal fun summarizeFuturesCampaignTrades(
     var feeUsdt = 0.0
     var feeKnown = true
     var fillCount = 0
+    var firstEntryFillTime = Long.MAX_VALUE
+    var lastExitFillTime = 0L
     val baseAsset = symbol.removeSuffix("USDT")
 
     for (i in 0 until userTrades.length()) {
@@ -126,9 +128,11 @@ internal fun summarizeFuturesCampaignTrades(
         if (isEntryFill) {
             entryQty += quantity
             entryQuote += quantity * price
+            firstEntryFillTime = minOf(firstEntryFillTime, time)
         } else {
             exitQty += quantity
             exitQuote += quantity * price
+            lastExitFillTime = maxOf(lastExitFillTime, time)
         }
         grossRealizedPnl += realized
         val commissionAsset = row.optString("commissionAsset")
@@ -142,6 +146,7 @@ internal fun summarizeFuturesCampaignTrades(
     }
 
     if (fillCount == 0 || entryQty <= 0.0 || exitQty <= 0.0 ||
+        firstEntryFillTime == Long.MAX_VALUE || lastExitFillTime < firstEntryFillTime ||
         !entryQty.isFinite() || !exitQty.isFinite() ||
         !entryQuote.isFinite() || !exitQuote.isFinite() ||
         !grossRealizedPnl.isFinite() || !feeUsdt.isFinite()
@@ -171,8 +176,8 @@ internal fun summarizeFuturesCampaignTrades(
         notionalUsdt = notionalUsdt,
         initialRiskUsdt = initialRiskUsdt,
         rMultiple = rMultiple,
-        openedAtMs = openedAtMs,
-        closedAtMs = closedAtMs,
+        openedAtMs = firstEntryFillTime,
+        closedAtMs = lastExitFillTime,
         fillCount = fillCount
     )
 }
