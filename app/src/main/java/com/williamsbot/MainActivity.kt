@@ -221,7 +221,7 @@ data class Status(
     val dailyPnlUsdt: Double = 0.0,
     val tradingMode: String = "ACTIVE",
     val openPositions: Int = 0,
-    val maxOpenPositions: Int = 1,
+    val maxOpenPositions: Int = APPROVED_FUTURES_CHART_SYMBOLS.size,
     val reservedRiskPct: Double = 0.0,
     val maxTotalRiskPct: Double = 0.006,
     val reconcileRequired: Boolean = false,
@@ -3575,7 +3575,7 @@ private fun parseStatus(json: JSONObject): Status {
         maxOpenPositions =
             json.optInt(
                 "max_open_positions",
-                1
+                APPROVED_FUTURES_CHART_SYMBOLS.size
             ),
         reservedRiskPct =
             json.optDouble(
