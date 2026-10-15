@@ -841,7 +841,51 @@ internal class NativeFuturesCampaignCoordinator(
                         val protectionStatus = matchingIntent.optString("protection_status", "NOT_SUBMITTED")
                             .uppercase(Locale.US)
                         val protectionId = matchingIntent.optString("protection_client_id")
-                        if (protectionStatus.isBlank() || protectionStatus == "NOT_SUBMITTED") {
+                        if (protectionId.isNotBlank() &&
+                            protectionStatus in setOf("PROTECTED", "SUBMISSION_UNKNOWN")
+                        ) {
+                            // The trigger may exist on Binance even when the local
+                            // structural-price field was lost. Adopt it only by the
+                            // exact durable client id, correct STOP_MARKET/closePosition
+                            // semantics, matching side, and a fresh protective-side mark.
+                            runCatching { adapter.queryAlgoOrder(symbol, protectionId) }
+                            liveMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                            val exchangeProtection = (0 until algos.length()).mapNotNull { j ->
+                                algos.optJSONObject(j)
+                            }.firstOrNull { row ->
+                                row.optString("clientAlgoId") == protectionId &&
+                                    isProtectiveStop(row, direction)
+                            }
+                            val exchangeStop = exchangeProtection?.optString("triggerPrice")
+                                ?.takeIf { it.isNotBlank() }
+                                ?: exchangeProtection?.optString("stopPrice")
+                                    ?.takeIf { it.isNotBlank() }
+                            val stopValue = exchangeStop?.toDoubleOrNull()
+                            if (exchangeProtection == null || stopValue == null ||
+                                liveMark == null ||
+                                !isProtectiveStopOnCorrectSide(direction, liveMark.toString(), stopValue.toString())
+                            ) {
+                                anyUnprotected = true
+                                lastBlocker = "$symbol stop journal is missing and the exact persisted protection id is not confirmed as a live protective Futures stop; no replacement submitted"
+                                matchingIntent.put("protection_status", "SUBMISSION_UNKNOWN")
+                                saveIntents(persisted)
+                                continue
+                            }
+                            val account = runCatching { parseFuturesAccountSnapshot(adapter.account()) }.getOrNull()
+                            val riskPct = account?.let {
+                                kotlin.math.abs(exchangeEntry - stopValue) * kotlin.math.abs(amount) / it.equityUsdt
+                            }?.takeIf { it.isFinite() && it > 0.0 }
+                            matchingIntent
+                                .put("protective_stop", stopValue.toString())
+                                .put("protection_status", "PROTECTED")
+                                .put("protection_recovered_from_exchange_at_ms", System.currentTimeMillis())
+                            if (riskPct != null) {
+                                val priorRisk = matchingIntent.optDouble("risk_pct", 0.0)
+                                    .takeIf { it.isFinite() && it > 0.0 } ?: 0.0
+                                matchingIntent.put("risk_pct", maxOf(priorRisk, riskPct))
+                            }
+                            saveIntents(persisted)
+                        } else if (protectionStatus.isBlank() || protectionStatus == "NOT_SUBMITTED") {
                             if (protectionId.isNotBlank()) {
                                 anyUnprotected = true
                                 lastBlocker = "$symbol stop price is missing but a protection client id is already journaled; ambiguous mutation will not be repeated"
