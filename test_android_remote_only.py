@@ -172,6 +172,29 @@ def test_android_reversal_htf_gate_matches_python_campaign_contract():
     assert "return signal_type != SignalType.REVERSAL" in python
 
 
+def test_android_manual_direction_override_is_demo_only_and_keeps_execution_safety_gates():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+
+    assert 'path == "/api/v1/control/testnet-force-mode"' in runtime
+    assert 'path == "/api/v1/control/testnet-force-entry"' in runtime
+    assert 'require(baseUrl == "https://demo-fapi.binance.com")' in runtime
+    assert "require(executionGate.tryReserve(FUTURES_EXECUTION_DOOR_KEY))" in runtime
+    assert "executionGate.release(FUTURES_EXECUTION_DOOR_KEY)" in runtime
+    assert "Futures positions/orders/protection must be reconciled" in runtime
+    assert "checkFuturesDailyLoss()" in runtime
+    assert "TESTNET_FORCE_MODE_ACTIVE: automatic entries suspended" in runtime
+    assert "FUTURES_ENTRY_SPREAD_BLOCKED" in runtime
+    assert "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED" in runtime
+    assert 'NativeFuturesCampaignCoordinator.Direction.LONG' in runtime
+    assert 'NativeFuturesCampaignCoordinator.Direction.SHORT' in runtime
+    assert "private fun TestnetForceTradingCard(" in ui
+    assert 'mutableStateOf("SHORT")' in ui
+    assert 'put("direction", direction)' in ui
+    assert 'put("acknowledge", true)' in ui
+    assert "protectiveStop = fmtPrice(stop, rules.tick)" in runtime
+
+
 def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
 
