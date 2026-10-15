@@ -35,6 +35,9 @@ class TestnetForcedEntryPolicyTest {
         repeat(1000) {
             fullPage.put(JSONObject().put("incomeType", "COMMISSION").put("income", "-0.01").put("time", 1792000000000L))
         }
+        // The production/default call path must reject a full Binance page too;
+        // otherwise the daily loss baseline could be reconstructed from truncated PnL.
+        assertNull(summarizeFuturesDailyIncome(fullPage))
         assertNull(summarizeFuturesDailyIncome(fullPage, maximumRows = 1000))
         assertNull(summarizeFuturesDailyIncome(JSONArray().put(JSONObject().put("incomeType", "TRANSFER"))))
     }
