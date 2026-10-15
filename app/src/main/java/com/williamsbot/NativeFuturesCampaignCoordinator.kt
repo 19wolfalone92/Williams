@@ -200,6 +200,49 @@ internal fun isEntryCampaignReserved(intent: JSONObject): Boolean {
     return campaignLifecycleStatus(intent) !in TERMINAL_CAMPAIGN_STATUSES
 }
 
+
+/**
+ * Count occupied account-wide slots without double-counting an exchange position
+ * and its corresponding persisted campaign. Unknown non-terminal ENTRY intents
+ * reserve a slot until reconciliation proves the campaign terminal.
+ */
+internal fun reservedFuturesPositionSymbols(
+    openPositionSymbols: Iterable<String>,
+    intents: JSONArray
+): Set<String> {
+    val occupied = linkedSetOf<String>()
+    openPositionSymbols.forEach { symbol ->
+        symbol.trim().takeIf { it.isNotEmpty() }?.let { occupied += it.uppercase(Locale.US) }
+    }
+    for (i in 0 until intents.length()) {
+        val intent = intents.optJSONObject(i)
+            ?: throw IllegalStateException("Persisted Futures intent is malformed")
+        if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
+        if (!isEntryCampaignReserved(intent)) continue
+        intent.optString("symbol").trim().takeIf { it.isNotEmpty() }
+            ?.let { occupied += it.uppercase(Locale.US) }
+    }
+    return occupied
+}
+
+/** Null means this symbol may claim a slot; every uncertain campaign blocks admission. */
+internal fun futuresPositionSlotBlocker(
+    symbol: String,
+    openPositionSymbols: Iterable<String>,
+    intents: JSONArray,
+    maxPositions: Int
+): String? {
+    if (maxPositions <= 0) return "Maximum concurrent Futures positions is not configured"
+    val normalized = symbol.trim().uppercase(Locale.US)
+    if (normalized.isEmpty()) return "Futures symbol is blank"
+    val occupied = reservedFuturesPositionSymbols(openPositionSymbols, intents)
+    if (normalized in occupied) return "$normalized already has an open or unresolved campaign"
+    if (occupied.size >= maxPositions) {
+        return "Maximum concurrent Futures campaigns reached ($maxPositions)"
+    }
+    return null
+}
+
 /** Avoid retiring a filled entry while the exchange is still converging on position state. */
 internal fun shouldFinalizeFilledFlatCampaign(
     lifecycleStatus: String,
