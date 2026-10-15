@@ -5304,29 +5304,19 @@ private class NativeEngine(
         }
         if (!contextAllowed) return
 
-        // Mandatory M15 execution confirmation for every initial H1 scenario.
-        // Only fully closed M15 candles are eligible; missing/stale history blocks entry.
+        // M15 is execution/fill monitoring only. It must not invent a second
+        // directional signal or veto a causally valid H1 Williams decision.
+        // Closed/fresh M15 data is still required for execution monitoring.
         val m15BarMs = frameSeconds("15m") * 1000L
         val m15 = fetchCandles(symbol, "15m", 120)
             .filter { it.t > 0L && it.t + m15BarMs <= contextNow }
         if (m15.size < 45) {
-            lastError = "M15_CONFIRMATION_BLOCKED: insufficient closed M15 history for $symbol"
+            lastError = "M15_EXECUTION_BLOCKED: insufficient closed M15 history for $symbol"
             return
         }
-        val m15Line = alligator(m15, m15.lastIndex)
-        val m15Ao = ao(m15, m15.lastIndex)
-        val m15Bull = m15Line.lips > m15Line.teeth &&
-            m15Line.teeth > m15Line.jaw &&
-            m15.last().c > m15Line.lips && m15Ao > 0.0
-        val m15Bear = m15Line.lips < m15Line.teeth &&
-            m15Line.teeth < m15Line.jaw &&
-            m15.last().c < m15Line.lips && m15Ao < 0.0
-        val m15Confirmed = when (direction) {
-            NativeFuturesCampaignCoordinator.Direction.LONG -> m15Bull
-            NativeFuturesCampaignCoordinator.Direction.SHORT -> m15Bear
-        }
-        if (!m15Confirmed) {
-            lastError = "M15_CONFIRMATION_BLOCKED: closed M15 structure does not confirm $direction for $symbol"
+        val lastClosedM15At = m15.last().t + m15BarMs
+        if (contextNow - lastClosedM15At > 30L * 60L * 1000L) {
+            lastError = "M15_EXECUTION_BLOCKED: latest closed M15 candle is stale for $symbol"
             return
         }
 
@@ -5428,29 +5418,14 @@ private class NativeEngine(
             val submitM15 = fetchCandles(symbol, "15m", 120)
                 .filter { it.t > 0L && it.t + m15BarMs <= submitNow }
             require(submitM15.size >= 45) {
-                "M15_CONFIRMATION_BLOCKED: closed M15 history unavailable at submission"
+                "M15_EXECUTION_BLOCKED: closed M15 history unavailable at submission"
             }
             val submitM15Last = submitM15.last()
             require(submitNow - (submitM15Last.t + m15BarMs) <= 30L * 60L * 1000L) {
-                "M15_CONFIRMATION_BLOCKED: latest closed M15 candle is stale"
+                "M15_EXECUTION_BLOCKED: latest closed M15 candle is stale at submission"
             }
-            val submitM15Line = alligator(submitM15, submitM15.lastIndex)
-            val submitM15Ao = ao(submitM15, submitM15.lastIndex)
-            val submitM15Bull = submitM15Line.lips > submitM15Line.teeth &&
-                submitM15Line.teeth > submitM15Line.jaw &&
-                submitM15.last().c > submitM15Line.lips && submitM15Ao > 0.0
-            val submitM15Bear = submitM15Line.lips < submitM15Line.teeth &&
-                submitM15Line.teeth < submitM15Line.jaw &&
-                submitM15.last().c < submitM15Line.lips && submitM15Ao < 0.0
-            require(
-                when (direction) {
-                    NativeFuturesCampaignCoordinator.Direction.LONG -> submitM15Bull
-                    NativeFuturesCampaignCoordinator.Direction.SHORT -> submitM15Bear
-                }
-            ) {
-                "M15_CONFIRMATION_BLOCKED: direction no longer confirmed at submission"
-            }
-            futuresCampaignCoordinator.submitPendingEntry(plan)
+            // Revalidate H1 trigger chronology and current Futures mark separately;
+            // M15 contributes only execution readiness, never a new direction.            futuresCampaignCoordinator.submitPendingEntry(plan)
         }
         lastOrder = result
         if (!result.optBoolean("accepted", false)) {
