@@ -28,6 +28,31 @@ internal fun isActiveFuturesProtectionStatus(status: String): Boolean =
     status.trim().uppercase(Locale.US) in setOf("NEW", "WORKING")
 
 
+/** Exact exchange proof required before an open position can be called protected. */
+internal fun matchesConfirmedFuturesProtectiveStop(
+    order: JSONObject,
+    direction: String,
+    expectedClientId: String,
+    expectedStop: String
+): Boolean {
+    if (direction != "LONG" && direction != "SHORT") return false
+    if (expectedClientId.isBlank()) return false
+    val expected = expectedStop.toBigDecimalOrNull() ?: return false
+    val type = order.optString("type", order.optString("orderType")).uppercase(Locale.US)
+    if (type != "STOP_MARKET") return false
+    if (!order.optString("closePosition").equals("true", ignoreCase = true)) return false
+    val side = order.optString("side").uppercase(Locale.US)
+    if (direction == "LONG" && side != "SELL") return false
+    if (direction == "SHORT" && side != "BUY") return false
+    val status = order.optString("algoStatus").ifBlank { order.optString("status") }
+    if (!isActiveFuturesProtectionStatus(status)) return false
+    val clientId = order.optString("clientAlgoId")
+    val actual = order.optString("triggerPrice").ifBlank { order.optString("stopPrice") }
+        .toBigDecimalOrNull() ?: return false
+    return clientId == expectedClientId && actual.compareTo(expected) == 0
+}
+
+
 /**
  * Independent pre-mutation risk assessment. Recomputes the quantity's stop risk
  * at the coordinator boundary instead of trusting the scanner's sizing calculation.
@@ -2362,15 +2387,16 @@ internal class NativeFuturesCampaignCoordinator(
         expectedClientId: String? = null,
         expectedStop: String? = null
     ): JSONObject? {
-        if (expectedClientId.isNullOrBlank()) return null
-        val stop = expectedStop?.toBigDecimalOrNull() ?: return null
-        val candidates = (0 until orders.length()).mapNotNull { orders.optJSONObject(it) }
-            .filter { isProtectiveStop(it, direction) }
-        return candidates.firstOrNull { row ->
-            val trigger = row.optString("triggerPrice").ifBlank { row.optString("stopPrice") }.toBigDecimalOrNull()
-            row.optString("clientAlgoId") == expectedClientId &&
-                trigger != null && trigger.compareTo(stop) == 0
-        }
+        if (expectedClientId.isNullOrBlank() || expectedStop.isNullOrBlank()) return null
+        return (0 until orders.length()).mapNotNull { orders.optJSONObject(it) }
+            .firstOrNull { row ->
+                matchesConfirmedFuturesProtectiveStop(
+                    order = row,
+                    direction = direction,
+                    expectedClientId = expectedClientId,
+                    expectedStop = expectedStop
+                )
+            }
     }
 
     private fun isProtectiveStop(order: JSONObject, direction: String): Boolean {
