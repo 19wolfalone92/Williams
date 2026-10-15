@@ -199,6 +199,15 @@ class TestnetForcedEntryPolicyTest {
     }
 
     @Test
+    fun missing_or_corrupt_reserved_risk_consumes_the_full_portfolio_budget() {
+        assertEquals(0.006, conservativeRiskReservation(Double.NaN, 0.006), 0.0)
+        assertEquals(0.006, conservativeRiskReservation(0.0, 0.006), 0.0)
+        assertEquals(0.006, conservativeRiskReservation(-0.001, 0.006), 0.0)
+        assertEquals(0.006, conservativeRiskReservation(0.02, 0.006), 0.0)
+        assertEquals(0.0025, conservativeRiskReservation(0.0025, 0.006), 0.0)
+    }
+
+    @Test
     fun forced_h1_levels_are_directionally_mirrored_and_structural() {
         val highs = listOf(101.0, 102.0, 104.0, 103.0, 102.0)
         val lows = listOf(99.0, 99.5, 100.0, 98.0, 98.5)
