@@ -811,7 +811,11 @@ def test_android_futures_long_and_short_readiness_uses_h1_signal_not_m5_mtf_gate
     submit = runtime.split("private fun submitNativeFuturesCampaignEntry(", 1)[1].split(
         "private fun performCampaignScan(", 1
     )[0]
-    assert 'signal.type.startsWith("SHORT_", true)' in submit
+    # The production path uses an explicit canonical mapper and fails closed for unknown types.
+    assert 'when (campaignSignalDirection(signal.type))' in submit
+    assert '"LONG" -> NativeFuturesCampaignCoordinator.Direction.LONG' in submit
+    assert '"SHORT" -> NativeFuturesCampaignCoordinator.Direction.SHORT' in submit
+    assert "WILLIAMS_SIGNAL_DIRECTION_UNKNOWN" in submit
     assert "val freshSignals = candidate.campaignSignals.filter" in submit
     assert "directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)" in submit
     assert "neither LONG nor SHORT is allowed by D1/H4" in submit
