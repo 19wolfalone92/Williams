@@ -517,7 +517,7 @@ def test_android_protective_stop_is_not_suppressed_by_price_protect_divergence()
     assert '"type" to "STOP_MARKET"' in protective
     assert '"closePosition" to "true"' in protective
     assert '"workingType" to "MARK_PRICE"' in protective
-    assert '"priceProtect" to "FALSE"' in protective
+    assert '"priceProtect" to "false"' in protective
 
 
 def test_android_protection_must_match_owner_id_exact_trigger_direction_and_active_exchange_status():
