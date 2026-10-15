@@ -1170,6 +1170,7 @@ fun WilliamsApp(context: Context) {
     }
 }
 
+@Composable
 private fun MoreScreen(
     padding: PaddingValues,
     onIncidents: () -> Unit,
