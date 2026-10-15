@@ -3547,8 +3547,8 @@ private class NativeEngine(
             allowReconcileRequired = allowReconcileRequired
         )?.let { error(it) }
 
-        // Campaign policy is account-wide (one active campaign), so distinct symbols
-        // must not obtain concurrent mutation reservations.
+        // Mutations are serialized account-wide through one durable Execution Door.
+        // This serialization does not limit the number of distinct-symbol open campaigns.
         val reservationKey = FUTURES_EXECUTION_DOOR_KEY
         val deadlineNanos = System.nanoTime() +
             TimeUnit.MILLISECONDS.toNanos(waitForDoorMs.coerceAtLeast(0L))
