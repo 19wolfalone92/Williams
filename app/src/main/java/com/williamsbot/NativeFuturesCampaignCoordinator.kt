@@ -23,6 +23,95 @@ private val TERMINAL_CAMPAIGN_STATUSES = setOf("CLOSED_OR_STOPPED")
 private const val FUTURES_MAX_ENTRY_RISK_PCT = 0.0025
 private const val FUTURES_MAX_PORTFOLIO_RISK_PCT = 0.006
 
+
+/**
+ * Independent pre-mutation risk assessment. Recomputes the quantity's stop risk
+ * at the coordinator boundary instead of trusting the scanner's sizing calculation.
+ */
+internal data class FuturesEntryRiskCheck(
+    val blocker: String?,
+    val notionalUsdt: Double = 0.0,
+    val grossStopLossUsdt: Double = 0.0,
+    val estimatedFeesAndSlippageUsdt: Double = 0.0,
+    val estimatedAllInLossUsdt: Double = 0.0,
+    val estimatedAllInRiskPct: Double = 0.0,
+    val initialMarginUsdt: Double = 0.0
+)
+
+internal fun assessFuturesEntryRisk(
+    direction: String,
+    quantity: String,
+    entryPrice: String,
+    protectiveStop: String,
+    equityUsdt: Double,
+    availableUsdt: Double,
+    riskBudgetPct: Double,
+    feeBufferPerSidePct: Double = 0.001,
+    maxSlippagePct: Double = 0.0015,
+    leverage: Double = 2.0,
+    availableMarginBufferPct: Double = 0.95
+): FuturesEntryRiskCheck {
+    fun blocked(reason: String) = FuturesEntryRiskCheck(blocker = reason)
+    if (direction != "LONG" && direction != "SHORT") {
+        return blocked("Futures risk check requires LONG or SHORT direction")
+    }
+    val qty = quantity.toDoubleOrNull()
+    val entry = entryPrice.toDoubleOrNull()
+    val stop = protectiveStop.toDoubleOrNull()
+    if (qty == null || entry == null || stop == null ||
+        !qty.isFinite() || !entry.isFinite() || !stop.isFinite() ||
+        qty <= 0.0 || entry <= 0.0 || stop <= 0.0
+    ) return blocked("Futures risk check received invalid quantity/entry/structural stop")
+    if (if (direction == "LONG") stop >= entry else stop <= entry) {
+        return blocked("$direction structural stop is on the wrong side of entry")
+    }
+    if (!equityUsdt.isFinite() || equityUsdt <= 0.0 ||
+        !availableUsdt.isFinite() || availableUsdt <= 0.0
+    ) return blocked("Fresh Futures equity/available USDT is unknown or non-positive")
+    if (!riskBudgetPct.isFinite() || riskBudgetPct <= 0.0 ||
+        riskBudgetPct > FUTURES_MAX_ENTRY_RISK_PCT
+    ) return blocked("Futures risk reservation exceeds the 0.25% per-entry cap or is invalid")
+    if (!feeBufferPerSidePct.isFinite() || feeBufferPerSidePct < 0.0 ||
+        !maxSlippagePct.isFinite() || maxSlippagePct < 0.0 ||
+        !leverage.isFinite() || leverage <= 0.0 ||
+        !availableMarginBufferPct.isFinite() || availableMarginBufferPct <= 0.0 ||
+        availableMarginBufferPct > 1.0
+    ) return blocked("Futures fee/slippage/margin risk assumptions are invalid")
+
+    val notional = qty * entry
+    val grossStopLoss = qty * kotlin.math.abs(entry - stop)
+    val feesAndSlippage = notional * (2.0 * feeBufferPerSidePct + maxSlippagePct)
+    val allInLoss = grossStopLoss + feesAndSlippage
+    val allInRiskPct = allInLoss / equityUsdt
+    val initialMargin = notional / leverage
+    if (listOf(notional, grossStopLoss, feesAndSlippage, allInLoss, allInRiskPct, initialMargin)
+            .any { !it.isFinite() || it < 0.0 }
+    ) return blocked("Futures risk arithmetic overflowed or became non-finite")
+
+    val assessment = FuturesEntryRiskCheck(
+        blocker = null,
+        notionalUsdt = notional,
+        grossStopLossUsdt = grossStopLoss,
+        estimatedFeesAndSlippageUsdt = feesAndSlippage,
+        estimatedAllInLossUsdt = allInLoss,
+        estimatedAllInRiskPct = allInRiskPct,
+        initialMarginUsdt = initialMargin
+    )
+    if (allInRiskPct > riskBudgetPct + 1e-12) {
+        return assessment.copy(
+            blocker = "FUTURES_RISK_BUDGET_EXCEEDED: estimated stop + fees + slippage " +
+                "is ${allInRiskPct * 100.0}% of equity, above reserved ${riskBudgetPct * 100.0}%"
+        )
+    }
+    if (initialMargin > availableUsdt * availableMarginBufferPct + 1e-9) {
+        return assessment.copy(
+            blocker = "FUTURES_MARGIN_BUDGET_EXCEEDED: estimated initial margin exceeds " +
+                "the buffered available USDT balance"
+        )
+    }
+    return assessment
+}
+
 /** Structural H1 recovery result for a known bot-owned position whose stop journal is missing. */
 internal data class RecoveredStructuralStop(
     val stopPrice: String,
@@ -1422,6 +1511,18 @@ internal class NativeFuturesCampaignCoordinator(
             )
         }
         val preflightAdapter = adapterFactory()
+        val preflightAccount = runCatching {
+            parseFuturesAccountSnapshot(preflightAdapter.account())
+        }.getOrNull() ?: return@synchronized safePreflightRejection(
+            "Fresh authenticated USD-M Futures account snapshot is unavailable; risk cannot be established"
+        )
+        if (!preflightAccount.equityUsdt.isFinite() || preflightAccount.equityUsdt <= 0.0 ||
+            !preflightAccount.availableUsdt.isFinite() || preflightAccount.availableUsdt <= 0.0
+        ) {
+            return@synchronized safePreflightRejection(
+                "Fresh Futures equity and available USDT must both be positive before entry"
+            )
+        }
         val exchangeInfo = preflightAdapter.exchangeInfo()
         val contractBlocker = futuresContractRuleBlocker(
             exchangeInfo,
@@ -1433,6 +1534,23 @@ internal class NativeFuturesCampaignCoordinator(
         )
         if (contractBlocker != null) {
             return@synchronized safePreflightRejection(contractBlocker)
+        }
+
+        // Defense in depth: the coordinator re-calculates the actual plan risk using
+        // quantity/trigger/structural stop and a fresh exchange equity snapshot. The
+        // estimate includes the same 0.10% fee allowance per side and 0.15% slippage
+        // buffer used by the scanner, plus a 5% available-margin reserve.
+        val riskCheck = assessFuturesEntryRisk(
+            direction = plan.direction.name,
+            quantity = plan.quantity,
+            entryPrice = plan.entryPrice,
+            protectiveStop = plan.protectiveStop,
+            equityUsdt = preflightAccount.equityUsdt,
+            availableUsdt = preflightAccount.availableUsdt,
+            riskBudgetPct = plan.riskPct
+        )
+        if (riskCheck.blocker != null) {
+            return@synchronized safePreflightRejection(riskCheck.blocker)
         }
 
         // Distinct approved symbols may hold concurrent campaigns, but each live
@@ -1516,6 +1634,15 @@ internal class NativeFuturesCampaignCoordinator(
             .put("entry_price", plan.entryPrice)
             .put("protective_stop", plan.protectiveStop)
             .put("risk_pct", plan.riskPct)
+            .put("risk_budget_usdt", preflightAccount.equityUsdt * plan.riskPct)
+            .put("risk_equity_snapshot_usdt", preflightAccount.equityUsdt)
+            .put("risk_available_snapshot_usdt", preflightAccount.availableUsdt)
+            .put("risk_gross_stop_loss_usdt", riskCheck.grossStopLossUsdt)
+            .put("risk_fee_slippage_allowance_usdt", riskCheck.estimatedFeesAndSlippageUsdt)
+            .put("risk_estimated_all_in_loss_usdt", riskCheck.estimatedAllInLossUsdt)
+            .put("risk_estimated_all_in_pct", riskCheck.estimatedAllInRiskPct)
+            .put("risk_initial_margin_estimate_usdt", riskCheck.initialMarginUsdt)
+            .put("risk_assessed_at_ms", System.currentTimeMillis())
             .put("client_id", plan.clientId)
             .put("exchange_status", "SUBMISSION_UNKNOWN")
             .put("order_status", "SUBMISSION_UNKNOWN")
@@ -1569,6 +1696,13 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("entry_kind", plan.kind.name)
                 .put("order", result)
                 .put("protection", "PENDING_FILL")
+                .put("risk_estimate", JSONObject()
+                    .put("budget_usdt", preflightAccount.equityUsdt * plan.riskPct)
+                    .put("gross_stop_loss_usdt", riskCheck.grossStopLossUsdt)
+                    .put("fees_slippage_allowance_usdt", riskCheck.estimatedFeesAndSlippageUsdt)
+                    .put("all_in_loss_usdt", riskCheck.estimatedAllInLossUsdt)
+                    .put("all_in_risk_pct", riskCheck.estimatedAllInRiskPct)
+                    .put("initial_margin_usdt", riskCheck.initialMarginUsdt))
         } catch (failure: Exception) {
             intent.put("exchange_status", "SUBMISSION_UNKNOWN")
                 .put("order_status", "SUBMISSION_UNKNOWN")
