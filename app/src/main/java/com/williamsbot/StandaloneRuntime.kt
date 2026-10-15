@@ -5561,10 +5561,23 @@ private class NativeEngine(
             })
         }
         val ranked = mutableListOf<BaseAnalysis>()
-        for (future in futures) {
-            runCatching { future.get(30L, TimeUnit.SECONDS) }.getOrElse {
+        // Bound the whole symbol fan-out, not each Future independently. A per-symbol
+        // 30s timeout multiplied by 10 contracts could leave the cockpit showing
+        // RUNNING for five minutes when one or more REST requests stall.
+        val scanDeadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(60L)
+        for ((index, future) in futures.withIndex()) {
+            val remainingNanos = scanDeadlineNanos - System.nanoTime()
+            if (remainingNanos <= 0L) {
+                futures.drop(index).forEach { it.cancel(true) }
+                scannerError = scannerError ?: "Futures H1 scan exceeded 60s total deadline; remaining symbols were not completed"
+                break
+            }
+            runCatching {
+                future.get(remainingNanos, TimeUnit.NANOSECONDS)
+            }.getOrElse {
                 future.cancel(true)
-                scannerError = scannerError ?: "Futures H1 scanner timeout: " + (it.message ?: it.javaClass.simpleName)
+                scannerError = scannerError ?: "Futures H1 scanner timeout within 60s total deadline: " +
+                    (it.message ?: it.javaClass.simpleName)
                 null
             }?.let { if (it is BaseAnalysis) ranked.add(it) }
         }
