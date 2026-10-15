@@ -1326,12 +1326,19 @@ private fun TestnetForceTradingCard(
                     Text("ВКЛЮЧИТЬ ПРИНУДИТЕЛЬНУЮ ТОРГОВЛЮ")
                 }
                 Text(
-                    if (!status.running) "Сначала запусти Runtime."
-                    else if (status.reconcileRequired || status.executionKillLatched)
-                        "Сначала восстанови состояние биржи; режим не обходит RECONCILE/KILL."
-                    else "После включения ручной выбор стороны будет использовать H1-структуру, даже если AI-гипотеза указывает противоположное направление.",
+                    when {
+                        !status.running -> "Сначала запусти Runtime."
+                        status.reconcileRequired || status.executionKillLatched ->
+                            "Сначала восстанови состояние биржи; режим не обходит RECONCILE/KILL."
+                        !status.p0GatePassed ->
+                            "Входы заблокированы P0: " + status.p0GateReason +
+                                ". Исправь первопричину; ручной режим не обходит защитные блокировки."
+                        else ->
+                            "Ручной выбор стороны использует H1-структуру, даже если AI-гипотеза указывает противоположное направление."
+                    },
                     style = MaterialTheme.typography.bodySmall,
-                    color = AppColors.amber
+                    color = if (!status.p0GatePassed || status.reconcileRequired || status.executionKillLatched)
+                        AppColors.red else AppColors.amber
                 )
             } else {
                 Button(
