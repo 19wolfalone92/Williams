@@ -248,6 +248,32 @@ internal fun runtimeRecoveryContract(
     running == workerAlive &&
         (!autoRunRequested || (running && workerAlive))
 
+/** Diagnostic severity must not call a stopped monitor healthy just because both flags are false. */
+internal fun runtimeLifecycleSeverity(
+    autoRunRequested: Boolean,
+    running: Boolean,
+    workerAlive: Boolean
+): String = when {
+    running && workerAlive -> "PASS"
+    running != workerAlive -> "FAIL"
+    autoRunRequested -> "FAIL"
+    else -> "WARN"
+}
+
+/** History is healthy when ready or actively loading; idle empty history is never a PASS. */
+internal fun historyLifecycleSeverity(
+    autoRunRequested: Boolean,
+    running: Boolean,
+    historyReady: Boolean,
+    warmupRunning: Boolean,
+    activeTasks: Int
+): String = when {
+    historyReady -> "PASS"
+    running && warmupRunning && activeTasks > 0 -> "PASS"
+    autoRunRequested && running -> "FAIL"
+    else -> "WARN"
+}
+
 /** Prefer a live WS quote, then a fresh Futures REST ticker, then the last closed candle. */
 internal fun dashboardPrice(
     livePrice: Double?,
@@ -10002,8 +10028,27 @@ private class NativeEngine(
         test("futures_execution_adapter", "binance", futuresExecutionAdapterReady, "FAIL", "Native USD-M Futures adapter and local coordinator wired; readiness still depends on live exchange reconciliation")
         test("local_runtime_dispatch", "runtime", true, "FAIL", "Cockpit commands dispatch in-process; no remote backend or unauthenticated loopback listener")
         test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(","))
-        test("runtime_lifecycle", "runtime", running == (worker?.isAlive == true), "FAIL", "running=" + running + "; worker_alive=" + (worker?.isAlive == true))
-        test("history_lifecycle", "database", historyReady || historyState in setOf("IDLE","LOADING","WAITING_RETRY","STOPPED"), "FAIL", "state=" + historyState + "; active_tasks=" + activeHistoryTasks.size)
+        val autoRunRequested = prefs.getBoolean("auto_run", false)
+        val workerAlive = worker?.isAlive == true
+        val runtimeSeverity = runtimeLifecycleSeverity(autoRunRequested, running, workerAlive)
+        test(
+            "runtime_lifecycle", "runtime", runtimeSeverity == "PASS", runtimeSeverity,
+            "running=" + running + "; worker_alive=" + workerAlive +
+                "; auto_run_requested=" + autoRunRequested + "; kill_latched=" + killLatched
+        )
+        val historySeverity = historyLifecycleSeverity(
+            autoRunRequested = autoRunRequested,
+            running = running,
+            historyReady = historyReady,
+            warmupRunning = historyWarmupRunning,
+            activeTasks = activeHistoryTasks.size
+        )
+        test(
+            "history_lifecycle", "database", historySeverity == "PASS", historySeverity,
+            "state=" + historyState + "; ready=" + historyReady +
+                "; warmup_running=" + historyWarmupRunning +
+                "; active_tasks=" + activeHistoryTasks.size
+        )
         test("credentials_state", "binance", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
         test("rest_market_data", "binance", restMarketReady, "FAIL", if (restMarketReady) "Ticker REST OK; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market failed: " + (restLastError ?: "pending"))
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT available=" + liveUsdtBalance + "; equity=" + liveFuturesEquity else "Account REST failed: " + (restAccountLastError ?: "pending"))
@@ -10027,8 +10072,6 @@ private class NativeEngine(
         )
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
         test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss=0.03")
-        val autoRunRequested = prefs.getBoolean("auto_run", false)
-        val workerAlive = worker?.isAlive == true
         test(
             "self_heal_contract",
             "runtime",
