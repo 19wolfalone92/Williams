@@ -14,6 +14,23 @@ class FuturesPositionSlotsTest {
             .apply { if (status != null) put("campaign_status", status) }
 
     @Test
+    fun aggregateRiskAllowsSeveralCampaignsOnlyWithinPortfolioCap() {
+        assertNull(futuresPortfolioRiskBlocker(0.002, listOf(0.002, 0.001)))
+        assertEquals(
+            "Aggregate Futures campaign risk would exceed 0.60% equity",
+            futuresPortfolioRiskBlocker(0.002, listOf(0.0025, 0.0025))
+        )
+    }
+
+    @Test
+    fun unknownExistingRiskReservationBlocksAnotherEntry() {
+        assertEquals(
+            "An active Futures campaign has an unknown/invalid risk reservation; reconciliation required",
+            futuresPortfolioRiskBlocker(0.002, listOf(Double.NaN))
+        )
+    }
+
+    @Test
     fun allowsDistinctSymbolsUntilConfiguredPortfolioSlotLimit() {
         val intents = JSONArray().put(entry("BTCUSDT", "OPEN_PROTECTED"))
         assertNull(futuresPositionSlotBlocker("ETHUSDT", listOf("BTCUSDT"), intents, 10))
