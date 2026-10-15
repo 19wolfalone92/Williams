@@ -5522,6 +5522,10 @@ private class NativeEngine(
             lastError = "Futures position monitor: " + (failure.message ?: failure.javaClass.simpleName)
             false
         }
+        // A previously submitted conditional entry can fire on Binance even if the
+        // Android entry gate is now closed. Cancel still-live entries outside the
+        // configured UTC window; exits, protection and position monitoring continue.
+        cancelPendingEntriesOutsideWilliamsSession()
         if (!managementOk) {
             scannerError = scannerError
                 ?: futuresCampaignCoordinator.lastBlocker
@@ -5658,6 +5662,53 @@ private class NativeEngine(
             // rejected before its intent is persisted, try the next valid symbol
             // instead of treating an older pending campaign as this attempt.
             if (intentsAfter > intentsBefore) break
+        }
+    }
+
+    private fun cancelPendingEntriesOutsideWilliamsSession() {
+        val exchangeNow = runCatching { futuresMarketData.exchangeNowMs() }.getOrElse { failure ->
+            lastError = "FUTURES_SESSION_CLOCK_UNAVAILABLE_FOR_PENDING_CANCEL: " +
+                (failure.message ?: failure.javaClass.simpleName)
+            return
+        }
+        if (isWithinWilliamsEntrySessionUtc(exchangeNow)) return
+
+        val intents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrElse { failure ->
+            lastError = "FUTURES_PENDING_ENTRY_SNAPSHOT_FAILED: " +
+                (failure.message ?: failure.javaClass.simpleName)
+            return
+        }
+        val pendingStatuses = setOf(
+            "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED",
+            "SUBMISSION_UNKNOWN", "CANCEL_SUBMISSION_UNKNOWN", "ACCEPTED", "TRIGGERED"
+        )
+        val hasPendingEntry = (0 until intents.length()).any { i ->
+            val intent = intents.optJSONObject(i) ?: return@any true
+            intent.optString("intent_role", "ENTRY") == "ENTRY" &&
+                campaignLifecycleStatus(intent) == "ENTRY_PENDING" &&
+                exchangeOrderStatus(intent).uppercase(Locale.US) in pendingStatuses
+        }
+        if (!hasPendingEntry) return
+
+        val result = runCatching {
+            withCampaignMutation(
+                symbol = "FUTURES_ACCOUNT",
+                purpose = "OUT_OF_SESSION_CANCEL_PENDING_ENTRIES",
+                allowPaused = true,
+                allowStopped = true,
+                allowKillLatched = true,
+                allowReconcileRequired = true,
+                waitForDoorMs = 50_000L
+            ) {
+                futuresCampaignCoordinator.cancelPendingEntries("OUTSIDE_WILLIAMS_ENTRY_SESSION")
+            }
+        }.getOrElse { failure ->
+            JSONObject().put("ok", false).put("error", failure.message ?: failure.javaClass.simpleName)
+        }
+        if (!result.optBoolean("ok", false)) {
+            lastError = "OUT_OF_SESSION_PENDING_CANCEL_UNRESOLVED: " +
+                result.optString("blocker", result.optString("error", "unknown Futures cancellation state"))
+            scannerError = lastError
         }
     }
 
