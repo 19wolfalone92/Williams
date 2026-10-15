@@ -5982,10 +5982,8 @@ private class NativeEngine(
             h4.last().c > h4Line.lips && ao(h4, h4.lastIndex) > 0.0
         val h4Bear = h4Line.lips < h4Line.teeth && h4Line.teeth < h4Line.jaw &&
             h4.last().c < h4Line.lips && ao(h4, h4.lastIndex) < 0.0
-        // Rank each still-fresh directional hypothesis only after context has
-        // been computed. A D1 veto rejects that side; it does not discard the other.
-        // At equal H1 timestamps, prefer a direction aligned with H4 over a reversal
-        // that is allowed by the macro airbag alone.
+        // Apply D1/H4 context before choosing between fresh confirmed H1 hypotheses.
+        // H4-aligned context ranks before a reversal; signal recency breaks ties.
         val signal = freshSignals.maxWithOrNull(
             compareBy<CampaignSignalN> {
                 directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)
