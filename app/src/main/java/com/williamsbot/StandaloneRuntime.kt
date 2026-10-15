@@ -1954,8 +1954,8 @@ private class NativeEngine(
             }
             try {
                 val rules = symbolFilters(symbol)
-                val qty = floorStep(kotlin.math.abs(signedQty), if (rules.marketStep > 0.0) rules.marketStep else rules.step)
-                require(qty >= rules.minQty) { "Cannot safely round exchange position qty for $symbol" }
+                val exchangeQtyText = row.optString("positionAmt")
+                val closeQty = fullMarketCloseQuantity(exchangeQtyText, rules)
                 val cid = ("W2K_" + symbol.take(8) + "_" + System.nanoTime().toString(16).takeLast(12)).take(36)
                 val result = withCampaignMutation(
                     symbol = symbol,
@@ -1967,7 +1967,7 @@ private class NativeEngine(
                     waitForDoorMs = 10_000L
                 ) {
                     futuresCampaignCoordinator.closePosition(
-                        symbol, direction, fmtQty(qty, rules.decimals), cid, "KILL_SWITCH"
+                        symbol, direction, closeQty, cid, "KILL_SWITCH"
                     )
                 }
                 if (!result.optBoolean("ok", false)) errors += "$symbol: " + result.optString("blocker", result.optString("error"))
@@ -5031,9 +5031,7 @@ private class NativeEngine(
         val direction = if (signedQty > 0.0) NativeFuturesCampaignCoordinator.Direction.LONG
             else NativeFuturesCampaignCoordinator.Direction.SHORT
         val rules = symbolFilters(symbol)
-        val step = if (rules.marketStep > 0.0) rules.marketStep else rules.step
-        val qty = floorStep(kotlin.math.abs(signedQty), step)
-        require(qty >= rules.minQty) { "Futures close quantity below minimum for " + symbol }
+        val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"), rules)
         val clientId = ("W2X_" + symbol.take(8) + "_" + System.nanoTime().toString(16).takeLast(12)).take(36)
         val result = withCampaignMutation(
             symbol = symbol,
@@ -5047,7 +5045,7 @@ private class NativeEngine(
             allowReconcileRequired = true
         ) {
             futuresCampaignCoordinator.closePosition(
-                symbol, direction, fmtQty(qty, rules.decimals), clientId, "MANUAL_EXIT"
+                symbol, direction, closeQty, clientId, "MANUAL_EXIT"
             )
         }
         if (!result.optBoolean("ok", false)) lastError = result.optString("blocker", result.optString("error"))
@@ -5173,9 +5171,7 @@ private class NativeEngine(
                 longCampaignSignals(symbol, candles, "1h", rules.tick).any { it.signalBarTimeMs >= newerBarCutoff }
             }
             if (structuralExit || opposing) {
-                val step = if (rules.marketStep > 0.0) rules.marketStep else rules.step
-                val qty = floorStep(kotlin.math.abs(signedQty), step)
-                require(qty >= rules.minQty) { "Futures exit qty below filter for " + symbol }
+                val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"), rules)
                 val clientId = ("W2O_" + symbol.take(8) + "_" + System.nanoTime().toString(16).takeLast(12)).take(36)
                 val result = withCampaignMutation(
                     symbol = symbol,
@@ -5183,7 +5179,7 @@ private class NativeEngine(
                     allowPaused = true
                 ) {
                     futuresCampaignCoordinator.closePosition(
-                        symbol, direction, fmtQty(qty, rules.decimals), clientId,
+                        symbol, direction, closeQty, clientId,
                         if (structuralExit) "H1_CLOSE_CROSSED_ALLIGATOR_TEETH" else "OPPOSITE_WILLIAMS_SIGNAL"
                     )
                 }
@@ -7268,6 +7264,35 @@ private class NativeEngine(
 
     private fun fmtQty(value: Double, decimals: Int): String =
         ExecutionMath.floorToScale(value, decimals)
+
+    /**
+     * A full-position market exit must preserve the exchange position amount exactly.
+     * Flooring it can leave residual exposure, while the coordinator correctly rejects
+     * a requested quantity that differs from live positionRisk. Validate against both
+     * LOT_SIZE and MARKET_LOT_SIZE and serialize the original decimal amount unchanged.
+     */
+    private fun fullMarketCloseQuantity(positionAmount: String, rules: SymbolRules): String {
+        val quantity = positionAmount.toBigDecimalOrNull()?.abs()
+            ?: throw IllegalArgumentException("Exchange position quantity is not a decimal")
+        val marketLotEnabled = rules.marketStep.isFinite() && rules.marketStep > 0.0
+        val commonStepDouble = ExecutionMath.commonQuantityStep(rules.step, rules.marketStep)
+        val commonStep = java.math.BigDecimal.valueOf(commonStepDouble)
+        val lotMin = java.math.BigDecimal.valueOf(rules.minQty)
+        val lotMax = java.math.BigDecimal.valueOf(rules.maxQty)
+        val minQty = if (marketLotEnabled) {
+            lotMin.max(java.math.BigDecimal.valueOf(rules.marketMinQty))
+        } else lotMin
+        val maxQty = if (marketLotEnabled) {
+            lotMax.min(java.math.BigDecimal.valueOf(rules.marketMaxQty))
+        } else lotMax
+        require(quantity.signum() > 0 && quantity >= minQty && quantity <= maxQty) {
+            "Full Futures exit quantity is outside combined LOT_SIZE/MARKET_LOT_SIZE bounds"
+        }
+        require(quantity.remainder(commonStep).signum() == 0) {
+            "Full Futures position quantity does not align to the combined market-exit step; refusing a rounded partial close"
+        }
+        return quantity.stripTrailingZeros().toPlainString()
+    }
 
     private fun fmtPrice(value: Double, tick: Double): String {
         val rounded = if (tick > 0.0) {
