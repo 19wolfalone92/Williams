@@ -1306,14 +1306,21 @@ private class NativeEngine(
     }
 
     private fun setReconcileRequired(reason: String) {
+        // An UNKNOWN exchange outcome blocks order mutations but must not tear down
+        // the monitor needed to reconcile that outcome. Stopping here used to kill
+        // market/history/user streams and reset auto-run on the exact failure that
+        // required fresh exchange evidence.
         reconcileRequired = true
         persistSafetyFlag("reconcile_required", true)
+        paused = true
+        val blocker = "RECONCILE_REQUIRED: " + reason
+        scannerState = "BLOCKED_FUTURES_RECONCILIATION"
+        scannerError = blocker
+        lastError = blocker
         stateMachine.force(
-            TradingState.RECONCILE_REQUIRED,
-            reason
+            if (killLatched) TradingState.KILL_SWITCH_LATCHED else TradingState.RECONCILE_REQUIRED,
+            blocker
         )
-        lastError = "RECONCILE_REQUIRED: " + reason
-        stop()
     }
 
     private fun clearReconcileRequired() {
