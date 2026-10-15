@@ -59,6 +59,8 @@ jobs:
             test_williams_book_alignment.py \
             test_williams_indicator_fidelity.py \
             test_williams_causality_contract.py \
+            test_williams_paper_replay.py \
+            test_williams_h1_paper_replay.py \
             test_book_wave_safety.py \
             test_trade_journal.py \
             test_multi_position_lifecycle.py \
