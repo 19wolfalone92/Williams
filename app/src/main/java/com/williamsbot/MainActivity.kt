@@ -1025,16 +1025,20 @@ fun WilliamsApp(context: Context) {
                                 api.post("/api/v1/control/sell?symbol=" + symbol)
                             )
                             val confirmed = result.optBoolean("sold", false)
+                            val reconcileRequired = result.optBoolean("reconcile_required", false)
                             val direction = result.optString("direction_closed", "Futures")
                             val detail = result.optJSONObject("result")
                                 ?.optString("blocker")
                                 ?.takeIf { it.isNotBlank() && it != "null" }
                                 ?: result.optString("reason", "биржа не подтвердила закрытие")
                             withContext(Dispatchers.Main) {
-                                message = if (confirmed) {
-                                    "$direction позиция $symbol закрыта и подтверждена Futures Runtime"
-                                } else {
-                                    "Закрытие $symbol НЕ подтверждено: $detail. Не отправляй повторную заявку вслепую."
+                                message = when {
+                                    confirmed && reconcileRequired ->
+                                        "$direction позиция $symbol закрыта и подтверждена биржей, но защитный ордер/журнал требует сверки; новые входы заблокированы: $detail"
+                                    confirmed ->
+                                        "$direction позиция $symbol закрыта и подтверждена Futures Runtime"
+                                    else ->
+                                        "Закрытие $symbol НЕ подтверждено: $detail. Не отправляй повторную заявку вслепую."
                                 }
                             }
                             loadAll(false)
