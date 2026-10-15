@@ -2444,7 +2444,8 @@ private class NativeEngine(
     }
 
     private fun scheduleUnexpectedWorkerRecovery(expectedGeneration: Long, reason: String) {
-        if (!prefs.getBoolean("auto_run", false) || killLatched) return
+        // Kill Switch blocks trading, not recovery of the monitor itself.
+        if (!prefs.getBoolean("auto_run", false)) return
         Thread {
             try {
                 Thread.sleep(1_500L)
@@ -2453,7 +2454,7 @@ private class NativeEngine(
                 return@Thread
             }
             if (expectedGeneration != runtimeGeneration || running ||
-                killLatched || !prefs.getBoolean("auto_run", false)
+                !prefs.getBoolean("auto_run", false)
             ) return@Thread
 
             val nowMs = System.currentTimeMillis()
