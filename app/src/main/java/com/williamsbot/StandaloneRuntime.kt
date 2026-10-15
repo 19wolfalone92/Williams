@@ -1004,7 +1004,7 @@ private class NativeEngine(
 
     @Volatile
     private var forceTestnetMode =
-        prefs.getBoolean("force_testnet_mode", false) &&
+        prefs.getBoolean("force_testnet_mode", false) ||
             executionStore.readState("futures_testnet_force_mode") == "true"
 
     @Volatile
