@@ -5155,15 +5155,28 @@ private class NativeEngine(
                 intent.optLong("position_open_observed_at_ms", 0L),
                 intent.optLong("fill_observed_at_ms", 0L)
             )
-            if (fillObservedAt <= 0L) {
-                // A terminal unfilled entry has nothing to journal. A live position
-                // seen in a prior reconciliation always receives the former timestamp.
+            val hasObservedPosition = intent.optDouble("actual_entry_price", 0.0) > 0.0
+            val exchangeEntryStatus = exchangeOrderStatus(intent).uppercase(Locale.US)
+            val definitivelyUnfilledTerminal = exchangeEntryStatus in setOf(
+                "CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"
+            )
+            if (fillObservedAt <= 0L && !hasObservedPosition && definitivelyUnfilledTerminal) {
+                // Only a clearly terminal, never-filled order is skipped. Older durable
+                // campaigns with no fill timestamp are still reconstructed from exchange
+                // history rather than being incorrectly discarded.
                 futuresCampaignCoordinator.markTradeJournalStatus(
-                    clientId, "NO_FILLED_TRADES", "No exchange-confirmed fill/position timestamp"
+                    clientId, "NO_FILLED_TRADES", "Exchange entry was terminal without an observed fill"
                 )
                 continue
             }
-            val startTime = intent.optLong("created_at_ms", 0L).takeIf { it > 0L } ?: fillObservedAt
+            val startTime = intent.optLong("created_at_ms", 0L).takeIf { it > 0L }
+                ?: fillObservedAt
+            if (startTime <= 0L) {
+                futuresCampaignCoordinator.markTradeJournalStatus(
+                    clientId, "RETRY", "Campaign has no trustworthy order/fill start timestamp"
+                )
+                continue
+            }
             val closedAt = maxOf(
                 intent.optLong("closed_observed_at_ms", 0L),
                 intent.optLong("confirmed_flat_at_ms", 0L)
