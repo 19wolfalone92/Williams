@@ -1684,12 +1684,15 @@ internal class NativeFuturesCampaignCoordinator(
                             }
                     }
             }
-        if (managedEntry == null) {
+        if (managedEntry == null && !manualExit) {
             state = State.RECONCILE_REQUIRED
-            lastBlocker = "$symbol has no confirmed active Williams campaign; refusing to close an unmanaged position"
+            lastBlocker = "$symbol has no confirmed active Williams campaign; strategy-driven exit is blocked"
             return@synchronized JSONObject().put("ok", false).put("state", state.name)
                 .put("blocker", lastBlocker)
         }
+        // MANUAL_EXIT is the explicit operator's risk-reducing override. If the
+        // campaign journal is missing, continue only to the live Binance position
+        // and exact quantity/direction checks below; never use this path for entries.
         val adapterPreflight = adapterFactory()
         try {
             adapterPreflight.requireOneWayMode()
@@ -1716,7 +1719,7 @@ internal class NativeFuturesCampaignCoordinator(
                 return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
             }
             if (!manualExit) {
-                val expectedProtectionId = managedEntry.optString("protection_client_id")
+                val expectedProtectionId = managedEntry!!.optString("protection_client_id")
                 val expectedStop = managedEntry.optString("protective_stop")
                 val openAlgos = adapterPreflight.openAlgoOrders(symbol)
                 if (findProtectiveStop(openAlgos, direction.name, expectedProtectionId, expectedStop) == null) {
@@ -1733,8 +1736,8 @@ internal class NativeFuturesCampaignCoordinator(
             return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
         }
         val adapter = adapterPreflight
-        val currentProtectionId = managedEntry.optString("protection_client_id")
-        val previousProtectionId = managedEntry.optString("previous_protection_client_id")
+        val currentProtectionId = managedEntry?.optString("protection_client_id").orEmpty()
+        val previousProtectionId = managedEntry?.optString("previous_protection_client_id").orEmpty()
         val exitIntent = JSONObject()
             .put("intent_role", "EXIT")
             .put("symbol", symbol)
@@ -1796,9 +1799,9 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("order_status", "FILLED")
                 .put("confirmed_flat_at_ms", confirmedFlatAt)
             // Terminal lifecycle is persisted before any stop-cleanup network request.
-            managedEntry.put("campaign_status", "CLOSED_OR_STOPPED")
-                .put("closed_observed_at_ms", confirmedFlatAt)
-                .put("close_reason", reason)
+            managedEntry?.put("campaign_status", "CLOSED_OR_STOPPED")
+                ?.put("closed_observed_at_ms", confirmedFlatAt)
+                ?.put("close_reason", reason)
             saveIntents(intents)
 
             // Cancel only protective orders whose ids belong to this persisted campaign.
