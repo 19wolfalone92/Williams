@@ -1334,27 +1334,46 @@ internal class NativeFuturesCampaignCoordinator(
         }
     }
 
+    /** Definite pre-order rejection. No exchange mutation was attempted. */
+    private fun safePreflightRejection(blocker: String): JSONObject =
+        JSONObject()
+            .put("accepted", false)
+            .put("safe_rejection", true)
+            .put("mutation_attempted", false)
+            .put("state", state.name)
+            .put("blocker", blocker)
+
     /** Persist the entry request before any account/order mutation. */
     fun submitPendingEntry(plan: EntryPlan): JSONObject = synchronized(lock) {
         val currentIntents = intents()
         val coordinatorCanAdmit = state == State.READY || state == State.OPEN_PROTECTED ||
             (state == State.ENTRY_PENDING &&
                 confirmedPendingEntriesAllowConcurrentAdmission(currentIntents))
-        check(coordinatorCanAdmit) {
-            "Futures execution blocked: ${lastBlocker ?: state.name}"
+        if (!coordinatorCanAdmit) {
+            return@synchronized safePreflightRejection(
+                "Futures execution blocked before order mutation: ${lastBlocker ?: state.name}"
+            )
         }
-        validatePlan(plan)
+        try {
+            validatePlan(plan)
+        } catch (failure: Exception) {
+            return@synchronized safePreflightRejection(
+                "Invalid Futures entry plan rejected before order mutation: " +
+                    (failure.message ?: failure.javaClass.simpleName)
+            )
+        }
         val preflightAdapter = adapterFactory()
+        val exchangeInfo = preflightAdapter.exchangeInfo()
         val contractBlocker = futuresContractRuleBlocker(
-            preflightAdapter.exchangeInfo(),
+            exchangeInfo,
             plan.symbol,
             plan.quantity,
             plan.entryPrice,
             plan.protectiveStop,
             marketOrder = plan.kind != EntryKind.LIMIT
         )
-        check(contractBlocker == null) {
-            contractBlocker ?: "Binance USD-M contract rules rejected the entry plan"
+        if (contractBlocker != null) {
+            return@synchronized safePreflightRejection(contractBlocker)
         }
 
         // Distinct approved symbols may hold concurrent campaigns, but each live
@@ -1411,7 +1430,7 @@ internal class NativeFuturesCampaignCoordinator(
             intents = currentIntents,
             maxPositions = allowedSymbols.size
         )
-        check(slotBlocker == null) { slotBlocker ?: "Futures position slot unavailable" }
+        if (slotBlocker != null) return@synchronized safePreflightRejection(slotBlocker)
 
         // Sum active intent risk conservatively. Missing/invalid reservations cannot
         // silently free aggregate portfolio capacity.
@@ -1427,7 +1446,7 @@ internal class NativeFuturesCampaignCoordinator(
             }
         }
         val riskBlocker = futuresPortfolioRiskBlocker(plan.riskPct, reservedRiskPcts)
-        check(riskBlocker == null) { riskBlocker ?: "Aggregate Futures risk reservation failed" }
+        if (riskBlocker != null) return@synchronized safePreflightRejection(riskBlocker)
 
         val intent = JSONObject()
             .put("intent_role", "ENTRY")
