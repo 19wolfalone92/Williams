@@ -5228,9 +5228,18 @@ private class NativeEngine(
     }
 
     private fun submitNativeFuturesCampaignEntry(candidate: BaseAnalysis) {
-        // Check the complete execution/funding barrier before touching daily-risk state.
-        // An unfunded Demo account must not pause or disable a healthy market scanner.
+        // Entry-session overlay is UTC 08:00 inclusive to 20:00 exclusive.
+        // Position protection/management and explicit exits remain active 24/7.
         if (!executionReady() || !candidate.campaignReady) return
+        val sessionClockMs = runCatching { futuresMarketData.exchangeNowMs() }.getOrElse { failure ->
+            lastError = "FUTURES_SESSION_CLOCK_UNAVAILABLE: " +
+                (failure.message ?: failure.javaClass.simpleName)
+            return
+        }
+        if (!isWithinWilliamsEntrySessionUtc(sessionClockMs)) {
+            lastError = "WILLIAMS_ENTRY_SESSION_CLOSED: new entries allowed only from 08:00 to 20:00 UTC; position management remains active"
+            return
+        }
 
         // Re-check daily equity immediately before the exchange mutation. If the account
         // or loss baseline becomes unknown at this point, fail closed for this entry.
@@ -5406,6 +5415,13 @@ private class NativeEngine(
             // Revalidate the H1 scenario at the last possible point before mutation.
             // A queued/stale candidate must never survive a slow scan or a door wait.
             val submitNow = futuresMarketData.exchangeNowMs()
+            if (!isWithinWilliamsEntrySessionUtc(submitNow)) {
+                return@withCampaignMutation JSONObject()
+                    .put("accepted", false)
+                    .put("safe_rejection", true)
+                    .put("mutation_attempted", false)
+                    .put("blocker", "WILLIAMS_ENTRY_SESSION_CLOSED: 08:00–20:00 UTC")
+            }
             require(isSignalFresh(signal.signalBarTimeMs, submitNow, 5L * 60L * 60L * 1000L)) {
                 "STALE_H1_SCENARIO: signal expired before Futures submission"
             }
