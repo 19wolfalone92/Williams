@@ -199,7 +199,8 @@ def _metrics_for_trades(trades: pd.DataFrame) -> dict:
         "net_pnl_usdt": float(pnl.sum()),
         "fees_usdt": float(pd.to_numeric(trades["fees_usdt"], errors="coerce").fillna(0).sum()),
         "avg_r_multiple": float(pd.to_numeric(trades["r_multiple"], errors="coerce").mean()),
-        "profit_factor": win_sum / loss_sum if loss_sum > 0 else (float("inf") if win_sum > 0 else 0.0),
+        "profit_factor": win_sum / loss_sum if loss_sum > 0 else (None if win_sum > 0 else 0.0),
+        "profit_factor_unbounded": bool(win_sum > 0 and loss_sum == 0),
     }
 
 
