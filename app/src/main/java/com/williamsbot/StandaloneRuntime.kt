@@ -7271,28 +7271,16 @@ private class NativeEngine(
      * a requested quantity that differs from live positionRisk. Validate against both
      * LOT_SIZE and MARKET_LOT_SIZE and serialize the original decimal amount unchanged.
      */
-    private fun fullMarketCloseQuantity(positionAmount: String, rules: SymbolRules): String {
-        val quantity = positionAmount.toBigDecimalOrNull()?.abs()
-            ?: throw IllegalArgumentException("Exchange position quantity is not a decimal")
-        val marketLotEnabled = rules.marketStep.isFinite() && rules.marketStep > 0.0
-        val commonStepDouble = ExecutionMath.commonQuantityStep(rules.step, rules.marketStep)
-        val commonStep = java.math.BigDecimal.valueOf(commonStepDouble)
-        val lotMin = java.math.BigDecimal.valueOf(rules.minQty)
-        val lotMax = java.math.BigDecimal.valueOf(rules.maxQty)
-        val minQty = if (marketLotEnabled) {
-            lotMin.max(java.math.BigDecimal.valueOf(rules.marketMinQty))
-        } else lotMin
-        val maxQty = if (marketLotEnabled) {
-            lotMax.min(java.math.BigDecimal.valueOf(rules.marketMaxQty))
-        } else lotMax
-        require(quantity.signum() > 0 && quantity >= minQty && quantity <= maxQty) {
-            "Full Futures exit quantity is outside combined LOT_SIZE/MARKET_LOT_SIZE bounds"
-        }
-        require(quantity.remainder(commonStep).signum() == 0) {
-            "Full Futures position quantity does not align to the combined market-exit step; refusing a rounded partial close"
-        }
-        return quantity.stripTrailingZeros().toPlainString()
-    }
+    private fun fullMarketCloseQuantity(positionAmount: String, rules: SymbolRules): String =
+        ExecutionMath.exactFullMarketCloseQuantity(
+            positionAmount = positionAmount,
+            lotMinQty = rules.minQty.toString(),
+            lotMaxQty = rules.maxQty.takeIf { it.isFinite() }?.toString(),
+            lotStep = rules.step.toString(),
+            marketMinQty = rules.marketMinQty.toString(),
+            marketMaxQty = rules.marketMaxQty.takeIf { it.isFinite() }?.toString(),
+            marketStep = rules.marketStep.toString()
+        )
 
     private fun fmtPrice(value: Double, tick: Double): String {
         val rounded = if (tick > 0.0) {
