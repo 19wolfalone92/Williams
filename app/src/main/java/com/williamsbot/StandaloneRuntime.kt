@@ -1129,6 +1129,11 @@ private class NativeEngine(
     @Volatile private var userStreamConnected = false
     @Volatile private var userStreamSyncRequired = true
     @Volatile private var userStreamLastError: String? = null
+    // All account-wide Futures snapshots share one lock, including startup, user-stream,
+    // position-management, recovery and self-heal callers. The durable Execution Door
+    // serializes mutations, but without this lock concurrent reconciliation requests can
+    // race their coordinator snapshots and incorrectly latch RECONCILE_REQUIRED.
+    private val futuresReconciliationLock = Any()
     @Volatile private var futuresStreamReconcileRunning = false
     @Volatile private var futuresStreamReconcilePending = false
     @Volatile private var lastUserStreamReconcileAttemptMs = 0L
@@ -4222,7 +4227,10 @@ private class NativeEngine(
         allowStopped: Boolean = false,
         allowKillLatched: Boolean = false,
         waitForDoorMs: Long = 50_000L
-    ): JSONObject {
+    ): JSONObject = synchronized(futuresReconciliationLock) {
+        // One coherent exchange snapshot at a time. Keep the entire operation,
+        // including the durable Execution Door lease and coordinator reconciliation,
+        // inside the same lock so concurrent REST snapshots cannot interleave.
         val result = withCampaignMutation(
             symbol = "FUTURES_ACCOUNT",
             purpose = purpose,
@@ -4237,7 +4245,7 @@ private class NativeEngine(
         if (result.optBoolean("ok", false)) {
             lastRestReconcileMs = System.currentTimeMillis()
         }
-        return result
+        result
     }
 
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
