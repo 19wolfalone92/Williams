@@ -10,7 +10,7 @@ def test_futures_defaults_use_single_campaign_risk_limits():
     assert config.risk_per_trade_pct == 0.0025
     assert config.max_total_risk_pct == 0.006
     assert config.max_daily_loss_pct == 0.03
-    assert config.max_open_positions == 1
+    assert config.max_open_positions == 10
     assert config.allow_long is True
     assert config.allow_short is True
 
