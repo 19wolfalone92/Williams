@@ -390,7 +390,7 @@ def main() -> None:
     must(coordinator_source, 'val manualExit = reason == "MANUAL_EXIT"', "NativeFuturesCampaignCoordinator.kt")
     must(coordinator_source, "manual close remains available, new entries blocked", "NativeFuturesCampaignCoordinator.kt")
     must(coordinator_source, "exchange position has no entry journal and a safe structural H1 stop could not be reconstructed", "NativeFuturesCampaignCoordinator.kt")
-    must(coordinator_source, "allowReconcileRequired = true", "StandaloneRuntime.kt")
+    must(runtime_source, "allowReconcileRequired = true", "StandaloneRuntime.kt")
     must(coordinator_source, "existing exit intent is active/ambiguous; reconcile before any new close request", "NativeFuturesCampaignCoordinator.kt")
     must(coordinator_source, "Live " , "NativeFuturesCampaignCoordinator.kt")
     must(coordinator_source, "Unmanaged close-position protective stop remains open", "NativeFuturesCampaignCoordinator.kt")
