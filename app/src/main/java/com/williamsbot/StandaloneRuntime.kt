@@ -3539,9 +3539,8 @@ private class NativeEngine(
                 // It is valid for display, never for a trading decision. Strategy
                 // reads are restricted to bars closed according to Binance server time.
                 val exchangeNowMs = futuresMarketData.exchangeNowMs()
-                val durationMs = frameSeconds(frame).coerceAtLeast(60L) * 1000L
                 val closed = live.filter {
-                    futuresMarketData.isCandleOpenTimeClosed(it.t, durationMs, exchangeNowMs)
+                    futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)
                 }
                 if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs)) {
                     // A WebSocket warm cache is not proof that the SQLite history
@@ -3549,11 +3548,10 @@ private class NativeEngine(
                     // closed-bar count and persisted count; returning here without
                     // persisting made a healthy stream keep the scanner stuck in
                     // WAITING_FOR_HISTORY on a fresh install.
-                    val bucketMs = frameSeconds(frame).coerceAtLeast(60L) * 1000L
                     val toStored: (CandleN) -> MarketHistoryStore.Candle = { candle ->
                         MarketHistoryStore.Candle(
                             openTime = candle.t,
-                            closeTime = candle.t + bucketMs - 1L,
+                            closeTime = futuresMarketData.klineCloseTimeMs(candle.t, frame),
                             open = candle.o,
                             high = candle.h,
                             low = candle.l,
@@ -10808,9 +10806,10 @@ private class NativeEngine(
     ): JSONObject {
         val symbol = if (requestedSymbol == null) primarySymbol else requestedSymbol.trim().uppercase(Locale.US)
         require(symbol in coreSymbols) { "Chart symbol is outside the approved Futures universe: $symbol" }
-        val supportedChartIntervals = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
         val selectedInterval = if (requestedInterval == null) interval else requestedInterval.trim()
-        require(selectedInterval in supportedChartIntervals) { "Unsupported Futures chart interval: $selectedInterval" }
+        require(selectedInterval in APPROVED_FUTURES_KLINE_INTERVALS) {
+            "Unsupported Futures chart interval: $selectedInterval"
+        }
         // Never return plausible H1 candles mislabeled as another symbol/interval after an invalid request or REST error.
         val sourceCandles = if (symbol == primarySymbol && selectedInterval == interval) {
             if (primaryCandles.isEmpty()) primaryCandles = fetchCandles(primarySymbol, selectedInterval, 150)
