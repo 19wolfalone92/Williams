@@ -21,6 +21,8 @@ class FuturesContractRulesTest {
                 .put("filters", JSONArray()
                     .put(JSONObject().put("filterType", "LOT_SIZE")
                         .put("minQty", minQty).put("maxQty", maxQty).put("stepSize", stepSize))
+                    .put(JSONObject().put("filterType", "MARKET_LOT_SIZE")
+                        .put("minQty", "0.005").put("maxQty", "100").put("stepSize", "0.005"))
                     .put(JSONObject().put("filterType", "PRICE_FILTER")
                         .put("minPrice", "0.1").put("maxPrice", "1000000").put("tickSize", tickSize))
                     .put(JSONObject().put("filterType", "MIN_NOTIONAL")
@@ -39,6 +41,27 @@ class FuturesContractRulesTest {
     fun rejectsQuantityThatDoesNotMatchStepSize() {
         assertNotNull(futuresContractRuleBlocker(
             exchangeInfo(), "BTCUSDT", "0.0105", "65000.1", "64900.2"
+        ))
+    }
+
+    @Test
+    fun marketTriggeredEntryMustSatisfyMarketLotSizeToo() {
+        assertNull(futuresContractRuleBlocker(
+            exchangeInfo(), "BTCUSDT", "0.010", "65000.1", "64900.2",
+            marketOrder = true
+        ))
+        assertNotNull(futuresContractRuleBlocker(
+            exchangeInfo(), "BTCUSDT", "0.012", "65000.1", "64900.2",
+            marketOrder = true
+        ))
+        assertNotNull(futuresContractRuleBlocker(
+            exchangeInfo(), "BTCUSDT", "0.002", "65000.1", "64900.2",
+            marketOrder = true
+        ))
+        // Limit entries use LOT_SIZE only; the stricter market filter applies
+        // to conditional STOP_MARKET/TAKE_PROFIT_MARKET paths.
+        assertNull(futuresContractRuleBlocker(
+            exchangeInfo(), "BTCUSDT", "0.012", "65000.1", "64900.2"
         ))
     }
 
