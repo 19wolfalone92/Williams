@@ -8,6 +8,52 @@ import androidx.core.database.sqlite.transaction
 import org.json.JSONArray
 import org.json.JSONObject
 
+internal data class HistoryReadinessStatus(
+    val minimumWorkingSetCount: Int,
+    val workingSetReady: Boolean,
+    val decisionFrame: Boolean,
+    val decisionReady: Boolean,
+    val scope: String
+)
+
+/**
+ * "complete" means exhaustive historical backfill reached the exchange's available
+ * beginning; it does not mean the bounded working set needed for scanning is unusable.
+ */
+internal fun historyReadinessStatus(
+    interval: String,
+    candleCount: Long,
+    fullHistoryComplete: Boolean
+): HistoryReadinessStatus {
+    val minimum = when (interval) {
+        "1h" -> 150
+        "4h", "1d", "15m" -> 45
+        else -> 40
+    }
+    val count = candleCount.coerceAtLeast(0L)
+    val workingReady = count >= minimum
+    val decisionFrame = interval in setOf("1h", "4h", "1d", "15m")
+    val decisionMinimum = when (interval) {
+        "1h" -> 150
+        "4h", "1d", "15m" -> 45
+        else -> Int.MAX_VALUE
+    }
+    val decisionReady = decisionFrame && count >= decisionMinimum
+    val scope = when {
+        fullHistoryComplete && workingReady -> "FULL_HISTORY"
+        fullHistoryComplete -> "FULL_HISTORY_BELOW_WORKING_SET_MINIMUM"
+        workingReady -> "WORKING_SET_READY"
+        else -> "WARMING_UP"
+    }
+    return HistoryReadinessStatus(
+        minimumWorkingSetCount = minimum,
+        workingSetReady = workingReady,
+        decisionFrame = decisionFrame,
+        decisionReady = decisionReady,
+        scope = scope
+    )
+}
+
 /**
  * Persistent market-history store.
  *
@@ -359,15 +405,23 @@ class MarketHistoryStore(context: Context) :
         val rows = JSONArray()
         for (symbol in symbols) {
             for (interval in intervals) {
-                rows.put(
-                    known[symbol to interval] ?: JSONObject()
-                        .put("symbol", symbol)
-                        .put("interval", interval)
-                        .put("complete", false)
-                        .put("count", 0L)
-                        .put("oldest_open_time", 0L)
-                        .put("newest_open_time", 0L)
-                )
+                val row = known[symbol to interval] ?: JSONObject()
+                    .put("symbol", symbol)
+                    .put("interval", interval)
+                    .put("complete", false)
+                    .put("count", 0L)
+                    .put("oldest_open_time", 0L)
+                    .put("newest_open_time", 0L)
+                val count = row.optLong("count", 0L)
+                val complete = row.optBoolean("complete", false)
+                val readiness = historyReadinessStatus(interval, count, complete)
+                row.put("full_history_complete", complete)
+                    .put("minimum_working_set_count", readiness.minimumWorkingSetCount)
+                    .put("working_set_ready", readiness.workingSetReady)
+                    .put("decision_frame", readiness.decisionFrame)
+                    .put("decision_history_ready", readiness.decisionReady)
+                    .put("history_scope", readiness.scope)
+                rows.put(row)
             }
         }
         return JSONObject().put("items", rows)
