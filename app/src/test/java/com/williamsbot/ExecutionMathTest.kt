@@ -32,4 +32,13 @@ class ExecutionMathTest {
         assertTrue(ExecutionMath.isMultiple(step, 0.02))
         assertTrue(ExecutionMath.isMultiple(step, 0.03))
     }
+
+    @Test
+    fun precisionAndFormattingHandleScientificNotationInSmallTicks() {
+        assertEquals(5, ExecutionMath.decimalPlacesForIncrement(0.00001))
+        assertEquals(6, ExecutionMath.decimalPlacesForIncrement(0.000001))
+        assertEquals(3, ExecutionMath.decimalPlacesForIncrement(0.001))
+        assertEquals("0.12015", ExecutionMath.floorToScale(0.120159, 5))
+        assertEquals("0.000000015", ExecutionMath.floorToScale(0.000000015, 9))
+    }
 }
