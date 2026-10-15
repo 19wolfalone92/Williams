@@ -141,6 +141,35 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         setLeverage(symbol, 2)
     }
 
+    /**
+     * Account-specific USD-M Futures fill history. Binance limits each time window
+     * to at most seven days; callers must split longer campaign lifetimes.
+     */
+    fun userTrades(
+        symbol: String,
+        startTime: Long,
+        endTime: Long,
+        limit: Int = 1000
+    ): JSONArray {
+        requireSymbol(symbol)
+        require(startTime >= 0L && endTime >= startTime) { "Invalid Futures user-trade time range" }
+        require(endTime - startTime <= 7L * 24L * 60L * 60L * 1000L) {
+            "USD-M Futures userTrades range cannot exceed seven days"
+        }
+        require(limit in 1..1000) { "USD-M Futures userTrades limit must be in 1..1000" }
+        return JSONArray(requestRaw(
+            "GET",
+            "/fapi/v1/userTrades",
+            mapOf(
+                "symbol" to symbol,
+                "startTime" to startTime.toString(),
+                "endTime" to endTime.toString(),
+                "limit" to limit.toString()
+            ),
+            signed = true
+        ))
+    }
+
     fun incomeHistory(startTime: Long, endTime: Long = System.currentTimeMillis()): JSONArray {
         require(startTime >= 0L && endTime >= startTime)
         return JSONArray(requestRaw("GET", "/fapi/v1/income", mapOf(
