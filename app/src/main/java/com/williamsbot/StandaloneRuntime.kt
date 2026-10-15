@@ -5424,7 +5424,8 @@ private class NativeEngine(
                 "M15_EXECUTION_BLOCKED: latest closed M15 candle is stale at submission"
             }
             // Revalidate H1 trigger chronology and current Futures mark separately;
-            // M15 contributes only execution readiness, never a new direction.            futuresCampaignCoordinator.submitPendingEntry(plan)
+            // M15 contributes only execution readiness, never a new direction.
+            futuresCampaignCoordinator.submitPendingEntry(plan)
         }
         lastOrder = result
         if (!result.optBoolean("accepted", false)) {
