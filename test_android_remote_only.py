@@ -318,9 +318,16 @@ def test_android_user_stream_is_not_the_spot_signed_subscription_protocol():
 def test_android_execution_gate_requires_coordinator_and_stream_reconciliation():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     user_stream = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     assert "private fun campaignCoordinatorReadyForEntry(): Boolean" in runtime
+    assert '"READY", "OPEN_PROTECTED", "ENTRY_PENDING"' in runtime
+    assert "private fun futuresFsmAllowsEntry(): Boolean" in runtime
     assert "campaignCoordinatorReadyForEntry() &&" in runtime
     assert '"futures_campaign_coordinator_not_ready:"' in runtime
+    assert "confirmedPendingEntriesAllowConcurrentAdmission(currentIntents)" in coordinator
+    assert '"ready_for_new_entry", readyForNewEntry' in coordinator
+    assert "val existingCampaignIntents = futuresCampaignCoordinator.intentsSnapshot()" in runtime
+    assert "reservedSymbol in coreSymbols" in runtime
     assert "else if (!userStreamConnected)" in runtime
     assert "userStreamSyncRequired = true" in runtime
     assert "internal fun shouldReconnectFuturesUserStream(event: JSONObject): Boolean" in user_stream
