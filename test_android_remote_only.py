@@ -349,6 +349,8 @@ def test_android_h1_is_the_only_directional_decision_and_m15_is_execution_readin
     # exchange-side conditional entry uses the H1 trigger/structural stop.
     assert "signal.triggerPrice" in entry
     assert "signal.protectivePrice" in entry
+    assert "H1_TRIGGER_ALREADY_CROSSED" in entry
+    assert "val submitMark = futuresMarketData.markPrice(symbol)" in entry
     assert "futuresCampaignCoordinator.submitPendingEntry(plan)" in entry
 
 
