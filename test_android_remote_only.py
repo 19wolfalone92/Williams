@@ -676,7 +676,8 @@ def test_chart_endpoint_rejects_unknown_symbol_or_interval_instead_of_silent_fal
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     chart = runtime.split("fun klines(", 1)[1].split("fun marketTickers()", 1)[0]
     assert 'require(symbol in coreSymbols)' in chart
-    assert 'require(selectedInterval in supportedChartIntervals)' in chart
+    assert 'require(selectedInterval in APPROVED_FUTURES_KLINE_INTERVALS)' in chart
+    assert 'APPROVED_FUTURES_KLINE_INTERVALS' in chart
     assert "fetchCandles(symbol, selectedInterval, 150)" in chart
     assert "getOrElse { emptyList() }" not in chart
     assert "Unsupported Futures chart interval" in chart
