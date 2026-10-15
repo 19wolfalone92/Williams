@@ -71,7 +71,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
 
     fun klines(symbol: String, interval: String = "1h", limit: Int = 300): JSONArray {
         requireSymbol(symbol)
-        require(interval in setOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"))
+        require(interval in APPROVED_FUTURES_KLINE_INTERVALS) { "Unsupported USD-M Futures kline interval: $interval" }
         require(limit in 1..1500)
         val url = "$base/fapi/v1/klines".toHttpUrl().newBuilder()
             .addQueryParameter("symbol", symbol)
