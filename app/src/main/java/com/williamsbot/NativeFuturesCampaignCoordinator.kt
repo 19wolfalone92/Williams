@@ -1882,14 +1882,20 @@ internal class NativeFuturesCampaignCoordinator(
         } catch (failure: Exception) {
             // Preserve the known flat/exit result if only protective-order cleanup
             // failed; reconciliation still blocks entry until the orphan is resolved.
-            if (exitIntent.optString("exchange_status").uppercase(Locale.US) != "EXIT_CONFIRMED") {
-                exitIntent.put("exchange_status", "SUBMISSION_UNKNOWN")
-            }
+            val flatConfirmed = exitIntent.optString("exchange_status").uppercase(Locale.US) == "EXIT_CONFIRMED"
+            if (!flatConfirmed) exitIntent.put("exchange_status", "SUBMISSION_UNKNOWN")
             exitIntent.put("error", failure.message ?: failure.javaClass.simpleName)
             saveIntents(intents)
             state = State.RECONCILE_REQUIRED
-            lastBlocker = "exit/protection cleanup unresolved; reconciliation before any retry"
+            lastBlocker = if (flatConfirmed) {
+                "position flat is exchange-confirmed, but protective-order cleanup remains unresolved"
+            } else {
+                "exit/protection cleanup unresolved; reconciliation before any retry"
+            }
             JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
+                .put("flat_confirmed", flatConfirmed)
+                .put("protection_cleanup_pending", flatConfirmed)
+                .put("reconcile_required", true)
                 .put("error", failure.message ?: failure.javaClass.simpleName)
         }
     }
