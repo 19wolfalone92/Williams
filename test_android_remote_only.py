@@ -423,6 +423,27 @@ def test_android_exit_keeps_account_state_open_protected_when_other_positions_re
     assert "findProtectiveStop(otherAlgos, otherDirection, ownerStopId, ownerStop)" in close
 
 
+def test_android_utc_entry_session_blocks_new_orders_and_cancels_resting_entries_after_close():
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert "internal fun isWithinWilliamsEntrySessionUtc(epochMs: Long): Boolean" in coordinator
+    assert "return hour in 8 until 20" in coordinator
+    submit = runtime.split("private fun submitNativeFuturesCampaignEntry(", 1)[1].split(
+        "private fun scanDailyRiskAllowsEntry(", 1
+    )[0]
+    assert "!isWithinWilliamsEntrySessionUtc(sessionClockMs)" in submit
+    assert "!isWithinWilliamsEntrySessionUtc(submitNow)" in submit
+    assert "private fun cancelPendingEntriesOutsideWilliamsSession()" in runtime
+    assert '"OUTSIDE_WILLIAMS_ENTRY_SESSION"' in runtime
+    assert '"OUT_OF_SESSION_CANCEL_PENDING_ENTRIES"' in runtime
+    # Position management must be executed independently from the entry-session gate.
+    scan = runtime.split("private fun performCampaignScan()", 1)[1].split(
+        "private fun performScan()", 1
+    )[0]
+    assert "manageNativeFuturesPositions()" in scan
+    assert "cancelPendingEntriesOutsideWilliamsSession()" in scan
+
+
 def test_android_protective_stop_is_not_suppressed_by_price_protect_divergence():
     adapter = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
     protective = adapter.split("fun placeProtectiveStop(", 1)[1].split(
