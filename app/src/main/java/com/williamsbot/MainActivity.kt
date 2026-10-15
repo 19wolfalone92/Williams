@@ -336,7 +336,14 @@ data class Trade(
     val wavePhase: String,
     val score: Double,
     val mfeR: Double,
-    val maeR: Double
+    val maeR: Double,
+    val direction: String = "",
+    val feeUsdt: Double? = null,
+    val feeKnown: Boolean = true,
+    val initialRiskUsdt: Double? = null,
+    val entrySlippagePct: Double? = null,
+    val pnlComplete: Boolean = true,
+    val fillCount: Int = 0
 )
 
 data class MarketPair(
@@ -2514,14 +2521,17 @@ private fun HistoryScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     val closed = trades.count { it.exit != null }
-                    val wins = trades.count { it.outcome == "WIN" }
-                    val losses = trades.count { it.outcome == "LOSS" }
-                    val pnl = trades.mapNotNull { it.pnl }.sum()
+                    val complete = trades.filter { it.exit != null && it.pnlComplete }
+                    val incomplete = closed - complete.size
+                    val wins = complete.count { it.outcome == "WIN" }
+                    val losses = complete.count { it.outcome == "LOSS" }
+                    val pnl = complete.mapNotNull { it.pnl }.sum()
                     InfoRow("Всего", trades.size.toString())
                     InfoRow("Закрытых", closed.toString())
-                    InfoRow("Win rate", if (closed > 0) "%.1f%%".format(Locale.US, wins * 100.0 / closed) else "—")
+                    InfoRow("Полная статистика", complete.size.toString() + " • неполная " + incomplete)
+                    InfoRow("Win rate", if (complete.isNotEmpty()) "%.1f%%".format(Locale.US, wins * 100.0 / complete.size) else "—")
                     InfoRow("Побед / убытков", wins.toString() + " / " + losses)
-                    InfoRow("PnL", fmt(pnl, 2) + " USDT")
+                    InfoRow("PnL (только полные данные)", fmt(pnl, 2) + " USDT")
                 }
             }
         }
@@ -2547,7 +2557,7 @@ private fun HistoryScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(it.symbol + " • " + it.outcome, style = MaterialTheme.typography.titleMedium)
+                        Text(it.symbol + " • " + it.direction + " • " + it.outcome, style = MaterialTheme.typography.titleMedium)
                         Text(
                             fmt(it.pnl, 2) + " USDT",
                             color = if ((it.pnl ?: 0.0) >= 0.0) AppColors.green else AppColors.red,
@@ -2555,6 +2565,32 @@ private fun HistoryScreen(
                         )
                     }
                     Text("Entry " + fmt(it.entry) + " → Exit " + fmt(it.exit), color = AppColors.textMuted)
+                    if (it.initialRiskUsdt != null) {
+                        Text("Initial risk " + fmt(it.initialRiskUsdt, 2) + " USDT")
+                    }
+                    if (it.feeUsdt != null) {
+                        Text(
+                            "Commission " + fmt(it.feeUsdt, 4) + " USDT" +
+                                if (it.feeKnown) "" else " • fee conversion incomplete",
+                            color = if (it.feeKnown) AppColors.textMuted else AppColors.amber,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    if (it.entrySlippagePct != null) {
+                        Text(
+                            "Entry slippage (adverse +) " +
+                                fmt(it.entrySlippagePct * 100.0, 4) + "%",
+                            color = AppColors.textMuted,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    if (!it.pnlComplete) {
+                        Text(
+                            "Net PnL excluded from aggregate: exchange commission currency could not be converted exactly",
+                            color = AppColors.amber,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                     Text(
                         "Wave W" + it.wavePosition + " • " + it.wavePhase +
                             " • Score " + fmt(it.score, 1) +
@@ -3808,7 +3844,16 @@ private fun parseTrades(array: JSONArray): List<Trade> =
             wavePhase = snap?.optString("wave_phase", "") ?: "",
             score = snap?.optDouble("score", 0.0) ?: 0.0,
             mfeR = x.optDouble("mfe_r", 0.0),
-            maeR = x.optDouble("mae_r", 0.0)
+            maeR = x.optDouble("mae_r", 0.0),
+            direction = x.optString("direction").ifBlank {
+                if (x.optString("side").equals("SELL", true)) "SHORT" else "LONG"
+            },
+            feeUsdt = x.optDouble("fee_usdt", Double.NaN).takeUnless { it.isNaN() },
+            feeKnown = x.optBoolean("fee_known", true),
+            initialRiskUsdt = x.optDouble("initial_risk_usdt", Double.NaN).takeUnless { it.isNaN() },
+            entrySlippagePct = x.optDouble("entry_slippage_pct", Double.NaN).takeUnless { it.isNaN() },
+            pnlComplete = x.optBoolean("pnl_complete", true),
+            fillCount = x.optInt("fill_count", 0)
         )
     }
 
