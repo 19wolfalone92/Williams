@@ -354,16 +354,16 @@ internal fun evaluateFuturesLossStreak(
     var mostRecentLossAt = 0L
     for (row in closed) {
         val outcome = row.optString("outcome").trim().uppercase(Locale.US)
+        if (outcome == "UNKNOWN_FEES" || !row.optBoolean("pnl_complete", true) ||
+            !row.optDouble("pnl", Double.NaN).isFinite()
+        ) {
+            return FuturesLossStreakDecision(
+                false, losses, false, null, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
+            )
+        }
         when (outcome) {
             "WIN", "BREAKEVEN" -> break
             "LOSS" -> {
-                if (!row.optBoolean("pnl_complete", true) ||
-                    !row.optDouble("pnl", Double.NaN).isFinite()
-                ) {
-                    return FuturesLossStreakDecision(
-                        false, losses, false, null, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
-                    )
-                }
                 losses++
                 if (mostRecentLossAt == 0L) mostRecentLossAt = row.optLong("closed_at", 0L)
             }
