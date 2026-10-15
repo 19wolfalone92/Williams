@@ -21,6 +21,12 @@ private val TERMINAL_CAMPAIGN_STATUSES = setOf("CLOSED_OR_STOPPED")
 private const val FUTURES_MAX_ENTRY_RISK_PCT = 0.0025
 private const val FUTURES_MAX_PORTFOLIO_RISK_PCT = 0.006
 
+/** Structural H1 recovery result for a known bot-owned position whose stop journal is missing. */
+internal data class RecoveredStructuralStop(
+    val stopPrice: String,
+    val riskPct: Double
+)
+
 /** Keeps exchange order completion separate from campaign lifecycle. */
 internal fun campaignLifecycleStatus(intent: JSONObject): String {
     val explicit = intent.optString("campaign_status").uppercase(Locale.US)
@@ -351,7 +357,23 @@ internal class NativeFuturesCampaignCoordinator(
         private set
 
     private val lock = Any()
+    @Volatile private var structuralStopRecoveryProvider:
+        ((String, String, Double, Double, Double) -> RecoveredStructuralStop?)? = null
     private val intentsKey = "futures_campaign_intents_v2"
+
+    /**
+     * Configure H1 structural-stop recovery before the first reconciliation. This
+     * provider may repair only a known active Williams campaign with missing stop
+     * metadata; unknown/manual positions are never silently adopted.
+     */
+    fun setStructuralStopRecoveryProvider(
+        provider: (String, String, Double, Double, Double) -> RecoveredStructuralStop?
+    ) = synchronized(lock) {
+        check(state == State.UNINITIALIZED) {
+            "Structural-stop recovery provider must be configured before reconciliation"
+        }
+        structuralStopRecoveryProvider = provider
+    }
     private val allowedSymbols = BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS
     private val terminalStatuses = setOf(
         "FILLED", "FINISHED", "EXPIRED", "EXPIRED_IN_MATCH", "CANCELED",
@@ -520,6 +542,7 @@ internal class NativeFuturesCampaignCoordinator(
                 }
             }
             var hasPendingExit = false
+            var anyUnprotected = false
             // Resolve persisted entry and exit intents against Binance. Older completed
             // campaigns on a symbol must not be mistaken for the campaign now in market.
             for (i in 0 until persisted.length()) {
@@ -783,32 +806,97 @@ internal class NativeFuturesCampaignCoordinator(
                 }
             }
 
-            var anyUnprotected = false
             val protectiveOrdersBySymbol = mutableMapOf<String, JSONArray>()
             for ((symbol, position) in openBySymbol) {
                 val amount = position.optString("positionAmt").toDoubleOrNull() ?: 0.0
                 val direction = if (amount > 0.0) "LONG" else "SHORT"
                 val algos = protectiveOrdersBySymbol.getOrPut(symbol) { adapter.openAlgoOrders(symbol) }
                 val latestIntentIndex = latestEntryIndexBySymbol[symbol]
-                val matchingIntent = latestIntentIndex?.let { persisted.optJSONObject(it) }
-                    ?.takeIf {
-                        it.optString("intent_role", "ENTRY") == "ENTRY" &&
-                            it.optString("symbol").uppercase(Locale.US) == symbol &&
-                            it.optString("direction") == direction &&
-                            run {
-                                val entry = it.optString("entry_price").toBigDecimalOrNull()
-                                val stop = it.optString("protective_stop").toBigDecimalOrNull()
-                                // Historical structural invalidation is entry-relative only at
-                                // initial placement. A trailing profit stop may cross entry.
-                                entry != null && stop != null && entry.signum() > 0 && stop.signum() > 0
-                            }
+                var matchingIntent = latestIntentIndex?.let { persisted.optJSONObject(it) }
+                    ?.takeIf { intent ->
+                        val clientId = intent.optString("client_id")
+                        intent.optString("intent_role", "ENTRY") == "ENTRY" &&
+                            intent.optString("symbol").uppercase(Locale.US) == symbol &&
+                            intent.optString("direction") == direction &&
+                            campaignLifecycleStatus(intent) in ACTIVE_CAMPAIGN_STATUSES &&
+                            // Recovery is restricted to client IDs emitted by the
+                            // Williams campaign runtime, never a manual/unknown position.
+                            (clientId.startsWith("W2E_") || clientId.startsWith("W5E_"))
                     }
+                var liveMark: Double? = null
+                if (matchingIntent != null) {
+                    val exchangeEntry = position.optString("entryPrice").toDoubleOrNull() ?: 0.0
+                    if (!exchangeEntry.isFinite() || exchangeEntry <= 0.0) {
+                        anyUnprotected = true
+                        lastBlocker = "$symbol exchange entry price is invalid; cannot recover structural protection"
+                        continue
+                    }
+                    val persistedEntry = matchingIntent.optString("entry_price").toDoubleOrNull() ?: 0.0
+                    if (!persistedEntry.isFinite() || persistedEntry <= 0.0) {
+                        matchingIntent.put("entry_price", exchangeEntry.toString())
+                            .put("exchange_entry_recovered_at_ms", System.currentTimeMillis())
+                    }
+                    val persistedStop = matchingIntent.optString("protective_stop").toDoubleOrNull() ?: 0.0
+                    if (!persistedStop.isFinite() || persistedStop <= 0.0) {
+                        val protectionStatus = matchingIntent.optString("protection_status", "NOT_SUBMITTED")
+                            .uppercase(Locale.US)
+                        val protectionId = matchingIntent.optString("protection_client_id")
+                        if (protectionStatus.isBlank() || protectionStatus == "NOT_SUBMITTED") {
+                            if (protectionId.isNotBlank()) {
+                                anyUnprotected = true
+                                lastBlocker = "$symbol stop price is missing but a protection client id is already journaled; ambiguous mutation will not be repeated"
+                                matchingIntent.put("protection_status", "SUBMISSION_UNKNOWN")
+                                saveIntents(persisted)
+                                continue
+                            }
+                            liveMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                            val recovered = liveMark?.let { mark ->
+                                runCatching {
+                                    structuralStopRecoveryProvider?.invoke(
+                                        symbol, direction, mark,
+                                        kotlin.math.abs(amount), exchangeEntry
+                                    )
+                                }.getOrNull()
+                            }
+                            if (recovered == null ||
+                                recovered.stopPrice.toDoubleOrNull()?.let {
+                                    isProtectiveStopOnCorrectSide(direction, liveMark.toString(), it.toString())
+                                } != true ||
+                                !recovered.riskPct.isFinite() || recovered.riskPct <= 0.0
+                            ) {
+                                anyUnprotected = true
+                                lastBlocker = "$symbol has a known active Williams campaign but its structural stop is missing; five closed H1 bars/account equity are unavailable or cannot produce a stop on the protective side of mark"
+                                continue
+                            }
+                            matchingIntent
+                                .put("protective_stop", recovered.stopPrice)
+                                .put("risk_pct", recovered.riskPct)
+                                .put("protection_status", "NOT_SUBMITTED")
+                                .put("recovery_stop_source", "H1_LAST_FIVE_CLOSED_BARS")
+                                .put("recovery_stop_at_ms", System.currentTimeMillis())
+                            saveIntents(persisted)
+                        } else {
+                            anyUnprotected = true
+                            lastBlocker = "$symbol structural stop is missing while protection lifecycle is $protectionStatus; manual reconciliation required"
+                            continue
+                        }
+                    }
+                    val verifiedEntry = matchingIntent.optString("entry_price").toBigDecimalOrNull()
+                    val verifiedStop = matchingIntent.optString("protective_stop").toBigDecimalOrNull()
+                    if (verifiedEntry == null || verifiedEntry.signum() <= 0 ||
+                        verifiedStop == null || verifiedStop.signum() <= 0
+                    ) {
+                        anyUnprotected = true
+                        lastBlocker = "$symbol persisted campaign could not recover a valid structural stop; automatic trading blocked"
+                        continue
+                    }
+                }
                 val currentProtectionId = matchingIntent?.optString("protection_client_id").orEmpty()
                 val previousProtectionId = matchingIntent?.optString("previous_protection_client_id").orEmpty()
                 val knownProtectionIds = setOf(currentProtectionId, previousProtectionId).filter { it.isNotBlank() }.toSet()
-                val liveMark = if (matchingIntent != null) {
-                    runCatching { adapter.markPrice(symbol) }.getOrNull()
-                } else null
+                if (matchingIntent != null && liveMark == null) {
+                    liveMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                }
                 val currentStopSafe = matchingIntent != null && liveMark != null &&
                     isProtectiveStopOnCorrectSide(
                         direction, liveMark.toString(), matchingIntent.optString("protective_stop")
