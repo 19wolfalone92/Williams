@@ -303,6 +303,8 @@ def main() -> None:
     must(market_data_source, "internal fun klineCloseTimeMs(openTimeMs: Long, interval: String)", "BinanceUsdMFuturesMarketData.kt")
     must(market_data_source, 'if (interval == "1M")', "BinanceUsdMFuturesMarketData.kt")
     must(market_data_source, "Calendar.MONTH", "BinanceUsdMFuturesMarketData.kt")
+    must(market_data_source, "internal fun isLastClosedCandleCurrent", "BinanceUsdMFuturesMarketData.kt")
+    must(runtime_source, "futuresMarketData.isLastClosedCandleCurrent(last.t, frame, nowMs)", "StandaloneRuntime.kt interval-aware cache freshness")
     must(runtime_source, "APPROVED_FUTURES_KLINE_INTERVALS", "StandaloneRuntime.kt chart interval contract")
     must(runtime_source, "var endTime = futuresMarketData.exchangeNowMs()", "StandaloneRuntime.kt")
     must_not(
