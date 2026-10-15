@@ -50,6 +50,24 @@ class TestnetForcedEntryPolicyTest {
     }
 
     @Test
+    fun complete_recursively_paginated_income_can_exceed_one_thousand_rows() {
+        val allRows = JSONArray()
+        repeat(1200) { index ->
+            allRows.put(
+                JSONObject()
+                    .put("incomeType", "COMMISSION")
+                    .put("income", "-0.01")
+                    .put("time", 1792000000000L + index)
+            )
+        }
+        val summary = summarizeFuturesDailyIncome(allRows)
+        assertNotNull(summary)
+        assertEquals(-12.0, summary!!.tradingIncomeUsdt, 1e-8)
+        assertEquals(0.0, summary.capitalFlowUsdt, 0.0)
+        assertEquals(true, summary.hasTradingActivity)
+    }
+
+    @Test
     fun forced_h1_levels_are_directionally_mirrored_and_structural() {
         val highs = listOf(101.0, 102.0, 104.0, 103.0, 102.0)
         val lows = listOf(99.0, 99.5, 100.0, 98.0, 98.5)
