@@ -152,6 +152,50 @@ class ProtectionOwnershipTest {
     }
 
     @Test
+    fun exchangeProtectionRequiresExactIdDirectionTriggerClosePositionAndActiveStatus() {
+        val validLong = JSONObject()
+            .put("type", "STOP_MARKET")
+            .put("side", "SELL")
+            .put("closePosition", true)
+            .put("algoStatus", "NEW")
+            .put("clientAlgoId", "W2PS_BTC_current")
+            .put("triggerPrice", "95.00")
+        assertTrue(matchesConfirmedFuturesProtectiveStop(
+            validLong, "LONG", "W2PS_BTC_current", "95"
+        ))
+        assertFalse(matchesConfirmedFuturesProtectiveStop(
+            JSONObject(validLong.toString()).put("side", "BUY"),
+            "LONG", "W2PS_BTC_current", "95"
+        ))
+        assertFalse(matchesConfirmedFuturesProtectiveStop(
+            JSONObject(validLong.toString()).put("closePosition", false),
+            "LONG", "W2PS_BTC_current", "95"
+        ))
+        assertFalse(matchesConfirmedFuturesProtectiveStop(
+            JSONObject(validLong.toString()).put("triggerPrice", "94.99"),
+            "LONG", "W2PS_BTC_current", "95"
+        ))
+        assertFalse(matchesConfirmedFuturesProtectiveStop(
+            JSONObject(validLong.toString()).put("clientAlgoId", "manual-stop"),
+            "LONG", "W2PS_BTC_current", "95"
+        ))
+        assertFalse(matchesConfirmedFuturesProtectiveStop(
+            JSONObject(validLong.toString()).put("algoStatus", ""),
+            "LONG", "W2PS_BTC_current", "95"
+        ))
+        val validShort = JSONObject()
+            .put("type", "STOP_MARKET")
+            .put("side", "BUY")
+            .put("closePosition", true)
+            .put("status", "WORKING")
+            .put("clientAlgoId", "W2PS_ETH_current")
+            .put("stopPrice", "105")
+        assertTrue(matchesConfirmedFuturesProtectiveStop(
+            validShort, "SHORT", "W2PS_ETH_current", "105.0"
+        ))
+    }
+
+    @Test
     fun structuralStopMustBeOnTheCorrectSideForDirection() {
         assertTrue(hasValidStructuralStop("LONG", "100", "95"))
         assertFalse(hasValidStructuralStop("LONG", "100", "100"))
