@@ -368,6 +368,35 @@ def test_android_exit_requires_exchange_position_protection_and_filled_order_con
     assert 'isOwnedClientOrderForSymbol(symbol, clientId, activeProtectionClientIdsBySymbol)' in coordinator
 
 
+def test_android_entry_cancellation_rechecks_order_and_partial_fill_before_retiring_campaign():
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    cancel = coordinator.split("fun cancelPendingEntries(", 1)[1].split(
+        "fun trailProtectiveStop(", 1
+    )[0]
+    assert "val confirmed = when (intent.optString(\"kind\"))" in cancel
+    assert "adapter.order(symbol, clientId)" in cancel
+    assert "adapter.queryAlgoOrder(symbol, clientId)" in cancel
+    assert "persistConfirmedCancellation(" in cancel
+    assert "val refreshedPositions = adapter.positions()" in cancel
+    assert "position_observed_after_cancel" in cancel
+    assert "cancel_prior_order_status" in cancel
+    assert 'campaignStatus = "FILL_CONFIRMATION_PENDING"' not in cancel
+    assert 'exchangeStatus == "FINISHED" || reportedExecuted' in cancel
+    assert 'prior == "FILL_CONFIRMATION_PENDING"' in coordinator
+    assert "possiblePartialFill" in coordinator
+
+
+def test_android_exit_keeps_account_state_open_protected_when_other_positions_remain():
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    close = coordinator.split("fun closePosition(", 1)[1].split(
+        "fun status(): JSONObject", 1
+    )[0]
+    assert "val accountPositionsAfterExit = adapter.positions()" in close
+    assert "remainingProtectedPositions++" in close
+    assert "state = if (remainingProtectedPositions > 0) State.OPEN_PROTECTED else State.READY" in close
+    assert "findProtectiveStop(otherAlgos, otherDirection, ownerStopId, ownerStop)" in close
+
+
 def test_android_protection_must_match_owner_id_and_exact_trigger():
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     assert "if (expectedClientId.isNullOrBlank()) return null" in coordinator
