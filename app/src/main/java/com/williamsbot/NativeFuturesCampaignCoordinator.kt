@@ -140,8 +140,19 @@ internal fun futuresContractRuleBlocker(
             .ifBlank { minNotionalFilter.optString("minNotional") }
         val minimum = rawMinimum.toBigDecimalOrNull()
             ?: return "$symbol minimum notional filter is invalid"
-        if (qty.multiply(entry) < minimum) {
+        val notional = qty.multiply(entry)
+        if (notional < minimum) {
             return "$symbol entry notional is below exchange minimum"
+        }
+        // Binance may publish an upper notional bound as well. If present, enforce
+        // it rather than assuming the local sizing cap is sufficient.
+        val rawMaximum = minNotionalFilter.optString("maxNotional")
+        if (rawMaximum.isNotBlank()) {
+            val maximum = rawMaximum.toBigDecimalOrNull()
+                ?: return "$symbol maximum notional filter is invalid"
+            if (maximum.signum() > 0 && notional > maximum) {
+                return "$symbol entry notional exceeds exchange maximum"
+            }
         }
     }
     return null
