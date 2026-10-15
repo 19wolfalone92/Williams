@@ -8,6 +8,75 @@ import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 class TestnetForcedEntryPolicyTest {
+    private fun futuresClosedTrade(
+        id: String,
+        closedAt: Long,
+        outcome: String,
+        pnl: Double,
+        complete: Boolean = true
+    ) = JSONObject()
+        .put("id", "FUTURES:$id")
+        .put("trade_audit_source", "BINANCE_USDM_USER_TRADES")
+        .put("status", "CLOSED")
+        .put("closed_at", closedAt)
+        .put("outcome", outcome)
+        .put("pnl", pnl)
+        .put("pnl_complete", complete)
+
+    @Test
+    fun futures_loss_streak_cooldown_blocks_new_entries_after_two_losses() {
+        val now = 1792067912748L
+        val rows = JSONArray()
+            .put(futuresClosedTrade("newer", now - 60_000L, "LOSS", -12.0))
+            .put(futuresClosedTrade("older", now - 120_000L, "LOSS", -8.0))
+        val decision = evaluateFuturesLossStreak(rows, now)
+        assertEquals(true, decision.available)
+        assertEquals(2, decision.consecutiveLosses)
+        assertEquals(false, decision.allowNewEntries)
+        assertEquals("FUTURES_CONSECUTIVE_LOSS_COOLDOWN", decision.reason)
+        assertEquals(now + (30L * 60L * 1000L) - 60_000L, decision.cooldownUntilMs)
+    }
+
+    @Test
+    fun futures_loss_streak_resets_on_a_newer_win_and_ignores_legacy_rows() {
+        val now = 1792067912748L
+        val rows = JSONArray()
+            .put(futuresClosedTrade("win", now - 30_000L, "WIN", 5.0))
+            .put(futuresClosedTrade("loss1", now - 60_000L, "LOSS", -12.0))
+            .put(futuresClosedTrade("loss2", now - 90_000L, "LOSS", -8.0))
+            .put(JSONObject().put("id", "legacy").put("status", "CLOSED")
+                .put("closed_at", now - 10_000L).put("outcome", "LOSS").put("pnl", -500.0))
+        val decision = evaluateFuturesLossStreak(rows, now)
+        assertEquals(true, decision.available)
+        assertEquals(0, decision.consecutiveLosses)
+        assertEquals(true, decision.allowNewEntries)
+    }
+
+    @Test
+    fun unknown_exchange_fees_fail_closed_for_loss_streak_calculation() {
+        val now = 1792067912748L
+        val rows = JSONArray().put(
+            futuresClosedTrade("unknown", now - 60_000L, "UNKNOWN_FEES", 0.0, complete = false)
+        )
+        val decision = evaluateFuturesLossStreak(rows, now)
+        assertEquals(false, decision.available)
+        assertEquals(false, decision.allowNewEntries)
+        assertEquals("FUTURES_LOSS_STREAK_OUTCOME_UNKNOWN", decision.reason)
+    }
+
+    @Test
+    fun three_consecutive_futures_losses_hard_pause_new_entries() {
+        val now = 1792067912748L
+        val rows = JSONArray()
+            .put(futuresClosedTrade("loss3", now - 10_000L, "LOSS", -12.0))
+            .put(futuresClosedTrade("loss2", now - 20_000L, "LOSS", -8.0))
+            .put(futuresClosedTrade("loss1", now - 30_000L, "LOSS", -4.0))
+        val decision = evaluateFuturesLossStreak(rows, now)
+        assertEquals(3, decision.consecutiveLosses)
+        assertEquals(false, decision.allowNewEntries)
+        assertEquals("FUTURES_CONSECUTIVE_LOSS_HARD_PAUSE", decision.reason)
+    }
+
     @Test
     fun baseline_reconstruction_subtracts_all_income_but_daily_trading_pnl_excludes_capital_flow() {
         val income = JSONArray()
