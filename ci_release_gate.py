@@ -422,7 +422,7 @@ def main() -> None:
     for needle in (
         "val riskPerTrade: Double = 0.0025",
         "val maxDailyLoss: Double = 0.03",
-        "val maxOpenPositions: Int = 1",
+        "val maxOpenPositions: Int = APPROVED_FUTURES_CHART_SYMBOLS.size",
         "val maxTotalRiskPct: Double = 0.006",
     ):
         must(android, needle, "MainActivity.kt")
