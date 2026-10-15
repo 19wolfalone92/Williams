@@ -320,7 +320,11 @@ internal fun runtimeStartButtonEnabled(
     binanceConfigured: Boolean,
     running: Boolean,
     killLatched: Boolean
-): Boolean = binanceConfigured && !running && !killLatched
+): Boolean {
+    // START also brings up read-only market/history feeds and safe reconciliation.
+    // A kill latch blocks order mutations, not the operator's ability to diagnose it.
+    return binanceConfigured && !running
+}
 
 /** Detect a socket that is open but has stopped delivering events or has a stalled handshake. */
 internal fun streamNeedsReconnect(
