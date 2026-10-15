@@ -5248,16 +5248,20 @@ private class NativeEngine(
                 }
 
                 val reconstructed = when {
-                    hasTradingIncome -> reconstructFuturesDailyRiskBaseline(
+                    income.length() > 0 -> reconstructFuturesDailyRiskBaseline(
                         currentEquityUsdt = equity,
                         unrealizedPnlUsdt = unrealized,
                         incomeRows = income
                     ) ?: throw IllegalStateException("Futures income history could not reconstruct a positive starting equity")
                     hasOpenOrUnknownPosition || hasActiveExecution ->
-                        throw IllegalStateException("Exposure/pending campaign exists but the UTC-day trading income ledger is empty")
+                        throw IllegalStateException("Exchange exposure/pending campaign exists but the UTC-day income ledger is empty")
                     else -> equity
                 }
-                reconstructed to if (hasTradingIncome) "RECONSTRUCTED_FROM_FUTURES_INCOME" else "INITIAL_FLAT_SNAPSHOT"
+                reconstructed to when {
+                    hasTradingIncome -> "RECONSTRUCTED_FROM_FUTURES_INCOME"
+                    income.length() > 0 -> "RECONSTRUCTED_FROM_CAPITAL_FLOW_LEDGER"
+                    else -> "INITIAL_FLAT_SNAPSHOT"
+                }
             }
             val baselineResult = baselineAttempt.getOrElse { failure ->
                 paused = true
