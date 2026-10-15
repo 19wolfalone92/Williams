@@ -63,6 +63,27 @@ class FuturesContractRulesTest {
     }
 
     @Test
+    fun rejectsInactiveContractsAndQuantityOutsideLotLimits() {
+        val inactive = exchangeInfo().put("symbols", JSONArray().put(
+            JSONObject()
+                .put("symbol", "BTCUSDT")
+                .put("status", "HALT")
+                .put("filters", exchangeInfo().getJSONArray("symbols").getJSONObject(0).getJSONArray("filters"))
+        ))
+        assertNotNull(futuresContractRuleBlocker(inactive, "BTCUSDT", "0.010", "65000.1", "64900.2"))
+        assertNotNull(futuresContractRuleBlocker(exchangeInfo(minQty = "0.02"), "BTCUSDT", "0.010", "65000.1", "64900.2"))
+        assertNotNull(futuresContractRuleBlocker(exchangeInfo(maxQty = "0.005"), "BTCUSDT", "0.010", "65000.1", "64900.2"))
+    }
+
+    @Test
+    fun enforcesOptionalMaximumNotionalWhenExchangePublishesIt() {
+        val info = exchangeInfo()
+        val filters = info.getJSONArray("symbols").getJSONObject(0).getJSONArray("filters")
+        filters.getJSONObject(2).put("maxNotional", "100")
+        assertNotNull(futuresContractRuleBlocker(info, "BTCUSDT", "0.010", "65000.1", "64900.2"))
+    }
+
+    @Test
     fun missingFiltersFailClosed() {
         assertNotNull(futuresContractRuleBlocker(
             JSONObject().put("symbols", JSONArray().put(
