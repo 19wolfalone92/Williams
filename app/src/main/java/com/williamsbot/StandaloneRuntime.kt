@@ -6215,8 +6215,6 @@ private class NativeEngine(
         raw: JSONObject?
     ) {
         val closedAt = System.currentTimeMillis()
-        val gross =
-            (exitPrice - stored.entry) * stored.qty
         val (feeUsdt, feeKnown) =
             auditStore.estimateFeesUsdt(
                 symbol = stored.symbol,
@@ -6224,20 +6222,26 @@ private class NativeEngine(
                 closedAt = closedAt,
                 exitPrice = exitPrice
             )
-        val net = gross - feeUsdt
-        val risk =
-            ((stored.entry - stored.stop) / stored.entry)
-                .coerceAtLeast(0.000001)
-        val rMultiple =
-            if (stored.entry > 0.0) {
-                (net / (stored.entry * stored.qty)) / risk
-            } else 0.0
-        val outcome =
-            when {
-                net > 0.0 -> "WIN"
-                net < 0.0 -> "LOSS"
-                else -> "BREAKEVEN"
-            }
+        // Legacy PositionState carries the original entry signal type, allowing the
+        // journal to distinguish a SELL-opened SHORT from a BUY-opened LONG.
+        val direction = if (stored.signalType.startsWith("SHORT_", ignoreCase = true) ||
+            stored.signalType.contains("_SHORT", ignoreCase = true)
+        ) "SHORT" else "LONG"
+        val estimatedInitialRisk = (stored.entry * stored.qty * stored.riskPct)
+            .takeIf { it.isFinite() && it > 0.0 }
+            ?: (kotlin.math.abs(stored.entry - stored.stop) * stored.qty)
+        val metrics = calculateDirectionalTradeMetrics(
+            direction = direction,
+            entryPrice = stored.entry,
+            exitPrice = exitPrice,
+            quantity = stored.qty,
+            feeUsdt = feeUsdt,
+            initialRiskUsdt = estimatedInitialRisk
+        )
+        val gross = metrics.grossPnlUsdt
+        val net = metrics.netPnlUsdt
+        val rMultiple = metrics.rMultiple
+        val outcome = metrics.outcome
         auditStore.recordTrade(
             tradeId =
                 "T:" + stored.symbol + ":" +
@@ -6257,7 +6261,8 @@ private class NativeEngine(
             reason = reason,
             rawJson = raw?.toString(),
             feeUsdt = feeUsdt,
-            feeKnown = feeKnown
+            feeKnown = feeKnown,
+            side = if (direction == "SHORT") "SELL" else "BUY"
         )
     }
 
