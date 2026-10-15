@@ -5054,7 +5054,15 @@ private class NativeEngine(
             )
         }
         if (!result.optBoolean("ok", false)) lastError = result.optString("blocker", result.optString("error"))
-        return JSONObject().put("sold", result.optBoolean("ok", false)).put("symbol", symbol)
+        val flatConfirmed = result.optBoolean("flat_confirmed", false)
+        return JSONObject()
+            // "sold" describes actual exchange exposure, not whether orphan-stop
+            // cleanup finished. Keep reconciliation latched via ok=false while
+            // still reporting a confirmed flat position truthfully to the UI.
+            .put("sold", result.optBoolean("ok", false) || flatConfirmed)
+            .put("flat_confirmed", result.optBoolean("flat_confirmed", result.optBoolean("ok", false)))
+            .put("reconcile_required", !result.optBoolean("ok", false))
+            .put("symbol", symbol)
             .put("direction_closed", direction.name).put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
             .put("result", result)
     }
