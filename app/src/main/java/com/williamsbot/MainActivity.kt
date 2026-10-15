@@ -1170,8 +1170,6 @@ fun WilliamsApp(context: Context) {
     }
 }
 
-@Composable
-private fun SystemHealthBar(status: Status) {@Composable
 private fun MoreScreen(
     padding: PaddingValues,
     onIncidents: () -> Unit,
