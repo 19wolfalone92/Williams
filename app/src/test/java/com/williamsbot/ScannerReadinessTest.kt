@@ -135,11 +135,17 @@ class ScannerReadinessTest {
         ))
     }
 
-    @Test fun recovery_contract_never_accepts_auto_run_with_kill_latched() {
-        assertEquals(false, runtimeRecoveryContract(
+    @Test fun recovery_contract_allows_safe_monitoring_with_kill_latched_but_never_auto_entries() {
+        assertEquals(true, runtimeRecoveryContract(
             autoRunRequested = true,
             running = true,
             workerAlive = true,
+            killLatched = true
+        ))
+        assertEquals(false, runtimeRecoveryContract(
+            autoRunRequested = true,
+            running = false,
+            workerAlive = false,
             killLatched = true
         ))
     }
