@@ -43,4 +43,22 @@ class WilliamsIndicatorParityTest {
         val values = (1..40).map { it.toDouble() }.toMutableList().apply { this[33] = Double.NaN }
         assertTrue(awesomeOscillatorAt(values, 33).isNaN())
     }
+
+    @Test
+    fun longAndShortWilliamsSignalsResolveToTheirOwnDirectionAndContext() {
+        assertEquals("LONG", campaignSignalDirection("REVERSAL"))
+        assertEquals("LONG", campaignSignalDirection("SUPER_AO"))
+        assertEquals("LONG", campaignSignalDirection("FRACTAL"))
+        assertEquals("SHORT", campaignSignalDirection("SHORT_REVERSAL"))
+        assertEquals("SHORT", campaignSignalDirection("SHORT_SUPER_AO"))
+        assertEquals("SHORT", campaignSignalDirection("SHORT_FRACTAL"))
+        assertNull(campaignSignalDirection("UNCLASSIFIED_SIGNAL"))
+
+        // D1 opposition vetoes both directions symmetrically; aligned H4 ranks first.
+        assertEquals(0, directionalSignalContextRank("REVERSAL", false, true, true, false))
+        assertEquals(0, directionalSignalContextRank("SHORT_REVERSAL", true, false, false, true))
+        assertEquals(2, directionalSignalContextRank("FRACTAL", true, false, true, false))
+        assertEquals(2, directionalSignalContextRank("SHORT_FRACTAL", false, true, false, true))
+        assertEquals(1, directionalSignalContextRank("SHORT_REVERSAL", false, false, false, false))
+    }
 }
