@@ -488,11 +488,17 @@ def test_android_protective_stop_is_not_suppressed_by_price_protect_divergence()
     assert '"priceProtect" to "FALSE"' in protective
 
 
-def test_android_protection_must_match_owner_id_and_exact_trigger():
+def test_android_protection_must_match_owner_id_exact_trigger_direction_and_active_exchange_status():
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
-    assert "if (expectedClientId.isNullOrBlank()) return null" in coordinator
-    assert 'row.optString("clientAlgoId") == expectedClientId' in coordinator
-    assert "trigger.compareTo(stop) == 0" in coordinator
+    # The exact exchange proof is centralized so it can be tested independently of
+    # the reconciliation loop; it must not accept a missing/defaulted algo status.
+    assert "internal fun matchesConfirmedFuturesProtectiveStop(" in coordinator
+    assert 'val clientId = order.optString("clientAlgoId")' in coordinator
+    assert "clientId == expectedClientId && actual.compareTo(expected) == 0" in coordinator
+    assert "isActiveFuturesProtectionStatus(status)" in coordinator
+    assert 'status.trim().uppercase(Locale.US) in setOf("NEW", "WORKING")' in coordinator
+    assert 'if (direction == "LONG" && side != "SELL") return false' in coordinator
+    assert 'if (direction == "SHORT" && side != "BUY") return false' in coordinator
     assert 'protectionStatus == "SUBMISSION_UNKNOWN" || protectionStatus == "PROTECTED"' in coordinator
     assert "unknownProtectiveStopExists" in coordinator
 
