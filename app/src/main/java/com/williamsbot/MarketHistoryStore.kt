@@ -13,12 +13,17 @@ internal data class HistoryReadinessStatus(
     val workingSetReady: Boolean,
     val decisionFrame: Boolean,
     val decisionReady: Boolean,
+    val contextFrame: Boolean,
+    val contextReady: Boolean,
+    val executionMonitoringFrame: Boolean,
+    val executionReady: Boolean,
     val scope: String
 )
 
 /**
  * "complete" means exhaustive historical backfill reached the exchange's available
- * beginning; it does not mean the bounded working set needed for scanning is unusable.
+ * beginning. A bounded working set can be ready without exhaustive backfill.
+ * H1 alone makes trading decisions; D1/H4 are context and M15 is execution monitoring.
  */
 internal fun historyReadinessStatus(
     interval: String,
@@ -32,13 +37,12 @@ internal fun historyReadinessStatus(
     }
     val count = candleCount.coerceAtLeast(0L)
     val workingReady = count >= minimum
-    val decisionFrame = interval in setOf("1h", "4h", "1d", "15m")
-    val decisionMinimum = when (interval) {
-        "1h" -> 150
-        "4h", "1d", "15m" -> 45
-        else -> Int.MAX_VALUE
-    }
-    val decisionReady = decisionFrame && count >= decisionMinimum
+    val decisionFrame = interval == "1h"
+    val contextFrame = interval == "4h" || interval == "1d"
+    val executionMonitoringFrame = interval == "15m"
+    val decisionReady = decisionFrame && count >= 150
+    val contextReady = contextFrame && count >= 45
+    val executionReady = executionMonitoringFrame && count >= 45
     val scope = when {
         fullHistoryComplete && workingReady -> "FULL_HISTORY"
         fullHistoryComplete -> "FULL_HISTORY_BELOW_WORKING_SET_MINIMUM"
@@ -50,6 +54,10 @@ internal fun historyReadinessStatus(
         workingSetReady = workingReady,
         decisionFrame = decisionFrame,
         decisionReady = decisionReady,
+        contextFrame = contextFrame,
+        contextReady = contextReady,
+        executionMonitoringFrame = executionMonitoringFrame,
+        executionReady = executionReady,
         scope = scope
     )
 }
@@ -420,6 +428,10 @@ class MarketHistoryStore(context: Context) :
                     .put("working_set_ready", readiness.workingSetReady)
                     .put("decision_frame", readiness.decisionFrame)
                     .put("decision_history_ready", readiness.decisionReady)
+                    .put("context_frame", readiness.contextFrame)
+                    .put("context_history_ready", readiness.contextReady)
+                    .put("execution_monitoring_frame", readiness.executionMonitoringFrame)
+                    .put("execution_history_ready", readiness.executionReady)
                     .put("history_scope", readiness.scope)
                 rows.put(row)
             }
