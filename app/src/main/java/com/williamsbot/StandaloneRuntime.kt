@@ -3618,9 +3618,17 @@ private class NativeEngine(
 
         try {
             val result = block()
-            val reportedFailure =
+            // A coordinator safe_preflight_rejection is emitted only before the
+            // intent is journaled and before any exchange order mutation. Do not
+            // poison the account-wide reconciliation latch for a rejected candidate
+            // (e.g. a filter/slot/risk failure); still fail closed on every ambiguous
+            // or post-mutation error.
+            val safePreflightRejection = result.optBoolean("safe_rejection", false) &&
+                !result.optBoolean("mutation_attempted", true)
+            val reportedFailure = !safePreflightRejection && (
                 (result.has("ok") && !result.optBoolean("ok", false)) ||
                     (result.has("accepted") && !result.optBoolean("accepted", false))
+                )
             if (reportedFailure) {
                 reconcileRequired = true
                 persistSafetyFlag("reconcile_required", true)
