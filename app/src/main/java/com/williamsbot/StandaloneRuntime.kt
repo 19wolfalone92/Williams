@@ -5316,8 +5316,6 @@ private class NativeEngine(
         return true
     }
 
-    /**
-     * Signed account requests are network-bound. Fast dashboard polling must not block
     private fun dailyRiskBaselineSource(): String = runCatching {
         val now = futuresMarketData.exchangeNowMs()
         val utc = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
@@ -5329,6 +5327,8 @@ private class NativeEngine(
         executionStore.readState("futures_day_start_equity_source_" + utc.timeInMillis) ?: "UNKNOWN"
     }.getOrDefault("UNKNOWN")
 
+    /**
+     * Signed account requests are network-bound. Fast dashboard polling must not block
      * on them; refresh asynchronously and expose freshness/error diagnostics instead.
      * Entry/risk authorization still uses the coordinator's direct exchange snapshot.
      */
