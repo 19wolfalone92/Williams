@@ -1218,6 +1218,13 @@ internal class NativeFuturesCampaignCoordinator(
                         .put("protection_client_id", confirmedClientId)
                         .put("protective_stop", confirmedStop)
                         .put("last_reconciled_ms", System.currentTimeMillis())
+                    if (!matchingIntent.optBoolean("strategy_ownership_verified", true)) {
+                        // Emergency protection is not proof of a Williams entry signal.
+                        // Keep the position protected and manually closable, but do not
+                        // allow new entries until the operator resolves ownership.
+                        anyUnprotected = true
+                        lastBlocker = "$symbol is emergency-protected, but strategy ownership is unverified; new entries remain blocked"
+                    }
 
                     // A crash during stop replacement may leave both the new stop and
                     // its previously persisted predecessor open. Remove only the known
