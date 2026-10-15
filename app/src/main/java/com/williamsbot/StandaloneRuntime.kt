@@ -6152,9 +6152,14 @@ private class NativeEngine(
 
         val riskUsed = (0 until entries.length()).mapNotNull { entries.optJSONObject(it) }.sumOf { intent ->
             if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
-                intent.optDouble("risk_pct", 0.0)
+                // Missing/corrupt risk is not zero risk. Reserve the full portfolio cap
+                // conservatively so a damaged journal can never authorize excess exposure.
+                conservativeRiskReservation(
+                    intent.optDouble("risk_pct", Double.NaN),
+                    maxTotalRiskPct
+                )
             } else 0.0
-        }
+        }.coerceAtMost(maxTotalRiskPct)
         val riskPct = min(campaignInitialRiskPct, min(maxRiskPerTradePct, maxTotalRiskPct - riskUsed))
         if (riskPct <= 0.0) return
         val account = futuresCampaignCoordinator.accountSnapshot()
