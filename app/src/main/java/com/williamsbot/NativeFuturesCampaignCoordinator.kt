@@ -825,49 +825,14 @@ internal class NativeFuturesCampaignCoordinator(
                     }
                 var liveMark: Double? = null
                 if (matchingIntent == null && latestIntentIndex == null) {
-                    // The exchange is authoritative. If an approved-symbol position
-                    // exists but its entry journal was lost, attempt deterministic
-                    // H1 structural protection and persist a recovery intent before
-                    // any stop-order mutation. Never fabricate a stop if market/history
-                    // or account equity cannot support a valid protective level.
-                    val exchangeEntry = position.optString("entryPrice").toDoubleOrNull() ?: 0.0
-                    val recoveryMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
-                    val recovered = if (exchangeEntry.isFinite() && exchangeEntry > 0.0 && recoveryMark != null) {
-                        runCatching {
-                            structuralStopRecoveryProvider?.invoke(
-                                symbol, direction, recoveryMark,
-                                kotlin.math.abs(amount), exchangeEntry
-                            )
-                        }.getOrNull()
-                    } else null
-                    if (recovered == null ||
-                        recovered.stopPrice.toDoubleOrNull()?.let {
-                            isProtectiveStopOnCorrectSide(direction, recoveryMark.toString(), it.toString())
-                        } != true ||
-                        !recovered.riskPct.isFinite() || recovered.riskPct <= 0.0
-                    ) {
-                        anyUnprotected = true
-                        lastBlocker = "$symbol exchange position has no entry journal and a safe structural H1 stop could not be reconstructed; manual close remains available, new entries blocked"
-                        continue
-                    }
-                    val recoveryClientId = "W2E_RECOVER_${symbol.take(6)}_${(System.currentTimeMillis().toString(16)).takeLast(8)}"
-                    matchingIntent = JSONObject()
-                        .put("intent_role", "ENTRY")
-                        .put("symbol", symbol)
-                        .put("direction", direction)
-                        .put("kind", "RECOVERED_EXCHANGE_POSITION")
-                        .put("client_id", recoveryClientId)
-                        .put("exchange_status", "POSITION_OPEN")
-                        .put("campaign_status", "POSITION_OPEN")
-                        .put("order_status", "FILLED")
-                        .put("entry_price", exchangeEntry.toString())
-                        .put("protective_stop", recovered.stopPrice)
-                        .put("risk_pct", recovered.riskPct)
-                        .put("protection_status", "NOT_SUBMITTED")
-                        .put("recovery_source", "EXCHANGE_POSITION_PLUS_FIVE_CLOSED_H1_BARS")
-                        .put("recovered_position_at_ms", System.currentTimeMillis())
-                    persisted.put(matchingIntent)
-                    saveIntents(persisted)
+                    // A live Futures position without a durable, direction-matching
+                    // Williams entry intent is not proof that this bot opened it.
+                    // Do not silently adopt it, trail it, or exit it on a strategy
+                    // signal. Preserve the exchange exposure, block new entries, and
+                    // leave the explicit MANUAL_EXIT path available to the operator.
+                    anyUnprotected = true
+                    lastBlocker = "$symbol has an exchange position without a current active Williams entry journal; automatic adoption is blocked, explicit manual close remains available, new entries blocked"
+                    continue
                 }
                 if (matchingIntent != null) {
                     val exchangeEntry = position.optString("entryPrice").toDoubleOrNull() ?: 0.0
