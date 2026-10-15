@@ -50,3 +50,129 @@ internal fun calculateDirectionalTradeMetrics(
         outcome = outcome
     )
 }
+
+
+/** Reconstructed, exchange-reported USD-M campaign fills; null means evidence is incomplete. */
+internal data class FuturesCampaignTradeSummary(
+    val symbol: String,
+    val direction: String,
+    val entryPrice: Double,
+    val exitPrice: Double,
+    val quantity: Double,
+    val grossPnlUsdt: Double,
+    val feeUsdt: Double,
+    val feeKnown: Boolean,
+    val netPnlUsdt: Double,
+    val notionalUsdt: Double,
+    val initialRiskUsdt: Double,
+    val rMultiple: Double,
+    val openedAtMs: Long,
+    val closedAtMs: Long,
+    val fillCount: Int
+)
+
+/**
+ * Reconstruct a campaign from authenticated Binance USD-M userTrades data.
+ * Works for LONG and SHORT and supports multiple entry/add-on fills; it refuses
+ * to fabricate a result if filled quantities, trade timestamps, or PnL are incomplete.
+ */
+internal fun summarizeFuturesCampaignTrades(
+    symbol: String,
+    direction: String,
+    openedAtMs: Long,
+    closedAtMs: Long,
+    userTrades: org.json.JSONArray,
+    initialRiskUsdt: Double
+): FuturesCampaignTradeSummary? {
+    if (symbol.isBlank() || direction !in setOf("LONG", "SHORT") ||
+        openedAtMs <= 0L || closedAtMs < openedAtMs ||
+        !initialRiskUsdt.isFinite() || initialRiskUsdt <= 0.0
+    ) return null
+
+    fun number(row: org.json.JSONObject, key: String): Double? {
+        val raw = row.opt(key) ?: return null
+        val value = when (raw) {
+            is Number -> raw.toDouble()
+            is String -> raw.toDoubleOrNull()
+            else -> null
+        }
+        return value?.takeIf { it.isFinite() }
+    }
+
+    var entryQty = 0.0
+    var entryQuote = 0.0
+    var exitQty = 0.0
+    var exitQuote = 0.0
+    var grossRealizedPnl = 0.0
+    var feeUsdt = 0.0
+    var feeKnown = true
+    var fillCount = 0
+    val baseAsset = symbol.removeSuffix("USDT")
+
+    for (i in 0 until userTrades.length()) {
+        val row = userTrades.optJSONObject(i) ?: return null
+        if (!row.optString("symbol").equals(symbol, ignoreCase = true)) continue
+        val time = row.optLong("time", -1L)
+        if (time < openedAtMs || time > closedAtMs) continue
+        val quantity = number(row, "qty") ?: return null
+        val price = number(row, "price") ?: return null
+        val realized = number(row, "realizedPnl") ?: return null
+        val commission = number(row, "commission") ?: return null
+        val buyer = row.opt("buyer") as? Boolean ?: return null
+        val positionSide = row.optString("positionSide", "BOTH").uppercase()
+        if (positionSide.isNotBlank() && positionSide != "BOTH") return null
+        if (quantity <= 0.0 || price <= 0.0) return null
+        val isEntryFill = if (direction == "LONG") buyer else !buyer
+        if (isEntryFill) {
+            entryQty += quantity
+            entryQuote += quantity * price
+        } else {
+            exitQty += quantity
+            exitQuote += quantity * price
+        }
+        grossRealizedPnl += realized
+        val commissionAsset = row.optString("commissionAsset")
+        when {
+            commission == 0.0 -> Unit
+            commissionAsset == "USDT" -> feeUsdt += commission
+            commissionAsset == baseAsset -> feeUsdt += commission * price
+            else -> feeKnown = false
+        }
+        fillCount++
+    }
+
+    if (fillCount == 0 || entryQty <= 0.0 || exitQty <= 0.0 ||
+        !entryQty.isFinite() || !exitQty.isFinite() ||
+        !entryQuote.isFinite() || !exitQuote.isFinite() ||
+        !grossRealizedPnl.isFinite() || !feeUsdt.isFinite()
+    ) return null
+    val qtyTolerance = maxOf(1e-10, maxOf(entryQty, exitQty) * 1e-8)
+    if (kotlin.math.abs(entryQty - exitQty) > qtyTolerance) return null
+
+    val entryPrice = entryQuote / entryQty
+    val exitPrice = exitQuote / exitQty
+    val notionalUsdt = entryQuote
+    val netPnlUsdt = grossRealizedPnl - feeUsdt
+    val rMultiple = netPnlUsdt / initialRiskUsdt
+    if (listOf(entryPrice, exitPrice, notionalUsdt, netPnlUsdt, rMultiple).any { !it.isFinite() } ||
+        entryPrice <= 0.0 || exitPrice <= 0.0
+    ) return null
+
+    return FuturesCampaignTradeSummary(
+        symbol = symbol,
+        direction = direction,
+        entryPrice = entryPrice,
+        exitPrice = exitPrice,
+        quantity = entryQty,
+        grossPnlUsdt = grossRealizedPnl,
+        feeUsdt = feeUsdt,
+        feeKnown = feeKnown,
+        netPnlUsdt = netPnlUsdt,
+        notionalUsdt = notionalUsdt,
+        initialRiskUsdt = initialRiskUsdt,
+        rMultiple = rMultiple,
+        openedAtMs = openedAtMs,
+        closedAtMs = closedAtMs,
+        fillCount = fillCount
+    )
+}
