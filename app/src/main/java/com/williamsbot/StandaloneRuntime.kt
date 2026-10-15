@@ -5095,6 +5095,196 @@ private class NativeEngine(
             .put("result", result)
     }
 
+    /**
+     * Fetch a campaign's account-specific Futures fills without exceeding Binance's
+     * seven-day query window. Saturated 1000-row windows are bisected instead of
+     * silently treating truncated history as complete.
+     */
+    private fun loadFuturesTradeRows(
+        symbol: String,
+        startTimeMs: Long,
+        endTimeMs: Long,
+        depth: Int = 0
+    ): List<JSONObject>? {
+        if (startTimeMs < 0L || endTimeMs < startTimeMs || depth > 40) return null
+        val maxWindowMs = 7L * 24L * 60L * 60L * 1000L
+        if (endTimeMs - startTimeMs > maxWindowMs) {
+            val splitEnd = startTimeMs + maxWindowMs
+            val left = loadFuturesTradeRows(symbol, startTimeMs, splitEnd, depth + 1) ?: return null
+            val right = loadFuturesTradeRows(symbol, splitEnd + 1L, endTimeMs, depth + 1) ?: return null
+            return left + right
+        }
+        val rows = runCatching {
+            futuresCampaignCoordinator.userTrades(symbol, startTimeMs, endTimeMs, 1000)
+        }.getOrNull() ?: return null
+        if (rows.length() < 1000) {
+            return (0 until rows.length()).map { i -> rows.optJSONObject(i) ?: return null }
+        }
+        // A full page may be truncated. Split by inclusive timestamps and verify each
+        // child window, rather than publishing potentially partial trade statistics.
+        if (startTimeMs >= endTimeMs) return null
+        val midpoint = startTimeMs + (endTimeMs - startTimeMs) / 2L
+        val left = loadFuturesTradeRows(symbol, startTimeMs, midpoint, depth + 1) ?: return null
+        val right = loadFuturesTradeRows(symbol, midpoint + 1L, endTimeMs, depth + 1) ?: return null
+        return left + right
+    }
+
+    /**
+     * Native Futures campaigns are not legacy TradeJournal entries. On every confirmed
+     * reconciliation, backfill closed campaigns from Binance userTrades and write an
+     * idempotent journal record. Incomplete exchange history/fee conversion stays
+     * explicitly marked and never enters aggregate net-PnL statistics as if exact.
+     */
+    private fun journalClosedNativeFuturesTrades() {
+        val nowMs = System.currentTimeMillis()
+        val intents = futuresCampaignCoordinator.intentsSnapshot()
+        for (i in 0 until intents.length()) {
+            val intent = intents.optJSONObject(i) ?: continue
+            if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
+            if (campaignLifecycleStatus(intent) !in TERMINAL_CAMPAIGN_STATUSES) continue
+            val clientId = intent.optString("client_id")
+            if (clientId.isBlank()) continue
+            val journalStatus = intent.optString("trade_journal_status")
+            if (journalStatus == "RECORDED" || journalStatus == "NO_FILLED_TRADES") continue
+            val lastAttempt = intent.optLong("trade_journal_updated_at_ms", 0L)
+            if (journalStatus == "RETRY" && lastAttempt > 0L &&
+                nowMs >= lastAttempt && nowMs - lastAttempt < 60_000L
+            ) continue
+
+            val fillObservedAt = maxOf(
+                intent.optLong("position_open_observed_at_ms", 0L),
+                intent.optLong("fill_observed_at_ms", 0L)
+            )
+            if (fillObservedAt <= 0L) {
+                // A terminal unfilled entry has nothing to journal. A live position
+                // seen in a prior reconciliation always receives the former timestamp.
+                futuresCampaignCoordinator.markTradeJournalStatus(
+                    clientId, "NO_FILLED_TRADES", "No exchange-confirmed fill/position timestamp"
+                )
+                continue
+            }
+            val startTime = intent.optLong("created_at_ms", 0L).takeIf { it > 0L } ?: fillObservedAt
+            val closedAt = maxOf(
+                intent.optLong("closed_observed_at_ms", 0L),
+                intent.optLong("confirmed_flat_at_ms", 0L)
+            )
+            if (closedAt < startTime || closedAt <= 0L) {
+                futuresCampaignCoordinator.markTradeJournalStatus(
+                    clientId, "RETRY", "Closed campaign is missing a valid timestamp range"
+                )
+                continue
+            }
+            val symbol = intent.optString("symbol").uppercase(Locale.US)
+            val direction = intent.optString("direction").uppercase(Locale.US)
+            if (symbol !in coreSymbols || direction !in setOf("LONG", "SHORT")) {
+                futuresCampaignCoordinator.markTradeJournalStatus(
+                    clientId, "RETRY", "Persisted campaign symbol/direction is invalid"
+                )
+                continue
+            }
+            try {
+                val fills = loadFuturesTradeRows(symbol, startTime, closedAt)
+                if (fills == null) {
+                    futuresCampaignCoordinator.markTradeJournalStatus(
+                        clientId, "RETRY", "Binance userTrades history was unavailable or remained saturated"
+                    )
+                    continue
+                }
+                val fillArray = JSONArray().apply { fills.forEach { put(it) } }
+                val riskBudget = intent.optDouble("risk_estimated_all_in_loss_usdt", Double.NaN)
+                val summaryRiskBudget = intent.optDouble("risk_budget_usdt", Double.NaN)
+                // Include scale-in quantity conservatively against the original structural
+                // stop. A trailing stop must not shrink the campaign's recorded initial risk.
+                val initialStop = intent.optString("initial_protective_stop")
+                    .toDoubleOrNull()
+                    ?: intent.optString("protective_stop").toDoubleOrNull()
+                val summaryProbe = summarizeFuturesCampaignTrades(
+                    symbol, direction, startTime, closedAt, fillArray,
+                    initialRiskUsdt = listOf(riskBudget, summaryRiskBudget, 1.0)
+                        .first { it.isFinite() && it > 0.0 }
+                )
+                if (summaryProbe == null) {
+                    futuresCampaignCoordinator.markTradeJournalStatus(
+                        clientId, "RETRY",
+                        "Exchange fills did not prove matching opening/closing quantities and realized PnL"
+                    )
+                    continue
+                }
+                val reconstructedStructuralRisk = initialStop?.takeIf {
+                    hasValidStructuralStop(direction, summaryProbe.entryPrice.toString(), it.toString())
+                }?.let {
+                    kotlin.math.abs(summaryProbe.entryPrice - it) * summaryProbe.quantity +
+                        summaryProbe.notionalUsdt * (2.0 * feeBufferPerSidePct + maxSlippagePct)
+                }?.takeIf { it.isFinite() && it > 0.0 } ?: 0.0
+                val initialRisk = maxOf(
+                    riskBudget.takeIf { it.isFinite() && it > 0.0 } ?: 0.0,
+                    summaryRiskBudget.takeIf { it.isFinite() && it > 0.0 } ?: 0.0,
+                    reconstructedStructuralRisk
+                )
+                if (!initialRisk.isFinite() || initialRisk <= 0.0) {
+                    futuresCampaignCoordinator.markTradeJournalStatus(
+                        clientId, "RETRY", "Initial campaign risk could not be reconstructed"
+                    )
+                    continue
+                }
+                val summary = summarizeFuturesCampaignTrades(
+                    symbol, direction, startTime, closedAt, fillArray, initialRisk
+                )
+                if (summary == null) {
+                    futuresCampaignCoordinator.markTradeJournalStatus(
+                        clientId, "RETRY", "Exchange trade statistics failed risk-qualified revalidation"
+                    )
+                    continue
+                }
+                val trigger = intent.optString("entry_price").toDoubleOrNull()
+                    ?.takeIf { it.isFinite() && it > 0.0 } ?: summary.entryPrice
+                val entrySlippagePct = if (direction == "LONG") {
+                    (summary.entryPrice - trigger) / trigger
+                } else {
+                    (trigger - summary.entryPrice) / trigger
+                }
+                val exitIntent = (0 until intents.length()).mapNotNull { j -> intents.optJSONObject(j) }
+                    .lastOrNull {
+                        it.optString("intent_role") == "EXIT" &&
+                            it.optString("symbol").equals(symbol, true) &&
+                            it.optString("exchange_status").equals("EXIT_CONFIRMED", true) &&
+                            it.optLong("created_at_ms", 0L) in startTime..closedAt
+                    }
+                val reason = exitIntent?.optString("reason")?.takeIf { it.isNotBlank() }
+                    ?: intent.optString("close_reason").takeIf { it.isNotBlank() }
+                    ?: "EXCHANGE_RECONCILED_CLOSE"
+                TradeJournal.recordExchangeCompleted(
+                    prefs = prefs,
+                    id = "FUTURES:" + clientId,
+                    symbol = symbol,
+                    direction = direction,
+                    entryPrice = summary.entryPrice,
+                    exitPrice = summary.exitPrice,
+                    qty = summary.quantity,
+                    grossPnlUsdt = summary.grossPnlUsdt,
+                    feeUsdt = summary.feeUsdt,
+                    feeKnown = summary.feeKnown,
+                    initialRiskUsdt = initialRisk,
+                    openedAtMs = summary.openedAtMs,
+                    closedAtMs = summary.closedAtMs,
+                    reason = reason,
+                    entrySnapshot = JSONObject(intent.toString()),
+                    entrySlippagePct = entrySlippagePct,
+                    fillCount = summary.fillCount
+                )
+                futuresCampaignCoordinator.markTradeJournalStatus(
+                    clientId, "RECORDED",
+                    "source=Binance userTrades; fills=${summary.fillCount}; fees_known=${summary.feeKnown}"
+                )
+            } catch (failure: Exception) {
+                futuresCampaignCoordinator.markTradeJournalStatus(
+                    clientId, "RETRY",
+                    failure.message ?: failure.javaClass.simpleName
+                )
+            }
+        }
+    }
+
     private fun manageNativeFuturesPositions(): Boolean {
         val nowMs = System.currentTimeMillis()
         val priorState = futuresCampaignCoordinator.state
@@ -5117,6 +5307,7 @@ private class NativeEngine(
             // Private WS trade/account events schedule immediate reconciliation. This
             // fallback cadence prevents the 1-second market scanner issuing a full
             // signed account/open-order/algo-order reconciliation on every pass.
+            runCatching { journalClosedNativeFuturesTrades() }
             return true
         }
         val lastAttempt = lastNativeManagementAttemptMs
@@ -5176,6 +5367,8 @@ private class NativeEngine(
                 }
             }
         }
+        runCatching { journalClosedNativeFuturesTrades() }
+            .onFailure { lastError = "Futures trade audit backfill failed: " + (it.message ?: it.javaClass.simpleName) }
         val positions = futuresCampaignCoordinator.positionsSnapshot()
         val intents = futuresCampaignCoordinator.intentsSnapshot()
         for (i in 0 until positions.length()) {
