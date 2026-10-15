@@ -139,4 +139,15 @@ class TestnetForcedEntryPolicyTest {
         assertEquals(1, directionalSignalContextRank("LONG_REVERSAL", false, false, false, true))
         assertEquals(0, directionalSignalContextRank("UNKNOWN_SIGNAL", false, false, true, true))
     }
+
+    @Test
+    fun canonical_long_signal_types_emitted_by_engine_are_not_misclassified_as_unknown() {
+        // longCampaignSignals emits these unprefixed types; the short mirror prefixes SHORT_.
+        assertEquals(2, directionalSignalContextRank("SUPER_AO", false, false, true, false))
+        assertEquals(2, directionalSignalContextRank("FRACTAL", false, false, true, false))
+        assertEquals(1, directionalSignalContextRank("REVERSAL", false, false, false, true))
+        assertEquals(0, directionalSignalContextRank("SUPER_AO", false, true, true, false))
+        assertEquals(2, directionalSignalContextRank("SHORT_SUPER_AO", false, false, false, true))
+        assertEquals(1, directionalSignalContextRank("SHORT_REVERSAL", false, false, true, false))
+    }
 }
