@@ -58,6 +58,28 @@ class TestnetForcedEntryPolicyTest {
     }
 
     @Test
+    fun missing_daily_baseline_is_reconstructed_when_exchange_exposure_or_trading_pnl_exists() {
+        val income = JSONArray()
+            .put(JSONObject().put("incomeType", "REALIZED_PNL").put("income", "-30.0"))
+            .put(JSONObject().put("incomeType", "COMMISSION").put("income", "-4.0"))
+            .put(JSONObject().put("incomeType", "TRANSFER").put("income", "250.0"))
+
+        // Equity is 5216 = opening 5000 - 34 trading income + 250 capital flow.
+        // The open position's current unrealized PnL is zero; exposure must not make
+        // a complete exchange ledger unreconstructable.
+        val decision = selectFuturesDailyBaseline(
+            currentEquityUsdt = 5216.0,
+            unrealizedPnlUsdt = 0.0,
+            incomeRows = income,
+            hasOpenOrUnknownPositionOrPendingExecution = true
+        )
+        assertNotNull(decision)
+        assertEquals(5000.0, decision!!.baselineEquityUsdt, 1e-9)
+        assertEquals("RECONSTRUCTED_FROM_FUTURES_INCOME", decision.source)
+        assertEquals(-34.0, summarizeFuturesDailyIncome(income)!!.tradingIncomeUsdt, 1e-9)
+    }
+
+    @Test
     fun empty_income_ledger_is_allowed_only_for_a_flat_reconciled_account() {
         val flat = selectFuturesDailyBaseline(
             currentEquityUsdt = 5000.0,
