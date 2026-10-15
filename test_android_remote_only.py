@@ -679,6 +679,10 @@ def test_chart_endpoint_rejects_unknown_symbol_or_interval_instead_of_silent_fal
     assert 'require(selectedInterval in APPROVED_FUTURES_KLINE_INTERVALS)' in chart
     assert 'APPROVED_FUTURES_KLINE_INTERVALS' in chart
     assert "fetchCandles(symbol, selectedInterval, 150)" in chart
+    assert "futuresMarketData.isLastClosedCandleCurrent(last.t, frame, nowMs)" in runtime
+    market_data = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesMarketData.kt")
+    assert "internal fun isLastClosedCandleCurrent" in market_data
+    assert "Calendar.MONTH" in market_data
     assert "getOrElse { emptyList() }" not in chart
     assert "Unsupported Futures chart interval" in chart
 
