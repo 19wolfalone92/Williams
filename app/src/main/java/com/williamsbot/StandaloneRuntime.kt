@@ -1315,9 +1315,12 @@ private class NativeEngine(
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
+            .put("futures_coordinator_state", coordinatorState)
+            .put("futures_coordinator_blocker", futuresRuntimeStatus.optString("blocker").ifBlank { JSONObject.NULL.toString() })
+            .put("futures_reconciliation_in_progress", coordinatorReconciliationInProgress)
             .put("execution_state_contract", JSONObject()
                 .put("version", 1)
-                .put("state", stateMachine.state.name)
+                .put("state", effectiveDisplayState)
                 .put("execution_enabled", executionReady())
                 .put("reconciliation_required", reconcileRequired)
                 .put("user_stream_sync_required", userStreamSyncRequired)
@@ -9347,6 +9350,25 @@ private class NativeEngine(
 
         val futuresRuntimeStatus = runCatching { futuresCampaignCoordinator.status() }
             .getOrElse { JSONObject().put("state", "RECONCILE_REQUIRED").put("blocker", it.message ?: it.javaClass.simpleName) }
+        val coordinatorState = futuresRuntimeStatus.optString("state", "RECONCILE_REQUIRED")
+            .uppercase(Locale.US)
+        // In campaign mode the exchange coordinator is authoritative. The local FSM can
+        // lag during a REST reconciliation; never display ENTRY_PENDING/READY as if it
+        // were settled while the coordinator is still reconciling or protection is unknown.
+        val effectiveDisplayState = when {
+            !campaignEngineEnabled -> stateName()
+            killLatched -> "KILL_SWITCH_LATCHED"
+            !running -> "STOPPED"
+            paused -> "PAUSED"
+            coordinatorState == "READY" -> "READY_FLAT"
+            coordinatorState == "OPEN_PROTECTED" -> "OPEN"
+            coordinatorState == "ENTRY_PENDING" -> "ENTRY_PENDING"
+            coordinatorState == "EXIT_PENDING" -> "EXIT_PENDING"
+            else -> "RECONCILE_REQUIRED"
+        }
+        val coordinatorReconciliationInProgress =
+            coordinatorState == "RECONCILE_REQUIRED" &&
+                futuresRuntimeStatus.optString("blocker") == "exchange_reconciliation_in_progress"
 
         return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
@@ -9356,7 +9378,7 @@ private class NativeEngine(
             .put("running", running)
             .put("paused", paused)
             .put("recovered", !reconcileRequired && (futuresRuntimeStatus.optString("state") in setOf("READY", "OPEN_PROTECTED", "ENTRY_PENDING")))
-            .put("state", stateName())
+            .put("state", effectiveDisplayState)
             .put("execution_enabled", executionReady())
             .put("position_symbol", firstPosition?.optString("symbol") ?: JSONObject.NULL)
             .put("position_direction", firstPosition?.optString("direction") ?: JSONObject.NULL)
