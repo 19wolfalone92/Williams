@@ -87,6 +87,57 @@ class FuturesEntryRiskAssessmentTest {
     }
 
     @Test
+    fun actualExchangePositionRiskIsRecomputedForLongAndShort() {
+        val long = assessActualFuturesPositionRisk(
+            direction = "LONG",
+            quantity = 5.0,
+            actualEntryPrice = 100.0,
+            originalStructuralStop = 99.5,
+            equityUsdt = 5_000.0,
+            reservedRiskPct = 0.002
+        )
+        val short = assessActualFuturesPositionRisk(
+            direction = "SHORT",
+            quantity = 5.0,
+            actualEntryPrice = 100.0,
+            originalStructuralStop = 100.5,
+            equityUsdt = 5_000.0,
+            reservedRiskPct = 0.002
+        )
+        assertNull(long.blocker)
+        assertNull(short.blocker)
+        assertEquals(4.25, long.estimatedAllInLossUsdt, 1e-9)
+        assertEquals(long.estimatedAllInLossUsdt, short.estimatedAllInLossUsdt, 1e-9)
+        assertEquals(10.0, long.reservedRiskUsdt, 1e-9)
+    }
+
+    @Test
+    fun actualRiskBreachAndMissingOriginalGeometryFailClosedAfterFill() {
+        val gapOrQuantityBreach = assessActualFuturesPositionRisk(
+            direction = "LONG",
+            quantity = 30.0,
+            actualEntryPrice = 100.0,
+            originalStructuralStop = 99.5,
+            equityUsdt = 5_000.0,
+            reservedRiskPct = 0.002
+        )
+        val invalidStop = assessActualFuturesPositionRisk(
+            direction = "SHORT",
+            quantity = 1.0,
+            actualEntryPrice = 100.0,
+            originalStructuralStop = 99.0,
+            equityUsdt = 5_000.0,
+            reservedRiskPct = 0.002
+        )
+        val unknownEquity = assessActualFuturesPositionRisk(
+            "LONG", 1.0, 100.0, 99.0, 0.0, 0.002
+        )
+        assertTrue(gapOrQuantityBreach.blocker!!.contains("ACTUAL_FUTURES_RISK_EXCEEDS_RESERVATION"))
+        assertTrue(invalidStop.blocker!!.contains("SHORT original structural stop"))
+        assertTrue(unknownEquity.blocker!!.contains("equity is unavailable"))
+    }
+
+    @Test
     fun invalidAccountDataAndOverlargeRiskReservationFailClosed() {
         val noEquity = assessFuturesEntryRisk(
             "LONG", "1", "100", "99", 0.0, 100.0, 0.002
