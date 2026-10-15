@@ -1388,6 +1388,20 @@ internal class NativeFuturesCampaignCoordinator(
             )) {
                 "Live Futures position $symbol is not confirmed OPEN_PROTECTED; structural-stop reconciliation required"
             }
+            // Local PROTECTED metadata alone is not sufficient for admission:
+            // confirm the exact closePosition stop still exists on Binance and
+            // remains on the protective side of the current mark before adding risk.
+            val ownerStop = owner.optString("protective_stop")
+            val ownerStopId = owner.optString("protection_client_id")
+            val currentMark = preflightAdapter.markPrice(symbol)
+            check(isProtectiveStopOnCorrectSide(direction, currentMark.toString(), ownerStop)) {
+                "Live Futures position $symbol stop is not on the protective side of the current mark"
+            }
+            check(findProtectiveStop(
+                preflightAdapter.openAlgoOrders(symbol), direction, ownerStopId, ownerStop
+            ) != null) {
+                "Live Futures position $symbol protection is not exchange-confirmed at the persisted client id/trigger"
+            }
             openPositionRows[symbol] = row
         }
 
