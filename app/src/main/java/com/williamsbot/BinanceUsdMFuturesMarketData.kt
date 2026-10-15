@@ -142,6 +142,24 @@ internal class BinanceUsdMFuturesMarketData(
     ): Boolean = openTimeMs >= 0L &&
         exchangeNowMs > klineCloseTimeMs(openTimeMs, interval)
 
+    /**
+     * A cached last-closed candle remains current until the following candle has
+     * itself closed. Derive both boundaries from the native interval, including
+     * calendar-month boundaries; fixed 30-day arithmetic drifts on 28/29/31-day months.
+     */
+    internal fun isLastClosedCandleCurrent(
+        openTimeMs: Long,
+        interval: String,
+        exchangeNowMs: Long
+    ): Boolean {
+        if (openTimeMs <= 0L || exchangeNowMs <= 0L) return false
+        val closeTimeMs = klineCloseTimeMs(openTimeMs, interval)
+        if (closeTimeMs == Long.MAX_VALUE) return false
+        val nextOpenTimeMs = closeTimeMs + 1L
+        val nextCloseTimeMs = klineCloseTimeMs(nextOpenTimeMs, interval)
+        return exchangeNowMs <= nextCloseTimeMs
+    }
+
     /** CandleN stores open time; derive the inclusive close timestamp without admitting a forming bar. */
     internal fun isCandleOpenTimeClosed(
         openTimeMs: Long,
