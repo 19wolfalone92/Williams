@@ -164,10 +164,11 @@ def test_android_reversal_htf_gate_matches_python_campaign_contract():
     android = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     python = _read(ROOT / "futures_williams_runtime.py")
 
-    assert 'signal.type.contains("REVERSAL", ignoreCase = true)' in android
-    assert "(reversalSignal || h4Bull) && !d1Bear" in android
-    assert "(reversalSignal || h4Bear) && !d1Bull" in android
-    assert "def _requires_directional_htf_confirmation" in python
+    # Directional context is ranked only after both H1 hypotheses are preserved.
+    # A D1 conflict vetoes that side, while H4 alignment ranks allowed candidates.
+    assert "internal fun directionalSignalContextRank(" in android
+    assert "val freshSignals = candidate.campaignSignals.filter" in android
+    assert "directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)" in android
     assert "return signal_type != SignalType.REVERSAL" in python
 
 
@@ -469,12 +470,17 @@ def test_android_utc_entry_session_blocks_new_orders_and_cancels_resting_entries
     assert "private fun cancelPendingEntriesOutsideWilliamsSession()" in runtime
     assert '"OUTSIDE_WILLIAMS_ENTRY_SESSION"' in runtime
     assert '"OUT_OF_SESSION_CANCEL_PENDING_ENTRIES"' in runtime
-    # Position management must be executed independently from the entry-session gate.
+    # Signed REST management runs asynchronously so a slow reconciliation cannot
+    # delay scanning every approved symbol.
     scan = runtime.split("private fun performCampaignScan()", 1)[1].split(
-        "private fun performScan()", 1
+        "private fun cancelPendingEntriesOutsideWilliamsSession()", 1
     )[0]
-    assert "manageNativeFuturesPositions()" in scan
-    assert "cancelPendingEntriesOutsideWilliamsSession()" in scan
+    manager = runtime.split("private fun scheduleNativePositionManagement()", 1)[1].split(
+        "private fun performCampaignScan()", 1
+    )[0]
+    assert "scheduleNativePositionManagement()" in scan
+    assert "manageNativeFuturesPositions()" in manager
+    assert "cancelPendingEntriesOutsideWilliamsSession()" in manager
 
 
 def test_android_protective_stop_is_not_suppressed_by_price_protect_divergence():
@@ -780,7 +786,10 @@ def test_android_futures_long_and_short_readiness_uses_h1_signal_not_m5_mtf_gate
         "private fun performCampaignScan(", 1
     )[0]
     assert 'signal.type.startsWith("SHORT_", true)' in submit
-    assert '(reversalSignal || h4Bear) && !d1Bull' in submit
+    assert "val freshSignals = candidate.campaignSignals.filter" in submit
+    assert "directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)" in submit
+    assert "neither LONG nor SHORT is allowed by D1/H4" in submit
+    assert "private fun directionalSignalContextRank(" in runtime
 
 
 def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
