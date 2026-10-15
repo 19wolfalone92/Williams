@@ -61,7 +61,7 @@ class TestnetForcedEntryPolicyTest {
         val decision = evaluateFuturesLossStreak(rows, now)
         assertEquals(false, decision.available)
         assertEquals(false, decision.allowNewEntries)
-        assertEquals("FUTURES_LOSS_STREAK_OUTCOME_UNKNOWN", decision.reason)
+        assertEquals("FUTURES_LOSS_STREAK_PNL_UNKNOWN", decision.reason)
     }
 
     @Test
