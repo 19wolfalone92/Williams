@@ -415,6 +415,111 @@ internal fun canInitializeDailyRiskBaseline(
     hasTradingIncome: Boolean
 ): Boolean = !hasOpenPosition && !hasActiveExecution && !hasTradingIncome
 
+// Rebuild a missing UTC daily equity baseline from the complete USD-M Futures
+// income history. Transfers are neutral capital movements; trading income and
+// unrealized PnL are removed from current equity to reconstruct the day's starting
+// trading equity. A full 1000-row response is treated as possibly truncated.
+internal fun reconstructFuturesDailyRiskBaseline(
+    currentEquityUsdt: Double,
+    unrealizedPnlUsdt: Double?,
+    incomeRows: JSONArray,
+    maximumRows: Int = 1000
+): Double? {
+    if (!currentEquityUsdt.isFinite() || currentEquityUsdt <= 0.0 ||
+        unrealizedPnlUsdt == null || !unrealizedPnlUsdt.isFinite() ||
+        incomeRows.length() < 0 || maximumRows <= 0 || incomeRows.length() >= maximumRows
+    ) return null
+
+    val nonTradingTypes = setOf(
+        "TRANSFER", "INTERNAL_TRANSFER", "DEPOSIT", "WITHDRAW",
+        "WELCOME_BONUS", "BONUS", "AUTO_EXCHANGE",
+        "COIN_SWAP_DEPOSIT", "COIN_SWAP_WITHDRAW"
+    )
+    var tradingIncomeUsdt = 0.0
+    for (index in 0 until incomeRows.length()) {
+        val row = incomeRows.optJSONObject(index) ?: return null
+        val type = row.optString("incomeType").trim().uppercase(Locale.US)
+        val amount = when (val raw = row.opt("income")) {
+            is Number -> raw.toDouble()
+            is String -> raw.trim().toDoubleOrNull()
+            else -> null
+        } ?: return null
+        if (type.isBlank() || !amount.isFinite()) return null
+        if (type !in nonTradingTypes) tradingIncomeUsdt += amount
+        if (!tradingIncomeUsdt.isFinite()) return null
+    }
+    val baseline = currentEquityUsdt - tradingIncomeUsdt - unrealizedPnlUsdt
+    return baseline.takeIf { it.isFinite() && it > 0.0 }
+}
+
+internal data class ForcedH1EntryLevels(
+    val triggerPrice: Double,
+    val protectiveStop: Double
+)
+
+/** User-directed test entry levels, derived only from closed H1 structure. */
+internal fun forcedH1EntryLevels(
+    direction: String,
+    highs: List<Double>,
+    lows: List<Double>,
+    tickSize: Double
+): ForcedH1EntryLevels? {
+    val side = direction.trim().uppercase(Locale.US)
+    if (side != "LONG" && side != "SHORT") return null
+    if (tickSize <= 0.0 || !tickSize.isFinite() ||
+        highs.size < 5 || lows.size < 5 ||
+        highs.takeLast(5).any { !it.isFinite() || it <= 0.0 } ||
+        lows.takeLast(5).any { !it.isFinite() || it <= 0.0 }
+    ) return null
+
+    val breakoutHigh = highs.takeLast(3).maxOrNull() ?: return null
+    val breakoutLow = lows.takeLast(3).minOrNull() ?: return null
+    val structureHigh = highs.takeLast(5).maxOrNull() ?: return null
+    val structureLow = lows.takeLast(5).minOrNull() ?: return null
+    fun roundDown(value: Double): Double = floor(value / tickSize + 1e-12) * tickSize
+    fun roundUp(value: Double): Double = ceil(value / tickSize - 1e-12) * tickSize
+
+    val levels = if (side == "LONG") {
+        ForcedH1EntryLevels(
+            triggerPrice = roundUp(breakoutHigh + tickSize),
+            protectiveStop = roundDown(structureLow - tickSize)
+        )
+    } else {
+        ForcedH1EntryLevels(
+            triggerPrice = roundDown(breakoutLow - tickSize),
+            protectiveStop = roundUp(structureHigh + tickSize)
+        )
+    }
+    if (!levels.triggerPrice.isFinite() || !levels.protectiveStop.isFinite() ||
+        levels.triggerPrice <= 0.0 || levels.protectiveStop <= 0.0 ||
+        (side == "LONG" && levels.protectiveStop >= levels.triggerPrice) ||
+        (side == "SHORT" && levels.protectiveStop <= levels.triggerPrice)
+    ) return null
+    return levels
+}
+
+/** 0 means the direction is vetoed, 1 is an allowed reversal, 2 is aligned H4 context. */
+internal fun directionalSignalContextRank(
+    signalType: String,
+    d1Bull: Boolean,
+    d1Bear: Boolean,
+    h4Bull: Boolean,
+    h4Bear: Boolean
+): Int {
+    val type = signalType.trim().uppercase(Locale.US)
+    val isLong = type.startsWith("LONG_")
+    val isShort = type.startsWith("SHORT_")
+    if (!isLong && !isShort) return 0
+    if (isLong && d1Bear || isShort && d1Bull) return 0
+    val h4Aligned = if (isLong) h4Bull else h4Bear
+    return when {
+        h4Aligned -> 2
+        type.contains("REVERSAL") -> 1
+        else -> 0
+    }
+}
+
+
 /** Rebuild the in-memory circuit breaker from the durable UTC baseline after process restart. */
 internal fun observeFuturesEquityFromPersistedBaseline(
     breaker: EquityCircuitBreaker,
@@ -739,6 +844,12 @@ private class StandaloneServer(private val context: Context) {
             method == "POST" && path == "/api/v1/control/resume" ->
                 x.resume().toString()
 
+            method == "POST" && path == "/api/v1/control/testnet-force-mode" ->
+                x.testnetForceMode(JSONObject(body)).toString()
+
+            method == "POST" && path == "/api/v1/control/testnet-force-entry" ->
+                x.forceTestnetEntry(JSONObject(body)).toString()
+
             method == "POST" &&
                 path == "/api/v1/control/recover" ->
                 x.recover().toString()
@@ -890,6 +1001,14 @@ private class NativeEngine(
 
     @Volatile
     private var paused = false
+
+    @Volatile
+    private var forceTestnetMode =
+        prefs.getBoolean("force_testnet_mode", false) &&
+            executionStore.readState("futures_testnet_force_mode") == "true"
+
+    @Volatile
+    private var nativeManagementRunning = false
 
     @Volatile
     private var scanning = false
@@ -2068,6 +2187,285 @@ private class NativeEngine(
     fun resume(): JSONObject {
         paused = false
         return JSONObject().put("resumed", true)
+    }
+
+    /**
+     * Testnet-only directional override. It does not bypass risk, reconciliation,
+     * account, freshness, session, exchange filters, or structural protection gates.
+     * Automatic signal entries are suspended while this mode is enabled so the
+     * explicitly chosen side cannot race an autonomous opposite-side entry.
+     */
+    @Synchronized
+    fun testnetForceMode(request: JSONObject): JSONObject {
+        require(baseUrl == "https://demo-fapi.binance.com") {
+            "Forced trading is available only on the pinned USD-M Futures Demo endpoint"
+        }
+        require(request.optBoolean("acknowledge", false)) {
+            "Explicit acknowledgement is required for the Testnet directional override"
+        }
+        val enabled = request.optBoolean("enabled", false)
+        if (!enabled) {
+            forceTestnetMode = false
+            val preferenceSaved = prefs.edit()
+                .putBoolean("force_testnet_mode", false)
+                .putBoolean("auto_run", false)
+                .commit()
+            val databaseSaved = executionStore.writeState("futures_testnet_force_mode", "false")
+            paused = true
+            lastError = if (preferenceSaved && databaseSaved) {
+                "TESTNET_FORCE_MODE_DISABLED: Runtime paused; daily-risk baseline retained"
+            } else {
+                "TESTNET_FORCE_MODE_DISABLE_PERSISTENCE_FAILED: Runtime paused; restart requires reconciliation"
+            }
+            if (!preferenceSaved || !databaseSaved) {
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+            }
+            return JSONObject()
+                .put("enabled", false)
+                .put("demo_only", true)
+                .put("paused", true)
+                .put("daily_loss_limit_pct", 0.03)
+                .put("baseline_reset", false)
+                .put("message", lastError)
+        }
+
+        require(running) { "Start the Futures Demo Runtime before enabling the directional override" }
+        require(!killLatched && !reconcileRequired && !equityCircuitBreaker.isTripped()) {
+            "KILL_SWITCH_LATCHED, RECONCILE_REQUIRED, or equity circuit breaker prevents forced trading"
+        }
+        require(historyReady && marketDataFresh() && marketWebSocketFresh() &&
+            publicWebSocketFresh() && userStreamConnected && !userStreamSyncRequired
+        ) { "Fresh Futures history and synchronized market/public/user streams are required" }
+        require(restAccountReady && accountFundedForEntry()) {
+            "A valid funded Futures Demo account snapshot is required"
+        }
+        require(campaignCoordinatorReadyForEntry()) {
+            "Futures positions/orders/protection must be reconciled before enabling the override"
+        }
+
+        val previousError = lastError
+        val dailyRiskAllowed = runCatching { checkFuturesDailyLoss() }.getOrElse {
+            lastError = "FUTURES_DAILY_LOSS_CHECK_FAILED: " +
+                (it.message ?: it.javaClass.simpleName)
+            false
+        }
+        require(dailyRiskAllowed) {
+            lastError ?: "Daily Futures risk limit has not been verified; forced trading remains blocked"
+        }
+        val baselineOnlyPause = paused &&
+            previousError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true
+        require(!paused || baselineOnlyPause) {
+            "Runtime is paused for a reason other than the recoverable missing daily baseline; inspect Diagnostics first"
+        }
+        if (baselineOnlyPause) {
+            require(prefs.edit().putBoolean("auto_run", true).commit()) {
+                "Could not persist Runtime resume after daily-baseline reconstruction"
+            }
+            paused = false
+            lastError = null
+        }
+
+        require(executionReady()) {
+            "Testnet override cannot be armed: " + executionBlockers().joinToString(", ")
+        }
+        forceTestnetMode = true
+        val preferenceSaved = prefs.edit()
+            .putBoolean("force_testnet_mode", true)
+            .putBoolean("auto_run", true)
+            .commit()
+        val databaseSaved = executionStore.writeState("futures_testnet_force_mode", "true")
+        if (!preferenceSaved || !databaseSaved) {
+            forceTestnetMode = false
+            paused = true
+            prefs.edit().putBoolean("auto_run", false).putBoolean("force_testnet_mode", false).commit()
+            executionStore.writeState("futures_testnet_force_mode", "false")
+            lastError = "TESTNET_FORCE_MODE_PERSISTENCE_FAILED: forced entries remain disabled"
+            throw IllegalStateException(lastError)
+        }
+        lastError = null
+        return JSONObject()
+            .put("enabled", true)
+            .put("demo_only", true)
+            .put("automatic_entries_suspended", true)
+            .put("daily_loss_limit_pct", 0.03)
+            .put("daily_baseline_source", "UTC_DAY_RECONCILED_FROM_FUTURES_INCOME")
+            .put("baseline_reset", false)
+            .put("message", "Testnet force mode armed; select LONG or SHORT for an H1 conditional entry. Mandatory risk/protection gates remain active.")
+    }
+
+    /**
+     * Submit one operator-directed conditional H1 breakout on Futures Demo.
+     * The direction may override the current strategy hypothesis, but never the
+     * account-wide Execution Door, daily-loss cap, exchange filters, or structural SL.
+     */
+    @Synchronized
+    fun forceTestnetEntry(request: JSONObject): JSONObject {
+        require(baseUrl == "https://demo-fapi.binance.com" && forceTestnetMode) {
+            "Enable the explicit Futures Demo force mode first"
+        }
+        require(request.optBoolean("acknowledge", false)) {
+            "Explicit acknowledgement is required before submitting the forced directional entry"
+        }
+        val symbol = request.optString("symbol").trim().uppercase(Locale.US)
+        require(symbol in coreSymbols) { "Symbol is outside the approved ten-contract Futures universe" }
+        val directionText = request.optString("direction").trim().uppercase(Locale.US)
+        val direction = when (directionText) {
+            "LONG" -> NativeFuturesCampaignCoordinator.Direction.LONG
+            "SHORT" -> NativeFuturesCampaignCoordinator.Direction.SHORT
+            else -> throw IllegalArgumentException("Direction must be LONG or SHORT")
+        }
+        require(executionReady()) {
+            "Forced entry blocked by the mandatory Execution Gate: " + executionBlockers().joinToString(", ")
+        }
+        require(checkFuturesDailyLoss()) {
+            lastError ?: "Daily Futures risk limit is unknown or breached"
+        }
+        require(executionReady()) {
+            "Forced entry blocked after daily-risk refresh: " + executionBlockers().joinToString(", ")
+        }
+
+        val nowMs = futuresMarketData.exchangeNowMs()
+        require(isWithinWilliamsEntrySessionUtc(nowMs)) {
+            "Williams/Testnet entry window is closed; conditional entries are permitted only 08:00–20:00 UTC"
+        }
+        val h1BarMs = frameSeconds("1h") * 1000L
+        val h1 = fetchCandles(symbol, "1h", 180)
+            .filter { it.t > 0L && it.t + h1BarMs <= nowMs }
+        require(h1.size >= 150) {
+            "Forced entry requires at least 150 closed H1 candles; found ${h1.size}"
+        }
+        val rules = symbolFilters(symbol)
+        val levels = forcedH1EntryLevels(
+            direction = direction.name,
+            highs = h1.takeLast(5).map { it.h },
+            lows = h1.takeLast(5).map { it.l },
+            tickSize = rules.tick
+        ) ?: throw IllegalStateException("Could not derive valid structural H1 trigger/stop for $symbol")
+        val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
+            normalizeTriggerPrice(levels.triggerPrice, rules.tick)
+        } else {
+            normalizePrice(levels.triggerPrice, rules.tick)
+        }
+        val stop = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
+            normalizePrice(levels.protectiveStop, rules.tick)
+        } else {
+            normalizeTriggerPrice(levels.protectiveStop, rules.tick)
+        }
+        val mark = futuresMarketData.markPrice(symbol)
+        require(
+            if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) mark < trigger
+            else mark > trigger
+        ) {
+            "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED: mark=$mark, trigger=$trigger; no market-order substitution"
+        }
+        require(
+            if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) stop < trigger
+            else stop > trigger
+        ) { "Structural stop is on the wrong side of the forced H1 trigger" }
+
+        val account = futuresCampaignCoordinator.accountSnapshot()
+        val parsed = parseFuturesAccountSnapshot(account)
+            ?: throw IllegalStateException("Fresh authenticated USD-M Futures account snapshot is invalid")
+        require(updateCachedFuturesAccount(account) && futuresAccountFundedForEntry(parsed.availableUsdt, parsed.equityUsdt)) {
+            "Positive available USDT and equity are required for a forced entry"
+        }
+        val intents = futuresCampaignCoordinator.intentsSnapshot()
+        val riskUsed = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.sumOf { intent ->
+            if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
+                intent.optDouble("risk_pct", Double.NaN).takeIf { it.isFinite() && it > 0.0 }
+                    ?: maxTotalRiskPct
+            } else 0.0
+        }
+        val riskPct = min(campaignInitialRiskPct, min(maxRiskPerTradePct, maxTotalRiskPct - riskUsed))
+        require(riskPct > 0.0) { "Aggregate Futures campaign risk budget is exhausted or unknown" }
+
+        val stopFraction = kotlin.math.abs(trigger - stop) / trigger
+        val effectiveLoss = stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct
+        require(stopFraction.isFinite() && stopFraction > 0.0 && effectiveLoss.isFinite()) {
+            "Forced-entry structural stop/risk calculation is invalid"
+        }
+        val notional = min(
+            parsed.equityUsdt * 0.25,
+            min(parsed.availableUsdt * 2.0 * 0.95, parsed.equityUsdt * riskPct / effectiveLoss)
+        )
+        val marketLotEnabled = rules.marketStep.isFinite() && rules.marketStep > 0.0
+        val quantityStep = ExecutionMath.commonQuantityStep(rules.step, rules.marketStep)
+        val minQuantity = if (marketLotEnabled) max(rules.minQty, rules.marketMinQty) else rules.minQty
+        val maxQuantity = if (marketLotEnabled) min(rules.maxQty, rules.marketMaxQty) else rules.maxQty
+        val qty = floorStep(notional / trigger, quantityStep)
+        require(
+            qty.isFinite() && qty >= minQuantity && qty <= maxQuantity &&
+                ExecutionMath.isMultiple(qty, rules.step) &&
+                (!marketLotEnabled || ExecutionMath.isMultiple(qty, rules.marketStep)) &&
+                qty * trigger >= rules.minNotional &&
+                qty * trigger <= rules.maxNotional
+        ) {
+            "FUTURES_QUANTITY_FILTER_BLOCKED: forced quantity fails LOT_SIZE/MARKET_LOT_SIZE/notional filters"
+        }
+        val clientId = ("W2F_" + symbol.take(7) + "_" + direction.name.take(1) + "_" + nowMs.toString(36)).take(36)
+        val plan = NativeFuturesCampaignCoordinator.EntryPlan(
+            symbol = symbol,
+            direction = direction,
+            kind = NativeFuturesCampaignCoordinator.EntryKind.STOP,
+            quantity = fmtQty(qty, rules.decimals),
+            entryPrice = fmtPrice(trigger, rules.tick),
+            protectiveStop = fmtPrice(stop, rules.tick),
+            clientId = clientId,
+            riskPct = riskPct
+        )
+        val result = withCampaignMutation(
+            symbol = symbol,
+            purpose = "TESTNET_FORCED_DIRECTION_ENTRY"
+        ) {
+            require(forceTestnetMode && executionReady()) {
+                "Forced-mode state or mandatory Execution Gate changed before submission"
+            }
+            require(checkFuturesDailyLoss()) {
+                lastError ?: "Daily loss limit could not be verified at submission"
+            }
+            val submitMark = futuresMarketData.markPrice(symbol)
+            require(
+                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
+                else submitMark > trigger
+            ) { "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED at final preflight; no market-order substitution" }
+            futuresCampaignCoordinator.submitPendingEntry(plan)
+        }
+        lastOrder = result
+        if (!result.optBoolean("accepted", false)) {
+            lastError = result.optString("blocker", result.optString("error", "Forced conditional entry rejected"))
+            if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED) {
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Forced Futures submission unresolved")
+            }
+        } else {
+            lastRestReconcileMs = 0L
+            stateMachine.force(
+                TradingState.ENTRY_PENDING,
+                "Operator-selected Futures Demo $direction conditional H1 entry submitted; awaiting exchange fill/reconciliation"
+            )
+        }
+        return JSONObject()
+            .put("accepted", result.optBoolean("accepted", false))
+            .put("safe_rejection", result.optBoolean("safe_rejection", false))
+            .put("demo_only", true)
+            .put("manual_direction_override", true)
+            .put("automatic_entries_suspended", true)
+            .put("symbol", symbol)
+            .put("direction", direction.name)
+            .put("entry_kind", "STOP")
+            .put("quantity", plan.quantity)
+            .put("trigger_price", plan.entryPrice)
+            .put("protective_stop", plan.protectiveStop)
+            .put("risk_pct", riskPct)
+            .put("max_daily_loss_pct", 0.03)
+            .put("blocker", result.optString("blocker", JSONObject.NULL.toString()))
+            .put("message", if (result.optBoolean("accepted", false)) {
+                "Forced Testnet conditional entry accepted; exchange reconciliation and stop confirmation are still required"
+            } else {
+                result.optString("blocker", "Forced conditional entry rejected before execution")
+            })
     }
 
     @Synchronized
@@ -4768,59 +5166,86 @@ private class NativeEngine(
         val baselineKey = "futures_day_start_equity_" + utcDayStartMs
 
         if (executionStore.readState(baselineKey) == null) {
-            // Never silently reset the loss counter to current equity if storage was
-            // lost after today's trading began. A flat, idle account with only transfers
-            // can safely establish a fresh baseline (common on a newly funded Testnet).
-            val baselineContext = try {
+            // Reconstruct from the full UTC-day income ledger when trades already
+            // occurred. Never reset to current equity just because the local baseline
+            // disappeared: that would erase realized losses from today's 3% limit.
+            val baselineAttempt = runCatching {
                 val positions = futuresCampaignCoordinator.positionsSnapshot()
                 val hasOpenOrUnknownPosition = (0 until positions.length()).any { index ->
                     val row = positions.optJSONObject(index) ?: return@any true
                     val amount = row.optString("positionAmt").toDoubleOrNull()
                     amount == null || !amount.isFinite() || amount != 0.0
                 }
-
-                // Campaign lifecycle, rather than order status alone, controls whether
-                // the daily-loss baseline can be reset. A FILLED entry may be OPEN_PROTECTED.
                 val intents = futuresCampaignCoordinator.intentsSnapshot()
                 val hasActiveExecution = (0 until intents.length()).any { index ->
                     val row = intents.optJSONObject(index) ?: return@any true
                     isEntryCampaignReserved(row)
                 }
-
                 val income = futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
-                val nonTradingIncomeTypes = setOf(
-                    "TRANSFER", "INTERNAL_TRANSFER", "WELCOME_BONUS", "BONUS", "DEPOSIT", "WITHDRAW"
-                )
-                val hasTradingIncome = (0 until income.length()).any { index ->
-                    val row = income.optJSONObject(index) ?: return@any true
-                    val incomeType = row.optString("incomeType").uppercase(Locale.US)
-                    incomeType.isBlank() || incomeType !in nonTradingIncomeTypes
+                if (income.length() >= 1000) {
+                    throw IllegalStateException("UTC-day Futures income history reached 1000 rows and may be truncated")
                 }
-                Triple(hasOpenOrUnknownPosition, hasActiveExecution, hasTradingIncome)
-            } catch (failure: Exception) {
+                val transferTypes = setOf(
+                    "TRANSFER", "INTERNAL_TRANSFER", "DEPOSIT", "WITHDRAW",
+                    "WELCOME_BONUS", "BONUS", "AUTO_EXCHANGE",
+                    "COIN_SWAP_DEPOSIT", "COIN_SWAP_WITHDRAW"
+                )
+                var hasTradingIncome = false
+                for (index in 0 until income.length()) {
+                    val row = income.optJSONObject(index)
+                        ?: throw IllegalStateException("Malformed Futures income row at index $index")
+                    val type = row.optString("incomeType").trim().uppercase(Locale.US)
+                    val amount = row.optString("income").toDoubleOrNull()
+                        ?: throw IllegalStateException("Missing numeric income at row $index")
+                    require(type.isNotBlank() && amount.isFinite()) {
+                        "Malformed Futures income type/amount at row $index"
+                    }
+                    if (type !in transferTypes) hasTradingIncome = true
+                }
+                val accountSnapshot = parseFuturesAccountSnapshot(account)
+                    ?: throw IllegalStateException("Cannot reconstruct daily baseline without a parsed Futures account snapshot")
+                val unrealized = accountSnapshot.unrealizedPnlUsdt ?: run {
+                    if (hasOpenOrUnknownPosition) {
+                        val values = (0 until positions.length()).map { index ->
+                            val row = positions.optJSONObject(index)
+                                ?: throw IllegalStateException("Malformed Futures position row at index $index")
+                            row.optString("unRealizedProfit").toDoubleOrNull()
+                                ?.takeIf { it.isFinite() }
+                                ?: throw IllegalStateException("Missing unrealized PnL for position row $index")
+                        }
+                        values.sum().takeIf { it.isFinite() }
+                            ?: throw IllegalStateException("Invalid aggregate Futures unrealized PnL")
+                    } else 0.0
+                }
+
+                val reconstructed = when {
+                    hasTradingIncome -> reconstructFuturesDailyRiskBaseline(
+                        currentEquityUsdt = equity,
+                        unrealizedPnlUsdt = unrealized,
+                        incomeRows = income
+                    ) ?: throw IllegalStateException("Futures income history could not reconstruct a positive starting equity")
+                    hasOpenOrUnknownPosition || hasActiveExecution ->
+                        throw IllegalStateException("Exposure/pending campaign exists but the UTC-day trading income ledger is empty")
+                    else -> equity
+                }
+                reconstructed to if (hasTradingIncome) "RECONSTRUCTED_FROM_FUTURES_INCOME" else "INITIAL_FLAT_SNAPSHOT"
+            }
+            val baselineResult = baselineAttempt.getOrElse { failure ->
                 paused = true
                 prefs.edit().putBoolean("auto_run", false).commit()
-                lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: cannot verify today's Futures exposure/activity: " +
-                    (failure.message ?: failure.javaClass.simpleName) + "; new entries blocked"
+                lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: unable to reconstruct UTC-day equity safely: " +
+                    (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 3% and entries stay blocked"
                 return false
             }
-
-            if (!canInitializeDailyRiskBaseline(
-                    hasOpenPosition = baselineContext.first,
-                    hasActiveExecution = baselineContext.second,
-                    hasTradingIncome = baselineContext.third
-                )
+            check(executionStore.writeState(baselineKey, baselineResult.first.toString()) &&
+                executionStore.writeState("futures_day_start_equity_source_" + utcDayStartMs, baselineResult.second)
             ) {
                 paused = true
                 prefs.edit().putBoolean("auto_run", false).commit()
-                lastError =
-                    "FUTURES_DAILY_BASELINE_UNKNOWN: exchange exposure or trading PnL exists since UTC midnight; " +
-                    "refusing to reset the 3% daily-loss limit to current equity"
+                lastError = "FUTURES_DAILY_BASELINE_PERSIST_FAILED: SQLite could not durably store the reconstructed baseline"
                 return false
             }
-            check(executionStore.writeState(baselineKey, equity.toString())) {
-                "SQLite commit failed while persisting Futures daily equity baseline"
-            }
+            if (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true) lastError = null
         }
 
         val baseline = executionStore.readState(baselineKey)?.toDoubleOrNull() ?: 0.0
@@ -4893,6 +5318,17 @@ private class NativeEngine(
 
     /**
      * Signed account requests are network-bound. Fast dashboard polling must not block
+    private fun dailyRiskBaselineSource(): String = runCatching {
+        val now = futuresMarketData.exchangeNowMs()
+        val utc = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        utc.timeInMillis = now
+        utc.set(Calendar.HOUR_OF_DAY, 0)
+        utc.set(Calendar.MINUTE, 0)
+        utc.set(Calendar.SECOND, 0)
+        utc.set(Calendar.MILLISECOND, 0)
+        executionStore.readState("futures_day_start_equity_source_" + utc.timeInMillis) ?: "UNKNOWN"
+    }.getOrDefault("UNKNOWN")
+
      * on them; refresh asynchronously and expose freshness/error diagnostics instead.
      * Entry/risk authorization still uses the coordinator's direct exchange snapshot.
      */
@@ -5484,9 +5920,6 @@ private class NativeEngine(
         if (!dailyLossAllowsEntry) return
         if (!executionReady() || !candidate.campaignReady) return
         if (candidate.spreadPct !in 0.0..maxSpreadPct) return
-        val signal = campaignEntryCandidate(candidate) ?: return
-        val direction = if (signal.type.startsWith("SHORT_", true))
-            NativeFuturesCampaignCoordinator.Direction.SHORT else NativeFuturesCampaignCoordinator.Direction.LONG
         val symbol = candidate.symbol
         val topOfBook = runCatching { futuresMarketData.topOfBook(symbol) }.getOrElse { failure ->
             lastError = "FUTURES_ENTRY_TOP_OF_BOOK_FAILED: $symbol: " +
@@ -5498,10 +5931,17 @@ private class NativeEngine(
             lastError = "FUTURES_ENTRY_SPREAD_BLOCKED: $symbol live spread=" + currentSpreadPct
             return
         }
-        // Measure signal age against the exchange clock, not the signal candle's
-        // open time. Comparing two candle open times under-counts age by up to one H1 bar.
+        // Keep both directional hypotheses until D1/H4 context is known. Picking
+        // the newest signal before applying the directional macro veto caused a
+        // valid opposite-side alternative to be discarded prematurely.
         val contextNow = futuresMarketData.exchangeNowMs()
-        if (!isSignalFresh(signal.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)) return
+        val freshSignals = candidate.campaignSignals.filter {
+            isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)
+        }
+        if (freshSignals.isEmpty()) {
+            lastError = "WILLIAMS_SIGNAL_EXPIRED: no fresh confirmed H1 hypothesis for $symbol"
+            return
+        }
 
         // Macro D1 is an airbag; H4 supplies context; H1 is the only decision TF.
         // M15 is execution/fill monitoring only; M5 remains diagnostics/replay only.
@@ -5522,17 +5962,22 @@ private class NativeEngine(
             h4.last().c > h4Line.lips && ao(h4, h4.lastIndex) > 0.0
         val h4Bear = h4Line.lips < h4Line.teeth && h4Line.teeth < h4Line.jaw &&
             h4.last().c < h4Line.lips && ao(h4, h4.lastIndex) < 0.0
-        // Match the Python campaign contract: a REVERSAL is a presenting
-        // signal and does not require directional H4 confirmation; D1 remains
-        // the macro veto. Continuation/other initial entries require H4 alignment.
-        val reversalSignal = signal.type.contains("REVERSAL", ignoreCase = true)
-        val contextAllowed = when (direction) {
-            NativeFuturesCampaignCoordinator.Direction.LONG ->
-                (reversalSignal || h4Bull) && !d1Bear
-            NativeFuturesCampaignCoordinator.Direction.SHORT ->
-                (reversalSignal || h4Bear) && !d1Bull
+        // Rank each still-fresh directional hypothesis only after context has
+        // been computed. A D1 veto rejects that side; it does not discard the other.
+        // At equal H1 timestamps, prefer a direction aligned with H4 over a reversal
+        // that is allowed by the macro airbag alone.
+        val signal = freshSignals.maxWithOrNull(
+            compareBy<CampaignSignalN> {
+                directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)
+            }.thenBy { it.signalBarTimeMs }
+        )?.takeIf {
+            directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear) > 0
+        } ?: run {
+            lastError = "WILLIAMS_DIRECTIONAL_CONTEXT_BLOCKED: neither LONG nor SHORT is allowed by D1/H4 for $symbol"
+            return
         }
-        if (!contextAllowed) return
+        val direction = if (signal.type.startsWith("SHORT_", true))
+            NativeFuturesCampaignCoordinator.Direction.SHORT else NativeFuturesCampaignCoordinator.Direction.LONG
 
         // M15 is execution/fill monitoring only. It must not invent a second
         // directional signal or veto a causally valid H1 Williams decision.
@@ -5706,6 +6151,38 @@ private class NativeEngine(
         return allowed
     }
 
+    private fun scheduleNativePositionManagement() {
+        synchronized(this) {
+            if (nativeManagementRunning) return
+            nativeManagementRunning = true
+        }
+        Thread {
+            try {
+                val managementOk = runCatching { manageNativeFuturesPositions() }.getOrElse { failure ->
+                    lastError = "Futures position monitor: " +
+                        (failure.message ?: failure.javaClass.simpleName)
+                    false
+                }
+                runCatching { cancelPendingEntriesOutsideWilliamsSession() }
+                    .onFailure { failure ->
+                        lastError = lastError ?: "Futures pending-entry monitor: " +
+                            (failure.message ?: failure.javaClass.simpleName)
+                    }
+                if (!managementOk) {
+                    scannerError = scannerError
+                        ?: futuresCampaignCoordinator.lastBlocker
+                        ?: "Futures position reconciliation/protection incomplete"
+                }
+            } finally {
+                synchronized(this) { nativeManagementRunning = false }
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-futures-position-management"
+            start()
+        }
+    }
+
     private fun performCampaignScan() {
         if (!running) {
             scannerState = "STOPPED"
@@ -5713,39 +6190,10 @@ private class NativeEngine(
             return
         }
 
-        // Discovery is read-only and should continue while entries are paused or
-        // exchange state is unresolved. Actual order mutations still require all
-        // durable risk, FSM, user-stream and Execution Door gates to pass.
-        if (!paused && !reconcileRequired && !killLatched && accountFundedForEntry()) {
-            val dailyRiskAllowed = scanDailyRiskAllowsEntry()
-            if (dailyRiskBlocksScanner(
-                    accountFunded = accountFundedForEntry(),
-                    dailyRiskAllowed = dailyRiskAllowed,
-                    paused = paused,
-                    killLatched = killLatched
-                )
-            ) {
-                scannerState = if (killLatched) "BLOCKED_KILL" else "BLOCKED_DAILY_LOSS"
-                scannerError = lastError ?: "Daily Futures risk gate is latched; new entries are disabled"
-            }
-        }
-
-        // Reconcile/manage through the same Execution Door, including under a kill
-        // latch. This can monitor/maintain already-owned exposure; it never unlatches
-        // the kill switch or bypasses entry authorization. Unknown exposure remains blocked.
-        val managementOk = runCatching { manageNativeFuturesPositions() }.getOrElse { failure ->
-            lastError = "Futures position monitor: " + (failure.message ?: failure.javaClass.simpleName)
-            false
-        }
-        // A previously submitted conditional entry can fire on Binance even if the
-        // Android entry gate is now closed. Cancel still-live entries outside the
-        // configured UTC window; exits, protection and position monitoring continue.
-        cancelPendingEntriesOutsideWilliamsSession()
-        if (!managementOk) {
-            scannerError = scannerError
-                ?: futuresCampaignCoordinator.lastBlocker
-                ?: "Futures position reconciliation/protection incomplete"
-        }
+        // Market discovery must not be serialized behind account income, position
+        // management, or entry-risk checks. Those checks still run immediately before
+        // every order mutation through Execution Door; scanning remains read-only.
+        scheduleNativePositionManagement()
 
         val universe = loadUniverse()
         scanSymbols = universe.first.toMutableList()
@@ -5836,6 +6284,11 @@ private class NativeEngine(
             }
             !completeScan -> "Futures H1 scan incomplete. Missing: " + missing.joinToString(",")
             else -> null
+        }
+        if (forceTestnetMode) {
+            scannerState = if (completeScan) "READY_BLOCKED" else "PARTIAL_BLOCKED"
+            scannerError = "TESTNET_FORCE_MODE_ACTIVE: automatic entries suspended; select an explicit LONG/SHORT H1 entry in Cockpit"
+            return
         }
         if (executionBlocker != null) return
         if (!completeScan) return
@@ -10106,6 +10559,8 @@ private class NativeEngine(
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
+            .put("force_testnet_mode", forceTestnetMode)
+            .put("daily_risk_baseline_source", dailyRiskBaselineSource())
             .put("trades_today", futuresTradesToday)
             .put("daily_pnl_usdt", futuresDailyPnl)
             .put("consecutive_losses", JSONObject.NULL)
