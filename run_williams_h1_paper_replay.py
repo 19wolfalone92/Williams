@@ -160,8 +160,9 @@ def _market_regime_frame(candles: pd.DataFrame) -> pd.DataFrame:
     returns = candles["close"].pct_change()
     trend = candles["close"].pct_change(24 * 30)
     volatility = returns.rolling(24 * 14, min_periods=24 * 7).std() * math.sqrt(24 * 365)
-    low_q = volatility.expanding(min_periods=24 * 30).quantile(0.25)
-    high_q = volatility.expanding(min_periods=24 * 30).quantile(0.75)
+    # Rolling trailing thresholds avoid using future volatility to classify an older trade.
+    low_q = volatility.rolling(24 * 90, min_periods=24 * 30).quantile(0.25)
+    high_q = volatility.rolling(24 * 90, min_periods=24 * 30).quantile(0.75)
     trend_label = np.select(
         [trend > 0.05, trend < -0.05],
         ["TREND_UP_30D", "TREND_DOWN_30D"],
@@ -216,6 +217,12 @@ def run_symbol_replay(
     cfg = canonical_indicator_config_from_env()
     indicators = calculate_indicators(candles, cfg)
     indicators = indicators.iloc[54:].copy()
+    # Indicators were calculated before trimming warmup, so translate stored row
+    # references into the trimmed frame's coordinate system.
+    for column in indicators.columns:
+        if column.endswith("_index"):
+            values = pd.to_numeric(indicators[column], errors="coerce")
+            indicators[column] = values.where(values.isna(), values - 54)
     candles = candles.loc[indicators.index].copy()
     signals = extract_causal_h1_signals(
         indicators, symbol=symbol, tick_size=tick_size, window_bars=window_bars
@@ -245,6 +252,14 @@ def run_symbol_replay(
     equity_path = output_dir / f"{symbol}_equity.csv"
     trades.to_csv(trades_path, index=False)
     equity.to_csv(equity_path)
+    # JSON output must never silently emit NaN/Infinity (e.g. profit factor with
+    # no losing trades). Preserve an unbounded PF as null plus an explicit flag.
+    if not math.isfinite(float(metrics.get("profit_factor", 0.0))):
+        metrics["profit_factor_unbounded"] = True
+        metrics["profit_factor"] = None
+    for key, value in list(metrics.items()):
+        if isinstance(value, (int, float, np.number)) and not math.isfinite(float(value)):
+            metrics[key] = None
     metrics.update({
         "symbol": symbol,
         "timeframe": "H1",
