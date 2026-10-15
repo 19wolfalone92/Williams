@@ -18,6 +18,8 @@ private val ACTIVE_CAMPAIGN_STATUSES = setOf(
     "ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "POSITION_OPEN", "OPEN_PROTECTED", "EXIT_PENDING"
 )
 private val TERMINAL_CAMPAIGN_STATUSES = setOf("CLOSED_OR_STOPPED")
+private const val FUTURES_MAX_ENTRY_RISK_PCT = 0.0025
+private const val FUTURES_MAX_PORTFOLIO_RISK_PCT = 0.006
 
 /** Keeps exchange order completion separate from campaign lifecycle. */
 internal fun campaignLifecycleStatus(intent: JSONObject): String {
@@ -223,6 +225,31 @@ internal fun reservedFuturesPositionSymbols(
             ?.let { occupied += it.uppercase(Locale.US) }
     }
     return occupied
+}
+
+/** Returns a blocker if the next entry would breach the aggregate risk reservation. */
+internal fun futuresPortfolioRiskBlocker(
+    proposedRiskPct: Double,
+    reservedRiskPcts: Iterable<Double>,
+    maxTotalRiskPct: Double = FUTURES_MAX_PORTFOLIO_RISK_PCT
+): String? {
+    if (!maxTotalRiskPct.isFinite() || maxTotalRiskPct <= 0.0) {
+        return "Maximum aggregate Futures risk is not configured"
+    }
+    if (!proposedRiskPct.isFinite() || proposedRiskPct <= 0.0 ||
+        proposedRiskPct > FUTURES_MAX_ENTRY_RISK_PCT
+    ) {
+        return "Proposed Futures entry risk is invalid or exceeds 0.25% equity"
+    }
+    val risks = reservedRiskPcts.toList()
+    if (risks.any { !it.isFinite() || it <= 0.0 || it > FUTURES_MAX_ENTRY_RISK_PCT }) {
+        return "An active Futures campaign has an unknown/invalid risk reservation; reconciliation required"
+    }
+    val reserved = risks.sum()
+    if (!reserved.isFinite() || reserved + proposedRiskPct > maxTotalRiskPct + 1e-9) {
+        return "Aggregate Futures campaign risk would exceed ${"%.2f".format(Locale.US, maxTotalRiskPct * 100.0)}% equity"
+    }
+    return null
 }
 
 /** Null means this symbol may claim a slot; every uncertain campaign blocks admission. */
@@ -1096,21 +1123,6 @@ internal class NativeFuturesCampaignCoordinator(
         }
         validatePlan(plan)
         val currentIntents = intents()
-        // This build permits one campaign across the entire Futures account, not one
-        // pending entry per symbol. Unknown or protected intents reserve that slot.
-        val reservedStatuses = activeStatuses + setOf(
-            "OPEN_PROTECTED", "POSITION_OPEN", "SUBMISSION_UNKNOWN", "EXIT_PENDING"
-        )
-        check((0 until currentIntents.length()).none { i ->
-            val row = currentIntents.optJSONObject(i)
-                ?: throw IllegalStateException("Persisted Futures intent is malformed")
-            isEntryCampaignReserved(row) ||
-                row.optString("exchange_status").uppercase(Locale.US) in reservedStatuses ||
-                row.optString("campaign_status").uppercase(Locale.US) in ACTIVE_CAMPAIGN_STATUSES
-        }) { "A Futures campaign is already active or unresolved; one-campaign limit blocks a second entry" }
-
-        // Also inspect exchange authority before writing an entry intent. Any live
-        // position (including manual/unmanaged exposure) blocks a fresh campaign.
         val preflightAdapter = adapterFactory()
         val contractBlocker = futuresContractRuleBlocker(
             preflightAdapter.exchangeInfo(),
@@ -1122,14 +1134,64 @@ internal class NativeFuturesCampaignCoordinator(
         check(contractBlocker == null) {
             contractBlocker ?: "Binance USD-M contract rules rejected the entry plan"
         }
+
+        // Distinct approved symbols may hold concurrent campaigns, but each live
+        // position must be owned by a durable campaign with exchange-confirmed stop.
+        // Unknown/manual exposure remains fail-closed.
         val livePositions = preflightAdapter.positions()
-        check((0 until livePositions.length()).none { i ->
+        val openPositionRows = linkedMapOf<String, JSONObject>()
+        for (i in 0 until livePositions.length()) {
             val row = livePositions.optJSONObject(i)
                 ?: throw IllegalStateException("Binance returned a malformed position row")
+            val symbol = row.optString("symbol").uppercase(Locale.US)
             val amount = row.optString("positionAmt").toBigDecimalOrNull()
-                ?: throw IllegalStateException("Binance returned a malformed position amount")
-            amount.signum() != 0
-        }) { "A live Futures position exists on Binance; reconcile/protect it before opening another campaign" }
+                ?: throw IllegalStateException("Binance returned a malformed position amount for $symbol")
+            if (amount.signum() == 0) continue
+            check(symbol in allowedSymbols) {
+                "Unmanaged live Futures position $symbol is outside the approved universe; no new entry allowed"
+            }
+            val ownerIndex = latestEntryIntentIndex(currentIntents, symbol)
+                ?: throw IllegalStateException(
+                    "Live Futures position $symbol has no persisted campaign/structural-stop ownership"
+                )
+            val owner = currentIntents.optJSONObject(ownerIndex)
+                ?: throw IllegalStateException("Persisted campaign owner for $symbol is malformed")
+            val direction = if (amount.signum() > 0) Direction.LONG.name else Direction.SHORT.name
+            check(isManagedOpenPositionIntent(
+                status = campaignLifecycleStatus(owner),
+                direction = owner.optString("direction"),
+                expectedDirection = direction,
+                protectionStatus = owner.optString("protection_status"),
+                protectionClientId = owner.optString("protection_client_id")
+            )) {
+                "Live Futures position $symbol is not confirmed OPEN_PROTECTED; structural-stop reconciliation required"
+            }
+            openPositionRows[symbol] = row
+        }
+
+        val slotBlocker = futuresPositionSlotBlocker(
+            symbol = plan.symbol,
+            openPositionSymbols = openPositionRows.keys,
+            intents = currentIntents,
+            maxPositions = allowedSymbols.size
+        )
+        check(slotBlocker == null) { slotBlocker ?: "Futures position slot unavailable" }
+
+        // Sum active intent risk conservatively. Missing/invalid reservations cannot
+        // silently free aggregate portfolio capacity.
+        val reservedRiskPcts = (0 until currentIntents.length()).mapNotNull { i ->
+            val intent = currentIntents.optJSONObject(i)
+                ?: throw IllegalStateException("Persisted Futures intent is malformed")
+            if (intent.optString("intent_role", "ENTRY") != "ENTRY" ||
+                !isEntryCampaignReserved(intent)
+            ) {
+                null
+            } else {
+                intent.optDouble("risk_pct", Double.NaN)
+            }
+        }
+        val riskBlocker = futuresPortfolioRiskBlocker(plan.riskPct, reservedRiskPcts)
+        check(riskBlocker == null) { riskBlocker ?: "Aggregate Futures risk reservation failed" }
 
         val intent = JSONObject()
             .put("intent_role", "ENTRY")
