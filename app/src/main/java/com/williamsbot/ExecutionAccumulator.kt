@@ -5,6 +5,30 @@ import java.math.RoundingMode
 import org.json.JSONObject
 
 /**
+ * Normalize Binance spot-style executionReport and USD-M Futures
+ * ORDER_TRADE_UPDATE (whose execution fields are nested under "o").
+ * The original event is retained separately in the durable audit journal.
+ */
+internal fun normalizedExecutionPayload(event: JSONObject): JSONObject? {
+    val eventType = event.optString("e")
+    return when {
+        eventType == "ORDER_TRADE_UPDATE" -> {
+            val order = event.optJSONObject("o") ?: return null
+            JSONObject(order.toString()).apply {
+                if (!has("E")) put("E", event.optLong("E", optLong("T", 0L)))
+                if (!has("T")) put("T", event.optLong("T", optLong("E", 0L)))
+            }
+        }
+        eventType == "executionReport" -> JSONObject(event.toString())
+        // Backward compatibility for locally stored normalized/legacy execution
+        // payloads which predate the event-type marker.
+        eventType.isBlank() && event.has("i") && event.has("x") ->
+            JSONObject(event.toString())
+        else -> null
+    }
+}
+
+/**
  * Persistent-friendly execution accumulator.
  *
  * Every TRADE execution is accumulated by orderId using exact decimal
@@ -37,17 +61,18 @@ class ExecutionAccumulator {
 
     @Synchronized
     fun accept(event: JSONObject, exitPriceForUnknownFee: BigDecimal? = null): Snapshot? {
-        val orderId = event.optString("i").ifBlank { return null }
-        if (event.optString("x").uppercase() != "TRADE") return snapshot(orderId)
+        val payload = normalizedExecutionPayload(event) ?: return null
+        val orderId = payload.optString("i").ifBlank { return null }
+        if (payload.optString("x").uppercase() != "TRADE") return snapshot(orderId)
         return acceptFill(
             orderId = orderId,
-            symbol = event.optString("s"),
-            tradeId = event.optString("t", "-1"),
-            eventTime = event.optLong("E", 0L),
-            qty = decimal(event.optString("l")),
-            price = decimal(event.optString("L")),
-            commission = decimal(event.optString("n")),
-            commissionAsset = event.optString("N"),
+            symbol = payload.optString("s"),
+            tradeId = payload.optString("t", "-1"),
+            eventTime = payload.optLong("T", payload.optLong("E", 0L)),
+            qty = decimal(payload.optString("l")),
+            price = decimal(payload.optString("L")),
+            commission = decimal(payload.optString("n")),
+            commissionAsset = payload.optString("N"),
             exitPriceForUnknownFee = exitPriceForUnknownFee
         )
     }
