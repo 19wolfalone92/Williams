@@ -94,7 +94,8 @@ internal fun futuresContractRuleBlocker(
     symbol: String,
     quantity: String,
     entryPrice: String,
-    protectiveStop: String
+    protectiveStop: String,
+    marketOrder: Boolean = false
 ): String? {
     val symbols = exchangeInfo.optJSONArray("symbols")
         ?: return "Binance exchangeInfo has no symbols array"
@@ -130,6 +131,25 @@ internal fun futuresContractRuleBlocker(
     }
     if (qty < minQty || qty > maxQty || qty.remainder(step).signum() != 0) {
         return "$symbol quantity violates LOT_SIZE min/max/stepSize"
+    }
+    if (marketOrder) {
+        val marketLot = filter("MARKET_LOT_SIZE")
+            ?: return "$symbol is missing MARKET_LOT_SIZE filter for market-triggered execution"
+        val marketMin = marketLot.optString("minQty").toBigDecimalOrNull()
+            ?: return "$symbol MARKET_LOT_SIZE minQty is invalid"
+        val marketMax = marketLot.optString("maxQty").toBigDecimalOrNull()
+            ?: return "$symbol MARKET_LOT_SIZE maxQty is invalid"
+        val marketStep = marketLot.optString("stepSize").toBigDecimalOrNull()
+            ?: return "$symbol MARKET_LOT_SIZE stepSize is invalid"
+        // Binance can publish a zero market step to indicate that this filter
+        // is disabled; in that case LOT_SIZE remains the quantity authority.
+        if (marketStep.signum() > 0) {
+            if (marketMin.signum() < 0 || marketMax.signum() <= 0 || marketMax < marketMin ||
+                qty < marketMin || qty > marketMax || qty.remainder(marketStep).signum() != 0
+            ) {
+                return "$symbol quantity violates MARKET_LOT_SIZE min/max/stepSize"
+            }
+        }
     }
     val tick = priceFilter.optString("tickSize").toBigDecimalOrNull()
         ?: return "$symbol PRICE_FILTER tickSize is invalid"
@@ -1271,7 +1291,8 @@ internal class NativeFuturesCampaignCoordinator(
             plan.symbol,
             plan.quantity,
             plan.entryPrice,
-            plan.protectiveStop
+            plan.protectiveStop,
+            marketOrder = plan.kind != EntryKind.LIMIT
         )
         check(contractBlocker == null) {
             contractBlocker ?: "Binance USD-M contract rules rejected the entry plan"
