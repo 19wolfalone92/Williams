@@ -5178,6 +5178,32 @@ private class NativeEngine(
         }
         if (!contextAllowed) return
 
+        // Mandatory M15 execution confirmation for every initial H1 scenario.
+        // Only fully closed M15 candles are eligible; missing/stale history blocks entry.
+        val m15BarMs = frameSeconds("15m") * 1000L
+        val m15 = fetchCandles(symbol, "15m", 120)
+            .filter { it.t > 0L && it.t + m15BarMs <= contextNow }
+        if (m15.size < 45) {
+            lastError = "M15_CONFIRMATION_BLOCKED: insufficient closed M15 history for $symbol"
+            return
+        }
+        val m15Line = alligator(m15, m15.lastIndex)
+        val m15Ao = ao(m15, m15.lastIndex)
+        val m15Bull = m15Line.lips > m15Line.teeth &&
+            m15Line.teeth > m15Line.jaw &&
+            m15.last().c > m15Line.lips && m15Ao > 0.0
+        val m15Bear = m15Line.lips < m15Line.teeth &&
+            m15Line.teeth < m15Line.jaw &&
+            m15.last().c < m15Line.lips && m15Ao < 0.0
+        val m15Confirmed = when (direction) {
+            NativeFuturesCampaignCoordinator.Direction.LONG -> m15Bull
+            NativeFuturesCampaignCoordinator.Direction.SHORT -> m15Bear
+        }
+        if (!m15Confirmed) {
+            lastError = "M15_CONFIRMATION_BLOCKED: closed M15 structure does not confirm $direction for $symbol"
+            return
+        }
+
         val entries = futuresCampaignCoordinator.intentsSnapshot()
         val clientId = ("W2E_" + symbol.take(7) + "_" + signal.type.take(4) + "_" + signal.signalBarTimeMs.toString(36)).take(36)
         if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId }) return
