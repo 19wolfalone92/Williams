@@ -150,6 +150,40 @@ class ScannerReadinessTest {
         ))
     }
 
+    @Test fun runtime_diagnostic_does_not_pass_when_runtime_and_worker_are_both_stopped() {
+        assertEquals("WARN", runtimeLifecycleSeverity(
+            autoRunRequested = false, running = false, workerAlive = false
+        ))
+        assertEquals("FAIL", runtimeLifecycleSeverity(
+            autoRunRequested = true, running = false, workerAlive = false
+        ))
+        assertEquals("FAIL", runtimeLifecycleSeverity(
+            autoRunRequested = true, running = true, workerAlive = false
+        ))
+        assertEquals("PASS", runtimeLifecycleSeverity(
+            autoRunRequested = true, running = true, workerAlive = true
+        ))
+    }
+
+    @Test fun history_diagnostic_does_not_pass_for_idle_empty_history() {
+        assertEquals("WARN", historyLifecycleSeverity(
+            autoRunRequested = false, running = false, historyReady = false,
+            warmupRunning = false, activeTasks = 0
+        ))
+        assertEquals("FAIL", historyLifecycleSeverity(
+            autoRunRequested = true, running = true, historyReady = false,
+            warmupRunning = false, activeTasks = 0
+        ))
+        assertEquals("PASS", historyLifecycleSeverity(
+            autoRunRequested = true, running = true, historyReady = false,
+            warmupRunning = true, activeTasks = 4
+        ))
+        assertEquals("PASS", historyLifecycleSeverity(
+            autoRunRequested = true, running = true, historyReady = true,
+            warmupRunning = false, activeTasks = 0
+        ))
+    }
+
 
     @Test fun dashboard_uses_live_quote_then_fresh_rest_then_last_closed_candle() {
         assertEquals(101.0, dashboardPrice(101.0, 100.0, 99.0, true, true)!!, 0.0)
