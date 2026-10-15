@@ -9960,11 +9960,31 @@ private class NativeEngine(
         val before = status(fast = true)
         val actions = JSONArray()
 
-        // A kill latch is never cleared automatically.
+        // A kill latch is never cleared automatically, but it must not disable
+        // safe monitoring. Start feeds/history in a no-entry mode so diagnostics and
+        // position protection can recover while all new entries stay blocked.
         if (killLatched) {
             actions.put("blocked_by_kill_switch")
+            if (!running) {
+                val safeStart = runCatching { start() }.getOrElse {
+                    JSONObject().put("started", false)
+                        .put("blocker", it.message ?: it.javaClass.simpleName)
+                }
+                if (safeStart.optBoolean("started", false)) {
+                    actions.put("safe_monitoring_started_under_kill_switch")
+                } else if (safeStart.optString("reason") != "already_running") {
+                    actions.put("safe_monitoring_start_blocked")
+                    actions.put("startup_blocker:" + safeStart.optString("blocker", "unknown"))
+                }
+            }
+            if (running && !historyReady && !historyWarmupRunning) {
+                historyState = "RECOVERY_REQUESTED"
+                warmCoreHistoryAsync(runtimeGeneration)
+                actions.put("futures_history_reload_requested")
+            }
+            if (running) repairStaleMarketStreams()
             val after = status(fast = true)
-            return JSONObject().put("changed", false).put("safe_only", true)
+            return JSONObject().put("changed", actions.length() > 1).put("safe_only", true)
                 .put("actions", actions).put("execution_ready", false)
                 .put("execution_blockers", JSONArray(executionBlockers()))
                 .put("before", before).put("after", after)
