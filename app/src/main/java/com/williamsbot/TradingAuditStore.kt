@@ -330,20 +330,27 @@ class TradingAuditStore(context: Context) :
         values.put("raw_json", event.toString())
         writableDatabase.insert("events", null, values)
 
-        if (eventType != "executionReport") return
+        // Binance USD-M Futures sends ORDER_TRADE_UPDATE with all execution fields
+        // nested in "o"; Spot-style executionReport fields live at the root. Normalize
+        // both shapes before writing the same durable execution/order tables.
+        if (eventType != "executionReport" && eventType != "ORDER_TRADE_UPDATE") return
+        val payload = normalizedExecutionPayload(event) ?: return
+        val executionEventTime = payload.optLong("E", eventTime)
+        val transactionTime = payload.optLong("T", executionEventTime)
 
-        val symbol = event.optString("s")
-        val orderId = event.optString("i")
-        val clientId = event.optString("c")
-        val tradeId = event.optString("t", "-1")
-        val executionType = event.optString("x")
-        val status = event.optString("X")
+        val symbol = payload.optString("s")
+        val orderId = payload.optString("i")
+        if (symbol.isBlank() || orderId.isBlank()) return
+        val clientId = payload.optString("c")
+        val tradeId = payload.optString("t", "-1")
+        val executionType = payload.optString("x")
+        val status = payload.optString("X")
         val eventKey = listOf(
             symbol,
             orderId,
             tradeId,
             executionType,
-            eventTime.toString()
+            transactionTime.toString()
         ).joinToString(":")
 
         val execution = ContentValues()
@@ -353,12 +360,12 @@ class TradingAuditStore(context: Context) :
         execution.put("trade_id", tradeId)
         execution.put("execution_type", executionType)
         execution.put("order_status", status)
-        execution.put("last_qty", event.optString("l").toDoubleOrNull() ?: 0.0)
-        execution.put("last_price", event.optString("L").toDoubleOrNull() ?: 0.0)
-        execution.put("commission", event.optString("n").toDoubleOrNull() ?: 0.0)
-        execution.put("commission_asset", event.optString("N"))
-        execution.put("event_time", eventTime)
-        execution.put("transaction_time", event.optLong("T", 0L))
+        execution.put("last_qty", payload.optString("l").toDoubleOrNull() ?: 0.0)
+        execution.put("last_price", payload.optString("L").toDoubleOrNull() ?: 0.0)
+        execution.put("commission", payload.optString("n").toDoubleOrNull() ?: 0.0)
+        execution.put("commission_asset", payload.optString("N"))
+        execution.put("event_time", executionEventTime)
+        execution.put("transaction_time", transactionTime)
         execution.put("raw_json", event.toString())
         writableDatabase.insertWithOnConflict(
             "executions",
@@ -371,17 +378,17 @@ class TradingAuditStore(context: Context) :
         order.put("client_order_id", clientId.ifBlank { orderId })
         order.put("symbol", symbol)
         order.put("order_id", orderId)
-        order.put("order_list_id", event.optString("g"))
-        order.put("side", event.optString("S"))
-        order.put("type", event.optString("o"))
+        order.put("order_list_id", payload.optString("g"))
+        order.put("side", payload.optString("S"))
+        order.put("type", payload.optString("o"))
         order.put("status", status)
-        order.put("orig_qty", event.optString("q").toDoubleOrNull() ?: 0.0)
-        order.put("executed_qty", event.optString("z").toDoubleOrNull() ?: 0.0)
-        val quote = event.optString("Z").toDoubleOrNull() ?: 0.0
+        order.put("orig_qty", payload.optString("q").toDoubleOrNull() ?: 0.0)
+        order.put("executed_qty", payload.optString("z").toDoubleOrNull() ?: 0.0)
+        val quote = payload.optString("Z").toDoubleOrNull() ?: 0.0
         order.put("cumulative_quote_qty", quote)
         val executed = event.optString("z").toDoubleOrNull() ?: 0.0
         order.put("avg_price", if (executed > 0.0) quote / executed else 0.0)
-        order.put("last_event_time", eventTime)
+        order.put("last_event_time", executionEventTime)
         order.put("updated_at", System.currentTimeMillis())
         order.put("raw_json", event.toString())
         writableDatabase.insertWithOnConflict(
