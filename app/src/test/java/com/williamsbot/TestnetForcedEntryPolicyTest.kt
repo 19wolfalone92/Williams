@@ -141,6 +141,18 @@ class TestnetForcedEntryPolicyTest {
     }
 
     @Test
+    fun order_direction_is_explicit_and_unknown_signal_never_defaults_to_long() {
+        assertEquals("LONG", campaignSignalDirection("REVERSAL"))
+        assertEquals("LONG", campaignSignalDirection("SUPER_AO"))
+        assertEquals("LONG", campaignSignalDirection("FRACTAL"))
+        assertEquals("LONG", campaignSignalDirection("LONG_BREAKOUT"))
+        assertEquals("SHORT", campaignSignalDirection("SHORT_REVERSAL"))
+        assertEquals("SHORT", campaignSignalDirection("SHORT_SUPER_AO"))
+        assertNull(campaignSignalDirection("UNKNOWN_SIGNAL"))
+        assertNull(campaignSignalDirection(""))
+    }
+
+    @Test
     fun canonical_long_signal_types_emitted_by_engine_are_not_misclassified_as_unknown() {
         // longCampaignSignals emits these unprefixed types; the short mirror prefixes SHORT_.
         assertEquals(2, directionalSignalContextRank("SUPER_AO", false, false, true, false))
