@@ -275,8 +275,13 @@ internal fun diagnosticConsistencyFindings(
     if (runtimeReconcileRequired && executionEnabled) {
         add("SAFETY_CONTRADICTION: execution enabled while reconcile_required is latched")
     }
-    if (dailyRiskBaselineSource.equals("UNKNOWN", ignoreCase = true) && executionEnabled) {
-        add("RISK_BASELINE_UNKNOWN: execution enabled without a known UTC daily-risk baseline")
+    if (dailyRiskBaselineSource.isBlank() ||
+        dailyRiskBaselineSource.equals("UNKNOWN", ignoreCase = true) ||
+        dailyRiskBaselineSource.equals("null", ignoreCase = true)) {
+        add("RISK_BASELINE_UNKNOWN: UTC daily-risk baseline source is not established")
+        if (executionEnabled) {
+            add("RISK_BASELINE_UNSAFE_EXECUTION: execution is enabled without a known UTC daily-risk baseline")
+        }
     }
 }
 
@@ -11157,7 +11162,7 @@ private class NativeEngine(
                 "; last_symbols_scanned=" + lastSymbolsScanned + "; age_ms=" + scannerProgressAgeMs
         )
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
-        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss=0.03")
+        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "CONFIGURATION ONLY; per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss_limit=0.03; baseline readiness is checked separately by daily_risk_baseline")
         test(
             "self_heal_contract",
             "runtime",
