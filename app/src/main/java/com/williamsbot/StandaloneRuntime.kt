@@ -260,8 +260,13 @@ internal fun diagnosticConsistencyFindings(
     runtimeReconcileRequired: Boolean,
     executionEnabled: Boolean,
     dailyRiskBaselineSource: String,
-    reconciliationRunning: Boolean
+    reconciliationRunning: Boolean,
+    topLevelRuntimeState: String = runtimeState
 ): List<String> = buildList {
+    if (topLevelRuntimeState.isNotBlank() && runtimeState.isNotBlank() &&
+        topLevelRuntimeState != runtimeState) {
+        add("RUNTIME_STATE_MISMATCH: status.state=$topLevelRuntimeState but execution_state_contract.state=$runtimeState")
+    }
     if (coordinatorState == "RECONCILE_REQUIRED" && runtimeState != "RECONCILE_REQUIRED") {
         add("STATE_MISMATCH: coordinator requires reconciliation but runtime state is $runtimeState")
     }
@@ -11197,8 +11202,20 @@ private class NativeEngine(
             runtimeReconcileRequired = statusSnapshot.optBoolean("reconcile_required", false),
             executionEnabled = statusSnapshot.optBoolean("execution_enabled", false),
             dailyRiskBaselineSource = statusSnapshot.optString("daily_risk_baseline_source", "UNKNOWN"),
-            reconciliationRunning = statusSnapshot.optBoolean("futures_reconciliation_in_progress", false)
+            reconciliationRunning = statusSnapshot.optBoolean("futures_reconciliation_in_progress", false),
+            topLevelRuntimeState = statusSnapshot.optString("state", "UNKNOWN")
         )
+        val failedTests = (0 until tests.length()).count {
+            tests.optJSONObject(it)?.optString("severity") == "FAIL"
+        }
+        val warningTests = (0 until tests.length()).count {
+            tests.optJSONObject(it)?.optString("severity") == "WARN"
+        }
+        val diagnosticOverall = when {
+            consistencyFindings.isNotEmpty() || failedTests > 0 -> "FAIL"
+            warningTests > 0 -> "WARN"
+            else -> "PASS"
+        }
         return JSONObject()
             .put("runtime", "standalone")
             .put("device_local_api", "in-process://williams-runtime")
@@ -11218,7 +11235,19 @@ private class NativeEngine(
             .put("tests", tests)
             .put("self_tests", tests)
             .put("diagnostic_findings", JSONArray(consistencyFindings))
-            .put("diagnostic_contract_version", 7)
+            .put("diagnostic_summary", JSONObject()
+                .put("overall", diagnosticOverall)
+                .put("finding_count", consistencyFindings.size)
+                .put("failed_test_count", failedTests)
+                .put("warning_test_count", warningTests)
+                .put("execution_allowed", statusSnapshot.optBoolean("execution_enabled", false) &&
+                    consistencyFindings.isEmpty() && failedTests == 0)
+                .put("top_level_runtime_state", statusSnapshot.optString("state", "UNKNOWN"))
+                .put("contract_runtime_state", statusSnapshot.optJSONObject("execution_state_contract")
+                    ?.optString("state", "UNKNOWN") ?: "UNKNOWN")
+                .put("coordinator_state", coordinatorSnapshot.optString("state", "UNKNOWN"))
+                .put("coordinator_blocker", coordinatorSnapshot.optString("blocker", "")))
+            .put("diagnostic_contract_version", 8)
             .put("execution_gate", JSONObject()
                 .put("ready", executionReady())
                 .put("reasons", JSONArray(executionBlockers()))
