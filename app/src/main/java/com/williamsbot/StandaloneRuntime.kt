@@ -5437,6 +5437,11 @@ private class NativeEngine(
                         (failure.message ?: failure.javaClass.simpleName)
                     false
                 }
+                runCatching { cancelPendingEntriesInvalidatedByMarket() }
+                    .onFailure { failure ->
+                        lastError = lastError ?: "TC2 pending-entry invalidation monitor: " +
+                            (failure.message ?: failure.javaClass.simpleName)
+                    }
                 runCatching { cancelPendingEntriesOutsideWilliamsSession() }
                     .onFailure { failure ->
                         lastError = lastError ?: "Futures pending-entry monitor: " +
@@ -5617,6 +5622,91 @@ private class NativeEngine(
             // rejected before its intent is persisted, try the next valid symbol
             // instead of treating an older pending campaign as this attempt.
             if (intentsAfter > intentsBefore) break
+        }
+    }
+
+    @Volatile private var lastWilliamsPendingInvalidationCheckMs: Long = 0L
+
+    /**
+     * A stop-entry that has not filled is still a hypothesis. If price first
+     * violates its signal-bar protective extreme, or the order becomes stale,
+     * cancel that symbol's pending order(s) with exchange acknowledgment.
+     * Do NOT liquidate existing positions; coordinator handles partial fills
+     * and unknown cancel results by requiring reconciliation.
+     *
+     * This is a conservative subset of the full book invalidation lifecycle:
+     * WM1 angulation/context changes and H4/D1 wave reclassification still
+     * require separately validated source-derived replay fixtures.
+     */
+    private fun cancelPendingEntriesInvalidatedByMarket() {
+        val nowMs = System.currentTimeMillis()
+        val elapsed = nowMs - lastWilliamsPendingInvalidationCheckMs
+        if (elapsed in 0 until 30_000L) return
+        lastWilliamsPendingInvalidationCheckMs = nowMs
+
+        val intents = futuresCampaignCoordinator.intentsSnapshot()
+        val pendingStatuses = setOf(
+            "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED",
+            "SUBMISSION_UNKNOWN", "CANCEL_SUBMISSION_UNKNOWN", "ACCEPTED", "TRIGGERED"
+        )
+        val pending = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }
+            .filter {
+                it.optString("intent_role", "ENTRY") == "ENTRY" &&
+                    campaignLifecycleStatus(it) == "ENTRY_PENDING" &&
+                    exchangeOrderStatus(it).uppercase(Locale.US) in pendingStatuses
+            }
+        if (pending.isEmpty()) return
+
+        val exchangeNow = futuresMarketData.exchangeNowMs()
+        for (intent in pending) {
+            val symbol = intent.optString("symbol").uppercase(Locale.US)
+            if (symbol !in coreSymbols) continue
+            val direction = intent.optString("direction").uppercase(Locale.US)
+            val submittedAt = intent.optLong("created_at_ms", 0L)
+            val stop = intent.optString("initial_protective_stop",
+                intent.optString("protective_stop")).toDoubleOrNull()
+            val invalidMetadata = direction !in setOf("LONG", "SHORT") ||
+                submittedAt <= 0L || submittedAt > exchangeNow ||
+                stop == null || !stop.isFinite() || stop <= 0.0
+            val expired = !invalidMetadata && exchangeNow - submittedAt >
+                5L * 60L * 60L * 1000L
+            // A current mark-price breach is independent of H1 close timing.
+            // Do not invent a price when Binance is unavailable.
+            val mark = if (invalidMetadata || expired) 0.0 else futuresMarketData.markPrice(symbol)
+            if (!invalidMetadata && !expired && (!mark.isFinite() || mark <= 0.0)) {
+                throw IllegalStateException("$symbol pending-entry invalidation has no valid mark price")
+            }
+            val crossedStop = !invalidMetadata && !expired && (
+                (direction == "LONG" && mark <= stop!!) ||
+                (direction == "SHORT" && mark >= stop!!)
+            )
+            if (!invalidMetadata && !expired && !crossedStop) continue
+
+            val reason = when {
+                invalidMetadata -> "TC2_PENDING_INVALID_METADATA"
+                expired -> "TC2_PENDING_EXPIRED_5H"
+                else -> "TC2_PENDING_SIGNAL_EXTREME_INVALIDATED"
+            }
+            val result = withCampaignMutation(
+                symbol = symbol,
+                purpose = "TC2_INVALIDATED_PENDING_CANCEL",
+                allowPaused = true,
+                allowStopped = true,
+                allowKillLatched = true,
+                allowReconcileRequired = true,
+                waitForDoorMs = 50_000L
+            ) {
+                futuresCampaignCoordinator.cancelPendingEntries(reason, setOf(symbol))
+            }
+            if (!result.optBoolean("ok", false)) {
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+                val message = "$symbol pending-entry cancel unresolved: " +
+                    result.optString("blocker", result.optString("error", reason))
+                lastError = message
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, message)
+                throw IllegalStateException(message)
+            }
         }
     }
 
