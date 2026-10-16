@@ -4124,7 +4124,6 @@ private class NativeEngine(
     // Retired Spot balance/order-capacity helpers removed; Futures limits come from exchangeInfo.
     
     /**
-     * One account-wide Execution Door    /**
      * One account-wide Execution Door for every runtime-issued Futures mutation.
      * Safety/recovery actions may explicitly opt into paused/stopped/reconcile states;
      * ordinary entries never can. The lease is committed to SQLite and mirrored to
