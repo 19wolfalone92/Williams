@@ -63,9 +63,12 @@ class BinanceRateGuard {
             if (waitMs <= 0L) return
             try {
                 Thread.sleep(waitMs.coerceAtMost(5000L))
-            } catch (_: InterruptedException) {
+            } catch (interrupted: InterruptedException) {
                 Thread.currentThread().interrupt()
-                return
+                throw IllegalStateException(
+                    "Interrupted while waiting for Binance REST rate-limit governor; request was not sent",
+                    interrupted
+                )
             }
         }
     }
