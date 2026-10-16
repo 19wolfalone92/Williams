@@ -60,7 +60,7 @@ def test_futures_client_rejects_spot_and_noncanonical_routes_before_network():
         "//demo-fapi.binance.com/fapi/v1/account",
         "/fapi/v1/order?symbol=BTCUSDT",
         "/fapi/v1/order#fragment",
-        "/fapi/v1/order\\n",
+        "/fapi/v1/order" + chr(10),
     ):
         try:
             client._request("GET", path)
