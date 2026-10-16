@@ -38,8 +38,6 @@ class BinanceUserDataStream(
     private val http: OkHttpClient,
     private val endpoint: String,
     private val apiKeyProvider: () -> String,
-    @Suppress("UNUSED_PARAMETER") private val apiSecretProvider: () -> String,
-    @Suppress("UNUSED_PARAMETER") private val timestampProvider: () -> Long,
     private val onConnection: (Boolean, String?) -> Unit,
     private val onEvent: (JSONObject) -> Unit
 ) {
