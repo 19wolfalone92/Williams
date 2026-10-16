@@ -290,11 +290,17 @@ def main() -> None:
             must_not(source, obsolete, path)
 
     runtime_source = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
-    signed_account = runtime_source.split("private fun signedAccount(): JSONObject =", 1)[1].split(
-        "private fun signedRequest(", 1
-    )[0]
-    must(signed_account, 'path = "/fapi/v3/account"', "StandaloneRuntime.kt signed account")
-    must_not(signed_account, 'path = "/api/v3/account"', "StandaloneRuntime.kt signed account")
+    # The legacy signed transport was removed. No Spot API route may remain in the
+    # Android runtime; account/order mutations belong to the dedicated Futures adapter.
+    must(runtime_source, "normalizeFuturesPublicPath(path)", "StandaloneRuntime.kt Futures public route allowlist")
+    must_not(runtime_source, "/api/v3/", "StandaloneRuntime.kt must not contain Spot API routes")
+    must_not(runtime_source, "private fun signedRequest(", "StandaloneRuntime.kt legacy signed transport removed")
+    adapter_source = read("app/src/main/java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
+    must(adapter_source, 'request("GET", "/fapi/v3/account"', "Futures adapter account endpoint")
+    must(adapter_source, '"/fapi/v1/algoOrder"', "Futures adapter conditional order endpoint")
+    must(adapter_source, '"/fapi/v1/order"', "Futures adapter regular order endpoint")
+    route_test = read("app/src/test/java/com/williamsbot/BinanceUsdMFuturesMarketDataTest.kt")
+    must(route_test, "legacySpotPublicRoutesAreRejectedInsteadOfTranslated", "Futures route allowlist regression test")
     must(runtime_source, "internal fun conservativeRiskReservation", "StandaloneRuntime.kt")
     must(runtime_source, "futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)", "StandaloneRuntime.kt")
     must(runtime_source, "futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)", "StandaloneRuntime.kt")
