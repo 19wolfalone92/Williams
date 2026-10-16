@@ -259,7 +259,8 @@ def test_android_defaults_match_the_approved_multi_symbol_campaign_risk_profile(
     assert '"max_daily_loss_pct",\n                0.03' in main
     assert '"max_total_risk_pct",\n                0.006' in main
     assert '.put("max_daily_loss_pct", 0.03)' in runtime
-    assert "daily_loss=0.03" in runtime
+    assert "if (lossPct >= 0.03)" in runtime
+    assert "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked" in runtime
 
 
 def test_android_diagnostics_do_not_fake_self_heal_readiness():
@@ -689,17 +690,15 @@ def test_chart_endpoint_rejects_unknown_symbol_or_interval_instead_of_silent_fal
 
 def test_scanner_diagnostic_does_not_pass_ready_at_zero_of_ten_or_stale_progress():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
-    tests = runtime.split("private fun diagnosticSelfTests()", 1)[1].split(
-        "fun diagnostics()", 1
-    )[0]
-    assert "val scannerUniverseMatches" in tests
-    assert "scanSymbols.size == coreSymbols.size && scanSymbols.toSet() == coreSymbols.toSet()" in tests
-    assert 'scannerState in setOf("READY", "READY_BLOCKED") &&' in tests
-    assert "!scanning && scannerUniverseMatches" in tests
-    assert "scanProgressSymbols == coreSymbols.size" in tests
-    assert "lastSymbolsScanned == coreSymbols.size" in tests
-    assert "scannerProgressAgeMs <= 60_000L" in tests
-    assert 'scannerState == "READY" || (scannerState == "RUNNING"' not in tests
+
+    # Assert the real production diagnostic contract. The old embedded diagnostic
+    # self-test was removed when readiness moved into the regular runtime snapshot.
+    assert "val scannerUniverseMatches = scanSymbols.size == coreSymbols.size && scanSymbols.toSet() == coreSymbols.toSet()" in runtime
+    assert 'val scannerComplete = scannerState in setOf("READY", "READY_BLOCKED") &&' in runtime
+    assert "!scanning && scannerUniverseMatches" in runtime
+    assert "scanProgressSymbols == coreSymbols.size && lastSymbolsScanned == coreSymbols.size" in runtime
+    assert "scannerProgressAgeMs <= 60_000L" in runtime
+    assert 'scannerState == "READY" || (scannerState == "RUNNING"' not in runtime
 
 
 def test_actions_testnet_gate_skips_when_ci_secrets_absent_without_claiming_test_passed():
