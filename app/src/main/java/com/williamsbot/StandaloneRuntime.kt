@@ -1046,9 +1046,8 @@ private class NativeEngine(
     private val executionStore: FuturesExecutionStore
 ) {
     private val baseUrl = "https://demo-fapi.binance.com"
-    // All REST transport in this Android runtime is anchored to USD-M Futures Testnet.
-    // Spot-shaped signed routes are rejected; legacy public reads are translated only
-    // to their Futures market-data equivalents by getBody().
+    // All REST transport in this Android runtime is pinned to USD-M Futures Demo.
+    // Public reads are allow-listed; order/account mutations go through the Futures adapter.
     private val futuresMarketData = BinanceUsdMFuturesMarketData(http)
     // Runtime execution is routed through the local USD-M Futures adapter/coordinator below.
     // Any leftover signed Spot mutation is blocked at the signedRequest boundary.
@@ -1265,8 +1264,6 @@ private class NativeEngine(
         http = http,
         endpoint = "wss://demo-fstream.binance.com/private/ws",
         apiKeyProvider = { key() },
-        apiSecretProvider = { secret() },
-        timestampProvider = { signedTimestamp() },
         onConnection = { connected, error ->
             userStreamConnected = connected
             userStreamLastError = if (connected) null else error?.takeUnless { it == "stopped" }
