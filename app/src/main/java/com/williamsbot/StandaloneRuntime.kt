@@ -2367,6 +2367,10 @@ private class NativeEngine(
         return JSONObject().put("resumed", true)
     }
 
+    /** Explicit operator exit; still uses the Futures Execution Door and exchange confirmation. */
+    @Synchronized
+    fun sell(symbol: String): JSONObject = sellFuturesPosition(symbol)
+
     /**
      * Testnet-only directional override. It does not bypass risk, reconciliation,
      * account, freshness, session, exchange filters, or structural protection gates.
