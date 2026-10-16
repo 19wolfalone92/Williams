@@ -79,7 +79,7 @@ def test_bullish_divergence_and_non_divergence():
 def test_missing_bars_never_forces_signals_or_future_confirmation():
     pts = pivots([100, 110, 104, 112], "UP")
     evidence = collect_visual_wave_evidence(pts, [0.0] * 15, "UP")
-    assert evidence["ao_divergence"]["status"] == "INSUFFICIENT_AO"
+    assert evidence["ao_divergence"]["status"] == "INSUFFICIENT_PIVOTS"
     assert evidence["impulse"]["status"] == "INCOMPLETE"
     assert evidence["can_place_orders"] is False
 
@@ -93,3 +93,12 @@ def test_bearish_divergence_persists_when_current_direction_turns_down():
     assert evidence["ao_divergence_bearish"]["divergence"] == "BEARISH"
     assert evidence["impulse_up"]["status"] == "INCOMPLETE"
     assert evidence["can_place_orders"] is False
+
+
+def test_future_confirmations_are_filtered_from_all_wave_evidence():
+    pts = pivots([100, 110, 104, 112, 103, 114], "UP")
+    # Last pivot centre 30 and confirmation 32: it is not knowable on bar 31.
+    output = collect_visual_wave_evidence(pts, [0.0] * 32, "UP")
+    assert output["impulse"]["status"] == "INCOMPLETE"
+    assert output["impulse_up"]["status"] == "INCOMPLETE"
+    assert output["can_place_orders"] is False
