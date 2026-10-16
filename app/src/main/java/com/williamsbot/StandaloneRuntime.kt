@@ -5376,7 +5376,9 @@ private class NativeEngine(
             entryPrice = fmtPrice(trigger, rules.tick),
             protectiveStop = fmtPrice(stop, rules.tick),
             clientId = clientId,
-            riskPct = riskPct
+            riskPct = riskPct,
+            signalType = signal.type,
+            signalBarTimeMs = signal.signalBarTimeMs
         )
         val result = withCampaignMutation(
             symbol = symbol,
@@ -5708,11 +5710,54 @@ private class NativeEngine(
             val submittedAt = intent.optLong("created_at_ms", 0L)
             val stop = intent.optString("initial_protective_stop",
                 intent.optString("protective_stop")).toDoubleOrNull()
+            val signalType = intent.optString("signal_type").uppercase(Locale.US)
             val invalidMetadata = direction !in setOf("LONG", "SHORT") ||
                 submittedAt <= 0L || submittedAt > exchangeNow ||
-                stop == null || !stop.isFinite() || stop <= 0.0
+                stop == null || !stop.isFinite() || stop <= 0.0 ||
+                (signalType.isNotBlank() && campaignSignalDirection(signalType) != direction)
             val expired = !invalidMetadata && exchangeNow - submittedAt >
                 5L * 60L * 60L * 1000L
+            // The historical signal/side are persisted BEFORE the Binance POST.
+            // Only orders carrying validated TC2 provenance are re-evaluated
+            // against live H4/D1 context. Untagged manual/legacy intents
+            // are not retrospectively assigned an invented signal family.
+            var directionalVeto = false
+            if (!invalidMetadata && !expired && signalType.isNotBlank()) {
+                val d1 = fetchCandles(symbol, "1d", startupHistoryLimit("1d"))
+                    .filter { it.t > 0L && exchangeNow - it.t >= frameSeconds("1d") * 1000L }
+                val h4 = fetchCandles(symbol, "4h", startupHistoryLimit("4h"))
+                    .filter { it.t > 0L && exchangeNow - it.t >= frameSeconds("4h") * 1000L }
+                // Data disagreement or unavailable context is NOT an affirmative
+                // opposite-side signal. Do not fabricate directional decisions.
+                if (d1.size >= 45 && h4.size >= 45 &&
+                    candleSeriesCurrent(d1, "1d", exchangeNow) &&
+                    candleSeriesCurrent(h4, "4h", exchangeNow)
+                ) {
+                    val d1Lines = alligator(d1, d1.lastIndex)
+                    val h4Lines = alligator(h4, h4.lastIndex)
+                    val d1Bull = d1Lines.lips > d1Lines.teeth && d1Lines.teeth > d1Lines.jaw &&
+                        d1.last().c > d1Lines.lips && ao(d1, d1.lastIndex) > 0.0
+                    val d1Bear = d1Lines.lips < d1Lines.teeth && d1Lines.teeth < d1Lines.jaw &&
+                        d1.last().c < d1Lines.lips && ao(d1, d1.lastIndex) < 0.0
+                    val h4Bull = h4Lines.lips > h4Lines.teeth && h4Lines.teeth > h4Lines.jaw &&
+                        h4.last().c > h4Lines.lips && ao(h4, h4.lastIndex) > 0.0
+                    val h4Bear = h4Lines.lips < h4Lines.teeth && h4Lines.teeth < h4Lines.jaw &&
+                        h4.last().c < h4Lines.lips && ao(h4, h4.lastIndex) < 0.0
+                    directionalVeto = directionalSignalContextRank(
+                        signalType, d1Bull, d1Bear, h4Bull, h4Bear
+                    ) == 0
+                }
+            }
+            // An entry hypothesis is also invalidated when an H1 closing
+            // extreme actually touches its structural protection. Only
+            // fully closed bars newer than signal time are relevant.
+            val signalTime = intent.optLong("signal_bar_time_ms", 0L)
+            val crossedByClosedH1 = if (!invalidMetadata && signalTime > 0L) {
+                fetchCandles(symbol, "1h", startupHistoryLimit("1h"))
+                    .filter { it.t > signalTime &&
+                        it.t > 0L && exchangeNow - it.t >= frameSeconds("1h") * 1000L }
+                    .any { if (direction == "LONG") it.l <= stop!! else it.h >= stop!! }
+            } else false
             // A current mark-price breach is independent of H1 close timing.
             // Do not invent a price when Binance is unavailable.
             val mark = if (invalidMetadata || expired) 0.0 else futuresMarketData.markPrice(symbol)
@@ -5723,11 +5768,14 @@ private class NativeEngine(
                 (direction == "LONG" && mark <= stop!!) ||
                 (direction == "SHORT" && mark >= stop!!)
             )
-            if (!invalidMetadata && !expired && !crossedStop) continue
+            if (!invalidMetadata && !expired && !crossedStop &&
+                !crossedByClosedH1 && !directionalVeto) continue
 
             val reason = when {
                 invalidMetadata -> "TC2_PENDING_INVALID_METADATA"
                 expired -> "TC2_PENDING_EXPIRED_5H"
+                directionalVeto -> "TC2_PENDING_DIRECTION_CONTEXT_VETO"
+                crossedByClosedH1 -> "TC2_PENDING_CLOSED_H1_INVALIDATION"
                 else -> "TC2_PENDING_SIGNAL_EXTREME_INVALIDATED"
             }
             val result = withCampaignMutation(
