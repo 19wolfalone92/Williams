@@ -47,6 +47,61 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         )
     }
     @Test
+    fun adapterRetriesTransientSafeGetButNotRateLimitResponses() {
+        var attempts = 0
+        val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            attempts++
+            val code = if (attempts == 1) 502 else 200
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(code)
+                .message(if (code == 200) "OK" else "Bad Gateway")
+                .body("{}".toResponseBody("application/json".toMediaType()))
+                .build()
+        }).build()
+
+        BinanceUsdMFuturesTestnetAdapter("unit-test-key", "unit-test-secret", client).exchangeInfo()
+        assertEquals(2, attempts)
+    }
+
+    @Test(expected = java.io.IOException::class)
+    fun ambiguousOrderMutationIsNeverRetriedAfterServerFailure() {
+        var orderPosts = 0
+        val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            val request = chain.request()
+            val code = when (request.url.encodedPath) {
+                "/fapi/v1/time" -> 200
+                "/fapi/v1/positionSide/dual" -> 200
+                "/fapi/v1/order" -> {
+                    if (request.method == "POST") orderPosts++
+                    503
+                }
+                else -> 200
+            }
+            val body = when (request.url.encodedPath) {
+                "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
+                else -> """{"code":-1000,"msg":"temporary server error"}"""
+            }
+            Response.Builder()
+                .request(request)
+                .protocol(Protocol.HTTP_1_1)
+                .code(code)
+                .message(if (code == 200) "OK" else "Service Unavailable")
+                .body(body.toResponseBody("application/json".toMediaType()))
+                .build()
+        }).build()
+
+        try {
+            BinanceUsdMFuturesTestnetAdapter("unit-test-key", "unit-test-secret", client)
+                .newOrder("BTCUSDT", "BUY", "0.01", false, "TEST_NO_RETRY")
+        } finally {
+            assertEquals(1, orderPosts)
+        }
+    }
+
+    @Test
     fun malformedPositionRowsNeverLookLikeAFlatAccountDuringModeChange() {
         assertTrue(!hasLiveFuturesPosition(JSONArray()))
         assertTrue(!hasLiveFuturesPosition(JSONArray().put(JSONObject().put("positionAmt", "0"))))
