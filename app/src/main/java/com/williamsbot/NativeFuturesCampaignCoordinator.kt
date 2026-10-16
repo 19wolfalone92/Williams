@@ -1534,10 +1534,11 @@ internal class NativeFuturesCampaignCoordinator(
                         if (riskAudit.blocker != null &&
                             riskAudit.blocker.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_RESERVATION:")
                         ) {
+                            val currentClientIdForRiskAudit = matchingIntent.optString("client_id")
                             val otherActiveRisks = (0 until persisted.length()).mapNotNull { riskIndex ->
                                 val other = persisted.optJSONObject(riskIndex) ?: return@mapNotNull null
                                 if (other.optString("intent_role", "ENTRY") != "ENTRY" ||
-                                    other.optString("client_id") == matchingIntent.optString("client_id") ||
+                                    other.optString("client_id") == currentClientIdForRiskAudit ||
                                     campaignLifecycleStatus(other) !in ACTIVE_CAMPAIGN_STATUSES
                                 ) return@mapNotNull null
                                 other.optDouble("risk_pct", Double.NaN)
