@@ -2715,10 +2715,10 @@ private class NativeEngine(
         } else {
             normalizeTriggerPrice(levels.protectiveStop, rules.tick)
         }
-        val mark = futuresMarketData.markPrice(symbol)
+        val contract = futuresCampaignCoordinator.contractPrice(symbol)
         require(
-            if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) mark < trigger
-            else mark > trigger
+            if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) contract < trigger
+            else contract > trigger
         ) {
             "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED: mark=$mark, trigger=$trigger; no market-order substitution"
         }
@@ -5139,7 +5139,7 @@ private class NativeEngine(
             if (candles.size < 45) throw IllegalStateException(symbol + " needs at least 45 closed H1 candles")
             val latest = candles.last()
             val rules = symbolFilters(symbol)
-            val mark = futuresMarketData.markPrice(symbol)
+            val contract = futuresCampaignCoordinator.contractPrice(symbol)
             // TC2 early WM1 can enter on the opposite side of Teeth. A universal
             // NTD Teeth-close would immediately liquidate a valid early campaign.
             // Existing exchange protection and the 3-5 bar trail remain active.
@@ -5147,12 +5147,12 @@ private class NativeEngine(
             val opposing = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
                 shortCampaignSignals(symbol, candles, "1h", rules.tick).any {
                     it.signalBarTimeMs >= newerBarCutoff &&
-                        tc2OppositeBreakoutTriggered(true, mark, it.triggerPrice)
+                        tc2OppositeBreakoutTriggered(true, contract, it.triggerPrice)
                 }
             } else {
                 longCampaignSignals(symbol, candles, "1h", rules.tick).any {
                     it.signalBarTimeMs >= newerBarCutoff &&
-                        tc2OppositeBreakoutTriggered(false, mark, it.triggerPrice)
+                        tc2OppositeBreakoutTriggered(false, contract, it.triggerPrice)
                 }
             }
             if (opposing) {
@@ -5355,7 +5355,7 @@ private class NativeEngine(
         val equity = parsedAccount.equityUsdt
         val available = parsedAccount.availableUsdt
         if (!futuresAccountFundedForEntry(available, equity)) return
-        val mark = futuresMarketData.markPrice(symbol)
+        val contract = futuresCampaignCoordinator.contractPrice(symbol)
         val rules = symbolFilters(symbol)
         val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
             normalizeTriggerPrice(signal.triggerPrice, rules.tick) else normalizePrice(signal.triggerPrice, rules.tick)
@@ -5363,9 +5363,9 @@ private class NativeEngine(
             normalizePrice(signal.protectivePrice, rules.tick) else normalizeTriggerPrice(signal.protectivePrice, rules.tick)
         if (trigger <= 0.0 || stop <= 0.0) return
         if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-            if (trigger <= mark || stop >= trigger) return
+            if (trigger <= contract || stop >= trigger) return
         } else {
-            if (trigger >= mark || stop <= trigger) return
+            if (trigger >= contract || stop <= trigger) return
         }
         val stopFraction = kotlin.math.abs(trigger - stop) / trigger
         if (!stopFraction.isFinite() || stopFraction <= 0.0) return
@@ -5439,12 +5439,12 @@ private class NativeEngine(
             // Revalidate the actual H1 trigger against the latest Futures mark
             // after network/door waits. Never convert a consumed stop-entry into a late
             // entry at the current market price.
-            val submitMark = futuresMarketData.markPrice(symbol)
+            val submitContract = futuresCampaignCoordinator.contractPrice(symbol)
             require(
-                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
-                else submitMark > trigger
+                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitContract < trigger
+                else submitContract > trigger
             ) {
-                "H1_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
+                "H1_TRIGGER_ALREADY_CROSSED: $symbol contract=$submitContract trigger=$trigger; pending entry not submitted"
             }
             // M15 contributes only execution readiness, never a new direction.
             futuresCampaignCoordinator.submitPendingEntry(plan)
@@ -5781,13 +5781,14 @@ private class NativeEngine(
             } else false
             // A current mark-price breach is independent of H1 close timing.
             // Do not invent a price when Binance is unavailable.
-            val mark = if (invalidMetadata || expired) 0.0 else futuresMarketData.markPrice(symbol)
-            if (!invalidMetadata && !expired && (!mark.isFinite() || mark <= 0.0)) {
-                throw IllegalStateException("$symbol pending-entry invalidation has no valid mark price")
+            val contract = if (invalidMetadata || expired) 0.0
+                else futuresCampaignCoordinator.contractPrice(symbol)
+            if (!invalidMetadata && !expired && (!contract.isFinite() || contract <= 0.0)) {
+                throw IllegalStateException("$symbol pending-entry invalidation has no valid contract price")
             }
             val crossedStop = !invalidMetadata && !expired && (
-                (direction == "LONG" && mark <= stop!!) ||
-                (direction == "SHORT" && mark >= stop!!)
+                (direction == "LONG" && contract <= stop!!) ||
+                (direction == "SHORT" && contract >= stop!!)
             )
             if (!invalidMetadata && !expired && !crossedStop &&
                 !crossedByClosedH1 && !directionalVeto) continue
