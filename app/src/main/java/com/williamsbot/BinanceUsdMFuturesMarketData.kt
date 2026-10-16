@@ -261,12 +261,48 @@ internal class BinanceUsdMFuturesMarketData(
 
     private fun execute(url: String): String {
         val request = Request.Builder().url(url).header("Accept", "application/json").get().build()
-        http.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw IOException("USD-M Futures market data HTTP ${response.code}: ${body.take(300)}")
+        val retryDelaysMs = longArrayOf(250L, 500L, 1_000L)
+        var lastTransportFailure: IOException? = null
+        for (attempt in 0..retryDelaysMs.size) {
+            val response = try {
+                http.newCall(request).execute()
+            } catch (failure: IOException) {
+                lastTransportFailure = failure
+                if (attempt >= retryDelaysMs.size) throw IOException(
+                    "USD-M Futures market data transport failed after ${attempt + 1} safe GET attempts: " +
+                        (failure.message ?: failure.javaClass.simpleName),
+                    failure
+                )
+                sleepBeforeSafeReadRetry(retryDelaysMs[attempt])
+                continue
             }
-            return body
+            response.use {
+                val body = it.body?.string().orEmpty()
+                if (it.isSuccessful) return body
+                val failure = IOException(
+                    "USD-M Futures market data HTTP ${it.code}: ${body.take(300)}"
+                )
+                // Only retry explicitly transient server failures. In particular, 418/429
+                // are never hammered with automatic retries; rate limiting remains visible.
+                if (it.code !in setOf(500, 502, 503, 504) || attempt >= retryDelaysMs.size) {
+                    throw failure
+                }
+                lastTransportFailure = failure
+            }
+            sleepBeforeSafeReadRetry(retryDelaysMs[attempt])
+        }
+        throw IOException(
+            "USD-M Futures market data safe GET retries exhausted",
+            lastTransportFailure
+        )
+    }
+
+    private fun sleepBeforeSafeReadRetry(delayMs: Long) {
+        try {
+            Thread.sleep(delayMs)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IOException("Interrupted while retrying a safe USD-M Futures market data GET", interrupted)
         }
     }
 }
