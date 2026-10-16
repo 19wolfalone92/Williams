@@ -2768,7 +2768,10 @@ private class NativeEngine(
                 throw x
             }
         }
-        error("Binance HTTP " + lastCode + ": " + lastBody)
+        if (lastCode > 0) {
+            error("Binance Futures REST HTTP " + lastCode + ": " + lastBody)
+        }
+        error("Binance Futures REST transport failed after 3 attempts: " + lastBody)
     }
 
     private fun wsStreamUrl(): String =
