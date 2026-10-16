@@ -14,21 +14,16 @@ import okhttp3.Request
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okhttp3.Response
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLDecoder
 import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.ArrayDeque
 import java.util.Calendar
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -1051,7 +1046,7 @@ private class NativeEngine(
     // to their Futures market-data equivalents by getBody().
     private val futuresMarketData = BinanceUsdMFuturesMarketData(http)
     // Runtime execution is routed through the local USD-M Futures adapter/coordinator below.
-    // Legacy signed Spot-shaped routes are rejected by the Futures-only transport boundary.
+    // Legacy signed transport was removed; account/order mutations use the Futures adapter/coordinator.
     private val futuresExecutionAdapterReady = true
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
@@ -1201,9 +1196,6 @@ private class NativeEngine(
     private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
-    @Volatile private var serverTimeOffsetMs = 0L
-    private val BINANCE_RECV_WINDOW_MS = 60000L
-    @Volatile private var lastServerTimeSyncMs = 0L
     @Volatile private var lastOrder: JSONObject? = null
     @Volatile private var reconcileRequired = false
     @Volatile private var killLatched = false
@@ -2738,41 +2730,6 @@ private class NativeEngine(
             .put("futures_reconciliation", result).put("state", futuresCampaignCoordinator.state.name)
     }
 
-    private fun signedTimestamp(): Long {
-        val now = System.currentTimeMillis()
-        if (
-            now - lastServerTimeSyncMs >
-                15 * 1000L
-        ) {
-            runCatching { syncServerTime() }
-        }
-        // Binance rejects timestamps even slightly ahead of its clock.
-        // Keep a small safety margin on the safe side of server time.
-        return System.currentTimeMillis() +
-            serverTimeOffsetMs -
-            750L
-    }
-
-    @Synchronized
-    private fun syncServerTime() {
-        val syncStartedAtMs = System.currentTimeMillis()
-        val remote =
-            JSONObject(
-                getBody("/fapi/v1/time")
-            ).optLong("serverTime", 0L)
-
-        if (remote <= 0L) {
-            error("Binance server time unavailable")
-        }
-
-        val after = System.currentTimeMillis()
-        val midpoint = (syncStartedAtMs + after) / 2L
-        // Estimate network latency using the request midpoint and bias
-        // slightly behind Binance to avoid -1021 "timestamp ahead".
-        serverTimeOffsetMs = remote - midpoint
-        lastServerTimeSyncMs = after
-    }
-
     private fun getBody(path: String): String {
         // Public market data is strictly allow-listed and always goes to USD-M Futures Demo.
         // Spot-shaped aliases are rejected instead of silently translated.
@@ -2812,139 +2769,6 @@ private class NativeEngine(
             }
         }
         error("Binance HTTP " + lastCode + ": " + lastBody)
-    }
-
-    private fun signedAccount(): JSONObject =
-        // USD-M Futures account endpoint; signed mutations are owned by the Futures adapter.
-        signedRequest(
-            method = "GET",
-            path = "/fapi/v3/account",
-            params = ""
-        )
-
-    private fun signedRequest(
-        method: String,
-        path: String,
-        params: String
-    ): JSONObject {
-        require(path.startsWith("/fapi/")) {
-            "SECURITY_BLOCK: legacy signed transport accepts USD-M Futures routes only; use the Futures execution coordinator"
-        }
-        var lastBody = "{}"
-        repeat(2) { attempt ->
-            val query = if (params.isBlank()) {
-                "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            } else {
-                params + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            }
-            val signature = hmac(query, secret())
-            val request = when (method) {
-                "POST" -> Request.Builder()
-                    .url(baseUrl + path)
-                    .header("X-MBX-APIKEY", key())
-                    .post((query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType()))
-                    .build()
-                "DELETE" -> Request.Builder()
-                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
-                    .header("X-MBX-APIKEY", key())
-                    .delete()
-                    .build()
-                else -> Request.Builder()
-                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
-                    .header("X-MBX-APIKEY", key())
-                    .get()
-                    .build()
-            }
-            rateGuard.beforeRequest()
-            http.newCall(request).execute().use { response ->
-                rateGuard.observe(response.headers, response.code)
-                lastBody = response.body?.string() ?: "{}"
-                auditStore.recordRestCall(
-                    method,
-                    path,
-                    response.code,
-                    params.ifBlank { null },
-                    lastBody
-                )
-                if (response.isSuccessful) return JSONObject(lastBody)
-                if (attempt == 0 && lastBody.contains("-1021")) {
-                    runCatching { syncServerTime() }
-                    return@use
-                }
-                error("Binance " + response.code + ": " + lastBody)
-            }
-        }
-        error("Binance timestamp retry failed: " + lastBody)
-    }
-
-    private fun signedRawGet(
-        path: String,
-        params: String
-    ): String {
-        require(path.startsWith("/fapi/")) {
-            "SECURITY_BLOCK: signed raw transport accepts USD-M Futures routes only"
-        }
-        var lastBody = "{}"
-        repeat(2) { attempt ->
-            val query = if (params.isBlank()) {
-                "timestamp=" + signedTimestamp() +
-                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            } else {
-                params +
-                    "&timestamp=" + signedTimestamp() +
-                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            }
-            val signature = hmac(query, secret())
-            val request = Request.Builder()
-                .url(
-                    baseUrl +
-                        path +
-                        if (query.isBlank()) {
-                            ""
-                        } else {
-                            "?" + query + "&signature=" + signature
-                        }
-                )
-                .header("X-MBX-APIKEY", key())
-                .get()
-                .build()
-
-            rateGuard.beforeRequest()
-            http.newCall(request).execute().use { response ->
-                rateGuard.observe(response.headers, response.code)
-                lastBody = response.body?.string() ?: "{}"
-                auditStore.recordRestCall(
-                    "GET",
-                    path,
-                    response.code,
-                    params.ifBlank { null },
-                    lastBody
-                )
-                if (response.isSuccessful) return lastBody
-                if (attempt == 0 && lastBody.contains("-1021")) {
-                    runCatching { syncServerTime() }
-                    return@use
-                }
-                error("Binance " + response.code + ": " + lastBody)
-            }
-        }
-        error("Binance signed GET failed: " + lastBody)
-    }
-
-    private fun hmac(value: String, secretValue: String): String {
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(
-            SecretKeySpec(
-                secretValue.toByteArray(StandardCharsets.UTF_8),
-                "HmacSHA256"
-            )
-        )
-
-        return mac.doFinal(
-            value.toByteArray(StandardCharsets.UTF_8)
-        ).joinToString("") {
-            "%02x".format(it)
-        }
     }
 
     private fun wsStreamUrl(): String =
@@ -6201,41 +6025,6 @@ private class NativeEngine(
         return false
     }
 
-    private fun signedGet(
-        path: String,
-        params: String
-    ): JSONObject = signedRequest("GET", path, params)
-
-    private fun signedPost(
-        path: String,
-        params: String
-    ): JSONObject = signedRequest("POST", path, params)
-
-    /**
-     * Binance cancel-replace is not truly transactional. STOP_ON_FAILURE
-     * prevents the replacement attempt when cancellation itself fails;
-     * callers must still reconcile when the response is ambiguous.
-     */
-    private fun signedCancelReplace(
-        @Suppress("UNUSED_PARAMETER") symbol: String,
-        @Suppress("UNUSED_PARAMETER") cancelOrderId: Long,
-        @Suppress("UNUSED_PARAMETER") side: String,
-        @Suppress("UNUSED_PARAMETER") type: String,
-        @Suppress("UNUSED_PARAMETER") quantity: String? = null,
-        @Suppress("UNUSED_PARAMETER") price: String? = null,
-        @Suppress("UNUSED_PARAMETER") stopPrice: String? = null,
-        @Suppress("UNUSED_PARAMETER") timeInForce: String? = null,
-        @Suppress("UNUSED_PARAMETER") newClientOrderId: String? = null
-    ): JSONObject {
-        error("Legacy cancel-replace is disabled; use the Futures coordinator and Algo Order API")
-    }
-
-    /**
-     * Derive a recovery stop only for a known bot-owned active Futures campaign.
-     * Uses the last five confirmed closed H1 bars, plus one exchange tick outside
-     * their structure. A fresh mark and validated equity are mandatory; no default
-     * price or guessed risk is accepted.
-     */
     private fun recoverMissingStructuralStop(
         symbol: String,
         direction: String,
@@ -6568,11 +6357,6 @@ private class NativeEngine(
     ): Protection {
         error("Legacy Spot OCO protection is disabled; use Futures Algo Order protection")
     }
-
-    private fun signedDelete(
-        path: String,
-        params: String
-    ): JSONObject = signedRequest("DELETE", path, params)
 
     private fun campaignSignalId(symbol: String, frame: String, type: String, barTimeMs: Long): String =
         symbol.uppercase(Locale.US) + ":" +
