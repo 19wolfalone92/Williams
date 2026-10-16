@@ -16,7 +16,7 @@ Safety:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import os
 import time
@@ -52,6 +52,8 @@ from data import fetch_klines
 from binance_client import BinanceAPIError
 from binance_futures_client import BinanceFuturesClient
 from trading_config import DEFAULT_FUTURES_SYMBOLS, TradingConfig
+from wave_engine import MultiTimeframeWaveEngine
+from williams_directional_context import evaluate_direction
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -86,6 +88,7 @@ class FuturesCandidate:
     spread_pct: float
     htf_confirmed: bool
     score: float
+    directional_context: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -100,6 +103,7 @@ class FuturesCandidate:
             "atr_pct": float(self.atr_pct),
             "spread_pct": float(self.spread_pct),
             "htf_confirmed": bool(self.htf_confirmed),
+            "directional_context": dict(self.directional_context),
             "wise_men": [
                 {
                     "signal_id": s.signal_id,
@@ -167,6 +171,12 @@ class FuturesWilliamsScanner:
         self.interval = str(interval).lower()
         self.htf_interval = str(htf_interval).lower()
         self.config = canonical_indicator_config_from_env()
+        # This dependency was previously referenced by analyse() but never
+        # initialized: every real symbol evaluation raised AttributeError.
+        self.wave_engine = MultiTimeframeWaveEngine(
+            client, base_interval=self.interval, intervals=[self.interval]
+        )
+        self.latest_directional_view: dict[str, dict] = {}
         self.symbols: list[str] = []
         self.configured_symbols = len(DEFAULT_FUTURES_SYMBOLS)
         self.last_scan_status: dict = {
@@ -366,6 +376,17 @@ class FuturesWilliamsScanner:
             return []
         self.last_signal_profile_error = None
         long_htf, short_htf = self._htf(symbol)
+        # Rank only existing, valid Williams triggers. Divergence/wave count
+        # never manufacture an entry, order, stop, add-on, or exit on their own.
+        contexts = {
+            side: evaluate_direction(
+                side=side, snapshot=wave_snapshot,
+                last_indicator=ind.iloc[-1], closed_bar_count=len(ind),
+                htf_confirmed=htf_ok,
+            ).to_dict()
+            for side, htf_ok in (("LONG", long_htf), ("SHORT", short_htf))
+        }
+        self.latest_directional_view[symbol] = contexts
         out: list[FuturesCandidate] = []
 
         for side, specs, htf_ok in (
@@ -413,6 +434,10 @@ class FuturesWilliamsScanner:
             score = 60.0 + freshness * 20.0 + type_bonus
             if signal.alligator_awake:
                 score += 10.0
+            # Bounded, explainable, explicitly uncalibrated structure overlay.
+            # Existing signal expiry, HTF execution gates, protective stops,
+            # Futures Risk Engine and campaign state machine stay authoritative.
+            score += float(contexts[side]["score_adjustment"])
             out.append(
                 FuturesCandidate(
                     symbol=symbol,
@@ -422,13 +447,15 @@ class FuturesWilliamsScanner:
                     atr_pct=atr_pct,
                     spread_pct=spread_pct,
                     htf_confirmed=bool(htf_ok),
-                    score=min(100.0, score),
+                    score=max(0.0, min(100.0, score)),
+                    directional_context=contexts[side],
                 )
             )
         return out
 
     def scan(self) -> list[FuturesCandidate]:
         result: list[FuturesCandidate] = []
+        self.latest_directional_view = {}
         self.last_scan_status = {
             "state": "RUNNING",
             "reason": None,
@@ -467,6 +494,7 @@ class FuturesWilliamsScanner:
                 evaluated.append(symbol)
             except Exception as exc:
                 failures[symbol] = type(exc).__name__
+                self.latest_directional_view[symbol] = {"error": type(exc).__name__}
         # Prioritize higher-quality, fresher candidates; never let an old
         # signal consume an available campaign slot before a current one.
         result.sort(key=lambda c: (-c.score, -c.signal.signal_bar_time_ms, c.symbol, c.side))
@@ -477,6 +505,7 @@ class FuturesWilliamsScanner:
             "evaluated_symbols": len(evaluated),
             "symbols": evaluated,
             "failures": failures,
+            "directional_context": dict(self.latest_directional_view),
         }
         return result
 
@@ -1203,6 +1232,8 @@ class FuturesWilliamsRuntime:
         campaign.current_stop_price = stop
         campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
+        campaign.tags["directional_context_at_entry"] = dict(candidate.directional_context)
+        campaign.tags["scanner_score_at_entry"] = float(candidate.score)
         campaign.pending_risk_quote = risk_quote
         campaign.capital_reserved_quote = notional / self.config.futures_leverage
         campaign.tags["pending_order_quantity"] = qty
