@@ -209,7 +209,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals("BUY", longParams["side"])
         assertEquals("STOP_MARKET", longParams["type"])
         assertEquals("101", longParams["triggerPrice"])
-        assertEquals("MARK_PRICE", longParams["workingType"])
+        assertEquals("CONTRACT_PRICE", longParams["workingType"])
         assertEquals("TEST_LONG_ENTRY", longParams["clientAlgoId"])
         assertTrue(!longParams.containsKey("reduceOnly"))
         assertTrue(!longParams.containsKey("closePosition"))
@@ -230,6 +230,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals("SELL", shortParams["side"])
         assertEquals("STOP_MARKET", shortParams["type"])
         assertEquals("99", shortParams["triggerPrice"])
+        assertEquals("CONTRACT_PRICE", shortParams["workingType"])
         assertEquals("TEST_SHORT_ENTRY", shortParams["clientAlgoId"])
         assertTrue(!shortParams.containsKey("reduceOnly"))
         assertTrue(!shortParams.containsKey("closePosition"))
@@ -246,6 +247,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals("STOP_MARKET", longParams["type"])
         assertEquals("true", longParams["closePosition"])
         assertEquals("false", longParams["priceProtect"])
+        assertEquals("MARK_PRICE", longParams["workingType"])
         assertTrue(!longParams.containsKey("quantity"))
         assertTrue(!longParams.containsKey("reduceOnly"))
 
@@ -258,6 +260,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals("STOP_MARKET", shortParams["type"])
         assertEquals("true", shortParams["closePosition"])
         assertEquals("false", shortParams["priceProtect"])
+        assertEquals("MARK_PRICE", shortParams["workingType"])
         assertTrue(!shortParams.containsKey("quantity"))
         assertTrue(!shortParams.containsKey("reduceOnly"))
     }
@@ -293,6 +296,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
                 "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
                 "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
                 "/fapi/v1/premiumIndex" -> """{"symbol":"BTCUSDT","markPrice":"100"}"""
+                "/fapi/v2/ticker/price" -> """{"symbol":"BTCUSDT","price":"100"}"""
                 "/fapi/v1/algoOrder" -> """{"algoId":1,"algoStatus":"NEW","orderType":"STOP_MARKET"}"""
                 else -> "{}"
             }
