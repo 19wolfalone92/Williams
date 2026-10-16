@@ -558,6 +558,27 @@ internal fun futuresPortfolioRiskBlocker(
 }
 
 /** Null means this symbol may claim a slot; every uncertain campaign blocks admission. */
+/**
+ * Strategy signal provenance is part of ORDER authorization, not a loose
+ * diagnostic field. The executor must not accept SHORT labels attached to a
+ * LONG order. Only an explicitly provenance-free forced testnet request may
+ * omit both fields; ordinary H1 Williams entries must include BOTH.
+ */
+internal fun futuresEntryProvenanceBlocker(
+    signalType: String,
+    signalBarTimeMs: Long,
+    direction: String
+): String? {
+    if (signalType.isBlank() && signalBarTimeMs == 0L) return null
+    if (signalType.isBlank() || signalBarTimeMs <= 0L) {
+        return "Williams signal type/time provenance is incomplete"
+    }
+    if (campaignSignalDirection(signalType) != direction.uppercase(Locale.US)) {
+        return "Williams signal direction disagrees with Futures order side"
+    }
+    return null
+}
+
 internal fun futuresPositionSlotBlocker(
     symbol: String,
     openPositionSymbols: Iterable<String>,
@@ -2700,6 +2721,10 @@ internal class NativeFuturesCampaignCoordinator(
             }
         }
         require(plan.clientId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client order ID" }
+        val provenanceBlocker = futuresEntryProvenanceBlocker(
+            plan.signalType, plan.signalBarTimeMs, plan.direction.name
+        )
+        require(provenanceBlocker == null) { provenanceBlocker ?: "Invalid Williams signal provenance" }
     }
 
     private fun findProtectiveStop(
