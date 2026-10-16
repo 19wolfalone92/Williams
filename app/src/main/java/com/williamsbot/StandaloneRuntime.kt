@@ -4303,22 +4303,31 @@ private class NativeEngine(
         allowKillLatched: Boolean = false,
         waitForDoorMs: Long = 50_000L
     ): JSONObject = synchronized(futuresReconciliationLock) {
-        // Report active work separately from the fail-closed latch. The previous
-        // diagnostic copied reconcileRequired into the in-progress field, making
-        // a persistent block indistinguishable from a reconciliation still running.
+        // This flag represents a live attempt only; a persistent safety latch is reported separately.
         futuresReconciliationRunning = true
         try {
-            // Keep the full exchange snapshot and Execution Door lease serialized.
-            val result = withCampaignMutation(
-                symbol = "FUTURES_ACCOUNT",
-                purpose = purpose,
-                allowPaused = true,
-                allowStopped = allowStopped,
-                allowKillLatched = allowKillLatched,
-                allowReconcileRequired = true,
-                waitForDoorMs = waitForDoorMs
-            ) {
-                futuresCampaignCoordinator.reconcile()
+            // The Door may reject before invoking the lambda (e.g. reservation timeout,
+            // interrupted wait, or failed durable lease). Record that concrete blocker in
+            // the coordinator; otherwise its previous "exchange_reconciliation_in_progress"
+            // text survives even though no reconciliation task is running.
+            val result = try {
+                withCampaignMutation(
+                    symbol = "FUTURES_ACCOUNT",
+                    purpose = purpose,
+                    allowPaused = true,
+                    allowStopped = allowStopped,
+                    allowKillLatched = allowKillLatched,
+                    allowReconcileRequired = true,
+                    waitForDoorMs = waitForDoorMs
+                ) {
+                    futuresCampaignCoordinator.reconcile()
+                }
+            } catch (failure: Exception) {
+                val reason = "Execution Door prevented Futures reconciliation ($purpose): " +
+                    (failure.message ?: failure.javaClass.simpleName)
+                val blocked = futuresCampaignCoordinator.recordReconciliationBlocker(reason)
+                lastError = reason
+                blocked
             }
             if (result.optBoolean("ok", false)) {
                 lastRestReconcileMs = System.currentTimeMillis()
