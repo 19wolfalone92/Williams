@@ -26,12 +26,25 @@ class BinanceRateGuard {
         private set
     @Volatile var cooldownUntilMs: Long = 0L
         private set
+    @Volatile var lastStatusCode: Int = 0
+        private set
+    @Volatile var lastResponseAtMs: Long = 0L
+        private set
+    @Volatile var observedResponseCount: Long = 0L
+        private set
+    @Volatile var rateLimitResponseCount: Long = 0L
+        private set
+    @Volatile var lastWaitMs: Long = 0L
+        private set
+    @Volatile var totalWaitMs: Long = 0L
+        private set
 
     private val lock = Any()
     private var nextRequestAtMs = 0L
     private val minGapMs = 50L
 
     fun beforeRequest(isOrder: Boolean = false) {
+        val waitStartedAtMs = System.currentTimeMillis()
         if (Thread.currentThread().isInterrupted) {
             throw IllegalStateException(
                 "Binance REST request interrupted before rate-limit scheduling; request was not sent"
@@ -85,6 +98,11 @@ class BinanceRateGuard {
                         "Binance REST request interrupted while waiting for rate-limit governor; request was not sent"
                     )
                 }
+                val waited = (System.currentTimeMillis() - waitStartedAtMs).coerceAtLeast(0L)
+                synchronized(lock) {
+                    lastWaitMs = waited
+                    totalWaitMs += waited
+                }
                 return
             }
             try {
@@ -100,6 +118,12 @@ class BinanceRateGuard {
     }
 
     fun observe(headers: Headers, statusCode: Int, isOrder: Boolean = false) {
+        synchronized(lock) {
+            lastStatusCode = statusCode
+            lastResponseAtMs = System.currentTimeMillis()
+            observedResponseCount += 1L
+            if (statusCode == 418 || statusCode == 429) rateLimitResponseCount += 1L
+        }
         headers.names().forEach { name ->
             val normalized = name.lowercase(Locale.US)
             val value = headers[name]?.toLongOrNull() ?: return@forEach
@@ -165,6 +189,12 @@ class BinanceRateGuard {
             .put("order_limit_10s", orderLimit10s)
             .put("order_count_1m", orderCount1m)
             .put("order_limit_1m", orderLimit1m)
+            .put("last_http_status", lastStatusCode)
+            .put("last_response_at_ms", lastResponseAtMs)
+            .put("observed_response_count", observedResponseCount)
+            .put("rate_limit_response_count", rateLimitResponseCount)
+            .put("last_wait_ms", lastWaitMs)
+            .put("total_wait_ms", totalWaitMs)
             .put(
                 "cooldown_ms",
                 (cooldownUntilMs - System.currentTimeMillis()).coerceAtLeast(0L)
