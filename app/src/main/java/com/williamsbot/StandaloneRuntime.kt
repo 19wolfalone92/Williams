@@ -270,6 +270,9 @@ internal fun diagnosticConsistencyFindings(
     if (coordinatorState == "RECONCILE_REQUIRED" && runtimeState != "RECONCILE_REQUIRED") {
         add("STATE_MISMATCH: coordinator requires reconciliation but runtime state is $runtimeState")
     }
+    if (coordinatorState == "RECONCILE_REQUIRED" && !runtimeReconcileRequired) {
+        add("RECONCILE_LATCH_MISMATCH: coordinator requires reconciliation but runtime reconcile_required is false")
+    }
     if (!coordinatorReady && executionEnabled) {
         add("GATE_CONTRADICTION: execution enabled while campaign coordinator is not ready")
     }
