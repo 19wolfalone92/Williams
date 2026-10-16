@@ -314,6 +314,14 @@ internal fun historyLifecycleSeverity(
     else -> "WARN"
 }
 
+/** Only the result produced by the currently connected private-stream generation may clear its sync latch. */
+internal fun mayCommitUserStreamSync(
+    connected: Boolean,
+    reconciliationPending: Boolean,
+    attemptGeneration: Long,
+    currentGeneration: Long
+): Boolean = connected && !reconciliationPending && attemptGeneration == currentGeneration
+
 /** A reconciliation worker is unhealthy if its start time is unknown, in the future, or over the deadline. */
 internal fun reconciliationTaskLifecycleHealthy(
     running: Boolean,
@@ -5698,8 +5706,12 @@ private class NativeEngine(
                     val repeat = synchronized(this) {
                         if (futuresStreamReconcilePending) {
                             true
-                        } else if (!userStreamConnected ||
-                            userStreamConnectionGeneration != connectionGenerationForAttempt
+                        } else if (!mayCommitUserStreamSync(
+                                connected = userStreamConnected,
+                                reconciliationPending = futuresStreamReconcilePending,
+                                attemptGeneration = connectionGenerationForAttempt,
+                                currentGeneration = userStreamConnectionGeneration
+                            )
                         ) {
                             // This attempt may finish just as the socket changes. Never let
                             // an old-session REST snapshot clear the current session's latch.
