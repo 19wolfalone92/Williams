@@ -67,35 +67,26 @@ internal class BinanceUsdMFuturesTestnetAdapter(
 
     fun markPrice(symbol: String): Double {
         requireSymbol(symbol)
-        val url = "$base/fapi/v1/premiumIndex".toHttpUrl().newBuilder()
-            .addQueryParameter("symbol", symbol)
-            .build()
-        val request = Request.Builder().url(url).get().build()
-        http.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw IOException("Futures mark price HTTP ${response.code}: ${body.take(300)}")
-            val value = JSONObject(body).optString("markPrice").toDoubleOrNull()
-                ?: throw IOException("Futures mark price response is malformed")
-            if (!value.isFinite() || value <= 0.0) throw IOException("Futures mark price is invalid")
-            return value
-        }
+        val body = requestRaw(
+            "GET", "/fapi/v1/premiumIndex", mapOf("symbol" to symbol), signed = false
+        )
+        val value = JSONObject(body).optString("markPrice").toDoubleOrNull()
+            ?: throw IOException("Futures mark price response is malformed")
+        if (!value.isFinite() || value <= 0.0) throw IOException("Futures mark price is invalid")
+        return value
     }
 
     fun klines(symbol: String, interval: String = "1h", limit: Int = 300): JSONArray {
         requireSymbol(symbol)
         require(interval in APPROVED_FUTURES_KLINE_INTERVALS) { "Unsupported USD-M Futures kline interval: $interval" }
         require(limit in 1..1500)
-        val url = "$base/fapi/v1/klines".toHttpUrl().newBuilder()
-            .addQueryParameter("symbol", symbol)
-            .addQueryParameter("interval", interval)
-            .addQueryParameter("limit", limit.toString())
-            .build()
-        val request = Request.Builder().url(url).get().build()
-        http.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw IOException("Futures klines HTTP ${response.code}: ${body.take(300)}")
-            return JSONArray(body)
-        }
+        val body = requestRaw(
+            "GET",
+            "/fapi/v1/klines",
+            mapOf("symbol" to symbol, "interval" to interval, "limit" to limit.toString()),
+            signed = false
+        )
+        return JSONArray(body)
     }
 
     fun account(): JSONObject = request("GET", "/fapi/v3/account", emptyMap(), signed = true)
@@ -515,16 +506,51 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         params: Map<String, String>,
         signed: Boolean
     ): String {
-        return try {
-            requestRawOnce(method, path, params, signed)
-        } catch (error: IOException) {
-            // Binance -1021 explicitly rejects a request whose timestamp is outside
-            // recvWindow. Only this definite rejection permits a single resync/retry;
-            // timeouts, connection resets and 5xx remain UNKNOWN and are never retried.
-            if (!signed || !error.message.orEmpty().contains("-1021")) throw error
-            timeSynced = false
-            serverTime()
-            requestRawOnce(method, path, params, signed = true)
+        var timestampResynced = false
+        var safeReadAttempt = 0
+        val safeReadDelaysMs = longArrayOf(250L, 500L, 1_000L)
+        while (true) {
+            try {
+                return requestRawOnce(method, path, params, signed)
+            } catch (error: IOException) {
+                val message = error.message.orEmpty()
+                // Binance -1021 explicitly rejects a stale timestamp. It is the only
+                // condition permitting a single signed-mutation retry because the exchange
+                // has definitively rejected that request before applying the mutation.
+                if (signed && !timestampResynced && message.contains("-1021")) {
+                    timestampResynced = true
+                    timeSynced = false
+                    serverTime()
+                    continue
+                }
+                // Reads are idempotent. Retry transient transport/5xx failures only for GET;
+                // never retry POST/DELETE on timeout or 5xx because exchange execution may
+                // be ambiguous. 418/429 and all other 4xx are surfaced immediately.
+                if (method.equals("GET", ignoreCase = true) &&
+                    safeReadAttempt < safeReadDelaysMs.size &&
+                    isRetryableSafeReadFailure(message)
+                ) {
+                    sleepBeforeSafeReadRetry(safeReadDelaysMs[safeReadAttempt])
+                    safeReadAttempt++
+                    continue
+                }
+                throw error
+            }
+        }
+    }
+
+    private fun isRetryableSafeReadFailure(message: String): Boolean {
+        val status = Regex("HTTP (\\d{3})").find(message)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        if (status != null) return status in setOf(500, 502, 503, 504)
+        return true // connection failure before an HTTP status exists
+    }
+
+    private fun sleepBeforeSafeReadRetry(delayMs: Long) {
+        try {
+            Thread.sleep(delayMs)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IOException("Interrupted while retrying a safe USD-M Futures GET", interrupted)
         }
     }
 
