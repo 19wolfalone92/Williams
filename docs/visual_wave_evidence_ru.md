@@ -45,7 +45,7 @@ Six alternating *confirmed* pivot centers prove only the skeletal topology, not 
 - williams_wave_evidence.py: symmetrical UP/DOWN impulse six-pivot checks; W2 origin, W3 extension/not-shortest, W4 overlap vs diagonal, W5 truncation. Recent ABC is flagged only as alternative, not certain.
 - AO leg divergence: compare two price swing highs/lows to two AO extrema measured over corresponding legs, record numerical anchors and confirmation indexes, with no future-bar reads.
 - wave_engine.py: attach results as WaveSnapshot.structure.visual_wave_evidence computed from closed candles and already-confirmed pivots.
-- test_williams_wave_evidence.py: seven standalone tests passed locally, including mirrored directions, invalidation, overlap, truncation, AO divergence and partial bars.
+- test_williams_wave_evidence.py: nine standalone tests passed locally, including mirrored directions, invalidation, overlap, truncation, AO divergence and partial bars.
 
 Explicit contract: authority = DIAGNOSTIC_ONLY; can_place_orders = false. This change does not alter primary wave labels, Williams entry logic, stops, risk rules or exchange calls.
 
