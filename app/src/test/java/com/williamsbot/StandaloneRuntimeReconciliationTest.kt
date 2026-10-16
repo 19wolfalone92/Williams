@@ -46,10 +46,10 @@ class StandaloneRuntimeReconciliationTest {
 
     @Test
     fun reconciliationLifecycleHasAnExplicitTimeout() {
-        assertTrue(reconciliationTaskLifecycleHealthy(false, 0L, 200_000L))
-        assertTrue(reconciliationTaskLifecycleHealthy(true, 100_000L, 220_000L))
-        assertFalse(reconciliationTaskLifecycleHealthy(true, 100_000L, 220_001L))
-        assertFalse(reconciliationTaskLifecycleHealthy(true, 0L, 220_000L))
-        assertFalse(reconciliationTaskLifecycleHealthy(true, 300_000L, 220_000L))
+        assertTrue(reconciliationTaskLifecycleHealthy(false, 0L, 500_000L))
+        assertTrue(reconciliationTaskLifecycleHealthy(true, 100_000L, 400_000L))
+        assertFalse(reconciliationTaskLifecycleHealthy(true, 100_000L, 400_001L))
+        assertFalse(reconciliationTaskLifecycleHealthy(true, 0L, 400_000L))
+        assertFalse(reconciliationTaskLifecycleHealthy(true, 500_000L, 400_000L))
     }
 }
