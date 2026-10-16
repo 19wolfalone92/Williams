@@ -319,17 +319,17 @@ internal fun historyLifecycleSeverity(
     else -> "WARN"
 }
 
-/** User-data WebSocket readiness requires a recent event, not merely a successful handshake. */
-internal fun userStreamIsFresh(
+/** Private-stream readiness is based on successful exchange reconciliation, not event traffic. */
+internal fun userStreamSyncIsFresh(
     connected: Boolean,
     syncRequired: Boolean,
-    lastEventMs: Long,
+    lastSuccessfulSyncMs: Long,
     nowMs: Long,
     maxAgeMs: Long = 120_000L
 ): Boolean =
-    connected && !syncRequired && lastEventMs > 0L &&
-        nowMs >= lastEventMs && maxAgeMs >= 0L &&
-        nowMs - lastEventMs <= maxAgeMs
+    connected && !syncRequired && lastSuccessfulSyncMs > 0L &&
+        nowMs >= lastSuccessfulSyncMs && maxAgeMs >= 0L &&
+        nowMs - lastSuccessfulSyncMs <= maxAgeMs
 
 /** Prefer a live WS quote, then a fresh Futures REST ticker, then the last closed candle. */
 internal fun dashboardPrice(
