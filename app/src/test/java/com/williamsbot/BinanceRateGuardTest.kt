@@ -57,6 +57,19 @@ class BinanceRateGuardTest {
         assertEquals(12L, snapshot.getLong("order_count_10s"))
         assertEquals(91L, snapshot.getLong("order_count_1m"))
         assertEquals(321L, snapshot.getLong("used_weight_1m"))
+        assertEquals(200, snapshot.getInt("last_http_status"))
+        assertEquals(1L, snapshot.getLong("observed_response_count"))
+        assertEquals(0L, snapshot.getLong("rate_limit_response_count"))
+    }
+
+    @Test
+    fun rateLimitResponsesAreCountedAndExposeCooldown() {
+        val guard = BinanceRateGuard()
+        guard.observe(Headers.headersOf("Retry-After", "2"), 429)
+        val snapshot = guard.snapshot()
+        assertEquals(429, snapshot.getInt("last_http_status"))
+        assertEquals(1L, snapshot.getLong("rate_limit_response_count"))
+        org.junit.Assert.assertTrue(snapshot.getLong("cooldown_ms") > 0L)
     }
     @Test
     fun sustainedUsagePressureDelaysOneRequestButDoesNotRescheduleItForever() {
