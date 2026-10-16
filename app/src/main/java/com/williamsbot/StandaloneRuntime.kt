@@ -470,6 +470,18 @@ internal fun canInitializeDailyRiskBaseline(
     hasTradingIncome: Boolean
 ): Boolean = !hasOpenPosition && !hasActiveExecution && !hasTradingIncome
 
+/** Missing provenance may be repaired only when the already-persisted baseline is valid. */
+internal fun canRepairDailyRiskBaselineSource(
+    baselineValue: String?,
+    source: String?
+): Boolean {
+    val baseline = baselineValue?.toDoubleOrNull()
+    val sourceMissing = source.isNullOrBlank() ||
+        source.equals("UNKNOWN", ignoreCase = true) ||
+        source.equals("null", ignoreCase = true)
+    return sourceMissing && baseline != null && baseline.isFinite() && baseline > 0.0
+}
+
 // Rebuild a missing UTC daily equity baseline from the complete USD-M Futures
 // income history. Transfers are neutral capital movements; trading income and
 // unrealized PnL are removed from current equity to reconstruct the day's starting
@@ -5582,8 +5594,8 @@ private class NativeEngine(
         ) return@runCatching source
         // Recover only provenance metadata for an already persisted, valid baseline.
         // Never manufacture a baseline from current equity here: the risk gate owns that.
-        val baseline = executionStore.readState(baselineKey)?.toDoubleOrNull()
-        if (baseline != null && baseline.isFinite() && baseline > 0.0 &&
+        val baselineValue = executionStore.readState(baselineKey)
+        if (canRepairDailyRiskBaselineSource(baselineValue, source) &&
             executionStore.writeState(sourceKey, "SQLITE_PERSISTED_BASELINE_SOURCE_RECOVERED")
         ) "SQLITE_PERSISTED_BASELINE_SOURCE_RECOVERED" else "UNKNOWN"
     }.getOrDefault("UNKNOWN")
