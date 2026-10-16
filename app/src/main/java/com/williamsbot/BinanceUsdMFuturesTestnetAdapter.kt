@@ -19,6 +19,18 @@ import javax.crypto.spec.SecretKeySpec
  * permission to trade: callers must still pass execution/reconciliation/risk
  * gates before mutating orders. Never use Spot /api/v3 routes here.
  */
+internal fun hasLiveFuturesPosition(rows: JSONArray): Boolean {
+    for (index in 0 until rows.length()) {
+        val row = rows.optJSONObject(index)
+            ?: throw IllegalStateException("Malformed Binance Futures position row at index $index")
+        val rawAmount = row.optString("positionAmt", "")
+        val amount = rawAmount.toBigDecimalOrNull()
+            ?: throw IllegalStateException("Malformed Binance Futures positionAmt at index $index")
+        if (amount.abs().signum() > 0) return true
+    }
+    return false
+}
+
 internal class BinanceUsdMFuturesTestnetAdapter(
     private val apiKey: String,
     apiSecret: String,
@@ -102,10 +114,10 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     fun requireOneWayMode() {
         if (!positionMode().optBoolean("dualSidePosition", true)) return
         val live = positions()
-        val hasPosition = (0 until live.length()).any { i ->
-            val row = live.optJSONObject(i) ?: return@any true
-            kotlin.math.abs(row.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0
-        }
+        // Never interpret malformed exchange data as a flat account. A malformed row
+        // must block mode changes, because switching Hedge/One-way with live exposure
+        // can alter the semantics of subsequent exits and protective orders.
+        val hasPosition = hasLiveFuturesPosition(live)
         check(!hasPosition) {
             "Futures account is in Hedge Mode with live positions; flatten/reconcile manually before switching to One-way"
         }
