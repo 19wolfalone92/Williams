@@ -274,7 +274,9 @@ class BinanceFuturesClient:
         )
 
     def account(self):
-        raw = self._request("GET", "/fapi/v2/account", signed=True)
+        # Binance replaced the account V2 endpoint with V3. Keep the backend aligned
+        # with the Android adapter so Testnet account reconciliation uses one API contract.
+        raw = self._request("GET", "/fapi/v3/account", signed=True)
         assets = raw.get("assets", []) or []
         balances = []
         for asset in assets:
@@ -300,7 +302,7 @@ class BinanceFuturesClient:
     def position_risk(self, symbol=None):
         return self._request(
             "GET",
-            "/fapi/v2/positionRisk",
+            "/fapi/v3/positionRisk",
             {"symbol": symbol} if symbol else {},
             signed=True,
         )
