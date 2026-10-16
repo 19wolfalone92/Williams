@@ -60,6 +60,46 @@ internal fun tc2OppositeBreakoutTriggered(
         else observedPrice >= opposingTrigger
 }
 
+/**
+ * TC2 ch.11 figs 11.1/11.2: equal extremes can be separated by one inside
+ * bar. Two consecutive strictly lower/higher bars separate independent groups.
+ * This makes the 6- and 9-bar drawings causal, without globally using >=.
+ */
+internal fun tc2FractalGroupStart(
+    extremes: List<Double>, anchor: Int, isHigh: Boolean
+): Int {
+    if (anchor !in extremes.indices || !extremes[anchor].isFinite()) return anchor
+    val level = extremes[anchor]
+    var first = anchor
+    var lowerRun = 0
+    for (j in anchor - 1 downTo 0) {
+        val value = extremes[j]
+        if (!value.isFinite() || (if (isHigh) value > level else value < level)) break
+        if (value == level) {
+            first = j
+            lowerRun = 0
+        } else {
+            lowerRun++
+            if (lowerRun >= 2) break
+        }
+    }
+    return first
+}
+
+internal fun tc2ConfirmedFractal(
+    extremes: List<Double>, anchor: Int, isHigh: Boolean
+): Boolean {
+    if (anchor < 2 || anchor + 2 >= extremes.size) return false
+    val level = extremes[anchor]
+    if (!level.isFinite()) return false
+    val start = tc2FractalGroupStart(extremes, anchor, isHigh)
+    if (start < 2) return false
+    fun outside(value: Double) = value.isFinite() &&
+        (if (isHigh) value < level else value > level)
+    return outside(extremes[start - 1]) && outside(extremes[start - 2]) &&
+        outside(extremes[anchor + 1]) && outside(extremes[anchor + 2])
+}
+
 object StandaloneRuntime {
     @SuppressLint("StaticFieldLeak")
     private var server: StandaloneServer? = null
@@ -6535,42 +6575,12 @@ private class NativeEngine(
                 teethS[i] > jawS[i] &&
                 candles[i].c > lipsS[i]
 
-        fun upGroupStart(i: Int): Int {
-            var start = i
-            while (start > 0 && candles[start - 1].h == candles[i].h) start--
-            return start
-        }
-
-        fun downGroupStart(i: Int): Int {
-            var start = i
-            while (start > 0 && candles[start - 1].l == candles[i].l) start--
-            return start
-        }
-
-        // A plateau of equal extremes is one fractal group, not several
-        // artificial signals. Anchor it at the last equal-extreme bar so the
-        // two required right-hand bars are fully closed before confirmation.
-        fun upFractal(i: Int): Boolean {
-            if (i + 2 >= candles.size) return false
-            if (i + 1 < candles.size && candles[i + 1].h == candles[i].h) return false
-            val start = upGroupStart(i)
-            if (start < 2) return false
-            return candles[start - 1].h < candles[i].h &&
-                candles[start - 2].h < candles[i].h &&
-                candles[i + 1].h < candles[i].h &&
-                candles[i + 2].h < candles[i].h
-        }
-
-        fun downFractal(i: Int): Boolean {
-            if (i + 2 >= candles.size) return false
-            if (i + 1 < candles.size && candles[i + 1].l == candles[i].l) return false
-            val start = downGroupStart(i)
-            if (start < 2) return false
-            return candles[start - 1].l > candles[i].l &&
-                candles[start - 2].l > candles[i].l &&
-                candles[i + 1].l > candles[i].l &&
-                candles[i + 2].l > candles[i].l
-        }
+        val candleHighs = candles.map { it.h }
+        val candleLows = candles.map { it.l }
+        fun upGroupStart(i: Int): Int = tc2FractalGroupStart(candleHighs, i, true)
+        fun downGroupStart(i: Int): Int = tc2FractalGroupStart(candleLows, i, false)
+        fun upFractal(i: Int): Boolean = tc2ConfirmedFractal(candleHighs, i, true)
+        fun downFractal(i: Int): Boolean = tc2ConfirmedFractal(candleLows, i, false)
 
         fun latestUpFractal(centerLimit: Int): Int? {
             for (i in centerLimit downTo 2) {
