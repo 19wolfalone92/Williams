@@ -209,6 +209,7 @@ def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
     assert "Legacy signed transport was removed; account/order mutations use the Futures adapter/coordinator." in runtime
     assert "Legacy direct BUY execution is disabled; CampaignEngine is canonical" in runtime
     assert "Legacy Spot OCO protection is disabled; use Futures Algo Order protection" in runtime
+    assert "fun sell(symbol: String): JSONObject = sellFuturesPosition(symbol)" in runtime
     assert "normalizeFuturesPublicPath(path)" in runtime
     assert "internal fun normalizeFuturesPublicPath(path: String)" in market_data
     assert "SECURITY_BLOCK: unsupported public route in USD-M Futures runtime" in market_data
