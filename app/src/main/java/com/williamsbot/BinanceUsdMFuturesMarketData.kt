@@ -204,7 +204,9 @@ internal class BinanceUsdMFuturesMarketData(
     fun tickerPrices(): JSONArray = getArray("$base/fapi/v1/ticker/price")
     fun ticker24h(): JSONArray = getArray("$base/fapi/v1/ticker/24hr")
     fun bookTickers(): JSONArray = getArray("$base/fapi/v1/ticker/bookTicker")
-    fun exchangeInfo(): JSONObject = getObject("$base/fapi/v1/exchangeInfo")
+    fun exchangeInfo(): JSONObject = getObject("$base/fapi/v1/exchangeInfo").also {
+        rateGuard?.updateFromExchangeInfo(it)
+    }
 
     /** Fresh bid/ask for the final entry-spread check; cached scanner spread is not execution authority. */
     fun topOfBook(symbol: String): Pair<Double, Double> {
