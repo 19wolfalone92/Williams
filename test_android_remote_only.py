@@ -936,6 +936,7 @@ def test_future_cancel_preflight_and_out_of_session_failures_always_latch_reconc
         "private fun performScan()", 1
     )[0]
     assert 'setReconcileRequired(blocker)' in session
+    assert 'setReconcileRequired(\n                            "TC2_PENDING_VALIDATION_UNAVAILABLE: "' in runtime
 
 
 def test_native_futures_executor_rejects_unknown_and_cross_direction_williams_signals():
