@@ -314,6 +314,18 @@ internal fun historyLifecycleSeverity(
     else -> "WARN"
 }
 
+/** A reconciliation worker is unhealthy if its start time is unknown, in the future, or over the deadline. */
+internal fun reconciliationTaskLifecycleHealthy(
+    running: Boolean,
+    startedAtMs: Long,
+    nowMs: Long,
+    maximumDurationMs: Long = 120_000L
+): Boolean {
+    if (!running) return true
+    if (maximumDurationMs <= 0L || startedAtMs <= 0L || nowMs < startedAtMs) return false
+    return nowMs - startedAtMs <= maximumDurationMs
+}
+
 /** Private-stream readiness is based on successful exchange reconciliation, not event traffic. */
 internal fun userStreamSyncIsFresh(
     connected: Boolean,
@@ -8376,7 +8388,8 @@ private class NativeEngine(
         val runtimeState = statusSnapshot.optJSONObject("execution_state_contract")
             ?.optString("state", statusSnapshot.optString("state", "UNKNOWN")) ?: "UNKNOWN"
         val dailyBaselineSource = statusSnapshot.optString("daily_risk_baseline_source", "UNKNOWN")
-        val reconciliationRunning = statusSnapshot.optBoolean("futures_reconciliation_in_progress", false)
+        val reconciliationRunning = statusSnapshot.optBoolean("futures_reconciliation_in_progress", false) ||
+            statusSnapshot.optBoolean("user_stream_reconcile_running", false)
         val consistencyFindings = diagnosticConsistencyFindings(
             coordinatorState, coordinatorReady, coordinatorBlocker, runtimeState,
             statusSnapshot.optBoolean("reconcile_required", false),
@@ -8456,6 +8469,25 @@ private class NativeEngine(
                 "; sync_age_ms=" + (if (userSyncAgeMs == Long.MAX_VALUE) "UNKNOWN" else userSyncAgeMs.toString()) +
                 "; sync must belong to the current connected session; private event silence alone does not indicate a broken stream"
         )
+        val streamReconcileStartedAtMs = statusSnapshot.optLong("user_stream_reconcile_started_at_ms", 0L)
+        val streamReconcileFinishedAtMs = statusSnapshot.optLong("user_stream_reconcile_finished_at_ms", 0L)
+        val streamReconcileRunning = statusSnapshot.optBoolean("user_stream_reconcile_running", false)
+        val streamReconcileDurationMs = statusSnapshot.opt("user_stream_reconcile_duration_ms")
+            .let { if (it is Number) it.toLong() else -1L }
+        val streamTaskHealthy = reconciliationTaskLifecycleHealthy(
+            running = streamReconcileRunning,
+            startedAtMs = streamReconcileStartedAtMs,
+            nowMs = userNowMs
+        )
+        test(
+            "user_stream_reconciliation_lifecycle", "runtime", streamTaskHealthy, "FAIL",
+            "running=" + streamReconcileRunning +
+                "; started_at_ms=" + streamReconcileStartedAtMs +
+                "; finished_at_ms=" + streamReconcileFinishedAtMs +
+                "; duration_ms=" + (if (streamReconcileDurationMs >= 0L) streamReconcileDurationMs.toString() else "UNKNOWN") +
+                "; max_running_duration_ms=120000" +
+                "; last_failure=" + statusSnapshot.optString("user_stream_reconcile_failure", "none")
+        )
         val userEventAgeMs = if (lastUserEventMs > 0L && userNowMs >= lastUserEventMs)
             userNowMs - lastUserEventMs else Long.MAX_VALUE
         test(
@@ -8521,7 +8553,8 @@ private class NativeEngine(
             runtimeReconcileRequired = statusSnapshot.optBoolean("reconcile_required", false),
             executionEnabled = statusSnapshot.optBoolean("execution_enabled", false),
             dailyRiskBaselineSource = statusSnapshot.optString("daily_risk_baseline_source", "UNKNOWN"),
-            reconciliationRunning = statusSnapshot.optBoolean("futures_reconciliation_in_progress", false),
+            reconciliationRunning = statusSnapshot.optBoolean("futures_reconciliation_in_progress", false) ||
+                statusSnapshot.optBoolean("user_stream_reconcile_running", false),
             topLevelRuntimeState = statusSnapshot.optString("state", "UNKNOWN")
         )
         val failedTests = (0 until tests.length()).count {
