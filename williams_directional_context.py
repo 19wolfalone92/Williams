@@ -185,10 +185,13 @@ def evaluate_direction(
         reasons.append("D1_H4_CONTEXT_NOT_DIRECTIONALLY_CONFIRMED")
 
     score = round(max(-8.0, min(8.0, score)), 2)
-    bias = "LONG" if score >= 2 else "SHORT" if score <= -2 and side == "LONG" else (
-        "SHORT" if side == "SHORT" and score >= 2 else (
-            "LONG" if side == "SHORT" and score <= -2 else "WAIT"
-        )
+    # Positive evidence favors the evaluated candidate's side; negative
+    # evidence favors the *other* side. Never confuse SHORT support with
+    # LONG bias (the mirrored-path regression caught this in CI).
+    bias = (
+        side if score >= 2
+        else ("SHORT" if side == "LONG" else "LONG") if score <= -2
+        else "WAIT"
     )
     alignment = "SUPPORTED" if score >= 2 else (
         "CONTRADICTED" if score <= -2 else "MIXED")
