@@ -1831,8 +1831,11 @@ private class NativeEngine(
         if (key().isNotBlank() && secret().isNotBlank()) {
             val rows = futuresCampaignCoordinator.positionsSnapshot()
             val open = (0 until rows.length()).any { i ->
-                val row = rows.optJSONObject(i) ?: return@any false
-                kotlin.math.abs(row.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0
+                val row = rows.optJSONObject(i)
+                    ?: throw IllegalStateException("Malformed Binance Futures position row while validating credential deletion")
+                val amount = row.optString("positionAmt").toDoubleOrNull()
+                    ?: throw IllegalStateException("Malformed Binance Futures position amount while validating credential deletion")
+                kotlin.math.abs(amount) > 0.0
             }
             val intents = futuresCampaignCoordinator.intentsSnapshot()
             val pending = (0 until intents.length()).any { i ->
@@ -2259,10 +2262,12 @@ private class NativeEngine(
             JSONArray()
         }
         for (i in 0 until rows.length()) {
-            val row = rows.optJSONObject(i) ?: continue
+            val row = rows.optJSONObject(i)
+                ?: throw IllegalStateException("Malformed Binance Futures position row during kill switch")
             val symbol = row.optString("symbol").uppercase(Locale.US)
             if (symbol !in coreSymbols) continue
-            val signedQty = row.optString("positionAmt").toDoubleOrNull() ?: 0.0
+            val signedQty = row.optString("positionAmt").toDoubleOrNull()
+                ?: throw IllegalStateException("Malformed Binance Futures position amount for $symbol during kill switch")
             if (signedQty == 0.0) continue
             val direction = if (signedQty > 0.0) NativeFuturesCampaignCoordinator.Direction.LONG
                 else NativeFuturesCampaignCoordinator.Direction.SHORT
@@ -2327,8 +2332,11 @@ private class NativeEngine(
         }
         val positions = futuresCampaignCoordinator.positionsSnapshot()
         val hasOpenPosition = (0 until positions.length()).any { i ->
-            val row = positions.optJSONObject(i) ?: return@any false
-            kotlin.math.abs(row.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0
+            val row = positions.optJSONObject(i)
+                ?: throw IllegalStateException("Malformed Binance Futures position row during kill-switch reset")
+            val amount = row.optString("positionAmt").toDoubleOrNull()
+                ?: throw IllegalStateException("Malformed Binance Futures position amount during kill-switch reset")
+            kotlin.math.abs(amount) > 0.0
         }
         require(!hasOpenPosition) {
             "Kill switch reset refused: Binance Futures still reports an open position."
@@ -4534,7 +4542,8 @@ private class NativeEngine(
         val positions = futuresCampaignCoordinator.positionsSnapshot()
         val intents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
         for (i in 0 until positions.length()) {
-            val row = positions.optJSONObject(i) ?: continue
+            val row = positions.optJSONObject(i)
+                ?: throw IllegalStateException("Malformed Binance Futures position row in position snapshot")
             val symbol = row.optString("symbol").uppercase(Locale.US)
             val signedQty = row.optString("positionAmt").toDoubleOrNull()
                 ?: throw IllegalStateException("Malformed Futures position amount for $symbol")
@@ -4575,9 +4584,13 @@ private class NativeEngine(
         val symbol = symbolInput.trim().uppercase(Locale.US)
         require(symbol in coreSymbols) { "Symbol is outside the approved Futures universe: " + symbol }
         val rows = futuresCampaignCoordinator.positionsSnapshot()
-        val row = (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.firstOrNull {
-            it.optString("symbol") == symbol &&
-                kotlin.math.abs(it.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0
+        val row = (0 until rows.length()).map { index ->
+            rows.optJSONObject(index)
+                ?: throw IllegalStateException("Malformed Binance Futures position row during manual exit")
+        }.firstOrNull { candidate ->
+            val amount = candidate.optString("positionAmt").toDoubleOrNull()
+                ?: throw IllegalStateException("Malformed Binance Futures position amount during manual exit")
+            candidate.optString("symbol") == symbol && kotlin.math.abs(amount) > 0.0
         } ?: run {
             val rec = reconcileFuturesThroughDoor(
                 "MANUAL_EXIT_POSITION_NOT_FOUND_RECONCILIATION",
@@ -4912,10 +4925,12 @@ private class NativeEngine(
         val positions = futuresCampaignCoordinator.positionsSnapshot()
         val intents = futuresCampaignCoordinator.intentsSnapshot()
         for (i in 0 until positions.length()) {
-            val row = positions.optJSONObject(i) ?: continue
+            val row = positions.optJSONObject(i)
+                ?: throw IllegalStateException("Malformed Binance Futures position row during structural exit evaluation")
             val symbol = row.optString("symbol").uppercase(Locale.US)
             if (symbol !in coreSymbols) continue
-            val signedQty = row.optString("positionAmt").toDoubleOrNull() ?: 0.0
+            val signedQty = row.optString("positionAmt").toDoubleOrNull()
+                ?: throw IllegalStateException("Malformed Binance Futures position amount for $symbol during structural exit evaluation")
             if (signedQty == 0.0) continue
             val direction = if (signedQty > 0.0) NativeFuturesCampaignCoordinator.Direction.LONG
                 else NativeFuturesCampaignCoordinator.Direction.SHORT
@@ -5098,8 +5113,13 @@ private class NativeEngine(
         if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId }) return
 
         val exchangePositions = futuresCampaignCoordinator.positionsSnapshot()
-        val openPositions = (0 until exchangePositions.length()).mapNotNull { exchangePositions.optJSONObject(it) }
-            .filter { kotlin.math.abs(it.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0 }
+        val openPositions = (0 until exchangePositions.length()).map { index ->
+            val row = exchangePositions.optJSONObject(index)
+                ?: throw IllegalStateException("Malformed Binance Futures position row during entry scan")
+            val amount = row.optString("positionAmt").toDoubleOrNull()
+                ?: throw IllegalStateException("Malformed Binance Futures position amount during entry scan")
+            row to amount
+        }.filter { (_, amount) -> kotlin.math.abs(amount) > 0.0 }.map { it.first }
         val slotBlocker = futuresPositionSlotBlocker(
             symbol = symbol,
             openPositionSymbols = openPositions.map { it.optString("symbol") },
@@ -7863,7 +7883,8 @@ private class NativeEngine(
         var livePnl = 0.0
         var totalEntryNotional = 0.0
         for (i in 0 until futuresPositions.length()) {
-            val row = futuresPositions.optJSONObject(i) ?: continue
+            val row = futuresPositions.optJSONObject(i)
+                ?: throw IllegalStateException("Malformed normalized Futures position row in dashboard snapshot")
             livePnl += row.optDouble("unrealized_pnl_usdt", 0.0)
             val entry = row.optDouble("entry", 0.0)
             val qty = row.optDouble("qty", 0.0)
