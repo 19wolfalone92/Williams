@@ -906,6 +906,9 @@ def test_futures_entry_uses_contract_price_and_protective_stop_keeps_mark_price(
     )[0]
     assert '"/fapi/v2/ticker/price"' in adapter
     assert '"workingType" to "CONTRACT_PRICE"' in entry
+    assert '.put("entry_trigger_basis", "CONTRACT_PRICE")' in runtime
+    assert '.put("protective_stop_trigger_basis", "MARK_PRICE")' in runtime
+    assert '.put("kline_price_basis", "CONTRACT_PRICE")' in runtime
     assert "contractPrice(symbol)" in entry
     assert 'markPrice(symbol)' not in entry
     assert '"workingType" to "MARK_PRICE"' in protection
