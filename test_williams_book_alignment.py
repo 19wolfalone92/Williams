@@ -69,7 +69,7 @@ def test_momentum_fading_and_volume_diagnostics_are_boolean():
     assert ind["squatting_bar"].dtype == bool
     assert ind["profitunity_window"].iloc[-1] in {"GREEN", "FADING", "FAKE", "SQUAT", "STABLE", "UNKNOWN"}
 
-def test_reversal_bar_needs_followup_extreme_breakout():
+def test_tc2_wm1_cannot_touch_alligator_even_if_high_breaks_later():
     import pandas as pd
     from strategy import calculate_indicators, config_from_env
 
@@ -88,7 +88,9 @@ def test_reversal_bar_needs_followup_extreme_breakout():
 
     df = pd.DataFrame({'open': open_, 'high': high, 'low': low, 'close': close, 'volume': volume})
     out = calculate_indicators(df, config_from_env())
-    assert bool(out['bullish_reversal_bar'].iloc[70]) is True
+    # The candle pierces the Alligator mouth: it is not TC2 WM1.
+    # A later high breakout cannot turn an invalid setup into a valid one.
+    assert bool(out['bullish_reversal_bar'].iloc[70]) is False
     assert bool(out['long_wise_reversal_entry'].iloc[70]) is False
 
 
