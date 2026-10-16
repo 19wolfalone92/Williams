@@ -5570,8 +5570,14 @@ private class NativeEngine(
                 }
                 runCatching { cancelPendingEntriesInvalidatedByMarket() }
                     .onFailure { failure ->
-                        lastError = lastError ?: "TC2 pending-entry invalidation monitor: " +
-                            (failure.message ?: failure.javaClass.simpleName)
+                        // This monitor returns before any API reads when nothing
+                        // is pending. A thrown exception means an outstanding
+                        // conditional order could not be evaluated or canceled.
+                        // A diagnostic alone is not an execution safety barrier.
+                        setReconcileRequired(
+                            "TC2_PENDING_VALIDATION_UNAVAILABLE: " +
+                                (failure.message ?: failure.javaClass.simpleName)
+                        )
                     }
                 runCatching { cancelPendingEntriesOutsideWilliamsSession() }
                     .onFailure { failure ->
