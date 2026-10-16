@@ -252,23 +252,52 @@ class MultiTimeframeWaveEngine:
     # Data preparation
     # ------------------------------------------------------------------
     @staticmethod
-    def _drop_unfinished(df: pd.DataFrame) -> pd.DataFrame:
+    def _drop_unfinished(
+        df: pd.DataFrame, interval: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """Return exchange-closed candles only; never infer closure from row count.
+
+        The old implementation returned every row when close_time was absent,
+        silently accepted malformed dates, and dropped at most ONE future bar.
+        A forming candle then changed Williams wave counts (lookahead). Missing
+        close_time can be inferred only from a UTC DatetimeIndex and a known,
+        exact Binance interval. Unknown calendars fail closed.
+        """
         if df is None or df.empty:
             return pd.DataFrame()
 
         out = df.copy()
-        if "close_time" not in out.columns:
-            return out
+        if "close_time" in out.columns:
+            raw = out["close_time"]
+            if pd.api.types.is_numeric_dtype(raw):
+                close_times = pd.to_datetime(raw, unit="ms", utc=True, errors="coerce")
+            else:
+                close_times = pd.to_datetime(raw, utc=True, errors="coerce")
+        else:
+            if not isinstance(out.index, pd.DatetimeIndex) or interval is None:
+                return out.iloc[0:0].copy()
+            try:
+                opens = pd.DatetimeIndex(out.index)
+                if opens.tz is None:
+                    # Binance OHLC interval opens must be explicitly UTC.
+                    return out.iloc[0:0].copy()
+                opens = opens.tz_convert("UTC")
+                if interval == "1M":
+                    close_times = opens + pd.DateOffset(months=1) - pd.Timedelta(milliseconds=1)
+                else:
+                    seconds = MultiTimeframeWaveEngine.INTERVAL_SECONDS.get(interval, 0)
+                    if seconds <= 0:
+                        return out.iloc[0:0].copy()
+                    close_times = opens + pd.to_timedelta(seconds, unit="s") - pd.Timedelta(milliseconds=1)
+            except (TypeError, ValueError, OverflowError):
+                return out.iloc[0:0].copy()
 
-        try:
-            close_times = pd.to_datetime(out["close_time"], utc=True, errors="coerce")
-            now = pd.Timestamp.now(tz="UTC")
-            if bool((close_times.iloc[-1] > now) if pd.notna(close_times.iloc[-1]) else False):
-                out = out.iloc[:-1].copy()
-        except Exception:
-            pass
-
-        return out
+        closed = pd.DatetimeIndex(close_times)
+        if closed.isna().any() or not closed.is_monotonic_increasing:
+            return out.iloc[0:0].copy()
+        now = pd.Timestamp.now(tz="UTC")
+        # Drop ALL bars whose exchange close is in the future, not just the last.
+        return out.iloc[(closed <= now).nonzero()[0]].copy()
 
     def _fetch(
         self,
@@ -280,7 +309,8 @@ class MultiTimeframeWaveEngine:
 
         if os.getenv("WAVE_USE_FULL_HISTORY", "false").lower() == "true":
             return self._drop_unfinished(
-                fetch_klines_cached_history(self.client, symbol, interval)
+                fetch_klines_cached_history(self.client, symbol, interval),
+                interval,
             )
 
         return self._drop_unfinished(
@@ -292,6 +322,7 @@ class MultiTimeframeWaveEngine:
                     1,
                     int(limit if limit is not None else self.lookback),
                 ),
+                interval,
             )
         )
 
@@ -987,7 +1018,7 @@ class MultiTimeframeWaveEngine:
         df: pd.DataFrame,
         degree: str = "MEDIUM",
     ) -> WaveSnapshot:
-        clean = self._drop_unfinished(df)
+        clean = self._drop_unfinished(df, interval)
         if clean is None or clean.empty:
             return WaveSnapshot(
                 interval=interval,
