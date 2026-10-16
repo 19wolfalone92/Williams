@@ -91,9 +91,9 @@ class DiagnosticConsistencyTest {
     }
 
     @Test
-    fun userStreamSyncRejectsMissingStaleFutureAndUnsynchronizedReconciliation() {
+    fun userStreamSyncRequiresCurrentSessionReconciliationButAllowsIdleStreams() {
         assertFalse(userStreamSyncIsFresh(true, false, 0L, 1_000_000L))
-        assertFalse(userStreamSyncIsFresh(true, false, 800_000L, 1_000_001L))
+        assertTrue(userStreamSyncIsFresh(true, false, 800_000L, 1_000_001L))
         assertFalse(userStreamSyncIsFresh(true, false, 1_000_001L, 1_000_000L))
         assertFalse(userStreamSyncIsFresh(true, true, 999_000L, 1_000_000L))
         assertFalse(userStreamSyncIsFresh(false, false, 999_000L, 1_000_000L))
