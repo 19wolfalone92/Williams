@@ -190,16 +190,21 @@ def ao_divergence_evidence(pivots: Sequence[Any], ao: Sequence[Any], direction: 
 
 
 def collect_visual_wave_evidence(pivots: Sequence[Any], ao: Sequence[Any], direction: str) -> dict[str, Any]:
+    # Causal guard independent of the caller: a pivot whose confirmation bar
+    # is not contained in the supplied CLOSED-candle sequence is invisible.
+    confirmed_pivots = [pivot for pivot in pivots
+                        if (node := _node(pivot)) is not None
+                        and node["confirmed_index"] < len(ao)]
     return {
-        "impulse": impulse_evidence(pivots, direction),
-        "impulse_up": impulse_evidence(pivots, "UP"),
-        "impulse_down": impulse_evidence(pivots, "DOWN"),
-        "abc": abc_evidence(pivots),
-        "ao_divergence": ao_divergence_evidence(pivots, ao, direction),
+        "impulse": impulse_evidence(confirmed_pivots, direction),
+        "impulse_up": impulse_evidence(confirmed_pivots, "UP"),
+        "impulse_down": impulse_evidence(confirmed_pivots, "DOWN"),
+        "abc": abc_evidence(confirmed_pivots),
+        "ao_divergence": ao_divergence_evidence(confirmed_pivots, ao, direction),
         # Counter-trend exhaustion evidence must not disappear when the
         # Alligator has already switched direction during a reversal.
-        "ao_divergence_bearish": ao_divergence_evidence(pivots, ao, "UP"),
-        "ao_divergence_bullish": ao_divergence_evidence(pivots, ao, "DOWN"),
+        "ao_divergence_bearish": ao_divergence_evidence(confirmed_pivots, ao, "UP"),
+        "ao_divergence_bullish": ao_divergence_evidence(confirmed_pivots, ao, "DOWN"),
         "authority": "DIAGNOSTIC_ONLY",
         "origin": "VOZNY_MEMO_PLUS_WILLIAMS_AO_ENGINEERING",
         "can_place_orders": False,
