@@ -2594,7 +2594,27 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("campaign_status", lifecycle)
                     .put("created_at_ms", item.optLong("created_at_ms", 0L))
                     .put("last_reconciled_ms", item.optLong("last_reconciled_ms", 0L))
+                    .put("reconciliation_age_ms", if (item.optLong("last_reconciled_ms", 0L) > 0L)
+                        (now - item.optLong("last_reconciled_ms", now)).coerceAtLeast(0L) else JSONObject.NULL)
                     .put("age_ms", (now - item.optLong("created_at_ms", now)).coerceAtLeast(0L))
+                    // Report journal protection fields separately from live exchange proof.
+                    // Consumers must not interpret this persisted field alone as protection.
+                    .put("protection_status", item.optString("protection_status", "UNKNOWN"))
+                    .put("persisted_protective_stop", item.optString("protective_stop")
+                        .toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 } ?: JSONObject.NULL)
+                    .put("initial_protective_stop", item.optString("initial_protective_stop")
+                        .toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 } ?: JSONObject.NULL)
+                    .put("protection_client_id_suffix", item.optString("protection_client_id").takeLast(8))
+                    .put("strategy_ownership_verified", item.optBoolean("strategy_ownership_verified", true))
+                    .put("actual_risk_audit_status", item.optString("actual_risk_audit_status", "UNKNOWN"))
+                    .put("actual_risk_audit_blocker", item.optString("actual_risk_audit_blocker").takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+                    .put("actual_gross_stop_loss_usdt", item.opt("actual_gross_stop_loss_usdt") ?: JSONObject.NULL)
+                    .put("actual_fee_slippage_allowance_usdt", item.opt("actual_fee_slippage_allowance_usdt") ?: JSONObject.NULL)
+                    .put("actual_all_in_stop_loss_usdt", item.opt("actual_all_in_stop_loss_usdt") ?: JSONObject.NULL)
+                    .put("actual_all_in_risk_pct", item.opt("actual_all_in_risk_pct") ?: JSONObject.NULL)
+                    .put("actual_risk_audited_at_ms", item.opt("actual_risk_audited_at_ms") ?: JSONObject.NULL)
+                    .put("risk_reservation_adjusted_at_ms", item.opt("risk_reservation_adjusted_at_ms") ?: JSONObject.NULL)
+                    .put("risk_reservation_adjustment_reason", item.opt("risk_reservation_adjustment_reason") ?: JSONObject.NULL)
             )
         }
         val readyForNewEntry = state == State.READY || state == State.OPEN_PROTECTED ||
