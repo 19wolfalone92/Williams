@@ -867,6 +867,8 @@ def test_native_wave_evidence_covers_each_of_four_configured_closed_timeframes()
     assert 'val evidence = diagnosticWaveFrames(symbol, result.candles)' in runtime
     assert 'result.copy(waveFrames = evidence)' in runtime
     assert '.put("wave_timeframes", JSONArray().apply {' in runtime
+    assert '.put("wave_context", waveEvidence.asJson())' in runtime
+    assert 'val waveEvidence = waveFrameEvidence(frame, candles, futuresMarketData.exchangeNowMs())' in runtime
     assert 'as_of_closed_at_ms' in runtime
     assert 'HEURISTIC_UNVERIFIED' in runtime
     assert '"execution_authority", false' in runtime
