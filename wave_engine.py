@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from strategy import calculate_indicators, config_from_env
+from williams_wave_evidence import collect_visual_wave_evidence
 
 WAVE_STATE_IMPULSE = "IMPULSE"
 WAVE_STATE_CORRECTION = "CORRECTION"
@@ -1050,6 +1051,13 @@ class MultiTimeframeWaveEngine:
             direction,
             price,
             atr,
+        )
+
+        # Diagnostic-only visual-wave hypotheses use the same confirmed pivots
+        # and closed AO history that created this snapshot. They must never
+        # be interpreted as order authorisation or silently override signals.
+        structure["visual_wave_evidence"] = collect_visual_wave_evidence(
+            pivots, ind["ao"].tolist(), direction
         )
 
         # If a pivot-derived correction/impulse phase is clear, let it refine the

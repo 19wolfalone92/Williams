@@ -1,0 +1,78 @@
+# WILLIAMS BOT 2.1 — visual wave and momentum handoff (2026-10-16)
+
+## Status and source boundaries
+
+Based on five user screenshots: NQ100 M15 bearish 1–5 structures, annotated discretionary decision process, alternate scenario/levels M15, projected A-B-C M15, and USD/CAD M15 bearish AO divergence; plus six-page Russian handout "Памятка для подсчета волн" (after D. Возный, "Код Эллиотта").
+
+**The Vozny memo is an Elliott-taxonomy reference, not a Bill Williams book.** Screenshots and hand-drawn projected prices are candidate interpretations, not ground truth without the matching historical OHLCV and closed-bar replay.
+
+**Williams and Elliott must stay separate.** Alligator, fractals, AO, AC, MFI, Wise Men and campaign lifecycle are signal/decision evidence. Elliott hypotheses are structural alternatives; neither alone grants Futures BUY/SELL authority.
+
+## Image 1: NQ100 M15 bearish five-wave structures, nested degree, AO/AC
+
+The down 1–5 overlays include smaller motive and corrective subwaves. A down W3 can show a strongly negative AO. A W4 is a countertrend recovery. An apparent W5 low with weaker negative AO is possible bullish divergence/exhaustion, not an automatic LONG. A rebound after W5 could be corrective A or a new uptrend: record alternatives and invalidation.
+
+For both directions, inverted as appropriate, W2 must not breach W1 origin; W3 must extend beyond W1 and cannot be shortest of motive legs; W4 overlap invalidates an ordinary impulse but may suggest a diagonal hypothesis. Internal wave degree still needs verification.
+
+## Image 2: discretionary ten-step trading process
+
+Top down: D1 → H4 → H1 direction and targets, M15/M5 (M1 if required) wave position, beginning/acceleration/completion or correction, remaining potential, stop location, fully confirmed vs forming entry trigger, risk/reward, placement, management. Translate to sequential CONTEXT → STRUCTURE → SETUP → CONFIRMATION → PRICE TRIGGER → RISK → FUTURES EXECUTION → POSITION MANAGEMENT; not simultaneous indicator conjunctions.
+
+Project trading requirements remain 10 USDⓈ-M Binance Futures Testnet USDT contracts, both LONG and SHORT, H1 decision timeframe, D1/H4 context, M15/M5 intraday observation and entry execution timing.
+
+## Image 3: blue/green/red possible paths and horizontal levels
+
+Hand-drawn colored lines show conditional alternative market paths. Future endpoints on the right are forecast scenarios, not completed bars. Track historical confirmed pivots, pending pivots, confirmed support/resistance, primary scenario, alternative scenario and their invalidations separately. A low-TF impulse can occur within a high-TF correction.
+
+## Image 4: A-B-C chart
+
+A and B are historical candidate swing labels; right-side C is explicitly a projection. An ABC correction, larger motive turn or complex combination may fit overlapping raw price sequences. The projected price is NOT a filled stop/entry/target. Check parent-degree context, Alligator, AO/AC, confirmed fractal and risk before acting.
+
+## Image 5: USD/CAD M15 AO divergence
+
+Marked price peaks are near/higher at the second peak, but the second AO positive hump is smaller. Treat as potential bearish divergence pending exact OHLC checks. AO may remain positive while momentum declines; AO/AC histogram color reflects CHANGE, not value sign. Alligator will often lag at the top. Divergence is a reversal/exhaustion warning, never sufficient for an automatic SHORT. The screenshot author explicitly reports a losing short and acknowledges failing to check full context.
+
+Important: AO peak can precede corresponding price swing high. Comparing AO only ON the pivot candle (old Wave Engine behavior) can miss this. The new diagnostic compares the AO maximum on each completed up-leg or minimum on each completed down-leg, anchored to confirmed price pivots.
+
+## Wave handout: rigorous separation of evidence
+
+Ordinary impulse = five main waves with 5-3-5-3-5 internal sequence; zigzag ABC = 5-3-5; flat ABC = 3-3-5. A diagonal may overlap W1 with W4. W5 truncation may be valid. Compound corrections include W-X-Y and W-X-Y-X-Z; triangles involve A-B-C-D-E. Fibonacci ratios and alternation are context/expectations, not unique proofs.
+
+Six alternating *confirmed* pivot centers prove only the skeletal topology, not the interior 5-3-5 degree. Therefore labels are IMPULSE_CANDIDATE, DIAGONAL_CANDIDATE, ABC_UNRESOLVED. Apply W3-shortest rule only once all motive lengths exist. A developing structure may legitimately stay INCOMPLETE rather than falsely be called invalid.
+
+## Code implemented in this PR
+
+- williams_wave_evidence.py: symmetrical UP/DOWN impulse six-pivot checks; W2 origin, W3 extension/not-shortest, W4 overlap vs diagonal, W5 truncation. Recent ABC is flagged only as alternative, not certain.
+- AO leg divergence: compare two price swing highs/lows to two AO extrema measured over corresponding legs, record numerical anchors and confirmation indexes, with no future-bar reads.
+- wave_engine.py: attach results as WaveSnapshot.structure.visual_wave_evidence computed from closed candles and already-confirmed pivots.
+- test_williams_wave_evidence.py: nine standalone tests passed locally, including mirrored directions, invalidation, overlap, truncation, AO divergence and partial bars.
+
+Explicit contract: authority = DIAGNOSTIC_ONLY; can_place_orders = false. This change does not alter primary wave labels, Williams entry logic, stops, risk rules or exchange calls.
+
+## Not yet demonstrated
+
+The screenshots are NOT numerical OHLC labels. Historical bar-by-bar replay and comparison to original annotations are pending. Rich primary/alternate scenario tracking, wave-degree nesting, exact AO/AC/MFI visual interpretation, Android chart DecisionTrace parity, and Binance Futures ten-contract LONG/SHORT end-to-end tests are pending. No Testnet-ready APK claim follows from this PR.
+
+
+## Image 6: nested W3 / full impulse / subsequent A-B-C illustration
+
+User's newly added schematic: red higher-degree swing 0→1→2→3→4→5; blue inner oscillations are explicitly marked 1(3), 2(3), 3(3), 4(3) within higher-degree third wave. After red W5, possible corrective legs a (down), b (up), c (down) follow. Blue bars across earlier lows indicate potential horizontal reaction zones, not guaranteed prices. The image visibly marks several "50%" notes, but without scale and unambiguous measurement anchors they should be treated as approximate Fibonacci hints rather than hard rules or precise thresholds.
+
+One likely interpretation of the first 50% is W4 retracement of the preceding W3. Another likely interpretation is B retracement of A. The lower "50%" could concern a larger post-impulse retracement and its exact measurement requires identifying anchors; the graphic by itself does not establish those anchors.
+
+**Key:** blue 1(3)–4(3) are not alternative labels for higher-degree red W1–W4. They are lower-degree internal wave segments. A non-overlapping red impulse skeleton does not by itself verify internal 5-3-5-3-5 or the W3 subdivisions. A/B/C are possibilities after the preceding W5, but an unseen future a/b/c endpoint is not confirmed market data.
+
+Implementation: impulse_correction_evidence accepts only previously confirmed alternating pivots. It reports current W5_CANDIDATE, A_PIVOT_CONFIRMED, B_PIVOT_CONFIRMED or C_PIVOT_CONFIRMED stage, approximate measured W4/W3 retracement and B/A retracement once both anchors exist, plus C/A size and historic W2/W4 reference levels once a C pivot confirms. Values are geometric descriptions, not 50%-only entry filters and not proof that a given diagram's manual wave labels are correct. The transition helper deliberately does not promote an unverified diagonal alternative to a completed impulse.
+
+Mirrored calculations apply after a bearish W5, when A rises, B falls, and C rises. All new data stay diagnostic-only; they cannot place or modify orders.
+
+
+## Durable strategy invariant — user correction (2026-10-16)
+
+**Retracement labels on illustrative charts are APPROXIMATE, NOT CONDITIONS.** The 50% marks and drawn end points are one possible evolution, not mandatory reversal levels and never future observed data. Compare actual confirmed H1 swings with nested M15/M5 developments and D1/H4 market context; the degree matters more than the size of the Fibonacci correction.
+
+The bot must (1) derive candidate wave structures from actual price OHLC, (2) keep impulse / correction / ending wave / alternative count explicitly uncertain, (3) use Alligator for direction/market regime, AO and AC for momentum/acceleration changes, fractals for causally confirmed turns, (4) treat AO price divergence as an exhaustion warning and not a standalone trade, (5) rank both BUY/LONG and SELL/SHORT Williams entry signals independently, (6) never use future pivots or projected A/B/C as known market events, (7) execute ONLY after the existing Williams conditional trigger, Binance Futures market/account reconciliation and risk/protection gates. Ten approved USDT-margined USD-M Futures contracts, LONG and SHORT, must remain supported.
+
+Implementation on the PR branch: the actual FuturesWilliamsScanner now initializes MultiTimeframeWaveEngine instead of raising AttributeError when trying to build H1 wave context. DirectionalAssessment in williams_directional_context.py calculates up to ±8 candidate-ranking points from H1 Alligator, AO, AC, provisional structural phase, RECENT confirmed divergence, W5 exhaustion and D1/H4 confirmation. No minimum/maximum Fibonacci correction is imposed. Evidence is marked HEURISTIC_UNCALIBRATED, attached to FuturesCandidate.to_dict(), included for both sides in scanner.last_scan_status.directional_context, and stored at campaign entry time for replay. This DOES NOT authorize a position or alter stop placement and exit authority. Missing wave data gives neutral adjustment and an explicit diagnostic status.
+
+Safety caveat: this is a weighted engineering heuristic, **not an original Bill Williams rule and not a proven profitable classifier**. Scanner ranking does not equal execution readiness, and stage labels remain hypotheses. Required subsequent acceptance: exact closed-bar replay, multi-timeframe degree nesting, actual M15/M5 operative integration, simulator performance/ablation, real Binance Futures Testnet LONG/SHORT coverage, and Android observable DecisionTrace parity.
