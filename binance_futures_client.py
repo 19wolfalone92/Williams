@@ -11,6 +11,7 @@ import os
 import time
 import hmac
 import hashlib
+import re
 from decimal import Decimal, ROUND_DOWN
 from urllib.parse import urlencode, urlparse
 
@@ -21,6 +22,7 @@ from binance_client import BinanceAPIError
 
 class BinanceFuturesClient:
     is_futures = True
+    CONDITIONAL_TYPES = {"STOP", "STOP_MARKET", "TAKE_PROFIT", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET"}
 
     def __init__(
         self,
@@ -93,7 +95,7 @@ class BinanceFuturesClient:
         # absolute URLs, and path/query injection before credentials or network I/O.
         if (
             not isinstance(path, str)
-            or not path.startswith("/fapi/")
+            or re.fullmatch(r"/fapi/v[1-3]/[A-Za-z0-9]+(?:/[A-Za-z0-9]+)*", path) is None
             or path.startswith("//")
             or "?" in path
             or "#" in path
@@ -113,8 +115,9 @@ class BinanceFuturesClient:
 
         for attempt in range(max_attempts):
             wait = max(0.0, self.rate_limit_pause_until - time.time())
-            if wait > 0:
+            while wait > 0:
                 time.sleep(min(wait, 30.0))
+                wait = max(0.0, self.rate_limit_pause_until - time.time())
 
             payload = dict(params or {})
             if signed:
@@ -133,6 +136,7 @@ class BinanceFuturesClient:
                     self.base_url + path,
                     params=payload,
                     timeout=self.timeout,
+                    allow_redirects=False,
                 )
             except (requests.Timeout, requests.ConnectionError) as exc:
                 last_exc = exc
@@ -203,7 +207,13 @@ class BinanceFuturesClient:
 
             try:
                 result = response.json()
-            except ValueError:
+            except ValueError as exc:
+                if response.status_code < 400:
+                    raise BinanceAPIError(
+                        "Binance Futures returned invalid JSON; reconciliation required",
+                        unknown_execution=method in {"POST", "PUT", "DELETE"},
+                        status_code=response.status_code,
+                    ) from exc
                 result = {"code": response.status_code, "msg": response.text}
 
             if (
@@ -216,7 +226,7 @@ class BinanceFuturesClient:
                 self.sync_time()
                 continue
 
-            if response.status_code >= 400 or (
+            if response.status_code >= 300 or (
                 isinstance(result, dict) and result.get("code", 0) < 0
             ):
                 raise BinanceAPIError(
@@ -237,11 +247,28 @@ class BinanceFuturesClient:
         return self._request("GET", "/fapi/v1/ping")
 
     def exchange_info(self, symbol=None):
-        return self._request(
-            "GET",
-            "/fapi/v1/exchangeInfo",
-            {"symbol": symbol} if symbol else {},
-        )
+        # USD-M exchangeInfo has no symbol parameter: Binance returns the whole
+        # universe. Preserve the scanner-compatible interface by filtering locally.
+        result = self._require_object(self._request("GET", "/fapi/v1/exchangeInfo"))
+        rows = self._require_array(result.get("symbols"))
+        if symbol is not None:
+            rows = [row for row in rows if isinstance(row, dict)
+                    and str(row.get("symbol", "")).upper() == str(symbol).upper()]
+            if len(rows) != 1:
+                raise BinanceAPIError(f"Futures symbol metadata missing/duplicated: {symbol}")
+        return {**result, "symbols": rows}
+
+    @staticmethod
+    def _require_object(payload):
+        if not isinstance(payload, dict):
+            raise BinanceAPIError("Binance Futures expected object", payload=payload)
+        return payload
+
+    @staticmethod
+    def _require_array(payload):
+        if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
+            raise BinanceAPIError("Binance Futures expected array of objects", payload=payload)
+        return payload
 
     def ticker_price(self, symbol):
         row = self._request("GET", "/fapi/v1/ticker/price", {"symbol": symbol})
@@ -290,7 +317,9 @@ class BinanceFuturesClient:
     def account(self):
         # Binance replaced the account V2 endpoint with V3. Keep the backend aligned
         # with the Android adapter so Testnet account reconciliation uses one API contract.
-        raw = self._request("GET", "/fapi/v3/account", signed=True)
+        raw = self._require_object(self._request("GET", "/fapi/v3/account", signed=True))
+        if not isinstance(raw.get("canTrade"), bool) or not isinstance(raw.get("assets"), list):
+            raise BinanceAPIError("Malformed Futures account snapshot", payload=raw)
         assets = raw.get("assets", []) or []
         balances = []
         for asset in assets:
@@ -305,7 +334,7 @@ class BinanceFuturesClient:
             )
         return {
             **raw,
-            "status": "TRADING" if bool(raw.get("canTrade", True)) else "NOT_TRADING",
+            "status": "TRADING" if raw["canTrade"] else "NOT_TRADING",
             "accountType": "FUTURES",
             "balances": balances,
             "totalWalletBalance": raw.get("totalWalletBalance", "0"),
@@ -314,18 +343,28 @@ class BinanceFuturesClient:
         }
 
     def position_risk(self, symbol=None):
-        return self._request(
+        rows = self._require_array(self._request(
             "GET",
             "/fapi/v3/positionRisk",
             {"symbol": symbol} if symbol else {},
             signed=True,
-        )
+        ))
+        for row in rows:
+            try:
+                amount = Decimal(str(row["positionAmt"]))
+                if not amount.is_finite() or not row.get("symbol"):
+                    raise ValueError("invalid position")
+            except (KeyError, ValueError, ArithmeticError) as exc:
+                raise BinanceAPIError("Malformed Futures position snapshot", payload=row) from exc
+        return rows
 
     def position(self, symbol):
         rows = self.position_risk(symbol)
-        for row in rows or []:
-            if str(row.get("symbol", "")).upper() == str(symbol).upper():
-                return row
+        matching = [row for row in rows if str(row.get("symbol", "")).upper() == str(symbol).upper()]
+        if len(matching) > 1 or any(row.get("positionSide", "BOTH") != "BOTH" for row in matching):
+            raise BinanceAPIError("One-way Futures position cannot be proven", payload=matching)
+        if matching:
+            return matching[0]
         return {
             "symbol": symbol,
             "positionAmt": "0",
@@ -388,17 +427,7 @@ class BinanceFuturesClient:
                 "API restrictions cannot be queried with Futures Testnet credentials; "
                 "live Wallet API access is blocked in Testnet mode"
             )
-        original = self.base_url
-        try:
-            self.base_url = os.getenv("BINANCE_SPOT_WALLET_URL", "https://api.binance.com")
-            return self._request(
-                "GET",
-                "/sapi/v1/account/apiRestrictions",
-                {},
-                signed=True,
-            )
-        finally:
-            self.base_url = original
+        raise BinanceAPIError("Wallet API is outside the Futures-only client; use a separate Wallet client")
 
     def api_trading_status(self):
         # Do not leak a Testnet API key to the live Wallet API host.
@@ -407,37 +436,44 @@ class BinanceFuturesClient:
                 "API trading status cannot be queried with Futures Testnet credentials; "
                 "live Wallet API access is blocked in Testnet mode"
             )
-        original = self.base_url
-        try:
-            self.base_url = os.getenv("BINANCE_SPOT_WALLET_URL", "https://api.binance.com")
-            return self._request(
-                "GET",
-                "/sapi/v1/account/apiTradingStatus",
-                {},
-                signed=True,
-            )
-        finally:
-            self.base_url = original
+        raise BinanceAPIError("Wallet API is outside the Futures-only client; use a separate Wallet client")
 
     def open_orders(self, symbol=None):
-        return self._request(
+        standard = self._require_array(self._request(
             "GET",
             "/fapi/v1/openOrders",
             {"symbol": symbol} if symbol else {},
             signed=True,
-        )
+        ))
+        conditional = self._require_array(self._request(
+            "GET", "/fapi/v1/openAlgoOrders", {"symbol": symbol} if symbol else {}, signed=True
+        ))
+        return [self._normalize_order_response(row) for row in standard] + [
+            self._normalize_algo_response(row) for row in conditional
+        ]
 
     def all_orders(self, symbol, limit=1000):
-        return self._request(
+        standard = self._require_array(self._request(
             "GET",
             "/fapi/v1/allOrders",
             {"symbol": symbol, "limit": int(limit)},
             signed=True,
-        )
+        ))
+        conditional = self._require_array(self._request(
+            "GET", "/fapi/v1/allAlgoOrders", {"symbol": symbol, "limit": min(int(limit), 1000)}, signed=True
+        ))
+        return [self._normalize_order_response(row) for row in standard] + [
+            self._resolve_algo_order(symbol, row) for row in conditional
+        ]
 
     def my_trades(self, symbol, order_id=None, limit=1000):
         params = {"symbol": symbol, "limit": int(limit)}
         if order_id is not None:
+            if str(order_id).startswith("algo:"):
+                order = self.get_order(symbol, order_id=order_id)
+                order_id = order.get("actualOrderId")
+                if not order_id:
+                    raise BinanceAPIError("Conditional order has no exchange fill orderId", payload=order)
             params["orderId"] = int(order_id)
         rows = self._request("GET", "/fapi/v1/userTrades", params, signed=True)
         normalized = []
@@ -455,13 +491,51 @@ class BinanceFuturesClient:
 
     @staticmethod
     def _normalize_order_response(payload):
-        result = dict(payload or {})
+        result = dict(BinanceFuturesClient._require_object(payload))
+        if not result.get("orderId") or not result.get("status"):
+            raise BinanceAPIError("Futures order response lacks orderId/status", payload=payload)
         result.setdefault("clientOrderId", result.get("origClientOrderId", ""))
         result.setdefault("cummulativeQuoteQty", result.get("cumQuote", "0"))
         result.setdefault("time", result.get("updateTime", result.get("transactTime", 0)))
         result.setdefault("origQty", result.get("origQty", "0"))
         result.setdefault("executedQty", result.get("executedQty", "0"))
         result.setdefault("type", result.get("type", ""))
+        return result
+
+    @staticmethod
+    def _normalize_algo_response(payload):
+        row = BinanceFuturesClient._require_object(payload)
+        if not row.get("algoId"):
+            raise BinanceAPIError("Conditional Futures order is missing algoId", payload=row)
+        status = str(row.get("algoStatus", "")).upper()
+        # Trigger acceptance is not execution. Query the actual matching-engine
+        # order before reporting FILLED/PARTIALLY_FILLED to campaign recovery.
+        normalized_status = {"CANCELLED": "CANCELED", "FINISHED": "TRIGGERED"}.get(status, status)
+        return {
+            **row,
+            "orderId": f"algo:{row['algoId']}",
+            "clientOrderId": row.get("clientAlgoId", ""),
+            "type": row.get("orderType", ""),
+            "status": normalized_status,
+            "stopPrice": row.get("triggerPrice", "0"),
+            "origQty": row.get("quantity", "0"),
+            "executedQty": "0",
+            "avgPrice": "0",
+            "time": row.get("createTime", 0),
+        }
+
+    def _resolve_algo_order(self, symbol, payload):
+        result = self._normalize_algo_response(payload)
+        if str(result.get("symbol", "")).upper() != str(symbol).upper():
+            raise BinanceAPIError("Conditional order symbol mismatch", payload=payload)
+        actual_id = payload.get("actualOrderId")
+        if actual_id and str(actual_id) != "0":
+            actual = self.get_order(symbol, order_id=actual_id)
+            if str(actual.get("symbol", "")).upper() != str(symbol).upper() or actual.get("side") != result.get("side"):
+                raise BinanceAPIError("Conditional/actual order identity mismatch", payload=payload)
+            result.update({key: actual[key] for key in (
+                "status", "executedQty", "avgPrice", "cumQuote", "cummulativeQuoteQty", "updateTime"
+            ) if key in actual})
         return result
 
     def order(
@@ -489,6 +563,8 @@ class BinanceFuturesClient:
             type_name = "STOP_MARKET"
         if quote_order_qty is not None:
             raise BinanceAPIError("USDⓈ-M Futures order quantity must be contracts/base quantity, not quoteOrderQty")
+        if close_position and (quantity is not None or reduce_only or type_name not in {"STOP_MARKET", "TAKE_PROFIT_MARKET"}):
+            raise ValueError("closePosition requires a market conditional without quantity/reduceOnly")
 
         p = {
             "symbol": symbol,
@@ -515,8 +591,24 @@ class BinanceFuturesClient:
             p["priceProtect"] = "true"
         if close_position:
             p["closePosition"] = "true"
+        if type_name in self.CONDITIONAL_TYPES:
+            p["algoType"] = "CONDITIONAL"
+            if "stopPrice" in p:
+                p["triggerPrice"] = p.pop("stopPrice")
+            if "newClientOrderId" in p:
+                p["clientAlgoId"] = p.pop("newClientOrderId")
+            result = self._request("POST", "/fapi/v1/algoOrder", p, signed=True)
+            try:
+                return self._normalize_algo_response(result)
+            except BinanceAPIError as exc:
+                exc.unknown_execution = True
+                raise
         result = self._request("POST", "/fapi/v1/order", p, signed=True)
-        return self._normalize_order_response(result)
+        try:
+            return self._normalize_order_response(result)
+        except BinanceAPIError as exc:
+            exc.unknown_execution = True
+            raise
 
     def order_safe(self, symbol, side, type_, *, quantity=None, quote_order_qty=None,
                    price=None, stop_price=None, time_in_force=None,
@@ -526,7 +618,7 @@ class BinanceFuturesClient:
         if not new_client_order_id:
             raise ValueError("order_safe requires new_client_order_id")
         try:
-            return self.order(
+            result = self.order(
                 symbol, side, type_,
                 quantity=quantity,
                 quote_order_qty=quote_order_qty,
@@ -543,6 +635,9 @@ class BinanceFuturesClient:
                 position_side=position_side,
                 close_position=close_position,
             )
+            if result.get("status") in {"REJECTED", "EXPIRED", "CANCELED", "EXPIRED_IN_MATCH"}:
+                raise BinanceAPIError("Futures order returned terminal failure", payload=result)
+            return result
         except BinanceAPIError as exc:
             if not exc.unknown_execution:
                 raise
@@ -550,6 +645,7 @@ class BinanceFuturesClient:
                 existing = self.get_order(
                     symbol,
                     orig_client_order_id=new_client_order_id,
+                    conditional=str(type_).upper() in self.CONDITIONAL_TYPES | {"STOP_LOSS"},
                 )
             except Exception as reconcile_exc:
                 raise BinanceAPIError(
@@ -563,7 +659,14 @@ class BinanceFuturesClient:
                 return existing
             raise
 
-    def get_order(self, symbol, order_id=None, orig_client_order_id=None):
+    def get_order(self, symbol, order_id=None, orig_client_order_id=None, *, conditional=False):
+        if conditional or str(order_id).startswith("algo:"):
+            params = {}
+            if order_id is not None:
+                params["algoId"] = int(str(order_id).removeprefix("algo:"))
+            if orig_client_order_id is not None:
+                params["clientAlgoId"] = orig_client_order_id
+            return self._resolve_algo_order(symbol, self._request("GET", "/fapi/v1/algoOrder", params, signed=True))
         p = {"symbol": symbol}
         if order_id is not None:
             p["orderId"] = int(order_id)
@@ -574,6 +677,15 @@ class BinanceFuturesClient:
         )
 
     def cancel_order(self, symbol, order_id=None, orig_client_order_id=None):
+        if str(order_id).startswith("algo:"):
+            order = self.get_order(symbol, order_id=order_id)
+            actual_id = order.get("actualOrderId")
+            if actual_id and str(actual_id) != "0":
+                if order.get("status") in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}:
+                    self.cancel_order(symbol, order_id=actual_id)
+            else:
+                self._request("DELETE", "/fapi/v1/algoOrder", {"algoId": int(str(order_id).removeprefix("algo:"))}, signed=True)
+            return self.get_order(symbol, order_id=order_id)
         p = {"symbol": symbol}
         if order_id is not None:
             p["orderId"] = int(order_id)
@@ -616,9 +728,10 @@ class BinanceFuturesClient:
         time_in_force=None,
         new_client_order_id=None,
     ):
-        # Futures does not use Spot OCO/cancelReplace semantics here. The caller
-        # receives both legs so it can fail closed if the replacement is not created.
-        cancel_payload = self.cancel_order(symbol, order_id=cancel_order_id)
+        # Keep the existing stop until its replacement is accepted. Cancellation
+        # failure is ambiguous and must expose the new stop to reconciliation.
+        if str(type_).upper() not in {"STOP_MARKET", "STOP_LOSS"}:
+            raise ValueError("Futures cancel_replace supports STOP_MARKET protection only")
         new_payload = self.order_safe(
             symbol,
             side,
@@ -629,6 +742,14 @@ class BinanceFuturesClient:
             new_client_order_id=new_client_order_id,
             reduce_only=True,
         )
+        try:
+            cancel_payload = self.cancel_order(symbol, order_id=cancel_order_id)
+        except Exception as exc:
+            raise BinanceAPIError(
+                "Replacement stop accepted; old-stop cancellation requires reconciliation",
+                unknown_execution=True,
+                payload={"newOrderResponse": new_payload, "oldOrderId": cancel_order_id},
+            ) from exc
         return {
             "cancelResult": "SUCCESS" if cancel_payload else "NOT_FOUND",
             "newOrderResult": "SUCCESS",

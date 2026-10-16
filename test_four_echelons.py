@@ -5,11 +5,13 @@ from collections import deque
 import pandas as pd
 import pytest
 import requests
+from decimal import Decimal
+from pathlib import Path
 
 from binance_client import BinanceAPIError, BinanceSpotClient
 from execution_accumulator import accumulate_fills, accumulate_order
 from execution_barrier import ExecutionBarrier, OrderIntent
-from market_context import ContextCache, MarketStateSnapshot
+from market_context import ContextCache, MarketStateSnapshot, TFMarketContext
 from wave_engine import MultiTimeframeWaveEngine
 
 
@@ -18,10 +20,10 @@ def test_echelon1_partial_fill_accumulator_is_authoritative():
         {"qty": "0.10", "price": "100", "commission": "0.01", "commissionAsset": "USDT"},
         {"qty": "0.20", "price": "101", "commission": "0.02", "commissionAsset": "USDT"},
     ])
-    assert summary.executed_qty == pytest.approx(0.30)
-    assert summary.quote_qty == pytest.approx(30.20)
-    assert summary.avg_price == pytest.approx(30.20 / 0.30)
-    assert summary.fee_quote == pytest.approx(0.03)
+    assert summary.executed_qty == Decimal("0.30")
+    assert summary.quote_qty == Decimal("30.20")
+    assert summary.avg_price == Decimal("30.20") / Decimal("0.30")
+    assert summary.fee_quote == Decimal("0.03")
 
 
 def test_echelon1_partial_fill_order_fallback():
@@ -30,8 +32,8 @@ def test_echelon1_partial_fill_order_fallback():
         "executedQty": "0.30",
         "cummulativeQuoteQty": "30.20",
     })
-    assert summary.executed_qty == pytest.approx(0.30)
-    assert summary.avg_price == pytest.approx(30.20 / 0.30)
+    assert summary.executed_qty == Decimal("0.30")
+    assert summary.avg_price == Decimal("30.20") / Decimal("0.30")
 
 
 class _BarrierDB:
@@ -41,7 +43,7 @@ class _BarrierDB:
         self.intents = []
 
     def state_get(self, key, default=None):
-        return self.state if key == "position_state" else default
+        return self.state if key == "position_state:BTCUSDT" else default
 
     def save_execution_intent(self, intent, status, reason=""):
         self.intents.append((intent.intent_id, status, reason))
@@ -52,6 +54,7 @@ class _BarrierDB:
 
 def test_echelon1_execution_timeout_becomes_ambiguous_without_retry():
     cache = ContextCache()
+    cache.publish(TFMarketContext("BTCUSDT", "1h", 1, 1, 2, 100.0))
     db = _BarrierDB()
     barrier = ExecutionBarrier(cache, db=db)
     intent = OrderIntent.new(
@@ -77,6 +80,7 @@ def test_echelon1_execution_timeout_becomes_ambiguous_without_retry():
 
 def test_echelon1_reconcile_gate_blocks_new_entry():
     cache = ContextCache()
+    cache.publish(TFMarketContext("BTCUSDT", "1h", 1, 1, 2, 100.0))
     db = _BarrierDB()
     db.state = "RECONCILE_REQUIRED"
     barrier = ExecutionBarrier(cache, db=db)
@@ -169,14 +173,15 @@ def test_echelon4_android_risk_budget_is_not_single_position_capped():
     # Repository contract: Android mirrors portfolio risk, not the obsolete
     # max_open_positions=1 rule.
     path = "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
-    assert os.path.exists(path) or True
+    assert Path(path).is_file()
 
 
 def test_echelon4_orderbook_cache_is_present_for_sequence_recovery():
     # Android has a dedicated OrderBookCache; detailed instrumented sequence
     # tests remain separate from backend pytest because they need the Android
     # runtime.
-    assert True
+    assert Path("app/src/main/java/com/williamsbot/OrderBookCache.kt").is_file()
+    assert Path("app/src/test/java/com/williamsbot/OrderBookCacheSequenceTest.kt").is_file()
 
 
 def test_fractal_confirmation_never_accepts_last_unconfirmed_pivot():

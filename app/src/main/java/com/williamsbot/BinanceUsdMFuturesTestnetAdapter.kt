@@ -13,6 +13,12 @@ import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
+internal class FuturesHttpException(
+    val statusCode: Int,
+    val exchangeCode: Int?,
+    detail: String
+) : IOException("Binance USD-M Futures HTTP $statusCode: $detail")
+
 /**
  * Native USDⓈ-M Futures Testnet transport.
  *
@@ -35,13 +41,20 @@ internal fun hasLiveFuturesPosition(rows: JSONArray): Boolean {
 internal class BinanceUsdMFuturesTestnetAdapter(
     private val apiKey: String,
     apiSecret: String,
-    private val http: OkHttpClient = OkHttpClient.Builder()
+    http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
         .build(),
     private val rateGuard: BinanceRateGuard? = null
 ) {
+    // Application-level retry rules must also govern OkHttp's transparent retries
+    // and redirects. A replayed POST can create duplicate exposure after a lost reply.
+    private val http = http.newBuilder()
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
     private val secret = apiSecret.toByteArray(Charsets.UTF_8)
     private val base = "https://demo-fapi.binance.com"
     @Volatile private var serverOffsetMs: Long = 0L
@@ -119,7 +132,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         try {
             setOneWayMode()
         } catch (failure: IOException) {
-            if (!failure.message.orEmpty().contains("-4059")) throw failure
+            if (failure !is FuturesHttpException || failure.exchangeCode != -4059) throw failure
         }
         check(!positionMode().optBoolean("dualSidePosition", true)) {
             "Binance did not confirm One-way Mode after the safe mode-change request"
@@ -143,7 +156,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             setIsolatedMargin(symbol)
         } catch (failure: IOException) {
             // Binance returns -4046 when the requested margin type is already active.
-            if (!failure.message.orEmpty().contains("-4046")) throw failure
+            if (failure !is FuturesHttpException || failure.exchangeCode != -4046) throw failure
         }
         setLeverage(symbol, 2)
     }
@@ -521,7 +534,9 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                 // Binance -1021 explicitly rejects a stale timestamp. It is the only
                 // condition permitting a single signed-mutation retry because the exchange
                 // has definitively rejected that request before applying the mutation.
-                if (signed && !timestampResynced && message.contains("-1021")) {
+                if (signed && !timestampResynced &&
+                    error is FuturesHttpException && error.exchangeCode == -1021
+                ) {
                     timestampResynced = true
                     timeSynced = false
                     serverTime()
@@ -564,7 +579,12 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         params: Map<String, String>,
         signed: Boolean
     ): String {
-        require(path.startsWith("/fapi/")) { "Only USD-M Futures endpoints are allowed" }
+        require(path.matches(Regex("/fapi/v[1-3]/[A-Za-z0-9]+(?:/[A-Za-z0-9]+)*"))) {
+            "Only canonical USD-M Futures endpoints are allowed"
+        }
+        val orderMutation = isOrderMutation(method, path)
+        // A rate-limit cooldown can exceed recvWindow. Sign only after admission.
+        rateGuard?.beforeRequest(isOrder = orderMutation)
         val all = LinkedHashMap(params)
         if (signed) {
             if (!timeSynced) serverTime()
@@ -590,12 +610,13 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             "DELETE" -> builder.delete(body)
             else -> throw IllegalArgumentException("Unsupported HTTP method")
         }
-        val orderMutation = isOrderMutation(method, path)
-        rateGuard?.beforeRequest(isOrder = orderMutation)
         http.newCall(builder.build()).execute().use { response ->
             rateGuard?.observe(response.headers, response.code, isOrder = orderMutation)
             val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw IOException("Binance USD-M Futures HTTP ${response.code}: ${text.take(500)}")
+            val exchangeCode = runCatching { JSONObject(text).optInt("code", 0) }.getOrNull()
+            if (!response.isSuccessful || (exchangeCode != null && exchangeCode < 0)) {
+                throw FuturesHttpException(response.code, exchangeCode, text.take(500))
+            }
             return text
         }
     }

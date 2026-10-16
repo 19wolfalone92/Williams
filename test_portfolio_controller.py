@@ -209,7 +209,7 @@ def main():
     print("=" * 72)
 
     test_no_position_selects_best_strict_signal()
-    test_open_position_blocks_entry()
+    test_open_position_blocks_entry_even_when_risk_budget_allows()
     test_setup_ready_never_enters()
     test_no_candidates_waits()
 

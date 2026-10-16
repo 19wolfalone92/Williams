@@ -555,12 +555,22 @@ def main() -> None:
 
     for path in (".github/workflows/python-ci.yml", ".github/workflows/campaign-ci.yml"):
         workflow = read(path)
-        for test_path in (
-            "tests/test_futures_campaign_risk_defaults.py",
-            "tests/test_futures_risk_policy_contract.py",
-            "tests/test_risk_engine_daily_loss_cap.py",
-        ):
-            must(workflow, test_path, path)
+        must(workflow, "python -m pytest -q 2>&1", path)
+        must(workflow, "python -m ruff check --select F821,F822,F823,E9", path)
+    # All deterministic tests are discovered; diagnostic CLIs cannot hide these suites.
+    collection_config = ast.parse(read("conftest.py"))
+    ignored = set()
+    for node in collection_config.body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "collect_ignore" for t in node.targets):
+            ignored = set(ast.literal_eval(node.value))
+    for required in (
+        "test_binance_futures_client.py", "test_futures_endpoint_pinning.py",
+        "test_futures_williams_runtime.py", "test_four_echelons.py", "test_wave_engine_integration.py",
+        "tests/test_futures_audit_regressions.py", "tests/test_futures_campaign_risk_defaults.py",
+        "tests/test_futures_risk_policy_contract.py", "tests/test_risk_engine_daily_loss_cap.py",
+    ):
+        read(required)
+        assert required not in ignored, f"required deterministic suite excluded: {required}"
     workflow = read(".github/workflows/python-ci.yml")
     must(workflow, "futures_williams_runtime.py", ".github/workflows/python-ci.yml")
     must(workflow, "python -m py_compile", ".github/workflows/python-ci.yml")
