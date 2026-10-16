@@ -2823,11 +2823,11 @@ private class NativeEngine(
             require(checkFuturesDailyLoss()) {
                 lastError ?: "Daily loss limit could not be verified at submission"
             }
-            val submitMark = futuresMarketData.markPrice(symbol)
+            val submitContract = futuresCampaignCoordinator.contractPrice(symbol)
             require(
-                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
-                else submitMark > trigger
-            ) { "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED at final preflight; no market-order substitution" }
+                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitContract < trigger
+                else submitContract > trigger
+            ) { "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED at final contract-price preflight; no market-order substitution" }
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
         lastOrder = result
