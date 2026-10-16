@@ -332,3 +332,61 @@ def test_point_zero_rejects_non_w3_w5_divergence():
     bullets, count, _ = e._point_zero_bullets(data, ps, DIRECTION_UP)
     assert bullets["divergence"] is False
     assert count < 5
+
+
+def test_wave_count_is_structural_across_price_scales_not_a_picture_match():
+    """TC1 ch.7: same confirmed swing relations imply same wave hypothesis.
+
+    Chart candles may differ in absolute price, vertical scaling and drawing.
+    A deterministic structural hypothesis must not depend on screenshot pixels.
+    """
+    e = engine(base_interval="1h", min_bars=140)
+    swing = [
+        (DIRECTION_DOWN, 90.0),
+        (DIRECTION_UP, 100.0),
+        (DIRECTION_DOWN, 95.0),
+        (DIRECTION_UP, 115.0),
+        (DIRECTION_DOWN, 105.0),
+    ]
+    base = e._estimate_position(pivots(*swing), DIRECTION_UP, close=120.0, atr=2.0)
+    assert base[0] == 5 and base[1] == "W5"
+    for factor in (0.0001, 0.5, 10.0, 1000.0):
+        scaled = pivots(*[(kind, price * factor) for kind, price in swing])
+        attempt = e._estimate_position(scaled, DIRECTION_UP, 120.0 * factor, 2.0 * factor)
+        assert attempt[:3] == base[:3]
+
+
+def test_wave_count_has_mirrored_long_short_structure():
+    e = engine(base_interval="1h", min_bars=140)
+    swing = [
+        (DIRECTION_DOWN, 90.0),
+        (DIRECTION_UP, 100.0),
+        (DIRECTION_DOWN, 95.0),
+        (DIRECTION_UP, 115.0),
+        (DIRECTION_DOWN, 105.0),
+    ]
+    long = e._estimate_position(pivots(*swing), DIRECTION_UP, close=120.0, atr=2.0)
+    # Mirror around 250: maxima become minima and vice versa.
+    flipped = [
+        (DIRECTION_UP if kind == DIRECTION_DOWN else DIRECTION_DOWN, 250.0 - price)
+        for kind, price in swing
+    ]
+    short = e._estimate_position(pivots(*flipped), DIRECTION_DOWN, close=130.0, atr=2.0)
+    assert long[:3] == short[:3]
+    assert long[1] == "W5"
+
+
+def test_wave_count_rejects_pivots_in_invalid_impulse_order():
+    e = engine(base_interval="1h", min_bars=140)
+    good = pivots(
+        (DIRECTION_DOWN, 90.0), (DIRECTION_UP, 100.0),
+        (DIRECTION_DOWN, 95.0), (DIRECTION_UP, 115.0),
+        (DIRECTION_DOWN, 105.0),
+    )
+    broken = pivots(
+        (DIRECTION_DOWN, 90.0), (DIRECTION_UP, 100.0),
+        (DIRECTION_DOWN, 89.0), (DIRECTION_UP, 115.0),
+        (DIRECTION_DOWN, 105.0),
+    )
+    assert e._estimate_position(good, DIRECTION_UP, 120.0, 2.0)[1] == "W5"
+    assert e._estimate_position(broken, DIRECTION_UP, 120.0, 2.0)[1] != "W5"
