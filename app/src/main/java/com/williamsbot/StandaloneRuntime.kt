@@ -900,6 +900,21 @@ private data class CampaignSignalN(
  * Analysis-only per-timeframe evidence, never order authorization. A wave label
  * cannot be treated as observed truth, and incomplete/open candles are excluded.
  */
+/**
+ * Returns ONLY exchange-confirmed bar opens, in strictly increasing order.
+ * A forming candle and a future-dated candle are never wave-count evidence.
+ */
+internal fun tc2ClosedWaveBarTimes(
+    opens: List<Long>,
+    frameDurationMs: Long,
+    exchangeNowMs: Long
+): List<Long> {
+    if (frameDurationMs <= 0L || exchangeNowMs <= 0L) return emptyList()
+    return opens.filter { it > 0L && it <= exchangeNowMs &&
+        exchangeNowMs - it >= frameDurationMs }
+        .distinct().sorted()
+}
+
 private data class WaveFrameEvidence(
     val timeframe: String,
     val state: String,
@@ -7680,10 +7695,14 @@ private class NativeEngine(
     ): List<PivotN> {
         if (candles.size < 10) return emptyList()
 
+        val highs = candles.map { it.h }
+        val lows = candles.map { it.l }
         val pivots = mutableListOf<PivotN>()
         for (i in 2 until candles.size - 2) {
-            val up = isUpFractal(candles, i)
-            val down = isDownFractal(candles, i)
+            // The wave engine must use the SAME book-compatible confirmed
+            // fractal family as the TC2 entry engine, including equal extrema.
+            val up = tc2ConfirmedFractal(highs, i, true)
+            val down = tc2ConfirmedFractal(lows, i, false)
 
             if (up && !down) {
                 pivots.add(PivotN("UP", candles[i].h, i + 2))
@@ -7733,11 +7752,20 @@ private class NativeEngine(
         if (barMs <= 0L || exchangeNow <= 0L) {
             return WaveFrameEvidence(frame, "UNKNOWN", 0L, 0, reason = "INVALID_TIMEBASE")
         }
-        val closed = candles.filter {
-            it.t > 0L && it.t <= exchangeNow &&
-                exchangeNow - it.t >= barMs
-        }.sortedBy { it.t }.distinctBy { it.t }
+        val closedTimes = tc2ClosedWaveBarTimes(candles.map { it.t }, barMs, exchangeNow)
+        val byTime = candles.associateBy { it.t }
+        val closed = closedTimes.mapNotNull { byTime[it] }
         val lastClose = closed.lastOrNull()?.t?.plus(barMs) ?: 0L
+        // No silent wave counts from incomplete, duplicate or non-UTC-aligned
+        // candle histories. H1 and the configured structural frames are
+        // exchange-aligned fixed-duration intervals.
+        val duplicateOpens = candles.count { it.t in closedTimes } != closedTimes.size
+        val continuous = closed.zipWithNext().all { (a, b) -> b.t - a.t == barMs }
+        val aligned = closed.all { it.t % barMs == 0L }
+        if (duplicateOpens || !continuous || !aligned) {
+            return WaveFrameEvidence(frame, "INVALID_HISTORY", lastClose, closed.size,
+                reason = "DUPLICATE_GAP_OR_UNALIGNED_CANDLE")
+        }
         if (closed.size < 45) {
             return WaveFrameEvidence(frame, "INSUFFICIENT", lastClose, closed.size,
                 reason = "AT_LEAST_45_CLOSED_BARS_REQUIRED")
