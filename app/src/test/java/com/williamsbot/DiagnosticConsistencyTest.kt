@@ -19,8 +19,9 @@ class DiagnosticConsistencyTest {
             reconciliationRunning = false
         )
 
-        assertEquals(3, findings.size)
+        assertEquals(4, findings.size)
         assertTrue(findings.any { it.startsWith("STATE_MISMATCH:") })
+        assertTrue(findings.any { it.startsWith("RECONCILE_LATCH_MISMATCH:") })
         assertTrue(findings.any { it.startsWith("RECONCILIATION_STALE_BLOCKER:") })
         assertTrue(findings.any { it.startsWith("RISK_BASELINE_UNKNOWN:") })
     }
