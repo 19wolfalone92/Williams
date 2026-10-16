@@ -44,7 +44,7 @@ class DiagnosticConsistencyTest {
     }
 
     @Test
-    fun acceptsConsistentBlockedRuntimeWithoutFalsePositive() {
+    fun reportsUnknownRiskBaselineEvenWhenRuntimeIsConsistentAndBlocked() {
         val findings = diagnosticConsistencyFindings(
             coordinatorState = "READY_FLAT",
             coordinatorReady = true,
