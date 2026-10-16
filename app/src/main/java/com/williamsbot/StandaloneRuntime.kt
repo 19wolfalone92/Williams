@@ -1050,7 +1050,7 @@ private class NativeEngine(
     // Public reads are allow-listed; order/account mutations go through the Futures adapter.
     private val futuresMarketData = BinanceUsdMFuturesMarketData(http)
     // Runtime execution is routed through the local USD-M Futures adapter/coordinator below.
-    // Any leftover signed Spot mutation is blocked at the signedRequest boundary.
+    // Legacy signed transport has been removed; mutations use the Futures adapter/coordinator only.
     private val futuresExecutionAdapterReady = true
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
