@@ -486,6 +486,15 @@ internal fun canInitializeDailyRiskBaseline(
     hasTradingIncome: Boolean
 ): Boolean = !hasOpenPosition && !hasActiveExecution && !hasTradingIncome
 
+/** Read-only validation: entry readiness needs a durable UTC-day risk baseline and provenance. */
+internal fun futuresDailyRiskBaselineEstablished(baselineValue: String?, source: String?): Boolean {
+    val baseline = baselineValue?.toDoubleOrNull()
+    val label = source?.trim().orEmpty()
+    return baseline != null && baseline.isFinite() && baseline > 0.0 &&
+        label.isNotBlank() && !label.equals("UNKNOWN", ignoreCase = true) &&
+        !label.equals("null", ignoreCase = true)
+}
+
 /** Missing provenance may be repaired only when the already-persisted baseline is valid. */
 internal fun canRepairDailyRiskBaselineSource(
     baselineValue: String?,
@@ -1180,6 +1189,10 @@ private class NativeEngine(
     private val scanUniverseCacheTtlMs = 15_000L
     @Volatile private var cachedScanUniverse: Triple<List<String>, Map<String, Double>, Map<String, Double>>? = null
     @Volatile private var scanUniverseCacheAtMs = 0L
+    private val dailyRiskCheckLock = Any()
+    private val dailyRiskPreflightLock = Any()
+    @Volatile private var dailyRiskPreflightRunning = false
+    @Volatile private var lastDailyRiskPreflightAtMs = 0L
     @Volatile private var lastScanDailyRiskCheckAtMs = 0L
     @Volatile private var lastScanDailyRiskCheckAllowed = false
     @Volatile private var lastNativeManagementAttemptMs = 0L
@@ -1470,6 +1483,22 @@ private class NativeEngine(
             nowMs = System.currentTimeMillis()
         )
 
+    /** Read-only SQLite/clock check: never perform signed REST I/O on the Android UI. */
+    private fun dailyRiskBaselineReady(): Boolean {
+        if (!futuresMarketData.clockSnapshot().optBoolean("fresh", false)) return false
+        val utc = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        utc.timeInMillis = futuresMarketData.cachedExchangeNowMs()
+        utc.set(Calendar.HOUR_OF_DAY, 0)
+        utc.set(Calendar.MINUTE, 0)
+        utc.set(Calendar.SECOND, 0)
+        utc.set(Calendar.MILLISECOND, 0)
+        val suffix = utc.timeInMillis.toString()
+        return futuresDailyRiskBaselineEstablished(
+            executionStore.readState("futures_day_start_equity_" + suffix),
+            executionStore.readState("futures_day_start_equity_source_" + suffix)
+        )
+    }
+
     private fun executionReady(): Boolean =
         futuresExecutionAdapterReady &&
             RuntimeServiceState.active &&
@@ -1485,6 +1514,7 @@ private class NativeEngine(
             !userStreamSyncRequired &&
             restAccountReady &&
             accountFundedForEntry() &&
+            dailyRiskBaselineReady() &&
             historyReady &&
             futuresFsmAllowsEntry() &&
             futuresLossStreakGuard().allowNewEntries &&
@@ -1510,6 +1540,7 @@ private class NativeEngine(
             if (!userStreamConnected || userStreamSyncRequired) add("futures_user_stream_disconnected_or_unsynchronized")
             if (!restAccountReady) add("rest_account_not_ready")
             else if (!accountFundedForEntry()) add("futures_account_unfunded_or_zero_usdt")
+            if (!dailyRiskBaselineReady()) add("futures_daily_risk_baseline_unverified")
             if (!historyReady) add("history_not_ready")
             if (!futuresFsmAllowsEntry()) add("fsm_not_execution_allowed")
             val lossStreak = futuresLossStreakGuard()
@@ -2087,6 +2118,14 @@ private class NativeEngine(
                         // until another socket reconnect happens. The gate remains fail-closed.
                         if (userStreamConnected && userStreamSyncRequired && !futuresStreamReconcileRunning) {
                             scheduleFuturesStreamReconciliation("automatic sync retry")
+                        }
+
+                        // Establish the UTC daily-loss baseline independently of signals.
+                        // Never serialize H1 discovery/UI behind signed account/income requests.
+                        // Missing provenance blocks new entries, not existing-position management.
+                        if (!paused && !killLatched && !reconcileRequired && restAccountReady &&
+                            userStreamConnected && !userStreamSyncRequired && !dailyRiskBaselineReady()) {
+                            scheduleDailyRiskBaselinePreflight()
                         }
 
                         // Keep managing existing exposure while entry prerequisites are
@@ -4301,7 +4340,40 @@ private class NativeEngine(
     // Legacy Spot-era campaign submission/management/recovery implementation removed.
     // Entry, trailing protection, and exits are owned by NativeFuturesCampaignCoordinator.
 
-    private fun checkFuturesDailyLoss(): Boolean {
+    /**
+     * At most one preflight at a time, one attempt per minute while unverified.
+     * The existing daily-loss function remains the authoritative fail-closed gate.
+     */
+    private fun scheduleDailyRiskBaselinePreflight() {
+        val now = System.currentTimeMillis()
+        synchronized(dailyRiskPreflightLock) {
+            if (dailyRiskPreflightRunning ||
+                (lastDailyRiskPreflightAtMs > 0L && now - lastDailyRiskPreflightAtMs < 60_000L)
+            ) return
+            dailyRiskPreflightRunning = true
+            lastDailyRiskPreflightAtMs = now
+        }
+        Thread {
+            try {
+                runCatching { checkFuturesDailyLoss() }.onFailure { failure ->
+                    lastError = "FUTURES_DAILY_RISK_PREFLIGHT_FAILED: " +
+                        (failure.message ?: failure.javaClass.simpleName) +
+                        "; new Futures entries remain blocked"
+                }
+            } finally {
+                synchronized(dailyRiskPreflightLock) { dailyRiskPreflightRunning = false }
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-futures-daily-risk-preflight"
+            start()
+        }
+    }
+
+    private fun checkFuturesDailyLoss(): Boolean =
+        synchronized(dailyRiskCheckLock) { checkFuturesDailyLossUnderLock() }
+
+    private fun checkFuturesDailyLossUnderLock(): Boolean {
         val account = try {
             futuresCampaignCoordinator.accountSnapshot()
         } catch (failure: Exception) {

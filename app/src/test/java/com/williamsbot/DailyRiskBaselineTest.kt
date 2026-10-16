@@ -6,6 +6,20 @@ import org.junit.Test
 
 class DailyRiskBaselineTest {
     @Test
+    fun unverifiedOrInvalidUtcDailyRiskBaselineNeverOpensExecutionGate() {
+        assertFalse(futuresDailyRiskBaselineEstablished(null, "INITIAL_FLAT_SNAPSHOT"))
+        assertFalse(futuresDailyRiskBaselineEstablished("5000", null))
+        assertFalse(futuresDailyRiskBaselineEstablished("5000", "UNKNOWN"))
+        assertFalse(futuresDailyRiskBaselineEstablished("5000", " null "))
+        assertFalse(futuresDailyRiskBaselineEstablished("NaN", "INITIAL_FLAT_SNAPSHOT"))
+        assertFalse(futuresDailyRiskBaselineEstablished("Infinity", "INITIAL_FLAT_SNAPSHOT"))
+        assertFalse(futuresDailyRiskBaselineEstablished("0", "INITIAL_FLAT_SNAPSHOT"))
+        assertFalse(futuresDailyRiskBaselineEstablished("-10", "INITIAL_FLAT_SNAPSHOT"))
+        assertTrue(futuresDailyRiskBaselineEstablished("4998.03288909", "INITIAL_FLAT_SNAPSHOT"))
+        assertTrue(futuresDailyRiskBaselineEstablished("4500", "RECONSTRUCTED_FROM_FUTURES_INCOME"))
+    }
+
+    @Test
     fun baselineCanBeInitializedForFlatIdleAccountWithNoTradingIncome() {
         assertTrue(canInitializeDailyRiskBaseline(
             hasOpenPosition = false,

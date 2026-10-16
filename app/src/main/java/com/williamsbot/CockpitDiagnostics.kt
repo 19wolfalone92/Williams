@@ -43,6 +43,8 @@ internal object CockpitDiagnostics {
             !snapshotFresh -> "Снимок позиций Binance обновляется или устарел"
             !coordinatorReady -> blockerText(coordinator.optString("blocker"))
             !scannerReady -> "Сканер: " + status.optString("scanner_state", "NOT_RUN")
+            status.optString("daily_risk_baseline_source", "UNKNOWN") in setOf("", "UNKNOWN", "null") ->
+                "Не подтверждена суточная база риска Binance; новые входы заблокированы"
             !technical -> "Ожидание связи, истории или синхронизации"
             !entries -> "Торговый шлюз ограничивает новые входы"
             else -> "Новые входы разрешены при подтверждённом сигнале и проверке риска"

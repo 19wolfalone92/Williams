@@ -27,6 +27,13 @@ class CockpitDiagnosticsTest {
         CockpitDiagnostics.rows(CockpitDiagnostics.checks(s, c, JSONObject(), now)).single { it.optString("id") == id }
     private fun severity(id: String, s: JSONObject, c: JSONObject = coordinator()) = check(id, s, c).optString("severity")
 
+    @Test fun unverifiedDailyRiskBaselineExplainsEntryBlockInCockpit() {
+        val status = healthy().put("execution_enabled", false)
+            .put("daily_risk_baseline_source", "UNKNOWN")
+        val r = CockpitDiagnostics.readiness(status, coordinator(), now)
+        assertFalse(r.getBoolean("new_entries_allowed"))
+        assertTrue(r.getString("new_entries_reason").contains("база риска"))
+    }
     @Test fun staleCachedPositionsNeverAllowNewEntriesDespiteGreenExecutionGate() {
         val s = healthy().put("positions_snapshot_ok", false).put("positions_snapshot_at_ms", now - 20_000)
         assertFalse(CockpitDiagnostics.readiness(s, coordinator(), now).getBoolean("new_entries_allowed"))
