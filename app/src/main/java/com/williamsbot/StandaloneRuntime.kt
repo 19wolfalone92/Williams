@@ -1210,6 +1210,7 @@ private class NativeEngine(
     @Volatile private var futuresStreamReconcilePending = false
     @Volatile private var lastUserStreamReconcileAttemptMs = 0L
     @Volatile private var lastUserEventMs = 0L
+    @Volatile private var lastUserStreamSyncAtMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
     @Volatile private var liveUsdtBalanceKnown = false
     @Volatile private var futuresAccountSnapshotUpdatedAtMs = 0L
@@ -1685,6 +1686,7 @@ private class NativeEngine(
             .put("user_stream_connected", userStreamConnected)
             .put("user_stream_sync_required", userStreamSyncRequired)
             .put("user_stream_last_event_ms", lastUserEventMs)
+            .put("user_stream_last_successful_sync_ms", lastUserStreamSyncAtMs)
             .put("user_stream_last_error", userStreamLastError ?: JSONObject.NULL)
             .put("user_stream_reconcile_running", futuresStreamReconcileRunning)
             .put("fsm_state", stateMachine.state.name)
@@ -7208,6 +7210,7 @@ private class NativeEngine(
                             false
                         } else {
                             userStreamSyncRequired = false
+                            lastUserStreamSyncAtMs = System.currentTimeMillis()
                             futuresStreamReconcileRunning = false
                             false
                         }
@@ -10827,6 +10830,7 @@ private class NativeEngine(
             .put("user_ws_connected", userStreamConnected)
             .put("user_stream_sync_required", userStreamSyncRequired)
             .put("user_stream_last_event_ms", lastUserEventMs)
+            .put("user_stream_last_successful_sync_ms", lastUserStreamSyncAtMs)
             .put("user_stream_last_error", userStreamLastError ?: JSONObject.NULL)
             .put("user_stream_reconcile_running", futuresStreamReconcileRunning)
             .put("history_ready", historyReady)
@@ -11162,23 +11166,33 @@ private class NativeEngine(
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT available=" + liveUsdtBalance + "; equity=" + liveFuturesEquity else "Account REST failed: " + (restAccountLastError ?: "pending"))
         test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market kline/aggTrade stream connected" else "Market stream disconnected")
         test("public_websocket", "websocket", publicSocketConnected && publicWebSocketFresh(), "WARN", if (publicSocketConnected && publicWebSocketFresh()) "Public depth/bookTicker stream connected and fresh" else "Public stream disconnected or stale")
-        test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream transport connected and sync flag clear; event freshness is checked separately" else "User stream degraded; connected=" + userStreamConnected + "; sync_required=" + userStreamSyncRequired + "; reconcile_running=" + futuresStreamReconcileRunning + "; last_error=" + (userStreamLastError ?: "none"))
+        test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "Private stream connected and REST-reconciled" else "User stream degraded; connected=" + userStreamConnected + "; sync_required=" + userStreamSyncRequired + "; reconcile_running=" + futuresStreamReconcileRunning + "; last_error=" + (userStreamLastError ?: "none"))
         val userNowMs = System.currentTimeMillis()
-        val userEventAgeMs = if (lastUserEventMs > 0L && userNowMs >= lastUserEventMs)
-            userNowMs - lastUserEventMs else Long.MAX_VALUE
-        val userStreamFresh = userStreamIsFresh(
+        val userSyncAgeMs = if (lastUserStreamSyncAtMs > 0L && userNowMs >= lastUserStreamSyncAtMs)
+            userNowMs - lastUserStreamSyncAtMs else Long.MAX_VALUE
+        val userStreamFresh = userStreamSyncIsFresh(
             connected = userStreamConnected,
             syncRequired = userStreamSyncRequired,
-            lastEventMs = lastUserEventMs,
+            lastSuccessfulSyncMs = lastUserStreamSyncAtMs,
             nowMs = userNowMs
         )
         test(
             "user_stream_freshness", "websocket", userStreamFresh, "FAIL",
             "connected=" + userStreamConnected +
                 "; sync_required=" + userStreamSyncRequired +
-                "; last_event_ms=" + lastUserEventMs +
-                "; age_ms=" + (if (userEventAgeMs == Long.MAX_VALUE) "UNKNOWN" else userEventAgeMs.toString()) +
-                "; max_age_ms=120000; a connected socket without a recent user event does not prove account/order stream freshness"
+                "; last_successful_rest_sync_ms=" + lastUserStreamSyncAtMs +
+                "; sync_age_ms=" + (if (userSyncAgeMs == Long.MAX_VALUE) "UNKNOWN" else userSyncAgeMs.toString()) +
+                "; max_age_ms=120000; private event silence alone does not indicate a broken stream"
+        )
+        val userEventAgeMs = if (lastUserEventMs > 0L && userNowMs >= lastUserEventMs)
+            userNowMs - lastUserEventMs else Long.MAX_VALUE
+        test(
+            "user_stream_event_observation", "websocket",
+            lastUserEventMs == 0L || (userNowMs >= lastUserEventMs && userEventAgeMs <= 86_400_000L),
+            "WARN",
+            "last_event_ms=" + lastUserEventMs +
+                "; age_ms=" + (if (userEventAgeMs == Long.MAX_VALUE) "NONE_RECORDED" else userEventAgeMs.toString()) +
+                "; event age is informational because an idle account may produce no private events"
         )
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
         val scannerProgressAgeMs = (System.currentTimeMillis() - scanLastProgressAt).coerceAtLeast(0L)
@@ -11472,7 +11486,8 @@ private class NativeEngine(
             .put("execution_block_reason", "Entries require reconciled Futures account, fresh H1 market data, risk approval, and exchange-confirmed protection")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
-            .put("max_trades_per_day", 0)
+            .put("max_trades_per_day", JSONObject.NULL)
+            .put("max_trades_per_day_policy", "NO_FIXED_COUNT_CAP; entries remain subject to campaign risk, daily loss, and Execution Gate")
             .put("max_consecutive_losses", 2)
             .put("cooldown_minutes", 30)
             .put("min_risk_reward", 1.5)
