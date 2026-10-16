@@ -280,3 +280,28 @@ def test_wise_men_progression_cannot_regress_or_revive_terminal_state():
     revived = machine.observe("c6", wm3_triggered=True, level=95.0)
     assert terminal.phase == WiseMenPhase.INVALIDATED
     assert revived.phase == WiseMenPhase.INVALIDATED
+
+
+def test_separated_equal_highs_are_one_nine_bar_fractal_after_last_confirmation():
+    # Trading Chaos 2 ch.11 fig.11.2E: top at indices 2,4,6.
+    highs = [8, 9, 10, 9, 10, 9, 10, 8, 9]
+    before = calculate_indicators(make_frame(highs[:-1]), config_from_env({}))
+    assert not bool(before["fractal_up_confirmed"].any())
+    after = calculate_indicators(make_frame(highs), config_from_env({}))
+    assert bool(after["fractal_up_confirmed"].iloc[8])
+    assert int(after["confirmed_up_center_index"].iloc[8]) == 6
+    assert int(after["confirmed_up_group_start_index"].iloc[8]) == 2
+    assert float(after["confirmed_up_level"].iloc[8]) == 10.0
+    assert int(after["fractal_up_confirmed"].sum()) == 1
+
+
+def test_separated_equal_lows_mirror_high_fractal():
+    lows = [12, 11, 10, 11, 10, 11, 10, 12, 11]
+    highs = [v + 1 for v in lows]
+    after = calculate_indicators(make_frame(highs, lows), config_from_env({}))
+    assert bool(after["fractal_down_confirmed"].iloc[8])
+    assert int(after["confirmed_down_center_index"].iloc[8]) == 6
+    assert int(after["confirmed_down_group_start_index"].iloc[8]) == 2
+    assert float(after["confirmed_down_level"].iloc[8]) == 10.0
+    assert int(after["fractal_down_confirmed"].sum()) == 1
+
