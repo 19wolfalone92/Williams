@@ -11,23 +11,77 @@ The collection currently contains six PDF files:
 - Билл_Вильямс_Торговый_Хаос_2_3_книга.pdf
 - Торговый Хаос 2 (3книга).pdf
 
-## Entry-search rules adopted by the bot
+## Edition-specific source-of-truth (16 October 2026 correction)
 
-1. Balance first, trigger second. For a LONG trend, the first actionable prerequisite is a confirmed bullish fractal above the Alligator Teeth / red balance line. A breakout above that fractal is the primary mechanical trigger.
-2. Do not manufacture an entry from AO, AC, MFI/MFI-proxy or the Alligator alone before the external fractal exists.
-3. Alligator is the trend/balance filter. LONG requires price on the bullish side of the mouth with the lines ordered Lips > Teeth > Jaw and an awake/spread condition.
-4. AO is momentum confirmation (Profitunity 5/34 on median price). AC is acceleration confirmation. AO/AC colors and zones are used for ranking, confirmation and trade management; they are not a substitute for the fractal trigger.
-5. Wiseman signals are treated as a family, not as three indicators that must all fire on the same bar. Fractal breakout is the conservative primary trigger; reversal/divergent-bar and Super AO signals are confirmation/context.
-6. Wave hierarchy is multi-timeframe. A lower-timeframe five-wave impulse can be a subdivision of a higher-timeframe impulse.
-7. Wave 3 receives the highest entry priority. If a credible lower-timeframe W3 exists, it should outrank a late higher-timeframe W5.
-8. A lower-timeframe bullish W3 inside a bullish higher-timeframe W5 is valid and must not be vetoed solely because the parent is W5.
-9. A five-wave move against the parent trend inside higher W2/W4 is corrective structure (for example A/C). It must not be treated as a continuation LONG signal.
-10. W5 entries require a substantially stronger exhaustion check: price in the 62%-100% target zone, price/oscillator divergence, terminal fractal, squat/volume-facilitation evidence and momentum change. A W5 is a low-priority exception, not the default entry.
-11. Wave analysis keeps a 100-140+ bar structural context; the latest closed bar, not an unfinished bar, is used for confirmed signals.
-12. Initial protection is structure-aware (recent opposite fractal / Teeth with volatility buffer). A fixed profit target is only a safety cap; the main trend exit is market-generated.
-13. After five consecutive green Profitunity bars, stop management can trail below the last strong bar / higher lows.
-14. A confirmed close through the Teeth is an important trend-exit condition and must not be converted into a higher stop that sits above market price.
-15. Exchange filters, spread, slippage, balance, order status and reconciliation remain hard execution gates. Strategy signals never bypass Binance execution safety.
+**Primary executable profile: TC2_THREE_WISE_MEN (Trading Chaos, 2nd ed.).
+Do not silently combine it with NTD_FIVE_DIMENSIONS or TC1/Course.**
+The following describes the intended source contract, not certification of
+implementation. Visual book examples must be used as labelled regression cases.
+
+1. TC2 ch.9 (PDF 121-134), WM1: a new extreme, a close in the relevant
+   half, ENTIRE signal bar away from the Alligator mouth (no contact), good
+   angulation, opposite-colour AO (red for bull / green for bear), conditional
+   BUY STOP above high / SELL STOP below low, initial protection beyond the
+   opposite extreme. Angulation remains an **engineering approximation** until
+   chart-by-chart picture parity is verified. WM1 is an early countertrend entry;
+   it must NOT be precluded by a mandatory first fractal.
+2. TC2 ch.10 (PDF 136-143), WM2/Super AO: the THIRD consecutive AO column
+   of the appropriate colour defines the candle and conditional entry price.
+   This signal can be an initial entry or an addition. AO colour is its change
+   from the preceding histogram value, not the sign of AO.
+3. TC2 ch.11 (PDF 144-152), WM3: confirm the full fractal with closed bars.
+   Its eventual trigger must occur on the appropriate side of Teeth; it need
+   NOT have formed on that side. Equal-high/low variants shown in figures
+   11.1-11.2 require additional test fixtures. Never use later bars in an
+   earlier decision (prefix/causality invariant).
+4. TC2 ch.12 (PDF 153-165): open a managed campaign on whichever valid Wise
+   Man comes first; later valid same-side signals can increase the EXISTING
+   campaign within risk limits. The 1:5:4:3:2 reverse pyramid is an allocation
+   example for pre-budgeted total size, NOT a multiplier of equity risk.
+   Initial stops are setup-specific; a protective stop then tightens behind
+   the lowest LOW / highest HIGH of a selected completed 3-5 bar window.
+5. TC2 exits: protective stop, completed structural invalidation and a
+   truly TRIGGERED opposite trade can close a campaign. The NTD close-beyond-
+   Teeth exit is NOT an unconditional TC2 rule; a merely detected opposite
+   pending signal is NOT an executable exit.
+6. All 10 configured USD-M Futures pairs require symmetrical LONG and SHORT
+   signals, order sides, protection, cancellation, reconciliation and exits.
+   The same source candles should produce consistent signal evidence in
+   Python and Android. The analyser must not silently relabel H4/M15 as H1.
+7. Market-wave reading is *probabilistic structural interpretation*, not
+   clairvoyance. For each configured timeframe (D1, H4, H1, M15), record
+   as-of timestamp, primary wave hypothesis W1-W5 / ABC / UNKNOWN, alternative
+   count, degree, direction, pivot/invalidation levels, confidence and
+   explicit uncertainty. Cross-timeframe nesting must be checked (including
+   a lower-level W3 within higher W5). An uncertain wave must not silently
+   become a guaranteed LONG/SHORT signal. These fields are an acceptance
+   requirement; their complete parity with the book figures is **NOT YET
+   VERIFIED** in the active Android execution path.
+8. Pending-order lifecycle is required: DETECTED -> QUALIFIED -> ARMED ->
+   TRIGGERED/FILLED or INVALIDATED/EXPIRED/CANCEL_REQUESTED/CANCEL_CONFIRMED.
+   Refresh closed bars and live data before submission; invalidate a setup
+   when the qualifying formation/side/context is no longer valid. Cancel via
+   the existing serialized Futures Execution Door, persist the cancellation
+   intent, query Binance order/algo-order state and do not treat an UNKNOWN
+   cancellation as success. Never replace a conditional entry with a MARKET
+   order just because the signal was missed.
+9. Engineering risk overlays (spread, ATR, D1/H4 veto, session window, funds,
+   slippage, cool-down, position caps, USDT contracts and account safety)
+   belong to **Bot Policy**, not **Williams Canon**. They must be explicit
+   in diagnostics so a rejected valid book signal is labelled as policy veto.
+
+### Mandatory acceptance evidence (not completed by this document)
+
+- Book page + labelled chart region -> candle/indicator fixture -> expected
+  state/trigger/stop -> identical Python/Kotlin output, BOTH sides.
+- Prefix replay without future data on every timeframe, including ambiguous
+  waves and competing primary/alternative counts.
+- Pending order invalidation/expiry/cancel and exchange-acknowledged status
+  tests with REST/WebSocket delays, partial fills, restarts, unknown outcomes.
+- Campaign add-ons and protected aggregate risk, opposite breakout,
+  structural trailing and exit parity through the actual Android coordinator.
+- Repeat on all 10 USD-M Futures Testnet contracts on a device, with exact
+  commit-linked green Android/Python CI and saved diagnostics.
 
 ## Important implementation boundary
 
