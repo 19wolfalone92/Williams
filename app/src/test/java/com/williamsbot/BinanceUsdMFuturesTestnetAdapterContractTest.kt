@@ -298,7 +298,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
             JSONObject(fresh.toString()).put("symbol", "ETHUSDT"),
             JSONObject(fresh.toString()).put("time", now - 61_000L),
             JSONObject(fresh.toString()).put("time", now + 6_000L),
-            JSONObject(fresh.toString()).remove("time"),
+            JSONObject(fresh.toString()).apply { remove("time") },
             JSONObject(fresh.toString()).put("price", "-0.01"),
             JSONObject(fresh.toString()).put("price", "NaN")
         )
