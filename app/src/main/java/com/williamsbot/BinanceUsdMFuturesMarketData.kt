@@ -25,21 +25,22 @@ internal val APPROVED_FUTURES_KLINE_INTERVALS = listOf(
  * Legacy runtime reads may use only explicitly approved public USD-M Futures routes.
  * No Spot-shaped route is translated: callers must be migrated to the canonical path.
  */
+private val APPROVED_FUTURES_PUBLIC_PATHS = setOf(
+    "/fapi/v1/time",
+    "/fapi/v1/depth",
+    "/fapi/v1/ticker/24hr",
+    "/fapi/v1/ticker/bookTicker",
+    "/fapi/v1/ticker/price",
+    "/fapi/v1/avgPrice",
+    "/fapi/v1/exchangeInfo"
+)
+
 internal fun normalizeFuturesPublicPath(path: String): String {
     require(path.isNotBlank() && path.startsWith("/") && !path.startsWith("//")) {
         "Invalid USD-M Futures public route"
     }
     val endpoint = path.substringBefore("?")
-    val allowed = setOf(
-        "/fapi/v1/time",
-        "/fapi/v1/depth",
-        "/fapi/v1/ticker/24hr",
-        "/fapi/v1/ticker/bookTicker",
-        "/fapi/v1/ticker/price",
-        "/fapi/v1/avgPrice",
-        "/fapi/v1/exchangeInfo"
-    )
-    require(endpoint in allowed) {
+    require(endpoint in APPROVED_FUTURES_PUBLIC_PATHS) {
         "SECURITY_BLOCK: unsupported public route in USD-M Futures runtime: $endpoint"
     }
     require(!path.contains("#") && !path.contains('\n') && !path.contains('\r')) {
