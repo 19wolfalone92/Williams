@@ -337,7 +337,8 @@ class MarketHistoryStore(context: Context) :
     fun loadRecent(
         symbol: String,
         interval: String,
-        limit: Int
+        limit: Int,
+        beforeMs: Long? = null
     ): List<Candle> {
         val safeLimit = limit.coerceIn(1, 20_000)
         val out = mutableListOf<Candle>()
@@ -352,8 +353,8 @@ class MarketHistoryStore(context: Context) :
                 "close",
                 "volume"
             ),
-            "symbol=? AND interval=?",
-            arrayOf(symbol, interval),
+            if (beforeMs == null) "symbol=? AND interval=?" else "symbol=? AND interval=? AND open_time<=?",
+            if (beforeMs == null) arrayOf(symbol, interval) else arrayOf(symbol, interval, beforeMs.toString()),
             null,
             null,
             "open_time DESC",

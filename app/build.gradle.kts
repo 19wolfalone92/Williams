@@ -16,7 +16,9 @@ if (keystorePropertiesFile.exists()) {
 }
 
 val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
-val resolvedVersionCode = maxOf(10, ciRunNumber ?: 10)
+// Local builds must not downgrade an installed CI build (the previous APK was code 3503).
+val resolvedVersionCode = maxOf(42700, ciRunNumber ?: 42700)
+val cockpitPreview = providers.gradleProperty("williamsCockpitPreview").orNull == "true"
 
 val debugKeystoreFile = rootProject.file("build/williams-debug.p12")
 val debugKeystorePassword = System.getenv("WILLIAMS_DEBUG_KEYSTORE_PASSWORD")
@@ -40,7 +42,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = resolvedVersionCode
-        versionName = "4.26.0"
+        versionName = "4.27.0"
     }
 
     buildFeatures {
@@ -61,8 +63,8 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
+            applicationIdSuffix = if (cockpitPreview) ".cockpit.preview" else ".debug"
+            versionNameSuffix = if (cockpitPreview) "-preview" else "-debug"
             isDebuggable = true
 
             if (debugKeystoreFile.exists() && !debugKeystorePassword.isNullOrBlank()) {
@@ -96,6 +98,10 @@ android {
                 }
             }
         }
+    }
+
+    if (cockpitPreview) {
+        sourceSets.getByName("debug").res.srcDir("src/cockpitPreview/res")
     }
 
     lint {

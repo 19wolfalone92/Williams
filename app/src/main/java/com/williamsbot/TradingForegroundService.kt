@@ -6,10 +6,15 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.Build
-import androidx.core.app.NotificationCompat
+import android.app.Notification
 import androidx.core.app.ServiceCompat
+import java.util.concurrent.Executors
 
 class TradingForegroundService : Service() {
+    private val lifecycleWorker = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "williams-service-lifecycle").apply { isDaemon = true }
+    }
+
     companion object {
         const val ACTION_START = "com.williamsbot.action.START"
         const val ACTION_STOP = "com.williamsbot.action.STOP"
@@ -38,7 +43,7 @@ class TradingForegroundService : Service() {
             )
 
         val notification =
-            NotificationCompat.Builder(this, CHANNEL_ID)
+            Notification.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("Williams Trader")
                 .setContentText(
@@ -46,11 +51,11 @@ class TradingForegroundService : Service() {
                 )
                 .setOngoing(true)
                 .setCategory(
-                    NotificationCompat.CATEGORY_SERVICE
+                    Notification.CATEGORY_SERVICE
                 )
                 .setContentIntent(contentIntent)
                 .setPriority(
-                    NotificationCompat.PRIORITY_LOW
+                    Notification.PRIORITY_LOW
                 )
                 .build()
 
@@ -65,7 +70,9 @@ class TradingForegroundService : Service() {
                 0
             }
         )
-
+        RuntimeServiceState.active = true
+        RuntimeServiceState.confirmedAtMs = System.currentTimeMillis()
+        RuntimeServiceState.lastError = null
     }
 
     override fun onStartCommand(
@@ -73,17 +80,18 @@ class TradingForegroundService : Service() {
         flags: Int,
         startId: Int
     ): Int {
-        when (intent?.action) {
-            ACTION_STOP -> {
-                runCatching { StandaloneRuntime.stopTrading() }
-                StandaloneRuntime.stop()
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            else -> {
-                // Also runs after a sticky service recreation with a null intent.
-                // Autostart is safe because persisted state is reconciled with Binance
-                // before the scanner can submit any new order.
+        val action = intent?.action
+        // Keystore, SQLite and authenticated reconciliation may block. Never do them
+        // on Android's main/service thread, including after START_STICKY recreation.
+        lifecycleWorker.execute {
+            if (action == ACTION_STOP) {
+                runCatching {
+                    StandaloneRuntime.stopTrading()
+                    if (StandaloneRuntime.stop()) stopSelf()
+                }.onFailure {
+                    android.util.Log.e("WilliamsFutures", "Safe shutdown was refused; monitoring retained", it)
+                }
+            } else {
                 runCatching {
                     StandaloneRuntime.start(applicationContext)
                     StandaloneRuntime.autostart(applicationContext)
@@ -99,6 +107,8 @@ class TradingForegroundService : Service() {
     override fun onDestroy() {
         // Do not clear auto_run on unexpected teardown. START_STICKY recreation
         // re-enters autostart(), which reconciles the exchange state first.
+        RuntimeServiceState.active = false
+        lifecycleWorker.shutdown()
         super.onDestroy()
     }
 

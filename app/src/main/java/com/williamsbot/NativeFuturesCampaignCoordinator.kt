@@ -647,7 +647,10 @@ internal class NativeFuturesCampaignCoordinator(
         val entryPrice: String,
         val protectiveStop: String,
         val clientId: String,
-        val riskPct: Double
+        val riskPct: Double,
+        val signalType: String = "",
+        val signalBarTimeMs: Long = 0L,
+        val signalReason: String = ""
     )
 
     @Volatile var state: State = State.UNINITIALIZED
@@ -656,6 +659,11 @@ internal class NativeFuturesCampaignCoordinator(
         private set
 
     private val lock = Any()
+    @Volatile private var observationSink: ((JSONArray) -> Unit)? = null
+
+    fun setObservationSink(sink: (JSONArray) -> Unit) {
+        observationSink = sink
+    }
     @Volatile private var structuralStopRecoveryProvider:
         ((String, String, Double, Double, Double) -> RecoveredStructuralStop?)? = null
     private val intentsKey = "futures_campaign_intents_v2"
@@ -1490,6 +1498,7 @@ internal class NativeFuturesCampaignCoordinator(
                     ) { "$symbol exchange position lacks a valid entry price/quantity for audit" }
                     val confirmedAt = System.currentTimeMillis()
                     matchingIntent.put("campaign_status", "OPEN_PROTECTED")
+                        .put("strategy_ownership_verified", true)
                         .put("protection_status", "PROTECTED")
                         .put("protection_client_id", confirmedClientId)
                         .put("protective_stop", confirmedStop)
@@ -1905,6 +1914,7 @@ internal class NativeFuturesCampaignCoordinator(
 
         val intent = JSONObject()
             .put("intent_role", "ENTRY")
+            .put("strategy_ownership_verified", true)
             .put("symbol", plan.symbol)
             .put("direction", plan.direction.name)
             .put("kind", plan.kind.name)
@@ -1913,6 +1923,9 @@ internal class NativeFuturesCampaignCoordinator(
             .put("protective_stop", plan.protectiveStop)
             .put("initial_protective_stop", plan.protectiveStop)
             .put("risk_pct", plan.riskPct)
+            .put("signal_type", plan.signalType)
+            .put("signal_bar_time_ms", plan.signalBarTimeMs)
+            .put("signal_reason", safeDiagnosticText(plan.signalReason))
             .put("risk_budget_usdt", preflightAccount.equityUsdt * plan.riskPct)
             .put("risk_equity_snapshot_usdt", preflightAccount.equityUsdt)
             .put("risk_available_snapshot_usdt", preflightAccount.availableUsdt)
@@ -2589,6 +2602,13 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("direction", item.optString("direction"))
                     .put("role", role)
                     .put("kind", item.optString("kind"))
+                    .put("signal_type", item.optString("signal_type"))
+                    .put("signal_bar_time_ms", item.optLong("signal_bar_time_ms"))
+                    .put("signal_reason", item.optString("signal_reason"))
+                    .put("entry_price", item.opt("entry_price") ?: JSONObject.NULL)
+                    .put("quantity", item.opt("quantity") ?: JSONObject.NULL)
+                    .put("risk_pct", item.opt("risk_pct") ?: JSONObject.NULL)
+                    .put("executed_qty", item.opt("executed_qty") ?: JSONObject.NULL)
                     .put("client_id_suffix", item.optString("client_id").takeLast(8))
                     .put("order_status", orderStatus)
                     .put("campaign_status", lifecycle)
@@ -2605,7 +2625,7 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("initial_protective_stop", item.optString("initial_protective_stop")
                         .toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 } ?: JSONObject.NULL)
                     .put("protection_client_id_suffix", item.optString("protection_client_id").takeLast(8))
-                    .put("strategy_ownership_verified", item.optBoolean("strategy_ownership_verified", true))
+                    .put("strategy_ownership_verified", item.optBoolean("strategy_ownership_verified", false))
                     .put("actual_risk_audit_status", item.optString("actual_risk_audit_status", "UNKNOWN"))
                     .put("actual_risk_audit_blocker", item.optString("actual_risk_audit_blocker").takeIf { it.isNotBlank() } ?: JSONObject.NULL)
                     .put("actual_gross_stop_loss_usdt", item.opt("actual_gross_stop_loss_usdt") ?: JSONObject.NULL)
@@ -2613,6 +2633,8 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("actual_all_in_stop_loss_usdt", item.opt("actual_all_in_stop_loss_usdt") ?: JSONObject.NULL)
                     .put("actual_all_in_risk_pct", item.opt("actual_all_in_risk_pct") ?: JSONObject.NULL)
                     .put("actual_risk_audited_at_ms", item.opt("actual_risk_audited_at_ms") ?: JSONObject.NULL)
+                    .put("trailing_at_ms", item.optLong("trailing_at_ms"))
+                    .put("previous_protection_unresolved", item.optString("previous_protection_client_id").isNotBlank())
                     .put("risk_reservation_adjusted_at_ms", item.opt("risk_reservation_adjusted_at_ms") ?: JSONObject.NULL)
                     .put("risk_reservation_adjustment_reason", item.opt("risk_reservation_adjustment_reason") ?: JSONObject.NULL)
             )
@@ -2704,5 +2726,7 @@ internal class NativeFuturesCampaignCoordinator(
         check(executionStore.writeState(intentsKey, array.toString())) {
             "SQLite commit failed while persisting Futures execution intents; order mutation is blocked"
         }
+        // Observability must never turn a committed exchange intent into a retry.
+        runCatching { observationSink?.invoke(JSONArray(array.toString())) }
     }
 }

@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
+import org.json.JSONArray
 
 /**
  * Persistent exchange/order/execution/state audit trail.
@@ -14,6 +15,64 @@ import org.json.JSONObject
  */
 class TradingAuditStore(context: Context) :
     SQLiteOpenHelper(context, "williams_trading_audit.db", null, 3) {
+
+    private val lastCampaignObservations = mutableMapOf<String, String>()
+
+    @Synchronized
+    fun recordCockpitEvent(stage: String, symbol: String = "", direction: String = "", state: String = "", detail: String = "") {
+        val event = JSONObject().put("e", "COCKPIT_" + stage.take(40))
+            .put("E", System.currentTimeMillis()).put("symbol", symbol.take(20))
+            .put("direction", direction.take(10)).put("state", safeDiagnosticText(state))
+            .put("detail", safeDiagnosticText(detail))
+        recordUserEvent(event)
+        writableDatabase.execSQL("DELETE FROM events WHERE event_type LIKE 'COCKPIT_%' AND id NOT IN (SELECT id FROM events WHERE event_type LIKE 'COCKPIT_%' ORDER BY id DESC LIMIT 1000)")
+    }
+
+    @Synchronized
+    fun recordCampaignSnapshot(intents: JSONArray) {
+        for (item in CockpitDiagnostics.rows(intents)) {
+            val id = item.optString("client_id")
+            val fields = listOf("campaign_status", "order_status", "exchange_status", "protection_status", "protective_stop", "actual_risk_audit_status")
+            val fingerprint = fields.joinToString("|") { item.optString(it) }
+            if (lastCampaignObservations[id] == fingerprint) continue
+            lastCampaignObservations[id] = fingerprint
+            if (lastCampaignObservations.size > 1000) lastCampaignObservations.remove(lastCampaignObservations.keys.first())
+            val audit = CockpitDiagnostics.lifecycleAudit(item)
+            recordCockpitEvent("EXECUTION", item.optString("symbol"), item.optString("direction"),
+                campaignLifecycleStatus(item), "Post-change audit=${audit.optString("severity")}; " + fields.joinToString("; ") { "$it=${item.optString(it)}" })
+            if (audit.optString("severity") == "FAIL" ||
+                item.optString("protection_status") in setOf("SUBMISSION_UNKNOWN", "UNRESOLVED_EXTRA_ORDER")) {
+                // A bounded durable incident keeps the events immediately preceding a failure.
+                val incident = recentCockpitEvents(80)
+                val values = ContentValues().apply {
+                    put("event_type", "COCKPIT_INCIDENT")
+                    put("event_time", System.currentTimeMillis())
+                    put("received_at", System.currentTimeMillis())
+                    put("raw_json", JSONObject().put("e", "COCKPIT_INCIDENT").put("events", incident).toString())
+                }
+                writableDatabase.insert("events", null, values)
+            }
+        }
+    }
+
+    @Synchronized
+    fun recentCockpitEvents(limit: Int = 100): JSONArray {
+        val result = JSONArray()
+        readableDatabase.query("events", arrayOf("raw_json", "received_at"),
+            "event_type LIKE 'COCKPIT_%' AND event_type != 'COCKPIT_INCIDENT'", null,
+            null, null, "id DESC", limit.coerceIn(1, 1000).toString()).use { cursor ->
+            while (cursor.moveToNext()) {
+                result.put(JSONObject(cursor.getString(0)).put("received_at_ms", cursor.getLong(1)))
+            }
+        }
+        return result
+    }
+
+    @Synchronized
+    fun lastCockpitIncident(): JSONObject? = readableDatabase.query("events", arrayOf("raw_json"),
+        "event_type = ?", arrayOf("COCKPIT_INCIDENT"), null, null, "id DESC", "1").use {
+        if (it.moveToFirst()) JSONObject(it.getString(0)) else null
+    }
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""

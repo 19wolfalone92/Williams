@@ -67,6 +67,17 @@ internal class BinanceUsdMFuturesMarketData(
     @Volatile private var serverOffsetMs = 0L
     @Volatile private var lastServerSyncLocalMs = 0L
 
+    /** Display/diagnostics must never block on clock I/O. This value cannot authorize a trade. */
+    fun cachedExchangeNowMs(): Long = System.currentTimeMillis() + serverOffsetMs
+
+    fun clockSnapshot(): JSONObject {
+        val now = System.currentTimeMillis()
+        val at = lastServerSyncLocalMs
+        return JSONObject().put("synced_at_ms", at).put("offset_ms", serverOffsetMs)
+            .put("fresh", at > 0L && now >= at && now - at <= 30_000L)
+            .put("age_ms", if (at > 0L && now >= at) now - at else JSONObject.NULL)
+    }
+
     /** Exchange clock is authoritative for candle closure and stale-cache decisions. */
     fun exchangeNowMs(): Long {
         val localNow = System.currentTimeMillis()

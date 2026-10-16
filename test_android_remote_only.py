@@ -669,11 +669,11 @@ def test_chart_cockpit_switches_all_approved_futures_symbols_without_changing_sc
         assert f'"{symbol}"' in ui
         assert f'"{symbol}"' in runtime
     assert "private fun MarketChartPanel(" in ui
-    assert 'Text("РЕШЕНИЕ ДВИЖКА ПО ВЫБРАННОЙ ПАРЕ"' in ui
+    assert 'Text("ЧТО ДУМАЕТ БОТ • H4 → H1 → СИГНАЛ → РИСК"' in ui
     assert "Почему сканер так решил:" in ui
     assert "entry_trigger_price" in ui
     assert "entry_protective_price" in ui
-    assert "Переключение графика не меняет логику входа." in ui
+    assert "смена графика не меняет торговлю" in ui
     assert 'fetchCandles(symbol, "1h", 180)' in runtime
     assert "val completeScan = ranked.size == coreSymbols.size" in runtime
     assert "scannerState = when {" in runtime
@@ -729,11 +729,13 @@ def test_actions_testnet_gate_skips_when_ci_secrets_absent_without_claiming_test
 def test_android_ui_uses_scanner_endpoint_for_real_state_progress_and_universe():
     ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
-    assert 'scannerJson.optString("scanner_state", status.scannerState)' in ui
-    assert 'scannerJson.optInt("progress_symbols", 0)' in ui
-    assert 'scannerJson.optJSONArray("scan_symbols")' in ui
-    assert 'scannerJson.optString("scanner_error")' in ui
-    assert 'scannerJson.optInt("progress_total", 10)' in ui
+    assert 'api.get("/api/v1/cockpit")' in ui
+    assert 'payload.getJSONObject("status")' in ui
+    assert 'payload.getJSONObject("scanner")' in ui
+    assert '.put("scanner_progress_symbols", scan.optInt("progress_symbols"))' in runtime
+    assert '.put("scanner_universe", scan.optJSONArray("scan_symbols") ?: JSONArray())' in runtime
+    assert '.put("scanner_error", scan.opt("scanner_error") ?: JSONObject.NULL)' in runtime
+    assert '.put("scanner_progress_total", scan.optInt("progress_total", 10))' in runtime
     assert '.put("progress_total", coreSymbols.size)' in runtime
     assert '.put("scan_symbols", JSONArray().apply { scanSymbols.forEach { put(it) } })' in runtime
     assert '"Сканирование выполняется • "' in ui
