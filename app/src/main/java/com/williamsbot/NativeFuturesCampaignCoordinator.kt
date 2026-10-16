@@ -741,7 +741,8 @@ internal class NativeFuturesCampaignCoordinator(
             val exchangePositions = adapter.positions()
             val openBySymbol = linkedMapOf<String, JSONObject>()
             for (i in 0 until exchangePositions.length()) {
-                val row = exchangePositions.optJSONObject(i) ?: continue
+                val row = exchangePositions.optJSONObject(i)
+                    ?: throw IllegalStateException("Binance returned a malformed position row at index $i during reconciliation")
                 val symbol = row.optString("symbol").uppercase(Locale.US)
                 val amount = row.optString("positionAmt").toDoubleOrNull()
                     ?: throw IllegalStateException("Binance returned a malformed position amount for $symbol")
@@ -1131,7 +1132,8 @@ internal class NativeFuturesCampaignCoordinator(
                 runCatching { parseFuturesAccountSnapshot(adapter.account()) }.getOrNull()
             } else null
             for ((symbol, position) in openBySymbol) {
-                val amount = position.optString("positionAmt").toDoubleOrNull() ?: 0.0
+                val amount = position.optString("positionAmt").toDoubleOrNull()
+                    ?: throw IllegalStateException("Binance returned a malformed position amount for $symbol during protection audit")
                 val direction = if (amount > 0.0) "LONG" else "SHORT"
                 val algos = protectiveOrdersBySymbol.getOrPut(symbol) { adapter.openAlgoOrders(symbol) }
                 val latestIntentIndex = latestEntryIndexBySymbol[symbol]
@@ -1526,7 +1528,8 @@ internal class NativeFuturesCampaignCoordinator(
                     var unmanagedExtraStop = false
                     val currentAlgos = adapter.openAlgoOrders(symbol)
                     for (j in 0 until currentAlgos.length()) {
-                        val old = currentAlgos.optJSONObject(j) ?: continue
+                        val old = currentAlgos.optJSONObject(j)
+                            ?: throw IOException("Binance returned a malformed algo-order row during protection reconciliation for $symbol")
                         if (!isProtectiveStop(old, direction)) continue
                         val oldClientId = old.optString("clientAlgoId")
                         if (oldClientId == confirmedClientId) continue
@@ -1622,7 +1625,8 @@ internal class NativeFuturesCampaignCoordinator(
                     if (knownProtectionIds.isNotEmpty()) {
                         val algos = adapter.openAlgoOrders(symbol)
                         for (j in 0 until algos.length()) {
-                            val order = algos.optJSONObject(j) ?: continue
+                            val order = algos.optJSONObject(j)
+                                ?: throw IOException("Binance returned a malformed algo-order row during orphan-stop cleanup for $symbol")
                             val clientAlgoId = order.optString("clientAlgoId")
                             if (clientAlgoId !in knownProtectionIds) continue
                             val algoId = order.optString("algoId")
@@ -1936,8 +1940,11 @@ internal class NativeFuturesCampaignCoordinator(
         val openPositions = adapter.positions()
         val openSymbols = mutableSetOf<String>()
         for (i in 0 until openPositions.length()) {
-            val row = openPositions.optJSONObject(i) ?: continue
-            if (kotlin.math.abs(row.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0) {
+            val row = openPositions.optJSONObject(i)
+                ?: throw IllegalStateException("Binance returned a malformed position row at index $i during entry cancellation")
+            val amount = row.optString("positionAmt").toDoubleOrNull()
+                ?: throw IllegalStateException("Binance returned a malformed position amount during entry cancellation")
+            if (kotlin.math.abs(amount) > 0.0) {
                 openSymbols.add(row.optString("symbol").uppercase(Locale.US))
             }
         }
