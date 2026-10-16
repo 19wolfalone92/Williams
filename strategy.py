@@ -242,19 +242,39 @@ def calculate_indicators(df, cfg):
     x["confirmed_up_confirmation_index"] = np.nan
     x["confirmed_down_confirmation_index"] = np.nan
 
+    def extended_group_start(values, anchor, is_high):
+        """Find separated equal-extreme bars joined by at most one inside bar.
+
+        TC2 ch.11 figs 11.1D/11.2E: a six- or nine-bar fractal is one
+        structure if equal highs/lows recur before two intervening bars
+        strictly below/above that extreme. A longer gap is a new formation.
+        """
+        level = values[anchor]
+        first = anchor
+        inside_run = 0
+        for j in range(anchor - 1, -1, -1):
+            value = values[j]
+            if not np.isfinite(value) or (value > level if is_high else value < level):
+                break
+            if value == level:
+                first = j
+                inside_run = 0
+            else:
+                inside_run += 1
+                if inside_run >= left:
+                    break
+        return first
+
     for anchor in range(left, n):
-        # Only the last bar of an adjacent equal-extreme group can anchor it.
+        # The last equal extreme is the anchor; the intervening bars may be
+        # below/above the level rather than adjacent to their equal neighbour.
         high_value = highs[anchor]
         low_value = lows[anchor]
         if not (np.isfinite(high_value) and np.isfinite(low_value)):
             continue
 
-        high_start = anchor
-        while high_start > 0 and highs[high_start - 1] == high_value:
-            high_start -= 1
-        low_start = anchor
-        while low_start > 0 and lows[low_start - 1] == low_value:
-            low_start -= 1
+        high_start = extended_group_start(highs, anchor, True)
+        low_start = extended_group_start(lows, anchor, False)
 
         # If the equal-extreme group continues to the next bar, defer it until
         # the group's last bar; this avoids duplicate pivots for one plateau.
