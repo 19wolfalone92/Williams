@@ -715,6 +715,29 @@ internal fun forcedH1EntryLevels(
 }
 
 /**
+ * TC2 ch.12 reverse pyramid: 1:5:4:3:2 is an allocation of a pre-budgeted
+ * TOTAL contract quantity, NOT 1x/5x/4x/3x/2x unbounded risk multipliers.
+ * Return exact integer LOT_SIZE units (largest remainder apportionment).
+ *
+ * Pure planner only. Trading must separately verify exchange LOT_SIZE,
+ * MAX_POSITION, available margin, campaign stop and aggregated risk; do NOT
+ * mistake this for implemented Android add-on execution.
+ */
+internal fun williamsReversePyramidUnits(totalQuantitySteps: Long): List<Long>? {
+    if (totalQuantitySteps < 15L || totalQuantitySteps > Long.MAX_VALUE / 15L) return null
+    val weights = listOf(1L, 5L, 4L, 3L, 2L)
+    val base = totalQuantitySteps / 15L
+    val extra = totalQuantitySteps % 15L
+    val units = weights.map { base * it + (extra * it) / 15L }.toMutableList()
+    val missing = totalQuantitySteps - units.sum()
+    val priorities = weights.indices.sortedWith(
+        compareByDescending<Int> { (extra * weights[it]) % 15L }.thenBy { it }
+    )
+    for (i in 0 until missing.toInt()) units[priorities[i]]++
+    return units
+}
+
+/**
  * Direction of an ACTUAL Williams signal family. An arbitrary SHORT_* string
  * must not become authorization for a short trade.
  */
