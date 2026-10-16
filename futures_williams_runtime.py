@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 import os
 import time
 import uuid
+import math
+from decimal import Decimal
 
 from db import Database
 from execution_barrier import ExecutionBarrier, OrderIntent
@@ -689,8 +691,9 @@ class FuturesWilliamsRuntime:
 
     def _filters(self, symbol):
         info = self.client.exchange_info(symbol)
-        rows = info.get("symbols", [])
-        if not rows:
+        rows = [row for row in info.get("symbols", [])
+                if isinstance(row, dict) and str(row.get("symbol", "")).upper() == str(symbol).upper()]
+        if len(rows) != 1:
             raise RuntimeError(f"{symbol}: Futures symbol not found")
         return {
             f.get("filterType"): f
@@ -724,6 +727,27 @@ class FuturesWilliamsRuntime:
         if value < minimum:
             return 0.0
         return value
+
+    def _full_market_close_qty(self, symbol, qty):
+        value = Decimal(str(qty))
+        if not value.is_finite() or value <= 0:
+            raise RuntimeError("full close requires a positive finite exchange quantity")
+        filters = self._filters(symbol)
+        if "LOT_SIZE" not in filters:
+            raise RuntimeError("cannot verify full close without LOT_SIZE")
+        for kind in ("LOT_SIZE", "MARKET_LOT_SIZE"):
+            lot = filters.get(kind)
+            if not lot:
+                continue
+            step = Decimal(str(lot.get("stepSize", "0")))
+            minimum = Decimal(str(lot.get("minQty", "0")))
+            maximum = Decimal(str(lot.get("maxQty", "0")))
+            if (not all(x.is_finite() and x >= 0 for x in (step, minimum, maximum))
+                    or kind == "LOT_SIZE" and step <= 0):
+                raise RuntimeError(f"invalid {kind} for full close")
+            if (step > 0 and value % step != 0) or value < minimum or (maximum > 0 and value > maximum):
+                raise RuntimeError(f"full close violates {kind}; refusing a rounded partial close")
+        return float(value)
 
     def _min_notional(self, symbol):
         f = self._filters(symbol)
@@ -905,18 +929,20 @@ class FuturesWilliamsRuntime:
     def _position_matches(self, campaign, position):
         qty = self._signed_position_qty(position)
         expected = float(campaign.position_qty or 0)
+        if not math.isfinite(qty) or not math.isfinite(expected) or position.get("positionSide", "BOTH") != "BOTH":
+            return False
         if expected <= 0:
             return abs(qty) <= 1e-12
         if campaign.side == "BUY":
-            return qty > 0 and abs(qty - expected) <= max(expected * 0.01, 1e-12)
-        return qty < 0 and abs(abs(qty) - expected) <= max(expected * 0.01, 1e-12)
+            return qty > 0 and math.isclose(qty, expected, rel_tol=1e-12, abs_tol=1e-12)
+        return campaign.side == "SELL" and qty < 0 and math.isclose(abs(qty), expected, rel_tol=1e-12, abs_tol=1e-12)
 
     def _liquidation_guard(self, campaign, position):
         liq = float(position.get("liquidationPrice", 0) or 0)
         stop = float(campaign.current_stop_price or 0)
         entry = float(position.get("entryPrice", 0) or campaign.average_entry_price or 0)
-        if liq <= 0 or stop <= 0 or entry <= 0:
-            return True
+        if not all(math.isfinite(value) and value > 0 for value in (liq, stop, entry)):
+            return False
         buffer = max(0.0, float(os.getenv("FUTURES_LIQUIDATION_BUFFER_PCT", "0.01")))
         if campaign.side == "BUY":
             return liq < stop and ((stop - liq) / stop) >= buffer
@@ -925,12 +951,14 @@ class FuturesWilliamsRuntime:
     def _fail_safe_flatten(self, campaign, reason):
         """Flatten when the structural stop cannot safely sit before liquidation."""
         symbol = campaign.symbol
-        self._set_state(symbol, "RECONCILE_REQUIRED")
+        # The exit revalidates exact ownership at the execution boundary. Latching
+        # RECONCILE_REQUIRED before it would block the very reduce-only close.
         try:
             return self._exit_market(campaign, reason)
-        except Exception:
+        finally:
+            # The known position may be flat, but the protection/liquidation fault
+            # still requires reconciliation before accepting another entry.
             self._set_state(symbol, "RECONCILE_REQUIRED")
-            raise
 
     def _record_trade_if_missing(self, campaign, order, avg, qty):
         symbol = campaign.symbol
@@ -961,7 +989,7 @@ class FuturesWilliamsRuntime:
         campaign = self.engine.load_campaign(intent.campaign_id)
         if campaign is None:
             raise RuntimeError(f"{intent.symbol}: campaign {intent.campaign_id} not found")
-        if campaign.state == CampaignState.RECONCILE_REQUIRED:
+        if campaign.state == CampaignState.RECONCILE_REQUIRED and intent.purpose != "CAMPAIGN_FLAT_CLEANUP":
             raise RuntimeError(f"{intent.symbol}: campaign requires reconciliation")
         if campaign.symbol != intent.symbol or campaign.side != intent.side and intent.purpose.upper() in {
             "CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"
@@ -971,6 +999,11 @@ class FuturesWilliamsRuntime:
         position = self._position(intent.symbol)
         pos_qty = abs(self._signed_position_qty(position))
         purpose = intent.purpose.upper()
+
+        if purpose == "CAMPAIGN_FLAT_CLEANUP":
+            if not math.isfinite(pos_qty) or pos_qty != 0:
+                raise RuntimeError("campaign cleanup requires an exchange-confirmed flat position")
+            return
 
         if purpose == "CAMPAIGN_ENTRY":
             if campaign.state != CampaignState.ENTRY_PENDING:
@@ -1030,11 +1063,17 @@ class FuturesWilliamsRuntime:
             if checks is not None:
                 checks(snapshot)
 
-        return self.execution_barrier.execute(
+        result = self.execution_barrier.execute(
             intent,
             fn,
             pre_submit_checks=combined_checks,
         )
+        if not result.accepted:
+            raise RuntimeError(f"Futures execution blocked: {result.reason}")
+        if result.reason:
+            self._set_state(intent.symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(result.reason)
+        return result.response
 
     def _client_id(self, prefix):
         return f"WILLF_{prefix}_{uuid.uuid4().hex[:20]}"
@@ -1076,14 +1115,21 @@ class FuturesWilliamsRuntime:
 
     def _size_from_risk(self, symbol, trigger, stop, risk_pct):
         equity = self._equity()
+        if not all(math.isfinite(value) for value in (equity, trigger, stop, risk_pct)):
+            raise RuntimeError("non-finite equity/risk/price inputs")
+        if risk_pct > self.config.risk_per_trade_pct + 1e-12:
+            raise RuntimeError("per-entry risk cap exceeded")
         risk_quote = equity * max(0.0, float(risk_pct))
         if equity <= 0 or risk_quote <= 0 or trigger <= 0 or stop <= 0:
             raise RuntimeError("invalid equity/risk/price inputs")
         distance_fraction = abs(trigger - stop) / trigger
         if distance_fraction <= 0:
             raise RuntimeError("zero stop distance")
-        fee_buffer = 2.0 * max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")))
-        slippage_buffer = max(0.0, float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")))
+        fee_side = float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001"))
+        slippage_buffer = float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015"))
+        if not all(math.isfinite(value) and value >= 0 for value in (fee_side, slippage_buffer)):
+            raise RuntimeError("invalid fee/slippage risk assumptions")
+        fee_buffer = 2.0 * fee_side
         effective_loss_fraction = distance_fraction + fee_buffer + slippage_buffer
         leverage = self.config.futures_leverage
         max_margin_fraction = max(
@@ -1093,7 +1139,7 @@ class FuturesWilliamsRuntime:
         max_notional = equity * max_margin_fraction * leverage
         notional = min(risk_quote / max(effective_loss_fraction, 1e-12), max_notional)
         qty = self._normalize_qty(symbol, notional / trigger)
-        if qty <= 0:
+        if not math.isfinite(qty) or qty <= 0:
             raise RuntimeError("sized quantity below Futures minimum")
         if self._min_notional(symbol) and qty * trigger < self._min_notional(symbol):
             raise RuntimeError("sized notional below Futures minimum")
@@ -1377,11 +1423,20 @@ class FuturesWilliamsRuntime:
 
     def _protect(self, campaign):
         symbol = campaign.symbol
-        qty = self._normalize_qty(symbol, abs(float(campaign.position_qty)))
-        if qty <= 0:
+        qty = abs(float(campaign.position_qty))
+        if not math.isfinite(qty) or qty <= 0:
             raise RuntimeError("cannot protect empty position")
         side = "SELL" if campaign.side == "BUY" else "BUY"
         cid = self._client_id("STOP")
+        # Ownership must survive a crash/lost response between POST and its reply.
+        campaign.tags["protective_order_client_id"] = cid
+        self.db.save_campaign_order(PendingOrderRecord(
+            order_id="", client_order_id=cid, symbol=symbol, side=side,
+            order_type="STOP_MARKET", purpose="PROTECTION", status="PENDING",
+            stop_price=float(campaign.current_stop_price), quantity=qty,
+            campaign_id=campaign.campaign_id, signal_id=campaign.current_signal_id,
+        ))
+        self.db.save_campaign(campaign)
         intent = OrderIntent.new(
             symbol,
             side,
@@ -1398,13 +1453,16 @@ class FuturesWilliamsRuntime:
                 symbol,
                 side,
                 "STOP_MARKET",
-                quantity=self.client.decimal_format(qty),
                 stop_price=self.client.decimal_format(campaign.current_stop_price),
                 new_client_order_id=cid,
-                reduce_only=True,
+                close_position=True,
+                working_type="MARK_PRICE",
             ),
             lambda _snapshot: None,
         )
+        result = self.client.get_order(symbol, order_id=result.get("orderId"), conditional=True)
+        if not self._protection_matches(campaign, result):
+            raise RuntimeError("exchange did not confirm the exact campaign protective stop")
         campaign.tags["protective_order_id"] = str(result.get("orderId", ""))
         campaign.tags["protective_order_client_id"] = cid
         self.db.save_campaign_order(
@@ -1438,11 +1496,20 @@ class FuturesWilliamsRuntime:
             proposed,
             upward=campaign.side == "SELL",
         )
-        qty = self._normalize_qty(symbol, abs(float(campaign.position_qty)))
-        if qty <= 0:
+        qty = abs(float(campaign.position_qty))
+        if not math.isfinite(qty) or qty <= 0:
             raise RuntimeError("cannot replace protection for empty position")
         side = "SELL" if campaign.side == "BUY" else "BUY"
         cid = self._client_id("STOP")
+        campaign.tags["pending_protection_client_id"] = cid
+        campaign.tags["pending_protection_price"] = proposed
+        self.db.save_campaign_order(PendingOrderRecord(
+            order_id="", client_order_id=cid, symbol=symbol, side=side,
+            order_type="STOP_MARKET", purpose="PROTECTION", status="PENDING",
+            stop_price=proposed, quantity=qty, campaign_id=campaign.campaign_id,
+            signal_id=campaign.current_signal_id,
+        ))
+        self.db.save_campaign(campaign)
         intent = OrderIntent.new(
             symbol,
             side,
@@ -1459,13 +1526,16 @@ class FuturesWilliamsRuntime:
                 symbol,
                 side,
                 "STOP_MARKET",
-                quantity=self.client.decimal_format(qty),
                 stop_price=self.client.decimal_format(proposed),
                 new_client_order_id=cid,
-                reduce_only=True,
+                close_position=True,
+                working_type="MARK_PRICE",
             ),
             lambda _snapshot: None,
         )
+        result = self.client.get_order(symbol, order_id=result.get("orderId"), conditional=True)
+        if not self._protection_matches(campaign, result):
+            raise RuntimeError("replacement protection was not confirmed; retaining old stop")
         new_order_id = str(result.get("orderId", ""))
         if not new_order_id:
             self._set_state(symbol, "RECONCILE_REQUIRED")
@@ -1488,14 +1558,16 @@ class FuturesWilliamsRuntime:
                 campaign_id=campaign.campaign_id,
             )
         )
-        old_order_id = int(campaign.tags.get("protective_order_id", "0") or 0)
+        old_order_id = str(campaign.tags.get("protective_order_id", "") or "")
         campaign.current_stop_price = proposed
         campaign.structural_stop_source = "3_5_BAR_STRUCTURE"
         campaign.tags["protective_order_id"] = new_order_id
         campaign.tags["protective_order_client_id"] = cid
+        campaign.tags.pop("pending_protection_client_id", None)
+        campaign.tags.pop("pending_protection_price", None)
         self.db.save_campaign(campaign)
 
-        if old_order_id > 0 and str(old_order_id) != new_order_id:
+        if old_order_id and old_order_id != "0" and old_order_id != new_order_id:
             try:
                 self._cancel(symbol, old_order_id, "CAMPAIGN_OLD_STOP_CANCEL")
             except Exception as exc:
@@ -1522,8 +1594,7 @@ class FuturesWilliamsRuntime:
 
         position = self._position(symbol)
         pos_qty = abs(self._signed_position_qty(position))
-        qty = self._normalize_qty(symbol, pos_qty)
-        if qty <= 0:
+        if pos_qty <= 0:
             try:
                 orders = self.client.all_orders(symbol, limit=1000)
             except Exception as exc:
@@ -1548,6 +1619,8 @@ class FuturesWilliamsRuntime:
             raise RuntimeError(
                 f"{symbol}: position is flat without attributable campaign exit"
             )
+
+        qty = self._full_market_close_qty(symbol, pos_qty)
 
         if campaign.state != CampaignState.EXIT_SIGNALLED:
             campaign.transition(
@@ -1624,21 +1697,13 @@ class FuturesWilliamsRuntime:
 
             verify = self._position(symbol)
             remaining = abs(self._signed_position_qty(verify))
-            if remaining > max(float(os.getenv("MIN_RECOVERY_QTY", "0.000001")), qty * 0.01):
+            if not math.isfinite(remaining) or remaining > 0:
                 self._set_state(symbol, "RECONCILE_REQUIRED")
                 raise RuntimeError(
                     f"{symbol}: Futures exit left residual position {remaining}"
                 )
 
-            protective = int(campaign.tags.get("protective_order_id", "0") or 0)
-            if protective > 0:
-                try:
-                    self._cancel(symbol, protective, "CAMPAIGN_PROTECTION_CANCEL")
-                except Exception as exc:
-                    self._set_state(symbol, "RECONCILE_REQUIRED")
-                    raise RuntimeError(
-                        f"{symbol}: protective order cancellation ambiguous after flat: {exc}"
-                    ) from exc
+            self._cleanup_campaign_protection(campaign)
 
             position_price = float(
                 result.get("avgPrice", 0) or result.get("price", 0) or 0
@@ -1675,7 +1740,7 @@ class FuturesWilliamsRuntime:
                     (
                         position_price / entry - 1.0
                         if campaign.side == "BUY"
-                        else entry / position_price - 1.0
+                        else (entry - position_price) / entry
                     )
                     if entry > 0 and position_price > 0
                     else 0.0
@@ -1796,10 +1861,7 @@ class FuturesWilliamsRuntime:
                     continue
 
                 if status == "FILLED":
-                    if remaining > max(
-                        float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
-                        float(order.get("origQty", 0) or 0) * 0.01,
-                    ):
+                    if not math.isfinite(remaining) or remaining > 0:
                         self._set_state(symbol, "RECONCILE_REQUIRED")
                         campaign.mark_reconcile_required(
                             "exit order filled but position remains"
@@ -1893,7 +1955,7 @@ class FuturesWilliamsRuntime:
                     results.append({"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": "pending order has no campaign"})
                     continue
 
-                order = self.client.get_order(symbol, orig_client_order_id=cid)
+                order = self.client.get_order(symbol, orig_client_order_id=cid, conditional=True)
                 status = str(order.get("status", "")).upper()
                 executed = float(order.get("executedQty", order.get("cumQty", 0)) or 0)
 
@@ -1915,35 +1977,41 @@ class FuturesWilliamsRuntime:
                         raise RuntimeError("expired pending order has no exchange orderId")
                     try:
                         self._cancel(symbol, order_id, "CAMPAIGN_SIGNAL_EXPIRED")
+                        order = self.client.get_order(symbol, orig_client_order_id=cid, conditional=True)
+                        status = str(order.get("status", "")).upper()
+                        executed = float(order.get("executedQty", 0) or 0)
+                        if status not in {"CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "FILLED"}:
+                            raise RuntimeError("expired entry cancellation has no terminal exchange confirmation")
                     except Exception as exc:
                         self._set_pending_signal_state(campaign, SignalState.RECONCILE_REQUIRED)
                         self._set_state(symbol, "RECONCILE_REQUIRED")
                         raise RuntimeError(
                             f"{symbol}: expired conditional order cancellation ambiguous: {exc}"
                         ) from exc
-                    self._set_pending_signal_state(campaign, SignalState.EXPIRED)
-                    self.db.set_campaign_signal_state(
-                        campaign.current_signal_id, SignalState.EXPIRED.value
-                    )
-                    campaign.pending_risk_quote = 0.0
-                    campaign.capital_reserved_quote = 0.0
-                    campaign.tags.pop("pending_order_id", None)
-                    self.db.state_delete(f"entry_client_order_id:{symbol}")
-                    campaign.state = (
-                        CampaignState.TREND_ACTIVE
-                        if campaign.position_qty > 0
-                        else CampaignState.CLOSED
-                    )
-                    self._set_state(symbol, "OPEN" if campaign.position_qty > 0 else "FLAT")
-                    self.db.save_campaign(campaign)
-                    results.append({
-                        "symbol": symbol,
-                        "campaign_id": campaign.campaign_id,
-                        "state": campaign.state.value,
-                        "reason": "SIGNAL_EXPIRED",
-                        "order_status": "CANCELLED",
-                    })
-                    continue
+                    if executed <= 0:
+                        self._set_pending_signal_state(campaign, SignalState.EXPIRED)
+                        self.db.set_campaign_signal_state(
+                            campaign.current_signal_id, SignalState.EXPIRED.value
+                        )
+                        campaign.pending_risk_quote = 0.0
+                        campaign.capital_reserved_quote = 0.0
+                        campaign.tags.pop("pending_order_id", None)
+                        self.db.state_delete(f"entry_client_order_id:{symbol}")
+                        campaign.state = (
+                            CampaignState.TREND_ACTIVE
+                            if campaign.position_qty > 0
+                            else CampaignState.CLOSED
+                        )
+                        self._set_state(symbol, "OPEN" if campaign.position_qty > 0 else "FLAT")
+                        self.db.save_campaign(campaign)
+                        results.append({
+                            "symbol": symbol,
+                            "campaign_id": campaign.campaign_id,
+                            "state": campaign.state.value,
+                            "reason": "SIGNAL_EXPIRED",
+                            "order_status": "CANCELLED",
+                        })
+                        continue
                 avg = float(order.get("avgPrice", 0) or 0)
                 if status in {"NEW", "PENDING_NEW"} and executed <= 0:
                     results.append({"symbol": symbol, "state": "ENTRY_PENDING", "order_status": status})
@@ -1965,7 +2033,13 @@ class FuturesWilliamsRuntime:
                     # campaign reservation.
                     if status == "PARTIALLY_FILLED" and order.get("orderId") is not None:
                         try:
-                            self.client.cancel_order(symbol, order_id=order.get("orderId"))
+                            self._cancel(symbol, order.get("orderId"), "CAMPAIGN_PARTIAL_REMAINDER_CANCEL")
+                            order = self.client.get_order(symbol, orig_client_order_id=cid, conditional=True)
+                            status = str(order.get("status", "")).upper()
+                            if status not in {"CANCELED", "EXPIRED", "FILLED", "EXPIRED_IN_MATCH"}:
+                                raise RuntimeError("partial entry remainder is still active/unknown after cancel")
+                            executed = float(order.get("executedQty", 0) or 0)
+                            avg = float(order.get("avgPrice", 0) or 0)
                         except Exception as exc:
                             self._set_state(symbol, "RECONCILE_REQUIRED")
                             raise RuntimeError(
@@ -1993,7 +2067,7 @@ class FuturesWilliamsRuntime:
                         expected_delta = float(executed)
                         old_qty = float(campaign.position_qty)
                         actual_delta = max(0.0, pos_qty - old_qty)
-                        if actual_delta <= 0 or abs(actual_delta - expected_delta) > max(expected_delta * 0.01, 1e-12):
+                        if actual_delta <= 0 or not math.isclose(actual_delta, expected_delta, rel_tol=1e-12, abs_tol=1e-12):
                             self._set_state(symbol, "RECONCILE_REQUIRED")
                             raise RuntimeError(
                                 f"{symbol}: add-on fill/position mismatch: executed={expected_delta:.12g} "
@@ -2020,8 +2094,8 @@ class FuturesWilliamsRuntime:
                         # reduce-only protective order before exposing the
                         # campaign as fully open again.
                         try:
-                            protective_id = int(campaign.tags.get("protective_order_id", "0") or 0)
-                            if protective_id > 0:
+                            protective_id = str(campaign.tags.get("protective_order_id", "") or "")
+                            if protective_id and protective_id != "0":
                                 # Quantity changed even when the structural stop price
                                 # stays unchanged; replace the stop new-first so the
                                 # enlarged campaign is fully protected.
@@ -2068,7 +2142,7 @@ class FuturesWilliamsRuntime:
                         self._set_state(symbol, "OPEN")
                         campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled and fully reprotected")
                     else:
-                        if abs(pos_qty - float(executed)) > max(float(executed) * 0.01, 1e-12):
+                        if not math.isclose(pos_qty, float(executed), rel_tol=1e-12, abs_tol=1e-12):
                             self._set_state(symbol, "RECONCILE_REQUIRED")
                             raise RuntimeError(
                                 f"{symbol}: initial fill/position mismatch: executed={float(executed):.12g} "
@@ -2195,6 +2269,8 @@ class FuturesWilliamsRuntime:
         if exit_price <= 0:
             return False
 
+        self._cleanup_campaign_protection(campaign)
+
         trade = self.db.open_trade(campaign.symbol)
         if trade is not None:
             entry = float(campaign.average_entry_price or trade.get("entry_price") or 0)
@@ -2207,7 +2283,7 @@ class FuturesWilliamsRuntime:
             pnl_pct = (
                 (exit_price / entry - 1.0)
                 if campaign.side == "BUY" and entry > 0
-                else (entry / exit_price - 1.0)
+                else ((entry - exit_price) / entry)
                 if campaign.side == "SELL" and entry > 0 and exit_price > 0
                 else 0.0
             )
@@ -2241,6 +2317,59 @@ class FuturesWilliamsRuntime:
         self.db.state_delete(f"entry_client_order_id:{campaign.symbol}")
         self._set_state(campaign.symbol, "FLAT")
         return True
+
+    def _cleanup_campaign_protection(self, campaign):
+        """Remove even a lost-response stop, using its durable pre-submit owner."""
+        owned_ids = {str(row["client_order_id"]) for row in self.db.conn.execute(
+            "SELECT client_order_id FROM campaign_orders WHERE campaign_id=? AND purpose IN ('PROTECTION','CAMPAIGN_TRAIL')",
+            (campaign.campaign_id,),
+        ).fetchall() if row["client_order_id"]}
+        for order in self.client.open_orders(campaign.symbol):
+            if str(order.get("clientOrderId", "")) not in owned_ids:
+                continue
+            intent = OrderIntent.new(
+                campaign.symbol, "SELL", "CANCEL", {}, purpose="CAMPAIGN_FLAT_CLEANUP",
+                campaign_id=campaign.campaign_id, client_order_id=self._client_id("CANCEL"),
+            )
+            self._submit(intent, lambda order=order: self.client.cancel_order(campaign.symbol, order_id=order["orderId"]))
+        if any(str(order.get("clientOrderId", "")) in owned_ids for order in self.client.open_orders(campaign.symbol)):
+            raise RuntimeError("campaign protective cleanup is not exchange-confirmed")
+
+    def _protection_matches(self, campaign, order):
+        """Require exact durable ownership, trigger, direction and full coverage."""
+        if (str(order.get("symbol", "")).upper() != campaign.symbol
+                or order.get("positionSide", "BOTH") != "BOTH"
+                or str(order.get("side", "")).upper() != ("SELL" if campaign.side == "BUY" else "BUY")
+                or str(order.get("type", "")).upper() != "STOP_MARKET"
+                or str(order.get("status", "")).upper() != "NEW"):
+            return False
+        cid = str(order.get("clientOrderId", ""))
+        expected = {
+            str(campaign.tags.get("protective_order_client_id", "")): campaign.current_stop_price,
+            str(campaign.tags.get("pending_protection_client_id", "")): campaign.tags.get("pending_protection_price", 0),
+        }
+        if not cid or cid not in expected:
+            return False
+        owner = self.db.conn.execute(
+            "SELECT campaign_id,purpose FROM campaign_orders WHERE client_order_id=? ORDER BY id DESC LIMIT 1",
+            (cid,),
+        ).fetchone()
+        if not owner or str(owner["campaign_id"]) != campaign.campaign_id or str(owner["purpose"]).upper() not in {"PROTECTION", "CAMPAIGN_TRAIL"}:
+            return False
+        try:
+            actual_stop = Decimal(str(order.get("stopPrice", "0")))
+            expected_stop = Decimal(str(expected[cid]))
+            if not actual_stop.is_finite() or actual_stop <= 0 or actual_stop != expected_stop:
+                return False
+            if str(order.get("priceProtect", False)).lower() == "true":
+                return False
+            if str(order.get("closePosition", False)).lower() == "true":
+                return True
+            quantity = Decimal(str(order.get("origQty", "0")))
+            return (str(order.get("reduceOnly", False)).lower() == "true"
+                    and quantity.is_finite() and quantity >= Decimal(str(campaign.position_qty)))
+        except (ValueError, ArithmeticError):
+            return False
 
     def recover(self):
         results = self._reconcile_pending()
@@ -2279,9 +2408,13 @@ class FuturesWilliamsRuntime:
                 orders = self.client.open_orders(symbol)
                 managed = [
                     o for o in orders
-                    if str(o.get("clientOrderId", "")).startswith("WILLF_STOP_")
-                    and str(o.get("type", "")).upper() in {"STOP_MARKET", "STOP_LOSS"}
+                    if self._protection_matches(campaign, o)
                 ]
+                unexpected_stops = [o for o in orders
+                                    if str(o.get("type", "")).upper() in {"STOP", "STOP_MARKET", "STOP_LOSS"}
+                                    and o not in managed]
+                if unexpected_stops:
+                    raise RuntimeError("unverified/mismatched protective stop; refusing adoption or duplicate protection")
                 if len(managed) == 0:
                     self._protect(campaign)
                 elif len(managed) > 1:
@@ -2289,7 +2422,10 @@ class FuturesWilliamsRuntime:
                     continue
                 else:
                     campaign.tags["protective_order_id"] = str(managed[0].get("orderId", ""))
+                    campaign.tags["protective_order_client_id"] = str(managed[0].get("clientOrderId", ""))
                     campaign.current_stop_price = float(managed[0].get("stopPrice", campaign.current_stop_price) or campaign.current_stop_price)
+                    campaign.tags.pop("pending_protection_client_id", None)
+                    campaign.tags.pop("pending_protection_price", None)
                 campaign.reconciliation_state = "CLEAN"
                 campaign.health = "GREEN"
                 self.db.save_campaign(campaign)

@@ -95,9 +95,11 @@ class ExecutionBarrier:
             except Exception:
                 pass
 
-    def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot) -> str:
+    def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot, *, allow_flat_cleanup: bool = False) -> str:
         if intent.created_at_ms:
             age = int(time.time() * 1000) - intent.created_at_ms
+            if age < 0:
+                return f"intent timestamp is in the future age={age}ms"
             if age > intent.max_age_ms:
                 return f"stale intent age={age}ms"
 
@@ -140,7 +142,7 @@ class ExecutionBarrier:
                 if campaign is None:
                     return "campaign_not_found"
                 campaign_state = str(campaign.get("state", "")).upper()
-                if campaign_state == "RECONCILE_REQUIRED":
+                if campaign_state == "RECONCILE_REQUIRED" and not allow_flat_cleanup:
                     return "campaign_reconcile_required"
 
             # Position/reconciliation state is symbol-scoped. The historical
@@ -149,7 +151,7 @@ class ExecutionBarrier:
                 symbol_state = str(
                     self.db.state_get(f"position_state:{intent.symbol}", "FLAT")
                 ).upper()
-                if symbol_state == "RECONCILE_REQUIRED":
+                if symbol_state == "RECONCILE_REQUIRED" and not allow_flat_cleanup:
                     return "RECONCILE_REQUIRED"
 
         return ""
@@ -172,8 +174,12 @@ class ExecutionBarrier:
                 except Exception:
                     pass
             snapshot = self.context_cache.snapshot()
-            reason = self._validate(intent, snapshot)
+            reason = self._validate(intent, snapshot, allow_flat_cleanup=(
+                intent.purpose == "CAMPAIGN_FLAT_CLEANUP" and intent.order_type == "CANCEL"
+                and bool(intent.campaign_id) and pre_submit_checks is not None
+            ))
             if reason:
+                self._persist(intent, "BLOCKED", reason)
                 self._record("WARNING", "execution_blocked", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 

@@ -25,7 +25,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
-VERSION = '4.24.0'
+VERSION = '4.25.0'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
@@ -396,6 +396,10 @@ SCANNER_AUTO_REFRESH_SECONDS = max(
 )
 scanner_watchdog_stop = threading.Event()
 scanner_watchdog_thread = None
+supervisor_stop = threading.Event()
+supervisor_thread = None
+heartbeat_stop = threading.Event()
+heartbeat_thread = None
 
 
 def _scanner_snapshot():

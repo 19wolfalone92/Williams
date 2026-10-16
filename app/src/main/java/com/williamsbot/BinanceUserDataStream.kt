@@ -13,6 +13,7 @@ import java.net.URLEncoder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Binance's migrated USD-M private stream takes multiple event filters separated by "/".
@@ -39,13 +40,18 @@ class BinanceUserDataStream(
     private val endpoint: String,
     private val apiKeyProvider: () -> String,
     private val onConnection: (Boolean, String?) -> Unit,
-    private val onEvent: (JSONObject) -> Unit
+    private val onEvent: (JSONObject) -> Unit,
+    private val webSocketFactory: (Request, WebSocketListener) -> WebSocket = http::newWebSocket
 ) {
     @Volatile private var socket: WebSocket? = null
     @Volatile private var worker: Thread? = null
     @Volatile private var connected = false
     private val stopping = AtomicBoolean(false)
     private val restartRequested = AtomicBoolean(false)
+    private val connectionGeneration = AtomicLong(0L)
+
+    private fun acceptsCallback(generation: Long): Boolean =
+        !stopping.get() && connectionGeneration.get() == generation
 
     fun isConnected(): Boolean = connected
 
@@ -93,6 +99,7 @@ class BinanceUserDataStream(
     fun stop() {
         restartRequested.set(false)
         stopping.set(true)
+        connectionGeneration.incrementAndGet()
         connected = false
         val activeSocket = socket
         socket = null
@@ -106,6 +113,7 @@ class BinanceUserDataStream(
     private fun loop() {
         var delayMs = 1000L
         while (!stopping.get()) {
+            val generation = connectionGeneration.incrementAndGet()
             val closed = CountDownLatch(1)
             val apiKey = apiKeyProvider().trim()
             if (apiKey.isBlank()) {
@@ -117,6 +125,7 @@ class BinanceUserDataStream(
 
             try {
                 val listenKey = createListenKey(apiKey)
+                if (!acceptsCallback(generation)) break
                 check(!endpoint.contains("?")) {
                     "Futures private stream endpoint must be a base path; query parameters are composed locally"
                 }
@@ -125,16 +134,21 @@ class BinanceUserDataStream(
                     "&events=" + EVENT_TYPES
                 val request = Request.Builder().url(streamUrl).build()
 
-                socket = http.newWebSocket(
+                socket = webSocketFactory(
                     request,
                     object : WebSocketListener() {
                         override fun onOpen(webSocket: WebSocket, response: Response) {
+                            if (!acceptsCallback(generation)) {
+                                webSocket.cancel()
+                                return
+                            }
                             connected = true
                             delayMs = 1000L
                             onConnection(true, null)
                         }
 
                         override fun onMessage(webSocket: WebSocket, text: String) {
+                            if (!acceptsCallback(generation)) return
                             val message = runCatching { JSONObject(text) }.getOrNull() ?: return
                             val event = message.optJSONObject("data") ?: message
                             if (event.has("e")) {
@@ -161,6 +175,7 @@ class BinanceUserDataStream(
                                     closed.countDown()
                                 }
                             } else if (message.has("code") || message.has("error")) {
+                                connected = false
                                 onConnection(false, "Futures user stream error: " +
                                     message.optString("msg", message.optString("error", "unknown")))
                                 closed.countDown()
@@ -173,6 +188,7 @@ class BinanceUserDataStream(
                         }
 
                         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                            if (!acceptsCallback(generation)) return
                             connected = false
                             onConnection(false, "closing: " + code + ": " +
                                 (reason.ifBlank { "none" }))
@@ -180,6 +196,7 @@ class BinanceUserDataStream(
                         }
 
                         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                            if (!acceptsCallback(generation)) return
                             connected = false
                             onConnection(false, "closed: " + code + ": " +
                                 (reason.ifBlank { "none" }))
@@ -187,6 +204,7 @@ class BinanceUserDataStream(
                         }
 
                         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                            if (!acceptsCallback(generation)) return
                             connected = false
                             onConnection(false, t.message ?: t.javaClass.simpleName)
                             closed.countDown()
@@ -210,9 +228,13 @@ class BinanceUserDataStream(
                 connected = false
                 onConnection(false, failure.message ?: failure.javaClass.simpleName)
             } finally {
+                // Invalidate callbacks before closing. Old onClosed/onFailure events
+                // must not overwrite a later socket's readiness or deliver stale fills.
+                connectionGeneration.compareAndSet(generation, generation + 1L)
                 socket?.close(1000, "Futures user stream reconnect")
                 socket = null
                 connected = false
+                if (!stopping.get()) onConnection(false, "reconnecting")
             }
 
             if (stopping.get()) break

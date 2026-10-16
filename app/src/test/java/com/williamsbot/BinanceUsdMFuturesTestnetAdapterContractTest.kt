@@ -16,6 +16,68 @@ import org.junit.Test
 
 class BinanceUsdMFuturesTestnetAdapterContractTest {
     @Test
+    fun timestampTextInAnUnrelatedErrorNeverAuthorizesMutationReplay() {
+        var posts = 0
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            val body = when (request.url.encodedPath) {
+                "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
+                else -> {
+                    posts++
+                    """{"code":-1000,"msg":"upstream mentions -1021 but execution is unknown"}"""
+                }
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(if (request.url.encodedPath == "/fapi/v1/order") 503 else 200)
+                .message("test").body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            BinanceUsdMFuturesTestnetAdapter("key", "secret", http)
+                .newOrder("BTCUSDT", "BUY", "0.01", false, "timestamp_text")
+            throw AssertionError("ambiguous order must fail")
+        } catch (expected: FuturesHttpException) {
+            assertEquals(-1000, expected.exchangeCode)
+        }
+        assertEquals(1, posts)
+    }
+
+    @Test
+    fun explicitTimestampRejectionMayBeResynchronizedAndRetriedOnce() {
+        var posts = 0
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            val body = when (request.url.encodedPath) {
+                "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
+                else -> {
+                    posts++
+                    if (posts == 1) """{"code":-1021,"msg":"timestamp rejected"}"""
+                    else """{"orderId":7,"status":"FILLED"}"""
+                }
+            }
+            val rejected = request.url.encodedPath == "/fapi/v1/order" && posts == 1
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(if (rejected) 400 else 200).message("test")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val result = BinanceUsdMFuturesTestnetAdapter("key", "secret", http)
+            .newOrder("BTCUSDT", "BUY", "0.01", false, "timestamp_retry")
+        assertEquals(7L, result.getLong("orderId"))
+        assertEquals(2, posts)
+    }
+
+    @Test(expected = FuturesHttpException::class)
+    fun negativeExchangeCodeInsideHttp200IsStillAFailure() {
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body("""{"code":-2015,"msg":"rejected"}""".toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        BinanceUsdMFuturesTestnetAdapter("key", "secret", http).account()
+    }
+
+    @Test
     fun approvedUniverseIsExactlyTheRequiredTenUsdtContracts() {
         assertEquals(
             setOf(

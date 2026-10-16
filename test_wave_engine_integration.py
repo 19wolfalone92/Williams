@@ -73,6 +73,7 @@ def make_report(htf_confirmed=True, wave_score=90.0):
         nested_w3_count=1,
         wave_path="4h:W5 > 1h:W3",
         htf_confirmed=htf_confirmed,
+        entry_allowed=htf_confirmed,
         setup_position=3,
         setup_phase="IMPULSE",
         reason="nested W3 inside parent W5 detected - W5 context is not a veto",
