@@ -93,6 +93,25 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         return value
     }
 
+    /**
+     * Last traded USD-M Futures contract price. The standard /fapi/v1/klines
+     * series is based on traded contract prices, not MARK_PRICE; all Williams
+     * conditional ENTRY triggers must use the same CONTRACT_PRICE reference.
+     * Protective close-all stops deliberately stay on MARK_PRICE for safety.
+     */
+    fun contractPrice(symbol: String): Double {
+        requireSymbol(symbol)
+        val body = requestRaw(
+            "GET", "/fapi/v2/ticker/price", mapOf("symbol" to symbol), signed = false
+        )
+        val value = JSONObject(body).optString("price").toDoubleOrNull()
+            ?: throw IOException("Futures contract ticker response is malformed")
+        if (!value.isFinite() || value <= 0.0) {
+            throw IOException("Futures contract price is invalid")
+        }
+        return value
+    }
+
     fun klines(symbol: String, interval: String = "1h", limit: Int = 300): JSONArray {
         requireSymbol(symbol)
         require(interval in APPROVED_FUTURES_KLINE_INTERVALS) { "Unsupported USD-M Futures kline interval: $interval" }
@@ -411,12 +430,12 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         require(qty.signum() > 0 && trigger.signum() > 0)
         require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
         requireOneWayMode()
-        val mark = java.math.BigDecimal.valueOf(markPrice(symbol))
+        val contract = java.math.BigDecimal.valueOf(contractPrice(symbol))
         val isBuy = direction == "LONG"
         val shouldTriggerAbove = (triggerType == "STOP" && isBuy) ||
             (triggerType == "TAKE_PROFIT" && !isBuy)
-        require(if (shouldTriggerAbove) trigger > mark else trigger < mark) {
-            "Conditional entry trigger is on the wrong side of the current mark price"
+        require(if (shouldTriggerAbove) trigger > contract else trigger < contract) {
+            "Conditional entry trigger is on the wrong side of the current contract price"
         }
         val exchangeType = when (triggerType) {
             "STOP" -> "STOP_MARKET"
@@ -430,7 +449,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             "type" to exchangeType,
             "quantity" to qty.stripTrailingZeros().toPlainString(),
             "triggerPrice" to trigger.stripTrailingZeros().toPlainString(),
-            "workingType" to "MARK_PRICE",
+            "workingType" to "CONTRACT_PRICE",
             "clientAlgoId" to clientOrderId
         )
         return JSONObject(requestRaw("POST", "/fapi/v1/algoOrder", params, signed = true))
