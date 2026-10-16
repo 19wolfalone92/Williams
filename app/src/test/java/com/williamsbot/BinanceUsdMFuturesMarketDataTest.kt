@@ -162,6 +162,46 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
+    fun marketDataRetriesTransientServerFailuresButOnlyAsSafeGets() {
+        var attempts = 0
+        val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            attempts++
+            val code = if (attempts == 1) 503 else 200
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(code)
+                .message(if (code == 200) "OK" else "Service Unavailable")
+                .body("[]".toResponseBody("application/json".toMediaType()))
+                .build()
+        }).build()
+
+        assertEquals(0, BinanceUsdMFuturesMarketData(client).ticker24h().length())
+        assertEquals(2, attempts)
+    }
+
+    @Test(expected = java.io.IOException::class)
+    fun marketDataDoesNotRetryRateLimitResponses() {
+        var attempts = 0
+        val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            attempts++
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(429)
+                .message("Too Many Requests")
+                .body("""{"code":-1003,"msg":"rate limited"}""".toResponseBody("application/json".toMediaType()))
+                .build()
+        }).build()
+
+        try {
+            BinanceUsdMFuturesMarketData(client).ticker24h()
+        } finally {
+            assertEquals(1, attempts)
+        }
+    }
+
+    @Test
     fun topOfBookReadsFreshUsdMFuturesBidAskForSelectedSymbol() {
         var capturedUrl = ""
         val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
