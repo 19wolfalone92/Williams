@@ -2760,7 +2760,7 @@ private class NativeEngine(
         val syncStartedAtMs = System.currentTimeMillis()
         val remote =
             JSONObject(
-                getBody("/api/v3/time")
+                getBody("/fapi/v1/time")
             ).optLong("serverTime", 0L)
 
         if (remote <= 0L) {
@@ -2776,25 +2776,10 @@ private class NativeEngine(
     }
 
     private fun getBody(path: String): String {
-        // Public market reads must use USD-M Futures even when legacy callers
-        // still pass a Spot-shaped route. No signed/order route is translated here.
-        val futuresPath = when {
-            path.startsWith("/api/v3/depth") -> path.replaceFirst("/api/v3/depth", "/fapi/v1/depth")
-            path.startsWith("/api/v3/ticker/24hr") -> path.replaceFirst("/api/v3/ticker/24hr", "/fapi/v1/ticker/24hr")
-            path.startsWith("/api/v3/ticker/bookTicker") -> path.replaceFirst("/api/v3/ticker/bookTicker", "/fapi/v1/ticker/bookTicker")
-            path.startsWith("/api/v3/ticker/price") -> path.replaceFirst("/api/v3/ticker/price", "/fapi/v1/ticker/price")
-            path.startsWith("/api/v3/avgPrice") -> path.replaceFirst("/api/v3/avgPrice", "/fapi/v1/avgPrice")
-            path.startsWith("/api/v3/exchangeInfo") -> path.replaceFirst("/api/v3/exchangeInfo", "/fapi/v1/exchangeInfo")
-            path.startsWith("/api/v3/time") -> path.replaceFirst("/api/v3/time", "/fapi/v1/time")
-            path.startsWith("/fapi/v1/") || path.startsWith("/fapi/v2/") -> path
-            path.startsWith("/api/v3/") -> error("SECURITY_BLOCK: unsupported Spot-shaped public route in Futures runtime: $path")
-            else -> path
-        }
-        val requestUrl = if (path.startsWith("/api/v3/") || path.startsWith("/fapi/")) {
-            "https://demo-fapi.binance.com" + futuresPath
-        } else {
-            baseUrl + path
-        }
+        // Public market data is strictly allow-listed and always goes to USD-M Futures Demo.
+        // Spot-shaped aliases are rejected instead of silently translated.
+        val futuresPath = normalizeFuturesPublicPath(path)
+        val requestUrl = "https://demo-fapi.binance.com" + futuresPath
         // GET market-data calls are idempotent. Testnet can transiently return
         // 5xx/502 responses, so retry only safe reads; never retry mutations.
         var lastCode = 0
@@ -2832,8 +2817,7 @@ private class NativeEngine(
     }
 
     private fun signedAccount(): JSONObject =
-        // USD-M Futures account endpoint. A Spot-shaped /api/v3/account route is
-        // rejected by signedRequest's Futures-only boundary and breaks account refresh.
+        // USD-M Futures account endpoint; signed mutations are owned by the Futures adapter.
         signedRequest(
             method = "GET",
             path = "/fapi/v3/account",
@@ -3285,7 +3269,7 @@ private class NativeEngine(
 
     private fun syncOrderBookSnapshot(symbol: String) {
         val book = JSONObject(
-            getBody("/api/v3/depth?symbol=" + symbol + "&limit=100")
+            getBody("/fapi/v1/depth?symbol=" + symbol + "&limit=100")
         )
         orderBookCache.seed(symbol, book)
     }
@@ -4142,7 +4126,7 @@ private class NativeEngine(
     private fun campaignBaseBalance(symbol: String, account: JSONObject? = null): Double {
         val a = account ?: signedAccount()
         val info = JSONObject(
-            getBody("/api/v3/exchangeInfo?symbol=" + symbol)
+            getBody("/fapi/v1/exchangeInfo?symbol=" + symbol)
         )
         val asset = info.optJSONArray("symbols")
             ?.optJSONObject(0)
@@ -6718,7 +6702,7 @@ private class NativeEngine(
         for (open in positionList()) {
             runCatching {
                 val mark = JSONObject(
-                    getBody("/api/v3/ticker/price?symbol=" + open.symbol)
+                    getBody("/fapi/v1/ticker/price?symbol=" + open.symbol)
                 ).optString("price").toDoubleOrNull() ?: 0.0
                 TradeJournal.updateExcursion(prefs, open.symbol, mark)
             }
@@ -8390,7 +8374,7 @@ private class NativeEngine(
 
         val refPrice = runCatching {
             JSONObject(
-                getBody("/api/v3/avgPrice?symbol=" + symbol)
+                getBody("/fapi/v1/avgPrice?symbol=" + symbol)
             ).optString("price").toDoubleOrNull()
         }.getOrNull()?.takeIf { it > 0.0 } ?: return
 
@@ -8514,7 +8498,7 @@ private class NativeEngine(
         orderBookCache.estimateBuy(symbol, quoteNotional)?.let { return it }
 
         val book = JSONObject(
-            getBody("/api/v3/depth?symbol=" + symbol + "&limit=100")
+            getBody("/fapi/v1/depth?symbol=" + symbol + "&limit=100")
         )
         val asks = book.optJSONArray("asks")
             ?: error("Order book has no asks for $symbol")
@@ -8749,7 +8733,7 @@ private class NativeEngine(
         if (rules.maxPosition.isFinite()) {
             val referencePrice = runCatching {
                 JSONObject(
-                    getBody("/api/v3/ticker/price?symbol=" + candidate.symbol)
+                    getBody("/fapi/v1/ticker/price?symbol=" + candidate.symbol)
                 ).optString("price").toDoubleOrNull()
             }.getOrNull() ?: 0.0
 
@@ -8779,7 +8763,7 @@ private class NativeEngine(
                 val ticker =
                     JSONObject(
                         getBody(
-                            "/api/v3/ticker/price?symbol=" +
+                            "/fapi/v1/ticker/price?symbol=" +
                                 candidate.symbol
                         )
                     )
@@ -8841,7 +8825,7 @@ private class NativeEngine(
                 runCatching {
                     JSONObject(
                         getBody(
-                            "/api/v3/ticker/bookTicker?symbol=" +
+                            "/fapi/v1/ticker/bookTicker?symbol=" +
                                 candidate.symbol
                         )
                     )
