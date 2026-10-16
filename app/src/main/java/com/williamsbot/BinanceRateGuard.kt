@@ -32,35 +32,61 @@ class BinanceRateGuard {
     private val minGapMs = 50L
 
     fun beforeRequest(isOrder: Boolean = false) {
+        if (Thread.currentThread().isInterrupted) {
+            throw IllegalStateException(
+                "Binance REST request interrupted before rate-limit scheduling; request was not sent"
+            )
+        }
+        // Compute the pressure delay once per request. Reapplying it on every
+        // sleep-loop iteration would keep pushing the target forward forever
+        // whenever the usage counter stayed above the threshold.
+        var targetMs = synchronized(lock) {
+            val now = System.currentTimeMillis()
+            val pressure = when {
+                isOrder &&
+                    orderLimit10s > 0 &&
+                    orderCount10s >= orderLimit10s * 0.96 -> 1000L
+                isOrder &&
+                    orderLimit10s > 0 &&
+                    orderCount10s >= orderLimit10s * 0.90 -> 250L
+                isOrder &&
+                    orderLimit1m > 0 &&
+                    orderCount1m >= orderLimit1m * 0.95 -> 1000L
+                requestWeightLimit1m > 0 &&
+                    usedWeight1m >= requestWeightLimit1m * 0.98 -> 1000L
+                requestWeightLimit1m > 0 &&
+                    usedWeight1m >= requestWeightLimit1m * 0.90 -> 250L
+                else -> 0L
+            }
+            val candidate = max(
+                now + pressure,
+                max(nextRequestAtMs, cooldownUntilMs)
+            )
+            nextRequestAtMs = candidate + minGapMs
+            candidate
+        }
+
         while (true) {
             val now = System.currentTimeMillis()
             val scheduled = synchronized(lock) {
-                val pressure = when {
-                    isOrder &&
-                        orderLimit10s > 0 &&
-                        orderCount10s >= orderLimit10s * 0.96 -> 1000L
-                    isOrder &&
-                        orderLimit10s > 0 &&
-                        orderCount10s >= orderLimit10s * 0.90 -> 250L
-                    isOrder &&
-                        orderLimit1m > 0 &&
-                        orderCount1m >= orderLimit1m * 0.95 -> 1000L
-                    requestWeightLimit1m > 0 &&
-                        usedWeight1m >= requestWeightLimit1m * 0.98 -> 1000L
-                    requestWeightLimit1m > 0 &&
-                        usedWeight1m >= requestWeightLimit1m * 0.90 -> 250L
-                    else -> 0L
+                // Another request may have received 418/429 while this caller
+                // was waiting. Honor the extended cooldown without reapplying
+                // pressure to this request's already-reserved target.
+                if (cooldownUntilMs > targetMs) {
+                    targetMs = cooldownUntilMs
+                    nextRequestAtMs = max(nextRequestAtMs, targetMs + minGapMs)
                 }
-                val candidate = max(
-                    now,
-                    max(nextRequestAtMs, cooldownUntilMs) + pressure
-                )
-                nextRequestAtMs = candidate + minGapMs
-                candidate
+                targetMs
             }
-
             val waitMs = scheduled - now
-            if (waitMs <= 0L) return
+            if (waitMs <= 0L) {
+                if (Thread.currentThread().isInterrupted) {
+                    throw IllegalStateException(
+                        "Binance REST request interrupted while waiting for rate-limit governor; request was not sent"
+                    )
+                }
+                return
+            }
             try {
                 Thread.sleep(waitMs.coerceAtMost(5000L))
             } catch (interrupted: InterruptedException) {
