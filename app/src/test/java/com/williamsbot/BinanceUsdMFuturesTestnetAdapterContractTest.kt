@@ -288,6 +288,30 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals(3L, guard.orderCount10s)
     }
 
+    @Test
+    fun contractPriceRejectsMismatchedAndStaleMarketSnapshotsBeforeOrderMutation() {
+        val now = 1_800_000_000_000L
+        val fresh = JSONObject().put("symbol", "BTCUSDT").put("price", "99.50")
+            .put("time", now - 2_000L)
+        assertEquals(99.5, parseFreshContractTickerPrice(fresh, "BTCUSDT", now), 0.0)
+        val malformed = listOf(
+            JSONObject(fresh.toString()).put("symbol", "ETHUSDT"),
+            JSONObject(fresh.toString()).put("time", now - 61_000L),
+            JSONObject(fresh.toString()).put("time", now + 6_000L),
+            JSONObject(fresh.toString()).remove("time"),
+            JSONObject(fresh.toString()).put("price", "-0.01"),
+            JSONObject(fresh.toString()).put("price", "NaN")
+        )
+        for (bad in malformed) {
+            try {
+                parseFreshContractTickerPrice(bad, "BTCUSDT", now)
+                throw AssertionError("Unsafe Futures last-price snapshot accepted: $bad")
+            } catch (expected: java.io.IOException) {
+                // Fail closed before STOP submission / opposite signal decision.
+            }
+        }
+    }
+
     private fun testAdapter(captured: MutableList<Request>): BinanceUsdMFuturesTestnetAdapter {
         val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
             val request = chain.request()
@@ -296,7 +320,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
                 "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
                 "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
                 "/fapi/v1/premiumIndex" -> """{"symbol":"BTCUSDT","markPrice":"100"}"""
-                "/fapi/v2/ticker/price" -> """{"symbol":"BTCUSDT","price":"100"}"""
+                "/fapi/v2/ticker/price" -> """{"symbol":"BTCUSDT","price":"100","time":${System.currentTimeMillis()}}"""
                 "/fapi/v1/algoOrder" -> """{"algoId":1,"algoStatus":"NEW","orderType":"STOP_MARKET"}"""
                 else -> "{}"
             }
