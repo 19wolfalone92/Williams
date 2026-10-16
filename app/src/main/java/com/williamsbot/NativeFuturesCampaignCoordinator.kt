@@ -713,6 +713,19 @@ internal class NativeFuturesCampaignCoordinator(
         if (isDefinitiveBinanceOrderNotFound(failure)) null else throw failure
     }
 
+    /** Record failures that happen before reconcile() is entered (for example, a busy or unpersisted Execution Door lease). */
+    fun recordReconciliationBlocker(reason: String): JSONObject = synchronized(lock) {
+        val safeReason = reason.trim().take(500).ifBlank { "reconciliation_blocked_before_exchange_snapshot" }
+        state = State.RECONCILE_REQUIRED
+        lastBlocker = safeReason
+        JSONObject()
+            .put("ok", false)
+            .put("engine", "USD_M_FUTURES_TESTNET")
+            .put("state", state.name)
+            .put("blocker", lastBlocker)
+            .put("reconciliation_started", false)
+    }
+
     fun reconcile(): JSONObject = synchronized(lock) {
         state = State.RECONCILE_REQUIRED
         lastBlocker = "exchange_reconciliation_in_progress"
