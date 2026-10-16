@@ -97,8 +97,7 @@ class BinanceFuturesClient:
             or path.startswith("//")
             or "?" in path
             or "#" in path
-            or "\\r" in path
-            or "\\n" in path
+            or any(ord(char) < 32 for char in path)
             or "\\\\" in path
         ):
             raise ValueError(
