@@ -6218,29 +6218,17 @@ private class NativeEngine(
      * callers must still reconcile when the response is ambiguous.
      */
     private fun signedCancelReplace(
-        symbol: String,
-        cancelOrderId: Long,
-        side: String,
-        type: String,
-        quantity: String? = null,
-        price: String? = null,
-        stopPrice: String? = null,
-        timeInForce: String? = null,
-        newClientOrderId: String? = null
+        @Suppress("UNUSED_PARAMETER") symbol: String,
+        @Suppress("UNUSED_PARAMETER") cancelOrderId: Long,
+        @Suppress("UNUSED_PARAMETER") side: String,
+        @Suppress("UNUSED_PARAMETER") type: String,
+        @Suppress("UNUSED_PARAMETER") quantity: String? = null,
+        @Suppress("UNUSED_PARAMETER") price: String? = null,
+        @Suppress("UNUSED_PARAMETER") stopPrice: String? = null,
+        @Suppress("UNUSED_PARAMETER") timeInForce: String? = null,
+        @Suppress("UNUSED_PARAMETER") newClientOrderId: String? = null
     ): JSONObject {
-        val params = StringBuilder()
-            .append("symbol=").append(symbol)
-            .append("&cancelReplaceMode=STOP_ON_FAILURE")
-            .append("&cancelOrderId=").append(cancelOrderId)
-            .append("&side=").append(side)
-            .append("&type=").append(type)
-            .append("&newOrderRespType=FULL")
-        if (!quantity.isNullOrBlank()) params.append("&quantity=").append(quantity)
-        if (!price.isNullOrBlank()) params.append("&price=").append(price)
-        if (!stopPrice.isNullOrBlank()) params.append("&stopPrice=").append(stopPrice)
-        if (!timeInForce.isNullOrBlank()) params.append("&timeInForce=").append(timeInForce)
-        if (!newClientOrderId.isNullOrBlank()) params.append("&newClientOrderId=").append(newClientOrderId)
-        return signedPost("/api/v3/order/cancelReplace", params.toString())
+        error("Legacy cancel-replace is disabled; use the Futures coordinator and Algo Order API")
     }
 
     /**
@@ -6473,62 +6461,10 @@ private class NativeEngine(
     }
 
     private fun checkOcoCapacity(
-        symbol: String,
-        rules: SymbolRules
+        @Suppress("UNUSED_PARAMETER") symbol: String,
+        @Suppress("UNUSED_PARAMETER") rules: SymbolRules
     ) {
-        val openOrders = runCatching {
-            val response = signedGet(
-                "/api/v3/openOrders",
-                "symbol=" + symbol
-            )
-            response.optJSONArray("orders")
-                ?: if (response.has("symbol")) {
-                    JSONArray().put(response)
-                } else JSONArray()
-        }.getOrElse {
-            throw IllegalStateException(
-                "Cannot verify open orders for " + symbol + ": " +
-                    (it.message ?: it.javaClass.simpleName),
-                it
-            )
-        }
-
-        val openLists = runCatching {
-            signedGet("/api/v3/openOrderList", "")
-                .let {
-                    it.optJSONArray("orderList")
-                        ?: it.optJSONArray("ordersLists")
-                        ?: it.optJSONArray("orderLists")
-                        ?: JSONArray()
-                }
-        }.getOrElse {
-            throw IllegalStateException(
-                "Cannot verify open order lists: " +
-                    (it.message ?: it.javaClass.simpleName),
-                it
-            )
-        }
-
-        require(openOrders.length() + 2 <= rules.maxNumOrders) {
-            "Binance MAX_NUM_ORDERS would be exceeded"
-        }
-
-        val algoCount = (0 until openOrders.length()).count { i ->
-            val type = openOrders.optJSONObject(i)
-                ?.optString("type")
-                ?.uppercase(Locale.US)
-                ?: ""
-            type.contains("STOP") || type.contains("TAKE_PROFIT")
-        }
-
-        // One OCO contains one conditional leg; keep a conservative margin.
-        require(algoCount + 1 <= rules.maxNumAlgoOrders) {
-            "Binance MAX_NUM_ALGO_ORDERS would be exceeded"
-        }
-
-        require(openLists.length() + 1 <= rules.maxNumOrderLists) {
-            "Binance MAX_NUM_ORDER_LISTS would be exceeded"
-        }
+        error("Legacy Spot OCO capacity checks are disabled; Futures coordinator owns order limits")
     }
 
     private data class Protection(
@@ -6626,156 +6562,13 @@ private class NativeEngine(
     }
 
     private fun createProtection(
-        symbol: String,
-        qty: Double,
-        entry: Double,
-        stopDistance: Double
+        @Suppress("UNUSED_PARAMETER") symbol: String,
+        @Suppress("UNUSED_PARAMETER") qty: Double,
+        @Suppress("UNUSED_PARAMETER") entry: Double,
+        @Suppress("UNUSED_PARAMETER") stopDistance: Double
     ): Protection {
-        val rules = symbolFilters(symbol)
-
-        if (!rules.ocoAllowed) {
-            error(
-                "OCO is not supported for " +
-                    symbol
-            )
-        }
-
-        val normalizedQty =
-            floorStep(qty, rules.step)
-
-        val maxQty = min(
-            rules.maxQty,
-            if (rules.marketMaxQty.isFinite()) rules.marketMaxQty else rules.maxQty
-        )
-        val minQty = max(rules.minQty, rules.marketMinQty)
-        if (normalizedQty < minQty) {
-            error("Filled quantity is below Binance minimum")
-        }
-        if (maxQty.isFinite() && normalizedQty > maxQty) {
-            error("Filled quantity is above Binance maximum")
-        }
-
-        checkOcoCapacity(symbol, rules)
-
-        val stop =
-            fmtPrice(
-                entry * (1.0 - stopDistance),
-                rules.tick
-            ).toDouble()
-
-        val take =
-            fmtPrice(
-                entry *
-                    (1.0 + stopDistance * 4.0),
-                rules.tick
-            ).toDouble()
-
-        val takeLimit =
-            fmtPrice(
-                take - rules.tick,
-                rules.tick
-            ).toDouble()
-
-        val stopLimit =
-            fmtPrice(
-                stop * 0.999,
-                rules.tick
-            ).toDouble()
-
-        if (
-            stop >= entry ||
-            take <= entry ||
-            takeLimit <= entry ||
-            takeLimit <= stop
-        ) {
-            error("Invalid TP/SL relationship")
-        }
-
-        validateLimitPrice(symbol, "SELL", takeLimit, rules)
-        validateLimitPrice(symbol, "SELL", take, rules)
-        validateLimitPrice(symbol, "SELL", stop, rules)
-        validateLimitPrice(symbol, "SELL", stopLimit, rules)
-
-        val notional = normalizedQty * entry
-        if (rules.minNotional > 0.0 && notional < rules.minNotional) {
-            error("OCO notional below Binance minimum")
-        }
-        if (rules.maxNotional.isFinite() && notional > rules.maxNotional) {
-            error("OCO notional above Binance maximum")
-        }
-
-        val ocoClientId =
-            "W4O_" +
-                java.util.UUID.randomUUID()
-                    .toString()
-                    .replace("-", "")
-                    .take(28)
-
-        val oco =
-            signedPost(
-                "/api/v3/orderList/oco",
-                "symbol=" + symbol +
-                    "&side=SELL" +
-                    "&quantity=" +
-                    fmtQty(
-                        normalizedQty,
-                        rules.decimals
-                    ) +
-                    "&aboveType=TAKE_PROFIT_LIMIT" +
-                    "&abovePrice=" +
-                    fmtPrice(
-                        takeLimit,
-                        rules.tick
-                    ) +
-                    "&aboveStopPrice=" +
-                    fmtPrice(
-                        take,
-                        rules.tick
-                    ) +
-                    "&aboveTimeInForce=GTC" +
-                    "&belowType=STOP_LOSS_LIMIT" +
-                    "&belowStopPrice=" +
-                    fmtPrice(
-                        stop,
-                        rules.tick
-                    ) +
-                    "&belowPrice=" +
-                    fmtPrice(
-                        stopLimit,
-                        rules.tick
-                    ) +
-                    "&belowTimeInForce=GTC" +
-                    "&newOrderRespType=FULL" +
-                    "&listClientOrderId=" +
-                    ocoClientId
-            )
-
-        val actualStopDistance =
-            ((entry - stop) / entry)
-                .coerceIn(0.0, 1.0)
-
-        val actualOcoClientId =
-            oco.optString("listClientOrderId")
-                .ifBlank { ocoClientId }
-        val actualOcoListId =
-            oco.optString("orderListId").ifBlank {
-                error("Binance OCO response has no orderListId")
-            }
-
-        return Protection(
-            qty = normalizedQty,
-            stop = stop,
-            take = take,
-            riskPct =
-                actualStopDistance +
-                    feeBufferPerSidePct * 2.0 +
-                    maxSlippagePct,
-            ocoClientId = actualOcoClientId,
-            ocoListId = actualOcoListId
-        )
+        error("Legacy Spot OCO protection is disabled; use Futures Algo Order protection")
     }
-
-    fun sell(symbolInput: String): JSONObject = sellFuturesPosition(symbolInput)
 
     private fun signedDelete(
         path: String,
