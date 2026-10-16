@@ -647,7 +647,9 @@ internal class NativeFuturesCampaignCoordinator(
         val entryPrice: String,
         val protectiveStop: String,
         val clientId: String,
-        val riskPct: Double
+        val riskPct: Double,
+        val signalType: String = "",
+        val signalBarTimeMs: Long = 0L
     )
 
     @Volatile var state: State = State.UNINITIALIZED
@@ -1908,6 +1910,8 @@ internal class NativeFuturesCampaignCoordinator(
             .put("symbol", plan.symbol)
             .put("direction", plan.direction.name)
             .put("kind", plan.kind.name)
+            .put("signal_type", plan.signalType)
+            .put("signal_bar_time_ms", plan.signalBarTimeMs)
             .put("quantity", plan.quantity)
             .put("entry_price", plan.entryPrice)
             .put("protective_stop", plan.protectiveStop)
