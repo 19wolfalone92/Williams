@@ -21,4 +21,16 @@ class DailyRiskBaselineTest {
         assertFalse(canInitializeDailyRiskBaseline(false, false, true))
         assertFalse(canInitializeDailyRiskBaseline(true, true, true))
     }
+
+    @Test
+    fun baselineSourceRepairRequiresAnExistingValidPersistedBaseline() {
+        assertTrue(canRepairDailyRiskBaselineSource("5000.00", null))
+        assertTrue(canRepairDailyRiskBaselineSource("5000.00", "UNKNOWN"))
+        assertTrue(canRepairDailyRiskBaselineSource("5000.00", "null"))
+        assertFalse(canRepairDailyRiskBaselineSource(null, null))
+        assertFalse(canRepairDailyRiskBaselineSource("0", "UNKNOWN"))
+        assertFalse(canRepairDailyRiskBaselineSource("-1", "UNKNOWN"))
+        assertFalse(canRepairDailyRiskBaselineSource("NaN", "UNKNOWN"))
+        assertFalse(canRepairDailyRiskBaselineSource("5000", "EXCHANGE_ACCOUNT_SNAPSHOT"))
+    }
 }
