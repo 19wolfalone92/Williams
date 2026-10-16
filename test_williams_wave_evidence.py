@@ -82,3 +82,14 @@ def test_missing_bars_never_forces_signals_or_future_confirmation():
     assert evidence["ao_divergence"]["status"] == "INSUFFICIENT_AO"
     assert evidence["impulse"]["status"] == "INCOMPLETE"
     assert evidence["can_place_orders"] is False
+
+
+def test_bearish_divergence_persists_when_current_direction_turns_down():
+    pts = pivots([100, 110, 104, 112], "UP")
+    ao = [0.0] * 40
+    ao[7], ao[17] = 4.2, 2.4
+    evidence = collect_visual_wave_evidence(pts, ao, "DOWN")
+    assert evidence["ao_divergence"]["divergence"] == "NONE"
+    assert evidence["ao_divergence_bearish"]["divergence"] == "BEARISH"
+    assert evidence["impulse_up"]["status"] == "INCOMPLETE"
+    assert evidence["can_place_orders"] is False
