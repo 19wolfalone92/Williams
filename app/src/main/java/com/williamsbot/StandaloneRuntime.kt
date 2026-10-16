@@ -248,6 +248,38 @@ internal fun runtimeRecoveryContract(
     running == workerAlive &&
         (!autoRunRequested || (running && workerAlive))
 
+/**
+ * Cross-check independent readiness claims before diagnostics report an overall state.
+ * A mismatch is evidence of an inconsistent snapshot, never permission to enable execution.
+ */
+internal fun diagnosticConsistencyFindings(
+    coordinatorState: String,
+    coordinatorReady: Boolean,
+    coordinatorBlocker: String,
+    runtimeState: String,
+    runtimeReconcileRequired: Boolean,
+    executionEnabled: Boolean,
+    dailyRiskBaselineSource: String,
+    reconciliationRunning: Boolean
+): List<String> = buildList {
+    if (coordinatorState == "RECONCILE_REQUIRED" && runtimeState != "RECONCILE_REQUIRED") {
+        add("STATE_MISMATCH: coordinator requires reconciliation but runtime state is $runtimeState")
+    }
+    if (!coordinatorReady && executionEnabled) {
+        add("GATE_CONTRADICTION: execution enabled while campaign coordinator is not ready")
+    }
+    if (coordinatorState == "RECONCILE_REQUIRED" &&
+        coordinatorBlocker == "exchange_reconciliation_in_progress" && !reconciliationRunning) {
+        add("RECONCILIATION_STALE_BLOCKER: coordinator reports reconciliation in progress but no reconciliation task is running")
+    }
+    if (runtimeReconcileRequired && executionEnabled) {
+        add("SAFETY_CONTRADICTION: execution enabled while reconcile_required is latched")
+    }
+    if (dailyRiskBaselineSource.equals("UNKNOWN", ignoreCase = true) && executionEnabled) {
+        add("RISK_BASELINE_UNKNOWN: execution enabled without a known UTC daily-risk baseline")
+    }
+}
+
 /** Diagnostic severity must not call a stopped monitor healthy just because both flags are false. */
 internal fun runtimeLifecycleSeverity(
     autoRunRequested: Boolean,
@@ -11030,7 +11062,10 @@ private class NativeEngine(
                 )
         )
 
-    private fun diagnosticSelfTests(): JSONArray {
+    private fun diagnosticSelfTests(
+        statusSnapshot: JSONObject,
+        coordinatorSnapshot: JSONObject
+    ): JSONArray {
         val tests = JSONArray()
         fun test(name: String, domain: String, ok: Boolean, failureSeverity: String, detail: String) {
             tests.put(
@@ -11046,6 +11081,35 @@ private class NativeEngine(
         test("futures_execution_adapter", "binance", futuresExecutionAdapterReady, "FAIL", "Native USD-M Futures adapter and local coordinator wired; readiness still depends on live exchange reconciliation")
         test("local_runtime_dispatch", "runtime", true, "FAIL", "Cockpit commands dispatch in-process; no remote backend or unauthenticated loopback listener")
         test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(","))
+        val coordinatorState = coordinatorSnapshot.optString("state", "UNKNOWN")
+        val coordinatorReady = coordinatorSnapshot.optBoolean("ready_for_new_entry", false)
+        val coordinatorBlocker = coordinatorSnapshot.optString("blocker", "")
+        val runtimeState = statusSnapshot.optJSONObject("execution_state_contract")
+            ?.optString("state", statusSnapshot.optString("state", "UNKNOWN")) ?: "UNKNOWN"
+        val dailyBaselineSource = statusSnapshot.optString("daily_risk_baseline_source", "UNKNOWN")
+        val reconciliationRunning = statusSnapshot.optBoolean("futures_reconciliation_in_progress", false)
+        val consistencyFindings = diagnosticConsistencyFindings(
+            coordinatorState, coordinatorReady, coordinatorBlocker, runtimeState,
+            statusSnapshot.optBoolean("reconcile_required", false),
+            statusSnapshot.optBoolean("execution_enabled", false),
+            dailyBaselineSource, reconciliationRunning
+        )
+        test(
+            "diagnostic_consistency", "diagnostics", consistencyFindings.isEmpty(),
+            "FAIL", if (consistencyFindings.isEmpty()) "Runtime/coordinator readiness claims are consistent"
+            else consistencyFindings.joinToString(" | ")
+        )
+        val baselineKnown = dailyBaselineSource.isNotBlank() &&
+            !dailyBaselineSource.equals("UNKNOWN", ignoreCase = true) &&
+            !dailyBaselineSource.equals("null", ignoreCase = true)
+        val baselineExecutionContradiction = !baselineKnown && statusSnapshot.optBoolean("execution_enabled", false)
+        test(
+            "daily_risk_baseline", "risk", baselineKnown || !statusSnapshot.optBoolean("execution_enabled", false),
+            if (baselineExecutionContradiction) "FAIL" else "WARN",
+            "source=" + dailyBaselineSource + "; execution_enabled=" +
+                statusSnapshot.optBoolean("execution_enabled", false) +
+                "; unknown baseline is not treated as a passed risk check"
+        )
         val autoRunRequested = prefs.getBoolean("auto_run", false)
         val workerAlive = worker?.isAlive == true
         val runtimeSeverity = runtimeLifecycleSeverity(autoRunRequested, running, workerAlive)
@@ -11114,17 +11178,30 @@ private class NativeEngine(
     }
 
     fun diagnostics(): JSONObject {
-        // Diagnostics stay local and responsive even when market/history/scanner
-        // network work is slow or blocked.
-        val tests = diagnosticSelfTests()
+        // Capture each state source once so the report does not compare different
+        // moments in time and manufacture contradictions from separate status reads.
+        val statusSnapshot = status(fast = true)
+        val coordinatorSnapshot = futuresCampaignCoordinator.status()
+        val tests = diagnosticSelfTests(statusSnapshot, coordinatorSnapshot)
+        val consistencyFindings = diagnosticConsistencyFindings(
+            coordinatorState = coordinatorSnapshot.optString("state", "UNKNOWN"),
+            coordinatorReady = coordinatorSnapshot.optBoolean("ready_for_new_entry", false),
+            coordinatorBlocker = coordinatorSnapshot.optString("blocker", ""),
+            runtimeState = statusSnapshot.optJSONObject("execution_state_contract")
+                ?.optString("state", statusSnapshot.optString("state", "UNKNOWN")) ?: "UNKNOWN",
+            runtimeReconcileRequired = statusSnapshot.optBoolean("reconcile_required", false),
+            executionEnabled = statusSnapshot.optBoolean("execution_enabled", false),
+            dailyRiskBaselineSource = statusSnapshot.optString("daily_risk_baseline_source", "UNKNOWN"),
+            reconciliationRunning = statusSnapshot.optBoolean("futures_reconciliation_in_progress", false)
+        )
         return JSONObject()
             .put("runtime", "standalone")
             .put("device_local_api", "in-process://williams-runtime")
             .put("binance_testnet", true)
             .put("exchange_market", "USDⓈ-M_FUTURES_REQUIRED")
             .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
-            .put("futures_campaign_coordinator", futuresCampaignCoordinator.status())
-            .put("status", status(fast = true))
+            .put("futures_campaign_coordinator", coordinatorSnapshot)
+            .put("status", statusSnapshot)
             .put("settings", settings())
             .put("system_info", JSONObject()
                 .put("runtime", "standalone")
@@ -11135,7 +11212,8 @@ private class NativeEngine(
             .put("configuration_sanitized", settings())
             .put("tests", tests)
             .put("self_tests", tests)
-            .put("diagnostic_contract_version", 6)
+            .put("diagnostic_findings", JSONArray(consistencyFindings))
+            .put("diagnostic_contract_version", 7)
             .put("execution_gate", JSONObject()
                 .put("ready", executionReady())
                 .put("reasons", JSONArray(executionBlockers()))
