@@ -52,3 +52,16 @@ Explicit contract: authority = DIAGNOSTIC_ONLY; can_place_orders = false. This c
 ## Not yet demonstrated
 
 The screenshots are NOT numerical OHLC labels. Historical bar-by-bar replay and comparison to original annotations are pending. Rich primary/alternate scenario tracking, wave-degree nesting, exact AO/AC/MFI visual interpretation, Android chart DecisionTrace parity, and Binance Futures ten-contract LONG/SHORT end-to-end tests are pending. No Testnet-ready APK claim follows from this PR.
+
+
+## Image 6: nested W3 / full impulse / subsequent A-B-C illustration
+
+User's newly added schematic: red higher-degree swing 0→1→2→3→4→5; blue inner oscillations are explicitly marked 1(3), 2(3), 3(3), 4(3) within higher-degree third wave. After red W5, possible corrective legs a (down), b (up), c (down) follow. Blue bars across earlier lows indicate potential horizontal reaction zones, not guaranteed prices. The image visibly marks several "50%" notes, but without scale and unambiguous measurement anchors they should be treated as approximate Fibonacci hints rather than hard rules or precise thresholds.
+
+One likely interpretation of the first 50% is W4 retracement of the preceding W3. Another likely interpretation is B retracement of A. The lower "50%" could concern a larger post-impulse retracement and its exact measurement requires identifying anchors; the graphic by itself does not establish those anchors.
+
+**Key:** blue 1(3)–4(3) are not alternative labels for higher-degree red W1–W4. They are lower-degree internal wave segments. A non-overlapping red impulse skeleton does not by itself verify internal 5-3-5-3-5 or the W3 subdivisions. A/B/C are possibilities after the preceding W5, but an unseen future a/b/c endpoint is not confirmed market data.
+
+Implementation: impulse_correction_evidence accepts only previously confirmed alternating pivots. It reports current W5_CANDIDATE, A_PIVOT_CONFIRMED, B_PIVOT_CONFIRMED or C_PIVOT_CONFIRMED stage, approximate measured W4/W3 retracement and B/A retracement once both anchors exist, plus C/A size and historic W2/W4 reference levels once a C pivot confirms. Values are geometric descriptions, not 50%-only entry filters and not proof that a given diagram's manual wave labels are correct. The transition helper deliberately does not promote an unverified diagonal alternative to a completed impulse.
+
+Mirrored calculations apply after a bearish W5, when A rises, B falls, and C rises. All new data stay diagnostic-only; they cannot place or modify orders.
