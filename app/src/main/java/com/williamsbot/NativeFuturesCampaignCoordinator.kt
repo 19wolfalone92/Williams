@@ -716,8 +716,12 @@ internal class NativeFuturesCampaignCoordinator(
     fun reconcile(): JSONObject = synchronized(lock) {
         state = State.RECONCILE_REQUIRED
         lastBlocker = "exchange_reconciliation_in_progress"
-        val adapter = adapterFactory()
         try {
+            // Adapter construction can fail too (for example, credentials/storage
+            // becoming unavailable during recovery). Keep it inside this guarded
+            // region so the failure is recorded as the real blocker instead of
+            // leaving the coordinator permanently reporting "in progress".
+            val adapter = adapterFactory()
             adapter.serverTime()
             adapter.requireOneWayMode()
             adapter.account() // verifies authenticated Futures account access
