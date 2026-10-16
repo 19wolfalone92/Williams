@@ -120,4 +120,21 @@ class WilliamsTc2RulesTest {
         }
     }
 
+    @Test
+    fun longShortAddOnRequiresAnActualSameDirectionWiseManFamily() {
+        assertTrue(isCampaignAddOnSignalForDirection("LONG_SUPER_AO", "LONG_REVERSAL"))
+        assertTrue(isCampaignAddOnSignalForDirection("LONG_FRACTAL", "LONG_SUPER_AO"))
+        assertTrue(isCampaignAddOnSignalForDirection("SHORT_SUPER_AO", "SHORT_REVERSAL"))
+        assertTrue(isCampaignAddOnSignalForDirection("SHORT_FRACTAL", "SHORT_SUPER_AO"))
+        assertFalse(isCampaignAddOnSignalForDirection("SHORT_FRACTAL", "LONG_REVERSAL"))
+        assertFalse(isCampaignAddOnSignalForDirection("LONG_SUPER_AO", "SHORT_REVERSAL"))
+        assertFalse(isCampaignAddOnSignalForDirection("LONG_REVERSAL", "LONG_FRACTAL"))
+        assertFalse(isCampaignAddOnSignalForDirection("SHORT_UNKNOWN", "SHORT_REVERSAL"))
+        assertFalse(isCampaignAddOnSignalForDirection("LONG_FRACTAL", ""))
+        assertTrue(campaignSignalDirection("LONG_FRACTAL") == "LONG")
+        assertTrue(campaignSignalDirection("SHORT_FRACTAL") == "SHORT")
+        assertTrue(campaignSignalDirection("SHORT_NOT_A_REAL_SIGNAL") == null)
+        assertTrue(campaignSignalDirection("LONG_NOT_A_REAL_SIGNAL") == null)
+    }
+
 }
