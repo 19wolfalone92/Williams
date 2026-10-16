@@ -37,4 +37,19 @@ class WilliamsTc2RulesTest {
         assertFalse(tc2OppositeBreakoutTriggered(true, Double.NaN, 95.0))
         assertFalse(tc2OppositeBreakoutTriggered(false, -1.0, 105.0))
     }
+    @Test
+    fun nineBarFractalWithSeparatedEqualHighsWaitsForConfirmation() {
+        val highs = listOf(8.0, 9.0, 10.0, 9.0, 10.0, 9.0, 10.0, 8.0, 9.0)
+        assertFalse(tc2ConfirmedFractal(highs.take(8), 6, true))
+        assertTrue(tc2ConfirmedFractal(highs, 6, true))
+        assertTrue(tc2FractalGroupStart(highs, 6, true) == 2)
+    }
+
+    @Test
+    fun nineBarFractalMirrorsToDownside() {
+        val lows = listOf(12.0, 11.0, 10.0, 11.0, 10.0, 11.0, 10.0, 12.0, 11.0)
+        assertTrue(tc2ConfirmedFractal(lows, 6, false))
+        assertTrue(tc2FractalGroupStart(lows, 6, false) == 2)
+    }
+
 }
