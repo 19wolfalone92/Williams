@@ -1,5 +1,6 @@
 package com.williamsbot
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -81,6 +82,42 @@ class WilliamsTc2RulesTest {
         assertTrue(directionalSignalContextRank("REVERSAL", false, false, false, false) == 1)
         assertTrue(directionalSignalContextRank("SHORT_REVERSAL", false, false, false, false) == 1)
         assertTrue(directionalSignalContextRank("NOT_A_SIGNAL", false, false, false, false) == 0)
+    }
+
+    @Test
+    fun geometricalWavePrincipleIsScaleInvariantButTimeSensitive() {
+        // TC1 fig.7-14: same two-unit price move, two vs ten bars => different
+        // geometry. The model must not try to match the bitmap of the drawing.
+        val swift = williamsSwingGeometry(100.0, 102.0, 2, 1.0)!!
+        val slow = williamsSwingGeometry(100.0, 102.0, 10, 1.0)!!
+        val scaled = williamsSwingGeometry(1000.0, 1020.0, 2, 10.0)!!
+        assertEquals(swift.distanceAtr, scaled.distanceAtr, 1e-9)
+        assertEquals(swift.velocityAtrPerBar, scaled.velocityAtrPerBar, 1e-9)
+        assertTrue(swift.velocityAtrPerBar > slow.velocityAtrPerBar)
+        assertTrue(slow.triangularAreaAtrBars > swift.triangularAreaAtrBars)
+        assertEquals(swift.distanceAtr, slow.distanceAtr, 1e-9)
+        assertTrue(williamsSwingGeometry(100.0, 102.0, 0, 1.0) == null)
+        assertTrue(williamsSwingGeometry(100.0, 102.0, 2, 0.0) == null)
+    }
+
+    @Test
+    fun fractalAndReversalPrinciplesGeneralizeWithoutPixelMatching() {
+        val original = listOf(8.0, 9.0, 10.0, 9.0, 10.0, 9.0, 10.0, 8.0, 9.0)
+        for (scale in listOf(0.001, 1.0, 100.0)) {
+            val shifted = original.map { it * scale + 100.0 }
+            assertTrue(tc2ConfirmedFractal(shifted, 6, true))
+            assertEquals(2, tc2FractalGroupStart(shifted, 6, true))
+        }
+        for (scale in listOf(0.1, 1.0, 100.0)) {
+            val qualified = tc2BullishWiseManBarQualified(
+                high = 98.8 * scale, low = 96.0 * scale,
+                close = 98.0 * scale, priorLow = 99.0 * scale,
+                jaw = 100.0 * scale, teeth = 99.8 * scale,
+                lips = 99.7 * scale, aoNow = -0.5 * scale,
+                aoPrevious = -0.3 * scale
+            )
+            assertTrue(qualified)
+        }
     }
 
 }
