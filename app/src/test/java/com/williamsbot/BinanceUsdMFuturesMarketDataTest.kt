@@ -12,6 +12,34 @@ import org.junit.Test
 
 class BinanceUsdMFuturesMarketDataTest {
     @Test
+    fun legacyRuntimePublicTransportAcceptsOnlyExplicitUsdMFuturesReadRoutes() {
+        assertEquals("/fapi/v1/time", normalizeFuturesPublicPath("/fapi/v1/time"))
+        assertEquals(
+            "/fapi/v1/exchangeInfo?symbol=BTCUSDT",
+            normalizeFuturesPublicPath("/fapi/v1/exchangeInfo?symbol=BTCUSDT")
+        )
+        assertEquals(
+            "/fapi/v1/depth?symbol=BTCUSDT&limit=100",
+            normalizeFuturesPublicPath("/fapi/v1/depth?symbol=BTCUSDT&limit=100")
+        )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun legacySpotPublicRoutesAreRejectedInsteadOfTranslated() {
+        normalizeFuturesPublicPath("/api/v3/ticker/price?symbol=BTCUSDT")
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun publicTransportCannotBeUsedForOrderMutations() {
+        normalizeFuturesPublicPath("/fapi/v1/order")
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun publicTransportRejectsExternalOrProtocolRelativeRoutes() {
+        normalizeFuturesPublicPath("//evil.example/path")
+    }
+
+    @Test
     fun chartContractSharesTheExactTenSymbolsAndAllFifteenNativeIntervals() {
         assertEquals(
             listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
