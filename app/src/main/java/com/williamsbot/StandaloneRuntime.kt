@@ -1220,7 +1220,7 @@ private class NativeEngine(
     // position-management, recovery and self-heal callers. The durable Execution Door
     // serializes mutations, but without this lock concurrent reconciliation requests can
     // race their coordinator snapshots and incorrectly latch RECONCILE_REQUIRED.
-    private val futuresReconciliationLock = Any()
+    private val futuresReconciliationLock = java.util.concurrent.locks.ReentrantLock()
     @Volatile private var futuresReconciliationRunning = false
     @Volatile private var futuresStreamReconcileRunning = false
     @Volatile private var futuresStreamReconcilePending = false
@@ -1257,6 +1257,8 @@ private class NativeEngine(
     @Volatile private var lastReconciliationAttemptAtMs = 0L
     @Volatile private var lastReconciliationCompletedAtMs = 0L
     @Volatile private var lastReconciliationResult = "NEVER_RUN"
+    @Volatile private var lastReconciliationLockWaitMs = 0L
+    @Volatile private var lastReconciliationLockWaitFailure: String? = null
     @Volatile private var runtimeGeneration = 0L
     @Volatile private var lastSelfHealMs = 0L
     @Volatile private var selfHealCount = 0
@@ -1742,6 +1744,8 @@ private class NativeEngine(
             .put("last_reconciliation_attempt_at_ms", lastReconciliationAttemptAtMs)
             .put("last_reconciliation_completed_at_ms", lastReconciliationCompletedAtMs)
             .put("last_reconciliation_result", lastReconciliationResult)
+            .put("last_reconciliation_lock_wait_ms", lastReconciliationLockWaitMs)
+            .put("last_reconciliation_lock_wait_failure", lastReconciliationLockWaitFailure ?: JSONObject.NULL)
             .put("last_rest_reconcile_ms", lastRestReconcileMs)
             .put("execution_state_contract", JSONObject()
                 .put("version", 1)
@@ -4123,11 +4127,45 @@ private class NativeEngine(
         allowStopped: Boolean = false,
         allowKillLatched: Boolean = false,
         waitForDoorMs: Long = 50_000L
-    ): JSONObject = synchronized(futuresReconciliationLock) {
-        // This flag represents a live attempt only; a persistent safety latch is reported separately.
+    ): JSONObject {
+        // Bound lock acquisition so a stalled account-wide reconciliation cannot strand
+        // queued private-stream work indefinitely. Unknown exchange state remains blocked.
+        val waitStartedAtMs = System.currentTimeMillis()
+        val lockAcquired = try {
+            futuresReconciliationLock.tryLock(waitForDoorMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            lastReconciliationLockWaitFailure = "Interrupted while waiting for the account-wide reconciliation lock"
+            false
+        }
+        lastReconciliationLockWaitMs = (System.currentTimeMillis() - waitStartedAtMs).coerceAtLeast(0L)
+        if (!lockAcquired) {
+            val reason = if (Thread.currentThread().isInterrupted) {
+                "Futures reconciliation ($purpose) was interrupted while waiting for the account-wide reconciliation lock"
+            } else {
+                "Futures reconciliation ($purpose) timed out after ${lastReconciliationLockWaitMs}ms waiting for the account-wide reconciliation lock"
+            }
+            lastReconciliationLockWaitFailure = reason
+            lastReconciliationAttemptAtMs = waitStartedAtMs
+            lastReconciliationCompletedAtMs = System.currentTimeMillis()
+            lastReconciliationResult = "BLOCKED_LOCK: $reason"
+            lastError = reason
+            reconcileRequired = true
+            persistSafetyFlag("reconcile_required", true)
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, reason)
+            // Do not enter the coordinator monitor here: the lock owner may still be
+            // inside reconcile(), so recording a blocker there could recreate the hang.
+            return JSONObject()
+                .put("ok", false)
+                .put("engine", "USD_M_FUTURES_TESTNET")
+                .put("state", "RECONCILE_REQUIRED")
+                .put("blocker", reason)
+                .put("lock_wait_ms", lastReconciliationLockWaitMs)
+        }
         futuresReconciliationRunning = true
         lastReconciliationAttemptAtMs = System.currentTimeMillis()
         lastReconciliationResult = "RUNNING"
+        lastReconciliationLockWaitFailure = null
         try {
             // The Door may reject before invoking the lambda (e.g. reservation timeout,
             // interrupted wait, or failed durable lease). Record that concrete blocker in
@@ -4159,13 +4197,14 @@ private class NativeEngine(
                 lastReconciliationResult = "BLOCKED: " +
                     result.optString("blocker", result.optString("error", "unknown"))
             }
-            result
+            return result
         } finally {
             lastReconciliationCompletedAtMs = System.currentTimeMillis()
             if (lastReconciliationResult == "RUNNING") {
                 lastReconciliationResult = "INTERRUPTED_OR_ABORTED"
             }
             futuresReconciliationRunning = false
+            futuresReconciliationLock.unlock()
         }
     }
 
