@@ -83,6 +83,59 @@ implementation. Visual book examples must be used as labelled regression cases.
 - Repeat on all 10 USD-M Futures Testnet contracts on a device, with exact
   commit-linked green Android/Python CI and saved diagnostics.
 
+
+## Interpreting book FIGURES as invariant market structure — not images (2026-10-16)
+
+The drawings are EXPLANATIONS of relationships, not templates to compare pixel-by-pixel.
+A Williams-compliant engine must generalize to different symbols, volatility, price levels,
+candle sizes, wick shapes and timeframes. Examples are sources for *rules and counterexamples*,
+not a collection of bitmaps that have to look identical to market screenshots.
+
+Evidence chain for every pattern:
+`edition / page / figure -> invariant statement -> synthetic OHLCV and indicator
+cases -> matching/near-miss/invalid/ambiguous cases -> mirror SHORT / scale / timing
+metamorphic tests -> Android and Python result comparison -> exchange lifecycle
+test`.
+
+**Core invariants and exceptions (refer to these instead of rigid candle pictures):**
+
+- TC2 fig.9.6 + ch.9: reversal WM1 requires new directional extreme, proper closing
+  half, angulation away from ALL Alligator lines, the opposite AO colour and a
+  next-price stop-entry breakout. A bar contacting the mouth is not WM1. Exact
+  angulation remains approximation pending edge-case chart verification.
+- TC2 figs.11.1A-D, 11.2A-E: fractals are inequality-and-confirmation
+  structures, *not* always five-bar pictures. Equal extremes can extend a
+  formation; no forward lookahead. The TC2 fig.11.4 Teeth requirement applies
+  at breakout/activation, not automatically to the central bar at formation.
+- TC1 figs.7-14 through 7-16: prices making the same absolute move over two
+  bars versus ten bars have different *price-time geometry*. Do not infer an
+  identical wave from equal vertical height alone. The implemented
+  `price_time_area_proxy_atr_bars` is an engineering triangle proxy ONLY; the
+  author's complete analytical projection model is not verified. MFI in
+  Futures uses reported trade volume and is labelled a proxy rather than
+  a substitute for original tick-volume data.
+- **Waves are uncertain hypotheses**, including competing W1-W5/ABC
+  interpretation. A label from fractal anchors, AO/AC, Alligator, price/time
+  geometry and parent/child timeframes is NOT a command to open an order.
+  Each timeframe exports as-of closed-bar timestamp, confirmed pivots,
+  invalidation reference, AO/AC, Alligator state and NORMALIZED swing metrics.
+  Unknown alternative counts must remain UNKNOWN until evidenced.
+- Signal direction and execution are separate: H1 traded CONTRACT_PRICE
+  OHLC matches the **CONTRACT_PRICE** conditional entry trigger and its
+  last-tick preflight check. Binance close-all protective stops deliberately
+  remain triggered on **MARK_PRICE**; their triggers may occur at different
+  moments. Never conceal the difference on the operator chart.
+- Every pending order is a conditional *hypothesis*: invalidate/cancel only
+  with durable intent and exchange readback; an ambiguous cancellation
+  requires reconciliation. Never open an immediate MARKET order in place of
+  a missed stop-entry. LONG and SHORT must be exact directional mirrors,
+  subject to documented directional policy vetoes and account risk caps.
+
+Current status: these invariants are implemented or partly tested as recorded
+in PR #71; the entire book, all image variants and Android add-on campaigns
+have NOT achieved 100% replay parity. Do not label this research handoff as
+fully production-ready.
+
 ## Important implementation boundary
 
 The public GitHub connector cannot decode the binary PDFs in-place, so this file records the implementation rules derived from the book collection plus accessible book excerpts/figures used for verification. It does not reproduce copyrighted book text.
