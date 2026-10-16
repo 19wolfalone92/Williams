@@ -59,3 +59,22 @@ class BinanceRateGuardTest {
         assertEquals(321L, snapshot.getLong("used_weight_1m"))
     }
 }
+
+
+    @Test
+    fun interruptedGovernorWaitFailsClosedInsteadOfSendingTheRequest() {
+        val guard = BinanceRateGuard()
+        guard.beforeRequest()
+        Thread.currentThread().interrupt()
+        try {
+            try {
+                guard.beforeRequest()
+                throw AssertionError("Interrupted governor wait must not allow a request")
+            } catch (expected: IllegalStateException) {
+                assertTrue(expected.message.orEmpty().contains("request was not sent"))
+            }
+        } finally {
+            // Do not leak the interrupt flag into the test runner's worker thread.
+            Thread.interrupted()
+        }
+    }
