@@ -137,4 +137,22 @@ class WilliamsTc2RulesTest {
         assertTrue(campaignSignalDirection("LONG_NOT_A_REAL_SIGNAL") == null)
     }
 
+    @Test
+    fun reversePyramidUsesBookContractRatioAndNeverCreatesExtraContracts() {
+        assertTrue(williamsReversePyramidUnits(15L) == listOf(1L, 5L, 4L, 3L, 2L))
+        assertTrue(williamsReversePyramidUnits(150L) == listOf(10L, 50L, 40L, 30L, 20L))
+        for (availableUnits in listOf(16L, 20L, 71L, 15001L)) {
+            val allocation = williamsReversePyramidUnits(availableUnits)!!
+            assertEquals(5, allocation.size)
+            assertEquals(availableUnits, allocation.sum())
+            assertTrue(allocation.all { it > 0L })
+            assertTrue(allocation[1] > allocation[2])
+            assertTrue(allocation[2] > allocation[3])
+            assertTrue(allocation[3] > allocation[4])
+        }
+        assertTrue(williamsReversePyramidUnits(14L) == null)
+        assertTrue(williamsReversePyramidUnits(0L) == null)
+        assertTrue(williamsReversePyramidUnits(Long.MAX_VALUE) == null)
+    }
+
 }
