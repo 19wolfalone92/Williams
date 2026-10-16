@@ -200,6 +200,29 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertTrue(!shortParams.containsKey("reduceOnly"))
     }
 
+    @Test
+    fun adapterFeedsResponseRateHeadersIntoSharedGovernor() {
+        val guard = BinanceRateGuard()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .header("X-MBX-USED-WEIGHT-1M", "432")
+                .header("X-MBX-ORDER-COUNT-10S", "3")
+                .body("{}".toResponseBody("application/json".toMediaType()))
+                .build()
+        }.build()
+
+        BinanceUsdMFuturesTestnetAdapter(
+            "unit-test-key", "unit-test-secret", client, guard
+        ).exchangeInfo()
+
+        assertEquals(432L, guard.usedWeight1m)
+        assertEquals(3L, guard.orderCount10s)
+    }
+
     private fun testAdapter(captured: MutableList<Request>): BinanceUsdMFuturesTestnetAdapter {
         val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
             val request = chain.request()
