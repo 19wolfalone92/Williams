@@ -294,6 +294,7 @@ def main() -> None:
     # behind the Futures-only path boundary; canonical mutations use the dedicated adapter.
     must(runtime_source, "normalizeFuturesPublicPath(path)", "StandaloneRuntime.kt Futures public route allowlist")
     must(runtime_source, 'require(path.startsWith("/fapi/"))', "StandaloneRuntime.kt signed Futures route boundary")
+    must_not(runtime_source, "/api/v3/", "StandaloneRuntime.kt must not contain Spot API routes")
     must_not(runtime_source, 'getBody("/api/v3/', "StandaloneRuntime.kt public reads must not use Spot routes")
     adapter_source = read("app/src/main/java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
     must(adapter_source, 'request("GET", "/fapi/v3/account"', "Futures adapter account endpoint")
