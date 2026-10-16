@@ -427,17 +427,7 @@ class BinanceFuturesClient:
                 "API restrictions cannot be queried with Futures Testnet credentials; "
                 "live Wallet API access is blocked in Testnet mode"
             )
-        original = self.base_url
-        try:
-            self.base_url = os.getenv("BINANCE_SPOT_WALLET_URL", "https://api.binance.com")
-            return self._request(
-                "GET",
-                "/sapi/v1/account/apiRestrictions",
-                {},
-                signed=True,
-            )
-        finally:
-            self.base_url = original
+        raise BinanceAPIError("Wallet API is outside the Futures-only client; use a separate Wallet client")
 
     def api_trading_status(self):
         # Do not leak a Testnet API key to the live Wallet API host.
@@ -446,17 +436,7 @@ class BinanceFuturesClient:
                 "API trading status cannot be queried with Futures Testnet credentials; "
                 "live Wallet API access is blocked in Testnet mode"
             )
-        original = self.base_url
-        try:
-            self.base_url = os.getenv("BINANCE_SPOT_WALLET_URL", "https://api.binance.com")
-            return self._request(
-                "GET",
-                "/sapi/v1/account/apiTradingStatus",
-                {},
-                signed=True,
-            )
-        finally:
-            self.base_url = original
+        raise BinanceAPIError("Wallet API is outside the Futures-only client; use a separate Wallet client")
 
     def open_orders(self, symbol=None):
         standard = self._require_array(self._request(
@@ -748,9 +728,10 @@ class BinanceFuturesClient:
         time_in_force=None,
         new_client_order_id=None,
     ):
-        # Futures does not use Spot OCO/cancelReplace semantics here. The caller
-        # receives both legs so it can fail closed if the replacement is not created.
-        cancel_payload = self.cancel_order(symbol, order_id=cancel_order_id)
+        # Keep the existing stop until its replacement is accepted. Cancellation
+        # failure is ambiguous and must expose the new stop to reconciliation.
+        if str(type_).upper() not in {"STOP_MARKET", "STOP_LOSS"}:
+            raise ValueError("Futures cancel_replace supports STOP_MARKET protection only")
         new_payload = self.order_safe(
             symbol,
             side,
@@ -761,6 +742,14 @@ class BinanceFuturesClient:
             new_client_order_id=new_client_order_id,
             reduce_only=True,
         )
+        try:
+            cancel_payload = self.cancel_order(symbol, order_id=cancel_order_id)
+        except Exception as exc:
+            raise BinanceAPIError(
+                "Replacement stop accepted; old-stop cancellation requires reconciliation",
+                unknown_execution=True,
+                payload={"newOrderResponse": new_payload, "oldOrderId": cancel_order_id},
+            ) from exc
         return {
             "cancelResult": "SUCCESS" if cancel_payload else "NOT_FOUND",
             "newOrderResult": "SUCCESS",

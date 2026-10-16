@@ -273,3 +273,37 @@ def test_retry_after_longer_than_thirty_seconds_is_honored_in_full(client, monke
     client.ping()
     assert sleeps == [30.0, 30.0, 5.0]
     assert sent == [165.0]
+
+
+@pytest.mark.parametrize("operation", ["api_restrictions", "api_trading_status"])
+def test_live_futures_client_never_temporarily_switches_shared_wallet_host(monkeypatch, operation):
+    client = BinanceFuturesClient("test-key", "test-secret", testnet=False)
+    monkeypatch.setattr(client, "_request", lambda *a, **kw: pytest.fail("no Wallet request"))
+    with pytest.raises(BinanceAPIError, match="Futures-only"):
+        getattr(client, operation)()
+    assert client.base_url == "https://fapi.binance.com"
+
+
+def test_replacement_failure_keeps_existing_stop(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(client, "cancel_order", lambda *a, **kw: calls.append("cancel"))
+    def reject(*args, **kwargs):
+        raise BinanceAPIError("new stop rejected")
+    monkeypatch.setattr(client, "order_safe", reject)
+    with pytest.raises(BinanceAPIError):
+        client.cancel_replace("BTCUSDT", "algo:7", "SELL", "STOP_MARKET", quantity="1", stop_price="95", new_client_order_id="replacement")
+    assert calls == []
+
+
+def test_replacement_is_created_before_cancel_and_exposed_on_ambiguity(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(client, "order_safe", lambda *a, **kw: calls.append("new") or {"orderId": "algo:8", "status": "NEW"})
+    def cancel(*args, **kwargs):
+        calls.append("cancel")
+        raise BinanceAPIError("lost cancel reply", unknown_execution=True)
+    monkeypatch.setattr(client, "cancel_order", cancel)
+    with pytest.raises(BinanceAPIError) as caught:
+        client.cancel_replace("BTCUSDT", "algo:7", "SELL", "STOP_MARKET", quantity="1", stop_price="95", new_client_order_id="replacement")
+    assert calls == ["new", "cancel"]
+    assert caught.value.unknown_execution
+    assert caught.value.payload["newOrderResponse"]["orderId"] == "algo:8"
