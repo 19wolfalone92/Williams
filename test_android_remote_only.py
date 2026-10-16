@@ -395,7 +395,8 @@ def test_android_h1_is_the_only_directional_decision_and_m15_is_execution_readin
     assert "signal.triggerPrice" in entry
     assert "signal.protectivePrice" in entry
     assert "H1_TRIGGER_ALREADY_CROSSED" in entry
-    assert "val submitMark = futuresMarketData.markPrice(symbol)" in entry
+    assert "val submitContract = futuresCampaignCoordinator.contractPrice(symbol)" in entry
+    assert "val submitMark = futuresMarketData.markPrice(symbol)" not in entry
     assert "futuresCampaignCoordinator.submitPendingEntry(plan)" in entry
 
 
@@ -892,3 +893,23 @@ def test_native_pending_order_cancellation_checks_closed_h1_and_htf_direction():
     assert 'scopedSymbols != null && symbol.uppercase(Locale.US) !in scopedSymbols' in coordinator
     assert '"remaining_pending_entries", remaining.size' in coordinator
     assert '"CANCEL_SUBMISSION_UNKNOWN"' in coordinator
+
+def test_futures_entry_uses_contract_price_and_protective_stop_keeps_mark_price():
+    adapter = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    entry = adapter.split("fun placeConditionalEntry(", 1)[1].split(
+        "private fun submitOrder(", 1
+    )[0]
+    protection = adapter.split("fun placeProtectiveStop(", 1)[1].split(
+        "private fun request(", 1
+    )[0]
+    assert '"/fapi/v2/ticker/price"' in adapter
+    assert '"workingType" to "CONTRACT_PRICE"' in entry
+    assert "contractPrice(symbol)" in entry
+    assert 'markPrice(symbol)' not in entry
+    assert '"workingType" to "MARK_PRICE"' in protection
+    assert "fun contractPrice(symbol: String): Double" in coordinator
+    assert "tc2OppositeBreakoutTriggered(true, contract, it.triggerPrice)" in runtime
+    assert "tc2OppositeBreakoutTriggered(false, contract, it.triggerPrice)" in runtime
+    assert '"TC2_PENDING_CLOSED_H1_INVALIDATION"' in runtime
