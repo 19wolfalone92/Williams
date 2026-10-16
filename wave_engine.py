@@ -322,8 +322,8 @@ class MultiTimeframeWaveEngine:
                     1,
                     int(limit if limit is not None else self.lookback),
                 ),
-                interval,
-            )
+            ),
+            interval,
         )
 
     @staticmethod
