@@ -14,8 +14,9 @@ def _frame(signal_high, signal_low, signal_close):
         high, low, close = (101.0, 99.0, 100.0)
         if i == 70:
             high, low, close = signal_high, signal_low, signal_close
+        open_price = (high + low) / 2.0 if i == 70 else 100.0
         rows.append({
-            "open": 100.0, "high": high, "low": low, "close": close,
+            "open": open_price, "high": high, "low": low, "close": close,
             "volume": 1000.0, "open_time_ms": 1800000000000 + i * 3600000,
         })
     return calculate_indicators(pd.DataFrame(rows), canonical_indicator_config_from_env({}))
