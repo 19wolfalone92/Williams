@@ -202,10 +202,11 @@ def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     market_data = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesMarketData.kt")
 
-    # Any remaining Spot-era signed call site is rejected before network I/O.
-    assert 'require(path.startsWith("/fapi/"))' in runtime
-    assert "Legacy signed Spot-shaped routes are rejected by the Futures-only transport boundary." in runtime
+    # Retired Spot transport and order paths are removed from the runtime.
+    assert "private fun signedRequest(" not in runtime
+    assert "private fun signedAccount()" not in runtime
     assert "/api/v3/" not in runtime
+    assert "Legacy signed transport was removed; account/order mutations use the Futures adapter/coordinator." in runtime
     assert "Legacy direct BUY execution is disabled; CampaignEngine is canonical" in runtime
     assert "Legacy Spot OCO protection is disabled; use Futures Algo Order protection" in runtime
     assert "normalizeFuturesPublicPath(path)" in runtime
@@ -318,12 +319,12 @@ def test_android_kill_switch_never_closes_an_unmanaged_or_unreconciled_position(
 
 def test_android_signed_account_refresh_uses_usdm_futures_route():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
-    signed_account = runtime.split("private fun signedAccount(): JSONObject =", 1)[1].split(
-        "private fun signedRequest(", 1
-    )[0]
-    assert 'path = "/fapi/v3/account"' in signed_account
-    assert 'path = "/api/v3/account"' not in signed_account
-    assert 'require(path.startsWith("/fapi/"))' in runtime
+    adapter = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
+    assert "private fun signedAccount()" not in runtime
+    assert "private fun signedRequest(" not in runtime
+    assert "/api/v3/" not in runtime
+    assert 'request("GET", "/fapi/v3/account"' in adapter
+    assert "futuresCampaignCoordinator.accountSnapshot()" in runtime
 
 def test_android_private_futures_stream_uses_supported_event_query_delimiters():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
