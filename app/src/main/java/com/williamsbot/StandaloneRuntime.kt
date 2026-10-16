@@ -3447,6 +3447,10 @@ private class NativeEngine(
         val mfiUp = mfiProxy > previousMfiProxy
         val upFractal = latestConfirmedUpFractal(candles, i)
         val downFractal = if (i >= 4 && isDownFractal(candles, i - 2)) i - 2 else null
+        // Chart may display a forming kline, but wave labels must ONLY use
+        // last exchange-confirmed closes. The same evidence is exposed to the
+        // scanner and the operator's switchable per-pair chart.
+        val waveEvidence = waveFrameEvidence(frame, candles, futuresMarketData.exchangeNowMs())
         return JSONObject()
             .put("symbol", symbol).put("interval", frame).put("ready", true)
             .put("candle_count", candles.size)
@@ -3465,7 +3469,9 @@ private class NativeEngine(
             .put("fractal_down_index", downFractal ?: JSONObject.NULL)
             .put("ao_bullish_divergence", aoBullishDivergence(candles))
             .put("ao_bearish_divergence", aoBearishDivergence(candles))
-            .put("wave", waveInfo(candles, frame).path)
+            .put("wave", if (waveEvidence.primary == "UNKNOWN") "$frame:?"
+                else "$frame:" + waveEvidence.primary)
+            .put("wave_context", waveEvidence.asJson())
     }
 
     private fun warmCoreHistoryAsync(generation: Long = runtimeGeneration) {
