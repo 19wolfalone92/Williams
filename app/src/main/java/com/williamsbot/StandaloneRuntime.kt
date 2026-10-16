@@ -1212,6 +1212,9 @@ private class NativeEngine(
     @Volatile private var futuresStreamReconcileRunning = false
     @Volatile private var futuresStreamReconcilePending = false
     @Volatile private var lastUserStreamReconcileAttemptMs = 0L
+    @Volatile private var userStreamReconcileStartedAtMs = 0L
+    @Volatile private var userStreamReconcileFinishedAtMs = 0L
+    @Volatile private var userStreamReconcileFailure: String? = null
     @Volatile private var lastUserEventMs = 0L
     @Volatile private var lastUserStreamSyncAtMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
@@ -1695,6 +1698,10 @@ private class NativeEngine(
             .put("user_stream_last_successful_sync_ms", lastUserStreamSyncAtMs)
             .put("user_stream_last_error", userStreamLastError ?: JSONObject.NULL)
             .put("user_stream_reconcile_running", futuresStreamReconcileRunning)
+            .put("user_stream_reconcile_started_at_ms", userStreamReconcileStartedAtMs)
+            .put("user_stream_reconcile_finished_at_ms", userStreamReconcileFinishedAtMs)
+            .put("user_stream_reconcile_duration_ms", if (userStreamReconcileStartedAtMs > 0L) ((if (futuresStreamReconcileRunning) System.currentTimeMillis() else userStreamReconcileFinishedAtMs) - userStreamReconcileStartedAtMs).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("user_stream_reconcile_failure", userStreamReconcileFailure ?: JSONObject.NULL)
             .put("fsm_state", stateMachine.state.name)
             .put("history_warmup_running", historyWarmupRunning)
             .put("history_ready", historyReady)
@@ -5617,6 +5624,8 @@ private class NativeEngine(
                     nowMs = nowMs
                 )) return
             lastUserStreamReconcileAttemptMs = nowMs
+            userStreamReconcileStartedAtMs = nowMs
+            userStreamReconcileFailure = null
             futuresStreamReconcileRunning = true
             futuresStreamReconcilePending = false
         }
@@ -5653,14 +5662,20 @@ private class NativeEngine(
                     if (!repeat) break
                 }
             } catch (failure: Exception) {
-                setReconcileRequired(
-                    "Futures user-stream reconciliation failed (" + reason + "): " +
-                        (failure.message ?: failure.javaClass.simpleName)
-                )
+                val failureReason = "Futures user-stream reconciliation failed (" + reason + "): " +
+                    (failure.message ?: failure.javaClass.simpleName)
+                // Publish the actual failure to diagnostics before changing the safety latch.
+                // Previously this path set the global blocker but left user_stream_last_error
+                // null, hiding the cause of a permanently blocked private-stream sync.
+                userStreamReconcileFailure = failureReason
+                userStreamLastError = failureReason
+                lastError = failureReason
+                setReconcileRequired(failureReason)
             } finally {
                 synchronized(this) {
                     futuresStreamReconcileRunning = false
                     futuresStreamReconcilePending = false
+                    userStreamReconcileFinishedAtMs = System.currentTimeMillis()
                 }
             }
         }.apply {
@@ -8065,6 +8080,10 @@ private class NativeEngine(
             .put("user_stream_last_successful_sync_ms", lastUserStreamSyncAtMs)
             .put("user_stream_last_error", userStreamLastError ?: JSONObject.NULL)
             .put("user_stream_reconcile_running", futuresStreamReconcileRunning)
+            .put("user_stream_reconcile_started_at_ms", userStreamReconcileStartedAtMs)
+            .put("user_stream_reconcile_finished_at_ms", userStreamReconcileFinishedAtMs)
+            .put("user_stream_reconcile_duration_ms", if (userStreamReconcileStartedAtMs > 0L) ((if (futuresStreamReconcileRunning) System.currentTimeMillis() else userStreamReconcileFinishedAtMs) - userStreamReconcileStartedAtMs).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("user_stream_reconcile_failure", userStreamReconcileFailure ?: JSONObject.NULL)
             .put("history_ready", historyReady)
             .put("history_state", historyState)
             .put("history_last_error", historyLastError ?: JSONObject.NULL)
