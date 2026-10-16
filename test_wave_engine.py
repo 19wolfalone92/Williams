@@ -390,3 +390,55 @@ def test_wave_count_rejects_pivots_in_invalid_impulse_order():
     )
     assert e._estimate_position(good, DIRECTION_UP, 120.0, 2.0)[1] == "W5"
     assert e._estimate_position(broken, DIRECTION_UP, 120.0, 2.0)[1] != "W5"
+
+
+def test_wave_engine_drops_every_future_or_forming_bar():
+    e = engine(base_interval="1h", min_bars=5)
+    now = pd.Timestamp.now(tz="UTC")
+    index = pd.date_range(now.floor("h") - pd.Timedelta(hours=5),
+                          periods=9, freq="h")
+    df = pd.DataFrame({"open": 100.0, "high": 101.0, "low": 99.0,
+                       "close": 100.0, "volume": 10.0}, index=index)
+    closed = e._drop_unfinished(df, "1h")
+    assert 4 <= len(closed) <= 6
+    assert len(closed) < len(df)
+    # The input index is an exchange candle OPEN, never a close marker.
+    assert all(p + pd.Timedelta(hours=1) <= now for p in closed.index)
+
+
+def test_wave_engine_does_not_trust_missing_or_malformed_close_time():
+    e = engine(base_interval="1h", min_bars=5)
+    df = pd.DataFrame({"close": [100.0, 120.0]}, index=[1, 2])
+    assert e._drop_unfinished(df, "1h").empty
+    malformed = pd.DataFrame({
+        "close": [100.0, 105.0],
+        "close_time": ["not-a-timestamp", "also-not-a-timestamp"],
+    })
+    assert e._drop_unfinished(malformed, "1h").empty
+
+
+def test_wave_engine_respects_real_calendar_month_lengths():
+    e = engine(base_interval="1M", min_bars=5)
+    now = pd.Timestamp.now(tz="UTC")
+    jan = pd.Timestamp("2026-01-01", tz="UTC")
+    feb = pd.Timestamp("2026-02-01", tz="UTC")
+    months = pd.DataFrame(
+        {"close": [1.0, 2.0]},
+        index=pd.DatetimeIndex([jan, feb]),
+    )
+    closed = e._drop_unfinished(months, "1M")
+    assert len(closed) == 2
+    # Feb 2026 ends after 28 days, not the hard-coded 30-day approximation.
+    future = pd.DataFrame(
+        {"close": [3.0]},
+        index=pd.DatetimeIndex([now.floor("D").replace(day=1) + pd.DateOffset(months=1)]),
+    )
+    assert e._drop_unfinished(future, "1M").empty
+
+
+def test_wave_engine_does_not_silently_accept_disordered_closes():
+    e = engine(base_interval="1h", min_bars=5)
+    now = pd.Timestamp.now(tz="UTC")
+    dates = [now - pd.Timedelta(hours=1), now - pd.Timedelta(hours=3)]
+    malformed = pd.DataFrame({"close": [1.0, 2.0], "close_time": dates})
+    assert e._drop_unfinished(malformed, "1h").empty
