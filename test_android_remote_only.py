@@ -366,7 +366,10 @@ def test_android_execution_gate_requires_coordinator_and_stream_reconciliation()
     assert '"ready_for_new_entry", readyForNewEntry' in coordinator
     assert "val existingCampaignIntents = futuresCampaignCoordinator.intentsSnapshot()" in runtime
     assert "reservedSymbol in coreSymbols" in runtime
-    assert "else if (!userStreamConnected)" in runtime
+    # Sync readiness is scoped to the current connection generation; a previous
+    # session's successful REST reconciliation must not unlock a reconnected socket.
+    assert "userStreamConnectionGeneration != connectionGenerationForAttempt" in runtime
+    assert "mayCommitUserStreamSync(" in runtime
     assert "userStreamSyncRequired = true" in runtime
     assert "internal fun shouldReconnectFuturesUserStream(event: JSONObject): Boolean" in user_stream
     assert "if (shouldReconnectFuturesUserStream(event))" in user_stream
