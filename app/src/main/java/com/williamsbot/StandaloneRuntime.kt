@@ -14,16 +14,21 @@ import okhttp3.Request
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okhttp3.Response
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.ArrayDeque
 import java.util.Calendar
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -1041,11 +1046,12 @@ private class NativeEngine(
     private val executionStore: FuturesExecutionStore
 ) {
     private val baseUrl = "https://demo-fapi.binance.com"
-    // All REST transport in this Android runtime is pinned to USD-M Futures Demo.
-    // Public reads are allow-listed; order/account mutations go through the Futures adapter.
+    // All REST transport in this Android runtime is anchored to USD-M Futures Testnet.
+    // Spot-shaped signed routes are rejected; legacy public reads are translated only
+    // to their Futures market-data equivalents by getBody().
     private val futuresMarketData = BinanceUsdMFuturesMarketData(http)
     // Runtime execution is routed through the local USD-M Futures adapter/coordinator below.
-    // Legacy signed transport has been removed; mutations use the Futures adapter/coordinator only.
+    // Legacy signed Spot-shaped routes are rejected by the Futures-only transport boundary.
     private val futuresExecutionAdapterReady = true
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
@@ -1195,6 +1201,9 @@ private class NativeEngine(
     private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
+    @Volatile private var serverTimeOffsetMs = 0L
+    private val BINANCE_RECV_WINDOW_MS = 60000L
+    @Volatile private var lastServerTimeSyncMs = 0L
     @Volatile private var lastOrder: JSONObject? = null
     @Volatile private var reconcileRequired = false
     @Volatile private var killLatched = false
@@ -2729,6 +2738,41 @@ private class NativeEngine(
             .put("futures_reconciliation", result).put("state", futuresCampaignCoordinator.state.name)
     }
 
+    private fun signedTimestamp(): Long {
+        val now = System.currentTimeMillis()
+        if (
+            now - lastServerTimeSyncMs >
+                15 * 1000L
+        ) {
+            runCatching { syncServerTime() }
+        }
+        // Binance rejects timestamps even slightly ahead of its clock.
+        // Keep a small safety margin on the safe side of server time.
+        return System.currentTimeMillis() +
+            serverTimeOffsetMs -
+            750L
+    }
+
+    @Synchronized
+    private fun syncServerTime() {
+        val syncStartedAtMs = System.currentTimeMillis()
+        val remote =
+            JSONObject(
+                getBody("/fapi/v1/time")
+            ).optLong("serverTime", 0L)
+
+        if (remote <= 0L) {
+            error("Binance server time unavailable")
+        }
+
+        val after = System.currentTimeMillis()
+        val midpoint = (syncStartedAtMs + after) / 2L
+        // Estimate network latency using the request midpoint and bias
+        // slightly behind Binance to avoid -1021 "timestamp ahead".
+        serverTimeOffsetMs = remote - midpoint
+        lastServerTimeSyncMs = after
+    }
+
     private fun getBody(path: String): String {
         // Public market data is strictly allow-listed and always goes to USD-M Futures Demo.
         // Spot-shaped aliases are rejected instead of silently translated.
@@ -2768,6 +2812,139 @@ private class NativeEngine(
             }
         }
         error("Binance HTTP " + lastCode + ": " + lastBody)
+    }
+
+    private fun signedAccount(): JSONObject =
+        // USD-M Futures account endpoint; signed mutations are owned by the Futures adapter.
+        signedRequest(
+            method = "GET",
+            path = "/fapi/v3/account",
+            params = ""
+        )
+
+    private fun signedRequest(
+        method: String,
+        path: String,
+        params: String
+    ): JSONObject {
+        require(path.startsWith("/fapi/")) {
+            "SECURITY_BLOCK: legacy signed transport accepts USD-M Futures routes only; use the Futures execution coordinator"
+        }
+        var lastBody = "{}"
+        repeat(2) { attempt ->
+            val query = if (params.isBlank()) {
+                "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+            } else {
+                params + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+            }
+            val signature = hmac(query, secret())
+            val request = when (method) {
+                "POST" -> Request.Builder()
+                    .url(baseUrl + path)
+                    .header("X-MBX-APIKEY", key())
+                    .post((query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+                    .build()
+                "DELETE" -> Request.Builder()
+                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                    .header("X-MBX-APIKEY", key())
+                    .delete()
+                    .build()
+                else -> Request.Builder()
+                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                    .header("X-MBX-APIKEY", key())
+                    .get()
+                    .build()
+            }
+            rateGuard.beforeRequest()
+            http.newCall(request).execute().use { response ->
+                rateGuard.observe(response.headers, response.code)
+                lastBody = response.body?.string() ?: "{}"
+                auditStore.recordRestCall(
+                    method,
+                    path,
+                    response.code,
+                    params.ifBlank { null },
+                    lastBody
+                )
+                if (response.isSuccessful) return JSONObject(lastBody)
+                if (attempt == 0 && lastBody.contains("-1021")) {
+                    runCatching { syncServerTime() }
+                    return@use
+                }
+                error("Binance " + response.code + ": " + lastBody)
+            }
+        }
+        error("Binance timestamp retry failed: " + lastBody)
+    }
+
+    private fun signedRawGet(
+        path: String,
+        params: String
+    ): String {
+        require(path.startsWith("/fapi/")) {
+            "SECURITY_BLOCK: signed raw transport accepts USD-M Futures routes only"
+        }
+        var lastBody = "{}"
+        repeat(2) { attempt ->
+            val query = if (params.isBlank()) {
+                "timestamp=" + signedTimestamp() +
+                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+            } else {
+                params +
+                    "&timestamp=" + signedTimestamp() +
+                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+            }
+            val signature = hmac(query, secret())
+            val request = Request.Builder()
+                .url(
+                    baseUrl +
+                        path +
+                        if (query.isBlank()) {
+                            ""
+                        } else {
+                            "?" + query + "&signature=" + signature
+                        }
+                )
+                .header("X-MBX-APIKEY", key())
+                .get()
+                .build()
+
+            rateGuard.beforeRequest()
+            http.newCall(request).execute().use { response ->
+                rateGuard.observe(response.headers, response.code)
+                lastBody = response.body?.string() ?: "{}"
+                auditStore.recordRestCall(
+                    "GET",
+                    path,
+                    response.code,
+                    params.ifBlank { null },
+                    lastBody
+                )
+                if (response.isSuccessful) return lastBody
+                if (attempt == 0 && lastBody.contains("-1021")) {
+                    runCatching { syncServerTime() }
+                    return@use
+                }
+                error("Binance " + response.code + ": " + lastBody)
+            }
+        }
+        error("Binance signed GET failed: " + lastBody)
+    }
+
+    private fun hmac(value: String, secretValue: String): String {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(
+            SecretKeySpec(
+                secretValue.toByteArray(StandardCharsets.UTF_8),
+                "HmacSHA256"
+            )
+        )
+
+        return mac.doFinal(
+            value.toByteArray(StandardCharsets.UTF_8)
+        ).joinToString("") {
+            "%02x".format(it)
+        }
     }
 
     private fun wsStreamUrl(): String =
@@ -5902,6 +6079,49 @@ private class NativeEngine(
         requireSuccessfulFuturesReconciliation("USER_STREAM_PENDING_RECOVERY")
     }
 
+    private fun adoptExistingProtection(
+        symbol: String,
+        qty: Double,
+        entry: Double,
+        stopDistance: Double,
+        oco: JSONObject
+    ): Protection {
+        val rules = symbolFilters(symbol)
+        val normalizedQty = floorStep(qty, rules.step)
+        if (normalizedQty < rules.minQty) {
+            error("Existing OCO quantity is below Binance minimum")
+        }
+
+        val stop = fmtPrice(
+            entry * (1.0 - stopDistance),
+            rules.tick
+        ).toDouble()
+        val take = fmtPrice(
+            entry * (1.0 + stopDistance * 4.0),
+            rules.tick
+        ).toDouble()
+        if (stop >= entry || take <= entry) {
+            error("Invalid adopted OCO prices")
+        }
+
+        val listId = oco.optString("orderListId")
+            .ifBlank { error("Existing OCO has no orderListId") }
+        val clientId = oco.optString("listClientOrderId")
+            .ifBlank { error("Existing OCO has no listClientOrderId") }
+
+        return Protection(
+            qty = normalizedQty,
+            stop = stop,
+            take = take,
+            riskPct =
+                ((entry - stop) / entry).coerceIn(0.0, 1.0) +
+                    feeBufferPerSidePct * 2.0 +
+                    maxSlippagePct,
+            ocoClientId = clientId,
+            ocoListId = listId
+        )
+    }
+
     @Synchronized
     /** Retired open-order audit delegates to the exchange-authoritative Futures coordinator. */
     private fun auditManagedOpenOrders() {
@@ -5913,6 +6133,122 @@ private class NativeEngine(
         requireSuccessfulFuturesReconciliation("LEGACY_POSITION_RECONCILIATION_REQUEST")
     }
 
+    private fun hasAnyOpenListForSymbol(
+        response: JSONObject?,
+        symbol: String
+    ): Boolean {
+        if (response == null) return false
+        val rows =
+            response.optJSONArray("orderList")
+                ?: response.optJSONArray("ordersLists")
+                ?: response.optJSONArray("orderLists")
+                ?: return false
+
+        for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: continue
+            if (row.optString("symbol") == symbol) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun openListsContainsListId(
+        response: JSONObject?,
+        symbol: String,
+        listId: String
+    ): Boolean {
+        if (response == null || listId.isBlank()) return false
+        val rows =
+            response.optJSONArray("orderList")
+                ?: response.optJSONArray("ordersLists")
+                ?: response.optJSONArray("orderLists")
+                ?: return false
+
+        for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: continue
+            if (
+                row.optString("symbol") == symbol &&
+                row.optString("orderListId") == listId
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun openListsContains(
+        response: JSONObject?,
+        symbol: String,
+        clientId: String
+    ): Boolean {
+        if (response == null) return false
+        val rows =
+            response.optJSONArray("orderList")
+                ?: response.optJSONArray("ordersLists")
+                ?: response.optJSONArray("orderLists")
+                ?: return false
+
+        for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: continue
+            if (
+                row.optString("symbol") == symbol &&
+                row.optString("listClientOrderId") ==
+                    clientId
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun signedGet(
+        path: String,
+        params: String
+    ): JSONObject = signedRequest("GET", path, params)
+
+    private fun signedPost(
+        path: String,
+        params: String
+    ): JSONObject = signedRequest("POST", path, params)
+
+    /**
+     * Binance cancel-replace is not truly transactional. STOP_ON_FAILURE
+     * prevents the replacement attempt when cancellation itself fails;
+     * callers must still reconcile when the response is ambiguous.
+     */
+    private fun signedCancelReplace(
+        symbol: String,
+        cancelOrderId: Long,
+        side: String,
+        type: String,
+        quantity: String? = null,
+        price: String? = null,
+        stopPrice: String? = null,
+        timeInForce: String? = null,
+        newClientOrderId: String? = null
+    ): JSONObject {
+        val params = StringBuilder()
+            .append("symbol=").append(symbol)
+            .append("&cancelReplaceMode=STOP_ON_FAILURE")
+            .append("&cancelOrderId=").append(cancelOrderId)
+            .append("&side=").append(side)
+            .append("&type=").append(type)
+            .append("&newOrderRespType=FULL")
+        if (!quantity.isNullOrBlank()) params.append("&quantity=").append(quantity)
+        if (!price.isNullOrBlank()) params.append("&price=").append(price)
+        if (!stopPrice.isNullOrBlank()) params.append("&stopPrice=").append(stopPrice)
+        if (!timeInForce.isNullOrBlank()) params.append("&timeInForce=").append(timeInForce)
+        if (!newClientOrderId.isNullOrBlank()) params.append("&newClientOrderId=").append(newClientOrderId)
+        return signedPost("/api/v3/order/cancelReplace", params.toString())
+    }
+
+    /**
+     * Derive a recovery stop only for a known bot-owned active Futures campaign.
+     * Uses the last five confirmed closed H1 bars, plus one exchange tick outside
+     * their structure. A fresh mark and validated equity are mandatory; no default
+     * price or guessed risk is accepted.
+     */
     private fun recoverMissingStructuralStop(
         symbol: String,
         direction: String,
@@ -6092,6 +6428,189 @@ private class NativeEngine(
         return ExecutionMath.floorToScale(rounded, decimals)
     }
 
+    private fun validateLimitPrice(
+        symbol: String,
+        side: String,
+        price: Double,
+        rules: SymbolRules
+    ) {
+        require(price > 0.0) { "Price must be positive" }
+
+        if (rules.minPrice > 0.0) {
+            require(price >= rules.minPrice) { "Price below Binance minPrice" }
+        }
+        if (rules.maxPrice.isFinite()) {
+            require(price <= rules.maxPrice) { "Price above Binance maxPrice" }
+        }
+
+        val refPrice = runCatching {
+            JSONObject(
+                getBody("/fapi/v1/avgPrice?symbol=" + symbol)
+            ).optString("price").toDoubleOrNull()
+        }.getOrNull()?.takeIf { it > 0.0 } ?: return
+
+        val lower =
+            if (side == "SELL" && rules.askPercentDown > 0.0) {
+                refPrice * rules.askPercentDown
+            } else if (side == "BUY" && rules.bidPercentDown > 0.0) {
+                refPrice * rules.bidPercentDown
+            } else if (rules.percentDown > 0.0) {
+                refPrice * rules.percentDown
+            } else 0.0
+
+        val upper =
+            if (side == "SELL" && rules.askPercentUp > 0.0) {
+                refPrice * rules.askPercentUp
+            } else if (side == "BUY" && rules.bidPercentUp > 0.0) {
+                refPrice * rules.bidPercentUp
+            } else if (rules.percentUp > 0.0) {
+                refPrice * rules.percentUp
+            } else Double.POSITIVE_INFINITY
+
+        require(price >= lower && price <= upper) {
+            "Price outside Binance percent-price filter"
+        }
+    }
+
+    private fun checkOcoCapacity(
+        symbol: String,
+        rules: SymbolRules
+    ) {
+        val openOrders = runCatching {
+            val response = signedGet(
+                "/api/v3/openOrders",
+                "symbol=" + symbol
+            )
+            response.optJSONArray("orders")
+                ?: if (response.has("symbol")) {
+                    JSONArray().put(response)
+                } else JSONArray()
+        }.getOrElse {
+            throw IllegalStateException(
+                "Cannot verify open orders for " + symbol + ": " +
+                    (it.message ?: it.javaClass.simpleName),
+                it
+            )
+        }
+
+        val openLists = runCatching {
+            signedGet("/api/v3/openOrderList", "")
+                .let {
+                    it.optJSONArray("orderList")
+                        ?: it.optJSONArray("ordersLists")
+                        ?: it.optJSONArray("orderLists")
+                        ?: JSONArray()
+                }
+        }.getOrElse {
+            throw IllegalStateException(
+                "Cannot verify open order lists: " +
+                    (it.message ?: it.javaClass.simpleName),
+                it
+            )
+        }
+
+        require(openOrders.length() + 2 <= rules.maxNumOrders) {
+            "Binance MAX_NUM_ORDERS would be exceeded"
+        }
+
+        val algoCount = (0 until openOrders.length()).count { i ->
+            val type = openOrders.optJSONObject(i)
+                ?.optString("type")
+                ?.uppercase(Locale.US)
+                ?: ""
+            type.contains("STOP") || type.contains("TAKE_PROFIT")
+        }
+
+        // One OCO contains one conditional leg; keep a conservative margin.
+        require(algoCount + 1 <= rules.maxNumAlgoOrders) {
+            "Binance MAX_NUM_ALGO_ORDERS would be exceeded"
+        }
+
+        require(openLists.length() + 1 <= rules.maxNumOrderLists) {
+            "Binance MAX_NUM_ORDER_LISTS would be exceeded"
+        }
+    }
+
+    private data class Protection(
+        val qty: Double,
+        val stop: Double,
+        val take: Double,
+        val riskPct: Double,
+        val ocoClientId: String,
+        val ocoListId: String
+    )
+
+    private fun initialWilliamsStopDistance(candidate: BaseAnalysis): Double {
+        val candles = candidate.candles
+        if (candles.size < 20) return (candidate.atrPct * 2.0).coerceIn(0.01, 0.08)
+        val prices = candles.map { it.c }
+        val teeth = alligator(candles, candles.lastIndex).teeth
+        var swingLow = Double.POSITIVE_INFINITY
+        for (i in max(2, candles.lastIndex - 30)..candles.lastIndex - 2) {
+            if (isDownFractal(candles, i)) swingLow = min(swingLow, candles[i].l)
+        }
+        val reference = prices.last()
+        val atr = reference * candidate.atrPct
+        val structuralStop = min(
+            if (swingLow.isFinite()) swingLow else reference - atr * 2.0,
+            teeth
+        ) - atr * 0.15
+        return ((reference - structuralStop) / reference).coerceIn(0.005, 0.08)
+    }
+
+    private fun estimateMarketBuySlippage(
+        symbol: String,
+        quoteNotional: Double
+    ): Pair<Double, Double> {
+        require(quoteNotional > 0.0)
+
+        // Prefer the continuously maintained local L2 book. A REST snapshot
+        // remains a safety fallback if the stream is not synchronized yet.
+        orderBookCache.estimateBuy(symbol, quoteNotional)?.let { return it }
+
+        val book = JSONObject(
+            getBody("/fapi/v1/depth?symbol=" + symbol + "&limit=100")
+        )
+        val asks = book.optJSONArray("asks")
+            ?: error("Order book has no asks for $symbol")
+        require(asks.length() > 0) { "Order book is empty for $symbol" }
+
+        var remainingQuote = quoteNotional
+        var consumedBase = 0.0
+        var consumedQuote = 0.0
+        var bestAsk = 0.0
+
+        for (i in 0 until asks.length()) {
+            val row = asks.optJSONArray(i) ?: continue
+            val price = row.optString(0).toDoubleOrNull() ?: continue
+            val qty = row.optString(1).toDoubleOrNull() ?: continue
+            if (price <= 0.0 || qty <= 0.0) continue
+            if (bestAsk <= 0.0) bestAsk = price
+
+            val levelQuote = price * qty
+            val usedQuote = min(remainingQuote, levelQuote)
+            consumedQuote += usedQuote
+            consumedBase += usedQuote / price
+            remainingQuote -= usedQuote
+            if (remainingQuote <= 1e-9) break
+        }
+
+        require(remainingQuote <= 1e-9) {
+            "Insufficient visible ask liquidity for $symbol"
+        }
+        require(bestAsk > 0.0 && consumedBase > 0.0) {
+            "Invalid order book for $symbol"
+        }
+
+        val vwap = consumedQuote / consumedBase
+        val slippage = (vwap / bestAsk - 1.0).coerceAtLeast(0.0)
+        return vwap to slippage
+    }
+
+    /**
+     * UI / legacy callers only receive last confirmed Futures account equity.
+     * An unavailable account is 0, not a synthetic free-balance-plus-notional estimate.
+     */
     private fun estimateManagedEquity(): Double =
         liveFuturesEquity.takeIf { it.isFinite() && it > 0.0 } ?: 0.0
 
@@ -6099,7 +6618,169 @@ private class NativeEngine(
      * Retired Spot-era direct execution implementation. Keeping a hard failure at
      * this entry point prevents future callers from bypassing the Futures coordinator.
      */
+    private fun executeBuyWithProtection(
+        @Suppress("UNUSED_PARAMETER") candidate: BaseAnalysis,
+        @Suppress("UNUSED_PARAMETER") gated: Boolean = false
+    ) {
+        error("Legacy direct BUY execution is disabled; CampaignEngine is canonical")
+    }
+
+    private fun createProtection(
+        symbol: String,
+        qty: Double,
+        entry: Double,
+        stopDistance: Double
+    ): Protection {
+        val rules = symbolFilters(symbol)
+
+        if (!rules.ocoAllowed) {
+            error(
+                "OCO is not supported for " +
+                    symbol
+            )
+        }
+
+        val normalizedQty =
+            floorStep(qty, rules.step)
+
+        val maxQty = min(
+            rules.maxQty,
+            if (rules.marketMaxQty.isFinite()) rules.marketMaxQty else rules.maxQty
+        )
+        val minQty = max(rules.minQty, rules.marketMinQty)
+        if (normalizedQty < minQty) {
+            error("Filled quantity is below Binance minimum")
+        }
+        if (maxQty.isFinite() && normalizedQty > maxQty) {
+            error("Filled quantity is above Binance maximum")
+        }
+
+        checkOcoCapacity(symbol, rules)
+
+        val stop =
+            fmtPrice(
+                entry * (1.0 - stopDistance),
+                rules.tick
+            ).toDouble()
+
+        val take =
+            fmtPrice(
+                entry *
+                    (1.0 + stopDistance * 4.0),
+                rules.tick
+            ).toDouble()
+
+        val takeLimit =
+            fmtPrice(
+                take - rules.tick,
+                rules.tick
+            ).toDouble()
+
+        val stopLimit =
+            fmtPrice(
+                stop * 0.999,
+                rules.tick
+            ).toDouble()
+
+        if (
+            stop >= entry ||
+            take <= entry ||
+            takeLimit <= entry ||
+            takeLimit <= stop
+        ) {
+            error("Invalid TP/SL relationship")
+        }
+
+        validateLimitPrice(symbol, "SELL", takeLimit, rules)
+        validateLimitPrice(symbol, "SELL", take, rules)
+        validateLimitPrice(symbol, "SELL", stop, rules)
+        validateLimitPrice(symbol, "SELL", stopLimit, rules)
+
+        val notional = normalizedQty * entry
+        if (rules.minNotional > 0.0 && notional < rules.minNotional) {
+            error("OCO notional below Binance minimum")
+        }
+        if (rules.maxNotional.isFinite() && notional > rules.maxNotional) {
+            error("OCO notional above Binance maximum")
+        }
+
+        val ocoClientId =
+            "W4O_" +
+                java.util.UUID.randomUUID()
+                    .toString()
+                    .replace("-", "")
+                    .take(28)
+
+        val oco =
+            signedPost(
+                "/api/v3/orderList/oco",
+                "symbol=" + symbol +
+                    "&side=SELL" +
+                    "&quantity=" +
+                    fmtQty(
+                        normalizedQty,
+                        rules.decimals
+                    ) +
+                    "&aboveType=TAKE_PROFIT_LIMIT" +
+                    "&abovePrice=" +
+                    fmtPrice(
+                        takeLimit,
+                        rules.tick
+                    ) +
+                    "&aboveStopPrice=" +
+                    fmtPrice(
+                        take,
+                        rules.tick
+                    ) +
+                    "&aboveTimeInForce=GTC" +
+                    "&belowType=STOP_LOSS_LIMIT" +
+                    "&belowStopPrice=" +
+                    fmtPrice(
+                        stop,
+                        rules.tick
+                    ) +
+                    "&belowPrice=" +
+                    fmtPrice(
+                        stopLimit,
+                        rules.tick
+                    ) +
+                    "&belowTimeInForce=GTC" +
+                    "&newOrderRespType=FULL" +
+                    "&listClientOrderId=" +
+                    ocoClientId
+            )
+
+        val actualStopDistance =
+            ((entry - stop) / entry)
+                .coerceIn(0.0, 1.0)
+
+        val actualOcoClientId =
+            oco.optString("listClientOrderId")
+                .ifBlank { ocoClientId }
+        val actualOcoListId =
+            oco.optString("orderListId").ifBlank {
+                error("Binance OCO response has no orderListId")
+            }
+
+        return Protection(
+            qty = normalizedQty,
+            stop = stop,
+            take = take,
+            riskPct =
+                actualStopDistance +
+                    feeBufferPerSidePct * 2.0 +
+                    maxSlippagePct,
+            ocoClientId = actualOcoClientId,
+            ocoListId = actualOcoListId
+        )
+    }
+
     fun sell(symbolInput: String): JSONObject = sellFuturesPosition(symbolInput)
+
+    private fun signedDelete(
+        path: String,
+        params: String
+    ): JSONObject = signedRequest("DELETE", path, params)
 
     private fun campaignSignalId(symbol: String, frame: String, type: String, barTimeMs: Long): String =
         symbol.uppercase(Locale.US) + ":" +
