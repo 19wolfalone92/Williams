@@ -1245,6 +1245,9 @@ private class NativeEngine(
     @Volatile private var restProbeRunning = false
     private var restProbeThread: Thread? = null
     @Volatile private var lastRestReconcileMs = 0L
+    @Volatile private var lastReconciliationAttemptAtMs = 0L
+    @Volatile private var lastReconciliationCompletedAtMs = 0L
+    @Volatile private var lastReconciliationResult = "NEVER_RUN"
     @Volatile private var runtimeGeneration = 0L
     @Volatile private var lastSelfHealMs = 0L
     @Volatile private var selfHealCount = 0
@@ -1726,6 +1729,10 @@ private class NativeEngine(
             .put("futures_coordinator_state", stateMachine.state.name)
             .put("futures_coordinator_blocker", lastError ?: JSONObject.NULL)
             .put("futures_reconciliation_in_progress", futuresReconciliationRunning)
+            .put("last_reconciliation_attempt_at_ms", lastReconciliationAttemptAtMs)
+            .put("last_reconciliation_completed_at_ms", lastReconciliationCompletedAtMs)
+            .put("last_reconciliation_result", lastReconciliationResult)
+            .put("last_rest_reconcile_ms", lastRestReconcileMs)
             .put("execution_state_contract", JSONObject()
                 .put("version", 1)
                 .put("state", stateName())
@@ -4317,6 +4324,8 @@ private class NativeEngine(
     ): JSONObject = synchronized(futuresReconciliationLock) {
         // This flag represents a live attempt only; a persistent safety latch is reported separately.
         futuresReconciliationRunning = true
+        lastReconciliationAttemptAtMs = System.currentTimeMillis()
+        lastReconciliationResult = "RUNNING"
         try {
             // The Door may reject before invoking the lambda (e.g. reservation timeout,
             // interrupted wait, or failed durable lease). Record that concrete blocker in
@@ -4343,9 +4352,17 @@ private class NativeEngine(
             }
             if (result.optBoolean("ok", false)) {
                 lastRestReconcileMs = System.currentTimeMillis()
+                lastReconciliationResult = "SUCCESS"
+            } else {
+                lastReconciliationResult = "BLOCKED: " +
+                    result.optString("blocker", result.optString("error", "unknown"))
             }
             result
         } finally {
+            lastReconciliationCompletedAtMs = System.currentTimeMillis()
+            if (lastReconciliationResult == "RUNNING") {
+                lastReconciliationResult = "INTERRUPTED_OR_ABORTED"
+            }
             futuresReconciliationRunning = false
         }
     }
@@ -11164,6 +11181,15 @@ private class NativeEngine(
         test("futures_execution_adapter", "binance", futuresExecutionAdapterReady, "FAIL", "Native USD-M Futures adapter and local coordinator wired; readiness still depends on live exchange reconciliation")
         test("local_runtime_dispatch", "runtime", true, "FAIL", "Cockpit commands dispatch in-process; no remote backend or unauthenticated loopback listener")
         test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(","))
+        val displayedSettings = settings()
+        val maxTradesSettingIsHonest = displayedSettings.isNull("max_trades_per_day") &&
+            displayedSettings.optString("max_trades_per_day_policy").startsWith("NO_FIXED_COUNT_CAP")
+        test(
+            "execution_config_audit", "configuration", maxTradesSettingIsHonest, "FAIL",
+            "max_trades_per_day=" + displayedSettings.opt("max_trades_per_day") +
+                "; policy=" + displayedSettings.optString("max_trades_per_day_policy") +
+                "; a display-only zero must not masquerade as an execution limit"
+        )
         val coordinatorState = coordinatorSnapshot.optString("state", "UNKNOWN")
         val coordinatorReady = coordinatorSnapshot.optBoolean("ready_for_new_entry", false)
         val coordinatorBlocker = coordinatorSnapshot.optString("blocker", "")
@@ -11185,14 +11211,26 @@ private class NativeEngine(
         val baselineKnown = dailyBaselineSource.isNotBlank() &&
             !dailyBaselineSource.equals("UNKNOWN", ignoreCase = true) &&
             !dailyBaselineSource.equals("null", ignoreCase = true)
-        val baselineExecutionContradiction = !baselineKnown && statusSnapshot.optBoolean("execution_enabled", false)
+        val baselineValue = runCatching {
+            val now = futuresMarketData.exchangeNowMs()
+            val utc = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+            utc.timeInMillis = now
+            utc.set(Calendar.HOUR_OF_DAY, 0)
+            utc.set(Calendar.MINUTE, 0)
+            utc.set(Calendar.SECOND, 0)
+            utc.set(Calendar.MILLISECOND, 0)
+            executionStore.readState("futures_day_start_equity_" + utc.timeInMillis)?.toDoubleOrNull()
+        }.getOrNull()
+        val baselineValueValid = baselineValue != null && baselineValue.isFinite() && baselineValue > 0.0
+        val baselineExecutionContradiction = (!baselineKnown || !baselineValueValid) &&
+            statusSnapshot.optBoolean("execution_enabled", false)
         test(
-            "daily_risk_baseline", "risk", baselineKnown,
+            "daily_risk_baseline", "risk", baselineKnown && baselineValueValid,
             "FAIL",
             "source=" + dailyBaselineSource +
-                "; known=" + baselineKnown +
+                "; baseline_value_valid=" + baselineValueValid +
                 "; execution_enabled=" + statusSnapshot.optBoolean("execution_enabled", false) +
-                "; unknown UTC baseline is a BLOCKING failure, never a passing check"
+                "; unknown source or missing/invalid UTC-day baseline is a BLOCKING failure"
         )
         val autoRunRequested = prefs.getBoolean("auto_run", false)
         val workerAlive = worker?.isAlive == true
