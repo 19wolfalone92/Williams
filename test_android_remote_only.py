@@ -200,12 +200,18 @@ def test_android_manual_direction_override_is_demo_only_and_keeps_execution_safe
 
 def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    market_data = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesMarketData.kt")
 
-    assert 'require(path.startsWith("/fapi/"))' in runtime
-    assert "Any leftover signed Spot mutation is blocked at the signedRequest boundary." in runtime
-    assert '"/api/v3/order"' in runtime  # legacy call sites may remain only as fail-closed dead paths
+    # The legacy signed transport and retired Spot order paths are removed entirely.
+    assert "Legacy signed transport has been removed" in runtime
+    assert "private fun signedRequest(" not in runtime
+    assert "/api/v3/" not in runtime
+    assert "normalizeFuturesPublicPath(path)" in runtime
+    assert "internal fun normalizeFuturesPublicPath(path: String)" in market_data
+    assert "SECURITY_BLOCK: unsupported public route in USD-M Futures runtime" in market_data
     adapter = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
     assert '"/fapi/v1/order"' in adapter
+    assert '"/fapi/v1/algoOrder"' in adapter
     assert "NativeFuturesCampaignCoordinator(executionStore)" in runtime
 
 
