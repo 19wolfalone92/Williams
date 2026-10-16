@@ -71,10 +71,7 @@ class BinanceRateGuard {
                     usedWeight1m >= requestWeightLimit1m * 0.90 -> 250L
                 else -> 0L
             }
-            val candidate = max(
-                now + pressure,
-                max(nextRequestAtMs, cooldownUntilMs)
-            )
+            val candidate = max(now, max(nextRequestAtMs, cooldownUntilMs)) + pressure
             nextRequestAtMs = candidate + minGapMs
             candidate
         }
