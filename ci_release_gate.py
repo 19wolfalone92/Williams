@@ -290,10 +290,11 @@ def main() -> None:
             must_not(source, obsolete, path)
 
     runtime_source = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
-    # Public reads reject Spot-shaped aliases. Legacy signed call sites remain fail-closed
-    # behind the Futures-only path boundary; canonical mutations use the dedicated adapter.
+    # Public reads are allow-listed and the legacy signed transport is gone.
+    # All signed account/order mutations use the dedicated USD-M Futures adapter.
     must(runtime_source, "normalizeFuturesPublicPath(path)", "StandaloneRuntime.kt Futures public route allowlist")
-    must(runtime_source, 'require(path.startsWith("/fapi/"))', "StandaloneRuntime.kt signed Futures route boundary")
+    must_not(runtime_source, "private fun signedRequest(", "StandaloneRuntime.kt legacy signed transport removed")
+    must_not(runtime_source, "private fun signedAccount()", "StandaloneRuntime.kt legacy account transport removed")
     must_not(runtime_source, "/api/v3/", "StandaloneRuntime.kt must not contain Spot API routes")
     must_not(runtime_source, 'getBody("/api/v3/', "StandaloneRuntime.kt public reads must not use Spot routes")
     adapter_source = read("app/src/main/java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
