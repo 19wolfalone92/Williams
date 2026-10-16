@@ -860,7 +860,6 @@ private class StandaloneServer(private val context: Context) {
         .build()
 
     private val historyStore = MarketHistoryStore(context)
-    private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
     private val stateMachine = TradingStateMachine(
         onTransition = { from, to, reason ->
@@ -1044,14 +1043,17 @@ private class NativeEngine(
     // All REST transport in this Android runtime is anchored to USD-M Futures Testnet.
     // Spot-shaped signed routes are rejected; legacy public reads are translated only
     // to their Futures market-data equivalents by getBody().
-    private val futuresMarketData = BinanceUsdMFuturesMarketData(http)
+    // One governor is shared by public market reads, signed account/order REST,
+    // and diagnostics so all Futures requests respect the same IP rate bucket.
+    private val rateGuard = BinanceRateGuard()
+    private val futuresMarketData = BinanceUsdMFuturesMarketData(http, rateGuard)
     // Runtime execution is routed through the local USD-M Futures adapter/coordinator below.
     // Legacy signed transport was removed; account/order mutations use the Futures adapter/coordinator.
     private val futuresExecutionAdapterReady = true
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
         NativeFuturesCampaignCoordinator(executionStore) {
-            BinanceUsdMFuturesTestnetAdapter(key(), secret(), http)
+            BinanceUsdMFuturesTestnetAdapter(key(), secret(), http, rateGuard)
         }.also { coordinator ->
             coordinator.setStructuralStopRecoveryProvider { symbol, direction, mark, quantity, entry ->
                 recoverMissingStructuralStop(symbol, direction, mark, quantity, entry)
