@@ -155,4 +155,17 @@ class WilliamsTc2RulesTest {
         assertTrue(williamsReversePyramidUnits(Long.MAX_VALUE) == null)
     }
 
+    @Test
+    fun futuresExecutorRefusesWrongSideAndIncompleteSignalProvenance() {
+        assertTrue(futuresEntryProvenanceBlocker("SUPER_AO", 1800000000000L, "LONG") == null)
+        assertTrue(futuresEntryProvenanceBlocker("SHORT_SUPER_AO", 1800000000000L, "SHORT") == null)
+        assertTrue(futuresEntryProvenanceBlocker("", 0L, "SHORT") == null) // explicit forced-mode
+        assertTrue(futuresEntryProvenanceBlocker("SHORT_SUPER_AO", 1800000000000L, "LONG") != null)
+        assertTrue(futuresEntryProvenanceBlocker("FRACTAL", 1800000000000L, "SHORT") != null)
+        assertTrue(futuresEntryProvenanceBlocker("SHORT_FAKE", 1800000000000L, "SHORT") != null)
+        assertTrue(futuresEntryProvenanceBlocker("LONG_FRACTAL", 0L, "LONG") != null)
+        assertTrue(futuresEntryProvenanceBlocker("", 1800000000000L, "LONG") != null)
+        assertTrue(futuresEntryProvenanceBlocker("LONG_FRACTAL", -1L, "LONG") != null)
+    }
+
 }
