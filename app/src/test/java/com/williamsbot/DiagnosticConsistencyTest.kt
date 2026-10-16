@@ -56,6 +56,7 @@ class DiagnosticConsistencyTest {
             reconciliationRunning = false
         )
 
-        assertTrue(findings.isEmpty())
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().startsWith("RISK_BASELINE_UNKNOWN:"))
     }
 }
