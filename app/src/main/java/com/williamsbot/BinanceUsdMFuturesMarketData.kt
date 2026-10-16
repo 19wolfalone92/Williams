@@ -42,7 +42,7 @@ internal fun normalizeFuturesPublicPath(path: String): String {
     require(endpoint in allowed) {
         "SECURITY_BLOCK: unsupported public route in USD-M Futures runtime: $endpoint"
     }
-    require(!path.contains("#") && !path.contains("\\n") && !path.contains("\\r")) {
+    require(!path.contains("#") && !path.contains('\n') && !path.contains('\r')) {
         "Invalid USD-M Futures public route"
     }
     return path
