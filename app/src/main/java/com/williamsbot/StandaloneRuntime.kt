@@ -5570,8 +5570,14 @@ private class NativeEngine(
                 }
                 runCatching { cancelPendingEntriesInvalidatedByMarket() }
                     .onFailure { failure ->
-                        lastError = lastError ?: "TC2 pending-entry invalidation monitor: " +
-                            (failure.message ?: failure.javaClass.simpleName)
+                        // This monitor returns before any API reads when nothing
+                        // is pending. A thrown exception means an outstanding
+                        // conditional order could not be evaluated or canceled.
+                        // A diagnostic alone is not an execution safety barrier.
+                        setReconcileRequired(
+                            "TC2_PENDING_VALIDATION_UNAVAILABLE: " +
+                                (failure.message ?: failure.javaClass.simpleName)
+                        )
                     }
                 runCatching { cancelPendingEntriesOutsideWilliamsSession() }
                     .onFailure { failure ->
@@ -5932,9 +5938,12 @@ private class NativeEngine(
             JSONObject().put("ok", false).put("error", failure.message ?: failure.javaClass.simpleName)
         }
         if (!result.optBoolean("ok", false)) {
-            lastError = "OUT_OF_SESSION_PENDING_CANCEL_UNRESOLVED: " +
+            val blocker = "OUT_OF_SESSION_PENDING_CANCEL_UNRESOLVED: " +
                 result.optString("blocker", result.optString("error", "unknown Futures cancellation state"))
-            scannerError = lastError
+            // A pending exchange order may still fire after the entry session.
+            // Logging without latching reconciliation was not fail-closed:
+            // the scanner could still show a READY state after a door timeout.
+            setReconcileRequired(blocker)
         }
     }
 

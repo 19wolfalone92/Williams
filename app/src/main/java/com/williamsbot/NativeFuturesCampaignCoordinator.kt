@@ -558,6 +558,27 @@ internal fun futuresPortfolioRiskBlocker(
 }
 
 /** Null means this symbol may claim a slot; every uncertain campaign blocks admission. */
+/**
+ * Strategy signal provenance is part of ORDER authorization, not a loose
+ * diagnostic field. The executor must not accept SHORT labels attached to a
+ * LONG order. Only an explicitly provenance-free forced testnet request may
+ * omit both fields; ordinary H1 Williams entries must include BOTH.
+ */
+internal fun futuresEntryProvenanceBlocker(
+    signalType: String,
+    signalBarTimeMs: Long,
+    direction: String
+): String? {
+    if (signalType.isBlank() && signalBarTimeMs == 0L) return null
+    if (signalType.isBlank() || signalBarTimeMs <= 0L) {
+        return "Williams signal type/time provenance is incomplete"
+    }
+    if (campaignSignalDirection(signalType) != direction.uppercase(Locale.US)) {
+        return "Williams signal direction disagrees with Futures order side"
+    }
+    return null
+}
+
 internal fun futuresPositionSlotBlocker(
     symbol: String,
     openPositionSymbols: Iterable<String>,
@@ -2015,19 +2036,34 @@ internal class NativeFuturesCampaignCoordinator(
             return@synchronized JSONObject().put("ok", false)
                 .put("blocker", "Pending-entry cancellation scope contains no approved Futures symbols")
         }
-        val adapter = adapterFactory()
-        val all = intents()
-        val openPositions = adapter.positions()
-        val openSymbols = mutableSetOf<String>()
-        for (i in 0 until openPositions.length()) {
-            val row = openPositions.optJSONObject(i)
-                ?: throw IllegalStateException("Binance returned a malformed position row at index $i during entry cancellation")
-            val amount = row.optString("positionAmt").toDoubleOrNull()
-                ?: throw IllegalStateException("Binance returned a malformed position amount during entry cancellation")
-            if (kotlin.math.abs(amount) > 0.0) {
-                openSymbols.add(row.optString("symbol").uppercase(Locale.US))
+        // No exchange read or credential load may fail *before* we latch
+        // RECONCILE_REQUIRED. Previously adapterFactory()/positions()/journal
+        // parsing could throw before the enclosing catch, falsely leaving
+        // state READY or ENTRY_PENDING after an attempted cancellation.
+        val preflight = try {
+            val adapter = adapterFactory()
+            val all = intents()
+            val openPositions = adapter.positions()
+            val openSymbols = mutableSetOf<String>()
+            for (i in 0 until openPositions.length()) {
+                val row = openPositions.optJSONObject(i)
+                    ?: throw IllegalStateException("Binance returned a malformed position row at index $i during entry cancellation")
+                val amount = row.optString("positionAmt").toDoubleOrNull()
+                    ?: throw IllegalStateException("Binance returned a malformed position amount during entry cancellation")
+                if (!amount.isFinite()) throw IllegalStateException("Non-finite Binance position amount during cancellation")
+                if (kotlin.math.abs(amount) > 0.0) {
+                    openSymbols.add(row.optString("symbol").uppercase(Locale.US))
+                }
             }
+            Triple(adapter, all, openSymbols)
+        } catch (failure: Exception) {
+            state = State.RECONCILE_REQUIRED
+            lastBlocker = "pending_entry_cancellation_preflight_failed"
+            return@synchronized JSONObject().put("ok", false)
+                .put("state", state.name).put("blocker", lastBlocker)
+                .put("error", failure.message ?: failure.javaClass.simpleName)
         }
+        val (adapter, all, openSymbols) = preflight
         try {
             val failures = mutableListOf<String>()
             fun persistConfirmedCancellation(
@@ -2685,6 +2721,10 @@ internal class NativeFuturesCampaignCoordinator(
             }
         }
         require(plan.clientId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client order ID" }
+        val provenanceBlocker = futuresEntryProvenanceBlocker(
+            plan.signalType, plan.signalBarTimeMs, plan.direction.name
+        )
+        require(provenanceBlocker == null) { provenanceBlocker ?: "Invalid Williams signal provenance" }
     }
 
     private fun findProtectiveStop(

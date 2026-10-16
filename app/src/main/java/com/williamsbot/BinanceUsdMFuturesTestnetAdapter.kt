@@ -38,6 +38,34 @@ internal fun hasLiveFuturesPosition(rows: JSONArray): Boolean {
     return false
 }
 
+/**
+ * Reject wrong-symbol, malformed and stale last-trade snapshots. A stale quote
+ * can make a STOP appear safely pending even though its trigger was crossed.
+ * This is a trade-permission preflight, not the chart's historical price.
+ */
+internal fun parseFreshContractTickerPrice(
+    response: JSONObject,
+    requestedSymbol: String,
+    exchangeNowMs: Long,
+    maxAgeMs: Long = 60_000L
+): Double {
+    val symbol = response.optString("symbol", "").uppercase(Locale.US)
+    if (symbol != requestedSymbol.uppercase(Locale.US)) {
+        throw IOException("Futures ticker symbol mismatch: requested $requestedSymbol, received $symbol")
+    }
+    val price = response.optString("price").toDoubleOrNull()
+    if (price == null || !price.isFinite() || price <= 0.0) {
+        throw IOException("Futures ticker price is missing or invalid")
+    }
+    val eventTime = response.optLong("time", 0L)
+    if (exchangeNowMs <= 0L || eventTime <= 0L || maxAgeMs <= 0L ||
+        eventTime > exchangeNowMs + 5_000L ||
+        exchangeNowMs - eventTime > maxAgeMs) {
+        throw IOException("Futures contract ticker is missing timestamp, stale, or future-dated")
+    }
+    return price
+}
+
 internal class BinanceUsdMFuturesTestnetAdapter(
     private val apiKey: String,
     apiSecret: String,
@@ -104,12 +132,12 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         val body = requestRaw(
             "GET", "/fapi/v2/ticker/price", mapOf("symbol" to symbol), signed = false
         )
-        val value = JSONObject(body).optString("price").toDoubleOrNull()
-            ?: throw IOException("Futures contract ticker response is malformed")
-        if (!value.isFinite() || value <= 0.0) {
-            throw IOException("Futures contract price is invalid")
-        }
-        return value
+        // Signed operations synchronize this clock already; before the first
+        // trade, explicitly synchronize against /fapi/v1/time to avoid using
+        // an incorrect device clock to declare an exchange quote fresh.
+        val exchangeNow = if (timeSynced) System.currentTimeMillis() + serverOffsetMs
+            else serverTime().optLong("serverTime", 0L)
+        return parseFreshContractTickerPrice(JSONObject(body), symbol, exchangeNow)
     }
 
     fun klines(symbol: String, interval: String = "1h", limit: Int = 300): JSONArray {
