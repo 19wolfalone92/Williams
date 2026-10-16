@@ -11114,11 +11114,12 @@ private class NativeEngine(
             !dailyBaselineSource.equals("null", ignoreCase = true)
         val baselineExecutionContradiction = !baselineKnown && statusSnapshot.optBoolean("execution_enabled", false)
         test(
-            "daily_risk_baseline", "risk", baselineKnown || !statusSnapshot.optBoolean("execution_enabled", false),
-            if (baselineExecutionContradiction) "FAIL" else "WARN",
-            "source=" + dailyBaselineSource + "; execution_enabled=" +
-                statusSnapshot.optBoolean("execution_enabled", false) +
-                "; unknown baseline is not treated as a passed risk check"
+            "daily_risk_baseline", "risk", baselineKnown,
+            "FAIL",
+            "source=" + dailyBaselineSource +
+                "; known=" + baselineKnown +
+                "; execution_enabled=" + statusSnapshot.optBoolean("execution_enabled", false) +
+                "; unknown UTC baseline is a BLOCKING failure, never a passing check"
         )
         val autoRunRequested = prefs.getBoolean("auto_run", false)
         val workerAlive = worker?.isAlive == true
@@ -11146,7 +11147,19 @@ private class NativeEngine(
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT available=" + liveUsdtBalance + "; equity=" + liveFuturesEquity else "Account REST failed: " + (restAccountLastError ?: "pending"))
         test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market kline/aggTrade stream connected" else "Market stream disconnected")
         test("public_websocket", "websocket", publicSocketConnected && publicWebSocketFresh(), "WARN", if (publicSocketConnected && publicWebSocketFresh()) "Public depth/bookTicker stream connected and fresh" else "Public stream disconnected or stale")
-        test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream degraded; connected=" + userStreamConnected + "; sync_required=" + userStreamSyncRequired + "; reconcile_running=" + futuresStreamReconcileRunning + "; last_error=" + (userStreamLastError ?: "none"))
+        test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream transport connected and sync flag clear; event freshness is checked separately" else "User stream degraded; connected=" + userStreamConnected + "; sync_required=" + userStreamSyncRequired + "; reconcile_running=" + futuresStreamReconcileRunning + "; last_error=" + (userStreamLastError ?: "none"))
+        val userEventAgeMs = if (lastUserEventMs > 0L && System.currentTimeMillis() >= lastUserEventMs)
+            System.currentTimeMillis() - lastUserEventMs else Long.MAX_VALUE
+        val userStreamFresh = userStreamConnected && !userStreamSyncRequired &&
+            lastUserEventMs > 0L && userEventAgeMs <= 120_000L
+        test(
+            "user_stream_freshness", "websocket", userStreamFresh, "FAIL",
+            "connected=" + userStreamConnected +
+                "; sync_required=" + userStreamSyncRequired +
+                "; last_event_ms=" + lastUserEventMs +
+                "; age_ms=" + (if (userEventAgeMs == Long.MAX_VALUE) "UNKNOWN" else userEventAgeMs.toString()) +
+                "; max_age_ms=120000; a connected socket without a recent user event does not prove account/order stream freshness"
+        )
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
         val scannerProgressAgeMs = (System.currentTimeMillis() - scanLastProgressAt).coerceAtLeast(0L)
         val scannerUniverseMatches = scanSymbols.size == coreSymbols.size && scanSymbols.toSet() == coreSymbols.toSet()
