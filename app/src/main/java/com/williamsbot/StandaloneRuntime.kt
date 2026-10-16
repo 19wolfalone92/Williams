@@ -915,6 +915,27 @@ internal fun tc2ClosedWaveBarTimes(
         .distinct().sorted()
 }
 
+/**
+ * Shape not screenshot: TC1 ch.7 figs 7-14/15 compares identical price
+ * heights with different durations. This is a documented *engineering*
+ * geometric proxy, not a source-claimed exact Williams area formula.
+ * ATR-normalized distance works across contracts of different price scales.
+ */
+internal data class WilliamsSwingGeometry(
+    val bars: Int, val distanceAtr: Double,
+    val velocityAtrPerBar: Double, val triangularAreaAtrBars: Double
+)
+internal fun williamsSwingGeometry(
+    from: Double, to: Double, barCount: Int, atr: Double
+): WilliamsSwingGeometry? {
+    if (!from.isFinite() || !to.isFinite() || !atr.isFinite() ||
+        from <= 0.0 || to <= 0.0 || atr <= 0.0 || barCount <= 0) return null
+    val distance = kotlin.math.abs(to - from) / atr
+    if (!distance.isFinite()) return null
+    return WilliamsSwingGeometry(barCount, distance, distance / barCount,
+        distance * barCount / 2.0)
+}
+
 private data class WaveFrameEvidence(
     val timeframe: String,
     val state: String,
@@ -929,6 +950,13 @@ private data class WaveFrameEvidence(
     val lastPivotKind: String = "NONE",
     val lastPivotPrice: Double = 0.0,
     val oppositePivotPrice: Double = 0.0,
+    val swing: WilliamsSwingGeometry? = null,
+    val lastClose: Double = 0.0,
+    val ao: Double = 0.0,
+    val aoDelta: Double = 0.0,
+    val ac: Double = 0.0,
+    val alligatorState: String = "UNKNOWN",
+    val invalidationPrice: Double = 0.0,
     val reason: String = ""
 ) {
     fun asJson(): JSONObject = JSONObject()
@@ -945,6 +973,14 @@ private data class WaveFrameEvidence(
         .put("last_pivot_kind", lastPivotKind)
         .put("last_pivot_price", if (lastPivotPrice > 0.0) lastPivotPrice else JSONObject.NULL)
         .put("opposite_pivot_price", if (oppositePivotPrice > 0.0) oppositePivotPrice else JSONObject.NULL)
+        .put("invalidation_price", if (invalidationPrice > 0.0) invalidationPrice else JSONObject.NULL)
+        .put("last_close", if (lastClose > 0.0) lastClose else JSONObject.NULL)
+        .put("ao", ao).put("ao_delta", aoDelta).put("ac", ac)
+        .put("alligator_state", alligatorState)
+        .put("swing_bars", swing?.bars ?: JSONObject.NULL)
+        .put("swing_distance_atr", swing?.distanceAtr ?: JSONObject.NULL)
+        .put("swing_velocity_atr_per_bar", swing?.velocityAtrPerBar ?: JSONObject.NULL)
+        .put("price_time_area_proxy_atr_bars", swing?.triangularAreaAtrBars ?: JSONObject.NULL)
         .put("wave_model", "HEURISTIC_UNVERIFIED")
         .put("execution_authority", false)
         .put("reason", reason)
@@ -7782,6 +7818,28 @@ private class NativeEngine(
         val primary = if (countSupported && info.phase in setOf("IMPULSE", "CORRECTION"))
             "W" + info.position else "UNKNOWN"
         val oppositePrice = opposite?.price ?: 0.0
+        val i = closed.lastIndex
+        val aNow = ao(closed, i)
+        val aPrior = ao(closed, i - 1)
+        val aoWindow = (0..4).map { ao(closed, i - it) }
+        val accelerator = if (aoWindow.all { it.isFinite() }) aNow - aoWindow.average() else 0.0
+        val lines = alligator(closed, i)
+        val gator = when {
+            lines.lips > lines.teeth && lines.teeth > lines.jaw -> "AWAKE_UP"
+            lines.lips < lines.teeth && lines.teeth < lines.jaw -> "AWAKE_DOWN"
+            else -> "SLEEPING_OR_TANGLED"
+        }
+        val counterPivot = when (info.direction) {
+            "UP" -> pivots.lastOrNull { it.kind == "DOWN" }
+            "DOWN" -> pivots.lastOrNull { it.kind == "UP" }
+            else -> null
+        }
+        val geo = lastPivot?.let { pivot ->
+            williamsSwingGeometry(
+                pivot.price, closed.last().c,
+                i - pivot.index, atrAbs(closed)
+            )
+        }
         return WaveFrameEvidence(
             timeframe = frame, state = if (countSupported) "ESTIMATED" else "UNCERTAIN",
             asOfCloseMs = lastClose, closedBars = closed.size,
@@ -7794,6 +7852,13 @@ private class NativeEngine(
             lastPivotKind = lastPivot?.kind ?: "NONE",
             lastPivotPrice = lastPivot?.price ?: 0.0,
             oppositePivotPrice = oppositePrice,
+            swing = geo,
+            lastClose = closed.last().c,
+            ao = if (aNow.isFinite()) aNow else 0.0,
+            aoDelta = if (aNow.isFinite() && aPrior.isFinite()) aNow - aPrior else 0.0,
+            ac = if (accelerator.isFinite()) accelerator else 0.0,
+            alligatorState = gator,
+            invalidationPrice = counterPivot?.price ?: 0.0,
             reason = if (countSupported) "CONFIRMED_FRACTAL_WAVE_HYPOTHESIS"
                 else "WAVE_DEGREE_NOT_PROVEN_BY_PIVOTS"
         )
