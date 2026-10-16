@@ -896,6 +896,45 @@ private data class CampaignSignalN(
     val reason: String
 )
 
+/**
+ * Analysis-only per-timeframe evidence, never order authorization. A wave label
+ * cannot be treated as observed truth, and incomplete/open candles are excluded.
+ */
+private data class WaveFrameEvidence(
+    val timeframe: String,
+    val state: String,
+    val asOfCloseMs: Long,
+    val closedBars: Int,
+    val phase: String = "UNKNOWN",
+    val primary: String = "UNKNOWN",
+    val alternative: String = "UNKNOWN",
+    val direction: String = "NEUTRAL",
+    val confidence: Double = 0.0,
+    val pivotCount: Int = 0,
+    val lastPivotKind: String = "NONE",
+    val lastPivotPrice: Double = 0.0,
+    val oppositePivotPrice: Double = 0.0,
+    val reason: String = ""
+) {
+    fun asJson(): JSONObject = JSONObject()
+        .put("timeframe", timeframe)
+        .put("state", state)
+        .put("as_of_closed_at_ms", asOfCloseMs)
+        .put("closed_bars", closedBars)
+        .put("phase", phase)
+        .put("primary_count", primary)
+        .put("alternative_count", alternative)
+        .put("direction", direction)
+        .put("confidence", confidence)
+        .put("confirmed_pivots", pivotCount)
+        .put("last_pivot_kind", lastPivotKind)
+        .put("last_pivot_price", if (lastPivotPrice > 0.0) lastPivotPrice else JSONObject.NULL)
+        .put("opposite_pivot_price", if (oppositePivotPrice > 0.0) oppositePivotPrice else JSONObject.NULL)
+        .put("wave_model", "HEURISTIC_UNVERIFIED")
+        .put("execution_authority", false)
+        .put("reason", reason)
+}
+
 private data class BaseAnalysis(
     val symbol: String,
     val candles: List<CandleN>,
@@ -912,7 +951,8 @@ private data class BaseAnalysis(
     val tradeFlowImbalance: Double? = null,
     val reason: String,
     val campaignSignals: List<CampaignSignalN> = emptyList(),
-    val campaignReady: Boolean = false
+    val campaignReady: Boolean = false,
+    val waveFrames: List<WaveFrameEvidence> = emptyList()
 )
 
 private class StandaloneServer(private val context: Context) {
@@ -5484,8 +5524,11 @@ private class NativeEngine(
                     val candles = fetchCandles(symbol, "1h", 180)
                     if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
                     val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
+                    // Every approved symbol publishes independently evaluated D1/H4/H1/M15
+                    // closed-candle wave evidence; never infer a higher TF from H1 data.
+                    val evidence = diagnosticWaveFrames(symbol, result.candles)
                     markScanProgress()
-                    result
+                    result.copy(waveFrames = evidence)
                 } catch (x: Exception) {
                     markScanProgress()
                     scannerError = symbol + ": " + (x.message ?: x.javaClass.simpleName)
@@ -7390,6 +7433,13 @@ private class NativeEngine(
             .put("wave_phase", wave.phase)
             .put("wave_confidence", wave.confidence)
             .put("wave_exhaustion_risk", wave.exhaustionRisk)
+            .put("wave_model", "HEURISTIC_UNVERIFIED")
+            .put("wave_timeframes", JSONArray().apply {
+                candidate.waveFrames.forEach { put(it.asJson()) }
+            })
+            .put("wave_timeframes_complete", candidate.waveFrames.size == 4 &&
+                candidate.waveFrames.all { it.state == "ESTIMATED" })
+            .put("wave_timeframes_execution_authority", false)
             .put("nested_w3", nestedW3)
             .put("nested_w3_parent_w5", nestedParentW5)
             .put("entry_timeframe", wave.entryFrame)
@@ -7619,6 +7669,83 @@ private class NativeEngine(
         }
 
         return alternating.takeLast(8)
+    }
+
+    /**
+     * Pure wave evidence extracted as-of a particular exchange timestamp.
+     * No chart labels from unconfirmed pivots or forming candles can escape.
+     * Its lower-dimensional W count is diagnostic until cross-book replay.
+     */
+    private fun waveFrameEvidence(
+        frame: String,
+        candles: List<CandleN>,
+        exchangeNow: Long
+    ): WaveFrameEvidence {
+        val barMs = frameSeconds(frame) * 1000L
+        if (barMs <= 0L || exchangeNow <= 0L) {
+            return WaveFrameEvidence(frame, "UNKNOWN", 0L, 0, reason = "INVALID_TIMEBASE")
+        }
+        val closed = candles.filter {
+            it.t > 0L && it.t <= exchangeNow &&
+                exchangeNow - it.t >= barMs
+        }.sortedBy { it.t }.distinctBy { it.t }
+        val lastClose = closed.lastOrNull()?.t?.plus(barMs) ?: 0L
+        if (closed.size < 45) {
+            return WaveFrameEvidence(frame, "INSUFFICIENT", lastClose, closed.size,
+                reason = "AT_LEAST_45_CLOSED_BARS_REQUIRED")
+        }
+        // Currency exchange-aligned freshness, using only the last *completed* bar.
+        if (exchangeNow - lastClose > 2L * barMs) {
+            return WaveFrameEvidence(frame, "STALE", lastClose, closed.size,
+                reason = "LAST_CLOSED_BAR_STALE")
+        }
+        val pivots = fractalPivots(closed)
+        val info = waveInfo(closed, frame)
+        val lastPivot = pivots.lastOrNull()
+        val opposite = pivots.lastOrNull { it.kind != lastPivot?.kind }
+        // Wave labels require confirmed swing evidence, not just an Alligator
+        // hint or a positive AO. W5 needs five alternating confirmed pivots.
+        val countSupported = when (info.position) {
+            1 -> pivots.size >= 2
+            2, 3 -> pivots.size >= 3
+            4, 5 -> pivots.size >= 5
+            else -> false
+        }
+        val primary = if (countSupported && info.phase in setOf("IMPULSE", "CORRECTION"))
+            "W" + info.position else "UNKNOWN"
+        val oppositePrice = opposite?.price ?: 0.0
+        return WaveFrameEvidence(
+            timeframe = frame, state = if (countSupported) "ESTIMATED" else "UNCERTAIN",
+            asOfCloseMs = lastClose, closedBars = closed.size,
+            phase = if (countSupported) info.phase else "UNKNOWN",
+            primary = primary,
+            alternative = "UNKNOWN", // No alternative count verified, do not invent it.
+            direction = if (countSupported) info.direction else "NEUTRAL",
+            confidence = if (countSupported) info.confidence else 0.0,
+            pivotCount = pivots.size,
+            lastPivotKind = lastPivot?.kind ?: "NONE",
+            lastPivotPrice = lastPivot?.price ?: 0.0,
+            oppositePivotPrice = oppositePrice,
+            reason = if (countSupported) "CONFIRMED_FRACTAL_WAVE_HYPOTHESIS"
+                else "WAVE_DEGREE_NOT_PROVEN_BY_PIVOTS"
+        )
+    }
+
+    private fun diagnosticWaveFrames(
+        symbol: String,
+        h1Closed: List<CandleN>
+    ): List<WaveFrameEvidence> {
+        val now = futuresMarketData.exchangeNowMs()
+        return listOf("1d", "4h", "1h", "15m").map { frame ->
+            try {
+                val candles = if (frame == "1h") h1Closed
+                    else fetchCandles(symbol, frame, startupHistoryLimit(frame))
+                waveFrameEvidence(frame, candles, now)
+            } catch (failure: Exception) {
+                WaveFrameEvidence(frame, "UNAVAILABLE", 0L, 0,
+                    reason = "HISTORY_UNAVAILABLE_" + failure.javaClass.simpleName)
+            }
+        }
     }
 
     private fun waveInfo(
