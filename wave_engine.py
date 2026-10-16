@@ -512,19 +512,20 @@ class MultiTimeframeWaveEngine:
             else:
                 score -= 18.0
 
-        # W2 should correct W1 without invalidating its origin.  Very deep
-        # corrections are penalised, but not treated as impossible because
-        # real markets and crypto can produce irregular structures.
+        # A standard impulse's W2 cannot cross the start of W1. If it
+        # does, abandon THIS numbered impulse hypothesis instead of retaining
+        # W5 merely because other soft scores outweigh the violation.
+        # Diagonals/complex corrections can be evaluated as alternatives,
+        # but they must not be falsely labelled a valid standard W5.
         if len(seq) >= 3:
             w2_valid = (
                 seq[2].price > seq[0].price
                 if direction == DIRECTION_UP
                 else seq[2].price < seq[0].price
             )
-            if w2_valid:
-                score += 10.0
-            else:
-                score -= 28.0
+            if not w2_valid:
+                return 0.0
+            score += 10.0
             r2 = retracement(seq[0], seq[1], seq[2])
             if 0.236 <= r2 <= 0.786:
                 score += 7.0
