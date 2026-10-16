@@ -5443,7 +5443,8 @@ private class NativeEngine(
         val baselineSourceKey = "futures_day_start_equity_source_" + utcDayStartMs
         val existingBaselineSource = executionStore.readState(baselineSourceKey)
         if (existingBaselineSource.isNullOrBlank() ||
-            existingBaselineSource.equals("UNKNOWN", ignoreCase = true)) {
+            existingBaselineSource.equals("UNKNOWN", ignoreCase = true) ||
+            existingBaselineSource.equals("null", ignoreCase = true)) {
             check(executionStore.writeState(
                 baselineSourceKey, "SQLITE_PERSISTED_BASELINE_SOURCE_RECOVERED"
             )) {
@@ -5571,7 +5572,20 @@ private class NativeEngine(
         utc.set(Calendar.MINUTE, 0)
         utc.set(Calendar.SECOND, 0)
         utc.set(Calendar.MILLISECOND, 0)
-        executionStore.readState("futures_day_start_equity_source_" + utc.timeInMillis) ?: "UNKNOWN"
+        val dayStart = utc.timeInMillis
+        val baselineKey = "futures_day_start_equity_" + dayStart
+        val sourceKey = "futures_day_start_equity_source_" + dayStart
+        val source = executionStore.readState(sourceKey)
+        if (!source.isNullOrBlank() &&
+            !source.equals("UNKNOWN", ignoreCase = true) &&
+            !source.equals("null", ignoreCase = true)
+        ) return@runCatching source
+        // Recover only provenance metadata for an already persisted, valid baseline.
+        // Never manufacture a baseline from current equity here: the risk gate owns that.
+        val baseline = executionStore.readState(baselineKey)?.toDoubleOrNull()
+        if (baseline != null && baseline.isFinite() && baseline > 0.0 &&
+            executionStore.writeState(sourceKey, "SQLITE_PERSISTED_BASELINE_SOURCE_RECOVERED")
+        ) "SQLITE_PERSISTED_BASELINE_SOURCE_RECOVERED" else "UNKNOWN"
     }.getOrDefault("UNKNOWN")
 
     /**
