@@ -295,11 +295,14 @@ def test_android_williams_indicator_decisions_use_chart_aligned_alligator_and_ca
     assert "private fun alligator(" in runtime
     assert "Super AO is independent of WM3/fractals." in runtime
     assert "priorFractalValid" not in runtime
-    assert "candles[fractalCenter].h > centerTeeth" in runtime
+    # TC2: this was the obsolete pivot-time veto, contradicted by fig.11.4.
+    assert "candles[fractalCenter].h > centerTeeth" not in runtime
+    assert "currentTeeth.isFinite() && currentTeeth > 0.0" in runtime
     assert "trigger > currentTeeth" in runtime
     assert "fun upGroupStart(i: Int): Int" in runtime
     assert "fun downGroupStart(i: Int): Int" in runtime
-    assert "candles[i + 1].h == candles[i].h" in runtime
+    assert "tc2ConfirmedFractal(candleHighs, i, true)" in runtime
+    assert "tc2FractalGroupStart(candleHighs, i, true)" in runtime
     assert ".minOf { candles[it].l } - tick" in runtime
 
 
