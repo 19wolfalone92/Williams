@@ -59,4 +59,22 @@ class DiagnosticConsistencyTest {
         assertEquals(1, findings.size)
         assertTrue(findings.single().startsWith("RISK_BASELINE_UNKNOWN:"))
     }
+    @Test
+    fun detectsTopLevelAndExecutionContractStateConflict() {
+        val findings = diagnosticConsistencyFindings(
+            coordinatorState = "RECONCILE_REQUIRED",
+            coordinatorReady = false,
+            coordinatorBlocker = "exchange_reconciliation_in_progress",
+            runtimeState = "READY_FLAT",
+            runtimeReconcileRequired = false,
+            executionEnabled = false,
+            dailyRiskBaselineSource = "KNOWN",
+            reconciliationRunning = false,
+            topLevelRuntimeState = "RECONCILE_REQUIRED"
+        )
+
+        assertTrue(findings.any { it.startsWith("RUNTIME_STATE_MISMATCH:") })
+        assertTrue(findings.any { it.startsWith("STATE_MISMATCH:") })
+    }
+
 }
