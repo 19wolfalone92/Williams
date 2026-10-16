@@ -4148,18 +4148,20 @@ private class NativeEngine(
         }
         lastReconciliationLockWaitMs = (System.currentTimeMillis() - waitStartedAtMs).coerceAtLeast(0L)
         if (!lockAcquired) {
-            val reason = if (Thread.currentThread().isInterrupted) {
+            val baseReason = if (Thread.currentThread().isInterrupted) {
                 "Futures reconciliation ($purpose) was interrupted while waiting for the account-wide reconciliation lock"
             } else {
                 "Futures reconciliation ($purpose) timed out after ${lastReconciliationLockWaitMs}ms waiting for the account-wide reconciliation lock"
             }
+            reconcileRequired = true
+            val latchPersisted = persistSafetyFlag("reconcile_required", true)
+            val reason = if (latchPersisted) baseReason
+                else "$baseReason; SQLite failed to persist the reconciliation safety latch"
             lastReconciliationLockWaitFailure = reason
             lastReconciliationAttemptAtMs = waitStartedAtMs
             lastReconciliationCompletedAtMs = System.currentTimeMillis()
             lastReconciliationResult = "BLOCKED_LOCK: $reason"
             lastError = reason
-            reconcileRequired = true
-            persistSafetyFlag("reconcile_required", true)
             stateMachine.force(TradingState.RECONCILE_REQUIRED, reason)
             // Do not enter the coordinator monitor here: the lock owner may still be
             // inside reconcile(), so recording a blocker there could recreate the hang.
