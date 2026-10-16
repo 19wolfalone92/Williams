@@ -295,11 +295,14 @@ def test_android_williams_indicator_decisions_use_chart_aligned_alligator_and_ca
     assert "private fun alligator(" in runtime
     assert "Super AO is independent of WM3/fractals." in runtime
     assert "priorFractalValid" not in runtime
-    assert "candles[fractalCenter].h > centerTeeth" in runtime
+    # TC2: this was the obsolete pivot-time veto, contradicted by fig.11.4.
+    assert "candles[fractalCenter].h > centerTeeth" not in runtime
+    assert "currentTeeth.isFinite() && currentTeeth > 0.0" in runtime
     assert "trigger > currentTeeth" in runtime
     assert "fun upGroupStart(i: Int): Int" in runtime
     assert "fun downGroupStart(i: Int): Int" in runtime
-    assert "candles[i + 1].h == candles[i].h" in runtime
+    assert "tc2ConfirmedFractal(candleHighs, i, true)" in runtime
+    assert "tc2FractalGroupStart(candleHighs, i, true)" in runtime
     assert ".minOf { candles[it].l } - tick" in runtime
 
 
@@ -392,7 +395,8 @@ def test_android_h1_is_the_only_directional_decision_and_m15_is_execution_readin
     assert "signal.triggerPrice" in entry
     assert "signal.protectivePrice" in entry
     assert "H1_TRIGGER_ALREADY_CROSSED" in entry
-    assert "val submitMark = futuresMarketData.markPrice(symbol)" in entry
+    assert "val submitContract = futuresCampaignCoordinator.contractPrice(symbol)" in entry
+    assert "val submitMark = futuresMarketData.markPrice(symbol)" not in entry
     assert "futuresCampaignCoordinator.submitPendingEntry(plan)" in entry
 
 
@@ -856,3 +860,59 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
     assert "htf1d.alligatorBearish && !htf1d.aoPositive" in enrich
     assert "it.position == 3 && it.direction == decisionDirection" in enrich
     assert "junior.alligatorBearish && !junior.aoPositive" in enrich
+
+
+def test_native_wave_evidence_covers_each_of_four_configured_closed_timeframes():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert 'listOf("1d", "4h", "1h", "15m").map { frame ->' in runtime
+    assert 'val evidence = diagnosticWaveFrames(symbol, result.candles)' in runtime
+    assert 'result.copy(waveFrames = evidence)' in runtime
+    assert '.put("wave_timeframes", JSONArray().apply {' in runtime
+    assert '.put("wave_context", waveEvidence.asJson())' in runtime
+    assert 'val waveEvidence = waveFrameEvidence(frame, candles, futuresMarketData.exchangeNowMs())' in runtime
+    assert 'as_of_closed_at_ms' in runtime
+    assert 'HEURISTIC_UNVERIFIED' in runtime
+    assert '"execution_authority", false' in runtime
+    assert 'tc2ClosedWaveBarTimes(candles.map { it.t }, barMs, exchangeNow)' in runtime
+    assert '"DUPLICATE_GAP_OR_UNALIGNED_CANDLE"' in runtime
+    assert 'val up = tc2ConfirmedFractal(highs, i, true)' in runtime
+    assert 'val down = tc2ConfirmedFractal(lows, i, false)' in runtime
+
+
+def test_native_pending_order_cancellation_checks_closed_h1_and_htf_direction():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    assert 'signalType = signal.type' in runtime
+    assert 'signalBarTimeMs = signal.signalBarTimeMs' in runtime
+    assert '.put("signal_type", plan.signalType)' in coordinator
+    assert '.put("signal_bar_time_ms", plan.signalBarTimeMs)' in coordinator
+    assert 'directionalSignalContextRank(' in runtime
+    assert '"TC2_PENDING_DIRECTION_CONTEXT_VETO"' in runtime
+    assert '"TC2_PENDING_CLOSED_H1_INVALIDATION"' in runtime
+    assert 'futuresCampaignCoordinator.cancelPendingEntries(reason, setOf(symbol))' in runtime
+    assert 'scopedSymbols != null && symbol.uppercase(Locale.US) !in scopedSymbols' in coordinator
+    assert '"remaining_pending_entries", remaining.size' in coordinator
+    assert '"CANCEL_SUBMISSION_UNKNOWN"' in coordinator
+
+def test_futures_entry_uses_contract_price_and_protective_stop_keeps_mark_price():
+    adapter = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt")
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    entry = adapter.split("fun placeConditionalEntry(", 1)[1].split(
+        "private fun submitOrder(", 1
+    )[0]
+    protection = adapter.split("fun placeProtectiveStop(", 1)[1].split(
+        "private fun request(", 1
+    )[0]
+    assert '"/fapi/v2/ticker/price"' in adapter
+    assert '"workingType" to "CONTRACT_PRICE"' in entry
+    assert '.put("entry_trigger_basis", "CONTRACT_PRICE")' in runtime
+    assert '.put("protective_stop_trigger_basis", "MARK_PRICE")' in runtime
+    assert '.put("kline_price_basis", "CONTRACT_PRICE")' in runtime
+    assert "contractPrice(symbol)" in entry
+    assert 'markPrice(symbol)' not in entry
+    assert '"workingType" to "MARK_PRICE"' in protection
+    assert "fun contractPrice(symbol: String): Double" in coordinator
+    assert "tc2OppositeBreakoutTriggered(true, contract, it.triggerPrice)" in runtime
+    assert "tc2OppositeBreakoutTriggered(false, contract, it.triggerPrice)" in runtime
+    assert '"TC2_PENDING_CLOSED_H1_INVALIDATION"' in runtime

@@ -30,6 +30,76 @@ import kotlin.math.min
 import kotlin.math.floor
 import kotlin.math.ceil
 
+/**
+ * TC2 chapter 9: a bullish reversal bar is entirely below the Alligator mouth,
+ * closes in its upper half, and still has falling (red) AO. Angulation is a
+ * separate, explicitly approximate context test; this predicate is not an entry.
+ * SHORT uses the exact reflected OHLC/indicator geometry.
+ */
+internal fun tc2BullishWiseManBarQualified(
+    high: Double, low: Double, close: Double, priorLow: Double,
+    jaw: Double, teeth: Double, lips: Double, aoNow: Double, aoPrevious: Double
+): Boolean {
+    if (listOf(high, low, close, priorLow, jaw, teeth, lips, aoNow, aoPrevious)
+            .any { !it.isFinite() } || high <= low || close !in low..high) return false
+    return low < priorLow &&
+        close >= low + (high - low) * 0.5 &&
+        high < min(jaw, min(teeth, lips)) &&
+        aoNow < aoPrevious
+}
+
+/** TC2: a pending opposite setup is NOT an exit until its price actually triggers. */
+internal fun tc2OppositeBreakoutTriggered(
+    positionIsLong: Boolean,
+    observedPrice: Double,
+    opposingTrigger: Double
+): Boolean {
+    if (!observedPrice.isFinite() || !opposingTrigger.isFinite() ||
+        observedPrice <= 0.0 || opposingTrigger <= 0.0) return false
+    return if (positionIsLong) observedPrice <= opposingTrigger
+        else observedPrice >= opposingTrigger
+}
+
+/**
+ * TC2 ch.11 figs 11.1/11.2: equal extremes can be separated by one inside
+ * bar. Two consecutive strictly lower/higher bars separate independent groups.
+ * This makes the 6- and 9-bar drawings causal, without globally using >=.
+ */
+internal fun tc2FractalGroupStart(
+    extremes: List<Double>, anchor: Int, isHigh: Boolean
+): Int {
+    if (anchor !in extremes.indices || !extremes[anchor].isFinite()) return anchor
+    val level = extremes[anchor]
+    var first = anchor
+    var lowerRun = 0
+    for (j in anchor - 1 downTo 0) {
+        val value = extremes[j]
+        if (!value.isFinite() || (if (isHigh) value > level else value < level)) break
+        if (value == level) {
+            first = j
+            lowerRun = 0
+        } else {
+            lowerRun++
+            if (lowerRun >= 2) break
+        }
+    }
+    return first
+}
+
+internal fun tc2ConfirmedFractal(
+    extremes: List<Double>, anchor: Int, isHigh: Boolean
+): Boolean {
+    if (anchor < 2 || anchor + 2 >= extremes.size) return false
+    val level = extremes[anchor]
+    if (!level.isFinite()) return false
+    val start = tc2FractalGroupStart(extremes, anchor, isHigh)
+    if (start < 2) return false
+    fun outside(value: Double) = value.isFinite() &&
+        (if (isHigh) value < level else value > level)
+    return outside(extremes[start - 1]) && outside(extremes[start - 2]) &&
+        outside(extremes[anchor + 1]) && outside(extremes[anchor + 2])
+}
+
 object StandaloneRuntime {
     @SuppressLint("StaticFieldLeak")
     private var server: StandaloneServer? = null
@@ -644,28 +714,54 @@ internal fun forcedH1EntryLevels(
     return levels
 }
 
-/** Resolve only explicit strategy signal types; unknown types must never default to LONG. */
-internal fun isCampaignAddOnSignalForDirection(signalType: String, positionSignalType: String): Boolean {
-    val signal = signalType.trim().uppercase(Locale.US)
-    val position = positionSignalType.trim().uppercase(Locale.US)
-    val signalIsShort = signal.startsWith("SHORT_")
-    val positionIsShort = position.startsWith("SHORT_")
-    val family = if (signalIsShort) signal.removePrefix("SHORT_") else signal
-    // Unknown position direction must not inherit the LONG default.
-    if (position.isBlank() || (!positionIsShort && position !in setOf("REVERSAL", "SUPER_AO", "FRACTAL") && !position.startsWith("LONG_"))) {
-        return false
-    }
-    return signalIsShort == positionIsShort && family in setOf("SUPER_AO", "FRACTAL")
+/**
+ * TC2 ch.12 reverse pyramid: 1:5:4:3:2 is an allocation of a pre-budgeted
+ * TOTAL contract quantity, NOT 1x/5x/4x/3x/2x unbounded risk multipliers.
+ * Return exact integer LOT_SIZE units (largest remainder apportionment).
+ *
+ * Pure planner only. Trading must separately verify exchange LOT_SIZE,
+ * MAX_POSITION, available margin, campaign stop and aggregated risk; do NOT
+ * mistake this for implemented Android add-on execution.
+ */
+internal fun williamsReversePyramidUnits(totalQuantitySteps: Long): List<Long>? {
+    if (totalQuantitySteps < 15L || totalQuantitySteps > Long.MAX_VALUE / 15L) return null
+    val weights = listOf(1L, 5L, 4L, 3L, 2L)
+    val base = totalQuantitySteps / 15L
+    val extra = totalQuantitySteps % 15L
+    val units = weights.map { base * it + (extra * it) / 15L }.toMutableList()
+    val missing = totalQuantitySteps - units.sum()
+    val priorities = weights.indices.sortedWith(
+        compareByDescending<Int> { (extra * weights[it]) % 15L }.thenBy { it }
+    )
+    for (i in 0 until missing.toInt()) units[priorities[i]]++
+    return units
 }
 
-/** Resolve only explicit strategy signal types; unknown types must never default to LONG. */
+/**
+ * Direction of an ACTUAL Williams signal family. An arbitrary SHORT_* string
+ * must not become authorization for a short trade.
+ */
 internal fun campaignSignalDirection(signalType: String): String? {
     val type = signalType.trim().uppercase(Locale.US)
+    val family = type.removePrefix("LONG_").removePrefix("SHORT_")
+    if (family !in setOf("REVERSAL", "SUPER_AO", "FRACTAL")) return null
     return when {
         type.startsWith("SHORT_") -> "SHORT"
-        type.startsWith("LONG_") || type in setOf("REVERSAL", "SUPER_AO", "FRACTAL") -> "LONG"
+        type.startsWith("LONG_") || type == family -> "LONG" // known legacy LONG types
         else -> null
     }
+}
+
+/**
+ * A recognized Williams WM2/WM3 may add to the EXISTING same-side campaign.
+ * This predicate is eligibility, NOT authorization: a protected position,
+ * fresh risk reservation and persisted exchange order are still required.
+ */
+internal fun isCampaignAddOnSignalForDirection(signalType: String, positionSignalType: String): Boolean {
+    val side = campaignSignalDirection(signalType) ?: return false
+    val currentSide = campaignSignalDirection(positionSignalType) ?: return false
+    val family = signalType.trim().uppercase(Locale.US).removePrefix("LONG_").removePrefix("SHORT_")
+    return side == currentSide && family in setOf("SUPER_AO", "FRACTAL")
 }
 
 /** 0 means the direction is vetoed, 1 is an allowed reversal, 2 is aligned H4 context. */
@@ -826,6 +922,96 @@ private data class CampaignSignalN(
     val reason: String
 )
 
+/**
+ * Analysis-only per-timeframe evidence, never order authorization. A wave label
+ * cannot be treated as observed truth, and incomplete/open candles are excluded.
+ */
+/**
+ * Returns ONLY exchange-confirmed bar opens, in strictly increasing order.
+ * A forming candle and a future-dated candle are never wave-count evidence.
+ */
+internal fun tc2ClosedWaveBarTimes(
+    opens: List<Long>,
+    frameDurationMs: Long,
+    exchangeNowMs: Long
+): List<Long> {
+    if (frameDurationMs <= 0L || exchangeNowMs <= 0L) return emptyList()
+    return opens.filter { it > 0L && it <= exchangeNowMs &&
+        exchangeNowMs - it >= frameDurationMs }
+        .distinct().sorted()
+}
+
+/**
+ * Shape not screenshot: TC1 ch.7 figs 7-14/15 compares identical price
+ * heights with different durations. This is a documented *engineering*
+ * geometric proxy, not a source-claimed exact Williams area formula.
+ * ATR-normalized distance works across contracts of different price scales.
+ */
+internal data class WilliamsSwingGeometry(
+    val bars: Int, val distanceAtr: Double,
+    val velocityAtrPerBar: Double, val triangularAreaAtrBars: Double
+)
+internal fun williamsSwingGeometry(
+    from: Double, to: Double, barCount: Int, atr: Double
+): WilliamsSwingGeometry? {
+    if (!from.isFinite() || !to.isFinite() || !atr.isFinite() ||
+        from <= 0.0 || to <= 0.0 || atr <= 0.0 || barCount <= 0) return null
+    val distance = kotlin.math.abs(to - from) / atr
+    if (!distance.isFinite()) return null
+    return WilliamsSwingGeometry(barCount, distance, distance / barCount,
+        distance * barCount / 2.0)
+}
+
+private data class WaveFrameEvidence(
+    val timeframe: String,
+    val state: String,
+    val asOfCloseMs: Long,
+    val closedBars: Int,
+    val phase: String = "UNKNOWN",
+    val primary: String = "UNKNOWN",
+    val alternative: String = "UNKNOWN",
+    val direction: String = "NEUTRAL",
+    val confidence: Double = 0.0,
+    val pivotCount: Int = 0,
+    val lastPivotKind: String = "NONE",
+    val lastPivotPrice: Double = 0.0,
+    val oppositePivotPrice: Double = 0.0,
+    val swing: WilliamsSwingGeometry? = null,
+    val lastClose: Double = 0.0,
+    val ao: Double = 0.0,
+    val aoDelta: Double = 0.0,
+    val ac: Double = 0.0,
+    val alligatorState: String = "UNKNOWN",
+    val invalidationPrice: Double = 0.0,
+    val reason: String = ""
+) {
+    fun asJson(): JSONObject = JSONObject()
+        .put("timeframe", timeframe)
+        .put("state", state)
+        .put("as_of_closed_at_ms", asOfCloseMs)
+        .put("closed_bars", closedBars)
+        .put("phase", phase)
+        .put("primary_count", primary)
+        .put("alternative_count", alternative)
+        .put("direction", direction)
+        .put("confidence", confidence)
+        .put("confirmed_pivots", pivotCount)
+        .put("last_pivot_kind", lastPivotKind)
+        .put("last_pivot_price", if (lastPivotPrice > 0.0) lastPivotPrice else JSONObject.NULL)
+        .put("opposite_pivot_price", if (oppositePivotPrice > 0.0) oppositePivotPrice else JSONObject.NULL)
+        .put("invalidation_price", if (invalidationPrice > 0.0) invalidationPrice else JSONObject.NULL)
+        .put("last_close", if (lastClose > 0.0) lastClose else JSONObject.NULL)
+        .put("ao", ao).put("ao_delta", aoDelta).put("ac", ac)
+        .put("alligator_state", alligatorState)
+        .put("swing_bars", swing?.bars ?: JSONObject.NULL)
+        .put("swing_distance_atr", swing?.distanceAtr ?: JSONObject.NULL)
+        .put("swing_velocity_atr_per_bar", swing?.velocityAtrPerBar ?: JSONObject.NULL)
+        .put("price_time_area_proxy_atr_bars", swing?.triangularAreaAtrBars ?: JSONObject.NULL)
+        .put("wave_model", "HEURISTIC_UNVERIFIED")
+        .put("execution_authority", false)
+        .put("reason", reason)
+}
+
 private data class BaseAnalysis(
     val symbol: String,
     val candles: List<CandleN>,
@@ -842,7 +1028,8 @@ private data class BaseAnalysis(
     val tradeFlowImbalance: Double? = null,
     val reason: String,
     val campaignSignals: List<CampaignSignalN> = emptyList(),
-    val campaignReady: Boolean = false
+    val campaignReady: Boolean = false,
+    val waveFrames: List<WaveFrameEvidence> = emptyList()
 )
 
 private class StandaloneServer(private val context: Context) {
@@ -2590,12 +2777,12 @@ private class NativeEngine(
         } else {
             normalizeTriggerPrice(levels.protectiveStop, rules.tick)
         }
-        val mark = futuresMarketData.markPrice(symbol)
+        val contract = futuresCampaignCoordinator.contractPrice(symbol)
         require(
-            if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) mark < trigger
-            else mark > trigger
+            if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) contract < trigger
+            else contract > trigger
         ) {
-            "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED: mark=$mark, trigger=$trigger; no market-order substitution"
+            "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED: contract=$contract, trigger=$trigger; no market-order substitution"
         }
         require(
             if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) stop < trigger
@@ -2662,11 +2849,11 @@ private class NativeEngine(
             require(checkFuturesDailyLoss()) {
                 lastError ?: "Daily loss limit could not be verified at submission"
             }
-            val submitMark = futuresMarketData.markPrice(symbol)
+            val submitContract = futuresCampaignCoordinator.contractPrice(symbol)
             require(
-                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
-                else submitMark > trigger
-            ) { "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED at final preflight; no market-order substitution" }
+                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitContract < trigger
+                else submitContract > trigger
+            ) { "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED at final contract-price preflight; no market-order substitution" }
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
         lastOrder = result
@@ -3322,8 +3509,15 @@ private class NativeEngine(
         val mfiUp = mfiProxy > previousMfiProxy
         val upFractal = latestConfirmedUpFractal(candles, i)
         val downFractal = if (i >= 4 && isDownFractal(candles, i - 2)) i - 2 else null
+        // Chart may display a forming kline, but wave labels must ONLY use
+        // last exchange-confirmed closes. The same evidence is exposed to the
+        // scanner and the operator's switchable per-pair chart.
+        val waveEvidence = waveFrameEvidence(frame, candles, futuresMarketData.exchangeNowMs())
         return JSONObject()
             .put("symbol", symbol).put("interval", frame).put("ready", true)
+            .put("kline_price_basis", "CONTRACT_PRICE")
+            .put("entry_trigger_basis", "CONTRACT_PRICE")
+            .put("protective_stop_trigger_basis", "MARK_PRICE")
             .put("candle_count", candles.size)
             .put("time", candles[i].t).put("price", candles[i].c)
             .put("jaw", jawNow).put("teeth", teethNow).put("lips", lipsNow)
@@ -3340,7 +3534,9 @@ private class NativeEngine(
             .put("fractal_down_index", downFractal ?: JSONObject.NULL)
             .put("ao_bullish_divergence", aoBullishDivergence(candles))
             .put("ao_bearish_divergence", aoBearishDivergence(candles))
-            .put("wave", waveInfo(candles, frame).path)
+            .put("wave", if (waveEvidence.primary == "UNKNOWN") "$frame:?"
+                else "$frame:" + waveEvidence.primary)
+            .put("wave_context", waveEvidence.asJson())
     }
 
     private fun warmCoreHistoryAsync(generation: Long = runtimeGeneration) {
@@ -5007,30 +5203,33 @@ private class NativeEngine(
             val candles = fetchCandles(symbol, "1h", 180)
             if (candles.size < 45) throw IllegalStateException(symbol + " needs at least 45 closed H1 candles")
             val latest = candles.last()
-            val teeth = alligator(candles, candles.lastIndex).teeth
             val rules = symbolFilters(symbol)
-            val mark = futuresMarketData.markPrice(symbol)
-            val structuralExit = teeth > 0.0 && (
-                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) latest.c < teeth
-                else latest.c > teeth
-            )
+            val contract = futuresCampaignCoordinator.contractPrice(symbol)
+            // TC2 early WM1 can enter on the opposite side of Teeth. A universal
+            // NTD Teeth-close would immediately liquidate a valid early campaign.
+            // Existing exchange protection and the 3-5 bar trail remain active.
             val newerBarCutoff = latest.t - 60L * 60L * 1000L
             val opposing = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-                shortCampaignSignals(symbol, candles, "1h", rules.tick).any { it.signalBarTimeMs >= newerBarCutoff }
+                shortCampaignSignals(symbol, candles, "1h", rules.tick).any {
+                    it.signalBarTimeMs >= newerBarCutoff &&
+                        tc2OppositeBreakoutTriggered(true, contract, it.triggerPrice)
+                }
             } else {
-                longCampaignSignals(symbol, candles, "1h", rules.tick).any { it.signalBarTimeMs >= newerBarCutoff }
+                longCampaignSignals(symbol, candles, "1h", rules.tick).any {
+                    it.signalBarTimeMs >= newerBarCutoff &&
+                        tc2OppositeBreakoutTriggered(false, contract, it.triggerPrice)
+                }
             }
-            if (structuralExit || opposing) {
+            if (opposing) {
                 val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"), rules)
                 val clientId = ("W2O_" + symbol.take(8) + "_" + System.nanoTime().toString(16).takeLast(12)).take(36)
                 val result = withCampaignMutation(
                     symbol = symbol,
-                    purpose = if (structuralExit) "STRUCTURAL_FUTURES_EXIT" else "OPPOSING_WILLIAMS_EXIT",
+                    purpose = "OPPOSING_WILLIAMS_EXIT",
                     allowPaused = true
                 ) {
                     futuresCampaignCoordinator.closePosition(
-                        symbol, direction, closeQty, clientId,
-                        if (structuralExit) "H1_CLOSE_CROSSED_ALLIGATOR_TEETH" else "OPPOSITE_WILLIAMS_SIGNAL"
+                        symbol, direction, closeQty, clientId, "OPPOSITE_WILLIAMS_TRIGGERED"
                     )
                 }
                 if (!result.optBoolean("ok", false)) throw IllegalStateException(result.optString("blocker", result.optString("error")))
@@ -5044,6 +5243,9 @@ private class NativeEngine(
                 } ?: throw IllegalStateException(symbol + " has no latest exchange-confirmed protected campaign")
             val oldStop = intent.optString("protective_stop").toDoubleOrNull()
                 ?: throw IllegalStateException(symbol + " structural stop is missing")
+            // Protective exchange STOP_MARKET remains MARK_PRICE-triggered:
+            // trailing comparisons must use MARK_PRICE, unlike TC2 entries.
+            val mark = futuresMarketData.markPrice(symbol)
             val trail = candles.takeLast(campaignTrailBars)
             val proposed = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
                 normalizePrice((trail.minOfOrNull { it.l } ?: oldStop) - rules.tick, rules.tick)
@@ -5221,7 +5423,7 @@ private class NativeEngine(
         val equity = parsedAccount.equityUsdt
         val available = parsedAccount.availableUsdt
         if (!futuresAccountFundedForEntry(available, equity)) return
-        val mark = futuresMarketData.markPrice(symbol)
+        val contract = futuresCampaignCoordinator.contractPrice(symbol)
         val rules = symbolFilters(symbol)
         val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
             normalizeTriggerPrice(signal.triggerPrice, rules.tick) else normalizePrice(signal.triggerPrice, rules.tick)
@@ -5229,9 +5431,9 @@ private class NativeEngine(
             normalizePrice(signal.protectivePrice, rules.tick) else normalizeTriggerPrice(signal.protectivePrice, rules.tick)
         if (trigger <= 0.0 || stop <= 0.0) return
         if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-            if (trigger <= mark || stop >= trigger) return
+            if (trigger <= contract || stop >= trigger) return
         } else {
-            if (trigger >= mark || stop <= trigger) return
+            if (trigger >= contract || stop <= trigger) return
         }
         val stopFraction = kotlin.math.abs(trigger - stop) / trigger
         if (!stopFraction.isFinite() || stopFraction <= 0.0) return
@@ -5263,7 +5465,9 @@ private class NativeEngine(
             entryPrice = fmtPrice(trigger, rules.tick),
             protectiveStop = fmtPrice(stop, rules.tick),
             clientId = clientId,
-            riskPct = riskPct
+            riskPct = riskPct,
+            signalType = signal.type,
+            signalBarTimeMs = signal.signalBarTimeMs
         )
         val result = withCampaignMutation(
             symbol = symbol,
@@ -5303,12 +5507,12 @@ private class NativeEngine(
             // Revalidate the actual H1 trigger against the latest Futures mark
             // after network/door waits. Never convert a consumed stop-entry into a late
             // entry at the current market price.
-            val submitMark = futuresMarketData.markPrice(symbol)
+            val submitContract = futuresCampaignCoordinator.contractPrice(symbol)
             require(
-                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
-                else submitMark > trigger
+                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitContract < trigger
+                else submitContract > trigger
             ) {
-                "H1_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
+                "H1_TRIGGER_ALREADY_CROSSED: $symbol contract=$submitContract trigger=$trigger; pending entry not submitted"
             }
             // M15 contributes only execution readiness, never a new direction.
             futuresCampaignCoordinator.submitPendingEntry(plan)
@@ -5364,6 +5568,11 @@ private class NativeEngine(
                         (failure.message ?: failure.javaClass.simpleName)
                     false
                 }
+                runCatching { cancelPendingEntriesInvalidatedByMarket() }
+                    .onFailure { failure ->
+                        lastError = lastError ?: "TC2 pending-entry invalidation monitor: " +
+                            (failure.message ?: failure.javaClass.simpleName)
+                    }
                 runCatching { cancelPendingEntriesOutsideWilliamsSession() }
                     .onFailure { failure ->
                         lastError = lastError ?: "Futures pending-entry monitor: " +
@@ -5406,8 +5615,11 @@ private class NativeEngine(
                     val candles = fetchCandles(symbol, "1h", 180)
                     if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
                     val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
+                    // Every approved symbol publishes independently evaluated D1/H4/H1/M15
+                    // closed-candle wave evidence; never infer a higher TF from H1 data.
+                    val evidence = diagnosticWaveFrames(symbol, result.candles)
                     markScanProgress()
-                    result
+                    result.copy(waveFrames = evidence)
                 } catch (x: Exception) {
                     markScanProgress()
                     scannerError = symbol + ": " + (x.message ?: x.javaClass.simpleName)
@@ -5544,6 +5756,138 @@ private class NativeEngine(
             // rejected before its intent is persisted, try the next valid symbol
             // instead of treating an older pending campaign as this attempt.
             if (intentsAfter > intentsBefore) break
+        }
+    }
+
+    @Volatile private var lastWilliamsPendingInvalidationCheckMs: Long = 0L
+
+    /**
+     * A stop-entry that has not filled is still a hypothesis. If price first
+     * violates its signal-bar protective extreme, or the order becomes stale,
+     * cancel that symbol's pending order(s) with exchange acknowledgment.
+     * Do NOT liquidate existing positions; coordinator handles partial fills
+     * and unknown cancel results by requiring reconciliation.
+     *
+     * This is a conservative subset of the full book invalidation lifecycle:
+     * WM1 angulation/context changes and H4/D1 wave reclassification still
+     * require separately validated source-derived replay fixtures.
+     */
+    private fun cancelPendingEntriesInvalidatedByMarket() {
+        val nowMs = System.currentTimeMillis()
+        val elapsed = nowMs - lastWilliamsPendingInvalidationCheckMs
+        if (elapsed in 0 until 30_000L) return
+        lastWilliamsPendingInvalidationCheckMs = nowMs
+
+        val intents = futuresCampaignCoordinator.intentsSnapshot()
+        val pendingStatuses = setOf(
+            "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED",
+            "SUBMISSION_UNKNOWN", "CANCEL_SUBMISSION_UNKNOWN", "ACCEPTED", "TRIGGERED"
+        )
+        val pending = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }
+            .filter {
+                it.optString("intent_role", "ENTRY") == "ENTRY" &&
+                    campaignLifecycleStatus(it) == "ENTRY_PENDING" &&
+                    exchangeOrderStatus(it).uppercase(Locale.US) in pendingStatuses
+            }
+        if (pending.isEmpty()) return
+
+        val exchangeNow = futuresMarketData.exchangeNowMs()
+        for (intent in pending) {
+            val symbol = intent.optString("symbol").uppercase(Locale.US)
+            if (symbol !in coreSymbols) continue
+            val direction = intent.optString("direction").uppercase(Locale.US)
+            val submittedAt = intent.optLong("created_at_ms", 0L)
+            val stop = intent.optString("initial_protective_stop",
+                intent.optString("protective_stop")).toDoubleOrNull()
+            val signalType = intent.optString("signal_type").uppercase(Locale.US)
+            val invalidMetadata = direction !in setOf("LONG", "SHORT") ||
+                submittedAt <= 0L || submittedAt > exchangeNow ||
+                stop == null || !stop.isFinite() || stop <= 0.0 ||
+                (signalType.isNotBlank() && campaignSignalDirection(signalType) != direction)
+            val expired = !invalidMetadata && exchangeNow - submittedAt >
+                5L * 60L * 60L * 1000L
+            // The historical signal/side are persisted BEFORE the Binance POST.
+            // Only orders carrying validated TC2 provenance are re-evaluated
+            // against live H4/D1 context. Untagged manual/legacy intents
+            // are not retrospectively assigned an invented signal family.
+            var directionalVeto = false
+            if (!invalidMetadata && !expired && signalType.isNotBlank()) {
+                val d1 = fetchCandles(symbol, "1d", startupHistoryLimit("1d"))
+                    .filter { it.t > 0L && exchangeNow - it.t >= frameSeconds("1d") * 1000L }
+                val h4 = fetchCandles(symbol, "4h", startupHistoryLimit("4h"))
+                    .filter { it.t > 0L && exchangeNow - it.t >= frameSeconds("4h") * 1000L }
+                // Data disagreement or unavailable context is NOT an affirmative
+                // opposite-side signal. Do not fabricate directional decisions.
+                if (d1.size >= 45 && h4.size >= 45 &&
+                    candleSeriesCurrent(d1, "1d", exchangeNow) &&
+                    candleSeriesCurrent(h4, "4h", exchangeNow)
+                ) {
+                    val d1Lines = alligator(d1, d1.lastIndex)
+                    val h4Lines = alligator(h4, h4.lastIndex)
+                    val d1Bull = d1Lines.lips > d1Lines.teeth && d1Lines.teeth > d1Lines.jaw &&
+                        d1.last().c > d1Lines.lips && ao(d1, d1.lastIndex) > 0.0
+                    val d1Bear = d1Lines.lips < d1Lines.teeth && d1Lines.teeth < d1Lines.jaw &&
+                        d1.last().c < d1Lines.lips && ao(d1, d1.lastIndex) < 0.0
+                    val h4Bull = h4Lines.lips > h4Lines.teeth && h4Lines.teeth > h4Lines.jaw &&
+                        h4.last().c > h4Lines.lips && ao(h4, h4.lastIndex) > 0.0
+                    val h4Bear = h4Lines.lips < h4Lines.teeth && h4Lines.teeth < h4Lines.jaw &&
+                        h4.last().c < h4Lines.lips && ao(h4, h4.lastIndex) < 0.0
+                    directionalVeto = directionalSignalContextRank(
+                        signalType, d1Bull, d1Bear, h4Bull, h4Bear
+                    ) == 0
+                }
+            }
+            // An entry hypothesis is also invalidated when an H1 closing
+            // extreme actually touches its structural protection. Only
+            // fully closed bars newer than signal time are relevant.
+            val signalTime = intent.optLong("signal_bar_time_ms", 0L)
+            val crossedByClosedH1 = if (!invalidMetadata && signalTime > 0L) {
+                fetchCandles(symbol, "1h", startupHistoryLimit("1h"))
+                    .filter { it.t > signalTime &&
+                        it.t > 0L && exchangeNow - it.t >= frameSeconds("1h") * 1000L }
+                    .any { if (direction == "LONG") it.l <= stop!! else it.h >= stop!! }
+            } else false
+            // A current mark-price breach is independent of H1 close timing.
+            // Do not invent a price when Binance is unavailable.
+            val contract = if (invalidMetadata || expired) 0.0
+                else futuresCampaignCoordinator.contractPrice(symbol)
+            if (!invalidMetadata && !expired && (!contract.isFinite() || contract <= 0.0)) {
+                throw IllegalStateException("$symbol pending-entry invalidation has no valid contract price")
+            }
+            val crossedStop = !invalidMetadata && !expired && (
+                (direction == "LONG" && contract <= stop!!) ||
+                (direction == "SHORT" && contract >= stop!!)
+            )
+            if (!invalidMetadata && !expired && !crossedStop &&
+                !crossedByClosedH1 && !directionalVeto) continue
+
+            val reason = when {
+                invalidMetadata -> "TC2_PENDING_INVALID_METADATA"
+                expired -> "TC2_PENDING_EXPIRED_5H"
+                directionalVeto -> "TC2_PENDING_DIRECTION_CONTEXT_VETO"
+                crossedByClosedH1 -> "TC2_PENDING_CLOSED_H1_INVALIDATION"
+                else -> "TC2_PENDING_SIGNAL_EXTREME_INVALIDATED"
+            }
+            val result = withCampaignMutation(
+                symbol = symbol,
+                purpose = "TC2_INVALIDATED_PENDING_CANCEL",
+                allowPaused = true,
+                allowStopped = true,
+                allowKillLatched = true,
+                allowReconcileRequired = true,
+                waitForDoorMs = 50_000L
+            ) {
+                futuresCampaignCoordinator.cancelPendingEntries(reason, setOf(symbol))
+            }
+            if (!result.optBoolean("ok", false)) {
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+                val message = "$symbol pending-entry cancel unresolved: " +
+                    result.optString("blocker", result.optString("error", reason))
+                lastError = message
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, message)
+                throw IllegalStateException(message)
+            }
         }
     }
 
@@ -6502,42 +6846,12 @@ private class NativeEngine(
                 teethS[i] > jawS[i] &&
                 candles[i].c > lipsS[i]
 
-        fun upGroupStart(i: Int): Int {
-            var start = i
-            while (start > 0 && candles[start - 1].h == candles[i].h) start--
-            return start
-        }
-
-        fun downGroupStart(i: Int): Int {
-            var start = i
-            while (start > 0 && candles[start - 1].l == candles[i].l) start--
-            return start
-        }
-
-        // A plateau of equal extremes is one fractal group, not several
-        // artificial signals. Anchor it at the last equal-extreme bar so the
-        // two required right-hand bars are fully closed before confirmation.
-        fun upFractal(i: Int): Boolean {
-            if (i + 2 >= candles.size) return false
-            if (i + 1 < candles.size && candles[i + 1].h == candles[i].h) return false
-            val start = upGroupStart(i)
-            if (start < 2) return false
-            return candles[start - 1].h < candles[i].h &&
-                candles[start - 2].h < candles[i].h &&
-                candles[i + 1].h < candles[i].h &&
-                candles[i + 2].h < candles[i].h
-        }
-
-        fun downFractal(i: Int): Boolean {
-            if (i + 2 >= candles.size) return false
-            if (i + 1 < candles.size && candles[i + 1].l == candles[i].l) return false
-            val start = downGroupStart(i)
-            if (start < 2) return false
-            return candles[start - 1].l > candles[i].l &&
-                candles[start - 2].l > candles[i].l &&
-                candles[i + 1].l > candles[i].l &&
-                candles[i + 2].l > candles[i].l
-        }
+        val candleHighs = candles.map { it.h }
+        val candleLows = candles.map { it.l }
+        fun upGroupStart(i: Int): Int = tc2FractalGroupStart(candleHighs, i, true)
+        fun downGroupStart(i: Int): Int = tc2FractalGroupStart(candleLows, i, false)
+        fun upFractal(i: Int): Boolean = tc2ConfirmedFractal(candleHighs, i, true)
+        fun downFractal(i: Int): Boolean = tc2ConfirmedFractal(candleLows, i, false)
 
         fun latestUpFractal(centerLimit: Int): Int? {
             for (i in centerLimit downTo 2) {
@@ -6582,18 +6896,12 @@ private class NativeEngine(
         val reversalStart = max(2, candles.lastIndex - 20)
         for (i in candles.lastIndex downTo reversalStart) {
             val priorLow = min(candles[i - 1].l, candles[i - 2].l)
-            val range = max(candles[i].h - candles[i].l, 1e-12)
-            val closeLocation = (candles[i].c - candles[i].l) / range
-            val belowMouth =
-                jawS[i].isFinite() &&
-                    teethS[i].isFinite() &&
-                    lipsS[i].isFinite() &&
-                    candles[i].l < min(jawS[i], min(teethS[i], lipsS[i]))
             if (
-                candles[i].l < priorLow &&
-                closeLocation >= 0.50 &&
-                belowMouth &&
-                angulationScore(i) > 0.0
+                tc2BullishWiseManBarQualified(
+                    high = candles[i].h, low = candles[i].l, close = candles[i].c,
+                    priorLow = priorLow, jaw = jawS[i], teeth = teethS[i],
+                    lips = lipsS[i], aoNow = ao(candles, i), aoPrevious = ao(candles, i - 1)
+                ) && angulationScore(i) > 0.0
             ) {
                 val trigger = candles[i].h + tick
                 if (triggerStillPending(i, trigger)) {
@@ -6649,14 +6957,11 @@ private class NativeEngine(
         val fractalCenter = latestUpFractal(candles.lastIndex - 2)
         if (fractalCenter != null) {
             val trigger = candles[fractalCenter].h + tick
-            val centerTeeth = teethS[fractalCenter]
-            val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
-            // Book rule: qualify the middle bar against the Teeth value at
-            // the fractal's own chart coordinate, then re-check the live
-            // pending trigger against current Teeth after confirmation.
+            val currentTeeth = teethS[current]
+            // TC2 ch.11: the FRACTAL must TRIGGER beyond Teeth, not form beyond
+            // it. Never veto a confirmed pattern using its pivot-bar Teeth.
             if (
-                centerTeeth.isFinite() &&
-                candles[fractalCenter].h > centerTeeth &&
+                currentTeeth.isFinite() && currentTeeth > 0.0 &&
                 triggerStillPending(fractalCenter, trigger) &&
                 trigger > currentTeeth
             ) {
@@ -7219,6 +7524,9 @@ private class NativeEngine(
 
         return JSONObject()
             .put("symbol", candidate.symbol)
+            .put("kline_price_basis", "CONTRACT_PRICE")
+            .put("entry_trigger_basis", "CONTRACT_PRICE")
+            .put("protective_stop_trigger_basis", "MARK_PRICE")
             .put("score", candidate.score)
             .put("signal", candidate.signal)
             .put("setup_score", candidate.score)
@@ -7266,6 +7574,13 @@ private class NativeEngine(
             .put("wave_phase", wave.phase)
             .put("wave_confidence", wave.confidence)
             .put("wave_exhaustion_risk", wave.exhaustionRisk)
+            .put("wave_model", "HEURISTIC_UNVERIFIED")
+            .put("wave_timeframes", JSONArray().apply {
+                candidate.waveFrames.forEach { put(it.asJson()) }
+            })
+            .put("wave_timeframes_complete", candidate.waveFrames.size == 4 &&
+                candidate.waveFrames.all { it.state == "ESTIMATED" })
+            .put("wave_timeframes_execution_authority", false)
             .put("nested_w3", nestedW3)
             .put("nested_w3_parent_w5", nestedParentW5)
             .put("entry_timeframe", wave.entryFrame)
@@ -7428,40 +7743,26 @@ private class NativeEngine(
     private fun isUpFractal(
         candles: List<CandleN>,
         i: Int
-    ): Boolean {
-        if (i < 2 || i + 2 >= candles.size) {
-            return false
-        }
-
-        return candles[i].h > candles[i - 1].h &&
-            candles[i].h > candles[i - 2].h &&
-            candles[i].h > candles[i + 1].h &&
-            candles[i].h > candles[i + 2].h
-    }
+    ): Boolean = tc2ConfirmedFractal(candles.map { it.h }, i, true)
 
     private fun isDownFractal(
         candles: List<CandleN>,
         i: Int
-    ): Boolean {
-        if (i < 2 || i + 2 >= candles.size) {
-            return false
-        }
-
-        return candles[i].l < candles[i - 1].l &&
-            candles[i].l < candles[i - 2].l &&
-            candles[i].l < candles[i + 1].l &&
-            candles[i].l < candles[i + 2].l
-    }
+    ): Boolean = tc2ConfirmedFractal(candles.map { it.l }, i, false)
 
     private fun fractalPivots(
         candles: List<CandleN>
     ): List<PivotN> {
         if (candles.size < 10) return emptyList()
 
+        val highs = candles.map { it.h }
+        val lows = candles.map { it.l }
         val pivots = mutableListOf<PivotN>()
         for (i in 2 until candles.size - 2) {
-            val up = isUpFractal(candles, i)
-            val down = isDownFractal(candles, i)
+            // The wave engine must use the SAME book-compatible confirmed
+            // fractal family as the TC2 entry engine, including equal extrema.
+            val up = tc2ConfirmedFractal(highs, i, true)
+            val down = tc2ConfirmedFractal(lows, i, false)
 
             if (up && !down) {
                 pivots.add(PivotN("UP", candles[i].h, i + 2))
@@ -7495,6 +7796,121 @@ private class NativeEngine(
         }
 
         return alternating.takeLast(8)
+    }
+
+    /**
+     * Pure wave evidence extracted as-of a particular exchange timestamp.
+     * No chart labels from unconfirmed pivots or forming candles can escape.
+     * Its lower-dimensional W count is diagnostic until cross-book replay.
+     */
+    private fun waveFrameEvidence(
+        frame: String,
+        candles: List<CandleN>,
+        exchangeNow: Long
+    ): WaveFrameEvidence {
+        val barMs = frameSeconds(frame) * 1000L
+        if (barMs <= 0L || exchangeNow <= 0L) {
+            return WaveFrameEvidence(frame, "UNKNOWN", 0L, 0, reason = "INVALID_TIMEBASE")
+        }
+        val closedTimes = tc2ClosedWaveBarTimes(candles.map { it.t }, barMs, exchangeNow)
+        val byTime = candles.associateBy { it.t }
+        val closed = closedTimes.mapNotNull { byTime[it] }
+        val lastClose = closed.lastOrNull()?.t?.plus(barMs) ?: 0L
+        // No silent wave counts from incomplete, duplicate or non-UTC-aligned
+        // candle histories. H1 and the configured structural frames are
+        // exchange-aligned fixed-duration intervals.
+        val duplicateOpens = candles.count { it.t in closedTimes } != closedTimes.size
+        val continuous = closed.zipWithNext().all { (a, b) -> b.t - a.t == barMs }
+        val aligned = closed.all { it.t % barMs == 0L }
+        if (duplicateOpens || !continuous || !aligned) {
+            return WaveFrameEvidence(frame, "INVALID_HISTORY", lastClose, closed.size,
+                reason = "DUPLICATE_GAP_OR_UNALIGNED_CANDLE")
+        }
+        if (closed.size < 45) {
+            return WaveFrameEvidence(frame, "INSUFFICIENT", lastClose, closed.size,
+                reason = "AT_LEAST_45_CLOSED_BARS_REQUIRED")
+        }
+        // Currency exchange-aligned freshness, using only the last *completed* bar.
+        if (exchangeNow - lastClose > 2L * barMs) {
+            return WaveFrameEvidence(frame, "STALE", lastClose, closed.size,
+                reason = "LAST_CLOSED_BAR_STALE")
+        }
+        val pivots = fractalPivots(closed)
+        val info = waveInfo(closed, frame)
+        val lastPivot = pivots.lastOrNull()
+        val opposite = pivots.lastOrNull { it.kind != lastPivot?.kind }
+        // Wave labels require confirmed swing evidence, not just an Alligator
+        // hint or a positive AO. W5 needs five alternating confirmed pivots.
+        val countSupported = when (info.position) {
+            1 -> pivots.size >= 2
+            2, 3 -> pivots.size >= 3
+            4, 5 -> pivots.size >= 5
+            else -> false
+        }
+        val primary = if (countSupported && info.phase in setOf("IMPULSE", "CORRECTION"))
+            "W" + info.position else "UNKNOWN"
+        val oppositePrice = opposite?.price ?: 0.0
+        val i = closed.lastIndex
+        val aNow = ao(closed, i)
+        val aPrior = ao(closed, i - 1)
+        val aoWindow = (0..4).map { ao(closed, i - it) }
+        val accelerator = if (aoWindow.all { it.isFinite() }) aNow - aoWindow.average() else 0.0
+        val lines = alligator(closed, i)
+        val gator = when {
+            lines.lips > lines.teeth && lines.teeth > lines.jaw -> "AWAKE_UP"
+            lines.lips < lines.teeth && lines.teeth < lines.jaw -> "AWAKE_DOWN"
+            else -> "SLEEPING_OR_TANGLED"
+        }
+        val counterPivot = when (info.direction) {
+            "UP" -> pivots.lastOrNull { it.kind == "DOWN" }
+            "DOWN" -> pivots.lastOrNull { it.kind == "UP" }
+            else -> null
+        }
+        val geo = lastPivot?.let { pivot ->
+            williamsSwingGeometry(
+                pivot.price, closed.last().c,
+                i - pivot.index, atrAbs(closed)
+            )
+        }
+        return WaveFrameEvidence(
+            timeframe = frame, state = if (countSupported) "ESTIMATED" else "UNCERTAIN",
+            asOfCloseMs = lastClose, closedBars = closed.size,
+            phase = if (countSupported) info.phase else "UNKNOWN",
+            primary = primary,
+            alternative = "UNKNOWN", // No alternative count verified, do not invent it.
+            direction = if (countSupported) info.direction else "NEUTRAL",
+            confidence = if (countSupported) info.confidence else 0.0,
+            pivotCount = pivots.size,
+            lastPivotKind = lastPivot?.kind ?: "NONE",
+            lastPivotPrice = lastPivot?.price ?: 0.0,
+            oppositePivotPrice = oppositePrice,
+            swing = geo,
+            lastClose = closed.last().c,
+            ao = if (aNow.isFinite()) aNow else 0.0,
+            aoDelta = if (aNow.isFinite() && aPrior.isFinite()) aNow - aPrior else 0.0,
+            ac = if (accelerator.isFinite()) accelerator else 0.0,
+            alligatorState = gator,
+            invalidationPrice = counterPivot?.price ?: 0.0,
+            reason = if (countSupported) "CONFIRMED_FRACTAL_WAVE_HYPOTHESIS"
+                else "WAVE_DEGREE_NOT_PROVEN_BY_PIVOTS"
+        )
+    }
+
+    private fun diagnosticWaveFrames(
+        symbol: String,
+        h1Closed: List<CandleN>
+    ): List<WaveFrameEvidence> {
+        val now = futuresMarketData.exchangeNowMs()
+        return listOf("1d", "4h", "1h", "15m").map { frame ->
+            try {
+                val candles = if (frame == "1h") h1Closed
+                    else fetchCandles(symbol, frame, startupHistoryLimit(frame))
+                waveFrameEvidence(frame, candles, now)
+            } catch (failure: Exception) {
+                WaveFrameEvidence(frame, "UNAVAILABLE", 0L, 0,
+                    reason = "HISTORY_UNAVAILABLE_" + failure.javaClass.simpleName)
+            }
+        }
     }
 
     private fun waveInfo(

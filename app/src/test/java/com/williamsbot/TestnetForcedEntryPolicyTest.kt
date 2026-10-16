@@ -232,10 +232,10 @@ class TestnetForcedEntryPolicyTest {
 
     @Test
     fun directional_context_preserves_long_and_short_and_applies_daily_veto() {
-        assertEquals(2, directionalSignalContextRank("LONG_BREAKOUT", false, false, true, false))
-        assertEquals(2, directionalSignalContextRank("SHORT_BREAKOUT", false, false, false, true))
-        assertEquals(0, directionalSignalContextRank("LONG_BREAKOUT", false, true, true, false))
-        assertEquals(0, directionalSignalContextRank("SHORT_BREAKOUT", true, false, false, true))
+        assertEquals(2, directionalSignalContextRank("LONG_FRACTAL", false, false, true, false))
+        assertEquals(2, directionalSignalContextRank("SHORT_FRACTAL", false, false, false, true))
+        assertEquals(0, directionalSignalContextRank("LONG_FRACTAL", false, true, true, false))
+        assertEquals(0, directionalSignalContextRank("SHORT_FRACTAL", true, false, false, true))
         assertEquals(1, directionalSignalContextRank("LONG_REVERSAL", false, false, false, true))
         assertEquals(0, directionalSignalContextRank("UNKNOWN_SIGNAL", false, false, true, true))
     }
@@ -245,7 +245,7 @@ class TestnetForcedEntryPolicyTest {
         assertEquals("LONG", campaignSignalDirection("REVERSAL"))
         assertEquals("LONG", campaignSignalDirection("SUPER_AO"))
         assertEquals("LONG", campaignSignalDirection("FRACTAL"))
-        assertEquals("LONG", campaignSignalDirection("LONG_BREAKOUT"))
+        assertEquals("LONG", campaignSignalDirection("LONG_FRACTAL"))
         assertEquals("SHORT", campaignSignalDirection("SHORT_REVERSAL"))
         assertEquals("SHORT", campaignSignalDirection("SHORT_SUPER_AO"))
         assertNull(campaignSignalDirection("UNKNOWN_SIGNAL"))

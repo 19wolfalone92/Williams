@@ -647,7 +647,9 @@ internal class NativeFuturesCampaignCoordinator(
         val entryPrice: String,
         val protectiveStop: String,
         val clientId: String,
-        val riskPct: Double
+        val riskPct: Double,
+        val signalType: String = "",
+        val signalBarTimeMs: Long = 0L
     )
 
     @Volatile var state: State = State.UNINITIALIZED
@@ -682,6 +684,8 @@ internal class NativeFuturesCampaignCoordinator(
 
     fun accountSnapshot(): JSONObject = adapterFactory().account()
     fun positionsSnapshot(): JSONArray = adapterFactory().positions()
+    /** CONTRACT_PRICE must match the analyzed standard Futures H1 candles. */
+    fun contractPrice(symbol: String): Double = adapterFactory().contractPrice(symbol)
     fun userTrades(symbol: String, startTime: Long, endTime: Long, limit: Int = 1000): JSONArray =
         adapterFactory().userTrades(symbol, startTime, endTime, limit)
     fun intentsSnapshot(): JSONArray = JSONArray(intents().toString())
@@ -1908,6 +1912,8 @@ internal class NativeFuturesCampaignCoordinator(
             .put("symbol", plan.symbol)
             .put("direction", plan.direction.name)
             .put("kind", plan.kind.name)
+            .put("signal_type", plan.signalType)
+            .put("signal_bar_time_ms", plan.signalBarTimeMs)
             .put("quantity", plan.quantity)
             .put("entry_price", plan.entryPrice)
             .put("protective_stop", plan.protectiveStop)
@@ -1999,8 +2005,16 @@ internal class NativeFuturesCampaignCoordinator(
         }
     }
 
-    /** Cancel unfilled entries on STOP/KILL without retrying ambiguous mutations. */
-    fun cancelPendingEntries(reason: String): JSONObject = synchronized(lock) {
+    /** Cancel unfilled entries with exchange readback; optional scope preserves other ten-pair signals. */
+    fun cancelPendingEntries(
+        reason: String,
+        onlySymbols: Set<String>? = null
+    ): JSONObject = synchronized(lock) {
+        val scopedSymbols = onlySymbols?.map { it.trim().uppercase(Locale.US) }?.toSet()
+        if (scopedSymbols != null && (scopedSymbols.isEmpty() || scopedSymbols.any { it !in allowedSymbols })) {
+            return@synchronized JSONObject().put("ok", false)
+                .put("blocker", "Pending-entry cancellation scope contains no approved Futures symbols")
+        }
         val adapter = adapterFactory()
         val all = intents()
         val openPositions = adapter.positions()
@@ -2082,6 +2096,7 @@ internal class NativeFuturesCampaignCoordinator(
                 val intent = all.optJSONObject(i) ?: continue
                 if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
                 val symbol = intent.optString("symbol")
+                if (scopedSymbols != null && symbol.uppercase(Locale.US) !in scopedSymbols) continue
                 val status = exchangeOrderStatus(intent)
                 if (status !in activeStatuses) continue
                 val clientId = intent.optString("client_id")
@@ -2158,10 +2173,28 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("reason", reason).put("blocker", lastBlocker)
                     .put("errors", JSONArray().apply { failures.forEach { put(it) } })
             }
-            state = if (openSymbols.isEmpty()) State.READY else State.RECONCILE_REQUIRED
-            lastBlocker = if (openSymbols.isEmpty()) null
-                else "open_positions_require_protection_reconciliation_after_pending_entry_cancellation"
+            // Scoped cancellation may leave unrelated, still-live pending entries.
+            // Never report READY just because this symbol's order was canceled.
+            val remaining = (0 until all.length()).mapNotNull { all.optJSONObject(it) }
+                .filter { it.optString("intent_role", "ENTRY") == "ENTRY" &&
+                    exchangeOrderStatus(it) in activeStatuses }
+            val unresolved = remaining.any {
+                exchangeOrderStatus(it) in setOf("SUBMISSION_UNKNOWN", "CANCEL_SUBMISSION_UNKNOWN")
+            }
+            state = when {
+                openSymbols.isNotEmpty() || unresolved -> State.RECONCILE_REQUIRED
+                remaining.isNotEmpty() -> State.ENTRY_PENDING
+                else -> State.READY
+            }
+            lastBlocker = when (state) {
+                State.RECONCILE_REQUIRED -> "pending_cancel_requires_account_reconciliation"
+                State.ENTRY_PENDING -> "unrelated_Futures_entries_remain_pending"
+                else -> null
+            }
             JSONObject().put("ok", true).put("state", state.name).put("reason", reason)
+                .put("scoped_symbols", if (scopedSymbols == null) JSONObject.NULL
+                    else JSONArray(scopedSymbols.toList()))
+                .put("remaining_pending_entries", remaining.size)
                 .put("positions_require_reconciliation", openSymbols.isNotEmpty())
                 .put("blocker", lastBlocker ?: JSONObject.NULL)
         } catch (failure: Exception) {

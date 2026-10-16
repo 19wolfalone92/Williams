@@ -155,7 +155,7 @@ def main() -> None:
         "def canonical_indicator_config_from_env(env=os.environ)",
         "CANONICAL_WILLIAMS_INDICATOR_PARAMS",
         "Non-canonical Williams indicator parameters are blocked",
-        "def _profitunity_window(volume_up, mfi_up, valid=None)",
+        "def _profitunity_window(volume_up, mfi_up, valid=None, *",
         '"fractal_up_confirmed"',
         '"confirmed_up_center_index"',
         '"confirmed_up_group_start_index"',
@@ -181,8 +181,7 @@ def main() -> None:
         "confirmed_up_center_index",
         "confirmed_up_group_start_index",
         "fractal_up_confirmed",
-        "middle-bar extreme must be",
-        "center_teeth",
+        "a confirmed fractal need not have FORMED",
         "side=side",
     ):
         must(signals, needle, "williams_signals.py")
@@ -368,7 +367,17 @@ def main() -> None:
     must(runtime_source, "val rawWorkCandles = candles", "StandaloneRuntime.kt H1 decision series")
     must_not(runtime_source, "getOrElse { candles }", "StandaloneRuntime.kt H1 fallback")
     must(runtime_source, '.put("take_profit_pct", 0.0)', "StandaloneRuntime.kt canonical Futures settings")
-    must(runtime_source, "candles[fractalCenter].h > centerTeeth", "StandaloneRuntime.kt")
+    must(runtime_source, "currentTeeth.isFinite() && currentTeeth > 0.0", "StandaloneRuntime.kt")
+    must_not(runtime_source, "candles[fractalCenter].h > centerTeeth", "StandaloneRuntime.kt pivot-bar Teeth veto")
+    must(runtime_source, "tc2BullishWiseManBarQualified(", "StandaloneRuntime.kt WM1")
+    must(runtime_source, "tc2OppositeBreakoutTriggered(true, contract, it.triggerPrice)", "StandaloneRuntime.kt LONG exit")
+    must(runtime_source, "tc2OppositeBreakoutTriggered(false, contract, it.triggerPrice)", "StandaloneRuntime.kt SHORT exit")
+    must(runtime_source, "futuresCampaignCoordinator.contractPrice(symbol)", "StandaloneRuntime.kt entry contract-price")
+    must_not(runtime_source, "val submitMark = futuresMarketData.markPrice(symbol)", "StandaloneRuntime.kt outdated mark-price entry")
+    must(adapter_source, '"workingType" to "CONTRACT_PRICE"', "Futures adapter TC2 entries")
+    must(adapter_source, '"workingType" to "MARK_PRICE"', "Futures adapter exchange protection")
+    must_not(runtime_source, "H1_CLOSE_CROSSED_ALLIGATOR_TEETH", "StandaloneRuntime.kt TC2 must not import NTD exit")
+    must(runtime_source, "tc2ConfirmedFractal(candleHighs, i, true)", "StandaloneRuntime.kt WM3 complex fractals")
     must(runtime_source, "fun upGroupStart(i: Int): Int", "StandaloneRuntime.kt")
     must(runtime_source, "fun downGroupStart(i: Int): Int", "StandaloneRuntime.kt")
     must(runtime_source, ".minOf { candles[it].l } - tick", "StandaloneRuntime.kt")
