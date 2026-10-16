@@ -7671,30 +7671,12 @@ private class NativeEngine(
     private fun isUpFractal(
         candles: List<CandleN>,
         i: Int
-    ): Boolean {
-        if (i < 2 || i + 2 >= candles.size) {
-            return false
-        }
-
-        return candles[i].h > candles[i - 1].h &&
-            candles[i].h > candles[i - 2].h &&
-            candles[i].h > candles[i + 1].h &&
-            candles[i].h > candles[i + 2].h
-    }
+    ): Boolean = tc2ConfirmedFractal(candles.map { it.h }, i, true)
 
     private fun isDownFractal(
         candles: List<CandleN>,
         i: Int
-    ): Boolean {
-        if (i < 2 || i + 2 >= candles.size) {
-            return false
-        }
-
-        return candles[i].l < candles[i - 1].l &&
-            candles[i].l < candles[i - 2].l &&
-            candles[i].l < candles[i + 1].l &&
-            candles[i].l < candles[i + 2].l
-    }
+    ): Boolean = tc2ConfirmedFractal(candles.map { it.l }, i, false)
 
     private fun fractalPivots(
         candles: List<CandleN>
