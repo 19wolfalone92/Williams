@@ -29,11 +29,12 @@ def _streak(mask):
     return pd.Series(out, index=mask.index, dtype=int)
 
 
-def _profitunity_window(volume_up, mfi_up, valid=None):
-    """Classify relative MFI/volume states without inventing a warm-up state.
+def _profitunity_window(volume_up, mfi_up, valid=None, *,
+                        volume_down=None, mfi_down=None):
+    """Classify strict up/down MFI and volume changes (ties are STABLE).
 
-    UNKNOWN means at least one current/previous input is unavailable. STABLE
-    is reserved for valid equal-direction comparisons, not NaN comparisons.
+    A flat MFI is NOT falling MFI. Older Boolean 'not up' handling
+    mislabelled equal-MFI/rising-volume bars as Squat, contrary to TC1.
     """
     if valid is None:
         valid = volume_up.notna() & mfi_up.notna()
@@ -41,12 +42,21 @@ def _profitunity_window(volume_up, mfi_up, valid=None):
         valid = valid.astype(bool)
     volume_up = volume_up.fillna(False).astype(bool)
     mfi_up = mfi_up.fillna(False).astype(bool)
+    # Without explicit falling columns, refuse to infer DOWN from NOT UP.
+    volume_down = (
+        volume_down.fillna(False).astype(bool)
+        if volume_down is not None else pd.Series(False, index=volume_up.index)
+    )
+    mfi_down = (
+        mfi_down.fillna(False).astype(bool)
+        if mfi_down is not None else pd.Series(False, index=mfi_up.index)
+    )
     result = pd.Series("UNKNOWN", index=volume_up.index, dtype=object)
     result.loc[valid] = "STABLE"
     result.loc[valid & volume_up & mfi_up] = "GREEN"
-    result.loc[valid & ~volume_up & ~mfi_up] = "FADING"
-    result.loc[valid & ~volume_up & mfi_up] = "FAKE"
-    result.loc[valid & volume_up & ~mfi_up] = "SQUAT"
+    result.loc[valid & volume_down & mfi_down] = "FADING"
+    result.loc[valid & volume_down & mfi_up] = "FAKE"
+    result.loc[valid & volume_up & mfi_down] = "SQUAT"
     return result
 
 
@@ -360,9 +370,10 @@ def calculate_indicators(df, cfg):
     x["long_fractal_signal"] = x["long_above_fractal"] & x["long_previous_below_fractal"]
     x["short_fractal_signal"] = x["short_below_fractal"] & x["short_previous_above_fractal"]
 
-    # First Wise Man: divergent/reversal bar. The source rule requires a new
-    # extreme and a close in the signal half of the bar. The extra mouth gate
-    # is the conservative spot-market overlay used by this bot.
+    # TC2 Wise Man 1: the ENTIRE signal bar must remain outside the mouth,
+    # and AO must have the opposite colour (red for bullish, green for bearish).
+    # Angulation and pending price breakout are subsequently checked by
+    # williams_signals.py, not by these indicator columns.
     bar_range = (x["high"] - x["low"]).replace(0, np.nan)
     close_location = (x["close"] - x["low"]) / bar_range
     prior_low = x["low"].shift(1).rolling(2).min()
@@ -370,14 +381,16 @@ def calculate_indicators(df, cfg):
     x["bullish_reversal_bar"] = (
         (x["low"] < prior_low)
         & (close_location >= 0.50)
-        & x["jaw_current"].notna()
-        & (x["low"] < x[["jaw_current", "teeth_current", "lips_current"]].min(axis=1))
+        & x[["jaw_current", "teeth_current", "lips_current"]].notna().all(axis=1)
+        & (x["high"] < x[["jaw_current", "teeth_current", "lips_current"]].min(axis=1))
+        & x["ao_red"]
     )
     x["bearish_reversal_bar"] = (
         (x["high"] > prior_high)
         & (close_location <= 0.50)
-        & x["jaw_current"].notna()
-        & (x["high"] > x[["jaw_current", "teeth_current", "lips_current"]].max(axis=1))
+        & x[["jaw_current", "teeth_current", "lips_current"]].notna().all(axis=1)
+        & (x["low"] > x[["jaw_current", "teeth_current", "lips_current"]].max(axis=1))
+        & x["ao_green"]
     )
     x["long_reversal_signal"] = x["bullish_reversal_bar"]
     x["short_reversal_signal"] = x["bearish_reversal_bar"]
@@ -511,7 +524,8 @@ def calculate_indicators(df, cfg):
     )
     x["mfi_proxy_valid"] = mfi_comparison_valid.astype(bool)
     x["profitunity_window"] = _profitunity_window(
-        x["volume_up"], x["mfi_up"], valid=mfi_comparison_valid
+        x["volume_up"], x["mfi_up"], valid=mfi_comparison_valid,
+        volume_down=x["volume_down"], mfi_down=x["mfi_down"]
     )
     x["squatting_bar"] = (x["profitunity_window"] == "SQUAT").astype(bool)
 
