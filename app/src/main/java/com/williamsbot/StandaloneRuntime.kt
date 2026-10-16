@@ -1148,6 +1148,7 @@ private class NativeEngine(
     // serializes mutations, but without this lock concurrent reconciliation requests can
     // race their coordinator snapshots and incorrectly latch RECONCILE_REQUIRED.
     private val futuresReconciliationLock = Any()
+    @Volatile private var futuresReconciliationRunning = false
     @Volatile private var futuresStreamReconcileRunning = false
     @Volatile private var futuresStreamReconcilePending = false
     @Volatile private var lastUserStreamReconcileAttemptMs = 0L
@@ -1653,7 +1654,7 @@ private class NativeEngine(
             .put("reconcile_required", reconcileRequired)
             .put("futures_coordinator_state", stateMachine.state.name)
             .put("futures_coordinator_blocker", lastError ?: JSONObject.NULL)
-            .put("futures_reconciliation_in_progress", reconcileRequired)
+            .put("futures_reconciliation_in_progress", futuresReconciliationRunning)
             .put("execution_state_contract", JSONObject()
                 .put("version", 1)
                 .put("state", stateName())
@@ -4243,24 +4244,30 @@ private class NativeEngine(
         allowKillLatched: Boolean = false,
         waitForDoorMs: Long = 50_000L
     ): JSONObject = synchronized(futuresReconciliationLock) {
-        // One coherent exchange snapshot at a time. Keep the entire operation,
-        // including the durable Execution Door lease and coordinator reconciliation,
-        // inside the same lock so concurrent REST snapshots cannot interleave.
-        val result = withCampaignMutation(
-            symbol = "FUTURES_ACCOUNT",
-            purpose = purpose,
-            allowPaused = true,
-            allowStopped = allowStopped,
-            allowKillLatched = allowKillLatched,
-            allowReconcileRequired = true,
-            waitForDoorMs = waitForDoorMs
-        ) {
-            futuresCampaignCoordinator.reconcile()
+        // Report active work separately from the fail-closed latch. The previous
+        // diagnostic copied reconcileRequired into the in-progress field, making
+        // a persistent block indistinguishable from a reconciliation still running.
+        futuresReconciliationRunning = true
+        try {
+            // Keep the full exchange snapshot and Execution Door lease serialized.
+            val result = withCampaignMutation(
+                symbol = "FUTURES_ACCOUNT",
+                purpose = purpose,
+                allowPaused = true,
+                allowStopped = allowStopped,
+                allowKillLatched = allowKillLatched,
+                allowReconcileRequired = true,
+                waitForDoorMs = waitForDoorMs
+            ) {
+                futuresCampaignCoordinator.reconcile()
+            }
+            if (result.optBoolean("ok", false)) {
+                lastRestReconcileMs = System.currentTimeMillis()
+            }
+            result
+        } finally {
+            futuresReconciliationRunning = false
         }
-        if (result.optBoolean("ok", false)) {
-            lastRestReconcileMs = System.currentTimeMillis()
-        }
-        result
     }
 
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
