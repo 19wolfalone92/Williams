@@ -134,6 +134,94 @@ def abc_evidence(pivots: Sequence[Any]) -> dict[str, Any]:
     }
 
 
+
+def impulse_correction_evidence(pivots: Sequence[Any], direction: str) -> dict[str, Any]:
+    """Describe a possible 1-2-3-4-5 -> A-B-C transition.
+
+    A six-pivot impulse *skeleton* is required first. Each additional A/B/C
+    turning point must already be confirmed. Internal wave degrees are not
+    verified, and 50% retracements are measured, never imposed as hard rules.
+    """
+    direction = str(direction).upper()
+    if direction not in {"UP", "DOWN"}:
+        return {"status": "UNKNOWN", "stage": "NONE", "is_entry_signal": False}
+    qualified = [(item, n) for item in pivots
+                 if (n := _node(item)) is not None]
+    first, second = (("DOWN", "UP") if direction == "UP"
+                     else ("UP", "DOWN"))
+    sequence = [first, second, first, second, first, second,
+                first, second, first]
+    sign = 1 if direction == "UP" else -1
+    for start in range(len(qualified) - 6, -1, -1):
+        remaining = len(qualified) - start
+        # Old formations must not masquerade as the current A/B/C scenario.
+        if remaining > 9:
+            continue
+        part = qualified[start:]
+        nodes = [n for _, n in part]
+        if [n["kind"] for n in nodes] != sequence[:remaining]:
+            continue
+        if any(nodes[k]["center_index"] >= nodes[k + 1]["center_index"]
+               for k in range(len(nodes) - 1)):
+            continue
+        base = impulse_evidence([item for item, _ in part[:6]], direction)
+        if base["status"] not in {"CANDIDATE", "ALTERNATIVE"}:
+            continue
+        prices = [n["price"] for n in nodes]
+        p = [price * sign for price in prices]
+        if remaining >= 7 and not p[6] < p[5]:
+            continue
+        if remaining >= 8 and not p[7] > p[6]:
+            continue
+        if remaining >= 9 and not p[8] < p[7]:
+            continue
+        denominator = p[3] - p[2]
+        if denominator <= 0:
+            continue
+        after_impulse = remaining - 6
+        stages = (
+            "W5_CANDIDATE", "A_PIVOT_CONFIRMED",
+            "B_PIVOT_CONFIRMED", "C_PIVOT_CONFIRMED"
+        )
+        output: dict[str, Any] = {
+            "status": "STRUCTURAL_HYPOTHESIS",
+            "direction_of_preceding_impulse": direction,
+            "stage": stages[after_impulse],
+            "ordinary_impulse_or_diagonal": base["model"],
+            "wave4_retracement_of_wave3": round((p[3] - p[4]) / denominator, 6),
+            "wave2_level": prices[2],
+            "wave4_level": prices[4],
+            "wave5_level": prices[5],
+            "confirmed_through_index": nodes[-1]["confirmed_index"],
+            "anchor_center_indices": [n["center_index"] for n in nodes],
+            "internal_subwaves_verified": False,
+            "ratios_are_filters": False,
+            "is_entry_signal": False,
+            "can_place_orders": False,
+        }
+        if after_impulse >= 1:
+            output["a_level"] = prices[6]
+        if after_impulse >= 2:
+            a_size = p[5] - p[6]
+            if a_size <= 0:
+                continue
+            output["b_level"] = prices[7]
+            output["b_retracement_of_a"] = round((p[7] - p[6]) / a_size, 6)
+            output["b_exceeds_wave5_level"] = p[7] >= p[5]
+        if after_impulse >= 3:
+            output["c_level"] = prices[8]
+            output["c_size_relative_to_a"] = round((p[7] - p[8]) / a_size, 6)
+            output["c_nearby_reference_levels"] = {
+                "wave2": prices[2], "wave4": prices[4]
+            }
+        return output
+    return {
+        "status": "INCOMPLETE", "stage": "NONE",
+        "reason": "No causally confirmed impulse-to-ABC skeleton",
+        "is_entry_signal": False, "can_place_orders": False
+    }
+
+
 def ao_divergence_evidence(pivots: Sequence[Any], ao: Sequence[Any], direction: str) -> dict[str, Any]:
     """Compare price swing extremes to AO *leg* peaks/troughs, not same-bar AO.
 
@@ -200,6 +288,8 @@ def collect_visual_wave_evidence(pivots: Sequence[Any], ao: Sequence[Any], direc
         "impulse_up": impulse_evidence(confirmed_pivots, "UP"),
         "impulse_down": impulse_evidence(confirmed_pivots, "DOWN"),
         "abc": abc_evidence(confirmed_pivots),
+        "impulse_correction_up": impulse_correction_evidence(confirmed_pivots, "UP"),
+        "impulse_correction_down": impulse_correction_evidence(confirmed_pivots, "DOWN"),
         "ao_divergence": ao_divergence_evidence(confirmed_pivots, ao, direction),
         # Counter-trend exhaustion evidence must not disappear when the
         # Alligator has already switched direction during a reversal.
