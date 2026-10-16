@@ -122,12 +122,17 @@ def test_wm3_consumers_use_actual_confirmation_and_whole_plateau_stop():
     assert trigger_base == 12.0
     assert protective == 10.0  # minimum low across equal-high bars 3 and 4
 
-    # The middle bar itself must qualify against Teeth when the fractal forms;
-    # checking only the later confirmation/current Teeth is insufficient.
-    rejected = ind.copy()
-    rejected.loc[4, "teeth_shifted"] = 12.1
+    # TC2 ch.11: only the eventual breakout must qualify against Teeth.
+    # A valid fractal may have FORMED below the Teeth (red) line.
+    formed_below_teeth = ind.copy()
+    formed_below_teeth.loc[4, "teeth_shifted"] = 12.1
     assert _latest_confirmed_fractal(
-        rejected, side="LONG", current_teeth=10.5,
+        formed_below_teeth, side="LONG", current_teeth=10.5,
+        current_close=9.0, tick_size=0.1
+    ) is not None
+    # But it is still rejected when the CURRENT Teeth obstructs its trigger.
+    assert _latest_confirmed_fractal(
+        formed_below_teeth, side="LONG", current_teeth=12.2,
         current_close=9.0, tick_size=0.1
     ) is None
 
