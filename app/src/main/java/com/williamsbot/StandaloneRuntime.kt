@@ -327,7 +327,7 @@ internal fun reconciliationTaskLifecycleHealthy(
     running: Boolean,
     startedAtMs: Long,
     nowMs: Long,
-    maximumDurationMs: Long = 120_000L
+    maximumDurationMs: Long = 300_000L
 ): Boolean {
     if (!running) return true
     if (maximumDurationMs <= 0L || startedAtMs <= 0L || nowMs < startedAtMs) return false
@@ -8542,7 +8542,7 @@ private class NativeEngine(
                 "; started_at_ms=" + streamReconcileStartedAtMs +
                 "; finished_at_ms=" + streamReconcileFinishedAtMs +
                 "; duration_ms=" + (if (streamReconcileDurationMs >= 0L) streamReconcileDurationMs.toString() else "UNKNOWN") +
-                "; max_running_duration_ms=120000" +
+                "; max_running_duration_ms=300000" +
                 "; last_failure=" + statusSnapshot.optString("user_stream_reconcile_failure", "none")
         )
         val userEventAgeMs = if (lastUserEventMs > 0L && userNowMs >= lastUserEventMs)
