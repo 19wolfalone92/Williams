@@ -2720,7 +2720,7 @@ private class NativeEngine(
             if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) contract < trigger
             else contract > trigger
         ) {
-            "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED: mark=$mark, trigger=$trigger; no market-order substitution"
+            "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED: contract=$contract, trigger=$trigger; no market-order substitution"
         }
         require(
             if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) stop < trigger
@@ -5178,6 +5178,9 @@ private class NativeEngine(
                 } ?: throw IllegalStateException(symbol + " has no latest exchange-confirmed protected campaign")
             val oldStop = intent.optString("protective_stop").toDoubleOrNull()
                 ?: throw IllegalStateException(symbol + " structural stop is missing")
+            // Protective exchange STOP_MARKET remains MARK_PRICE-triggered:
+            // trailing comparisons must use MARK_PRICE, unlike TC2 entries.
+            val mark = futuresMarketData.markPrice(symbol)
             val trail = candles.takeLast(campaignTrailBars)
             val proposed = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
                 normalizePrice((trail.minOfOrNull { it.l } ?: oldStop) - rules.tick, rules.tick)
