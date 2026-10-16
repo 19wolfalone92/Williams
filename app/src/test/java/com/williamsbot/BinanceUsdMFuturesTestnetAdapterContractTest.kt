@@ -47,6 +47,24 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         )
     }
     @Test
+    fun malformedPositionRowsNeverLookLikeAFlatAccountDuringModeChange() {
+        assertTrue(!hasLiveFuturesPosition(JSONArray()))
+        assertTrue(!hasLiveFuturesPosition(JSONArray().put(JSONObject().put("positionAmt", "0"))))
+        assertTrue(hasLiveFuturesPosition(JSONArray().put(JSONObject().put("positionAmt", "0.01"))))
+        assertTrue(hasLiveFuturesPosition(JSONArray().put(JSONObject().put("positionAmt", "-0.01"))))
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun malformedPositionAmountFailsClosedInsteadOfAssumingZero() {
+        hasLiveFuturesPosition(JSONArray().put(JSONObject().put("positionAmt", "not-a-number")))
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun malformedPositionRowFailsClosedInsteadOfAssumingNoPosition() {
+        hasLiveFuturesPosition(JSONArray().put(JSONObject.NULL))
+    }
+
+    @Test
     fun longAndShortEntryAndExitSidesAreOppositeAndNeverAmbiguous() {
         assertEquals("BUY", BinanceUsdMFuturesTestnetAdapter.entrySide("LONG"))
         assertEquals("SELL", BinanceUsdMFuturesTestnetAdapter.entrySide("SHORT"))
