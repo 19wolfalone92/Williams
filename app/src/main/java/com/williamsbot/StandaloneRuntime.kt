@@ -5142,10 +5142,30 @@ private class NativeEngine(
             h4.last().c < h4Line.lips && ao(h4, h4.lastIndex) < 0.0
         // Apply D1/H4 context before choosing between fresh confirmed H1 hypotheses.
         // H4-aligned context ranks before a reversal; signal recency breaks ties.
+        val lastH1Index = candidate.candles.lastIndex
+        val lastClosedAo = ao(candidate.candles, lastH1Index)
+        val lastClosedAc = nativeAcFromClosedAo(
+            (lastH1Index - 4..lastH1Index).map { ao(candidate.candles, it) }
+        )
+        fun nativeRank(type: String): Double = nativeDirectionalHeuristicRank(
+            signalType = type,
+            waveDirection = candidate.wave.direction,
+            wavePosition = candidate.wave.position,
+            exhaustionRisk = candidate.wave.exhaustionRisk,
+            bullishAlligator = candidate.wave.alligatorBullish,
+            bearishAlligator = candidate.wave.alligatorBearish,
+            ao = lastClosedAo, ac = lastClosedAc,
+            bearishDivergence = candidate.wave.aoBearishDivergence,
+            bullishDivergence = candidate.wave.aoBullishDivergence
+        )
+        // Keep macro eligibility (0/1/2) authoritative. The new bounded
+        // H1 wave/AO/AC evidence ranks only *equally eligible* real signals.
+        // Drawing-based A/B/C targets and 50% Fibonacci markers are NEVER gates.
         val signal = freshSignals.maxWithOrNull(
             compareBy<CampaignSignalN> {
                 directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)
-            }.thenBy { it.signalBarTimeMs }
+            }.thenBy { nativeRank(it.type) }
+                .thenBy { it.signalBarTimeMs }
         )?.takeIf {
             directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear) > 0
         } ?: run {
@@ -7216,8 +7236,32 @@ private class NativeEngine(
 
         val riskReward =
             candidate.riskReward
+        val lastH1 = candidate.candles.lastIndex
+        val h1Ao = ao(candidate.candles, lastH1)
+        val h1Ac = if (lastH1 >= 4) nativeAcFromClosedAo(
+            (lastH1 - 4..lastH1).map { ao(candidate.candles, it) }
+        ) else Double.NaN
+        fun waveRank(type: String) = nativeDirectionalHeuristicRank(
+            signalType = type, waveDirection = wave.direction,
+            wavePosition = wave.position, exhaustionRisk = wave.exhaustionRisk,
+            bullishAlligator = wave.alligatorBullish,
+            bearishAlligator = wave.alligatorBearish, ao = h1Ao, ac = h1Ac,
+            bearishDivergence = wave.aoBearishDivergence,
+            bullishDivergence = wave.aoBullishDivergence
+        )
+        val directionTrace = JSONObject()
+            .put("long_rank_tiebreak", waveRank("LONG_REVERSAL"))
+            .put("short_rank_tiebreak", waveRank("SHORT_REVERSAL"))
+            .put("ao_divergence_bearish", wave.aoBearishDivergence)
+            .put("ao_divergence_bullish", wave.aoBullishDivergence)
+            .put("wave_label", wave.position)
+            .put("wave_phase", wave.phase)
+            .put("ratios_are_mandatory", false)
+            .put("calibration", "ENGINEERING_HEURISTIC_UNCALIBRATED")
+            .put("can_place_orders", false)
 
         return JSONObject()
+            .put("directional_context_native", directionTrace)
             .put("symbol", candidate.symbol)
             .put("score", candidate.score)
             .put("signal", candidate.signal)
@@ -7379,31 +7423,17 @@ private class NativeEngine(
         return fastSum / 5.0 - slowSum / 34.0
     }
 
-    private fun aoBearishDivergence(candles: List<CandleN>): Boolean {
-        if (candles.size < 45) return false
-        val end = candles.lastIndex
-        val start = max(2, end - 35)
-        val peaks = (start + 1 until end).filter {
-            candles[it].h > candles[it - 1].h && candles[it].h >= candles[it + 1].h
-        }
-        if (peaks.size < 2) return false
-        val recent = peaks.last()
-        val previous = peaks[peaks.size - 2]
-        return candles[recent].h > candles[previous].h && ao(candles, recent) < ao(candles, previous)
-    }
+    private fun aoBearishDivergence(candles: List<CandleN>): Boolean =
+        nativeConfirmedAoLegDivergence(
+            highs = candles.map { it.h }, lows = candles.map { it.l },
+            ao = candles.indices.map { ao(candles, it) }, bearish = true
+        )
 
-    private fun aoBullishDivergence(candles: List<CandleN>): Boolean {
-        if (candles.size < 45) return false
-        val end = candles.lastIndex
-        val start = max(2, end - 35)
-        val troughs = (start + 1 until end).filter {
-            candles[it].l < candles[it - 1].l && candles[it].l <= candles[it + 1].l
-        }
-        if (troughs.size < 2) return false
-        val recent = troughs.last()
-        val previous = troughs[troughs.size - 2]
-        return candles[recent].l < candles[previous].l && ao(candles, recent) > ao(candles, previous)
-    }
+    private fun aoBullishDivergence(candles: List<CandleN>): Boolean =
+        nativeConfirmedAoLegDivergence(
+            highs = candles.map { it.h }, lows = candles.map { it.l },
+            ao = candles.indices.map { ao(candles, it) }, bearish = false
+        )
     private fun latestConfirmedUpFractal(
         candles: List<CandleN>,
         currentIndex: Int
