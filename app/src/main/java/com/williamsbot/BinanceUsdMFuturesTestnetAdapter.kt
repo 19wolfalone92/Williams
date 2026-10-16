@@ -38,7 +38,8 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
-        .build()
+        .build(),
+    private val rateGuard: BinanceRateGuard? = null
 ) {
     private val secret = apiSecret.toByteArray(Charsets.UTF_8)
     private val base = "https://demo-fapi.binance.com"
@@ -586,12 +587,19 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             "DELETE" -> builder.delete(body)
             else -> throw IllegalArgumentException("Unsupported HTTP method")
         }
+        val orderMutation = isOrderMutation(method, path)
+        rateGuard?.beforeRequest(isOrder = orderMutation)
         http.newCall(builder.build()).execute().use { response ->
+            rateGuard?.observe(response.headers, response.code, isOrder = orderMutation)
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IOException("Binance USD-M Futures HTTP ${response.code}: ${text.take(500)}")
             return text
         }
     }
+
+    private fun isOrderMutation(method: String, path: String): Boolean =
+        method.uppercase(Locale.US) in setOf("POST", "DELETE") &&
+            path in setOf("/fapi/v1/order", "/fapi/v1/algoOrder", "/fapi/v1/batchOrders")
 
     private fun encode(params: Map<String, String>): String =
         params.entries.joinToString("&") { "${it.key}=${java.net.URLEncoder.encode(it.value, "UTF-8")}" }
