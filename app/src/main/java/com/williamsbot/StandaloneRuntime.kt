@@ -1213,6 +1213,7 @@ private class NativeEngine(
     @Volatile private var reconcileRequired = false
     @Volatile private var killLatched = false
     @Volatile private var userStreamConnected = false
+    @Volatile private var userStreamConnectionGeneration = 0L
     @Volatile private var userStreamSyncRequired = true
     @Volatile private var userStreamLastError: String? = null
     // All account-wide Futures snapshots share one lock, including startup, user-stream,
@@ -1277,23 +1278,21 @@ private class NativeEngine(
         endpoint = "wss://demo-fstream.binance.com/private/ws",
         apiKeyProvider = { key() },
         onConnection = { connected, error ->
-            userStreamConnected = connected
-            userStreamLastError = if (connected) null else error?.takeUnless { it == "stopped" }
-            if (connected) {
-                // Each new connection generation must complete its own REST reconciliation.
-                lastUserStreamSyncAtMs = 0L
-                // A recovered socket must not leave the old close reason displayed as
-                // the current Runtime error. Clear only this stream's stale diagnostic;
-                // preserve unrelated REST, risk, persistence and reconciliation errors.
-                if (lastError?.startsWith("user ws: ") == true) lastError = null
-                scheduleFuturesStreamReconciliation("user stream connected", force = true)
-            } else if (!error.equals("stopped")) {
+            synchronized(this) {
+                // Change generation under the same monitor used by the reconciliation
+                // worker so a prior socket's REST snapshot cannot certify a new session.
+                userStreamConnectionGeneration += 1L
+                userStreamConnected = connected
                 userStreamSyncRequired = true
-                // Keep the failure visible even while flat. A disconnected private
-                // stream blocks new entries and its actual reason must not disappear
-                // just because there are no open positions.
-                if (!killLatched) lastError = "user ws: " + (error ?: "disconnected")
+                userStreamLastError = if (connected) null else error?.takeUnless { it == "stopped" }
+                if (connected) {
+                    lastUserStreamSyncAtMs = 0L
+                    if (lastError?.startsWith("user ws: ") == true) lastError = null
+                } else if (!error.equals("stopped")) {
+                    if (!killLatched) lastError = "user ws: " + (error ?: "disconnected")
+                }
             }
+            if (connected) scheduleFuturesStreamReconciliation("user stream connected", force = true)
         },
         onEvent = { event ->
             handleUserEvent(event)
@@ -1706,6 +1705,7 @@ private class NativeEngine(
             .put("public_stream_last_event_ms", publicSocketLastEventMs)
             .put("user_stream_connected", userStreamConnected)
             .put("user_stream_sync_required", userStreamSyncRequired)
+            .put("user_stream_connection_generation", userStreamConnectionGeneration)
             .put("user_stream_last_event_ms", lastUserEventMs)
             .put("user_stream_last_successful_sync_ms", lastUserStreamSyncAtMs)
             .put("user_stream_last_error", userStreamLastError ?: JSONObject.NULL)
@@ -5620,9 +5620,9 @@ private class NativeEngine(
     }
 
     private fun scheduleFuturesStreamReconciliation(reason: String, force: Boolean = false) {
-        userStreamSyncRequired = true
-        lastUserStreamSyncAtMs = 0L
         synchronized(this) {
+            userStreamSyncRequired = true
+            lastUserStreamSyncAtMs = 0L
             if (futuresStreamReconcileRunning) {
                 futuresStreamReconcilePending = true
                 return
@@ -5644,7 +5644,10 @@ private class NativeEngine(
         Thread {
             try {
                 while (true) {
-                    synchronized(this) { futuresStreamReconcilePending = false }
+                    val connectionGenerationForAttempt = synchronized(this) {
+                        futuresStreamReconcilePending = false
+                        userStreamConnectionGeneration
+                    }
                     val result = reconcileFuturesThroughDoor(
                         "USER_STREAM_RECONCILIATION",
                         allowStopped = true,
@@ -5656,11 +5659,11 @@ private class NativeEngine(
                     val repeat = synchronized(this) {
                         if (futuresStreamReconcilePending) {
                             true
-                        } else if (!userStreamConnected) {
-                            // The socket can drop while REST reconciliation is in flight.
-                            // Never let a successful REST snapshot from a now-disconnected
-                            // stream clear the synchronization barrier; on reconnect a fresh
-                            // reconciliation is scheduled from onOpen.
+                        } else if (!userStreamConnected ||
+                            userStreamConnectionGeneration != connectionGenerationForAttempt
+                        ) {
+                            // This attempt may finish just as the socket changes. Never let
+                            // an old-session REST snapshot clear the current session's latch.
                             userStreamSyncRequired = true
                             futuresStreamReconcileRunning = false
                             false
@@ -8088,6 +8091,7 @@ private class NativeEngine(
             .put("public_stream_last_event_ms", publicSocketLastEventMs)
             .put("user_ws_connected", userStreamConnected)
             .put("user_stream_sync_required", userStreamSyncRequired)
+            .put("user_stream_connection_generation", userStreamConnectionGeneration)
             .put("user_stream_last_event_ms", lastUserEventMs)
             .put("user_stream_last_successful_sync_ms", lastUserStreamSyncAtMs)
             .put("user_stream_last_error", userStreamLastError ?: JSONObject.NULL)
