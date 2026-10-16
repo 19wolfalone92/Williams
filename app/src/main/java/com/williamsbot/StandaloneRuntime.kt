@@ -5435,6 +5435,24 @@ private class NativeEngine(
 
         val baseline = executionStore.readState(baselineKey)?.toDoubleOrNull() ?: 0.0
         require(baseline > 0.0 && baseline.isFinite()) { "Futures daily equity baseline is invalid" }
+        // Older builds persisted the numeric baseline and its provenance as two separate
+        // SQLite writes. A process death between those writes left a valid baseline but no
+        // source key; because initialization only ran when the numeric key was absent, the
+        // missing provenance could then persist forever. Repair metadata only when the
+        // already-persisted baseline itself validates; never replace/reset the baseline.
+        val baselineSourceKey = "futures_day_start_equity_source_" + utcDayStartMs
+        val existingBaselineSource = executionStore.readState(baselineSourceKey)
+        if (existingBaselineSource.isNullOrBlank() ||
+            existingBaselineSource.equals("UNKNOWN", ignoreCase = true)) {
+            check(executionStore.writeState(
+                baselineSourceKey, "SQLITE_PERSISTED_BASELINE_SOURCE_RECOVERED"
+            )) {
+                paused = true
+                prefs.edit().putBoolean("auto_run", false).commit()
+                lastError = "FUTURES_DAILY_BASELINE_SOURCE_REPAIR_FAILED: persisted baseline is valid but provenance metadata could not be repaired"
+                return false
+            }
+        }
         val dailyIncomeRows = incomeRowsForDay ?: runCatching {
             futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
         }.getOrElse { failure ->
