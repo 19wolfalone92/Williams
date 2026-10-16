@@ -859,3 +859,34 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
     assert "htf1d.alligatorBearish && !htf1d.aoPositive" in enrich
     assert "it.position == 3 && it.direction == decisionDirection" in enrich
     assert "junior.alligatorBearish && !junior.aoPositive" in enrich
+
+
+def test_native_wave_evidence_covers_each_of_four_configured_closed_timeframes():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert 'listOf("1d", "4h", "1h", "15m").map { frame ->' in runtime
+    assert 'val evidence = diagnosticWaveFrames(symbol, result.candles)' in runtime
+    assert 'result.copy(waveFrames = evidence)' in runtime
+    assert '.put("wave_timeframes", JSONArray().apply {' in runtime
+    assert 'as_of_closed_at_ms' in runtime
+    assert 'HEURISTIC_UNVERIFIED' in runtime
+    assert '"execution_authority", false' in runtime
+    assert 'tc2ClosedWaveBarTimes(candles.map { it.t }, barMs, exchangeNow)' in runtime
+    assert '"DUPLICATE_GAP_OR_UNALIGNED_CANDLE"' in runtime
+    assert 'val up = tc2ConfirmedFractal(highs, i, true)' in runtime
+    assert 'val down = tc2ConfirmedFractal(lows, i, false)' in runtime
+
+
+def test_native_pending_order_cancellation_checks_closed_h1_and_htf_direction():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    assert 'signalType = signal.type' in runtime
+    assert 'signalBarTimeMs = signal.signalBarTimeMs' in runtime
+    assert '.put("signal_type", plan.signalType)' in coordinator
+    assert '.put("signal_bar_time_ms", plan.signalBarTimeMs)' in coordinator
+    assert 'directionalSignalContextRank(' in runtime
+    assert '"TC2_PENDING_DIRECTION_CONTEXT_VETO"' in runtime
+    assert '"TC2_PENDING_CLOSED_H1_INVALIDATION"' in runtime
+    assert 'futuresCampaignCoordinator.cancelPendingEntries(reason, setOf(symbol))' in runtime
+    assert 'scopedSymbols != null && symbol.uppercase(Locale.US) !in scopedSymbols' in coordinator
+    assert '"remaining_pending_entries", remaining.size' in coordinator
+    assert '"CANCEL_SUBMISSION_UNKNOWN"' in coordinator
