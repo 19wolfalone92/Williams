@@ -76,9 +76,10 @@ object StandaloneRuntime {
         server?.stopTrading()
     }
 
-    fun stop() {
-        server?.stop()
-        server = null
+    fun stop(): Boolean {
+        // Keep the process singleton: an overlapping UI start must never create a
+        // second NativeEngine while an old server still has a running worker.
+        return server?.stop() ?: true
     }
 }
 
@@ -889,9 +890,7 @@ private class StandaloneServer(private val context: Context) {
 
     private var engine: NativeEngine? = null
 
-    fun stop() {
-        engine?.stop()
-    }
+    fun stop(): Boolean = engine?.stop()?.optBoolean("stopped", false) ?: true
 
     fun autostart() {
         if (
@@ -916,6 +915,7 @@ private class StandaloneServer(private val context: Context) {
         e().stop()
     }
 
+    @Synchronized
     private fun e(): NativeEngine {
         if (engine == null) {
             engine = NativeEngine(context, prefs, client, executionStore)
@@ -964,10 +964,15 @@ private class StandaloneServer(private val context: Context) {
             method == "GET" && path == "/api/v1/market/indicators" ->
                 x.indicators(params["symbol"], params["interval"]).toString()
 
+            method == "GET" && path == "/api/v1/market/quote" ->
+                x.marketQuote(params["symbol"]).toString()
+
             method == "GET" && path == "/api/v1/market/klines" ->
                 x.klines(
                     requestedSymbol = params["symbol"],
-                    requestedInterval = params["interval"]
+                    requestedInterval = params["interval"],
+                    requestedEndTime = params["until"]?.toLongOrNull(),
+                    requestedBars = params["bars"]?.toIntOrNull() ?: 120
                 ).toString()
 
             method == "GET" && path == "/api/v1/market/tickers" ->
@@ -993,6 +998,18 @@ private class StandaloneServer(private val context: Context) {
             method == "GET" && path == "/api/v1/settings" ->
                 x.settings().toString()
 
+            method == "GET" && path == "/api/v1/cockpit" ->
+                x.cockpit().toString()
+
+            method == "POST" && path == "/api/v1/ui/event" ->
+                x.uiEvent(JSONObject(body)).toString()
+
+            method == "POST" && path == "/api/v1/control/block" ->
+                x.blockNewEntries().toString()
+
+            method == "POST" && path == "/api/v1/control/shutdown" ->
+                x.stop().toString()
+
             method == "GET" && path == "/api/v1/diagnostics" ->
                 x.diagnostics().toString()
 
@@ -1006,7 +1023,7 @@ private class StandaloneServer(private val context: Context) {
                 x.start().toString()
 
             method == "POST" && path == "/api/v1/control/stop" ->
-                x.stop().toString()
+                x.stopNewEntries().toString()
 
             method == "POST" && path == "/api/v1/control/pause" ->
                 x.pause().toString()
@@ -1075,6 +1092,7 @@ private class NativeEngine(
         NativeFuturesCampaignCoordinator(executionStore) {
             BinanceUsdMFuturesTestnetAdapter(key(), secret(), http, rateGuard)
         }.also { coordinator ->
+            coordinator.setObservationSink { auditStore.recordCampaignSnapshot(it) }
             coordinator.setStructuralStopRecoveryProvider { symbol, direction, mark, quantity, entry ->
                 recoverMissingStructuralStop(symbol, direction, mark, quantity, entry)
             }
@@ -1172,7 +1190,7 @@ private class NativeEngine(
     private var running = false
 
     @Volatile
-    private var paused = false
+    private var paused = prefs.getBoolean("operator_entries_paused", false)
 
     @Volatile
     private var forceTestnetMode =
@@ -1244,8 +1262,8 @@ private class NativeEngine(
     @Volatile private var futuresAccountSnapshotRefreshRunning = false
     @Volatile private var futuresAccountSnapshotLastAttemptMs = 0L
     @Volatile private var futuresAccountSnapshotRefreshError: String? = null
-    @Volatile private var cachedFuturesPositionsSnapshot: JSONArray? = null
-    @Volatile private var cachedFuturesPositionsSnapshotAtMs = 0L
+    // Publish bytes and their confirmation time together; a later refresh cannot relabel old rows as fresh.
+    @Volatile private var cachedFuturesPositionEnvelope: Pair<String, Long>? = null
     @Volatile private var futuresPositionSnapshotRefreshRunning = false
     @Volatile private var futuresPositionSnapshotLastAttemptMs = 0L
     @Volatile private var futuresPositionSnapshotRefreshError: String? = null
@@ -1454,6 +1472,7 @@ private class NativeEngine(
 
     private fun executionReady(): Boolean =
         futuresExecutionAdapterReady &&
+            RuntimeServiceState.active &&
             campaignCoordinatorReadyForEntry() &&
             running &&
             !paused &&
@@ -1474,6 +1493,7 @@ private class NativeEngine(
     private fun executionBlockers(): List<String> =
         buildList {
             if (!futuresExecutionAdapterReady) add("futures_execution_adapter_disabled")
+            if (!RuntimeServiceState.active) add("foreground_service_not_confirmed")
             if (!campaignCoordinatorReadyForEntry()) {
                 val coordinator = runCatching { futuresCampaignCoordinator.status() }.getOrNull()
                 add("futures_campaign_coordinator_not_ready:" +
@@ -1888,8 +1908,7 @@ private class NativeEngine(
         candidates = JSONArray()
         primaryCandles = emptyList()
         scanSymbols = mutableListOf()
-        cachedFuturesPositionsSnapshot = null
-        cachedFuturesPositionsSnapshotAtMs = 0L
+        cachedFuturesPositionEnvelope = null
         futuresPositionSnapshotLastAttemptMs = 0L
         futuresPositionSnapshotRefreshError = null
         liveUsdtBalance = 0.0
@@ -2025,7 +2044,7 @@ private class NativeEngine(
         running = true
         // Independent reconciliation/account gates block entries. Only an explicit
         // kill latch needs to force the pause flag during safe monitoring.
-        paused = killLatched
+        paused = killLatched || prefs.getBoolean("operator_entries_paused", false)
         // The Futures Demo market stream is a live execution prerequisite. REST remains
         // authoritative for recovery and account/position reconciliation.
         marketSocket?.close(1000, "Restart USD-M Futures market stream")
@@ -2144,42 +2163,72 @@ private class NativeEngine(
             .put("interval_seconds", 10)
     }
 
+    fun blockNewEntries(): JSONObject {
+        killLatched = true
+        paused = true
+        check(persistSafetyFlag("kill_latched", true)) { "Cannot persist emergency entry block; entries remain blocked in memory" }
+        val result = stopNewEntries()
+        runCatching { auditStore.recordCockpitEvent("CONTROL", state = "EMERGENCY_ENTRY_BLOCK", detail = "Existing positions remain managed; explicit reset required") }
+        return result.put("kill_switch_latched", true).put("reason", "Новые входы аварийно заблокированы. Сопровождение открытых позиций сохранено.")
+    }
+
+    fun stopNewEntries(): JSONObject {
+        paused = true
+        check(prefs.edit().putBoolean("operator_entries_paused", true).commit()) {
+            "Cannot persist new-entry pause; monitoring continues"
+        }
+        val cancellation = if (key().isNotBlank() && secret().isNotBlank()) runCatching {
+            withCampaignMutation("FUTURES_ACCOUNT", "OPERATOR_SUSPEND_ENTRIES",
+                allowPaused = true, allowStopped = true, allowKillLatched = true,
+                allowReconcileRequired = true, waitForDoorMs = 50_000L) {
+                futuresCampaignCoordinator.cancelPendingEntries("OPERATOR_SUSPEND_ENTRIES")
+            }
+        }.getOrElse { JSONObject().put("ok", false).put("error", safeDiagnosticText(it.message.orEmpty())) }
+        else JSONObject().put("ok", false).put("error", "Credentials unavailable")
+        if (!cancellation.optBoolean("ok")) {
+            reconcileRequired = true
+            persistSafetyFlag("reconcile_required", true)
+        }
+        runCatching { auditStore.recordCockpitEvent("CONTROL", state = "ENTRIES_SUSPENDED",
+            detail = "Pending cancellation confirmed=" + cancellation.optBoolean("ok") + "; monitoring_running=" + running) }
+        return JSONObject().put("stopped", false).put("paused", true).put("monitoring_running", running)
+            .put("pending_cancellation_confirmed", cancellation.optBoolean("ok"))
+            .put("reason", "Новые входы остановлены; сопровождение позиций продолжается")
+    }
+
     fun stop(): JSONObject {
-        // Fence off new local entries before making the cancellation network call.
+        paused = true
+        check(prefs.edit().putBoolean("operator_entries_paused", true).commit()) { "Cannot persist shutdown entry fence" }
+        val cancellation = if (key().isNotBlank() && secret().isNotBlank()) {
+            runCatching {
+                withCampaignMutation(symbol = "FUTURES_ACCOUNT", purpose = "RUNTIME_STOP_CANCEL_PENDING",
+                    allowPaused = true, allowStopped = true, allowKillLatched = true,
+                    allowReconcileRequired = true, waitForDoorMs = 50_000L) {
+                    val result = futuresCampaignCoordinator.cancelPendingEntries("RUNTIME_STOP")
+                    val positions = futuresCampaignCoordinator.positionsSnapshot()
+                    val intents = futuresCampaignCoordinator.intentsSnapshot()
+                    val safe = canShutdownFuturesRuntime(result.optBoolean("ok"), positions, intents)
+                    if (safe) {
+                        // Fence queued mutations before releasing the account-wide door.
+                        running = false
+                        ++runtimeGeneration
+                    }
+                    result.put("flat_confirmed", safe)
+                }
+            }.getOrElse { JSONObject().put("ok", false).put("error", safeDiagnosticText(it.message.orEmpty())) }
+        } else {
+            val localEmpty = runCatching { futuresCampaignCoordinator.intentsSnapshot().length() == 0 }.getOrDefault(false)
+            JSONObject().put("ok", localEmpty).put("flat_confirmed", localEmpty)
+        }
+        if (!cancellation.optBoolean("ok") || !cancellation.optBoolean("flat_confirmed")) {
+            runCatching { auditStore.recordCockpitEvent("CONTROL", state = "SHUTDOWN_REFUSED", detail = "Position or pending order exists, or Binance state is unknown; monitoring preserved") }
+            return JSONObject().put("stopped", false).put("monitoring_running", running)
+                .put("reason", "Полное выключение запрещено: есть позиция, ожидающая заявка или состояние Binance неизвестно. Сопровождение сохранено.")
+        }
         ++runtimeGeneration
         running = false
         paused = false
-        // Stopping the local worker must not leave an unfilled exchange-side
-        // conditional entry armed to open a position after the phone stops.
-        val cancellation = if (key().isNotBlank() && secret().isNotBlank()) {
-            runCatching {
-                withCampaignMutation(
-                    symbol = "FUTURES_ACCOUNT",
-                    purpose = "RUNTIME_STOP_CANCEL_PENDING",
-                    allowPaused = true,
-                    allowStopped = true,
-                    allowKillLatched = true,
-                    allowReconcileRequired = true,
-                    waitForDoorMs = 50_000L
-                ) {
-                    futuresCampaignCoordinator.cancelPendingEntries("RUNTIME_STOP")
-                }
-            }.getOrElse { JSONObject().put("ok", false).put("error", it.message ?: it.javaClass.simpleName) }
-        } else {
-            JSONObject().put("ok", false).put("error", "Futures credentials unavailable; exchange cancellation cannot be confirmed")
-        }
-        if (!cancellation.optBoolean("ok", false) ||
-            cancellation.optString("state") == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED.name
-        ) {
-            reconcileRequired = true
-            persistSafetyFlag("reconcile_required", true)
-            lastError = if (!cancellation.optBoolean("ok", false)) {
-                "Stop completed locally, but pending Futures entry cancellation is unconfirmed: " +
-                    cancellation.optString("error", cancellation.optString("blocker", "unknown cancellation state"))
-            } else {
-                "Pending entries canceled; existing Futures positions require reconciliation before restart"
-            }
-        }
+        runCatching { auditStore.recordCockpitEvent("CONTROL", state = "SHUTDOWN_CONFIRMED", detail = "Pending entries canceled and account flat confirmed after cancellation") }
         marketSocket?.close(1000, "Williams stopped")
         marketSocket = null
         marketSocketConnected = false
@@ -2399,11 +2448,15 @@ private class NativeEngine(
 
     fun pause(): JSONObject {
         paused = true
+        check(prefs.edit().putBoolean("operator_entries_paused", true).commit()) { "Pause persistence failed" }
+        runCatching { auditStore.recordCockpitEvent("CONTROL", state = "SEARCH_PAUSED", detail = "Position management remains active; resting entries remain on Binance") }
         return JSONObject().put("paused", true)
     }
 
     fun resume(): JSONObject {
+        check(prefs.edit().putBoolean("operator_entries_paused", false).commit()) { "Resume persistence failed" }
         paused = false
+        runCatching { auditStore.recordCockpitEvent("CONTROL", state = "SEARCH_RESUMED") }
         return JSONObject().put("resumed", true)
     }
 
@@ -2650,7 +2703,9 @@ private class NativeEngine(
             entryPrice = fmtPrice(trigger, rules.tick),
             protectiveStop = fmtPrice(stop, rules.tick),
             clientId = clientId,
-            riskPct = riskPct
+            riskPct = riskPct,
+            signalType = "OPERATOR_FORCED_DIRECTION",
+            signalReason = "Оператор выбрал направление Testnet; структурный H1 STOP"
         )
         val result = withCampaignMutation(
             symbol = symbol,
@@ -2669,6 +2724,8 @@ private class NativeEngine(
             ) { "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED at final preflight; no market-order substitution" }
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
+        runCatching { auditStore.recordCockpitEvent("ORDER_RESPONSE", symbol, direction.name,
+            if (result.optBoolean("accepted")) "ACCEPTED" else "UNCONFIRMED_OR_REJECTED", detail = result.optString("blocker", result.optString("error"))) }
         lastOrder = result
         if (!result.optBoolean("accepted", false)) {
             lastError = result.optString("blocker", result.optString("error", "Forced conditional entry rejected"))
@@ -4207,6 +4264,8 @@ private class NativeEngine(
                 lastReconciliationResult = "BLOCKED: " +
                     result.optString("blocker", result.optString("error", "unknown"))
             }
+            runCatching { auditStore.recordCockpitEvent("RECONCILIATION", state = result.optString("state"),
+                detail = "$purpose; ok=" + result.optBoolean("ok") + "; " + result.optString("blocker")) }
             return result
         } finally {
             lastReconciliationCompletedAtMs = System.currentTimeMillis()
@@ -4471,8 +4530,9 @@ private class NativeEngine(
         return true
     }
 
-    private fun dailyRiskBaselineSource(): String = runCatching {
-        val now = futuresMarketData.exchangeNowMs()
+    private fun dailyRiskBaselineSource(fast: Boolean = false): String = runCatching {
+        if (fast && !futuresMarketData.clockSnapshot().optBoolean("fresh")) return@runCatching "UNKNOWN"
+        val now = if (fast) futuresMarketData.cachedExchangeNowMs() else futuresMarketData.exchangeNowMs()
         val utc = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
         utc.timeInMillis = now
         utc.set(Calendar.HOUR_OF_DAY, 0)
@@ -4554,12 +4614,12 @@ private class NativeEngine(
      * refresh it on a worker. Trading/reconciliation mutations still query Binance
      * directly through the coordinator and never trust this display cache.
      */
-    private fun fastFuturesPositionsSnapshot(): Pair<JSONArray, String?> {
+    private fun fastFuturesPositionsSnapshot(): Triple<JSONArray, String?, Long> {
         val nowMs = System.currentTimeMillis()
-        val cached = cachedFuturesPositionsSnapshot
-        val cachedAt = cachedFuturesPositionsSnapshotAtMs
-        if (cached != null && cachedAt > 0L && nowMs >= cachedAt && nowMs - cachedAt <= 15_000L) {
-            return JSONArray(cached.toString()) to null
+        val envelope = cachedFuturesPositionEnvelope
+        val cachedAt = envelope?.second ?: 0L
+        if (envelope != null && CockpitDiagnostics.fresh(cachedAt, nowMs, 15_000L)) {
+            return Triple(JSONArray(envelope.first), null, cachedAt)
         }
 
         val shouldRefresh = synchronized(this) {
@@ -4595,14 +4655,14 @@ private class NativeEngine(
             }
         }
 
-        val fallback = cachedFuturesPositionsSnapshot
+        val fallback = cachedFuturesPositionEnvelope
         val error = futuresPositionSnapshotRefreshError
             ?: if (fallback == null) {
                 "Exchange position snapshot is loading; no cached snapshot yet"
             } else {
                 "Showing a stale cached Futures position snapshot while refresh runs"
             }
-        return (fallback?.let { JSONArray(it.toString()) } ?: JSONArray()) to error
+        return Triple(fallback?.let { JSONArray(it.first) } ?: JSONArray(), error, fallback?.second ?: 0L)
     }
 
     private fun futuresPositionSnapshot(): JSONArray {
@@ -4643,8 +4703,7 @@ private class NativeEngine(
                 .put("leverage", row.optString("leverage")).put("exchange_confirmed", true))
         }
         val snapshotNow = System.currentTimeMillis()
-        cachedFuturesPositionsSnapshot = JSONArray(out.toString())
-        cachedFuturesPositionsSnapshotAtMs = snapshotNow
+        cachedFuturesPositionEnvelope = out.toString() to snapshotNow
         futuresPositionSnapshotRefreshError = null
         return out
     }
@@ -5283,8 +5342,13 @@ private class NativeEngine(
             entryPrice = fmtPrice(trigger, rules.tick),
             protectiveStop = fmtPrice(stop, rules.tick),
             clientId = clientId,
-            riskPct = riskPct
+            riskPct = riskPct,
+            signalType = signal.type,
+            signalBarTimeMs = signal.signalBarTimeMs,
+            signalReason = signal.reason
         )
+        runCatching { auditStore.recordCockpitEvent("SIGNAL_RISK", symbol, direction.name, signal.type,
+            "${signal.reason}; H1 bar=${signal.signalBarTimeMs}; trigger=$trigger; stop=$stop; qty=$qty; reserved_risk=$riskPct") }
         val result = withCampaignMutation(
             symbol = symbol,
             purpose = "WILLIAMS_PENDING_ENTRY"
@@ -5333,6 +5397,8 @@ private class NativeEngine(
             // M15 contributes only execution readiness, never a new direction.
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
+        runCatching { auditStore.recordCockpitEvent("ORDER_RESPONSE", symbol, direction.name,
+            if (result.optBoolean("accepted")) "ACCEPTED" else "UNCONFIRMED_OR_REJECTED", detail = result.optString("blocker", result.optString("error"))) }
         lastOrder = result
         if (!result.optBoolean("accepted", false)) {
             lastError = result.optString("blocker", result.optString("error"))
@@ -5783,6 +5849,11 @@ private class NativeEngine(
         executionAccumulator.accept(event)
 
         val eventType = event.optString("e", "unknown")
+        if (eventType in setOf("ORDER_TRADE_UPDATE", "ALGO_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT")) {
+            val order = event.optJSONObject("o") ?: event
+            runCatching { auditStore.recordCockpitEvent("USER_WS", symbol = order.optString("s"),
+                state = eventType, detail = "status=" + order.optString("X") + "; executed_qty=" + order.optString("z")) }
+        }
         val eventTime = event.optLong("E", 0L)
         if (eventTime > 0L) {
             val previous = lastUserEventTimeByType[eventType]
@@ -7974,13 +8045,15 @@ private class NativeEngine(
         val credentialsConfigured = key().isNotBlank() && secret().isNotBlank()
         if (credentialsConfigured && fast) refreshFuturesAccountSnapshotIfNeeded()
         var futuresPositionSnapshotError: String? = null
+        var positionObservedAtMs = 0L
         val futuresPositions = if (credentialsConfigured) {
             if (fast) {
-                val (snapshot, refreshError) = fastFuturesPositionsSnapshot()
+                val (snapshot, refreshError, snapshotAt) = fastFuturesPositionsSnapshot()
                 futuresPositionSnapshotError = refreshError
+                positionObservedAtMs = snapshotAt
                 snapshot
             } else {
-                runCatching { futuresPositionSnapshot() }.getOrElse { failure ->
+                runCatching { futuresPositionSnapshot().also { positionObservedAtMs = cachedFuturesPositionEnvelope?.second ?: 0L } }.getOrElse { failure ->
                     futuresPositionSnapshotError = failure.message ?: failure.javaClass.simpleName
                     reconcileRequired = true
                     persistSafetyFlag("reconcile_required", true)
@@ -8013,7 +8086,7 @@ private class NativeEngine(
             } else 0.0
         }
         val utcDayStart = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
-            timeInMillis = runCatching { futuresMarketData.exchangeNowMs() }.getOrElse { System.currentTimeMillis() }
+            timeInMillis = if (fast) futuresMarketData.cachedExchangeNowMs() else runCatching { futuresMarketData.exchangeNowMs() }.getOrElse { System.currentTimeMillis() }
             set(java.util.Calendar.HOUR_OF_DAY, 0)
             set(java.util.Calendar.MINUTE, 0)
             set(java.util.Calendar.SECOND, 0)
@@ -8135,9 +8208,9 @@ private class NativeEngine(
                 .put("user_stream_sync_required", userStreamSyncRequired)
                 .put("kill_switch_latched", killLatched))
             .put("positions_snapshot_ok", futuresPositionsSnapshotOk)
-            .put("positions_snapshot_at_ms", cachedFuturesPositionsSnapshotAtMs)
-            .put("positions_snapshot_age_ms", if (cachedFuturesPositionsSnapshotAtMs > 0L)
-                (System.currentTimeMillis() - cachedFuturesPositionsSnapshotAtMs).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("positions_snapshot_at_ms", positionObservedAtMs)
+            .put("positions_snapshot_age_ms", if (positionObservedAtMs > 0L)
+                (System.currentTimeMillis() - positionObservedAtMs).coerceAtLeast(0L) else JSONObject.NULL)
             .put("positions_snapshot_error", futuresPositionSnapshotError ?: JSONObject.NULL)
             .put("pnl", if (futuresPositions.length() == 0 || !futuresPositionsSnapshotOk) JSONObject.NULL else livePnl)
             .put("pnl_pct", if (futuresPositions.length() == 0 || !futuresPositionsSnapshotOk) JSONObject.NULL else livePnlPct)
@@ -8152,7 +8225,7 @@ private class NativeEngine(
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
             .put("force_testnet_mode", forceTestnetMode)
-            .put("daily_risk_baseline_source", dailyRiskBaselineSource())
+            .put("daily_risk_baseline_source", dailyRiskBaselineSource(fast = fast))
             .put("trades_today", futuresTradesToday)
             .put("daily_pnl_usdt", futuresDailyPnl)
             .put("daily_loss_pct", futuresDailyLossPct)
@@ -8219,6 +8292,13 @@ private class NativeEngine(
             .put("decision_timeframe", "1h")
             .put("max_daily_loss_pct", 0.03)
             .put("futures_runtime", futuresRuntimeStatus)
+            .put("android_runtime", AndroidRuntimeHealth.snapshot(context))
+            .put("exchange_clock", futuresMarketData.clockSnapshot())
+            .put("quote_observations", JSONArray().apply {
+                coreSymbols.forEach { symbol -> put(JSONObject().put("symbol", symbol)
+                    .put("price", livePrices[symbol] ?: JSONObject.NULL)
+                    .put("at_ms", livePriceUpdatedAtMs[symbol] ?: 0L)) }
+            })
             .put("futures_positions", futuresPositions)
     }
 
@@ -8238,7 +8318,9 @@ private class NativeEngine(
 
     fun klines(
         requestedSymbol: String? = null,
-        requestedInterval: String? = null
+        requestedInterval: String? = null,
+        requestedEndTime: Long? = null,
+        requestedBars: Int = 120
     ): JSONObject {
         val symbol = if (requestedSymbol == null) primarySymbol else requestedSymbol.trim().uppercase(Locale.US)
         require(symbol in coreSymbols) { "Chart symbol is outside the approved Futures universe: $symbol" }
@@ -8247,7 +8329,12 @@ private class NativeEngine(
             "Unsupported Futures chart interval: $selectedInterval"
         }
         // Never return plausible H1 candles mislabeled as another symbol/interval after an invalid request or REST error.
-        val sourceCandles = if (symbol == primarySymbol && selectedInterval == interval) {
+        val bars = requestedBars.coerceIn(120, 6000)
+        val historical = requestedEndTime != null
+        val stored = if (historical || bars > 150) historyStore.loadRecent(symbol, selectedInterval, 6000, requestedEndTime)
+            .filter { futuresMarketData.isKlineOpenTimeClosed(it.openTime, selectedInterval, futuresMarketData.exchangeNowMs()) }
+            .map { CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume) } else emptyList()
+        val sourceCandles = if (historical) stored else if (stored.size >= 150 && candleSeriesCurrent(stored, selectedInterval)) stored else if (symbol == primarySymbol && selectedInterval == interval) {
             if (primaryCandles.isEmpty()) primaryCandles = fetchCandles(primarySymbol, selectedInterval, 150)
             primaryCandles
         } else {
@@ -8274,7 +8361,7 @@ private class NativeEngine(
             JSONObject(cachedIndicatorSnapshot.toString())
         } else {
             buildIndicatorSnapshot(sourceCandles, symbol, selectedInterval).also { snapshot ->
-                if (snapshot.optBoolean("ready", false) && latestClosedCandleTime > 0L) {
+                if (!historical && snapshot.optBoolean("ready", false) && latestClosedCandleTime > 0L) {
                     indicatorSnapshots[indicatorKey] = JSONObject(snapshot.toString())
                 }
             }
@@ -8284,7 +8371,9 @@ private class NativeEngine(
             val jaw = williamsAlligatorLine(sourceCandles, 13, 8)
             val teeth = williamsAlligatorLine(sourceCandles, 8, 5)
             val lips = williamsAlligatorLine(sourceCandles, 5, 3)
-            val start = max(0, sourceCandles.size - 120)
+            val start = max(0, sourceCandles.size - bars)
+            val observedSignals = if (historical || selectedInterval != "1h") emptyList() else
+                CockpitDiagnostics.rows(CockpitDiagnostics.rows(candidates).firstOrNull { it.optString("symbol") == symbol }?.optJSONArray("campaign_signals"))
 
             for (i in start until sourceCandles.size) {
                 val c = sourceCandles[i]
@@ -8306,12 +8395,26 @@ private class NativeEngine(
                         .put("ac", acValues.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
                         .put("mfi_proxy", volumeProxy.takeIf { it.isFinite() } ?: JSONObject.NULL)
                         .put("signal_source", "DIAGNOSTIC_ONLY_H1_CAMPAIGN_AUTHORITY")
+                        .put("signal_types", JSONArray(observedSignals.filter { it.optLong("signal_bar_time_ms") == c.t }.map { it.optString("type") }))
                         .put("fractal_up", isUpFractal(sourceCandles, i))
                         .put("fractal_down", isDownFractal(sourceCandles, i))
                 )
             }
         }
 
+        if (historical) return JSONObject().put("symbol", symbol).put("interval", selectedInterval)
+            .put("candles", output).put("indicator_snapshot", indicatorSnapshot)
+            .put("historical", true).put("until_ms", requestedEndTime)
+            .put("live_price", JSONObject.NULL).put("live_price_source", "HISTORICAL")
+            .put("live_price_at_ms", 0L)
+
+        return marketQuote(symbol).put("interval", selectedInterval)
+            .put("indicator_snapshot", indicatorSnapshot).put("candles", output)
+    }
+
+    fun marketQuote(requestedSymbol: String?): JSONObject {
+        val symbol = requestedSymbol?.trim()?.uppercase(Locale.US) ?: primarySymbol
+        require(symbol in coreSymbols) { "Quote symbol is outside the approved Futures universe" }
         val nowMs = System.currentTimeMillis()
         val lastTradeAt = lastTradeUpdatedAtMs[symbol] ?: 0L
         val lastTradeQuote = lastTradePrices[symbol]?.takeIf {
@@ -8350,12 +8453,9 @@ private class NativeEngine(
         }
         return JSONObject()
             .put("symbol", symbol)
-            .put("interval", selectedInterval)
             .put("live_price", liveQuote ?: JSONObject.NULL)
             .put("live_price_at_ms", liveQuoteAtMs)
             .put("live_price_source", liveQuoteSource)
-            .put("indicator_snapshot", indicatorSnapshot)
-            .put("candles", output)
     }
 
     fun marketTickers(): JSONObject {
@@ -8459,7 +8559,7 @@ private class NativeEngine(
         test("version_consistency", "runtime", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
         test("futures_execution_adapter", "binance", futuresExecutionAdapterReady, "FAIL", "Native USD-M Futures adapter and local coordinator wired; readiness still depends on live exchange reconciliation")
         test("local_runtime_dispatch", "runtime", true, "FAIL", "Cockpit commands dispatch in-process; no remote backend or unauthenticated loopback listener")
-        test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(","))
+        test("execution_gate", "execution", executionReady(), "WARNING", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(",") + "; an intentional entry block is not proof of component failure")
         val displayedSettings = settings()
         val maxTradesSettingIsHonest = displayedSettings.isNull("max_trades_per_day") &&
             displayedSettings.optString("max_trades_per_day_policy").startsWith("NO_FIXED_COUNT_CAP")
@@ -8491,8 +8591,8 @@ private class NativeEngine(
         val baselineKnown = dailyBaselineSource.isNotBlank() &&
             !dailyBaselineSource.equals("UNKNOWN", ignoreCase = true) &&
             !dailyBaselineSource.equals("null", ignoreCase = true)
-        val baselineValue = runCatching {
-            val now = futuresMarketData.exchangeNowMs()
+        val baselineValue = if (!baselineKnown) null else runCatching {
+            val now = futuresMarketData.cachedExchangeNowMs()
             val utc = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
             utc.timeInMillis = now
             utc.set(Calendar.HOUR_OF_DAY, 0)
@@ -8625,12 +8725,78 @@ private class NativeEngine(
         return tests
     }
 
+    fun cockpit(): JSONObject {
+        val captured = status(fast = true)
+        val scan = scannerSnapshot()
+        val coherent = captured.optString("scanner_run_id") == scan.optString("run_id")
+        captured.put("snapshot_consistent", coherent)
+            .put("scanner_state", if (coherent) scan.optString("scanner_state") else "SNAPSHOT_UPDATING")
+            .put("scanner_scanning", scan.optBoolean("scanning"))
+            .put("scanner_error", scan.opt("scanner_error") ?: JSONObject.NULL)
+            .put("scanner_progress_symbols", scan.optInt("progress_symbols"))
+            .put("scanner_progress_total", scan.optInt("progress_total", 10))
+            .put("scanner_configured_symbols", scan.optInt("progress_total", 10))
+            .put("scanner_universe", scan.optJSONArray("scan_symbols") ?: JSONArray())
+            .put("scanner_symbols", scan.optInt("symbols_scanned"))
+            .put("allow_long", true).put("allow_short", true)
+        val coordinator = captured.optJSONObject("futures_runtime") ?: JSONObject()
+        val observedAt = System.currentTimeMillis()
+        val readiness = CockpitDiagnostics.readiness(captured, coordinator, observedAt)
+        captured.put("cockpit_readiness", readiness).put("snapshot_at_ms", observedAt)
+        return JSONObject().put("snapshot_at_ms", observedAt).put("status", captured)
+            .put("scanner", scan).put("trades", trades())
+            .put("events", auditStore.recentCockpitEvents(30))
+    }
+
+    fun uiEvent(event: JSONObject): JSONObject {
+        val action = event.optString("action")
+        require(action in setOf("NAVIGATE", "REFRESH_FAILED", "DIAGNOSTICS", "CHART_SELECTED", "CONTROL")) { "Unknown UI event" }
+        auditStore.recordCockpitEvent("UI", state = action, detail = safeDiagnosticText(event.optString("detail")))
+        return JSONObject().put("recorded", true)
+    }
+
+    private fun strategyDiagnosticEvidence(): JSONArray {
+        val now = futuresMarketData.cachedExchangeNowMs()
+        val clockFresh = futuresMarketData.clockSnapshot().optBoolean("fresh")
+        return JSONArray().apply {
+            for (symbol in coreSymbols) {
+                val key = "$symbol:1h"
+                val source = candleCache[key]?.second ?: if (symbol == primarySymbol && interval == "1h") primaryCandles else emptyList()
+                val candles = if (clockFresh) source.filter { futuresMarketData.isKlineOpenTimeClosed(it.t, "1h", now) } else emptyList()
+                val observed = JSONObject()
+                if (candles.size >= 40) {
+                    val index = candles.lastIndex
+                    observed.put("jaw", williamsAlligatorLine(candles, 13, 8).last()?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("teeth", williamsAlligatorLine(candles, 8, 5).last()?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("lips", williamsAlligatorLine(candles, 5, 3).last()?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("ao", ao(candles, index).takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("ac", (ao(candles, index) - (0..4).map { ao(candles, index - it) }.average()).takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("fractal_up_index", latestConfirmedUpFractal(candles, index) ?: JSONObject.NULL)
+                        .put("fractal_down_index", candles.indices.lastOrNull { isDownFractal(candles, it) } ?: JSONObject.NULL)
+                }
+                put(JSONObject().put("symbol", symbol).put("interval", "1h")
+                    .put("candle_count", candles.size).put("last_bar_time_ms", candles.lastOrNull()?.t ?: 0L)
+                    .put("observed", observed)
+                    .put("checks", auditWilliamsIndicatorObservation(candles.map { (it.h + it.l) / 2.0 }, observed)))
+            }
+        }
+    }
+
     fun diagnostics(): JSONObject {
         // Capture each state source once so the report does not compare different
         // moments in time and manufacture contradictions from separate status reads.
         val statusSnapshot = status(fast = true)
-        val coordinatorSnapshot = futuresCampaignCoordinator.status()
+            .put("strategy_audit", strategyDiagnosticEvidence())
+            .put("trade_observations", JSONArray(CockpitDiagnostics.rows(trades()).take(20)))
+        val coordinatorSnapshot = statusSnapshot.optJSONObject("futures_runtime") ?: JSONObject()
         val tests = diagnosticSelfTests(statusSnapshot, coordinatorSnapshot)
+        val observedAtMs = System.currentTimeMillis()
+        val cockpitTests = CockpitDiagnostics.checks(statusSnapshot, coordinatorSnapshot, scannerSnapshot(), observedAtMs)
+        for (item in CockpitDiagnostics.rows(cockpitTests)) tests.put(item)
+        for (item in CockpitDiagnostics.rows(tests)) {
+            if (item.optString("severity") == "WARN") item.put("severity", "WARNING")
+        }
+        val cockpitReadiness = CockpitDiagnostics.readiness(statusSnapshot, coordinatorSnapshot, observedAtMs)
         val consistencyFindings = diagnosticConsistencyFindings(
             coordinatorState = coordinatorSnapshot.optString("state", "UNKNOWN"),
             coordinatorReady = coordinatorSnapshot.optBoolean("ready_for_new_entry", false),
@@ -8644,19 +8810,22 @@ private class NativeEngine(
                 statusSnapshot.optBoolean("user_stream_reconcile_running", false),
             topLevelRuntimeState = statusSnapshot.optString("state", "UNKNOWN")
         )
-        val failedTests = (0 until tests.length()).count {
-            tests.optJSONObject(it)?.optString("severity") == "FAIL"
-        }
-        val warningTests = (0 until tests.length()).count {
-            tests.optJSONObject(it)?.optString("severity") == "WARN"
-        }
-        val diagnosticOverall = when {
-            consistencyFindings.isNotEmpty() || failedTests > 0 -> "FAIL"
-            warningTests > 0 -> "WARN"
-            else -> "PASS"
-        }
+        val sqliteHealth = executionStore.healthSnapshot()
+        tests.put(JSONObject().put("id", "DB-01").put("name", "SQLite execution journal quick_check")
+            .put("domain", "database").put("ok", sqliteHealth.optBoolean("ok"))
+            .put("severity", if (sqliteHealth.optBoolean("ok")) "PASS" else "FAIL").put("detail", sqliteHealth.toString()))
+        val checkedSummary = CockpitDiagnostics.summary(tests)
+        val failedTests = checkedSummary.optInt("failed_test_count")
+        val warningTests = checkedSummary.optInt("warning_test_count")
+        val diagnosticOverall = if (consistencyFindings.isNotEmpty()) "FAIL" else checkedSummary.optString("overall")
         return JSONObject()
             .put("runtime", "standalone")
+            .put("created_at_ms", observedAtMs)
+            .put("created_at", java.time.Instant.ofEpochMilli(observedAtMs).toString())
+            .put("cockpit_readiness", cockpitReadiness)
+            .put("event_timeline", auditStore.recentCockpitEvents(150))
+            .put("last_incident", auditStore.lastCockpitIncident() ?: JSONObject.NULL)
+            .put("sqlite_health", sqliteHealth)
             .put("device_local_api", "in-process://williams-runtime")
             .put("binance_testnet", true)
             .put("exchange_market", "USDⓈ-M_FUTURES_REQUIRED")
@@ -8679,15 +8848,19 @@ private class NativeEngine(
                 .put("finding_count", consistencyFindings.size)
                 .put("failed_test_count", failedTests)
                 .put("warning_test_count", warningTests)
-                .put("execution_allowed", statusSnapshot.optBoolean("execution_enabled", false) &&
+                .put("not_verified_test_count", checkedSummary.optInt("not_verified_test_count"))
+                .put("passed_test_count", checkedSummary.optInt("passed_test_count"))
+                .put("execution_allowed", cockpitReadiness.optBoolean("new_entries_allowed") &&
                     consistencyFindings.isEmpty() && failedTests == 0)
                 .put("top_level_runtime_state", statusSnapshot.optString("state", "UNKNOWN"))
                 .put("contract_runtime_state", statusSnapshot.optJSONObject("execution_state_contract")
                     ?.optString("state", "UNKNOWN") ?: "UNKNOWN")
                 .put("coordinator_state", coordinatorSnapshot.optString("state", "UNKNOWN"))
                 .put("coordinator_blocker", coordinatorSnapshot.optString("blocker", "")))
-            .put("diagnostic_contract_version", 8)
+            .put("diagnostic_contract_version", CockpitDiagnostics.VERSION)
             .put("execution_gate", JSONObject()
+                .put("scope", "TECHNICAL_EXECUTION_DOOR_ONLY")
+                .put("new_entries_allowed", cockpitReadiness.optBoolean("new_entries_allowed"))
                 .put("ready", executionReady())
                 .put("reasons", JSONArray(executionBlockers()))
                 .put("degraded_channels", JSONArray().apply {

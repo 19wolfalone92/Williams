@@ -6,6 +6,7 @@ import android.content.SharedPreferences
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.database.sqlite.transaction
+import org.json.JSONObject
 
 /**
  * Durable on-device source of truth for Futures execution intents and campaign state.
@@ -16,6 +17,15 @@ import androidx.core.database.sqlite.transaction
  */
 internal class FuturesExecutionStore(context: Context) :
     SQLiteOpenHelper(context.applicationContext, DATABASE_NAME, null, DATABASE_VERSION) {
+
+    @Synchronized
+    fun healthSnapshot(): JSONObject = runCatching {
+        val check = readableDatabase.rawQuery("PRAGMA quick_check(1)", null).use {
+            if (it.moveToFirst()) it.getString(0) else "No result"
+        }
+        JSONObject().put("quick_check", check).put("ok", check == "ok")
+            .put("observed_at_ms", System.currentTimeMillis()).put("schema_version", DATABASE_VERSION)
+    }.getOrElse { JSONObject().put("ok", false).put("error", safeDiagnosticText(it.message.orEmpty())) }
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(

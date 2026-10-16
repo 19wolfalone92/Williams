@@ -209,7 +209,11 @@ object TradeJournal {
             .put("r_multiple", rMultiple)
             .put("outcome", outcome)
             .put("exit_reason", reason)
-            .put("entry_reason", entrySnapshot.optString("kind"))
+            .put("entry_reason", entrySnapshot.optString("signal_reason").ifBlank {
+                "Причина сигнала не записана; тип заявки " + entrySnapshot.optString("kind")
+            })
+            .put("stop_price", entrySnapshot.optString("initial_protective_stop").toDoubleOrNull()
+                ?.takeIf { it.isFinite() && it > 0.0 } ?: JSONObject.NULL)
             .put("entry_snapshot", entrySnapshot)
             .put("strategy_version", BuildConfig.VERSION_NAME)
             .put("trade_audit_source", "BINANCE_USDM_USER_TRADES")

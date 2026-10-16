@@ -11,6 +11,11 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.activity.compose.setContent
@@ -20,6 +25,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -102,6 +108,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -125,11 +132,6 @@ class MainActivity : ComponentActivity() {
         // The phone owns the Futures Testnet runtime. Keep it alive in a foreground
         // service; cockpit commands execute in-process and never send Binance
         // credentials to a remote backend.
-        ContextCompat.startForegroundService(
-            this,
-            Intent(this, TradingForegroundService::class.java)
-                .setAction(TradingForegroundService.ACTION_START)
-        )
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
                 this,
@@ -144,22 +146,43 @@ class MainActivity : ComponentActivity() {
         setContent {
             WilliamsTheme {
                 WilliamsApp(this)
+                // A visible Activity may start a service normally, which then promotes
+                // itself immediately. Wait for the first draw before cold service class loading.
+                LaunchedEffect(Unit) {
+                    androidx.compose.runtime.withFrameNanos { }
+                    androidx.compose.runtime.withFrameNanos { }
+                    while (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) delay(100L)
+                    val intent = Intent(this@MainActivity, TradingForegroundService::class.java)
+                        .setAction(TradingForegroundService.ACTION_START)
+                    try {
+                        startService(intent)
+                    } catch (_: IllegalStateException) {
+                        // The Activity may have moved to the background between the check and call.
+                        runCatching { ContextCompat.startForegroundService(this@MainActivity, intent) }
+                            .onFailure { RuntimeServiceState.lastError = safeDiagnosticText(it.message.orEmpty()) }
+                    }
+                }
             }
         }
     }
 }
 
+internal object AppAppearance {
+    var light by mutableStateOf(false)
+    var textScale by mutableFloatStateOf(1f)
+}
+
 object AppColors {
-    val background = Color(0xFF070B12)
-    val surface = Color(0xFF0F1622)
-    val surface2 = Color(0xFF151F2E)
-    val primary = Color(0xFF5DE2E7)
-    val violet = Color(0xFF9D8CFF)
-    val green = Color(0xFF62E6A7)
-    val amber = Color(0xFFFFC857)
-    val red = Color(0xFFFF687A)
-    val blue = Color(0xFF67A8FF)
-    val textMuted = Color(0xFF98A8BD)
+    val background get() = if (AppAppearance.light) Color(0xFFF2F5FA) else Color(0xFF070B12)
+    val surface get() = if (AppAppearance.light) Color.White else Color(0xFF0F1622)
+    val surface2 get() = if (AppAppearance.light) Color(0xFFE5EBF3) else Color(0xFF151F2E)
+    val primary get() = if (AppAppearance.light) Color(0xFF006F76) else Color(0xFF5DE2E7)
+    val violet get() = if (AppAppearance.light) Color(0xFF603DAA) else Color(0xFF9D8CFF)
+    val green get() = if (AppAppearance.light) Color(0xFF006B48) else Color(0xFF62E6A7)
+    val amber get() = if (AppAppearance.light) Color(0xFF8C5900) else Color(0xFFFFC857)
+    val red get() = if (AppAppearance.light) Color(0xFFB3263C) else Color(0xFFFF687A)
+    val blue get() = if (AppAppearance.light) Color(0xFF2255A0) else Color(0xFF67A8FF)
+    val textMuted get() = if (AppAppearance.light) Color(0xFF526176) else Color(0xFF98A8BD)
 }
 
 // Static release-contract anchor: the chart must expose every approved USD-M contract
@@ -171,7 +194,15 @@ private val CHART_VIEW_INTERVALS = APPROVED_FUTURES_KLINE_INTERVALS
 
 @Composable
 private fun WilliamsTheme(content: @Composable () -> Unit) {
-    val colors = androidx.compose.material3.darkColorScheme(
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        val preferences = context.getSharedPreferences("cockpit_appearance", Context.MODE_PRIVATE)
+        AppAppearance.light = preferences.getBoolean("light", false)
+        AppAppearance.textScale = preferences.getFloat("text_scale", 1f).coerceIn(1f, 1.3f)
+    }
+    val density = LocalDensity.current
+    val base = if (AppAppearance.light) androidx.compose.material3.lightColorScheme() else androidx.compose.material3.darkColorScheme()
+    val colors = base.copy(
         primary = AppColors.primary,
         secondary = AppColors.violet,
         tertiary = AppColors.green,
@@ -179,12 +210,13 @@ private fun WilliamsTheme(content: @Composable () -> Unit) {
         background = AppColors.background,
         surface = AppColors.surface,
         surfaceVariant = AppColors.surface2,
-        onPrimary = Color(0xFF001113),
-        onBackground = Color(0xFFF2F6FC),
-        onSurface = Color(0xFFF2F6FC),
+        onPrimary = if (AppAppearance.light) Color.White else Color(0xFF001113),
+        onBackground = if (AppAppearance.light) Color(0xFF182333) else Color(0xFFF2F6FC),
+        onSurface = if (AppAppearance.light) Color(0xFF182333) else Color(0xFFF2F6FC),
         onSurfaceVariant = AppColors.textMuted
     )
 
+    CompositionLocalProvider(LocalDensity provides Density(density.density, density.fontScale * AppAppearance.textScale)) {
     MaterialTheme(
         colorScheme = colors,
         typography = androidx.compose.material3.Typography().run {
@@ -197,6 +229,7 @@ private fun WilliamsTheme(content: @Composable () -> Unit) {
         },
         content = content
     )
+    }
 }
 
 data class Status(
@@ -262,7 +295,13 @@ data class Status(
     val maxOpenPositionsLocked: Boolean = false,
     val unresolvedSymbols: List<String> = emptyList(),
     val pendingEntrySymbols: List<String> = emptyList(),
-    val forceTestnetMode: Boolean = false
+    val forceTestnetMode: Boolean = false,
+    val snapshotAtMs: Long = 0L,
+    val positionsSnapshotOk: Boolean = false,
+    val positionsSnapshotAtMs: Long = 0L,
+    val accountSnapshotAtMs: Long = 0L,
+    val futuresIntents: List<JSONObject> = emptyList(),
+    val cockpitReadiness: JSONObject = JSONObject()
 )
 
 data class Candle(
@@ -279,7 +318,8 @@ data class Candle(
     val fractalDown: Boolean,
     val ao: Double? = null,
     val ac: Double? = null,
-    val mfiProxy: Double? = null
+    val mfiProxy: Double? = null,
+    val signalTypes: List<String> = emptyList()
 )
 
 data class Candidate(
@@ -349,7 +389,11 @@ data class Trade(
     val initialRiskUsdt: Double? = null,
     val entrySlippagePct: Double? = null,
     val pnlComplete: Boolean = true,
-    val fillCount: Int = 0
+    val fillCount: Int = 0,
+    val openedAtMs: Long = 0L,
+    val closedAtMs: Long = 0L,
+    val stopPrice: Double? = null,
+    val exitReason: String = ""
 )
 
 data class MarketPair(
@@ -414,12 +458,12 @@ fun WilliamsApp(context: Context) {
     val api = remember { LocalRuntimeApi(context) }
     val scope = rememberCoroutineScope()
 
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     var status by remember { mutableStateOf(Status()) }
     var marketPairs by remember { mutableStateOf(emptyList<MarketPair>()) }
     var selectedPositionSymbol by remember { mutableStateOf<String?>(null) }
     var candles by remember { mutableStateOf(emptyList<Candle>()) }
-    var selectedChartSymbol by remember { mutableStateOf("BTCUSDT") }
+    var selectedChartSymbol by rememberSaveable { mutableStateOf("BTCUSDT") }
     var chartCandles by remember { mutableStateOf(emptyList<Candle>()) }
     var chartLoading by remember { mutableStateOf(false) }
     var chartError by remember { mutableStateOf<String?>(null) }
@@ -438,110 +482,58 @@ fun WilliamsApp(context: Context) {
     var backupPassword by remember { mutableStateOf("") }
     var backupMessage by remember { mutableStateOf("") }
     var diagnosticsMessage by remember { mutableStateOf("") }
+    var diagnosticReport by remember { mutableStateOf<JSONObject?>(null) }
+    var diagnosticsRunning by remember { mutableStateOf(false) }
+    var historicalTrade by remember { mutableStateOf<Trade?>(null) }
+    var requestedCloseSymbol by remember { mutableStateOf<String?>(null) }
+    var criticalSetting by remember { mutableStateOf("") }
     val loadMutex = remember { Mutex() }
 
     suspend fun loadAll(scan: Boolean) {
         if (!loadMutex.tryLock()) return
         try {
-            withContext(Dispatchers.Main) { refreshing = scan }
+            refreshing = scan
+            val payload = withContext(Dispatchers.IO) {
+                if (scan) api.get("/api/v1/scanner?refresh=true")
+                JSONObject(api.get("/api/v1/cockpit"))
+            }
+            val source = payload.getJSONObject("status")
+            val scanner = payload.getJSONObject("scanner")
+            val loadedStatus = parseStatus(source)
+            val loadedCandidates = parseCandidates(scanner.optJSONArray("candidates") ?: JSONArray())
+            val loadedTrades = parseTrades(payload.optJSONArray("trades") ?: JSONArray())
+            val prices = source.optJSONObject("live_prices") ?: JSONObject()
+            val loadedPairs = APPROVED_FUTURES_CHART_SYMBOLS.map { symbol ->
+                MarketPair(symbol, prices.optDouble(symbol).takeIf { it.isFinite() && it > 0.0 })
+            }
+            withContext(Dispatchers.Main) {
+                // Publish one envelope together; no screen combines independent status reads.
+                status = loadedStatus
+                candidates = loadedCandidates
+                trades = loadedTrades
+                marketPairs = loadedPairs
+                logs = CockpitDiagnostics.rows(payload.optJSONArray("events")).map {
+                    cockpitTime(it.optLong("E")) + " • " + it.optString("state") + " • " + it.optString("detail")
+                }.reversed()
+                message = if (scan) "Сканирование запрошено" else "Данные обновлены"
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            val reason = safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+            withContext(Dispatchers.Main) {
+                message = "Частичная ошибка обновления: $reason"
+                status = status.copy(positionsSnapshotOk = false,
+                    cockpitReadiness = JSONObject(status.cockpitReadiness.toString())
+                        .put("technical_ready", false).put("new_entries_allowed", false)
+                        .put("position_management_ready", false).put("new_entries_reason", "Обновление состояния не подтверждено: $reason"))
+            }
             withContext(Dispatchers.IO) {
-                val failures = mutableListOf<String>()
-                var scannerJson = JSONObject()
-
-                runCatching {
-                    val json = JSONObject(api.get("/api/v1/status?fast=true"))
-                    withContext(Dispatchers.Main) { status = parseStatus(json) }
-                }.onFailure {
-                    failures += "status: " + (it.message ?: it.javaClass.simpleName)
-                }
-
-                runCatching {
-                    val json = JSONObject(api.get("/api/v1/market/tickers"))
-                    val rows = json.optJSONArray("pairs") ?: JSONArray()
-                    val loaded = List(rows.length()) { i ->
-                        val row = rows.optJSONObject(i) ?: JSONObject()
-                        MarketPair(
-                            row.optString("symbol"),
-                            row.optDouble("price").takeUnless { it.isNaN() || it <= 0.0 }
-                        )
-                    }
-                    withContext(Dispatchers.Main) { marketPairs = loaded }
-                }.onFailure {
-                    failures += "market: " + (it.message ?: it.javaClass.simpleName)
-                }
-
-                runCatching {
-                    scannerJson = JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
-                    withContext(Dispatchers.Main) {
-                        candidates = parseCandidates(
-                            scannerJson.optJSONArray("candidates") ?: JSONArray()
-                        )
-                        val scannedUniverse = scannerJson.optJSONArray("scan_symbols")?.let { symbols ->
-                            List(symbols.length()) { index -> symbols.optString(index) }
-                                .filter { it.isNotBlank() }
-                        } ?: status.scannerUniverse
-                        val reportedTotal = scannerJson.optInt("progress_total", 10)
-                            .let { if (it > 0) it.coerceAtMost(10) else 10 }
-                        status = status.copy(
-                            scannerScanning = scannerJson.optBoolean("scanning", false),
-                            scannerState = scannerJson.optString("scanner_state", status.scannerState),
-                            scannerError = scannerJson.optString("scanner_error")
-                                .takeUnless { it.isBlank() || it == "null" },
-                            scannerSymbols = scannerJson.optInt(
-                                "symbols_scanned",
-                                scannerJson.optInt("progress_symbols", 0)
-                            ),
-                            scannerConfiguredSymbols = reportedTotal,
-                            scannerProgressSymbols = scannerJson.optInt("progress_symbols", 0)
-                                .coerceIn(0, reportedTotal),
-                            scannerProgressTotal = reportedTotal,
-                            scannerUniverse = scannedUniverse,
-                            scanDurationMs = scannerJson.optLong(
-                                "last_scan_duration_ms",
-                                status.scanDurationMs
-                            )
-                        )
-                    }
-                }.onFailure {
-                    failures += "scanner: " + (it.message ?: it.javaClass.simpleName)
-                }
-
-                if (tab == 3) {
-                    runCatching {
-                        val rows = JSONArray(api.get("/api/v1/trades"))
-                        withContext(Dispatchers.Main) { trades = parseTrades(rows) }
-                    }.onFailure {
-                        failures += "trades: " + (it.message ?: it.javaClass.simpleName)
-                    }
-
-                    runCatching {
-                        val rows = JSONArray(api.get("/api/v1/logs"))
-                        withContext(Dispatchers.Main) { logs = parseLogs(rows) }
-                    }.onFailure {
-                        failures += "logs: " + (it.message ?: it.javaClass.simpleName)
-                    }
-                }
-
-                withContext(Dispatchers.Main) {
-                    val scannerError =
-                        scannerJson.optString("scanner_error").takeIf { it.isNotBlank() && it != "null" }
-                    message = when {
-                        failures.isNotEmpty() ->
-                            "Частичная ошибка: " + failures.joinToString(" • ")
-                        scannerError != null ->
-                            "Сканер: " + scannerError
-                        scan && scannerJson.optBoolean("scanning", false) ->
-                            "Сканирование запущено в фоне"
-                        scan ->
-                            "Сканирование запрошено"
-                        else ->
-                            "Данные обновлены"
-                    }
-                    refreshing = false
-                }
+                runCatching { api.post("/api/v1/ui/event", JSONObject().put("action", "REFRESH_FAILED").put("detail", reason).toString()) }
             }
         } finally {
             loadMutex.unlock()
+            withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) { refreshing = false }
         }
     }
 
@@ -569,7 +561,7 @@ fun WilliamsApp(context: Context) {
     }
 
     // Read-only market view; the Runtime scanner independently evaluates all ten contracts.
-    LaunchedEffect(tab, selectedChartSymbol, selectedChartInterval) {
+    LaunchedEffect(tab, selectedChartSymbol, selectedChartInterval, historicalTrade?.id) {
         if (tab != 1) return@LaunchedEffect
         chartCandles = emptyList()
         chartLivePrice = null
@@ -578,24 +570,31 @@ fun WilliamsApp(context: Context) {
         chartIndicatorSummary = "Загрузка индикаторов…"
         chartError = null
         chartLoading = true
+        var lastCandleRefreshMs = 0L
         while (isActive) {
             val requestSymbol = selectedChartSymbol
             val requestInterval = selectedChartInterval
             try {
+                val refreshCandles = chartCandles.isEmpty() || System.currentTimeMillis() - lastCandleRefreshMs >= 30_000L
                 val raw = withContext(Dispatchers.IO) {
-                    api.get("/api/v1/market/klines?symbol=" + requestSymbol + "&interval=" + requestInterval)
+                    if (refreshCandles) api.get("/api/v1/market/klines?symbol=" + requestSymbol + "&interval=" + requestInterval + "&bars=6000" +
+                        (historicalTrade?.let { "&until=" + ((it.closedAtMs.takeIf { t -> t > 0L } ?: it.openedAtMs) + 14_400_000L) } ?: ""))
+                    else api.get("/api/v1/market/quote?symbol=" + requestSymbol)
                 }
                 val payload = JSONObject(raw)
                 payload.optString("error").takeIf { it.isNotBlank() && it != "null" }?.let {
                     throw IllegalStateException(it)
                 }
                 require(payload.optString("symbol") == requestSymbol) { "Runtime вернул график другой пары" }
-                require(payload.optString("interval") == requestInterval) { "Runtime вернул другой таймфрейм; молчаливая подмена запрещена" }
-                val loaded = parseCandles(payload.optJSONArray("candles") ?: JSONArray())
-                chartLivePrice = payload.optDouble("live_price").takeIf { it.isFinite() && it > 0.0 }
+                require(!refreshCandles || payload.optString("interval") == requestInterval) { "Runtime вернул другой таймфрейм; молчаливая подмена запрещена" }
+                val loaded = if (refreshCandles) parseCandles(payload.optJSONArray("candles") ?: JSONArray()) else chartCandles
+                chartLivePrice = if (historicalTrade == null) payload.optDouble("live_price").takeIf { it.isFinite() && it > 0.0 } else null
                 chartQuoteSource = payload.optString("live_price_source", "UNAVAILABLE")
                 chartQuoteUpdatedAtMs = payload.optLong("live_price_at_ms", 0L)
-                chartIndicatorSummary = chartIndicatorSummary(payload.optJSONObject("indicator_snapshot"))
+                if (refreshCandles) {
+                    chartIndicatorSummary = chartIndicatorSummary(payload.optJSONObject("indicator_snapshot"))
+                    lastCandleRefreshMs = System.currentTimeMillis()
+                }
                 if (loaded.isEmpty()) {
                     chartError = "$requestSymbol $requestInterval: закрытые свечи не получены"
                 } else {
@@ -608,13 +607,14 @@ fun WilliamsApp(context: Context) {
                 chartError = failure.message ?: failure.javaClass.simpleName
             }
             chartLoading = false
-            delay(1_000L)
+            delay(if (historicalTrade == null) 2_000L else 30_000L)
         }
     }
 
     fun command(path: String) {
         scope.launch(Dispatchers.IO) {
             try {
+                runCatching { api.post("/api/v1/ui/event", JSONObject().put("action", "CONTROL").put("detail", path).toString()) }
                 val rawResponse = api.post(path)
                 val response = runCatching { JSONObject(rawResponse) }.getOrNull()
                 val label = if (path.endsWith("/control/start")) {
@@ -634,7 +634,7 @@ fun WilliamsApp(context: Context) {
                         "Runtime НЕ запущен: " + reason
                     }
                 } else {
-                    commandLabel(path)
+                    response?.optString("reason")?.takeIf { it.isNotBlank() && it != "null" } ?: commandLabel(path)
                 }
                 withContext(Dispatchers.Main) {
                     message = label
@@ -884,18 +884,25 @@ fun WilliamsApp(context: Context) {
     }
 
     fun runDiagnostics() {
+        if (diagnosticsRunning) return
+        diagnosticsRunning = true
         scope.launch(Dispatchers.IO) {
             try {
+                runCatching { api.post("/api/v1/ui/event", JSONObject().put("action", "DIAGNOSTICS").put("detail", "Run requested").toString()) }
                 val report = api.get("/api/v1/diagnostics?run=true")
                 DiagnosticsArchive.writeLatest(context, report)
                 withContext(Dispatchers.Main) {
-                    diagnosticsMessage = "Диагностика выполнена и сохранена на телефоне."
+                    diagnosticReport = JSONObject(report)
+                    diagnosticsMessage = "Проверка завершена: " + diagnosticReport?.optJSONObject("diagnostic_summary")?.optString("overall")
+
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     diagnosticsMessage =
                         e.message ?: "Не удалось выполнить диагностику"
                 }
+            } finally {
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) { diagnosticsRunning = false }
             }
         }
     }
@@ -938,19 +945,36 @@ fun WilliamsApp(context: Context) {
         delay(700L)
         loadAll(false)
         while (isActive) {
-            delay(15_000L)
+            delay(5_000L)
             loadAll(false)
         }
     }
 
-    // Four primary destinations keep the trading view compact. Advanced tools stay
-    // grouped under "Ещё" instead of taking space from market/position monitoring.
-    val titles = listOf("Главная", "Рынок", "Позиции", "Ещё")
-    val icons = listOf(
-        Icons.Filled.Dashboard,
-        Icons.Filled.Radar,
-        Icons.Filled.AccountBalanceWallet,
-        Icons.Filled.Settings
+    LaunchedEffect(tab) {
+        withContext(Dispatchers.IO) {
+            runCatching { api.post("/api/v1/ui/event", JSONObject().put("action", "NAVIGATE").put("detail", "screen=$tab").toString()) }
+        }
+        if (tab == 4 && diagnosticReport == null) runDiagnostics()
+    }
+    BackHandler(tab in listOf(3, 4, 5)) { tab = 6 }
+    val titles = listOf("Главная", "Рынок", "Сделки", "Анализ", "Система")
+    val destinations = listOf(0, 1, 2, 7, 6)
+    val icons = listOf(Icons.Filled.Dashboard, Icons.Filled.ShowChart,
+        Icons.Filled.AccountBalanceWallet, Icons.Filled.Timeline, Icons.Filled.Settings)
+
+    if (criticalSetting.isNotEmpty()) AlertDialog(
+        onDismissRequest = { criticalSetting = "" },
+        title = { Text(when (criticalSetting) { "save" -> "Изменить подключение Binance?"; "clear" -> "Удалить ключи Binance?"; else -> "Сбросить аварийную блокировку?" }) },
+        text = { Text(when (criticalSetting) {
+            "save" -> "Будут проверены новые ключи USDⓈ-M Futures Testnet. Изменение подключения разрешено только при безопасном состоянии Runtime."
+            "clear" -> "Будут удалены сохранённые ключи API. Удаление запрещено при позициях или неразрешённых заявках."
+            else -> "Сброс разрешён только после остановки движка, подтверждения пустого счёта и отсутствия ожидающих заявок."
+        }) },
+        confirmButton = { TextButton(onClick = {
+            when (criticalSetting) { "save" -> saveCredentials(); "clear" -> clearCredentials(); else -> command("/api/v1/control/kill/reset") }
+            criticalSetting = ""
+        }) { Text("Подтвердить") } },
+        dismissButton = { TextButton(onClick = { criticalSetting = "" }) { Text("Отмена") } }
     )
 
     Scaffold(
@@ -980,11 +1004,11 @@ fun WilliamsApp(context: Context) {
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text(
-                                "ЦЕНТР WILLIAMS",
+                                "WILLIAMS BOT 2.1",
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                "USDⓈ-M FUTURES DEMO • автономно на устройстве",
+                                "USDⓈ-M FUTURES • 10 ПАР • LONG / SHORT",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AppColors.textMuted
                             )
@@ -992,9 +1016,6 @@ fun WilliamsApp(context: Context) {
                     }
                 },
                 actions = {
-                    StatusDot("P0", if (status.p0GatePassed) AppColors.green else AppColors.red)
-                    StatusDot("WSS", if (status.marketWsConnected && status.userWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber)
-                    StatusDot("BINANCE", if (status.binanceConfigured) AppColors.green else AppColors.amber)
                     ModeChip("TESTNET", AppColors.green)
                     IconButton(onClick = { refresh(true) }) {
                         Icon(
@@ -1013,9 +1034,9 @@ fun WilliamsApp(context: Context) {
                 containerColor = AppColors.surface
             ) {
                 titles.forEachIndexed { index, title ->
-                    val targetTab = if (index == 3) 6 else index
+                    val targetTab = destinations[index]
                     NavigationBarItem(
-                        selected = if (index == 3) tab >= 3 else tab == targetTab,
+                        selected = if (targetTab == 6) tab in listOf(3, 4, 5, 6) else tab == targetTab,
                         onClick = { tab = targetTab },
                         icon = {
                             Icon(
@@ -1038,34 +1059,17 @@ fun WilliamsApp(context: Context) {
         // The user must be able to inspect Wave Map, Positions, Incidents and Config
         // while execution remains blocked until backend recovery proves the state clean.
         when (tab) {
-            0 -> DashboardScreen(
-                padding = padding,
-                status = status,
-                marketPairs = marketPairs,
-                candidates = candidates,
-                message = message,
-                refreshing = refreshing,
-                onStart = {
-                    command("/api/v1/control/start")
-                },
-                onPause = {
-                    command("/api/v1/control/pause")
-                },
-                onResume = {
-                    command("/api/v1/control/resume")
-                },
-                onStop = {
-                    command("/api/v1/control/stop")
-                },
-                onKill = {
-                    command("/api/v1/control/kill")
-                },
-                onScan = { refresh(true) },
-                onSettings = { tab = 6 },
-                onRecoverDashboard = { command("/api/v1/control/recover") },
-                onSetTestnetForceMode = ::setTestnetForceMode,
-                onForcedEntry = ::submitForcedTestnetEntry
-            )
+            0 -> CockpitDashboard(padding, status, candidates, message,
+                onMarket = { selectedChartSymbol = it; historicalTrade = null; tab = 1 },
+                onSystem = { tab = 4 }, controls = {
+                    CockpitControls(status,
+                        onStart = { command("/api/v1/control/start") },
+                        onPause = { command("/api/v1/control/pause") },
+                        onResume = { command("/api/v1/control/resume") },
+                        onSuspend = { command("/api/v1/control/stop") },
+                        onShutdown = { command("/api/v1/control/shutdown") },
+                        onKill = { command("/api/v1/control/block") })
+                })
 
             1 -> ScannerScreen(
                 padding = padding,
@@ -1082,13 +1086,19 @@ fun WilliamsApp(context: Context) {
                 chartIndicatorSummary = chartIndicatorSummary,
                 chartLoading = chartLoading,
                 chartError = chartError,
-                onChartSymbolChange = { selectedChartSymbol = it },
+                onChartSymbolChange = { selectedChartSymbol = it; historicalTrade = null },
                 onChartIntervalChange = { selectedChartInterval = it },
-                onRefresh = { refresh(true) }
+                onRefresh = { refresh(true) },
+                historicalTrade = historicalTrade,
+                onLive = { historicalTrade = null }
             )
 
-            2 -> PositionScreen(
-                padding = padding,
+            2 -> CockpitTrades(padding, status, trades,
+                onMarket = { selectedChartSymbol = it; historicalTrade = null; tab = 1 },
+                onTradeChart = { historicalTrade = it; selectedChartSymbol = it.symbol; selectedChartInterval = "1h"; tab = 1 },
+                active = {
+                PositionScreen(
+                padding = PaddingValues(0.dp),
                 status = status,
                 candles = candles,
                 selectedSymbol = selectedPositionSymbol,
@@ -1096,6 +1106,16 @@ fun WilliamsApp(context: Context) {
                 onIntervalChange = { selectedChartInterval = it },
                 onSelect = { selectedPositionSymbol = it },
                 onSell = { symbol ->
+                    requestedCloseSymbol = symbol
+                }
+                )
+                requestedCloseSymbol?.let { symbol ->
+                    AlertDialog(onDismissRequest = { requestedCloseSymbol = null },
+                        title = { Text("Закрыть $symbol?") },
+                        text = { Text("Будет отправлен запрос закрытия позиции с проверкой принадлежности и подтверждением Binance.") },
+                        dismissButton = { TextButton(onClick = { requestedCloseSymbol = null }) { Text("Отмена") } },
+                        confirmButton = { TextButton(onClick = {
+                            requestedCloseSymbol = null
                     scope.launch(Dispatchers.IO) {
                         try {
                             val result = JSONObject(
@@ -1126,29 +1146,44 @@ fun WilliamsApp(context: Context) {
                             }
                         }
                     }
+                        }) { Text("Закрыть позицию") } })
                 }
-            )
+                }, history = { HistoryScreen(PaddingValues(0.dp), trades, logs) {
+                    historicalTrade = it; selectedChartSymbol = it.symbol; selectedChartInterval = "1h"; tab = 1
+                } })
 
             3 -> HistoryScreen(
                 padding = padding,
                 trades = trades,
-                logs = logs
+                logs = logs,
+                onTradeChart = { historicalTrade = it; selectedChartSymbol = it.symbol; selectedChartInterval = "1h"; tab = 1 }
             )
 
-            4 -> DiagnosticsScreen(
-                padding = padding,
-                status = status,
-                onRun = ::runDiagnostics,
-                onSelfHeal = ::selfHeal,
-                onExport = ::exportDiagnostics,
-                message = diagnosticsMessage
-            )
+            4 -> CockpitDiagnosticScreen(padding, status, diagnosticReport, diagnosticsMessage,
+                onRun = ::runDiagnostics, onExport = ::exportDiagnostics, onSelfHeal = ::selfHeal, running = diagnosticsRunning)
+
+            7 -> CockpitAnalysis(padding, status, candidates) {
+                selectedChartSymbol = it; historicalTrade = null; tab = 1
+            }
 
             6 -> MoreScreen(
                 padding = padding,
                 onIncidents = { tab = 3 },
                 onDiagnostics = { tab = 4 },
-                onConfig = { tab = 5 }
+                onConfig = { tab = 5 },
+                advanced = {
+                    CockpitAppearanceCard(context)
+                    CockpitCard("Торговля и риск") {
+                        CockpitField("Инструменты", "10 USDⓈ-M контрактов")
+                        CockpitField("Направления", "LONG и SHORT")
+                        CockpitField("Решение / контекст", "H1 / H4, D1")
+                        CockpitField("Резерв риска", "до 0,25% на вход / 0,60% суммарно")
+                        CockpitField("Дневной лимит убытка", "3%")
+                        Text("Параметры ограничены торговым движком. Изменение экрана графика их не меняет.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+                    }
+                    TestnetForceTradingCard(status, ::setTestnetForceMode, ::submitForcedTestnetEntry)
+                    if (status.executionKillLatched) OutlinedButton(onClick = { criticalSetting = "reset" }, modifier = Modifier.fillMaxWidth()) { Text("Сбросить аварийную блокировку при пустом счёте") }
+                }
             )
 
             else -> SettingsScreen(
@@ -1158,8 +1193,8 @@ fun WilliamsApp(context: Context) {
                 apiSecret = apiSecret,
                 onApiKey = { apiKey = it },
                 onApiSecret = { apiSecret = it },
-                onSave = ::saveCredentials,
-                onClear = ::clearCredentials,
+                onSave = { criticalSetting = "save" },
+                onClear = { criticalSetting = "clear" },
                 backupPassword = backupPassword,
                 onBackupPassword = { backupPassword = it },
                 onExportBackup = ::exportBackup,
@@ -1179,7 +1214,8 @@ private fun MoreScreen(
     padding: PaddingValues,
     onIncidents: () -> Unit,
     onDiagnostics: () -> Unit,
-    onConfig: () -> Unit
+    onConfig: () -> Unit,
+    advanced: @Composable () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier
@@ -1190,7 +1226,7 @@ private fun MoreScreen(
         contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp)
     ) {
         item {
-            Text("Ещё", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text("Система", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Text(
                 "История, диагностика и настройки собраны здесь, чтобы главные экраны оставались компактными.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -1221,6 +1257,7 @@ private fun MoreScreen(
                 onClick = onConfig
             )
         }
+        item { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { advanced() } }
     }
 }
 
@@ -2270,7 +2307,9 @@ private fun ScannerScreen(
     chartError: String?,
     onChartSymbolChange: (String) -> Unit,
     onChartIntervalChange: (String) -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    historicalTrade: Trade? = null,
+    onLive: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier
@@ -2286,7 +2325,7 @@ private fun ScannerScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(Modifier.weight(1f)) {
                     Text("График рынка и решение бота", style = MaterialTheme.typography.headlineSmall)
                     Text(
                         when (status.scannerState) {
@@ -2325,6 +2364,14 @@ private fun ScannerScreen(
             }
         }
 
+        if (historicalTrade != null) item {
+            CockpitCard("Исторический график • ${historicalTrade.symbol}", AppColors.violet) {
+                Text("Вход: ${cockpitTime(historicalTrade.openedAtMs)} • выход: ${cockpitTime(historicalTrade.closedAtMs)}", style = MaterialTheme.typography.bodySmall)
+                Text(historicalTrade.reason.ifBlank { "Причина входа не записана" }, style = MaterialTheme.typography.bodySmall)
+                Text("Выход: " + historicalTrade.exitReason.ifBlank { "Причина не записана" }, style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = onLive) { Text("Вернуться к прямому эфиру") }
+            }
+        }
         item {
             MarketChartPanel(
                 selectedSymbol = chartSymbol,
@@ -2339,7 +2386,8 @@ private fun ScannerScreen(
                 candidate = candidates.firstOrNull { it.symbol.equals(chartSymbol, ignoreCase = true) },
                 status = status,
                 onSymbolChange = onChartSymbolChange,
-                onIntervalChange = onChartIntervalChange
+                onIntervalChange = onChartIntervalChange,
+                historicalTrade = historicalTrade
             )
         }
 
@@ -2351,36 +2399,7 @@ private fun ScannerScreen(
             )
         }
 
-        if (candidates.isEmpty()) {
-            item {
-                EmptyState(
-                    icon = Icons.Filled.Radar,
-                    title = when (status.scannerState) {
-                        "ERROR" -> "Сканер сообщил ошибку"
-                        "BLOCKED" -> "Сканирование заблокировано"
-                        "PARTIAL" -> "Сканирование завершено не полностью"
-                        "RUNNING" -> "Сканер работает"
-                        "READY" -> "Валидных сигналов пока нет"
-                        else -> "Сканирование ещё не запускалось"
-                    },
-                    subtitle = status.scannerError?.takeIf { it.isNotBlank() }
-                        ?: when (status.scannerState) {
-                            "READY" -> "Проверены все " + status.scannerSymbols +
-                                " из " + status.scannerConfiguredSymbols +
-                                " утверждённых Futures-пар; сейчас нет условий для входа."
-                            "BLOCKED" -> "Проверка конфигурации или биржевых фильтров заблокировала сканирование."
-                            "PARTIAL" -> "Проверены не все пары. Новые входы остаются заблокированы."
-                            "RUNNING" -> "Сканер проверяет утверждённые пары: " +
-                                status.scannerProgressSymbols + "/" + status.scannerProgressTotal + "."
-                            else -> "Нажми «СКАН», чтобы проверить утверждённые десять Futures-пар."
-                        }
-                )
-            }
-        }
 
-        items(candidates) {
-            CandidateCardModern(it)
-        }
     }
 }
 
@@ -2399,9 +2418,10 @@ private fun MarketChartPanel(
     candidate: Candidate?,
     status: Status,
     onSymbolChange: (String) -> Unit,
-    onIntervalChange: (String) -> Unit
+    onIntervalChange: (String) -> Unit,
+    historicalTrade: Trade? = null
 ) {
-    val selectedPosition = status.positions.firstOrNull {
+    val selectedPosition = if (historicalTrade != null) null else status.positions.firstOrNull {
         it.symbol.equals(selectedSymbol, ignoreCase = true)
     }
     val displayStatus = status.copy(
@@ -2419,6 +2439,7 @@ private fun MarketChartPanel(
         else -> "НЕ ОПРЕДЕЛЕНО"
     }
 
+    var details by remember(selectedSymbol) { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Row(
@@ -2446,16 +2467,16 @@ private fun MarketChartPanel(
                 horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 CHART_VIEW_INTERVALS.forEach { frame ->
                     FilterChip(selected = interval == frame, onClick = { onIntervalChange(frame) },
-                        label = { Text(frame.uppercase(Locale.US)) })
+                        label = { Text(chartIntervalLabel(frame)) })
                 }
             }
-            Text("Все таймфреймы здесь — визуальный анализ. Торговое решение создаётся только на закрытом H1; D1/H4 — контекст, M15/M5 — мониторинг и диагностика. Переключение графика не меняет логику входа.",
-                color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
-            Text("Котировка: " + (livePrice?.let { fmt(it) } ?: "нет") + " • источник: " + quoteSource +
+            Text("Решение: H1 • контекст: H4 / D1 • смена графика не меняет торговлю", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
+            Text((if (historicalTrade != null) "Исторические свечи" else "Котировка: " + (livePrice?.let { fmt(it) } ?: "нет")) + " • источник: " + quoteSource +
                 (if (quoteUpdatedAtMs > 0L) " • " + ((System.currentTimeMillis() - quoteUpdatedAtMs).coerceAtLeast(0L) / 1000L) + "с назад" else ""),
-                color = if (livePrice != null) AppColors.green else AppColors.amber,
+                color = if (livePrice != null && CockpitDiagnostics.fresh(quoteUpdatedAtMs, System.currentTimeMillis(), 60_000L)) AppColors.green else AppColors.amber,
                 style = MaterialTheme.typography.labelSmall)
-            Text(indicatorSummary, color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { details = !details }) { Text(if (details) "Скрыть данные индикаторов" else "Что видит бот • данные индикаторов") }
+            if (details) Text(indicatorSummary, color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
             if (candles.isEmpty()) {
                 if (loading) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2469,13 +2490,15 @@ private fun MarketChartPanel(
                 }
             } else {
                 TradingChart(candles = candles, status = displayStatus, position = selectedPosition,
-                    candidate = candidate, interval = interval, onIntervalChange = onIntervalChange)
+                    candidate = if (historicalTrade == null) candidate else null, interval = interval,
+                    onIntervalChange = onIntervalChange, historicalTrade = historicalTrade)
             }
             if (!error.isNullOrBlank() && candles.isNotEmpty()) {
                 Text("Обновление графика: " + error, color = AppColors.amber, style = MaterialTheme.typography.bodySmall)
             }
+            if (historicalTrade == null) {
             Divider(color = AppColors.surface2)
-            Text("РЕШЕНИЕ ДВИЖКА ПО ВЫБРАННОЙ ПАРЕ", style = MaterialTheme.typography.titleMedium)
+            Text("ЧТО ДУМАЕТ БОТ • H4 → H1 → СИГНАЛ → РИСК", style = MaterialTheme.typography.titleMedium)
             Text("Показан последний результат сканера, а не команда немедленной покупки/продажи. Ордер требует отдельного H1-триггера, проверки риска и биржевой сверки.",
                 color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
             if (candidate == null) {
@@ -2490,6 +2513,7 @@ private fun MarketChartPanel(
                 })
                 InfoRow("Семейство Williams", candidate.entrySignalType.ifBlank { "не указано" })
                 InfoRow("HTF-контекст", if (candidate.htfConfirmed) "подтверждён" else "не подтверждён")
+                if (details) {
                 InfoRow("Согласование направления", candidate.wiseManCount.toString() + "/3 (диагностика, не счётчик Three Wise Men)")
                 InfoRow("Волновая фаза", "W" + candidate.wavePosition + " • " + candidate.wavePhase)
                 InfoRow("Волновая уверенность / истощение", fmt(candidate.waveConfidence, 2) + " / " + fmt(candidate.waveExhaustionRisk, 1) + "%")
@@ -2502,6 +2526,7 @@ private fun MarketChartPanel(
                 InfoRow("Оценка риска", if (candidate.riskPct > 0.0) fmt(candidate.riskPct, 2) + "%" else "—")
                 InfoRow("Risk/reward", if (candidate.riskReward > 0.0) fmt(candidate.riskReward, 2) else "—")
                 InfoRow("Спред / ATR", fmt(candidate.spreadPct * 100.0, 3) + "% / " + fmt(candidate.atrPct * 100.0, 3) + "%")
+                }
                 InfoRow("Триггер условного STOP", fmt(candidate.entryTriggerPrice))
                 InfoRow("Структурный стоп", fmt(candidate.entryProtectivePrice))
                 if (candidate.shadowReason.isNotBlank()) Text("Теневая оценка: " + candidate.shadowReason,
@@ -2512,6 +2537,7 @@ private fun MarketChartPanel(
                     style = MaterialTheme.typography.bodySmall)
                 if (candidate.wavePath.isNotBlank()) Text("Контекст волны: " + candidate.wavePath,
                     color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
+            }
             }
         }
     }
@@ -2677,11 +2703,11 @@ private fun PositionScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            "FLAT",
+                            if (status.positionsSnapshotOk && CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L)) "FLAT" else "NOT VERIFIED",
                             style = MaterialTheme.typography.headlineMedium
                         )
                         Text(
-                            "Открытых позиций нет.",
+                            if (status.positionsSnapshotOk && CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L)) "Открытых позиций нет." else "Нет актуального подтверждения позиций Binance.",
                             color = AppColors.textMuted
                         )
                     }
@@ -2709,7 +2735,7 @@ private fun PositionScreen(
                             Text(
                                 (p.direction.takeIf { it == "LONG" || it == "SHORT" }
                                     ?: if (p.qty < 0.0) "SHORT" else "LONG") + " " + p.symbol,
-                                modifier = Modifier.clickable { onSelect(p.symbol) },
+                                modifier = Modifier.weight(1f).clickable { onSelect(p.symbol) },
                                 style =
                                     MaterialTheme.typography.headlineSmall
                             )
@@ -2774,8 +2800,11 @@ private fun PositionScreen(
                         )
                         InfoRow(
                             "Защита",
-                            if (p.stop != null) "Уровень SL есть; подтверждение сверяй в Futures Runtime"
-                            else "SL не указан в статусе"
+                            if (status.positionsSnapshotOk && status.futuresIntents.any {
+                                it.optString("symbol") == p.symbol && it.optString("direction") == p.direction &&
+                                    CockpitDiagnostics.protectionProven(it, System.currentTimeMillis())
+                            }) "Подтверждена Binance"
+                            else "НЕ ПОДТВЕРЖДЕНА — требуется сверка"
                         )
                     }
                 }
@@ -2809,7 +2838,8 @@ private fun PositionScreen(
 private fun HistoryScreen(
     padding: PaddingValues,
     trades: List<Trade>,
-    logs: List<String>
+    logs: List<String>,
+    onTradeChart: (Trade) -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier
@@ -2915,6 +2945,8 @@ private fun HistoryScreen(
                     if (it.reason.isNotBlank()) {
                         Text("Почему открыли: " + it.reason, style = MaterialTheme.typography.bodySmall)
                     }
+                    if (it.exitReason.isNotBlank()) Text("Почему вышли: " + it.exitReason, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { onTradeChart(it) }) { Text("Открыть график сделки") }
                     if (it.classification.isNotBlank()) {
                         Text(
                             "Разбор: " + it.classification,
@@ -3470,9 +3502,21 @@ private fun TradingChart(
     position: PositionView? = null,
     candidate: Candidate? = null,
     interval: String = "1h",
-    onIntervalChange: (String) -> Unit = {}
+    onIntervalChange: (String) -> Unit = {},
+    historicalTrade: Trade? = null
 ) {
-    var scale by remember(candles.size) { mutableFloatStateOf(1f) }
+    if (candles.isEmpty()) { Text("Нет закрытых свечей"); return }
+    var showJaw by remember { mutableStateOf(true) }
+    var showTeeth by remember { mutableStateOf(true) }
+    var showLips by remember { mutableStateOf(true) }
+    var showFractals by remember { mutableStateOf(true) }
+    var showSignals by remember { mutableStateOf(true) }
+    var showLevels by remember { mutableStateOf(true) }
+    var showAo by remember { mutableStateOf(true) }
+    var showAc by remember { mutableStateOf(true) }
+    var showMfi by remember { mutableStateOf(false) }
+    var selectedBar by remember { mutableIntStateOf(-1) }
+    var scale by remember(candles.size) { mutableFloatStateOf(max(1f, candles.size / 100f)) }
     var pan by remember(candles.size) { mutableFloatStateOf(0f) }
 
     val visibleCount = min(candles.size, max(1, (candles.size / scale).toInt()))
@@ -3490,11 +3534,20 @@ private fun TradingChart(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = AppColors.surface)
     ) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(Triple("Jaw", showJaw) { showJaw = !showJaw }, Triple("Teeth", showTeeth) { showTeeth = !showTeeth },
+                Triple("Lips", showLips) { showLips = !showLips }, Triple("Фракталы", showFractals) { showFractals = !showFractals },
+                Triple("Мудрецы", showSignals) { showSignals = !showSignals }, Triple("Уровни", showLevels) { showLevels = !showLevels },
+                Triple("AO", showAo) { showAo = !showAo }, Triple("AC", showAc) { showAc = !showAc },
+                Triple("MFI", showMfi) { showMfi = !showMfi }).forEach { (label, enabled, change) ->
+                FilterChip(enabled, change, label = { Text(label) })
+            }
+        }
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text("Alligator: Jaw 13/8 • Teeth 8/5 • Lips 5/3  |  Fractals подтверждаются после двух правых закрытых баров",
                 color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
             Text(
-                "График • " + interval.uppercase(Locale.US) +
+                "График • " + chartIntervalLabel(interval) +
                     " • H1 остаётся единственным таймфреймом торгового решения",
                 color = AppColors.textMuted,
                 style = MaterialTheme.typography.labelSmall
@@ -3506,17 +3559,21 @@ private fun TradingChart(
                 .height(340.dp)
                 .padding(8.dp)
                 .pointerInput(visible.size) {
+                    detectTapGestures { tap -> selectedBar = (tap.x / size.width * visible.size).toInt().coerceIn(0, visible.lastIndex) }
+                }
+                .pointerInput(visible.size) {
                     detectTransformGestures { _, drag, zoom, _ ->
                         scale =
-                            (scale * zoom).coerceIn(1f, 5f)
+                            (scale * zoom).coerceIn(1f, max(5f, candles.size / 20f))
                         pan += drag.x
                     }
                 }
         ) {
             val levels = listOfNotNull(
                 status.tp, status.entry, status.sl, status.price,
-                candidate?.entryTriggerPrice, candidate?.entryProtectivePrice
-            )
+                candidate?.entryTriggerPrice, candidate?.entryProtectivePrice,
+                position?.entry, position?.stop, historicalTrade?.entry, historicalTrade?.exit, historicalTrade?.stopPrice
+            ) + visible.flatMap { listOfNotNull(if (showJaw) it.jaw else null, if (showTeeth) it.teeth else null, if (showLips) it.lips else null) }
             val minPrice = min(
                 visible.minOf { it.low },
                 levels.minOrNull() ?: Double.MAX_VALUE
@@ -3564,10 +3621,10 @@ private fun TradingChart(
                         max(2f, bottom - top)
                     )
                 )
-                if (candle.fractalUp) {
+                if (showFractals && candle.fractalUp) {
                     drawCircle(AppColors.red, radius = 4f, center = Offset(center, y(candle.high) - 7f))
                 }
-                if (candle.fractalDown) {
+                if (showFractals && candle.fractalDown) {
                     drawCircle(AppColors.green, radius = 4f, center = Offset(center, y(candle.low) + 7f))
                 }
             }
@@ -3600,12 +3657,38 @@ private fun TradingChart(
                 }
             }
 
-            indicatorLine({ it.jaw }, AppColors.violet)
-            indicatorLine({ it.teeth }, AppColors.amber)
-            indicatorLine({ it.lips }, AppColors.primary)
+            if (showJaw) indicatorLine({ it.jaw }, AppColors.violet)
+            if (showTeeth) indicatorLine({ it.teeth }, AppColors.amber)
+            if (showLips) indicatorLine({ it.lips }, AppColors.primary)
+            if (showSignals) visible.forEachIndexed { index, c ->
+                c.signalTypes.forEach { type ->
+                    val short = type.startsWith("SHORT")
+                    val family = when { type.contains("REVERSAL") -> "WM1"; type.contains("SUPER_AO") -> "WM2"; type.contains("FRACTAL") -> "WM3"; else -> type }
+                    drawContext.canvas.nativeCanvas.drawText((if (short) "▼" else "▲") + family,
+                        x(index), y(if (short) c.high else c.low), android.graphics.Paint().apply {
+                            color = (if (short) AppColors.red else AppColors.green).toArgb(); textSize = 10.sp.toPx(); isAntiAlias = true
+                        })
+                }
+            }
+            fun tradeMarker(at: Long, price: Double?, label: String, color: Color) {
+                if (at <= 0L || price == null || visible.isEmpty()) return
+                val frameMs = when (interval) { "1h" -> 3_600_000L; "4h" -> 14_400_000L; "1d" -> 86_400_000L; else -> 0L }
+                val index = visible.indexOfLast { it.time <= at }
+                if (index < 0 || (index == visible.lastIndex && frameMs > 0 && at >= visible.last().time + frameMs)) return
+                drawLine(color.copy(alpha = 0.6f), Offset(x(index), 0f), Offset(x(index), size.height), 1f)
+                drawCircle(color, 5f, Offset(x(index), y(price)))
+                drawContext.canvas.nativeCanvas.drawText(label, x(index), max(20f, y(price) - 8f), android.graphics.Paint().apply {
+                    this.color = color.toArgb(); textSize = 11.sp.toPx(); isAntiAlias = true
+                })
+            }
+            historicalTrade?.let { trade ->
+                tradeMarker(trade.openedAtMs, trade.entry, "ВХОД ${trade.direction}", AppColors.primary)
+                tradeMarker(trade.closedAtMs, trade.exit, "ВЫХОД", AppColors.violet)
+            }
+            if (selectedBar in visible.indices) drawLine(AppColors.textMuted, Offset(x(selectedBar), 0f), Offset(x(selectedBar), size.height), 1f)
 
             fun level(price: Double?, color: Color, label: String) {
-                if (price == null) return
+                if (price == null || !price.isFinite() || !showLevels) return
                 val yy = y(price)
                 drawLine(
                     color,
@@ -3620,7 +3703,7 @@ private fun TradingChart(
                     max(20f, yy - 6f),
                     android.graphics.Paint().apply {
                         this.color = color.toArgb()
-                        textSize = 26f
+                        textSize = 11.sp.toPx()
                         isAntiAlias = true
                     }
                 )
@@ -3633,6 +3716,12 @@ private fun TradingChart(
             level(candidate?.entryTriggerPrice, AppColors.amber, "H1 TRIGGER")
             level(candidate?.entryProtectivePrice, AppColors.red.copy(alpha = 0.9f), "H1 STRUCTURAL STOP")
         }
+        Text(cockpitTime(visible.first().time) + "  —  " + cockpitTime(visible.last().time), modifier = Modifier.padding(horizontal = 8.dp), color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
+        if (selectedBar in visible.indices) {
+            val c = visible[selectedBar]
+            Text("${cockpitTime(c.time)} • O ${fmt(c.open)} • H ${fmt(c.high)} • L ${fmt(c.low)} • C ${fmt(c.close)}\nAO ${fmt(c.ao, 5)} • AC ${fmt(c.ac, 5)} • ${c.signalTypes.joinToString()}", modifier = Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
+        }
+        if (showAo) {
         Text("Awesome Oscillator (AO) • зелёный: столбец растёт, красный: столбец снижается",
             color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 8.dp))
@@ -3655,6 +3744,8 @@ private fun TradingChart(
                 }
             }
         }
+        }
+        if (showAc) {
         Text("Accelerator Oscillator (AC = AO − SMA5(AO)) • зелёный: растёт, красный: снижается; не самостоятельный вход",
             color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 8.dp))
@@ -3677,6 +3768,8 @@ private fun TradingChart(
                 }
             }
         }
+        }
+        if (showMfi) {
         Text("Williams MFI proxy = (High − Low) / Volume • это диагностический прокси потока, не классический MFI 0–100",
             color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 8.dp))
@@ -3697,6 +3790,7 @@ private fun TradingChart(
                     previous = value
                 }
             }
+        }
         }
     }
 }
@@ -3767,7 +3861,7 @@ private fun parsePortfolio(json: JSONObject): PortfolioSummary {
     )
 }
 
-private fun parseStatus(json: JSONObject): Status {
+internal fun parseStatus(json: JSONObject): Status {
     val legacy = json.optJSONObject("position")
     val array = json.optJSONArray("positions")
     val parsed =
@@ -3897,7 +3991,7 @@ private fun parseStatus(json: JSONObject): Status {
                 .takeUnless { it.isNaN() },
         error =
             json.optString("last_error")
-                .takeIf { it.isNotBlank() },
+                .takeUnless { it.isBlank() || it == "null" },
         // Accept the local runtime's canonical credential flag and older status aliases.
         binanceConfigured =
             json.optBoolean(
@@ -3960,7 +4054,7 @@ private fun parseStatus(json: JSONObject): Status {
             ),
         scannerError =
             json.optString("scanner_error")
-                .takeIf { it.isNotBlank() },
+                .takeUnless { it.isBlank() || it == "null" },
         scannerSymbols =
             json.optInt(
                 "scanner_symbols",
@@ -3968,6 +4062,8 @@ private fun parseStatus(json: JSONObject): Status {
             ),
         scannerConfiguredSymbols =
             json.optInt("scanner_configured_symbols", 10),
+        scannerProgressSymbols = json.optInt("scanner_progress_symbols"),
+        scannerProgressTotal = json.optInt("scanner_progress_total", 10),
         scannerUniverse = scannerUniverse.toList(),
         scannerLongCandidates =
             json.optInt("scanner_long_candidates", 0),
@@ -4038,7 +4134,13 @@ private fun parseStatus(json: JSONObject): Status {
             List(array.length()) { i -> array.optString(i) }
                 .filter { it.isNotBlank() }
         } ?: emptyList(),
-        forceTestnetMode = json.optBoolean("force_testnet_mode", false)
+        forceTestnetMode = json.optBoolean("force_testnet_mode", false),
+        snapshotAtMs = json.optLong("snapshot_at_ms"),
+        positionsSnapshotOk = json.optBoolean("positions_snapshot_ok"),
+        positionsSnapshotAtMs = json.optLong("positions_snapshot_at_ms"),
+        accountSnapshotAtMs = json.optLong("account_snapshot_at_ms"),
+        futuresIntents = CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")?.optJSONArray("pending_intent_details")),
+        cockpitReadiness = json.optJSONObject("cockpit_readiness") ?: JSONObject()
     )
 }
 
@@ -4087,7 +4189,8 @@ private fun parseCandles(array: JSONArray): List<Candle> =
             fractalDown = x.optBoolean("fractal_down"),
             ao = x.optDouble("ao").takeUnless { it.isNaN() || x.isNull("ao") },
             ac = x.optDouble("ac").takeUnless { it.isNaN() || x.isNull("ac") },
-            mfiProxy = x.optDouble("mfi_proxy").takeUnless { it.isNaN() || x.isNull("mfi_proxy") }
+            mfiProxy = x.optDouble("mfi_proxy").takeUnless { it.isNaN() || x.isNull("mfi_proxy") },
+            signalTypes = x.optJSONArray("signal_types")?.let { a -> List(a.length()) { a.optString(it) } } ?: emptyList()
         )
     }
 
@@ -4168,7 +4271,11 @@ private fun parseTrades(array: JSONArray): List<Trade> =
             initialRiskUsdt = x.optDouble("initial_risk_usdt", Double.NaN).takeUnless { it.isNaN() },
             entrySlippagePct = x.optDouble("entry_slippage_pct", Double.NaN).takeUnless { it.isNaN() },
             pnlComplete = x.optBoolean("pnl_complete", true),
-            fillCount = x.optInt("fill_count", 0)
+            fillCount = x.optInt("fill_count", 0),
+            openedAtMs = x.optLong("opened_at"),
+            closedAtMs = x.optLong("closed_at"),
+            stopPrice = x.optDouble("stop_price").takeIf { it.isFinite() && it > 0.0 },
+            exitReason = x.optString("exit_reason")
         )
     }
 
@@ -4243,7 +4350,7 @@ private fun commandLabel(path: String): String =
         path.endsWith("/start") -> "Двигатель запущен"
         path.endsWith("/pause") -> "Пауза включена"
         path.endsWith("/panic") -> "PANIC STOP: новые входы остановлены"
-        path.endsWith("/kill") -> "EMERGENCY EXIT: торговля остановлена, позиция закрыта"
+        path.endsWith("/kill") -> "Аварийное закрытие запрошено; результат требует подтверждения Binance"
         path.endsWith("/resume") -> "Сканирование возобновлено"
         path.endsWith("/stop") -> "Двигатель остановлен"
         else -> "Команда выполнена"
@@ -4262,3 +4369,12 @@ private fun pct(value: Double?): String =
     } else {
         String.format(Locale.US, "%+.2f%%", value * 100.0)
     }
+
+private fun chartIntervalLabel(frame: String): String = when {
+    frame == "1M" -> "MN1"
+    frame.endsWith("m") -> "M" + frame.dropLast(1)
+    frame.endsWith("h") -> "H" + frame.dropLast(1)
+    frame.endsWith("d") -> "D" + frame.dropLast(1)
+    frame.endsWith("w") -> "W" + frame.dropLast(1)
+    else -> frame
+}

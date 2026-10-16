@@ -16,10 +16,13 @@ object DiagnosticsArchive {
     private const val DIR = "diagnostics"
     private const val LATEST = "Williams_Diagnostics_Latest.zip"
 
+    @Synchronized
     fun writeLatest(context: Context, reportJson: String): File {
         val dir = File(context.filesDir, DIR).apply { mkdirs() }
         val output = File(dir, LATEST)
-        ZipOutputStream(FileOutputStream(output)).use { zip ->
+        val temporary = File.createTempFile("williams-diagnostics-", ".zip", dir)
+        try {
+        ZipOutputStream(FileOutputStream(temporary)).use { zip ->
             val report = org.json.JSONObject(reportJson)
 
             add(zip, "diagnostic_report.json", report.toString(2))
@@ -73,7 +76,14 @@ object DiagnosticsArchive {
                 "ui.log",
                 renderTests(report, "ui")
             )
+            add(zip, "event_timeline.json", report.optJSONArray("event_timeline")?.toString(2) ?: "[]")
+            add(zip, "last_incident.json", report.optJSONObject("last_incident")?.toString(2) ?: "{}")
+            add(zip, "sqlite_health.json", report.optJSONObject("sqlite_health")?.toString(2) ?: "{}")
+            add(zip, "strategy.log", renderTests(report, "strategy"))
         }
+        java.nio.file.Files.move(temporary.toPath(), output.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+        } finally { temporary.delete() }
         return output
     }
 
@@ -84,10 +94,12 @@ object DiagnosticsArchive {
     private fun renderTests(report: org.json.JSONObject, domain: String): String {
         val out = StringBuilder()
         out.append("Williams diagnostics • ").append(report.optString("created_at")).append('\n')
+        var count = 0
         val tests = report.optJSONArray("tests") ?: org.json.JSONArray()
         for (i in 0 until tests.length()) {
             val test = tests.optJSONObject(i) ?: continue
             if (test.optString("domain") != domain) continue
+            count++
             val severity = test.optString(
                 "severity",
                 if (test.optBoolean("ok", false)) "PASS" else "UNKNOWN"
@@ -104,7 +116,22 @@ object DiagnosticsArchive {
                 )
                 .append('\n')
         }
-        if (out.length == 0) out.append("No test records for this domain.\n")
+        for (event in CockpitDiagnostics.rows(report.optJSONArray("event_timeline")).asReversed()) {
+            val type = event.optString("e")
+            val matches = when (domain) {
+                "ui" -> type == "COCKPIT_UI"
+                "execution", "binance" -> type in setOf("COCKPIT_EXECUTION", "COCKPIT_RECONCILIATION", "COCKPIT_SIGNAL_RISK", "COCKPIT_ORDER_RESPONSE", "COCKPIT_USER_WS")
+                "websocket" -> type == "COCKPIT_USER_WS"
+                "runtime" -> type == "COCKPIT_CONTROL"
+                else -> false
+            }
+            if (!matches) continue
+            count++
+            out.append(event.optLong("E")).append(" | ").append(type).append(" | ")
+                .append(event.optString("symbol")).append(" | ").append(event.optString("state"))
+                .append(" | ").append(safeDiagnosticText(event.optString("detail"))).append('\n')
+        }
+        if (count == 0) out.append("NOT_VERIFIED | No observations recorded for this domain.\n")
         return out.toString()
     }
 
