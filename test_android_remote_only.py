@@ -916,3 +916,33 @@ def test_futures_entry_uses_contract_price_and_protective_stop_keeps_mark_price(
     assert "tc2OppositeBreakoutTriggered(true, contract, it.triggerPrice)" in runtime
     assert "tc2OppositeBreakoutTriggered(false, contract, it.triggerPrice)" in runtime
     assert '"TC2_PENDING_CLOSED_H1_INVALIDATION"' in runtime
+
+
+def test_future_cancel_preflight_and_out_of_session_failures_always_latch_reconciliation():
+    """Source-contract guard complements Kotlin pure unit tests and does NOT
+    replace a device-level forced REST timeout/restart exercise."""
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    cancellation = coordinator.split("fun cancelPendingEntries(", 1)[1].split(
+        "fun trailProtectiveStop(", 1
+    )[0]
+    assert "val preflight = try {" in cancellation
+    assert "val adapter = adapterFactory()" in cancellation
+    assert "val openPositions = adapter.positions()" in cancellation
+    assert 'lastBlocker = "pending_entry_cancellation_preflight_failed"' in cancellation
+    assert "state = State.RECONCILE_REQUIRED" in cancellation
+    assert "return@synchronized JSONObject().put(\"ok\", false)" in cancellation
+    session = runtime.split("private fun cancelPendingEntriesOutsideWilliamsSession()", 1)[1].split(
+        "private fun performScan()", 1
+    )[0]
+    assert 'setReconcileRequired(blocker)' in session
+
+
+def test_native_futures_executor_rejects_unknown_and_cross_direction_williams_signals():
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    assert "internal fun futuresEntryProvenanceBlocker(" in coordinator
+    assert "campaignSignalDirection(signalType) != direction.uppercase(Locale.US)" in coordinator
+    validator = coordinator.split("private fun validatePlan(plan: EntryPlan)", 1)[1].split(
+        "private fun findProtectiveStop(", 1
+    )[0]
+    assert "futuresEntryProvenanceBlocker(" in validator
