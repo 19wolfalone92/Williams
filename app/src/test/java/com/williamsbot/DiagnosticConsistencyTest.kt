@@ -81,20 +81,22 @@ class DiagnosticConsistencyTest {
 
 
     @Test
-    fun userStreamHandshakeWithoutEventIsNotFresh() {
-        assertFalse(userStreamIsFresh(
+    fun idleUserStreamIsFreshAfterSuccessfulRestReconciliation() {
+        assertTrue(userStreamSyncIsFresh(
             connected = true,
             syncRequired = false,
-            lastEventMs = 0L,
+            lastSuccessfulSyncMs = 900_000L,
             nowMs = 1_000_000L
         ))
     }
 
     @Test
-    fun userStreamRejectsStaleFutureAndUnsynchronizedEvents() {
-        assertFalse(userStreamIsFresh(true, false, 100_000L, 220_001L))
-        assertFalse(userStreamIsFresh(true, false, 300_000L, 220_000L))
-        assertFalse(userStreamIsFresh(true, true, 219_000L, 220_000L))
-        assertTrue(userStreamIsFresh(true, false, 219_000L, 220_000L))
+    fun userStreamSyncRejectsMissingStaleFutureAndUnsynchronizedReconciliation() {
+        assertFalse(userStreamSyncIsFresh(true, false, 0L, 1_000_000L))
+        assertFalse(userStreamSyncIsFresh(true, false, 800_000L, 1_000_001L))
+        assertFalse(userStreamSyncIsFresh(true, false, 1_000_001L, 1_000_000L))
+        assertFalse(userStreamSyncIsFresh(true, true, 999_000L, 1_000_000L))
+        assertFalse(userStreamSyncIsFresh(false, false, 999_000L, 1_000_000L))
     }
+
 }
