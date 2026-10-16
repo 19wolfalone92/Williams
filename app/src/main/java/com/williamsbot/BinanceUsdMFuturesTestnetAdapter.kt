@@ -64,7 +64,9 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     }
 
     fun exchangeInfo(): JSONObject =
-        request("GET", "/fapi/v1/exchangeInfo", emptyMap(), signed = false)
+        request("GET", "/fapi/v1/exchangeInfo", emptyMap(), signed = false).also {
+            rateGuard?.updateFromExchangeInfo(it)
+        }
 
     fun markPrice(symbol: String): Double {
         requireSymbol(symbol)
