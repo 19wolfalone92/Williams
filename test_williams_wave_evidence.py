@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from williams_wave_evidence import (
-    abc_evidence, ao_divergence_evidence, collect_visual_wave_evidence, impulse_evidence
+    abc_evidence, ao_divergence_evidence, collect_visual_wave_evidence, impulse_evidence, impulse_correction_evidence
 )
 
 
@@ -102,3 +102,62 @@ def test_future_confirmations_are_filtered_from_all_wave_evidence():
     assert output["impulse"]["status"] == "INCOMPLETE"
     assert output["impulse_up"]["status"] == "INCOMPLETE"
     assert output["can_place_orders"] is False
+
+
+def test_five_wave_then_abc_matches_two_half_retracements():
+    # Synthetic geometry modeled on the *shape* of the provided drawing,
+    # not digitized historical quotes. W4 retraces half of W3; B half of A.
+    levels = [100, 115, 110, 130, 120, 140, 120, 130, 110]
+    result = impulse_correction_evidence(pivots(levels, "UP"), "UP")
+    assert result["stage"] == "C_PIVOT_CONFIRMED"
+    assert result["ordinary_impulse_or_diagonal"] == "IMPULSE_CANDIDATE"
+    assert result["wave4_retracement_of_wave3"] == 0.5
+    assert result["b_retracement_of_a"] == 0.5
+    assert result["c_size_relative_to_a"] == 1.0
+    assert result["c_nearby_reference_levels"]["wave2"] == 110
+    assert result["internal_subwaves_verified"] is False
+    assert result["ratios_are_filters"] is False
+    assert result["can_place_orders"] is False
+
+
+def test_impulse_to_abc_mirrors_for_bearish_impulse():
+    levels = [200, 185, 190, 170, 180, 160, 180, 170, 190]
+    result = impulse_correction_evidence(pivots(levels, "DOWN"), "DOWN")
+    assert result["stage"] == "C_PIVOT_CONFIRMED"
+    assert result["wave4_retracement_of_wave3"] == 0.5
+    assert result["b_retracement_of_a"] == 0.5
+    assert result["c_size_relative_to_a"] == 1.0
+    assert result["direction_of_preceding_impulse"] == "DOWN"
+
+
+def test_impulse_abc_partial_stages_and_unconfirmed_c_never_assumed():
+    levels = [100, 115, 110, 130, 120, 140, 120, 130, 110]
+    for count, expected in ((6, "W5_CANDIDATE"),
+                            (7, "A_PIVOT_CONFIRMED"),
+                            (8, "B_PIVOT_CONFIRMED"),
+                            (9, "C_PIVOT_CONFIRMED")):
+        out = impulse_correction_evidence(pivots(levels[:count]), "UP")
+        assert out["stage"] == expected
+        assert ("c_level" in out) == (count == 9)
+    # Pivot C is visible as a *drawn* center but still awaits its second
+    # right-hand close. Only the first eight points are admissible.
+    evidence = collect_visual_wave_evidence(
+        pivots(levels), [0.0] * 47, "UP"
+    )
+    assert evidence["impulse_correction_up"]["stage"] == "B_PIVOT_CONFIRMED"
+    assert "c_level" not in evidence["impulse_correction_up"]
+
+
+def test_half_retracement_is_not_required_for_a_wave_hypothesis():
+    levels = [100, 115, 110, 130, 115, 140, 120, 125, 110]
+    result = impulse_correction_evidence(pivots(levels), "UP")
+    assert result["status"] == "STRUCTURAL_HYPOTHESIS"
+    assert result["wave4_retracement_of_wave3"] == 0.75
+    assert result["b_retracement_of_a"] == 0.25
+
+
+def test_invalid_impulse_cannot_anchor_false_abc_narrative():
+    levels = [100, 115, 99, 130, 120, 140, 120, 130, 110]
+    result = impulse_correction_evidence(pivots(levels), "UP")
+    assert result["status"] == "INCOMPLETE"
+    assert result["can_place_orders"] is False
