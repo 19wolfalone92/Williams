@@ -37,6 +37,14 @@ class StandaloneRuntimeReconciliationTest {
     }
 
     @Test
+    fun onlyCurrentConnectedSessionCanClearSyncLatch() {
+        assertTrue(mayCommitUserStreamSync(true, false, 7L, 7L))
+        assertFalse(mayCommitUserStreamSync(false, false, 7L, 7L))
+        assertFalse(mayCommitUserStreamSync(true, true, 7L, 7L))
+        assertFalse(mayCommitUserStreamSync(true, false, 6L, 7L))
+    }
+
+    @Test
     fun reconciliationLifecycleHasAnExplicitTimeout() {
         assertTrue(reconciliationTaskLifecycleHealthy(false, 0L, 200_000L))
         assertTrue(reconciliationTaskLifecycleHealthy(true, 100_000L, 220_000L))
