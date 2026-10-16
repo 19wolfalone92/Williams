@@ -714,28 +714,31 @@ internal fun forcedH1EntryLevels(
     return levels
 }
 
-/** Resolve only explicit strategy signal types; unknown types must never default to LONG. */
-internal fun isCampaignAddOnSignalForDirection(signalType: String, positionSignalType: String): Boolean {
-    val signal = signalType.trim().uppercase(Locale.US)
-    val position = positionSignalType.trim().uppercase(Locale.US)
-    val signalIsShort = signal.startsWith("SHORT_")
-    val positionIsShort = position.startsWith("SHORT_")
-    val family = if (signalIsShort) signal.removePrefix("SHORT_") else signal
-    // Unknown position direction must not inherit the LONG default.
-    if (position.isBlank() || (!positionIsShort && position !in setOf("REVERSAL", "SUPER_AO", "FRACTAL") && !position.startsWith("LONG_"))) {
-        return false
-    }
-    return signalIsShort == positionIsShort && family in setOf("SUPER_AO", "FRACTAL")
-}
-
-/** Resolve only explicit strategy signal types; unknown types must never default to LONG. */
+/**
+ * Direction of an ACTUAL Williams signal family. An arbitrary SHORT_* string
+ * must not become authorization for a short trade.
+ */
 internal fun campaignSignalDirection(signalType: String): String? {
     val type = signalType.trim().uppercase(Locale.US)
+    val family = type.removePrefix("LONG_").removePrefix("SHORT_")
+    if (family !in setOf("REVERSAL", "SUPER_AO", "FRACTAL")) return null
     return when {
         type.startsWith("SHORT_") -> "SHORT"
-        type.startsWith("LONG_") || type in setOf("REVERSAL", "SUPER_AO", "FRACTAL") -> "LONG"
+        type.startsWith("LONG_") || type == family -> "LONG" // known legacy LONG types
         else -> null
     }
+}
+
+/**
+ * A recognized Williams WM2/WM3 may add to the EXISTING same-side campaign.
+ * This predicate is eligibility, NOT authorization: a protected position,
+ * fresh risk reservation and persisted exchange order are still required.
+ */
+internal fun isCampaignAddOnSignalForDirection(signalType: String, positionSignalType: String): Boolean {
+    val side = campaignSignalDirection(signalType) ?: return false
+    val currentSide = campaignSignalDirection(positionSignalType) ?: return false
+    val family = signalType.trim().uppercase(Locale.US).removePrefix("LONG_").removePrefix("SHORT_")
+    return side == currentSide && family in setOf("SUPER_AO", "FRACTAL")
 }
 
 /** 0 means the direction is vetoed, 1 is an allowed reversal, 2 is aligned H4 context. */
