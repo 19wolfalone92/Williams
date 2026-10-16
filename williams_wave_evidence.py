@@ -165,7 +165,9 @@ def impulse_correction_evidence(pivots: Sequence[Any], direction: str) -> dict[s
                for k in range(len(nodes) - 1)):
             continue
         base = impulse_evidence([item for item, _ in part[:6]], direction)
-        if base["status"] not in {"CANDIDATE", "ALTERNATIVE"}:
+        # Diagonal interiors are not verified by the six-pivot skeleton;
+        # never promote a diagonal alternative into a post-impulse ABC count.
+        if base["status"] != "CANDIDATE":
             continue
         prices = [n["price"] for n in nodes]
         p = [price * sign for price in prices]
