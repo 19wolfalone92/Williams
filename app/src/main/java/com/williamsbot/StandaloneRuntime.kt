@@ -4351,6 +4351,22 @@ private class NativeEngine(
         }
     }
 
+    private fun requireSuccessfulFuturesReconciliation(purpose: String) {
+        val result = reconcileFuturesThroughDoor(
+            purpose,
+            allowStopped = true,
+            allowKillLatched = true
+        )
+        if (result.optBoolean("ok", false)) return
+        val blocker = result.optString("blocker", result.optString("error", "Futures reconciliation failed"))
+        reconcileRequired = true
+        persistSafetyFlag("reconcile_required", true)
+        lastError = blocker
+        scannerError = blocker
+        stateMachine.force(TradingState.RECONCILE_REQUIRED, blocker)
+        throw IllegalStateException(blocker)
+    }
+
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
         // Select the most recent still-valid confirmed setup, never the oldest one
         // returned by a historical scan.
@@ -4670,104 +4686,9 @@ private class NativeEngine(
         }
     }
 
+    /** Legacy recovery now delegates to the canonical Futures coordinator. */
     private fun recoverCampaignPendingEntries() {
-        val pending = synchronized(pendingEntries) {
-            pendingEntries.values.toList()
-        }
-        for (intent in pending) {
-            try {
-                val order = signedGet(
-                    "/api/v3/order",
-                    "symbol=" + intent.symbol + "&origClientOrderId=" + intent.clientOrderId
-                )
-                lastOrder = order
-                val status = order.optString("status", "").uppercase(Locale.US)
-                val executed = order.optString("executedQty").toDoubleOrNull() ?: 0.0
-                val quote = order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
-
-                when {
-                    status == "NEW" || status == "PENDING_NEW" -> Unit
-
-                    status == "PARTIALLY_FILLED" -> {
-                        val orderId = order.optLong("orderId", -1L)
-                        require(orderId > 0L) {
-                            intent.symbol + ": partial campaign entry missing orderId"
-                        }
-                        try {
-                            withCampaignMutation(
-                                intent.symbol,
-                                "CAMPAIGN_PARTIAL_ENTRY_CANCEL"
-                            ) {
-                                signedDelete(
-                                    "/api/v3/order",
-                                    "symbol=" + intent.symbol + "&orderId=" + orderId
-                                )
-                                JSONObject()
-                            }
-                        } catch (cancelError: Throwable) {
-                            setReconcileRequired(
-                                intent.symbol + ": partial campaign BUY cancel ambiguous: " +
-                                    (cancelError.message ?: cancelError.javaClass.simpleName)
-                            )
-                            continue
-                        }
-                        val finalOrder = signedGet(
-                            "/api/v3/order",
-                            "symbol=" + intent.symbol + "&orderId=" + orderId
-                        )
-                        val finalQty = finalOrder.optString("executedQty").toDoubleOrNull() ?: executed
-                        val finalQuote = finalOrder.optString("cummulativeQuoteQty").toDoubleOrNull() ?: quote
-                        if (finalQty > 0.0) {
-                            applyCampaignFill(
-                                intent,
-                                finalOrder,
-                                finalQty,
-                                finalQuote
-                            )
-                        } else {
-                            clearCampaignPending(intent.symbol)
-                        }
-                    }
-
-                    status == "FILLED" -> {
-                        require(executed > 0.0 && quote > 0.0) {
-                            intent.symbol + ": filled campaign BUY has invalid fill"
-                        }
-                        applyCampaignFill(
-                            intent,
-                            order,
-                            executed,
-                            quote
-                        )
-                    }
-
-                    status in setOf("CANCELED", "EXPIRED", "REJECTED") -> {
-                        if (executed > 0.0) {
-                            require(quote > 0.0) {
-                                intent.symbol + ": terminal campaign fill lacks quote"
-                            }
-                            applyCampaignFill(
-                                intent,
-                                order,
-                                executed,
-                                quote
-                            )
-                        } else {
-                            clearCampaignPending(intent.symbol)
-                        }
-                    }
-
-                    else -> setReconcileRequired(
-                        intent.symbol + ": unknown campaign pending status=" + status
-                    )
-                }
-            } catch (x: Throwable) {
-                setReconcileRequired(
-                    intent.symbol + ": campaign pending recovery failed: " +
-                        (x.message ?: x.javaClass.simpleName)
-                )
-            }
-        }
+        requireSuccessfulFuturesReconciliation("LEGACY_CAMPAIGN_PENDING_RECOVERY")
     }
 
     private fun clearCampaignPending(symbol: String) {
@@ -5043,99 +4964,9 @@ private class NativeEngine(
         }
     }
 
+    /** Legacy reconciliation now delegates to the canonical Futures coordinator. */
     private fun reconcileCampaignPositions() {
-        for (stored in positionList().filter { it.campaignId.isNotBlank() }) {
-            try {
-                val rules = symbolFilters(stored.symbol)
-                val actualBase = campaignBaseBalance(stored.symbol)
-                val tolerance = max(0.000001, stored.qty * 0.005)
-                require(actualBase + tolerance >= stored.qty) {
-                    stored.symbol + ": campaign inventory below expected"
-                }
-
-                val response = signedGet(
-                    "/api/v3/openOrders",
-                    "symbol=" + stored.symbol
-                )
-                val orders = response.optJSONArray("orders")
-                    ?: if (response.has("symbol")) JSONArray().put(response) else JSONArray()
-
-                val managedStops = mutableListOf<JSONObject>()
-                val unknownSells = mutableListOf<JSONObject>()
-
-                for (j in 0 until orders.length()) {
-                    val o = orders.optJSONObject(j) ?: continue
-                    if (o.optString("side").uppercase(Locale.US) != "SELL") continue
-                    val cid = o.optString("clientOrderId")
-                    if (
-                        cid.startsWith("W5S_") &&
-                        o.optString("type").uppercase(Locale.US) in
-                            setOf("STOP_LOSS", "STOP_LOSS_LIMIT")
-                    ) {
-                        managedStops += o
-                    } else {
-                        unknownSells += o
-                    }
-                }
-                require(unknownSells.isEmpty()) {
-                    stored.symbol + ": unknown open SELL conflicts with campaign"
-                }
-                require(managedStops.size <= 1) {
-                    stored.symbol + ": multiple campaign protection stops"
-                }
-
-                if (managedStops.isEmpty()) {
-                    val created = createCampaignStop(stored)
-                    synchronized(positions) {
-                        positions[stored.symbol] =
-                            stored.copy(
-                                protectiveOrderId = created.optString("orderId", "")
-                            )
-                    }
-                    savePersistedState()
-                    continue
-                }
-
-                val stop = managedStops.single()
-                val stopId = stop.optString("orderId", "")
-                require(stopId.isNotBlank()) {
-                    stored.symbol + ": campaign stop missing orderId"
-                }
-                val stopQty = stop.optString("origQty").toDoubleOrNull() ?: 0.0
-
-                if (abs(stopQty - stored.qty) > tolerance) {
-                    replaceCampaignStop(
-                        stored.copy(protectiveOrderId = stopId),
-                        stored.stop
-                    )
-                } else {
-                    synchronized(positions) {
-                        positions[stored.symbol] =
-                            stored.copy(
-                                protectiveOrderId = stopId,
-                                campaignState = "TREND_ACTIVE"
-                            )
-                    }
-                    savePersistedState()
-                }
-            } catch (x: Throwable) {
-                setReconcileRequired(
-                    stored.symbol + ": campaign reconciliation failed: " +
-                        (x.message ?: x.javaClass.simpleName)
-                )
-            }
-        }
-
-        if (
-            positionList().isNotEmpty() &&
-            stateMachine.state != TradingState.RECONCILE_REQUIRED &&
-            !killLatched
-        ) {
-            stateMachine.force(
-                TradingState.PROTECTED,
-                "Campaign positions reconciled"
-            )
-        }
+        requireSuccessfulFuturesReconciliation("LEGACY_CAMPAIGN_POSITION_RECONCILIATION")
     }
 
     private fun manageCampaignPositions() {
@@ -7153,8 +6984,7 @@ private class NativeEngine(
                     Thread {
                         runCatching {
                             Thread.sleep(120L)
-                            recoverCampaignPendingEntries()
-                            reconcileCampaignPositions()
+                            requireSuccessfulFuturesReconciliation("FUTURES_CAMPAIGN_EVENT_RECONCILIATION")
                         }.onFailure {
                             if (!killLatched) {
                                 setReconcileRequired(
@@ -7324,136 +7154,9 @@ private class NativeEngine(
         reconcilePositionsWithExchange()
     }
 
+    /** Private-stream recovery must reconcile Futures orders/positions through the Execution Door. */
     private fun recoverPendingEntries() {
-        if (campaignEngineEnabled) {
-            recoverCampaignPendingEntries()
-            return
-        }
-
-        val pending =
-            synchronized(pendingEntries) {
-                pendingEntries.values.toList()
-            }
-
-        for (intent in pending) {
-            val order =
-                signedGet(
-                    "/api/v3/order",
-                    "symbol=" + intent.symbol +
-                        "&origClientOrderId=" +
-                        intent.clientOrderId
-                )
-
-            when (order.optString("status")) {
-                "FILLED" -> {
-                    val qty =
-                        order.optString("executedQty")
-                            .toDoubleOrNull() ?: 0.0
-                    val quote =
-                        order.optString("cummulativeQuoteQty")
-                            .toDoubleOrNull() ?: 0.0
-
-                    if (qty <= 0.0 || quote <= 0.0) {
-                        throw IllegalStateException(
-                            "Pending BUY has no fill: " +
-                                intent.symbol
-                        )
-                    }
-
-                    val lists =
-                        signedGet(
-                            "/api/v3/openOrderList",
-                            ""
-                        )
-                    val entryPrice = quote / qty
-
-                    val existingBotOco =
-                        (lists.optJSONArray("orderList")
-                            ?: lists.optJSONArray("ordersLists")
-                            ?: lists.optJSONArray("orderLists"))
-                            ?.let { rows ->
-                                (0 until rows.length())
-                                    .mapNotNull { rows.optJSONObject(it) }
-                                    .firstOrNull {
-                                        it.optString("symbol") ==
-                                            intent.symbol &&
-                                            it.optString("listClientOrderId")
-                                                .startsWith("W4O_")
-                                    }
-                            }
-
-                    val protection =
-                        if (existingBotOco != null) {
-                            adoptExistingProtection(
-                                symbol = intent.symbol,
-                                qty = qty,
-                                entry = entryPrice,
-                                stopDistance = intent.stopDistance,
-                                oco = existingBotOco
-                            )
-                        } else {
-                            if (
-                                hasAnyOpenListForSymbol(
-                                    lists,
-                                    intent.symbol
-                                )
-                            ) {
-                                throw IllegalStateException(
-                                    "Unrecognized open order list for " +
-                                        intent.symbol
-                                )
-                            }
-                            createProtection(
-                                symbol = intent.symbol,
-                                qty = qty,
-                                entry = entryPrice,
-                                stopDistance = intent.stopDistance
-                            )
-                        }
-
-                    synchronized(positions) {
-                        positions[intent.symbol] =
-                            PositionState(
-                                symbol = intent.symbol,
-                                qty = protection.qty,
-                                entry = entryPrice,
-                                stop = protection.stop,
-                                take = protection.take,
-                                riskPct = protection.riskPct,
-                                ocoListClientId =
-                                    protection.ocoClientId,
-                                ocoListId = protection.ocoListId,
-                                entryOrderId = order.optString(
-                                    "orderId"
-                                ),
-                                entryClientOrderId =
-                                    intent.clientOrderId,
-                                openedAt =
-                                    order.optLong(
-                                        "transactTime",
-                                        System.currentTimeMillis()
-                                    )
-                            )
-                    }
-
-                    synchronized(pendingEntries) {
-                        pendingEntries.remove(
-                            intent.symbol
-                        )
-                    }
-                    savePersistedState()
-                }
-
-                "CANCELED", "EXPIRED", "REJECTED" -> {
-                    synchronized(pendingEntries) {
-                        pendingEntries.remove(
-                            intent.symbol
-                        )
-                    }
-                    savePersistedState()
-                }
-            }
-        }
+        requireSuccessfulFuturesReconciliation("USER_STREAM_PENDING_RECOVERY")
     }
 
     private fun adoptExistingProtection(
@@ -7500,344 +7203,14 @@ private class NativeEngine(
     }
 
     @Synchronized
+    /** Retired open-order audit delegates to the exchange-authoritative Futures coordinator. */
     private fun auditManagedOpenOrders() {
-        val openOrders = JSONArray(
-            signedRawGet("/api/v3/openOrders", "")
-        )
-        val openLists =
-            signedGet("/api/v3/openOrderList", "")
-                .let {
-                    it.optJSONArray("orderList")
-                        ?: it.optJSONArray("ordersLists")
-                        ?: it.optJSONArray("orderLists")
-                        ?: JSONArray()
-                }
-
-        val expectedSymbols =
-            pendingEntries.keys.toSet() +
-                positionList().map { it.symbol }
-
-        for (i in 0 until openOrders.length()) {
-            val order = openOrders.optJSONObject(i) ?: continue
-            val clientId = order.optString("clientOrderId")
-            if (!clientId.startsWith("W4B_") &&
-                !clientId.startsWith("W4S_")
-            ) continue
-
-            val symbol =
-                order.optString("symbol").uppercase(Locale.US)
-            if (symbol !in expectedSymbols) {
-                throw IllegalStateException(
-                    "Unmanaged Williams open order after restart: " +
-                        symbol + " clientOrderId=" + clientId
-                )
-            }
-        }
-
-        for (i in 0 until openLists.length()) {
-            val list = openLists.optJSONObject(i) ?: continue
-            val listClientId = list.optString("listClientOrderId")
-            if (!listClientId.startsWith("W4O_")) continue
-
-            val symbol =
-                list.optString("symbol").uppercase(Locale.US)
-            if (positionList().none { it.symbol == symbol }) {
-                throw IllegalStateException(
-                    "Unmanaged Williams OCO after restart: " +
-                        symbol + " listClientOrderId=" + listClientId
-                )
-            }
-        }
+        requireSuccessfulFuturesReconciliation("LEGACY_OPEN_ORDER_AUDIT")
     }
 
+    /** Exchange reconciliation is exclusively owned by the USD-M Futures coordinator. */
     private fun reconcilePositionsWithExchange() {
-        if (campaignEngineEnabled) {
-            reconcileCampaignPositions()
-            return
-        }
-        if (positions.isEmpty()) {
-            savePersistedState()
-            return
-        }
-
-        val account = signedAccount()
-        val balances = account.getJSONArray("balances")
-        val openLists =
-            runCatching {
-                signedGet(
-                    "/api/v3/openOrderList",
-                    ""
-                )
-            }.getOrElse {
-                throw IllegalStateException(
-                    "Cannot verify managed open order lists: " +
-                        (it.message ?: it.javaClass.simpleName),
-                    it
-                )
-            }
-
-        val updated = mutableListOf<PositionState>()
-        val minRecoveryQty = 0.000001
-
-        for (stored in positionList()) {
-            if (
-                stored.qty <= 0.0 ||
-                stored.entry <= 0.0 ||
-                stored.stop <= 0.0
-            ) {
-                throw IllegalStateException(
-                    "Invalid persisted position " +
-                        stored.symbol
-                )
-            }
-
-            val allOrders = JSONArray(
-                signedRawGet(
-                    "/api/v3/allOrders",
-                    "symbol=" + stored.symbol +
-                        "&limit=1000"
-                )
-            )
-
-            val exitFills = mutableListOf<JSONObject>()
-            var soldQty = 0.0
-            var soldQuote = 0.0
-
-            for (i in 0 until allOrders.length()) {
-                val order = allOrders.optJSONObject(i) ?: continue
-                if (
-                    order.optString("symbol").uppercase() !=
-                        stored.symbol.uppercase()
-                ) continue
-                if (order.optString("side").uppercase() != "SELL") continue
-                if (order.optString("status").uppercase() != "FILLED") continue
-
-                val listId =
-                    order.optString("orderListId")
-                if (
-                    stored.ocoListId.isBlank() ||
-                    listId != stored.ocoListId
-                ) continue
-
-                val entryTime = stored.openedAt
-                val orderTime = order.optLong(
-                    "transactTime",
-                    order.optLong("time", 0L)
-                )
-                if (entryTime > 0L && orderTime > 0L &&
-                    orderTime < entryTime) {
-                    continue
-                }
-
-                val qty =
-                    order.optString("executedQty")
-                        .toDoubleOrNull() ?: 0.0
-                val quote =
-                    order.optString("cummulativeQuoteQty")
-                        .toDoubleOrNull() ?: 0.0
-                if (qty <= 0.0) continue
-
-                soldQty += qty
-                soldQuote += quote
-                exitFills.add(order)
-            }
-
-            val asset =
-                stored.symbol.removeSuffix("USDT")
-            var total = 0.0
-
-            for (i in 0 until balances.length()) {
-                val b = balances.getJSONObject(i)
-                if (b.optString("asset") == asset) {
-                    val free =
-                        b.optString("free")
-                            .toDoubleOrNull() ?: 0.0
-                    val locked =
-                        b.optString("locked")
-                            .toDoubleOrNull() ?: 0.0
-                    total = free + locked
-                    break
-                }
-            }
-
-            val expectedRemaining =
-                max(0.0, stored.qty - soldQty)
-            val tolerance =
-                max(
-                    minRecoveryQty,
-                    max(
-                        expectedRemaining,
-                        stored.qty
-                    ) * 0.005
-                )
-
-            if (soldQty > 0.0 && expectedRemaining <= minRecoveryQty) {
-                if (total > tolerance) {
-                    throw IllegalStateException(
-                        stored.symbol +
-                            " reports full managed SELL but exchange still "
-                            + "holds " + total + " units"
-                    )
-                }
-
-                val lastExit =
-                    exitFills.maxByOrNull {
-                        it.optLong(
-                            "transactTime",
-                            it.optLong("time", 0L)
-                        )
-                    } ?: throw IllegalStateException(
-                        stored.symbol +
-                            ": managed SELL evidence missing"
-                    )
-
-                val exitPrice =
-                    if (soldQuote > 0.0 && soldQty > 0.0) {
-                        soldQuote / soldQty
-                    } else {
-                        lastExit.optString("price")
-                            .toDoubleOrNull()
-                            ?: stored.entry
-                    }
-                val pnl =
-                    (exitPrice - stored.entry) * stored.qty
-                val pnlPct =
-                    if (stored.entry > 0.0) {
-                        exitPrice / stored.entry - 1.0
-                    } else {
-                        0.0
-                    }
-                val exitType =
-                    lastExit.optString("type").uppercase()
-                val reason =
-                    when {
-                        exitType.contains("TAKE_PROFIT") ->
-                            "TAKE_PROFIT"
-                        exitType.contains("STOP_LOSS") ->
-                            "STOP_LOSS"
-                        else ->
-                            "BOT_OCO_EXIT"
-                    }
-
-                TradeJournal.close(
-                    prefs = prefs,
-                    symbol = stored.symbol,
-                    exitPrice = exitPrice,
-                    reason = reason,
-                    order = lastExit
-                )
-                recordCompletedTrade(
-                    stored = stored,
-                    exitPrice = exitPrice,
-                    reason = reason,
-                    raw = lastExit
-                )
-                continue
-            }
-
-            if (
-                total <= tolerance &&
-                soldQty <= 0.0
-            ) {
-                throw IllegalStateException(
-                    stored.symbol +
-                        ": exchange position disappeared without "
-                        + "managed SELL evidence"
-                )
-            }
-
-            if (expectedRemaining <= minRecoveryQty) {
-                throw IllegalStateException(
-                    stored.symbol +
-                        ": position quantity is inconsistent with "
-                        + "exchange history"
-                )
-            }
-
-            if (
-                abs(total - expectedRemaining) > tolerance
-            ) {
-                throw IllegalStateException(
-                    stored.symbol +
-                        " managed balance mismatch: expected " +
-                        expectedRemaining +
-                        ", exchange " +
-                        total
-                )
-            }
-
-            var current =
-                stored.copy(
-                    qty = expectedRemaining
-                        .coerceAtMost(total)
-                )
-
-            val protected =
-                (
-                    stored.ocoListClientId.isNotBlank() &&
-                        openListsContains(
-                            openLists,
-                            stored.symbol,
-                            stored.ocoListClientId
-                        )
-                ) ||
-                    (
-                        stored.ocoListId.isNotBlank() &&
-                            openListsContainsListId(
-                                openLists,
-                                stored.symbol,
-                                stored.ocoListId
-                            )
-                    )
-
-            if (!protected) {
-                if (
-                    hasAnyOpenListForSymbol(
-                        openLists,
-                        stored.symbol
-                    )
-                ) {
-                    throw IllegalStateException(
-                        "Unrecognized open order list for " +
-                            stored.symbol
-                    )
-                }
-
-                val distance =
-                    ((stored.entry - stored.stop) /
-                        stored.entry)
-                        .coerceIn(0.01, 0.08)
-
-                val protection =
-                    createProtection(
-                        symbol = stored.symbol,
-                        qty = current.qty,
-                        entry = stored.entry,
-                        stopDistance = distance
-                    )
-
-                current =
-                    current.copy(
-                        qty = protection.qty,
-                        stop = protection.stop,
-                        take = protection.take,
-                        riskPct = protection.riskPct,
-                        ocoListClientId =
-                            protection.ocoClientId,
-                        ocoListId = protection.ocoListId
-                    )
-            }
-
-            updated.add(current)
-        }
-
-        synchronized(positions) {
-            positions.clear()
-            updated.forEach {
-                positions[it.symbol] = it
-            }
-        }
-        savePersistedState()
+        requireSuccessfulFuturesReconciliation("LEGACY_POSITION_RECONCILIATION_REQUEST")
     }
 
     private fun hasAnyOpenListForSymbol(
