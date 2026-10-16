@@ -60,7 +60,8 @@ internal class BinanceUsdMFuturesMarketData(
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
-        .build()
+        .build(),
+    private val rateGuard: BinanceRateGuard? = null
 ) {
     private val base = "https://demo-fapi.binance.com"
     @Volatile private var serverOffsetMs = 0L
@@ -264,6 +265,7 @@ internal class BinanceUsdMFuturesMarketData(
         val retryDelaysMs = longArrayOf(250L, 500L, 1_000L)
         var lastTransportFailure: IOException? = null
         for (attempt in 0..retryDelaysMs.size) {
+            rateGuard?.beforeRequest()
             val response = try {
                 http.newCall(request).execute()
             } catch (failure: IOException) {
@@ -277,6 +279,7 @@ internal class BinanceUsdMFuturesMarketData(
                 continue
             }
             response.use {
+                rateGuard?.observe(it.headers, it.code)
                 val body = it.body?.string().orEmpty()
                 if (it.isSuccessful) return body
                 val failure = IOException(
