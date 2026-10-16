@@ -316,6 +316,18 @@ internal fun historyLifecycleSeverity(
     else -> "WARN"
 }
 
+/** User-data WebSocket readiness requires a recent event, not merely a successful handshake. */
+internal fun userStreamIsFresh(
+    connected: Boolean,
+    syncRequired: Boolean,
+    lastEventMs: Long,
+    nowMs: Long,
+    maxAgeMs: Long = 120_000L
+): Boolean =
+    connected && !syncRequired && lastEventMs > 0L &&
+        nowMs >= lastEventMs && maxAgeMs >= 0L &&
+        nowMs - lastEventMs <= maxAgeMs
+
 /** Prefer a live WS quote, then a fresh Futures REST ticker, then the last closed candle. */
 internal fun dashboardPrice(
     livePrice: Double?,
@@ -11148,10 +11160,15 @@ private class NativeEngine(
         test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market kline/aggTrade stream connected" else "Market stream disconnected")
         test("public_websocket", "websocket", publicSocketConnected && publicWebSocketFresh(), "WARN", if (publicSocketConnected && publicWebSocketFresh()) "Public depth/bookTicker stream connected and fresh" else "Public stream disconnected or stale")
         test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream transport connected and sync flag clear; event freshness is checked separately" else "User stream degraded; connected=" + userStreamConnected + "; sync_required=" + userStreamSyncRequired + "; reconcile_running=" + futuresStreamReconcileRunning + "; last_error=" + (userStreamLastError ?: "none"))
-        val userEventAgeMs = if (lastUserEventMs > 0L && System.currentTimeMillis() >= lastUserEventMs)
-            System.currentTimeMillis() - lastUserEventMs else Long.MAX_VALUE
-        val userStreamFresh = userStreamConnected && !userStreamSyncRequired &&
-            lastUserEventMs > 0L && userEventAgeMs <= 120_000L
+        val userNowMs = System.currentTimeMillis()
+        val userEventAgeMs = if (lastUserEventMs > 0L && userNowMs >= lastUserEventMs)
+            userNowMs - lastUserEventMs else Long.MAX_VALUE
+        val userStreamFresh = userStreamIsFresh(
+            connected = userStreamConnected,
+            syncRequired = userStreamSyncRequired,
+            lastEventMs = lastUserEventMs,
+            nowMs = userNowMs
+        )
         test(
             "user_stream_freshness", "websocket", userStreamFresh, "FAIL",
             "connected=" + userStreamConnected +
