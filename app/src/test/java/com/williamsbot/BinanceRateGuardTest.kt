@@ -59,6 +59,29 @@ class BinanceRateGuardTest {
         assertEquals(321L, snapshot.getLong("used_weight_1m"))
     }
     @Test
+    fun sustainedUsagePressureDelaysOneRequestButDoesNotRescheduleItForever() {
+        val guard = BinanceRateGuard()
+        guard.observe(
+            Headers.headersOf("X-MBX-USED-WEIGHT-1M", "5500"),
+            200
+        )
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+        val worker = Thread({
+            runCatching { guard.beforeRequest() }.onFailure { failure.set(it) }
+        }, "rate-guard-pressure-test").apply {
+            isDaemon = true
+            start()
+        }
+        worker.join(2000L)
+
+        org.junit.Assert.assertFalse(
+            "A request must leave the governor after its one pressure delay",
+            worker.isAlive
+        )
+        org.junit.Assert.assertEquals(null, failure.get())
+    }
+
+    @Test
     fun interruptedGovernorWaitFailsClosedInsteadOfSendingTheRequest() {
         val guard = BinanceRateGuard()
         guard.beforeRequest()
