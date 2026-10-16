@@ -30,6 +30,36 @@ import kotlin.math.min
 import kotlin.math.floor
 import kotlin.math.ceil
 
+/**
+ * TC2 chapter 9: a bullish reversal bar is entirely below the Alligator mouth,
+ * closes in its upper half, and still has falling (red) AO. Angulation is a
+ * separate, explicitly approximate context test; this predicate is not an entry.
+ * SHORT uses the exact reflected OHLC/indicator geometry.
+ */
+internal fun tc2BullishWiseManBarQualified(
+    high: Double, low: Double, close: Double, priorLow: Double,
+    jaw: Double, teeth: Double, lips: Double, aoNow: Double, aoPrevious: Double
+): Boolean {
+    if (listOf(high, low, close, priorLow, jaw, teeth, lips, aoNow, aoPrevious)
+            .any { !it.isFinite() } || high <= low || close !in low..high) return false
+    return low < priorLow &&
+        close >= low + (high - low) * 0.5 &&
+        high < min(jaw, min(teeth, lips)) &&
+        aoNow < aoPrevious
+}
+
+/** TC2: a pending opposite setup is NOT an exit until its price actually triggers. */
+internal fun tc2OppositeBreakoutTriggered(
+    positionIsLong: Boolean,
+    observedPrice: Double,
+    opposingTrigger: Double
+): Boolean {
+    if (!observedPrice.isFinite() || !opposingTrigger.isFinite() ||
+        observedPrice <= 0.0 || opposingTrigger <= 0.0) return false
+    return if (positionIsLong) observedPrice <= opposingTrigger
+        else observedPrice >= opposingTrigger
+}
+
 object StandaloneRuntime {
     @SuppressLint("StaticFieldLeak")
     private var server: StandaloneServer? = null
@@ -5007,30 +5037,33 @@ private class NativeEngine(
             val candles = fetchCandles(symbol, "1h", 180)
             if (candles.size < 45) throw IllegalStateException(symbol + " needs at least 45 closed H1 candles")
             val latest = candles.last()
-            val teeth = alligator(candles, candles.lastIndex).teeth
             val rules = symbolFilters(symbol)
             val mark = futuresMarketData.markPrice(symbol)
-            val structuralExit = teeth > 0.0 && (
-                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) latest.c < teeth
-                else latest.c > teeth
-            )
+            // TC2 early WM1 can enter on the opposite side of Teeth. A universal
+            // NTD Teeth-close would immediately liquidate a valid early campaign.
+            // Existing exchange protection and the 3-5 bar trail remain active.
             val newerBarCutoff = latest.t - 60L * 60L * 1000L
             val opposing = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-                shortCampaignSignals(symbol, candles, "1h", rules.tick).any { it.signalBarTimeMs >= newerBarCutoff }
+                shortCampaignSignals(symbol, candles, "1h", rules.tick).any {
+                    it.signalBarTimeMs >= newerBarCutoff &&
+                        tc2OppositeBreakoutTriggered(true, mark, it.triggerPrice)
+                }
             } else {
-                longCampaignSignals(symbol, candles, "1h", rules.tick).any { it.signalBarTimeMs >= newerBarCutoff }
+                longCampaignSignals(symbol, candles, "1h", rules.tick).any {
+                    it.signalBarTimeMs >= newerBarCutoff &&
+                        tc2OppositeBreakoutTriggered(false, mark, it.triggerPrice)
+                }
             }
-            if (structuralExit || opposing) {
+            if (opposing) {
                 val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"), rules)
                 val clientId = ("W2O_" + symbol.take(8) + "_" + System.nanoTime().toString(16).takeLast(12)).take(36)
                 val result = withCampaignMutation(
                     symbol = symbol,
-                    purpose = if (structuralExit) "STRUCTURAL_FUTURES_EXIT" else "OPPOSING_WILLIAMS_EXIT",
+                    purpose = "OPPOSING_WILLIAMS_EXIT",
                     allowPaused = true
                 ) {
                     futuresCampaignCoordinator.closePosition(
-                        symbol, direction, closeQty, clientId,
-                        if (structuralExit) "H1_CLOSE_CROSSED_ALLIGATOR_TEETH" else "OPPOSITE_WILLIAMS_SIGNAL"
+                        symbol, direction, closeQty, clientId, "OPPOSITE_WILLIAMS_TRIGGERED"
                     )
                 }
                 if (!result.optBoolean("ok", false)) throw IllegalStateException(result.optString("blocker", result.optString("error")))
@@ -6582,18 +6615,12 @@ private class NativeEngine(
         val reversalStart = max(2, candles.lastIndex - 20)
         for (i in candles.lastIndex downTo reversalStart) {
             val priorLow = min(candles[i - 1].l, candles[i - 2].l)
-            val range = max(candles[i].h - candles[i].l, 1e-12)
-            val closeLocation = (candles[i].c - candles[i].l) / range
-            val belowMouth =
-                jawS[i].isFinite() &&
-                    teethS[i].isFinite() &&
-                    lipsS[i].isFinite() &&
-                    candles[i].l < min(jawS[i], min(teethS[i], lipsS[i]))
             if (
-                candles[i].l < priorLow &&
-                closeLocation >= 0.50 &&
-                belowMouth &&
-                angulationScore(i) > 0.0
+                tc2BullishWiseManBarQualified(
+                    high = candles[i].h, low = candles[i].l, close = candles[i].c,
+                    priorLow = priorLow, jaw = jawS[i], teeth = teethS[i],
+                    lips = lipsS[i], aoNow = ao(candles, i), aoPrevious = ao(candles, i - 1)
+                ) && angulationScore(i) > 0.0
             ) {
                 val trigger = candles[i].h + tick
                 if (triggerStillPending(i, trigger)) {
@@ -6649,14 +6676,11 @@ private class NativeEngine(
         val fractalCenter = latestUpFractal(candles.lastIndex - 2)
         if (fractalCenter != null) {
             val trigger = candles[fractalCenter].h + tick
-            val centerTeeth = teethS[fractalCenter]
-            val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
-            // Book rule: qualify the middle bar against the Teeth value at
-            // the fractal's own chart coordinate, then re-check the live
-            // pending trigger against current Teeth after confirmation.
+            val currentTeeth = teethS[current]
+            // TC2 ch.11: the FRACTAL must TRIGGER beyond Teeth, not form beyond
+            // it. Never veto a confirmed pattern using its pivot-bar Teeth.
             if (
-                centerTeeth.isFinite() &&
-                candles[fractalCenter].h > centerTeeth &&
+                currentTeeth.isFinite() && currentTeeth > 0.0 &&
                 triggerStillPending(fractalCenter, trigger) &&
                 trigger > currentTeeth
             ) {
