@@ -1,6 +1,7 @@
 package com.williamsbot
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -77,4 +78,22 @@ class DiagnosticConsistencyTest {
         assertTrue(findings.any { it.startsWith("STATE_MISMATCH:") })
     }
 
+
+    @Test
+    fun userStreamHandshakeWithoutEventIsNotFresh() {
+        assertFalse(userStreamIsFresh(
+            connected = true,
+            syncRequired = false,
+            lastEventMs = 0L,
+            nowMs = 1_000_000L
+        ))
+    }
+
+    @Test
+    fun userStreamRejectsStaleFutureAndUnsynchronizedEvents() {
+        assertFalse(userStreamIsFresh(true, false, 100_000L, 220_001L))
+        assertFalse(userStreamIsFresh(true, false, 300_000L, 220_000L))
+        assertFalse(userStreamIsFresh(true, true, 219_000L, 220_000L))
+        assertTrue(userStreamIsFresh(true, false, 219_000L, 220_000L))
+    }
 }
