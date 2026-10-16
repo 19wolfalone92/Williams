@@ -324,12 +324,10 @@ internal fun userStreamSyncIsFresh(
     connected: Boolean,
     syncRequired: Boolean,
     lastSuccessfulSyncMs: Long,
-    nowMs: Long,
-    maxAgeMs: Long = 120_000L
+    nowMs: Long
 ): Boolean =
     connected && !syncRequired && lastSuccessfulSyncMs > 0L &&
-        nowMs >= lastSuccessfulSyncMs && maxAgeMs >= 0L &&
-        nowMs - lastSuccessfulSyncMs <= maxAgeMs
+        nowMs >= lastSuccessfulSyncMs
 
 /** Prefer a live WS quote, then a fresh Futures REST ticker, then the last closed candle. */
 internal fun dashboardPrice(
@@ -1261,6 +1259,8 @@ private class NativeEngine(
             userStreamConnected = connected
             userStreamLastError = if (connected) null else error?.takeUnless { it == "stopped" }
             if (connected) {
+                // Each new connection generation must complete its own REST reconciliation.
+                lastUserStreamSyncAtMs = 0L
                 // A recovered socket must not leave the old close reason displayed as
                 // the current Runtime error. Clear only this stream's stale diagnostic;
                 // preserve unrelated REST, risk, persistence and reconciliation errors.
@@ -7195,6 +7195,7 @@ private class NativeEngine(
 
     private fun scheduleFuturesStreamReconciliation(reason: String, force: Boolean = false) {
         userStreamSyncRequired = true
+        lastUserStreamSyncAtMs = 0L
         synchronized(this) {
             if (futuresStreamReconcileRunning) {
                 futuresStreamReconcilePending = true
@@ -11209,7 +11210,7 @@ private class NativeEngine(
                 "; sync_required=" + userStreamSyncRequired +
                 "; last_successful_rest_sync_ms=" + lastUserStreamSyncAtMs +
                 "; sync_age_ms=" + (if (userSyncAgeMs == Long.MAX_VALUE) "UNKNOWN" else userSyncAgeMs.toString()) +
-                "; max_age_ms=120000; private event silence alone does not indicate a broken stream"
+                "; sync must belong to the current connected session; private event silence alone does not indicate a broken stream"
         )
         val userEventAgeMs = if (lastUserEventMs > 0L && userNowMs >= lastUserEventMs)
             userNowMs - lastUserEventMs else Long.MAX_VALUE
