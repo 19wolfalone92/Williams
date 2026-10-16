@@ -684,6 +684,8 @@ internal class NativeFuturesCampaignCoordinator(
 
     fun accountSnapshot(): JSONObject = adapterFactory().account()
     fun positionsSnapshot(): JSONArray = adapterFactory().positions()
+    /** CONTRACT_PRICE must match the analyzed standard Futures H1 candles. */
+    fun contractPrice(symbol: String): Double = adapterFactory().contractPrice(symbol)
     fun userTrades(symbol: String, startTime: Long, endTime: Long, limit: Int = 1000): JSONArray =
         adapterFactory().userTrades(symbol, startTime, endTime, limit)
     fun intentsSnapshot(): JSONArray = JSONArray(intents().toString())
