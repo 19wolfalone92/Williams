@@ -205,7 +205,7 @@ def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
     # Any remaining Spot-era signed call site is rejected before network I/O.
     assert 'require(path.startsWith("/fapi/"))' in runtime
     assert "Legacy signed Spot-shaped routes are rejected by the Futures-only transport boundary." in runtime
-    assert '"/api/v3/order"' in runtime  # only unreachable legacy helpers remain; the signed boundary rejects them
+    assert '"/api/v3/orderList/oco"' in runtime  # retired OCO helper is unreachable; the signed boundary rejects it
     assert "normalizeFuturesPublicPath(path)" in runtime
     assert "internal fun normalizeFuturesPublicPath(path: String)" in market_data
     assert "SECURITY_BLOCK: unsupported public route in USD-M Futures runtime" in market_data
