@@ -89,6 +89,21 @@ class BinanceFuturesClient:
         self.rate_limit_pause_until = 0.0
 
     def _request(self, method, path, params=None, signed=False):
+        # This client is a Futures-only boundary. Reject accidental Spot routes,
+        # absolute URLs, and path/query injection before credentials or network I/O.
+        if (
+            not isinstance(path, str)
+            or not path.startswith("/fapi/")
+            or path.startswith("//")
+            or "?" in path
+            or "#" in path
+            or "\\r" in path
+            or "\\n" in path
+            or "\\\\" in path
+        ):
+            raise ValueError(
+                "BinanceFuturesClient accepts only canonical /fapi/ USD-M Futures routes"
+            )
         method = method.upper()
         # Signed mutations may be retried only when Binance explicitly rejects the
         # request for timestamp skew (-1021); transport/5xx ambiguity remains UNKNOWN.
