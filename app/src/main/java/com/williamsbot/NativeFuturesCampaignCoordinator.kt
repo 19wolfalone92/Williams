@@ -151,6 +151,37 @@ internal data class FuturesActualPositionRiskCheck(
 )
 
 /**
+ * A confirmed fill may differ slightly from the planned entry because of exchange
+ * execution. Reconcile the reservation to measured stop+cost risk only when the
+ * per-entry and portfolio caps still hold and every other active reservation is known.
+ */
+internal fun actualRiskReservationAdjustmentBlocker(
+    actualRiskPct: Double,
+    otherActiveRiskPcts: Iterable<Double>,
+    maxEntryRiskPct: Double = FUTURES_MAX_ENTRY_RISK_PCT,
+    maxPortfolioRiskPct: Double = FUTURES_MAX_PORTFOLIO_RISK_PCT
+): String? {
+    if (!actualRiskPct.isFinite() || actualRiskPct <= 0.0) {
+        return "Actual Futures risk is invalid; reservation cannot be reconciled"
+    }
+    if (!maxEntryRiskPct.isFinite() || maxEntryRiskPct <= 0.0 ||
+        !maxPortfolioRiskPct.isFinite() || maxPortfolioRiskPct <= 0.0
+    ) return "Futures risk limits are invalid; reservation cannot be reconciled"
+    if (actualRiskPct > maxEntryRiskPct + 1e-9) {
+        return "ACTUAL_FUTURES_RISK_EXCEEDS_ENTRY_CAP: actual all-in risk exceeds the 0.25% per-entry cap"
+    }
+    val otherRisks = otherActiveRiskPcts.toList()
+    if (otherRisks.any { !it.isFinite() || it <= 0.0 || it > maxEntryRiskPct }) {
+        return "ACTUAL_FUTURES_RISK_ADJUSTMENT_BLOCKED: another active campaign has an unknown or invalid risk reservation"
+    }
+    val portfolioRisk = otherRisks.sum() + actualRiskPct
+    if (!portfolioRisk.isFinite() || portfolioRisk > maxPortfolioRiskPct + 1e-9) {
+        return "ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP: measured risk cannot be reserved without exceeding the 0.60% portfolio cap"
+    }
+    return null
+}
+
+/**
  * Reconcile actual exchange position quantity/entry against the original structural
  * stop. This catches gap/slippage or later quantity changes that a preflight estimate
  * cannot prove. A missing original stop/reservation fails closed.
@@ -1500,7 +1531,41 @@ internal class NativeFuturesCampaignCoordinator(
                             .put("actual_all_in_risk_pct", riskAudit.actualAllInRiskPct)
                             .put("actual_risk_equity_snapshot_usdt", actualRiskAccount.equityUsdt)
                             .put("actual_risk_audited_at_ms", confirmedAt)
-                        if (riskAudit.blocker != null) {
+                        if (riskAudit.blocker != null &&
+                            riskAudit.blocker.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_RESERVATION:")
+                        ) {
+                            val otherActiveRisks = (0 until persisted.length()).mapNotNull { riskIndex ->
+                                val other = persisted.optJSONObject(riskIndex) ?: return@mapNotNull null
+                                if (other.optString("intent_role", "ENTRY") != "ENTRY" ||
+                                    other.optString("client_id") == matchingIntent.optString("client_id") ||
+                                    campaignLifecycleStatus(other) !in ACTIVE_CAMPAIGN_STATUSES
+                                ) return@mapNotNull null
+                                other.optDouble("risk_pct", Double.NaN)
+                            }
+                            val adjustmentBlocker = actualRiskReservationAdjustmentBlocker(
+                                actualRiskPct = riskAudit.actualAllInRiskPct,
+                                otherActiveRiskPcts = otherActiveRisks
+                            )
+                            if (adjustmentBlocker == null) {
+                                // Exchange-confirmed fill/price/costs are authoritative for
+                                // measured risk. Reconcile the reservation upward only after
+                                // proving both hard caps still hold; never move the stop or
+                                // permit risk to exceed the approved per-entry/portfolio limits.
+                                matchingIntent
+                                    .put("risk_pct", riskAudit.actualAllInRiskPct)
+                                    .put("risk_reservation_adjusted_at_ms", confirmedAt)
+                                    .put("risk_reservation_adjustment_reason", "EXCHANGE_CONFIRMED_FILL_COST_RECONCILIATION")
+                                    .put("actual_risk_audit_status", "PASS_RESERVATION_ADJUSTED")
+                                    .put("actual_risk_reservation_increase_usdt",
+                                        (riskAudit.estimatedAllInLossUsdt - riskAudit.reservedRiskUsdt).coerceAtLeast(0.0))
+                                matchingIntent.remove("actual_risk_audit_blocker")
+                            } else {
+                                actualRiskAuditBlocked = true
+                                actualRiskAuditBlocker = adjustmentBlocker
+                                matchingIntent.put("actual_risk_audit_status", "BLOCKED")
+                                    .put("actual_risk_audit_blocker", adjustmentBlocker)
+                            }
+                        } else if (riskAudit.blocker != null) {
                             actualRiskAuditBlocked = true
                             actualRiskAuditBlocker = riskAudit.blocker
                             matchingIntent.put("actual_risk_audit_status", "BLOCKED")
