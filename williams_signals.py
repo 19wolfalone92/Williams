@@ -299,23 +299,9 @@ def _latest_confirmed_fractal(
         if center_i < 0 or center_i >= len(ind) or not bool(ind.iloc[center_i].get(fractal_col, False)):
             continue
         center = ind.iloc[center_i]
-        # New Trading Dimensions: the fractal's middle-bar extreme must be
-        # outside the Teeth (red Balance Line) when the pattern is formed.
-        # This is distinct from the second, live check below that the pending
-        # stop-entry trigger remains beyond the current Teeth after confirmation.
-        center_teeth_raw = center.get(
-            "teeth_current", center.get("teeth_shifted", float("nan"))
-        )
-        try:
-            center_teeth = float(center_teeth_raw)
-        except (TypeError, ValueError):
-            continue
-        if not math.isfinite(center_teeth):
-            continue
-        if direction == "LONG" and float(center["high"]) <= center_teeth:
-            continue
-        if direction == "SHORT" and float(center["low"]) >= center_teeth:
-            continue
+        # TC2 ch.11, fig.11.4: a confirmed fractal need not have FORMED
+        # beyond Teeth. Qualification is by its eventual TRIGGER relative
+        # to the live Teeth. Checking the pivot bar rejects valid patterns.
 
         group_start_value = row.get(group_start_col)
         group_start_i = (
