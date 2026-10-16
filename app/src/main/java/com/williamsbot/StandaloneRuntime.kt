@@ -1061,7 +1061,6 @@ private class NativeEngine(
         }
     }
     private val historyStore = MarketHistoryStore(context)
-    private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
     private val executionAccumulator = ExecutionAccumulator()
     private val stateMachine = TradingStateMachine(
