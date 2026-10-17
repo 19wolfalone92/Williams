@@ -135,6 +135,34 @@ class FuturesStopTrailPolicyTest {
         assertEquals(106.1, result!!.stop, 1e-7)
     }
 
+    @Test fun olderValidPostEntryLongFractalIsNotMaskedByUnusableNewerOne() {
+        // Newer down-fractal would put a LONG stop ABOVE the current mark.
+        // Earlier confirmed pivot is still a strictly protective improvement.
+        val lows = listOf(100.0, 99.0, 98.0, 96.0, 100.0,
+            110.0, 109.0, 105.0, 107.0, 108.0, 110.0)
+        val result = planFuturesStopTrail(
+            "LONG", oldStop = 90.0, actualEntry = 100.0, initialStop = 90.0,
+            markPrice = 104.0, tickSize = 0.1, openedObservedAtMs = 1L,
+            bars = bars(lows.map { it + 2.0 }, lows)
+        )
+        assertEquals("CONFIRMED_H1_FRACTAL", result?.reason)
+        assertEquals(95.9, result!!.stop, 1e-8)
+        assertEquals(3 * 3_600_000L, result.fractalAtMs)
+    }
+
+    @Test fun olderValidPostEntryShortFractalIsNotMaskedByUnusableNewerOne() {
+        val highs = listOf(99.0, 100.0, 103.0, 105.0, 99.0,
+            91.0, 92.0, 94.0, 90.0, 89.0, 88.0)
+        val result = planFuturesStopTrail(
+            "SHORT", oldStop = 110.0, actualEntry = 100.0, initialStop = 110.0,
+            markPrice = 95.0, tickSize = 0.1, openedObservedAtMs = 1L,
+            bars = bars(highs, highs.map { it - 5.0 })
+        )
+        assertEquals("CONFIRMED_H1_FRACTAL", result?.reason)
+        assertEquals(105.1, result!!.stop, 1e-8)
+        assertEquals(3 * 3_600_000L, result.fractalAtMs)
+    }
+
     @Test fun twoTickOrPriceRelativeMarkBufferBlocksNearMarketStop() {
         // Threshold 2 ticks: proposed protective BE is 100.4, mark 100.55
         // is too near for a safe replacement. The +1R trigger is satisfied
