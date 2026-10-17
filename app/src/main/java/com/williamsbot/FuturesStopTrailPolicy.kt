@@ -3,6 +3,7 @@ package com.williamsbot
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.max
 
 /**
  * Futures trailing policy. Only exchange-confirmed OPEN_PROTECTED campaigns may
@@ -47,29 +48,39 @@ internal fun planFuturesStopTrail(
 
     fun floorTick(price: Double): Double = floor(price / tickSize + 1e-12) * tickSize
     fun ceilTick(price: Double): Double = ceil(price / tickSize - 1e-12) * tickSize
+    // Avoid sending Binance a replacement which can immediately trigger or
+    // be rejected due to a mark-price tick during the REST round trip.
+    val minimumMarkGap = max(2.0 * tickSize, markPrice * 0.00025)
     fun usable(price: Double): Boolean =
         price.isFinite() && price > 0.0 && if (direction == "LONG") {
-            price > oldStop + tickSize * 0.5 && price < markPrice - tickSize * 0.5
+            price > oldStop + tickSize * 0.5 && price + minimumMarkGap < markPrice
         } else {
-            price < oldStop - tickSize * 0.5 && price > markPrice + tickSize * 0.5
+            price < oldStop - tickSize * 0.5 && price - minimumMarkGap > markPrice
         }
 
     val proposals = mutableListOf<FuturesStopTrailProposal>()
     if (bars.size >= 5 && openedObservedAtMs > 0L &&
         bars.all { it.high.isFinite() && it.low.isFinite() && it.high >= it.low &&
             it.low > 0.0 }) {
-        // The most recent five-bar confirmed fractal only. The pivot must have
-        // formed AFTER the position was first observed open, not in pre-entry history.
+        // The most recent five-bar confirmed fractal only. The pivot must
+        // have formed after the live position was first observed. Group
+        // equal-extreme plateaus just like Williams' ENTRY detector: only the
+        // final bar of a plateau is eligible, with two closed bars to the right.
         for (i in bars.lastIndex - 2 downTo 2) {
             if (bars[i].openTimeMs < openedObservedAtMs) break
-            val fractal = if (direction == "LONG") {
-                (i - 2..i + 2).all { j -> j == i || bars[i].low < bars[j].low }
-            } else {
-                (i - 2..i + 2).all { j -> j == i || bars[i].high > bars[j].high }
-            }
-            if (!fractal) continue
-            val price = if (direction == "LONG") floorTick(bars[i].low - tickSize)
-                else ceilTick(bars[i].high + tickSize)
+            val extreme = if (direction == "LONG") bars[i].low else bars[i].high
+            fun sameExtreme(j: Int): Boolean =
+                if (direction == "LONG") bars[j].low == extreme else bars[j].high == extreme
+            if (sameExtreme(i + 1)) continue
+            var start = i
+            while (start > 0 && sameExtreme(start - 1)) start--
+            if (start < 2 || bars[start].openTimeMs < openedObservedAtMs) continue
+            fun onProtectiveSide(j: Int): Boolean =
+                if (direction == "LONG") bars[j].low > extreme else bars[j].high < extreme
+            if (!(onProtectiveSide(start - 1) && onProtectiveSide(start - 2) &&
+                onProtectiveSide(i + 1) && onProtectiveSide(i + 2))) continue
+            val price = if (direction == "LONG") floorTick(extreme - tickSize)
+                else ceilTick(extreme + tickSize)
             if (usable(price)) {
                 proposals += FuturesStopTrailProposal(price, "CONFIRMED_H1_FRACTAL", bars[i].openTimeMs)
             }

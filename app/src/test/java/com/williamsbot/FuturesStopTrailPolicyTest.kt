@@ -107,4 +107,43 @@ class FuturesStopTrailPolicyTest {
         assertNull(planFuturesStopTrail("SIDEWAYS", 90.0, 100.0, 90.0, 111.0, 0.1, 0L, emptyList()))
         assertTrue(planFuturesStopTrail("LONG", 90.0, 100.0, 90.0, 109.0, 0.1, 0L, emptyList()) == null)
     }
+
+    @Test fun equalLowPlateauTrailsOnlyAfterTwoRightClosedBars() {
+        val result = planFuturesStopTrail(
+            "LONG", oldStop = 90.0, actualEntry = 100.0, initialStop = 90.0,
+            markPrice = 105.0, tickSize = 0.1, openedObservedAtMs = 1 * 3_600_000L,
+            bars = bars(
+                highs = listOf(103.0, 104.0, 105.0, 104.0, 104.0, 105.0, 106.0),
+                lows = listOf(102.0, 101.0, 100.0, 95.0, 95.0, 98.0, 99.0)
+            )
+        )
+        assertEquals("CONFIRMED_H1_FRACTAL", result?.reason)
+        assertEquals(94.9, result!!.stop, 1e-7)
+        assertEquals(4 * 3_600_000L, result.fractalAtMs)
+    }
+
+    @Test fun equalHighPlateauTrailsShort() {
+        val result = planFuturesStopTrail(
+            "SHORT", oldStop = 110.0, actualEntry = 100.0, initialStop = 110.0,
+            markPrice = 95.0, tickSize = 0.1, openedObservedAtMs = 1 * 3_600_000L,
+            bars = bars(
+                highs = listOf(103.0, 102.0, 103.0, 106.0, 106.0, 102.0, 101.0),
+                lows = listOf(99.0, 98.0, 99.0, 102.0, 102.0, 98.0, 97.0)
+            )
+        )
+        assertEquals("CONFIRMED_H1_FRACTAL", result?.reason)
+        assertEquals(106.1, result!!.stop, 1e-7)
+    }
+
+    @Test fun twoTickOrPriceRelativeMarkBufferBlocksNearMarketStop() {
+        // Threshold 2 ticks: proposed protective BE is 100.4, mark 100.55
+        // is too near for a safe replacement. The +1R trigger is satisfied
+        // because the original initial risk is only 0.05.
+        val blocked = planFuturesStopTrail(
+            "LONG", oldStop = 99.9, actualEntry = 100.0, initialStop = 99.95,
+            markPrice = 100.55, tickSize = 0.1, openedObservedAtMs = 0L,
+            bars = emptyList()
+        )
+        assertNull(blocked)
+    }
 }
