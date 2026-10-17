@@ -439,7 +439,8 @@ def main() -> None:
         "baselineCannotResetAfterOpenPositionPendingExecutionOrTradingPnl",
     ):
         must(baseline_test, needle, "DailyRiskBaselineTest.kt")
-    must(legacy_runtime, '.put("ok", running && !reconcileRequired && !killLatched)', "StandaloneRuntime.kt")
+    must(legacy_runtime, '.put("ok", running && !reconcileRequired && !killLatched &&', "StandaloneRuntime.kt")
+    must(legacy_runtime, 'coordinator.optString("state") in setOf("READY", "OPEN_PROTECTED", "ENTRY_PENDING")', "StandaloneRuntime.kt")
     must(legacy_runtime, 'userStreamSyncRequired = true', "StandaloneRuntime.kt")
     must(legacy_runtime, 'if (lossPct >= 0.03)', "StandaloneRuntime.kt")
     must(legacy_runtime, 'FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked', "StandaloneRuntime.kt")

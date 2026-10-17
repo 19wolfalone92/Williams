@@ -231,6 +231,14 @@ internal object CockpitDiagnostics {
                 fresh(it.optLong("actual_risk_audited_at_ms"), now, 120_000L) } } -> "NOT_VERIFIED"
             else -> "PASS"
         }, "Фактический риск берётся из аудита исполнения и свежей биржевой позиции; резерв не подменяет измерение.")
+        check("RISK-04", "risk", "Стоп до ликвидации", when {
+            !positionsFresh(status, now) || positions.isEmpty() -> "NOT_VERIFIED"
+            positions.any { p -> entries.any { matchesPosition(it, p) && it.optString("liquidation_guard_status") == "UNSAFE" } } -> "FAIL"
+            positions.any { p -> entries.none { matchesPosition(it, p) &&
+                it.optString("liquidation_guard_status") == "PASS" &&
+                fresh(it.optLong("liquidation_guard_audited_at_ms"), now, 120_000L) } } -> "NOT_VERIFIED"
+            else -> "PASS"
+        }, "Проверяется фактическая цена ликвидации Binance и запас до структурного стопа; ноль или отсутствующая цена не считаются PASS.")
         val reserved = status.optDouble("reserved_risk_pct")
         val limit = status.optDouble("max_total_risk_pct")
         check("RISK-02", "risk", "Совокупный резерв риска", when {

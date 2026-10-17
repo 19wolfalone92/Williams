@@ -16,7 +16,7 @@ import org.json.JSONObject
  * committed to SQLite before the corresponding Binance mutation is attempted.
  */
 internal class FuturesExecutionStore(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, DATABASE_NAME, null, DATABASE_VERSION) {
+    SQLiteOpenHelper(context.applicationContext, DATABASE_NAME, null, DATABASE_VERSION), FuturesCampaignStateStore {
 
     @Synchronized
     fun healthSnapshot(): JSONObject = runCatching {
@@ -73,7 +73,7 @@ internal class FuturesExecutionStore(context: Context) :
     }
 
     @Synchronized
-    fun readState(key: String): String? {
+    override fun readState(key: String): String? {
         return readableDatabase.query(
             "runtime_state",
             arrayOf("state_value"),
@@ -88,7 +88,7 @@ internal class FuturesExecutionStore(context: Context) :
     }
 
     @Synchronized
-    fun writeState(key: String, value: String): Boolean =
+    override fun writeState(key: String, value: String): Boolean =
         writeStates(mapOf(key to value))
 
     /**

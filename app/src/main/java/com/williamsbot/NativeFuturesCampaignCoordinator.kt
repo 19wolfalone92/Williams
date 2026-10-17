@@ -615,9 +615,10 @@ internal fun isManagedOpenPositionIntent(
     direction: String,
     expectedDirection: String,
     protectionStatus: String,
-    protectionClientId: String
+    protectionClientId: String,
+    strategyOwnershipVerified: Boolean
 ): Boolean =
-    status.uppercase(Locale.US) == "OPEN_PROTECTED" &&
+    strategyOwnershipVerified && status.uppercase(Locale.US) == "OPEN_PROTECTED" &&
         direction.equals(expectedDirection, ignoreCase = true) &&
         protectionStatus.equals("PROTECTED", ignoreCase = true) &&
         protectionClientId.isNotBlank()
@@ -629,7 +630,7 @@ internal fun isManagedOpenPositionIntent(
  * resolved by client id and exchange state; they are never blindly re-sent.
  */
 internal class NativeFuturesCampaignCoordinator(
-    private val executionStore: FuturesExecutionStore,
+    private val executionStore: FuturesCampaignStateStore,
     private val adapterFactory: () -> BinanceUsdMFuturesTestnetAdapter
 ) {
     enum class Direction { LONG, SHORT }
@@ -658,6 +659,9 @@ internal class NativeFuturesCampaignCoordinator(
         private set
     @Volatile var lastBlocker: String? = "startup_reconciliation_required"
         private set
+    @Volatile private var reconciliationRunning = false
+    @Volatile private var reconciliationStartedAtMs = 0L
+    @Volatile private var reconciliationFinishedAtMs = 0L
 
     private val lock = Any()
     @Volatile private var observationSink: ((JSONArray) -> Unit)? = null
@@ -724,7 +728,8 @@ internal class NativeFuturesCampaignCoordinator(
             direction = latest.optString("direction"),
             expectedDirection = direction.name,
             protectionStatus = latest.optString("protection_status"),
-            protectionClientId = latest.optString("protection_client_id")
+            protectionClientId = latest.optString("protection_client_id"),
+            strategyOwnershipVerified = latest.optBoolean("strategy_ownership_verified", false)
         )
     }
 
@@ -767,6 +772,8 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     fun reconcile(): JSONObject = synchronized(lock) {
+        reconciliationRunning = true
+        reconciliationStartedAtMs = System.currentTimeMillis()
         state = State.RECONCILE_REQUIRED
         lastBlocker = "exchange_reconciliation_in_progress"
         try {
@@ -889,6 +896,7 @@ internal class NativeFuturesCampaignCoordinator(
             }
             var hasPendingExit = false
             var anyUnprotected = false
+            val requiredSafetyExits = JSONArray()
             var actualRiskAuditBlocked = false
             var actualRiskAuditBlocker: String? = null
             // Resolve persisted entry and exit intents against Binance. Older completed
@@ -1186,7 +1194,8 @@ internal class NativeFuturesCampaignCoordinator(
                             campaignLifecycleStatus(intent) in ACTIVE_CAMPAIGN_STATUSES &&
                             // Recovery is restricted to client IDs emitted by the
                             // Williams campaign runtime, never a manual/unknown position.
-                            (clientId.startsWith("W2E_") || clientId.startsWith("W5E_"))
+                            (clientId.startsWith("W2E_") || clientId.startsWith("W5E_") ||
+                                clientId.startsWith("W2F_"))
                     }
                 var liveMark: Double? = null
                 if (matchingIntent == null && latestIntentIndex == null) {
@@ -1499,7 +1508,6 @@ internal class NativeFuturesCampaignCoordinator(
                     ) { "$symbol exchange position lacks a valid entry price/quantity for audit" }
                     val confirmedAt = System.currentTimeMillis()
                     matchingIntent.put("campaign_status", "OPEN_PROTECTED")
-                        .put("strategy_ownership_verified", true)
                         .put("protection_status", "PROTECTED")
                         .put("protection_client_id", confirmedClientId)
                         .put("protective_stop", confirmedStop)
@@ -1588,7 +1596,27 @@ internal class NativeFuturesCampaignCoordinator(
                             matchingIntent.put("actual_risk_audit_blocker", actualRiskAuditBlocker)
                         }
                     }
-                    if (!matchingIntent.optBoolean("strategy_ownership_verified", true)) {
+                    val liquidation = assessFuturesLiquidationProtection(
+                        direction, confirmedStop, position.opt("liquidationPrice")
+                    )
+                    matchingIntent.put("liquidation_guard_status", liquidation.status)
+                        .put("liquidation_guard_blocker", liquidation.blocker ?: JSONObject.NULL)
+                        .put("exchange_liquidation_price", liquidation.liquidationPrice ?: JSONObject.NULL)
+                        .put("liquidation_stop_gap_pct", liquidation.stopGapPct ?: JSONObject.NULL)
+                        .put("liquidation_guard_audited_at_ms", confirmedAt)
+                    if (liquidation.blocker != null) {
+                        actualRiskAuditBlocked = true
+                        actualRiskAuditBlocker = "$symbol ${liquidation.blocker}"
+                        if (liquidation.status == "UNSAFE" &&
+                            matchingIntent.optBoolean("strategy_ownership_verified", false)
+                        ) {
+                            requiredSafetyExits.put(JSONObject().put("symbol", symbol)
+                                .put("direction", direction).put("quantity", position.getString("positionAmt").toBigDecimal().abs().toPlainString())
+                                .put("entry_client_id", matchingIntent.optString("client_id"))
+                                .put("reason", "LIQUIDATION_GUARD"))
+                        }
+                    }
+                    if (!matchingIntent.optBoolean("strategy_ownership_verified", false)) {
                         // Emergency protection is not proof of a Williams entry signal.
                         // Keep the position protected and manually closable, but do not
                         // allow new entries until the operator resolves ownership.
@@ -1751,6 +1779,7 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("ok", !anyUnprotected && !actualRiskAuditBlocked && !hasPendingExit)
                 .put("actual_risk_audit_blocked", actualRiskAuditBlocked)
                 .put("actual_risk_audit_blocker", actualRiskAuditBlocker ?: JSONObject.NULL)
+                .put("required_safety_exits", requiredSafetyExits)
                 .put("engine", "USD_M_FUTURES_TESTNET")
                 .put("state", state.name)
                 .put("positions_checked", exchangePositions.length())
@@ -1767,7 +1796,46 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("engine", "USD_M_FUTURES_TESTNET")
                 .put("state", state.name)
                 .put("blocker", lastBlocker)
+        } finally {
+            reconciliationFinishedAtMs = System.currentTimeMillis()
+            reconciliationRunning = false
         }
+    }
+
+    /** Revalidate an observed liquidation breach before a distinct reduce-only exit. */
+    fun executeRequiredSafetyExit(request: JSONObject): JSONObject = synchronized(lock) {
+        val symbol = request.optString("symbol")
+        val entryClientId = request.optString("entry_client_id")
+        val rows = intents()
+        val owner = latestEntryIntentIndex(rows, symbol)?.let { rows.optJSONObject(it) }
+        val direction = runCatching { Direction.valueOf(request.optString("direction")) }.getOrNull()
+        if (request.optString("reason") != "LIQUIDATION_GUARD" || direction == null ||
+            symbol !in allowedSymbols || owner == null || entryClientId.isBlank() ||
+            owner.optString("client_id") != entryClientId ||
+            !isManagedOpenPositionIntent(campaignLifecycleStatus(owner), owner.optString("direction"),
+                direction.name, owner.optString("protection_status"), owner.optString("protection_client_id"),
+                owner.optBoolean("strategy_ownership_verified", false))
+        ) return@synchronized JSONObject().put("ok", false).put("safe_rejection", true)
+            .put("blocker", "Safety exit requires the same current, verified and protected campaign")
+
+        val positions = adapterFactory().positions()
+        val live = (0 until positions.length()).mapNotNull { positions.optJSONObject(it) }
+            .filter { it.optString("symbol") == symbol && it.optString("positionAmt").toDoubleOrNull()?.let { q -> q.isFinite() && q != 0.0 } == true }
+        if (live.size != 1) return@synchronized JSONObject().put("ok", false)
+            .put("blocker", "Safety exit cannot establish one live Futures position")
+        val amount = live.single().getString("positionAmt").toBigDecimal()
+        if ((amount.signum() > 0) != (direction == Direction.LONG) ||
+            request.optString("quantity").toBigDecimalOrNull()?.compareTo(amount.abs()) != 0
+        ) return@synchronized JSONObject().put("ok", false).put("safe_rejection", true)
+            .put("blocker", "Safety exit quantity/direction changed; fresh reconciliation required")
+        val check = assessFuturesLiquidationProtection(direction.name, owner.optString("protective_stop"),
+            live.single().opt("liquidationPrice"))
+        if (check.status != "UNSAFE") return@synchronized JSONObject().put("ok", false)
+            .put("safe_rejection", true).put("blocker", check.blocker ?: "Liquidation stop buffer recovered; exit not submitted")
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest((symbol + ":" + entryClientId).toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }.take(24)
+        closePosition(symbol, direction, amount.abs().toPlainString(), "W2X_LIQ_$digest", "LIQUIDATION_GUARD")
     }
 
     /** Definite pre-order rejection. No exchange mutation was attempted. */
@@ -1879,7 +1947,8 @@ internal class NativeFuturesCampaignCoordinator(
                 direction = owner.optString("direction"),
                 expectedDirection = direction,
                 protectionStatus = owner.optString("protection_status"),
-                protectionClientId = owner.optString("protection_client_id")
+                protectionClientId = owner.optString("protection_client_id"),
+                strategyOwnershipVerified = owner.optBoolean("strategy_ownership_verified", false)
             )) {
                 "Live Futures position $symbol is not confirmed OPEN_PROTECTED; structural-stop reconciliation required"
             }
@@ -2397,6 +2466,7 @@ internal class NativeFuturesCampaignCoordinator(
                         // metadata was lost. It still requires a persisted active campaign
                         // and exact agreement with the exchange-confirmed position direction.
                         campaignLifecycleStatus(row) in ACTIVE_CAMPAIGN_STATUSES &&
+                            (reason != "KILL_SWITCH" || row.optBoolean("strategy_ownership_verified", false)) &&
                             row.optString("direction").equals(direction.name, ignoreCase = true)
                     } else {
                         isManagedOpenPositionIntent(
@@ -2404,7 +2474,8 @@ internal class NativeFuturesCampaignCoordinator(
                             direction = row.optString("direction"),
                             expectedDirection = direction.name,
                             protectionStatus = row.optString("protection_status"),
-                            protectionClientId = row.optString("protection_client_id")
+                            protectionClientId = row.optString("protection_client_id"),
+                            strategyOwnershipVerified = row.optBoolean("strategy_ownership_verified", false)
                         ) &&
                             run {
                                 val entry = row.optString("entry_price").toBigDecimalOrNull()
@@ -2413,7 +2484,7 @@ internal class NativeFuturesCampaignCoordinator(
                             }
                     }
             }
-        if (managedEntry == null && !manualExit) {
+        if (managedEntry == null && reason != "MANUAL_EXIT") {
             state = State.RECONCILE_REQUIRED
             lastBlocker = "$symbol has no confirmed active Williams campaign; strategy-driven exit is blocked"
             return@synchronized JSONObject().put("ok", false).put("state", state.name)
@@ -2586,7 +2657,8 @@ internal class NativeFuturesCampaignCoordinator(
                 val otherAlgos = adapter.openAlgoOrders(otherSymbol)
                 if (!isManagedOpenPositionIntent(
                         campaignLifecycleStatus(owner), owner.optString("direction"), otherDirection,
-                        owner.optString("protection_status"), ownerStopId
+                        owner.optString("protection_status"), ownerStopId,
+                        owner.optBoolean("strategy_ownership_verified", false)
                     ) ||
                     !isProtectiveStopOnCorrectSide(otherDirection, otherMark.toString(), ownerStop) ||
                     findProtectiveStop(otherAlgos, otherDirection, ownerStopId, ownerStop) == null
@@ -2622,6 +2694,9 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     fun status(): JSONObject {
+        val reconciliationActive = reconciliationRunning
+        val observedState = if (reconciliationActive) State.RECONCILE_REQUIRED else state
+        val observedBlocker = if (reconciliationActive) "exchange_reconciliation_in_progress" else lastBlocker
         val persisted = intents()
         val pendingDetails = JSONArray()
         val now = System.currentTimeMillis()
@@ -2649,6 +2724,11 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("risk_pct", item.opt("risk_pct") ?: JSONObject.NULL)
                     .put("requested_leverage", item.opt("requested_leverage") ?: JSONObject.NULL)
                     .put("confirmed_leverage", item.opt("confirmed_leverage") ?: JSONObject.NULL)
+                    .put("liquidation_guard_status", item.optString("liquidation_guard_status", "NOT_VERIFIED"))
+                    .put("liquidation_guard_blocker", item.opt("liquidation_guard_blocker") ?: JSONObject.NULL)
+                    .put("exchange_liquidation_price", item.opt("exchange_liquidation_price") ?: JSONObject.NULL)
+                    .put("liquidation_stop_gap_pct", item.opt("liquidation_stop_gap_pct") ?: JSONObject.NULL)
+                    .put("liquidation_guard_audited_at_ms", item.opt("liquidation_guard_audited_at_ms") ?: JSONObject.NULL)
                     .put("executed_qty", item.opt("executed_qty") ?: JSONObject.NULL)
                     .put("client_id_suffix", item.optString("client_id").takeLast(8))
                     .put("order_status", orderStatus)
@@ -2680,14 +2760,17 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("risk_reservation_adjustment_reason", item.opt("risk_reservation_adjustment_reason") ?: JSONObject.NULL)
             )
         }
-        val readyForNewEntry = state == State.READY || state == State.OPEN_PROTECTED ||
-            (state == State.ENTRY_PENDING &&
-                confirmedPendingEntriesAllowConcurrentAdmission(persisted))
+        val readyForNewEntry = !reconciliationActive && (observedState == State.READY || observedState == State.OPEN_PROTECTED ||
+            (observedState == State.ENTRY_PENDING &&
+                confirmedPendingEntriesAllowConcurrentAdmission(persisted)))
         return JSONObject()
             .put("engine", "USD_M_FUTURES_TESTNET")
-            .put("state", state.name)
+            .put("state", observedState.name)
             .put("ready_for_new_entry", readyForNewEntry)
-            .put("blocker", if (readyForNewEntry) JSONObject.NULL else (lastBlocker ?: JSONObject.NULL))
+            .put("blocker", if (readyForNewEntry) JSONObject.NULL else (observedBlocker ?: JSONObject.NULL))
+            .put("reconciliation_running", reconciliationActive)
+            .put("reconciliation_started_at_ms", reconciliationStartedAtMs)
+            .put("reconciliation_finished_at_ms", reconciliationFinishedAtMs)
             .put("pending_intents", pendingDetails.length())
             .put("pending_intent_details", pendingDetails)
             .put("testnet_only", true)

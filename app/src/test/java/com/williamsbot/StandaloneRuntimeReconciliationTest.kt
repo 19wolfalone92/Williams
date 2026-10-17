@@ -22,6 +22,28 @@ class StandaloneRuntimeReconciliationTest {
     }
 
     @Test
+    fun activeReconciliationDoesNotMisclassifyThePriorFsmAndLatchAsAStuckTask() {
+        val findings = diagnosticConsistencyFindings(
+            "RECONCILE_REQUIRED", false, "exchange_reconciliation_in_progress", "ENTRY_PENDING",
+            false, false, "EXCHANGE_RECONCILED", true
+        )
+        assertTrue(findings.isEmpty())
+        val finishedButStillBlocked = diagnosticConsistencyFindings(
+            "RECONCILE_REQUIRED", false, "exchange_reconciliation_in_progress", "ENTRY_PENDING",
+            false, false, "EXCHANGE_RECONCILED", false
+        )
+        assertTrue(finishedButStillBlocked.any { it.startsWith("RECONCILIATION_STALE_BLOCKER:") })
+    }
+
+    @Test
+    fun healthAndExecutionContractUseOneAuthoritativeStateMapping() {
+        assertEquals("RECONCILE_REQUIRED", authoritativeRuntimeDisplayState(true, true, false, false, "RECONCILE_REQUIRED", "ENTRY_PENDING"))
+        assertEquals("ENTRY_PENDING", authoritativeRuntimeDisplayState(true, true, false, false, "ENTRY_PENDING", "READY_FLAT"))
+        assertEquals("OPEN", authoritativeRuntimeDisplayState(true, true, false, false, "OPEN_PROTECTED", "ENTRY_PENDING"))
+        assertEquals("STOPPED", authoritativeRuntimeDisplayState(true, false, false, false, "READY", "STOPPED"))
+    }
+
+    @Test
     fun inProgressCoordinatorWithNoRunningTaskIsFlagged() {
         val findings = diagnosticConsistencyFindings(
             coordinatorState = "RECONCILE_REQUIRED",

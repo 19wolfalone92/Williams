@@ -27,6 +27,20 @@ class CockpitDiagnosticsTest {
         CockpitDiagnostics.rows(CockpitDiagnostics.checks(s, c, JSONObject(), now)).single { it.optString("id") == id }
     private fun severity(id: String, s: JSONObject, c: JSONObject = coordinator()) = check(id, s, c).optString("severity")
 
+    @Test fun liquidationCheckNeedsFreshMeasuredEvidenceAndReportsAnUnsafeStop() {
+        val s = healthy().put("futures_positions", JSONArray().put(JSONObject()
+            .put("symbol", "SOLUSDT").put("direction", "LONG").put("qty", 1)))
+        val e = entry().put("campaign_status", "OPEN_PROTECTED")
+        val c = coordinator().put("pending_intent_details", JSONArray().put(e))
+        assertEquals("NOT_VERIFIED", severity("RISK-04", s, c))
+        e.put("liquidation_guard_status", "UNSAFE").put("liquidation_guard_audited_at_ms", now)
+        assertEquals("FAIL", severity("RISK-04", s, c))
+        e.put("liquidation_guard_status", "PASS")
+        assertEquals("PASS", severity("RISK-04", s, c))
+        e.put("liquidation_guard_audited_at_ms", now - 120_001)
+        assertEquals("NOT_VERIFIED", severity("RISK-04", s, c))
+    }
+
     @Test fun unverifiedDailyRiskBaselineExplainsEntryBlockInCockpit() {
         val status = healthy().put("execution_enabled", false)
             .put("daily_risk_baseline_source", "UNKNOWN")
