@@ -99,4 +99,70 @@ class DiagnosticConsistencyTest {
         assertFalse(userStreamSyncIsFresh(false, false, 999_000L, 1_000_000L))
     }
 
+
+    @Test
+    fun transientReconciliationSnapshotDoesNotInventStateMismatch() {
+        val findings = diagnosticConsistencyFindings(
+            coordinatorState = "RECONCILE_REQUIRED",
+            coordinatorReady = false,
+            coordinatorBlocker = "exchange_reconciliation_in_progress",
+            runtimeState = "ENTRY_PENDING",
+            runtimeReconcileRequired = false,
+            executionEnabled = false,
+            dailyRiskBaselineSource = "INITIAL_FLAT_SNAPSHOT",
+            reconciliationRunning = true,
+            topLevelRuntimeState = "RECONCILE_REQUIRED"
+        )
+        assertTrue(findings.isEmpty())
+    }
+
+    @Test
+    fun transientSnapshotNeverMasksUnsafeExecutionGate() {
+        val findings = diagnosticConsistencyFindings(
+            coordinatorState = "RECONCILE_REQUIRED",
+            coordinatorReady = false,
+            coordinatorBlocker = "exchange_reconciliation_in_progress",
+            runtimeState = "ENTRY_PENDING",
+            runtimeReconcileRequired = false,
+            executionEnabled = true,
+            dailyRiskBaselineSource = "INITIAL_FLAT_SNAPSHOT",
+            reconciliationRunning = true,
+            topLevelRuntimeState = "RECONCILE_REQUIRED"
+        )
+        assertTrue(findings.any { it.startsWith("GATE_CONTRADICTION:") })
+    }
+
+    @Test
+    fun staleBlockedReconciliationStillProducesFourFindings() {
+        val findings = diagnosticConsistencyFindings(
+            coordinatorState = "RECONCILE_REQUIRED",
+            coordinatorReady = false,
+            coordinatorBlocker = "exchange_reconciliation_in_progress",
+            runtimeState = "ENTRY_PENDING",
+            runtimeReconcileRequired = false,
+            executionEnabled = false,
+            dailyRiskBaselineSource = "INITIAL_FLAT_SNAPSHOT",
+            reconciliationRunning = false,
+            topLevelRuntimeState = "RECONCILE_REQUIRED"
+        )
+        assertEquals(4, findings.size)
+        assertTrue(findings.any { it.startsWith("RECONCILIATION_STALE_BLOCKER:") })
+    }
+
+    @Test
+    fun unrelatedReconciliationErrorCannotBeHidden() {
+        val findings = diagnosticConsistencyFindings(
+            coordinatorState = "RECONCILE_REQUIRED",
+            coordinatorReady = false,
+            coordinatorBlocker = "position_snapshot_unknown",
+            runtimeState = "ENTRY_PENDING",
+            runtimeReconcileRequired = false,
+            executionEnabled = false,
+            dailyRiskBaselineSource = "INITIAL_FLAT_SNAPSHOT",
+            reconciliationRunning = true,
+            topLevelRuntimeState = "RECONCILE_REQUIRED"
+        )
+        assertTrue(findings.any { it.startsWith("STATE_MISMATCH:") })
+        assertTrue(findings.any { it.startsWith("RECONCILE_LATCH_MISMATCH:") })
+    }
 }
