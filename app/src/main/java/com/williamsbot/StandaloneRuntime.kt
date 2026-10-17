@@ -259,14 +259,20 @@ internal fun diagnosticConsistencyFindings(
     reconciliationRunning: Boolean,
     topLevelRuntimeState: String = runtimeState
 ): List<String> = buildList {
-    if (topLevelRuntimeState.isNotBlank() && runtimeState.isNotBlank() &&
-        topLevelRuntimeState != runtimeState) {
+    // Only an exchange reconciliation currently holding the coordinator in
+    // RECONCILE_REQUIRED/in-progress can legitimately outrun the local FSM.
+    // Another coincident task must not hide an unrelated coordinator failure.
+    val transientReconciliation = reconciliationRunning &&
+        coordinatorState == "RECONCILE_REQUIRED" &&
+        coordinatorBlocker == "exchange_reconciliation_in_progress"
+    if (!transientReconciliation && topLevelRuntimeState.isNotBlank() &&
+        runtimeState.isNotBlank() && topLevelRuntimeState != runtimeState) {
         add("RUNTIME_STATE_MISMATCH: status.state=$topLevelRuntimeState but execution_state_contract.state=$runtimeState")
     }
-    if (coordinatorState == "RECONCILE_REQUIRED" && !reconciliationRunning && runtimeState != "RECONCILE_REQUIRED") {
+    if (coordinatorState == "RECONCILE_REQUIRED" && !transientReconciliation && runtimeState != "RECONCILE_REQUIRED") {
         add("STATE_MISMATCH: coordinator requires reconciliation but runtime state is $runtimeState")
     }
-    if (coordinatorState == "RECONCILE_REQUIRED" && !reconciliationRunning && !runtimeReconcileRequired) {
+    if (coordinatorState == "RECONCILE_REQUIRED" && !transientReconciliation && !runtimeReconcileRequired) {
         add("RECONCILE_LATCH_MISMATCH: coordinator requires reconciliation but runtime reconcile_required is false")
     }
     if (!coordinatorReady && executionEnabled) {
@@ -8264,8 +8270,17 @@ private class NativeEngine(
             }.onFailure { lastError = "Futures account status: " + (it.message ?: it.javaClass.simpleName) }
         }
 
+        // Snapshot reconciliation state around the coordinator call. The
+        // coordinator's temporary in-progress state is not a durable runtime
+        // inconsistency, and signed REST work can race status collection.
+        val reconciliationAttemptBefore = lastReconciliationAttemptAtMs
+        val reconciliationRunningBefore = futuresReconciliationRunning
         val futuresRuntimeStatus = runCatching { futuresCampaignCoordinator.status() }
             .getOrElse { JSONObject().put("state", "RECONCILE_REQUIRED").put("blocker", it.message ?: it.javaClass.simpleName) }
+        val coordinatorReconciliationInProgress = futuresRuntimeStatus.optBoolean("reconciliation_running", false)
+        val reconciliationObserved = coordinatorReconciliationInProgress ||
+            reconciliationRunningBefore || futuresReconciliationRunning ||
+            lastReconciliationAttemptAtMs != reconciliationAttemptBefore
         val coordinatorState = futuresRuntimeStatus.optString("state", "RECONCILE_REQUIRED")
             .uppercase(Locale.US)
         // In campaign mode the exchange coordinator is authoritative. The local FSM can
@@ -8273,8 +8288,6 @@ private class NativeEngine(
         // were settled while the coordinator is still reconciling or protection is unknown.
         val effectiveDisplayState = authoritativeRuntimeDisplayState(campaignEngineEnabled, running, paused,
             killLatched, coordinatorState, stateName())
-        val coordinatorReconciliationInProgress = futuresRuntimeStatus.optBoolean("reconciliation_running", false)
-        val reconciliationObserved = coordinatorReconciliationInProgress || futuresReconciliationRunning
         val executionEnabledSnapshot = executionReady() && !reconciliationObserved &&
             futuresRuntimeStatus.optBoolean("ready_for_new_entry", false)
 
@@ -8444,6 +8457,9 @@ private class NativeEngine(
             .put("decision_timeframe", "1h")
             .put("max_daily_loss_pct", 0.03)
             .put("futures_runtime", futuresRuntimeStatus)
+            .put("futures_reconciliation_in_progress", reconciliationObserved)
+            .put("futures_reconciliation_last_result", lastReconciliationResult)
+            .put("futures_reconciliation_last_completed_at_ms", lastReconciliationCompletedAtMs)
             .put("android_runtime", AndroidRuntimeHealth.snapshot(context))
             .put("exchange_clock", futuresMarketData.clockSnapshot())
             .put("quote_observations", JSONArray().apply {
