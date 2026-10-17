@@ -5232,26 +5232,46 @@ private class NativeEngine(
                 } ?: throw IllegalStateException(symbol + " has no latest exchange-confirmed protected campaign")
             val oldStop = intent.optString("protective_stop").toDoubleOrNull()
                 ?: throw IllegalStateException(symbol + " structural stop is missing")
-            val trail = candles.takeLast(campaignTrailBars)
-            val proposed = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-                normalizePrice((trail.minOfOrNull { it.l } ?: oldStop) - rules.tick, rules.tick)
-            } else {
-                normalizeTriggerPrice((trail.maxOfOrNull { it.h } ?: oldStop) + rules.tick, rules.tick)
-            }
-            val tighter = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) proposed > oldStop && proposed < mark
-                else proposed < oldStop && proposed > mark
-            if (tighter) {
-                val clientId = ("W2T_" + symbol.take(8) + "_" + latest.t.toString(16)).take(36)
+            val originalStop = intent.optString("initial_protective_stop").toDoubleOrNull()
+                ?: throw IllegalStateException(symbol + " initial structural stop is missing; cannot prove original R")
+            val actualEntry = row.optString("entryPrice").toDoubleOrNull()
+                ?: throw IllegalStateException(symbol + " Binance entry price is missing for trailing")
+            val plan = planFuturesStopTrail(
+                direction = dir,
+                oldStop = oldStop,
+                actualEntry = actualEntry,
+                initialStop = originalStop,
+                markPrice = mark,
+                tickSize = rules.tick,
+                openedObservedAtMs = intent.optLong("position_open_observed_at_ms", 0L),
+                bars = candles.map { FuturesTrailBar(it.t, it.h, it.l) },
+                breakEvenAtR = 1.0,
+                feeAndSlippageAllowancePct = 2.0 * feeBufferPerSidePct + maxSlippagePct
+            )
+            if (plan != null) {
+                // Different intra-H1 break-even/fractal improvements require distinct
+                // Binance client algo IDs. An H1 timestamp alone was not sufficient.
+                val clientId = ("W2T_" + symbol.take(8) + "_" +
+                    System.nanoTime().toString(36).takeLast(14)).take(36)
                 val result = withCampaignMutation(
                     symbol = symbol,
-                    purpose = "STRUCTURAL_STOP_TRAIL",
+                    purpose = "CONFIRMED_FRACTAL_OR_BREAKEVEN_STOP_TRAIL",
                     allowPaused = true
                 ) {
                     futuresCampaignCoordinator.trailProtectiveStop(
-                        symbol, direction, fmtPrice(proposed, rules.tick), clientId
+                        symbol, direction, fmtPrice(plan.stop, rules.tick), clientId
                     )
                 }
-                if (!result.optBoolean("ok", false)) throw IllegalStateException(result.optString("blocker", result.optString("error")))
+                if (!result.optBoolean("ok", false)) {
+                    throw IllegalStateException(result.optString("blocker", result.optString("error")))
+                }
+                runCatching {
+                    auditStore.recordCockpitEvent(
+                        "PROTECTION_TRAILED", symbol = symbol, direction = dir,
+                        state = "OPEN_PROTECTED",
+                        detail = "${plan.reason}; previous=$oldStop; new=${plan.stop}; mark=$mark; entry=$actualEntry"
+                    )
+                }
             }
         }
         return true
@@ -9193,7 +9213,7 @@ private class NativeEngine(
             .put("take_profit_pct", 0.0)
             .put("legacy_spot_settings_active", false)
             .put("position_sizing_model", "STRUCTURAL_STOP_RISK_BUDGET")
-            .put("protective_stop_model", "STRUCTURAL_3_TO_5_H1_BARS")
+            .put("protective_stop_model", "CONFIRMED_H1_FRACTAL_PLUS_COST_BUFFERED_1R_BREAKEVEN")
             .put("poll_seconds", 10)
             .put("scan_mode", "adaptive_parallel_cached")
             .put("wave_timeframes", analysisFrames.joinToString(","))
