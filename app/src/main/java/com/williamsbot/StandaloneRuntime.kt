@@ -5253,8 +5253,7 @@ private class NativeEngine(
                 val result = withCampaignMutation(
                     symbol = symbol,
                     purpose = "STRUCTURAL_STOP_TRAIL_" + trail.source,
-                    allowPaused = true,
-                    allowKillLatched = true
+                    allowPaused = true
                 ) {
                     futuresCampaignCoordinator.trailProtectiveStop(
                         symbol, direction, fmtPrice(trail.stopPrice, rules.tick), clientId
