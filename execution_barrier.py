@@ -95,7 +95,8 @@ class ExecutionBarrier:
             except Exception:
                 pass
 
-    def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot, *, allow_flat_cleanup: bool = False) -> str:
+    def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot, *, allow_flat_cleanup: bool = False,
+                  allow_recovery_management: bool = False) -> str:
         if intent.created_at_ms:
             age = int(time.time() * 1000) - intent.created_at_ms
             if age < 0:
@@ -142,16 +143,23 @@ class ExecutionBarrier:
                 if campaign is None:
                     return "campaign_not_found"
                 campaign_state = str(campaign.get("state", "")).upper()
-                if campaign_state == "RECONCILE_REQUIRED" and not allow_flat_cleanup:
+                if campaign_state == "RECONCILE_REQUIRED" and not (allow_flat_cleanup or allow_recovery_management):
                     return "campaign_reconcile_required"
 
             # Position/reconciliation state is symbol-scoped. The historical
             # global key could incorrectly block or admit another symbol.
             if hasattr(self.db, "state_get"):
+                reduces_risk = intent.order_type == "CANCEL" or intent.purpose in {
+                    "CAMPAIGN_EXIT", "CAMPAIGN_PROTECTION", "CAMPAIGN_TRAIL", "CAMPAIGN_FLAT_CLEANUP"
+                }
+                if not reduces_risk:
+                    for flag in ("kill_switch_latched", "entry_admission_paused"):
+                        if str(self.db.state_get(flag, "false")).strip().lower() not in {"false", "0", ""}:
+                            return flag
                 symbol_state = str(
                     self.db.state_get(f"position_state:{intent.symbol}", "FLAT")
                 ).upper()
-                if symbol_state == "RECONCILE_REQUIRED" and not allow_flat_cleanup:
+                if symbol_state == "RECONCILE_REQUIRED" and not (allow_flat_cleanup or allow_recovery_management):
                     return "RECONCILE_REQUIRED"
 
         return ""
@@ -174,10 +182,17 @@ class ExecutionBarrier:
                 except Exception:
                     pass
             snapshot = self.context_cache.snapshot()
-            reason = self._validate(intent, snapshot, allow_flat_cleanup=(
+            flat_cleanup = (
                 intent.purpose == "CAMPAIGN_FLAT_CLEANUP" and intent.order_type == "CANCEL"
                 and bool(intent.campaign_id) and pre_submit_checks is not None
-            ))
+            )
+            recovery_management = bool(intent.campaign_id) and pre_submit_checks is not None and (
+                (intent.purpose == "CAMPAIGN_EXIT" and intent.order_type == "MARKET") or
+                (intent.purpose in {"CAMPAIGN_PROTECTION", "CAMPAIGN_TRAIL"} and intent.order_type == "STOP_MARKET") or
+                (intent.purpose == "CAMPAIGN_CANCEL_ENTRY" and intent.order_type == "CANCEL")
+            )
+            reason = self._validate(intent, snapshot, allow_flat_cleanup=flat_cleanup,
+                allow_recovery_management=recovery_management)
             if reason:
                 self._persist(intent, "BLOCKED", reason)
                 self._record("WARNING", "execution_blocked", intent, reason)
@@ -191,6 +206,15 @@ class ExecutionBarrier:
                     self._persist(intent, "BLOCKED", reason)
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
+
+            # Network preflight can outlast an operator PAUSE/KILL request.
+            # Re-read the durable controls immediately before the exchange mutation.
+            reason = self._validate(intent, self.context_cache.snapshot(), allow_flat_cleanup=flat_cleanup,
+                allow_recovery_management=recovery_management)
+            if reason:
+                self._persist(intent, "BLOCKED", reason)
+                self._record("WARNING", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
 
             self._record(
                 "INFO",

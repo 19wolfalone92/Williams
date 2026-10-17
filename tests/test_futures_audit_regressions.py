@@ -211,9 +211,16 @@ def test_recovery_rejects_wrong_or_insufficient_protection(runtime, campaign, ch
 
 
 def test_position_ownership_does_not_allow_one_percent_foreign_quantity(runtime, campaign):
-    assert runtime._position_matches(campaign, {"positionAmt": "1"})
+    assert runtime._position_matches(campaign, {"positionAmt": "1", "entryPrice": "100"})
     assert not runtime._position_matches(campaign, {"positionAmt": "1.005"})
     assert not runtime._position_matches(campaign, {"positionAmt": "-1"})
+
+
+@pytest.mark.parametrize("quantity", ["NaN", "malformed", "0", "0.5"])
+def test_a_flat_snapshot_and_incomplete_exit_fill_cannot_fabricate_a_closed_campaign(runtime, campaign, quantity):
+    order = {**protective_order(), "orderId": "algo:7", "status": "FILLED", "executedQty": quantity, "avgPrice": "95"}
+    assert not runtime._finalize_confirmed_exchange_exit(campaign, [order])
+    assert campaign.position_qty == 1
 
 
 @pytest.mark.parametrize("value", ["0", "NaN", "Infinity", ""])

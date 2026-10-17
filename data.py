@@ -1,4 +1,5 @@
 import os, time, pandas as pd, requests
+import tempfile
 
 # Legacy historical mode is retained for research/backtests only. Its
 # endpoint follows the same TESTNET switch as the trading client so a live
@@ -60,7 +61,7 @@ def save_csv(df,path):df.reset_index().to_csv(path,index=False)
 
 
 def fetch_klines_history(client, symbol, interval, start_ms=0, end_ms=None):
-    """Download all available Spot klines in Binance's 1000-row pages."""
+    """Download the client's own market history in Binance's 1000-row pages."""
     symbol = str(symbol).upper()
     interval = _normalize_interval(interval)
     rows = []
@@ -70,7 +71,8 @@ def fetch_klines_history(client, symbol, interval, start_ms=0, end_ms=None):
         params = {"symbol": symbol, "interval": interval, "limit": 1000, "startTime": cursor}
         if end_value is not None:
             params["endTime"] = end_value
-        batch = client._request("GET", "/api/v3/klines", params)
+        route = "/fapi/v1/klines" if getattr(client, "is_futures", False) else "/api/v3/klines"
+        batch = client._request("GET", route, params)
         if not batch:
             break
         rows.extend(batch)
@@ -88,6 +90,9 @@ def fetch_klines_history(client, symbol, interval, start_ms=0, end_ms=None):
 def fetch_klines_cached_history(client, symbol, interval, cache_dir=None):
     """Persistent full-history cache; subsequent calls only fetch new candles."""
     cache_dir = cache_dir or os.getenv("WAVE_HISTORY_CACHE_DIR", "data_cache/klines")
+    market = "futures" if getattr(client, "is_futures", False) else "spot"
+    environment = "testnet" if getattr(client, "testnet", True) else "live"
+    cache_dir = os.path.join(cache_dir, f"{market}_{environment}")
     os.makedirs(cache_dir, exist_ok=True)
     path = os.path.join(
         cache_dir,
@@ -107,12 +112,20 @@ def fetch_klines_cached_history(client, symbol, interval, cache_dir=None):
     if cached.empty:
         fresh = fetch_klines_history(client, symbol, interval, start_ms=0)
     else:
-        start_ms = int(cached.index.max().timestamp() * 1000) + 1
+        # The last cached candle may still be forming: refresh it inclusively.
+        start_ms = int(cached.index.max().timestamp() * 1000)
         fresh = fetch_klines_history(client, symbol, interval, start_ms=start_ms)
 
     merged = pd.concat([cached, fresh]) if not fresh.empty else cached
     if merged.empty:
         return merged
     merged = merged[~merged.index.duplicated(keep="last")].sort_index()
-    merged.reset_index().to_csv(path, index=False)
+    descriptor, temporary = tempfile.mkstemp(dir=cache_dir, prefix=".klines-", suffix=".tmp")
+    os.close(descriptor)
+    try:
+        merged.reset_index().to_csv(temporary, index=False)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
     return merged
