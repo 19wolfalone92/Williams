@@ -67,6 +67,13 @@ class WilliamsWaveRhythmTest {
         assertEquals(Wave4ZeroStatus.NO_ZERO_CROSS, r.status)
     }
 
+    @Test fun proposedJuniorW3InsideSeniorW5CannotReduceExhaustionRisk() {
+        assertEquals(65.0, provisionalWave3InsideWave5Caution(true, 10.0), 0.0)
+        assertEquals(87.0, provisionalWave3InsideWave5Caution(true, 87.0), 0.0)
+        assertEquals(12.0, provisionalWave3InsideWave5Caution(false, 12.0), 0.0)
+        assertEquals(100.0, provisionalWave3InsideWave5Caution(true, Double.NaN), 0.0)
+    }
+
     @Test fun scaleSelectionPrefers100To140BarsWithoutFabricatingMoreHistory() {
         val frames = linkedMapOf("1h" to 3_600_000L, "15m" to 900_000L, "5m" to 300_000L)
         val match = suggestWilliamsWaveScale(30L * 3_600_000L, frames)
