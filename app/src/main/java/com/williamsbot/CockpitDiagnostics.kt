@@ -292,25 +292,49 @@ internal object CockpitDiagnostics {
 
     /** Runs after each durable lifecycle change, including partial fill and stop replacement. */
     fun lifecycleAudit(intent: JSONObject): JSONObject {
+        val role = intent.optString("intent_role", "ENTRY").uppercase(java.util.Locale.US)
         val lifecycle = campaignLifecycleStatus(intent)
         val order = intent.optString("order_status").ifBlank { intent.optString("exchange_status") }
+            .uppercase(java.util.Locale.US)
+        val exchangeStatus = intent.optString("exchange_status").uppercase(java.util.Locale.US)
         val protection = intent.optString("protection_status")
-        val exposed = order in setOf("FILLED", "PARTIALLY_FILLED") ||
-            lifecycle in setOf("POSITION_OPEN", "OPEN_PROTECTED")
-        val protected = protection == "PROTECTED" && intent.optString("protection_client_id").isNotBlank()
         val risk = intent.optString("actual_risk_audit_status")
-        val severity = when {
-            risk == "BLOCKED" -> "FAIL"
-            exposed && !protected -> "FAIL"
-            lifecycle == "CLOSED_OR_STOPPED" -> "PASS"
-            exposed && risk !in setOf("PASS", "PASS_RESERVATION_ADJUSTED") -> "NOT_VERIFIED"
-            order in setOf("SUBMISSION_UNKNOWN", "CANCEL_SUBMISSION_UNKNOWN") -> "WARNING"
-            exposed -> "PASS"
-            else -> "NOT_VERIFIED"
+        // EXIT intents are exchange-side reduce-only orders and must not carry
+        // the ENTRY campaign's structural stop/protection/risk snapshot. Applying
+        // the ENTRY invariant to EXIT FILLED orders generated spurious FAIL events
+        // and incident records despite Binance-confirmed flat positions.
+        val severity = if (role == "EXIT") {
+            when {
+                exchangeStatus == "EXIT_CONFIRMED" -> "PASS"
+                // FILLED while Binance still sees exposure (possibly a newer
+                // campaign on the same symbol) is NOT proof of a flat account.
+                exchangeStatus == "EXIT_TERMINAL_POSITION_OPEN" -> "WARNING"
+                exchangeStatus in setOf("SUBMISSION_UNKNOWN", "CANCEL_SUBMISSION_UNKNOWN") ->
+                    "WARNING"
+                else -> "NOT_VERIFIED"
+            }
+        } else if (role == "ENTRY") {
+            val exposed = order in setOf("FILLED", "PARTIALLY_FILLED") ||
+                lifecycle in setOf("POSITION_OPEN", "OPEN_PROTECTED")
+            val protected = protection == "PROTECTED" &&
+                intent.optString("protection_client_id").isNotBlank()
+            when {
+                risk == "BLOCKED" -> "FAIL"
+                exposed && !protected -> "FAIL"
+                lifecycle == "CLOSED_OR_STOPPED" -> "PASS"
+                exposed && risk !in setOf("PASS", "PASS_RESERVATION_ADJUSTED") -> "NOT_VERIFIED"
+                order in setOf("SUBMISSION_UNKNOWN", "CANCEL_SUBMISSION_UNKNOWN") -> "WARNING"
+                exposed -> "PASS"
+                else -> "NOT_VERIFIED"
+            }
+        } else {
+            // Unknown role cannot be treated as a protected entry or confirmed exit.
+            "FAIL"
         }
-        return JSONObject().put("severity", severity).put("campaign_status", lifecycle)
+        return JSONObject().put("severity", severity).put("intent_role", role)
+            .put("campaign_status", lifecycle).put("exchange_status", exchangeStatus)
             .put("order_status", order).put("protection_status", protection).put("risk_audit", risk)
-            .put("scope", "Persisted exchange evidence and lifecycle invariants; not a fresh independent exchange query")
+            .put("scope", "Role-aware persisted exchange evidence and lifecycle invariants; not a fresh independent exchange query")
     }
 }
 

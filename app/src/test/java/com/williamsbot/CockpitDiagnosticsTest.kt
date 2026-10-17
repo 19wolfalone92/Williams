@@ -169,5 +169,42 @@ class CockpitDiagnosticsTest {
         protected.put("actual_risk_audit_status", "BLOCKED")
         assertEquals("FAIL", CockpitDiagnostics.lifecycleAudit(protected).optString("severity"))
     }
-}
 
+    @Test fun confirmedExitIsNotAnUnprotectedEntry() {
+        val confirmed = JSONObject()
+            .put("intent_role", "EXIT")
+            .put("kind", "MARKET_REDUCE_ONLY")
+            .put("order_status", "FILLED")
+            .put("exchange_status", "EXIT_CONFIRMED")
+        assertEquals("PASS", CockpitDiagnostics.lifecycleAudit(confirmed).optString("severity"))
+    }
+
+    @Test fun terminalExitWithAnotherLivePositionIsNeverDeclaredFlat() {
+        val stillOpen = JSONObject()
+            .put("intent_role", "EXIT")
+            .put("kind", "MARKET_REDUCE_ONLY")
+            .put("order_status", "FILLED")
+            .put("exchange_status", "EXIT_TERMINAL_POSITION_OPEN")
+        assertEquals("WARNING", CockpitDiagnostics.lifecycleAudit(stillOpen).optString("severity"))
+    }
+
+    @Test fun ambiguousOrUnconfirmedExitCannotPassAudit() {
+        for (status in listOf("SUBMISSION_UNKNOWN", "CANCEL_SUBMISSION_UNKNOWN")) {
+            val exit = JSONObject().put("intent_role", "EXIT").put("exchange_status", status)
+            assertEquals("WARNING", CockpitDiagnostics.lifecycleAudit(exit).optString("severity"))
+        }
+        val justFilled = JSONObject().put("intent_role", "EXIT")
+            .put("exchange_status", "FILLED")
+            .put("order_status", "FILLED")
+        assertEquals("NOT_VERIFIED", CockpitDiagnostics.lifecycleAudit(justFilled).optString("severity"))
+    }
+
+    @Test fun exitRoleCannotMaskUnsafeFilledEntry() {
+        val unsafeEntry = JSONObject().put("intent_role", "ENTRY")
+            .put("campaign_status", "POSITION_OPEN").put("order_status", "FILLED")
+        assertEquals("FAIL", CockpitDiagnostics.lifecycleAudit(unsafeEntry).optString("severity"))
+        val malformedRole = JSONObject().put("intent_role", "UNKNOWN")
+            .put("exchange_status", "EXIT_CONFIRMED")
+        assertEquals("FAIL", CockpitDiagnostics.lifecycleAudit(malformedRole).optString("severity"))
+    }
+}
