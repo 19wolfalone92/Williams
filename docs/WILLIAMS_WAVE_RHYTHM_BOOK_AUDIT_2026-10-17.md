@@ -30,12 +30,13 @@ Source checked directly in the user's reference PDFs, **not** just existing proj
 * Introduced `suggestWilliamsWaveScale` to select a real candle resolution near 120 bars from observed duration. This helper does **not** request, interpolate or synthesize candles and does **not** affect execution.
 * Fixed Futures stop trailing when the latest confirmed pivot yields a currently **unusable** stop. The policy now considers an older eligible post-entry confirmed pivot before giving up, while retaining tightening-only and mark-price-gap conditions. Added symmetric LONG/SHORT regression cases.
 * Added regression tests for missing W4 crossing, positive/negative W3, near zero, unsuitable resolution, malformed data and scale selection.
+* Corrected misleading late-wave context: a *provisional* lower-TF W3 coinciding with a possible higher-TF W5 no longer gets an automatic +10 positive quality bonus nor **reduced** exhaustion. It now keeps at least 65/100 caution; the display no longer falsely presents this case as a 92/100 ideal setup. This ranking caution is engineering policy, not a categorical book trade ban.
 
 ## Still absent / not implemented
 
 **Do not advertise a complete hierarchical Elliott-wave trading brain.** This PR does not implement a proven full genealogy across D1/H6/H4/H1/M15, wave A-B-C classification, a calibrated scenario posterior, a production intraday entry engine, reversal orders, zone stops or other missing book pathways. Existing H1 authority and Binance Futures safety gate are intentionally unchanged.
 
-Current `enrichWithMtf()` estimates relationships from nearest higher TF and may conflate coincident wave numbers with actual parentage. The existing bonus for a lower W3 inside a higher W5 must be revisited as a subsequent targeted change with a proper causal hierarchy test. It is **not** enough to concatenate MTF labels.
+Current `enrichWithMtf()` still infers relationships from TF coincidence and can conflate wave-number alignment with actual parentage. Its **optimistic W3-in-W5 bonus is removed in this PR**, but a full causal hierarchy based on parent/child timestamps and invalidation is still missing. It is **not** enough to concatenate MTF labels.
 
 ## Required follow-up and release gates
 
