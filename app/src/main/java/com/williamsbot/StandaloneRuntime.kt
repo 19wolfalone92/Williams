@@ -7275,12 +7275,11 @@ private class NativeEngine(
         }
 
         if (nestedW3ParentW5) {
-            bonus += 10.0
-            exhaustion =
-                min(
-                    exhaustion,
-                    max(10.0, setup.exhaustionRisk - 10.0)
-                )
+            // A W3 inside a possible senior W5 is a late-stage scenario.
+            // TF coincidence does not establish real wave parentage. Do not
+            // award a positive entry bonus or REDUCE exhaustion here.
+            // This only changes candidate ranking, never the H1 entry gate.
+            exhaustion = provisionalWave3InsideWave5Caution(true, exhaustion)
         } else if (setup.position == 5) {
             bonus -= 12.0
             exhaustion = max(exhaustion, 65.0)
@@ -7450,16 +7449,17 @@ private class NativeEngine(
         val nestedW3 =
             wave.path.contains("W3")
 
-        val nestedParentW5 =
-            wave.path.contains("W5") &&
-                wave.path.contains("W3")
+        val nestedParentW5 = wave.nestedW3ParentW5
 
+        // Never present a guessed junior W3 within a proposed senior W5 as a
+        // 92/100 near-ideal entry. This remains an uncalibrated UI quality
+        // indicator, NOT a statistical probability or exchange entry gate.
         val displayWaveScore =
             when {
-                nestedParentW5 -> 92.0
-                wave.position == 3 -> 86.0
-                wave.position == 5 -> 42.0
-                else -> 65.0
+                nestedParentW5 -> min(50.0, wave.confidence)
+                wave.position == 3 -> min(86.0, wave.confidence)
+                wave.position == 5 -> min(42.0, wave.confidence)
+                else -> min(65.0, wave.confidence)
             }
 
         val riskReward =
