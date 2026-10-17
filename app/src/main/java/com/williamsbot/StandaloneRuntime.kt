@@ -7275,12 +7275,11 @@ private class NativeEngine(
         }
 
         if (nestedW3ParentW5) {
-            bonus += 10.0
-            exhaustion =
-                min(
-                    exhaustion,
-                    max(10.0, setup.exhaustionRisk - 10.0)
-                )
+            // A W3 inside a possible senior W5 is a late-stage scenario.
+            // TF coincidence does not establish real wave parentage. Do not
+            // award a positive entry bonus or REDUCE exhaustion here.
+            // This only changes candidate ranking, never the H1 entry gate.
+            exhaustion = provisionalWave3InsideWave5Caution(true, exhaustion)
         } else if (setup.position == 5) {
             bonus -= 12.0
             exhaustion = max(exhaustion, 65.0)
@@ -7450,21 +7449,61 @@ private class NativeEngine(
         val nestedW3 =
             wave.path.contains("W3")
 
-        val nestedParentW5 =
-            wave.path.contains("W5") &&
-                wave.path.contains("W3")
+        val nestedParentW5 = wave.nestedW3ParentW5
 
+        // Never present a guessed junior W3 within a proposed senior W5 as a
+        // 92/100 near-ideal entry. This remains an uncalibrated UI quality
+        // indicator, NOT a statistical probability or exchange entry gate.
         val displayWaveScore =
             when {
-                nestedParentW5 -> 92.0
-                wave.position == 3 -> 86.0
-                wave.position == 5 -> 42.0
-                else -> 65.0
+                nestedParentW5 -> min(50.0, wave.confidence)
+                wave.position == 3 -> min(86.0, wave.confidence)
+                wave.position == 5 -> min(42.0, wave.confidence)
+                else -> min(65.0, wave.confidence)
             }
 
         val riskReward =
             candidate.riskReward
+        // Book diagnostic only: the 100-140-bar cycle and W4 AO zero-line
+        // crossing are NOT themselves a Williams entry, exit or reversal.
+        // PivotN.index is confirmation time (pivot + 2), so recover the
+        // actual price-pivot index before linking it to an AO leg.
+        val wave4Pivots = fractalPivots(candidate.candles)
+        val proposedAnchors = when {
+            wave.position == 4 && wave4Pivots.size >= 5 -> wave4Pivots.takeLast(5)
+            wave.position == 5 && wave4Pivots.size >= 6 -> wave4Pivots.takeLast(6)
+            else -> emptyList()
+        }
         val lastH1 = candidate.candles.lastIndex
+        val aoHistory = if (proposedAnchors.isNotEmpty()) {
+            (0..lastH1).map { ao(candidate.candles, it) }
+        } else emptyList()
+        val wave4Evidence = if (proposedAnchors.size >= 5 && wave.direction in setOf("UP", "DOWN")) {
+            val start = proposedAnchors[0].index - 2
+            val w3Start = proposedAnchors[2].index - 2
+            val w3End = proposedAnchors[3].index - 2
+            val sample = if (start >= 0 && w3Start >= 0 && w3End >= w3Start &&
+                w3End < aoHistory.size) (w3Start..w3End).filter { aoHistory[it].isFinite() }
+                else emptyList()
+            val w3Extreme = if (wave.direction == "DOWN") {
+                sample.minByOrNull { aoHistory[it] }
+            } else sample.maxByOrNull { aoHistory[it] }
+            if (w3Extreme == null) null else evaluateWilliamsWave4Zero(
+                closedAo = aoHistory, cycleStart = start,
+                w3OscillatorExtreme = w3Extreme, observedEnd = lastH1,
+                direction = wave.direction
+            )
+        } else null
+        val wave4Trace = JSONObject()
+            .put("status", wave4Evidence?.status?.name ?: "UNASSESSED")
+            .put("examined_bars", wave4Evidence?.examinedBars ?: JSONObject.NULL)
+            .put("closest_abs_ao", wave4Evidence?.closestAbsAo ?: JSONObject.NULL)
+            .put("w3_abs_ao", wave4Evidence?.w3AbsAo ?: JSONObject.NULL)
+            .put("zero_cross_bar_index", wave4Evidence?.crossedBarIndex ?: JSONObject.NULL)
+            .put("source", "TRADING_CHAOS_CH7_5_34_OSCILLATOR")
+            .put("wave_labels", "PROVISIONAL")
+            .put("wave4_completion_confirmed", false)
+            .put("can_place_orders", false)
         val h1Ao = ao(candidate.candles, lastH1)
         val h1Ac = if (lastH1 >= 4) nativeAcFromClosedAo(
             (lastH1 - 4..lastH1).map { ao(candidate.candles, it) }
@@ -7490,6 +7529,7 @@ private class NativeEngine(
 
         return JSONObject()
             .put("directional_context_native", directionTrace)
+            .put("wave4_zero_line_diagnostic", wave4Trace)
             .put("symbol", candidate.symbol)
             .put("score", candidate.score)
             .put("signal", candidate.signal)
