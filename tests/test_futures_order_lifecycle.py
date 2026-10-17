@@ -18,6 +18,9 @@ class DemoExchangeModel:
         self.calls = []
         self.cancel_fill = False
         self.protection_failure = False
+        self.leverage = 2
+        self.bad_leverage_confirmation = False
+        self.bad_brackets = False
 
     def request(self, method, path, params=None, signed=False):
         p = params or {}
@@ -28,7 +31,19 @@ class DemoExchangeModel:
                 {"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001", "maxQty": "1000"},
                 {"filterType": "MARKET_LOT_SIZE", "stepSize": "0.001", "minQty": "0.001", "maxQty": "1000"},
             ]}]}
-        if path.endswith("marginType") or path.endswith("leverage"):
+        if path.endswith("leverageBracket"):
+            return {} if self.bad_brackets else {"symbol": "BTCUSDT", "brackets": [
+                {"notionalFloor": 0, "notionalCap": 1000000, "initialLeverage": 125, "maintMarginRatio": 0.005}
+            ]}
+        if path.endswith("symbolConfig"):
+            return [{"symbol": "BTCUSDT", "marginType": "ISOLATED", "leverage": self.leverage,
+                     "maxNotionalValue": "1000000"}]
+        if path.endswith("leverage"):
+            self.leverage = p["leverage"]
+            return {"code": 200} if self.bad_leverage_confirmation else {
+                "symbol": p["symbol"], "leverage": self.leverage, "maxNotionalValue": "1000000"
+            }
+        if path.endswith("marginType"):
             return {"code": 200}
         if path.endswith("ticker/price"):
             return {"symbol": "BTCUSDT", "price": str(self.price)}
@@ -36,7 +51,8 @@ class DemoExchangeModel:
             return {"canTrade": True, "assets": [], "totalWalletBalance": "10000", "totalUnrealizedProfit": "0", "availableBalance": "10000"}
         if path.endswith("positionRisk"):
             return [{"symbol": "BTCUSDT", "positionAmt": str(self.amount), "entryPrice": str(self.entry_price),
-                     "liquidationPrice": "50" if self.amount > 0 else "200", "positionSide": "BOTH"}]
+                     "liquidationPrice": "50" if self.amount > 0 else "200", "positionSide": "BOTH",
+                     "leverage": str(self.leverage), "marginType": "isolated"}]
         if path.endswith("openOrders") or path.endswith("allOrders"):
             return list(self.orders.values()) if path.endswith("allOrders") else []
         if path.endswith("openAlgoOrders") or path.endswith("allAlgoOrders"):
@@ -92,12 +108,15 @@ class DemoExchangeModel:
 
 
 @pytest.mark.parametrize("side", ["BUY", "SELL"])
+@pytest.mark.parametrize("leverage", [1, 2, 5, 10])
 @pytest.mark.parametrize("mode", ["fill", "expire_race", "partial_cancel", "protection_failure"])
-def test_pending_entry_fill_protection_trail_and_exact_close(monkeypatch, tmp_path, side, mode):
+def test_pending_entry_fill_protection_trail_and_exact_close(monkeypatch, tmp_path, side, leverage, mode):
     monkeypatch.setenv("WILLIAMS_DB_PATH", str(tmp_path / "lifecycle.sqlite3"))
     monkeypatch.setenv("DRY_RUN", "false")
     monkeypatch.setenv("TESTNET", "true")
     monkeypatch.setenv("BINANCE_MARKET", "futures_usdt")
+    monkeypatch.setenv("FUTURES_LEVERAGE", str(leverage))
+    monkeypatch.setenv("FUTURES_SYMBOL_LEVERAGES", "")
     bot = FuturesWilliamsRuntime("test-key", "test-secret")
     exchange = DemoExchangeModel()
     monkeypatch.setattr(bot.client, "_request", exchange.request)
@@ -110,6 +129,10 @@ def test_pending_entry_fill_protection_trail_and_exact_close(monkeypatch, tmp_pa
     candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
     try:
         armed = bot._arm_entry(candidate)
+        assert exchange.leverage == leverage
+        campaign = bot.engine.load_campaign(armed["campaign_id"])
+        assert campaign.tags["futures_leverage"] == leverage
+        assert campaign.capital_reserved_quote == pytest.approx(armed["quantity"] * armed["trigger_price"] / leverage)
         assert armed["order_id"].startswith("algo:")
         assert len(exchange.algos) == 1 and exchange.amount == 0
         if mode == "expire_race":
@@ -141,6 +164,34 @@ def test_pending_entry_fill_protection_trail_and_exact_close(monkeypatch, tmp_pa
         assert result["state"] == "CLOSED"
         assert exchange.amount == 0 and not bot._pending_entries() and not bot._pending_exits()
         assert all(row["algoStatus"] != "NEW" for row in exchange.algos.values())
+        assert bot.db.campaign_risk_reserved_quote() == 0
+    finally:
+        bot.client.session.close()
+        bot.db.conn.close()
+
+
+@pytest.mark.parametrize("failure", ["confirmation", "brackets", "excessive_leverage"])
+@pytest.mark.parametrize("side", ["BUY", "SELL"])
+def test_leverage_failure_never_sends_an_entry(monkeypatch, tmp_path, failure, side):
+    monkeypatch.setenv("WILLIAMS_DB_PATH", str(tmp_path / "reject.sqlite3"))
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("FUTURES_LEVERAGE", "125" if failure == "excessive_leverage" else "5")
+    monkeypatch.setenv("FUTURES_SYMBOL_LEVERAGES", "")
+    bot = FuturesWilliamsRuntime("test-key", "test-secret", testnet=True)
+    exchange = DemoExchangeModel()
+    exchange.bad_leverage_confirmation = failure == "confirmation"
+    exchange.bad_brackets = failure == "brackets"
+    monkeypatch.setattr(bot.client, "_request", exchange.request)
+    now = int(time.time() * 1000)
+    signal = SignalSpec.new(symbol="BTCUSDT", side=side, signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY,
+        timeframe="1h", signal_bar_time_ms=now - 1000, trigger_price=101 if side == "BUY" else 99,
+        protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000)
+    candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
+    try:
+        with pytest.raises((ValueError, RuntimeError)):
+            bot._arm_entry(candidate)
+        assert not exchange.algos and not exchange.orders and exchange.amount == 0
+        assert not bot._pending_entries()
         assert bot.db.campaign_risk_reserved_quote() == 0
     finally:
         bot.client.session.close()

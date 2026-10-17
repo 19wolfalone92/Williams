@@ -1025,6 +1025,9 @@ private class StandaloneServer(private val context: Context) {
             method == "POST" && path == "/api/v1/config/binance" ->
                 x.configure(JSONObject(body)).toString()
 
+            method == "POST" && path == "/api/v1/config/futures-leverage" ->
+                x.configureFuturesLeverage(JSONObject(body)).toString()
+
             method == "DELETE" && path == "/api/v1/config/binance" ->
                 x.clear().toString()
 
@@ -1096,6 +1099,9 @@ private class NativeEngine(
     // Runtime execution is routed through the local USD-M Futures adapter/coordinator below.
     // Legacy signed transport was removed; account/order mutations use the Futures adapter/coordinator.
     private val futuresExecutionAdapterReady = true
+    @Volatile private var futuresLeverageSettings = prefs.getString("futures_leverage_settings_v1", null)?.let {
+        FuturesLeverageSettings.fromJson(JSONObject(it))
+    } ?: FuturesLeverageSettings()
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
         NativeFuturesCampaignCoordinator(executionStore) {
@@ -2715,9 +2721,10 @@ private class NativeEngine(
         require(stopFraction.isFinite() && stopFraction > 0.0 && effectiveLoss.isFinite()) {
             "Forced-entry structural stop/risk calculation is invalid"
         }
+        val entryLeverage = futuresLeverageSettings.forSymbol(symbol)
         val notional = min(
             parsed.equityUsdt * 0.25,
-            min(parsed.availableUsdt * 2.0 * 0.95, parsed.equityUsdt * riskPct / effectiveLoss)
+            min(parsed.availableUsdt * entryLeverage * 0.95, parsed.equityUsdt * riskPct / effectiveLoss)
         )
         val marketLotEnabled = rules.marketStep.isFinite() && rules.marketStep > 0.0
         val quantityStep = ExecutionMath.commonQuantityStep(rules.step, rules.marketStep)
@@ -2744,6 +2751,7 @@ private class NativeEngine(
             clientId = clientId,
             riskPct = riskPct,
             signalType = "OPERATOR_FORCED_DIRECTION",
+            leverage = entryLeverage,
             signalReason = "Оператор выбрал направление Testnet; структурный H1 STOP"
         )
         val result = withCampaignMutation(
@@ -5388,7 +5396,8 @@ private class NativeEngine(
         if (!stopFraction.isFinite() || stopFraction <= 0.0) return
         val effectiveLoss = stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct
         val maxRiskQuote = equity * riskPct
-        val notional = min(equity * 0.25, min(available * 2.0 * 0.95, maxRiskQuote / effectiveLoss))
+        val entryLeverage = futuresLeverageSettings.forSymbol(symbol)
+        val notional = min(equity * 0.25, min(available * entryLeverage * 0.95, maxRiskQuote / effectiveLoss))
         // STOP_MARKET entries become market executions when triggered. Size them
         // to the common exact increment of LOT_SIZE and MARKET_LOT_SIZE; using
         // LOT_SIZE alone can leave a perfectly valid pending order that Binance
@@ -5416,6 +5425,7 @@ private class NativeEngine(
             clientId = clientId,
             riskPct = riskPct,
             signalType = signal.type,
+            leverage = entryLeverage,
             signalBarTimeMs = signal.signalBarTimeMs,
             signalReason = signal.reason
         )
@@ -8213,6 +8223,11 @@ private class NativeEngine(
             .put("interval", interval)
             .put("testnet", true)
             .put("running", running)
+            .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
+            .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
+            .put("futures_leverage_settings", futuresLeverageSettings.toJson())
+            .put("futures_margin_type", "ISOLATED")
+            .put("futures_force_one_way", true)
             .put("paused", paused)
             .put("recovered", !reconcileRequired && (futuresRuntimeStatus.optString("state") in setOf("READY", "OPEN_PROTECTED", "ENTRY_PENDING")))
             .put("state", effectiveDisplayState)
@@ -9086,8 +9101,25 @@ private class NativeEngine(
             .put("before", before).put("after", after)
     }
 
+    @Synchronized
+    fun configureFuturesLeverage(payload: JSONObject): JSONObject {
+        val next = FuturesLeverageSettings.fromJson(payload)
+        check(prefs.edit().putString("futures_leverage_settings_v1", next.toJson().toString()).commit()) {
+            "Не удалось сохранить плечо"
+        }
+        futuresLeverageSettings = next
+        runCatching { auditStore.recordCockpitEvent("LEVERAGE_SETTINGS", detail = next.toJson().toString()) }
+        return JSONObject().put("saved", true).put("settings", next.toJson())
+            .put("message", "Плечо сохранено для следующих входов; Binance подтвердит его перед ордером.")
+    }
+
     fun settings(): JSONObject =
         JSONObject()
+            .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
+            .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
+            .put("futures_leverage_settings", futuresLeverageSettings.toJson())
+            .put("futures_margin_type", "ISOLATED")
+            .put("futures_force_one_way", true)
             .put("version", BuildConfig.VERSION_NAME)
             .put("campaign_engine", campaignEngineEnabled)
             .put("campaign_execution_timeframe", campaignExecutionTimeframe)

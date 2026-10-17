@@ -16,6 +16,62 @@ import org.junit.Test
 
 class BinanceUsdMFuturesTestnetAdapterContractTest {
     @Test
+    fun selectedLeverageIsSignedAndConfirmedForEveryApprovedContract() {
+        val captured = mutableListOf<Request>()
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            captured += request
+            val body = if (request.url.encodedPath == "/fapi/v1/time") {
+                """{"serverTime":${System.currentTimeMillis()}}"""
+            } else {
+                val p = formParams(request)
+                JSONObject().put("symbol", p["symbol"]).put("leverage", p["leverage"]!!.toInt())
+                    .put("maxNotionalValue", "1000000").toString()
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val adapter = BinanceUsdMFuturesTestnetAdapter("key", "secret", http)
+        BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.withIndex().forEach { (index, symbol) ->
+            val leverage = index + 1
+            assertEquals(leverage, adapter.setLeverage(symbol, leverage).getInt("leverage"))
+        }
+        val posts = captured.filter { it.method == "POST" }
+        assertEquals(10, posts.size)
+        posts.forEach {
+            assertEquals("demo-fapi.binance.com", it.url.host)
+            assertEquals("/fapi/v1/leverage", it.url.encodedPath)
+            assertTrue(formParams(it).containsKey("signature"))
+            assertTrue(formParams(it).containsKey("timestamp"))
+        }
+    }
+
+    @Test
+    fun wrongOrMissingLeverageConfirmationCannotAuthorizeAnOrder() {
+        listOf("{}", """{"symbol":"ETHUSDT","leverage":5,"maxNotionalValue":"1000000"}""",
+            """{"symbol":"BTCUSDT","leverage":2,"maxNotionalValue":"1000000"}""",
+            """{"symbol":"BTCUSDT","leverage":5,"maxNotionalValue":"NaN"}"""
+        ).forEach { confirmation ->
+            var orderCalls = 0
+            val http = OkHttpClient.Builder().addInterceptor { chain ->
+                val request = chain.request()
+                if (request.url.encodedPath == "/fapi/v1/algoOrder") orderCalls++
+                val body = if (request.url.encodedPath == "/fapi/v1/time")
+                    """{"serverTime":${System.currentTimeMillis()}}""" else confirmation
+                Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                    .body(body.toResponseBody("application/json".toMediaType())).build()
+            }.build()
+            val adapter = BinanceUsdMFuturesTestnetAdapter("key", "secret", http)
+            try {
+                adapter.setLeverage("BTCUSDT", 5)
+                adapter.placeConditionalEntry("BTCUSDT", "LONG", "STOP", "1", "101", "TEST")
+                throw AssertionError("unconfirmed leverage must fail")
+            } catch (_: IllegalStateException) { }
+            assertEquals(0, orderCalls)
+        }
+    }
+
+    @Test
     fun timestampTextInAnUnrelatedErrorNeverAuthorizesMutationReplay() {
         var posts = 0
         val http = OkHttpClient.Builder().addInterceptor { chain ->

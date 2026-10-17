@@ -277,6 +277,7 @@ data class Status(
     val allowLong: Boolean = false,
     val allowShort: Boolean = false,
     val futuresLeverage: Int = 0,
+    val futuresLeverageSettingsJson: String = "",
     val futuresMarginType: String = "UNKNOWN",
     val futuresForceOneWay: Boolean = false,
     val scanDurationMs: Long = 0L,
@@ -608,6 +609,21 @@ fun WilliamsApp(context: Context) {
             }
             chartLoading = false
             delay(if (historicalTrade == null) 2_000L else 30_000L)
+        }
+    }
+
+    fun saveFuturesLeverage(payload: JSONObject) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val response = JSONObject(api.post("/api/v1/config/futures-leverage", payload.toString()))
+                check(response.optBoolean("saved", false)) {
+                    response.optString("error", "Не удалось сохранить плечо")
+                }
+                withContext(Dispatchers.Main) { message = response.optString("message") }
+                loadAll(false)
+            } catch (failure: Exception) {
+                withContext(Dispatchers.Main) { message = failure.message ?: "Ошибка настройки плеча" }
+            }
         }
     }
 
@@ -1182,6 +1198,7 @@ fun WilliamsApp(context: Context) {
                         Text("Параметры ограничены торговым движком. Изменение экрана графика их не меняет.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
                     }
                     TestnetForceTradingCard(status, ::setTestnetForceMode, ::submitForcedTestnetEntry)
+                    FuturesLeverageSettingsCard(status, ::saveFuturesLeverage)
                     if (status.executionKillLatched) OutlinedButton(onClick = { criticalSetting = "reset" }, modifier = Modifier.fillMaxWidth()) { Text("Сбросить аварийную блокировку при пустом счёте") }
                 }
             )
@@ -1195,6 +1212,7 @@ fun WilliamsApp(context: Context) {
                 onApiSecret = { apiSecret = it },
                 onSave = { criticalSetting = "save" },
                 onClear = { criticalSetting = "clear" },
+                onSaveLeverage = ::saveFuturesLeverage,
                 backupPassword = backupPassword,
                 onBackupPassword = { backupPassword = it },
                 onExportBackup = ::exportBackup,
@@ -2983,6 +3001,7 @@ private fun SettingsScreen(
     onApiSecret: (String) -> Unit,
     onSave: () -> Unit,
     onClear: () -> Unit,
+    onSaveLeverage: (JSONObject) -> Unit,
     backupPassword: String,
     onBackupPassword: (String) -> Unit,
     onExportBackup: () -> Unit,
@@ -3016,6 +3035,8 @@ private fun SettingsScreen(
         item {
             Text("Настройки", style = MaterialTheme.typography.headlineSmall)
         }
+
+        item { FuturesLeverageSettingsCard(status, onSaveLeverage) }
 
         item {
             Card(
@@ -4075,6 +4096,8 @@ internal fun parseStatus(json: JSONObject): Status {
             json.optBoolean("allow_short", false),
         futuresLeverage =
             json.optInt("futures_leverage", 0),
+        futuresLeverageSettingsJson =
+            json.optJSONObject("futures_leverage_settings")?.toString().orEmpty(),
         futuresMarginType =
             json.optString("futures_margin_type", "UNKNOWN"),
         futuresForceOneWay =

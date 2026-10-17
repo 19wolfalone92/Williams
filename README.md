@@ -161,6 +161,25 @@ Risk is bounded at multiple levels:
 
 The default environment is `DRY_RUN=true`, `TESTNET=true`, `ALLOW_LIVE=false`, `FUTURES_LEVERAGE=2`, `FUTURES_MARGIN_TYPE=ISOLATED` and `FUTURES_FORCE_ONE_WAY=true`.
 
+### Variable Futures leverage
+
+Android: **Ещё → Настройки → Плечо Futures** (also available under Ещё).
+Set a default and optionally override each of the ten contracts; an empty field inherits the default.
+Python: `FUTURES_LEVERAGE=5` and optional `FUTURES_SYMBOL_LEVERAGES=BTCUSDT:3,ETHUSDT:10`.
+Settings accept integers from 1 to the application's ceiling of 125; malformed values are rejected, never silently clamped.
+The same setting applies to LONG and SHORT for that symbol in One-way mode.
+
+Each entry checks fresh, account-specific `/fapi/v1/leverageBracket` data, available margin,
+and a conservative isolated-margin buffer covering the structural stop, costs and maintenance margin.
+The signed `/fapi/v1/leverage` response must confirm the exact symbol, leverage and notional ceiling before an order is sent.
+Excessive leverage is rejected with an explicit blocker; the bot does not silently lower it or move the stop.
+Risk sizing and the existing risk caps remain in force. Settings affect subsequently prepared entries;
+existing positions are not re-leveraged, and Python add-ons require the existing leverage to match.
+Unknown configuration outcomes are reconciled without replaying an entry.
+
+Binance references: [Change Initial Leverage](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Change-Initial-Leverage)
+and [Notional and Leverage Brackets](https://developers.binance.com/docs/derivatives/usds-margined-futures/account/rest-api/Notional-and-Leverage-Brackets).
+
 ### Protection and exit
 
 The campaign has no fixed strategic take-profit.

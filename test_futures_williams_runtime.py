@@ -136,6 +136,7 @@ def test_futures_risk_sizing_is_independent_of_leverage(monkeypatch):
         "FUTURES_LEVERAGE": "2",
     })
     runtime._equity = lambda: 10000.0
+    runtime._available_margin = lambda: 10000.0
     runtime._min_notional = lambda symbol: 0.0
     runtime._normalize_qty = lambda symbol, qty: qty
     runtime._filters = lambda symbol: {
@@ -1249,7 +1250,7 @@ def test_futures_config_enforces_margin_mode_leverage_and_daily_loss_caps():
         "FUTURES_FORCE_ONE_WAY": "true",
         "MAX_DAILY_LOSS_PCT": "0.20",
     })
-    assert config.futures_leverage == 2
+    assert config.futures_leverage == 20
     assert config.futures_margin_type == "ISOLATED"
     assert config.futures_force_one_way is True
     assert config.max_daily_loss_pct == 0.03

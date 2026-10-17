@@ -412,12 +412,24 @@ class BinanceFuturesClient:
             raise
 
     def set_leverage(self, symbol, leverage):
+        from futures_leverage import parse_leverage
         return self._request(
             "POST",
             "/fapi/v1/leverage",
-            {"symbol": symbol, "leverage": int(leverage)},
+            {"symbol": symbol, "leverage": parse_leverage(leverage)},
             signed=True,
         )
+
+    def leverage_brackets(self, symbol):
+        return self._request("GET", "/fapi/v1/leverageBracket", {"symbol": symbol}, signed=True)
+
+    def symbol_configuration(self, symbol):
+        payload = self._request("GET", "/fapi/v1/symbolConfig", {"symbol": symbol}, signed=True)
+        rows = payload if isinstance(payload, list) else [payload]
+        matches = [row for row in rows if isinstance(row, dict) and row.get("symbol") == symbol]
+        if len(matches) != 1:
+            raise BinanceAPIError("Missing or ambiguous Futures symbol configuration", payload=payload)
+        return matches[0]
 
     def api_restrictions(self):
         # Testnet credentials must never be sent to the live Wallet API host.

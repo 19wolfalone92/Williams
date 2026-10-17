@@ -582,6 +582,7 @@ class FuturesWilliamsRuntime:
         self.liquidity_preselect = int(os.getenv("FUTURES_SCAN_TOP_N", "40"))
         self._locks: set[str] = set()
         self._initialised_symbols: set[str] = set()
+        self._leverage_confirmations: dict[str, dict] = {}
         self.equity_breaker = EquityCircuitBreaker(self.max_daily_loss_pct)
 
     # Compatibility API used by the existing backend/cockpit.
@@ -785,11 +786,58 @@ class FuturesWilliamsRuntime:
 
     def _ensure_symbol_config(self, symbol):
         symbol = str(symbol).upper()
-        if symbol in self._initialised_symbols:
+        leverage = self.config.leverage_for(symbol)
+        position = self._position(symbol)
+        amount = float(position.get("positionAmt", "nan"))
+        if not math.isfinite(amount):
+            raise RuntimeError("Invalid position amount before leverage configuration")
+        if amount != 0:
+            # Do not change the margin policy of an existing campaign after a
+            # restart/config edit. Exits and protection remain independent.
+            # V3 positionRisk does not supply leverage/marginType. Read the
+            # current signed symbolConfig instead of assuming V2 fields exist.
+            configuration = self.client.symbol_configuration(symbol)
+            if (str(configuration.get("marginType", "")).upper() != "ISOLATED"
+                    or str(configuration.get("leverage", "")) != str(leverage)):
+                raise RuntimeError("FUTURES_LEVERAGE_ACTIVE_POSITION_MISMATCH: reconcile before adding exposure")
+            self._leverage_confirmations[symbol] = configuration
             return
         self.client.set_margin_type(symbol, self.config.futures_margin_type)
-        self.client.set_leverage(symbol, self.config.futures_leverage)
+        response = self.client.set_leverage(symbol, leverage)
+        if (not isinstance(response, dict) or response.get("symbol") != symbol
+                or type(response.get("leverage")) is not int or response.get("leverage") != leverage
+                or not math.isfinite(float(response.get("maxNotionalValue", "nan")))
+                or float(response["maxNotionalValue"]) <= 0):
+            raise RuntimeError("Binance did not confirm requested Futures leverage")
+        configuration = self.client.symbol_configuration(symbol)
+        if (str(configuration.get("marginType", "")).upper() != "ISOLATED"
+                or str(configuration.get("leverage", "")) != str(leverage)):
+            raise RuntimeError("Binance symbol configuration does not match requested isolated leverage")
+        self._leverage_confirmations[symbol] = configuration
         self._initialised_symbols.add(symbol)
+
+    def _validate_entry_leverage(self, symbol, qty, entry, stop):
+        from futures_leverage import validate_isolated_leverage
+        position = self._position(symbol)
+        amount = float(position.get("positionAmt", "nan"))
+        position_entry = float(position.get("entryPrice", 0) or 0)
+        if not math.isfinite(amount) or not math.isfinite(position_entry):
+            raise RuntimeError("Invalid position before leverage risk assessment")
+        # Add-ons must fit the combined exposure's tier, not just the new order.
+        total_qty = qty + abs(amount)
+        average_entry = (qty * entry + abs(amount) * position_entry) / total_qty
+        confirmed = self._leverage_confirmations.get(symbol, {})
+        maximum = float(confirmed.get("maxNotionalValue", "nan"))
+        if not math.isfinite(maximum) or maximum <= total_qty * max(average_entry, entry, stop):
+            raise RuntimeError("FUTURES_LEVERAGE_NOTIONAL_CAP: confirmed symbol limit is insufficient or unknown")
+        costs = 2.0 * float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")) + float(
+            os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")
+        )
+        validate_isolated_leverage(
+            self.client.leverage_brackets(symbol), symbol, self.config.leverage_for(symbol),
+            total_qty * average_entry, average_entry, stop, costs,
+            float(os.getenv("FUTURES_LIQUIDATION_BUFFER_PCT", "0.01")),
+        )
 
     def _preflight(self):
         report = {"ready": False, "environment": "TESTNET" if self.client.testnet else "LIVE", "checks": {}, "details": {}}
@@ -914,6 +962,7 @@ class FuturesWilliamsRuntime:
             report["checks"]["exchange_info"] = "PASS"
             report["checks"]["market_mode"] = "USD_M_FUTURES"
             report["details"]["leverage"] = self.config.futures_leverage
+            report["details"]["symbol_leverages"] = {s: self.config.leverage_for(s) for s in self.config.symbols}
             report["details"]["margin_type"] = self.config.futures_margin_type
             report["details"]["one_way_mode_required"] = self.config.futures_force_one_way
             report["details"]["allow_long"] = self.config.allow_long
@@ -1160,19 +1209,23 @@ class FuturesWilliamsRuntime:
             raise RuntimeError("invalid fee/slippage risk assumptions")
         fee_buffer = 2.0 * fee_side
         effective_loss_fraction = distance_fraction + fee_buffer + slippage_buffer
-        leverage = self.config.futures_leverage
+        leverage = self.config.leverage_for(symbol)
         max_margin_fraction = max(
             0.01,
             min(0.90, float(os.getenv("FUTURES_MAX_MARGIN_FRACTION", "0.25"))),
         )
-        max_notional = equity * max_margin_fraction * leverage
+        available_margin = self._available_margin()
+        if not math.isfinite(available_margin) or available_margin <= 0:
+            raise RuntimeError("Fresh available Futures margin is invalid or exhausted")
+        max_notional = min(equity * max_margin_fraction, available_margin * 0.95) * leverage
         notional = min(risk_quote / max(effective_loss_fraction, 1e-12), max_notional)
         qty = self._normalize_qty(symbol, notional / trigger)
         if not math.isfinite(qty) or qty <= 0:
             raise RuntimeError("sized quantity below Futures minimum")
         if self._min_notional(symbol) and qty * trigger < self._min_notional(symbol):
             raise RuntimeError("sized notional below Futures minimum")
-        return qty, risk_quote, notional
+        # Rounding down must also reduce the reported margin reservation.
+        return qty, risk_quote, qty * trigger
 
     def _arm_entry(self, candidate: FuturesCandidate):
         if self.dry_run:
@@ -1227,6 +1280,7 @@ class FuturesWilliamsRuntime:
         qty, risk_quote, notional = self._size_from_risk(
             symbol, trigger, stop, initial_risk_pct
         )
+        self._validate_entry_leverage(symbol, qty, trigger, stop)
         campaign = self.engine.create_campaign(signal, initial_risk_pct=initial_risk_pct)
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
@@ -1235,7 +1289,8 @@ class FuturesWilliamsRuntime:
         campaign.tags["directional_context_at_entry"] = dict(candidate.directional_context)
         campaign.tags["scanner_score_at_entry"] = float(candidate.score)
         campaign.pending_risk_quote = risk_quote
-        campaign.capital_reserved_quote = notional / self.config.futures_leverage
+        campaign.capital_reserved_quote = notional / self.config.leverage_for(symbol)
+        campaign.tags["futures_leverage"] = self.config.leverage_for(symbol)
         campaign.tags["pending_order_quantity"] = qty
         campaign.tags["pending_order_trigger"] = trigger
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
@@ -1363,10 +1418,11 @@ class FuturesWilliamsRuntime:
             stop,
             add_risk_pct,
         )
+        self._validate_entry_leverage(signal.symbol, qty, trigger, stop)
         campaign.tags["pending_order_quantity"] = qty
         campaign.tags["pending_order_trigger"] = trigger
         campaign.pending_risk_quote = risk_quote
-        campaign.capital_reserved_quote = notional / self.config.futures_leverage
+        campaign.capital_reserved_quote = notional / self.config.leverage_for(signal.symbol)
         campaign.tags["pending_order_client_id"] = self._client_id("ADD")
         self.db.save_campaign(campaign)
         cid = campaign.tags["pending_order_client_id"]

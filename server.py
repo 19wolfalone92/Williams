@@ -1083,6 +1083,7 @@ def status():
         ).isoformat(),
         'market_mode': 'USD_M_FUTURES',
         'futures_leverage': t.config.futures_leverage,
+        'futures_symbol_leverages': {symbol: t.config.leverage_for(symbol) for symbol in t.config.symbols},
         'futures_margin_type': t.config.futures_margin_type,
         'futures_force_one_way': t.config.futures_force_one_way,
         'allow_long': t.config.allow_long,

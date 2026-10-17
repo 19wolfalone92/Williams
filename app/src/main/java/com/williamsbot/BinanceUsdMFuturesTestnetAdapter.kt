@@ -146,19 +146,47 @@ internal class BinanceUsdMFuturesTestnetAdapter(
 
     fun setLeverage(symbol: String, leverage: Int): JSONObject {
         requireSymbol(symbol)
-        require(leverage in 1..2) { "Futures leverage is capped at 2x by this runtime" }
-        return request("POST", "/fapi/v1/leverage", mapOf("symbol" to symbol, "leverage" to leverage.toString()), signed = true)
+        parseFuturesLeverage(leverage)
+        val result = request("POST", "/fapi/v1/leverage", mapOf("symbol" to symbol, "leverage" to leverage.toString()), signed = true)
+        val maximum = result.optString("maxNotionalValue").toDoubleOrNull()
+        check(result.optString("symbol") == symbol && result.opt("leverage")?.toString() == leverage.toString() &&
+            maximum != null && maximum.isFinite() && maximum > 0.0) {
+            "Binance did not confirm requested Futures leverage"
+        }
+        return result
+    }
+
+    fun leverageBrackets(symbol: String): Any {
+        requireSymbol(symbol)
+        val body = requestRaw("GET", "/fapi/v1/leverageBracket", mapOf("symbol" to symbol), signed = true)
+        return if (body.trimStart().startsWith("[")) JSONArray(body) else JSONObject(body)
+    }
+
+    fun symbolConfiguration(symbol: String): JSONObject {
+        requireSymbol(symbol)
+        val body = requestRaw("GET", "/fapi/v1/symbolConfig", mapOf("symbol" to symbol), signed = true)
+        val rows = if (body.trimStart().startsWith("[")) JSONArray(body) else JSONArray().put(JSONObject(body))
+        val matches = (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+            .filter { it.optString("symbol") == symbol }
+        check(matches.size == 1) { "Missing or ambiguous Futures symbol configuration" }
+        return matches.single()
     }
 
     /** Idempotently enforce this bot's account policy before entry. */
-    fun ensureIsolatedTwoX(symbol: String) {
+    fun ensureIsolatedLeverage(symbol: String, leverage: Int): JSONObject {
         try {
             setIsolatedMargin(symbol)
         } catch (failure: IOException) {
             // Binance returns -4046 when the requested margin type is already active.
             if (failure !is FuturesHttpException || failure.exchangeCode != -4046) throw failure
         }
-        setLeverage(symbol, 2)
+        setLeverage(symbol, leverage)
+        val confirmed = symbolConfiguration(symbol)
+        check(confirmed.optString("marginType").equals("ISOLATED", ignoreCase = true) &&
+            confirmed.opt("leverage")?.toString() == leverage.toString()) {
+            "Binance symbol configuration does not match requested isolated leverage"
+        }
+        return confirmed
     }
 
     /**
