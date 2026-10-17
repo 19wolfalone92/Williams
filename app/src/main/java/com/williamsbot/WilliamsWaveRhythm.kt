@@ -78,6 +78,21 @@ internal fun evaluateWilliamsWave4Zero(
     return Wave4ZeroEvidence(scale, bars, nearest, abs(w3), cross)
 }
 
+/**
+ * A junior W3 apparently coinciding with a senior W5 is *not* an early
+ * senior W3. The present runtime inference is provisional (TF labels only),
+ * so it must never grant a positive quality bonus or reduce exhaustion risk.
+ * This is an explicitly engineered conservative policy, not a Williams entry.
+ */
+internal fun provisionalWave3InsideWave5Caution(
+    nestedCandidate: Boolean,
+    currentExhaustion: Double
+): Double {
+    if (!currentExhaustion.isFinite()) return 100.0
+    return if (nestedCandidate) maxOf(currentExhaustion, 65.0)
+    else currentExhaustion
+}
+
 internal data class WilliamsWaveScaleChoice(
     val timeframe: String,
     val expectedBars: Int,
