@@ -46,7 +46,8 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         .readTimeout(15, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
         .build(),
-    private val rateGuard: BinanceRateGuard? = null
+    private val rateGuard: BinanceRateGuard? = null,
+    private val beforeExposureMutation: () -> Unit = {}
 ) {
     // Application-level retry rules must also govern OkHttp's transparent retries
     // and redirects. A replayed POST can create duplicate exposure after a lost reply.
@@ -290,6 +291,22 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         requireSymbol(symbol)
         require(clientOrderId.isNotBlank())
         return request("GET", "/fapi/v1/order", mapOf("symbol" to symbol, "origClientOrderId" to clientOrderId), signed = true)
+    }
+
+    fun orderById(symbol: String, orderId: String): JSONObject {
+        requireSymbol(symbol)
+        require(orderId.toLongOrNull()?.let { it > 0L } == true)
+        return request("GET", "/fapi/v1/order", mapOf("symbol" to symbol, "orderId" to orderId), signed = true).also {
+            check(it.optString("symbol") == symbol && it.optString("orderId") == orderId) {
+                "Futures child order identity mismatch"
+            }
+        }
+    }
+
+    fun cancelOrderById(symbol: String, orderId: String): JSONObject {
+        requireSymbol(symbol)
+        require(orderId.toLongOrNull()?.let { it > 0L } == true)
+        return request("DELETE", "/fapi/v1/order", mapOf("symbol" to symbol, "orderId" to orderId), signed = true)
     }
 
     fun openOrders(symbol: String): JSONArray {
@@ -637,6 +654,10 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             "POST" -> builder.post(body!!)
             "DELETE" -> builder.delete(body)
             else -> throw IllegalArgumentException("Unsupported HTTP method")
+        }
+        if (method == "POST" && path in setOf("/fapi/v1/order", "/fapi/v1/algoOrder") &&
+            params["reduceOnly"] != "true" && params["closePosition"] != "true") {
+            beforeExposureMutation()
         }
         http.newCall(builder.build()).execute().use { response ->
             rateGuard?.observe(response.headers, response.code, isOrder = orderMutation)

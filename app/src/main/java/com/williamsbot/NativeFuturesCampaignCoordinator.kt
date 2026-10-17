@@ -861,6 +861,42 @@ internal class NativeFuturesCampaignCoordinator(
                     addOwner(activeProtectionClientIdsBySymbol, symbol, item.optString("previous_protection_client_id"))
                 }
             }
+            // A triggered conditional's matching-engine child has its own client id.
+            // Bind it through the signed parent actualOrderId, never through a prefix.
+            val entryExecutions = mutableMapOf<String, JSONObject>()
+            for (i in 0 until persisted.length()) {
+                val owner = persisted.optJSONObject(i) ?: continue
+                val symbol = owner.optString("symbol")
+                if (owner.optString("intent_role", "ENTRY") != "ENTRY" ||
+                    campaignLifecycleStatus(owner) in TERMINAL_CAMPAIGN_STATUSES ||
+                    !owner.optBoolean("strategy_ownership_verified", false)) continue
+                val cid = owner.optString("client_id")
+                val execution = if (owner.optString("kind") == EntryKind.LIMIT.name) {
+                    standardOrderOrNull(adapter, symbol, cid)
+                } else {
+                    val parent = conditionalOrderOrNull(adapter, symbol, cid)
+                    val actualId = parent?.optString("actualOrderId").orEmpty()
+                    if (actualId.isNotBlank() && actualId != "0") {
+                        check(parent != null && parent.optString("symbol") == symbol && parent.optString("clientAlgoId") == cid) {
+                            "Conditional entry parent identity mismatch"
+                        }
+                        adapter.orderById(symbol, actualId)
+                    } else null
+                }
+                if (execution != null) {
+                    val expectedSide = if (owner.optString("direction") == "LONG") "BUY" else "SELL"
+                    check(execution.optString("symbol") == symbol && execution.optString("side") == expectedSide &&
+                        execution.optString("positionSide", "BOTH") == "BOTH" && execution.optString("clientOrderId").isNotBlank()) {
+                        "Entry matching-engine order identity/direction mismatch"
+                    }
+                    val actualId = execution.optString("orderId")
+                    check(owner.optString("actual_entry_order_id").let { it.isBlank() || it == actualId }) {
+                        "Entry matching-engine order id changed"
+                    }
+                    owner.put("actual_entry_order_id", actualId)
+                    entryExecutions[cid] = execution
+                }
+            }
             // A manual or orphaned order can create exposure without any local intent.
             // Block startup if any account-wide open order cannot be tied to this bot's
             // durable intent journal; never silently adopt or duplicate it.
@@ -871,7 +907,9 @@ internal class NativeFuturesCampaignCoordinator(
                 val symbol = order.optString("symbol").uppercase(Locale.US)
                 val clientId = order.optString("clientOrderId")
                 if (symbol !in allowedSymbols ||
-                    (!isOwnedClientOrderForSymbol(symbol, clientId, activeEntryClientIdsBySymbol) &&
+                    (!entryExecutions.values.any { it.optString("symbol") == symbol &&
+                        it.optString("orderId") == order.optString("orderId") && it.optString("clientOrderId") == clientId } &&
+                        !isOwnedClientOrderForSymbol(symbol, clientId, activeEntryClientIdsBySymbol) &&
                         !isOwnedClientOrderForSymbol(symbol, clientId, activeExitClientIdsBySymbol))
                 ) {
                     throw IllegalStateException(
@@ -937,6 +975,13 @@ internal class NativeFuturesCampaignCoordinator(
                             )
                         }
                     } else {
+                        check(order.optString("symbol") == symbol && order.optString("clientOrderId") == clientId) {
+                            "Exit exchange order identity mismatch"
+                        }
+                        val executed = order.optString("executedQty").toBigDecimalOrNull()
+                        check(executed != null && executed.signum() >= 0 &&
+                            executed <= intent.getString("quantity").toBigDecimal()) { "Exit execution quantity is invalid" }
+                        intent.put("executed_qty", executed.toPlainString())
                         val exitStatus = order.optString("status").uppercase(Locale.US)
                         if (exitStatus == "FILLED") {
                             if (position == null) {
@@ -998,7 +1043,8 @@ internal class NativeFuturesCampaignCoordinator(
                         allOpenOrders.optJSONObject(j)
                     }.firstOrNull {
                         it.optString("symbol").equals(symbol, true) &&
-                            it.optString("clientOrderId") == clientId
+                            (it.optString("clientOrderId") == clientId ||
+                                it.optString("orderId") == entryExecutions[clientId]?.optString("orderId"))
                     }
                     val matchingOpenAlgo = (0 until allOpenAlgoOrders.length()).mapNotNull { j ->
                         allOpenAlgoOrders.optJSONObject(j)
@@ -1017,9 +1063,12 @@ internal class NativeFuturesCampaignCoordinator(
                                     intent.put("order_status", "CANCEL_SUBMISSION_UNKNOWN")
                                         .put("cancel_remainder_requested_at_ms", System.currentTimeMillis())
                                     saveIntents(persisted)
-                                    adapter.cancelOrder(symbol, clientId)
+                                    if (matchingOpenOrder.optString("clientOrderId") == clientId) adapter.cancelOrder(symbol, clientId)
+                                    else adapter.cancelOrderById(symbol, matchingOpenOrder.getString("orderId"))
                                 }
-                                val confirmed = adapter.order(symbol, clientId)
+                                val confirmed = if (matchingOpenOrder.optString("clientOrderId") == clientId) adapter.order(symbol, clientId)
+                                    else adapter.orderById(symbol, matchingOpenOrder.getString("orderId"))
+                                entryExecutions[clientId] = confirmed
                                 val status = confirmed.optString("status").uppercase(Locale.US)
                                 if (status !in ENTRY_ORDER_TERMINAL_STATUSES) {
                                     throw IllegalStateException(
@@ -1198,6 +1247,35 @@ internal class NativeFuturesCampaignCoordinator(
                                 clientId.startsWith("W2F_"))
                     }
                 var liveMark: Double? = null
+                if (matchingIntent?.optBoolean("strategy_ownership_verified", false) == true) {
+                    val verifiedOwner = checkNotNull(matchingIntent)
+                    val fill = entryExecutions[verifiedOwner.optString("client_id")]
+                        ?: throw IllegalStateException("$symbol live position has no exchange-confirmed campaign fill")
+                    val entered = fill.optString("executedQty").toBigDecimalOrNull()
+                        ?: throw IllegalStateException("$symbol campaign fill quantity is malformed")
+                    val planned = verifiedOwner.optString("quantity").toBigDecimalOrNull()
+                        ?: throw IllegalStateException("$symbol planned entry quantity is malformed")
+                    val exited = (0 until persisted.length()).mapNotNull { persisted.optJSONObject(it) }
+                        .filter { it.optString("intent_role") == "EXIT" &&
+                            it.optString("entry_client_id") == verifiedOwner.optString("client_id") }
+                        .fold(java.math.BigDecimal.ZERO) { total, exit ->
+                            total + (exit.optString("executed_qty", "0").toBigDecimalOrNull()
+                                ?: throw IllegalStateException("$symbol exit fill quantity is malformed"))
+                        }
+                    val liveQuantity = position.getString("positionAmt").toBigDecimal().abs()
+                    check(entered.signum() > 0 && entered <= planned && (entered - exited).compareTo(liveQuantity) == 0) {
+                        "$symbol exchange quantity cannot be attributed to campaign entry/exit fills"
+                    }
+                    val fillPrice = fill.optString("avgPrice").toDoubleOrNull()
+                    val positionPrice = position.optString("entryPrice").toDoubleOrNull()
+                    check(fillPrice != null && fillPrice.isFinite() && fillPrice > 0 &&
+                        positionPrice != null && positionPrice.isFinite() &&
+                        kotlin.math.abs(fillPrice - positionPrice) <= maxOf(1e-8, fillPrice * 1e-8)) {
+                        "$symbol position entry price conflicts with the campaign fill"
+                    }
+                    verifiedOwner.put("confirmed_position_qty", liveQuantity.toPlainString())
+                        .put("actual_entry_price", positionPrice.toString())
+                }
                 if (matchingIntent == null && latestIntentIndex == null) {
                     // The exchange is authoritative, but an orphan position must not
                     // be mistaken for a strategy-generated signal. Reconstruct only a
@@ -2323,6 +2401,38 @@ internal class NativeFuturesCampaignCoordinator(
         }
 
         val adapter = adapterFactory()
+        try {
+            check(intent.optBoolean("strategy_ownership_verified", false)) { "Trailing requires verified campaign ownership" }
+            check(latestEntryIntentIndex(persisted, symbol)?.let { persisted.optJSONObject(it)?.optString("client_id") } == intent.optString("client_id")) {
+                "Trailing cannot use a historical campaign"
+            }
+            adapter.requireOneWayMode()
+            val snapshot = adapter.positions()
+            val live = (0 until snapshot.length()).map { snapshot.getJSONObject(it) }
+                .filter { it.optString("symbol") == symbol && it.getString("positionAmt").toBigDecimal().signum() != 0 }
+            check(live.size == 1) { "Trailing requires exactly one live campaign position" }
+            val amount = live.single().getString("positionAmt").toBigDecimal()
+            val expectedQty = intent.optString("confirmed_position_qty").toBigDecimalOrNull()
+            check(live.single().optString("positionSide", "BOTH") == "BOTH" &&
+                (amount.signum() > 0) == (direction == Direction.LONG) &&
+                expectedQty != null && expectedQty.signum() > 0 && amount.abs().compareTo(expectedQty) == 0) {
+                "Trailing position quantity/direction changed since campaign confirmation"
+            }
+            val confirmedEntry = intent.optString("actual_entry_price").toDoubleOrNull()
+            val liveEntry = live.single().optString("entryPrice").toDoubleOrNull()
+            check(confirmedEntry != null && confirmedEntry.isFinite() && confirmedEntry > 0 &&
+                liveEntry != null && liveEntry.isFinite() &&
+                kotlin.math.abs(confirmedEntry - liveEntry) <= maxOf(1e-8, confirmedEntry * 1e-8)) {
+                "Trailing position entry price changed since campaign confirmation"
+            }
+            check(isProtectiveStopOnCorrectSide(direction.name, adapter.markPrice(symbol).toString(), newStopPrice)) {
+                "Trailing stop is on the wrong side of the current mark"
+            }
+        } catch (failure: Exception) {
+            state = State.RECONCILE_REQUIRED
+            lastBlocker = "$symbol trailing preflight blocked: ${failure.message ?: failure.javaClass.simpleName}"
+            return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
+        }
         val before = adapter.openAlgoOrders(symbol)
         val currentProtectionId = intent.optString("protection_client_id")
         val confirmedOld = findProtectiveStop(before, direction.name, currentProtectionId, oldStop.toPlainString())
@@ -2518,6 +2628,19 @@ internal class NativeFuturesCampaignCoordinator(
                 lastBlocker = "$symbol exit direction/quantity does not exactly match the live Binance position; exit mutation blocked"
                 return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
             }
+            if (reason != "MANUAL_EXIT") {
+                val confirmedQty = managedEntry?.optString("confirmed_position_qty")?.toBigDecimalOrNull()
+                check(confirmedQty != null && confirmedQty.signum() > 0 && confirmedQty.compareTo(liveAmount.abs()) == 0) {
+                    "$symbol automatic exit quantity is no longer attributable to the confirmed campaign"
+                }
+                val confirmedEntry = managedEntry?.optString("actual_entry_price")?.toDoubleOrNull()
+                val liveEntry = liveForSymbol.single().first.optString("entryPrice").toDoubleOrNull()
+                check(confirmedEntry != null && confirmedEntry.isFinite() && confirmedEntry > 0 &&
+                    liveEntry != null && liveEntry.isFinite() &&
+                    kotlin.math.abs(confirmedEntry - liveEntry) <= maxOf(1e-8, confirmedEntry * 1e-8)) {
+                    "$symbol automatic exit entry price no longer matches the confirmed campaign"
+                }
+            }
             if (!manualExit) {
                 val expectedProtectionId = managedEntry!!.optString("protection_client_id")
                 val expectedStop = managedEntry!!.optString("protective_stop")
@@ -2545,6 +2668,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("kind", "MARKET_REDUCE_ONLY")
             .put("quantity", quantity)
             .put("client_id", clientOrderId)
+            .put("entry_client_id", managedEntry?.optString("client_id") ?: JSONObject.NULL)
             .put("reason", reason)
             .put("exchange_status", "SUBMISSION_UNKNOWN")
             .put("created_at_ms", System.currentTimeMillis())

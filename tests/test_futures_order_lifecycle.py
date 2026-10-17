@@ -124,6 +124,8 @@ def armed_runtime(monkeypatch, tmp_path, request):
         protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000)
     candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
     armed = bot._arm_entry(candidate)
+    bot.preflight_report = {"ready": True}
+    bot.recovered = True
     try:
         yield bot, exchange, armed
     finally:

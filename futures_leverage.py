@@ -11,6 +11,20 @@ import re
 MAX_CONFIGURED_LEVERAGE = 125
 
 
+def liquidation_protection_status(side, stop, liquidation_price, buffer=0.01):
+    """Missing exchange data blocks admission, but cannot authorize an exit."""
+    try:
+        stop, liquidation_price, buffer = float(stop), float(liquidation_price), float(buffer)
+    except (TypeError, ValueError, OverflowError):
+        return "UNKNOWN"
+    if (side not in {"BUY", "SELL"} or
+            not all(math.isfinite(x) for x in (stop, liquidation_price, buffer)) or
+            stop <= 0 or liquidation_price <= 0 or not 0 <= buffer < 1):
+        return "UNKNOWN"
+    gap = (stop - liquidation_price) / stop if side == "BUY" else (liquidation_price - stop) / stop
+    return "PASS" if gap > 0 and gap + 1e-12 >= buffer else "UNSAFE"
+
+
 def parse_leverage(value) -> int:
     if isinstance(value, bool) or not re.fullmatch(r"[0-9]+", str(value).strip()):
         raise ValueError("FUTURES_LEVERAGE must be an integer in 1..125")

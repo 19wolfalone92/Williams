@@ -1120,7 +1120,11 @@ private class NativeEngine(
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
         NativeFuturesCampaignCoordinator(executionStore) {
-            BinanceUsdMFuturesTestnetAdapter(key(), secret(), http, rateGuard)
+            BinanceUsdMFuturesTestnetAdapter(key(), secret(), http, rateGuard,
+                beforeExposureMutation = {
+                    executionDoorBlocker(running, paused, reconcileRequired, killLatched)?.let { error(it) }
+                    check(RuntimeServiceState.active) { "Runtime service is not active before Futures exposure mutation" }
+                })
         }.also { coordinator ->
             coordinator.setObservationSink { auditStore.recordCampaignSnapshot(it) }
             coordinator.setStructuralStopRecoveryProvider { symbol, direction, mark, quantity, entry ->
@@ -4166,6 +4170,11 @@ private class NativeEngine(
         }
         require(reserved) {
             "Futures Execution Door is already reserved by another mutation"
+        }
+        executionDoorBlocker(running, paused, reconcileRequired, killLatched,
+            allowPaused, allowStopped, allowKillLatched, allowReconcileRequired)?.let {
+            executionGate.release(reservationKey)
+            error(it)
         }
 
         val leasePersisted = executionStore.writeExecutionGate(symbol, purpose) &&

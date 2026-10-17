@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import wraps
 import os
 import time
 import uuid
@@ -27,6 +28,16 @@ from decimal import Decimal
 from db import Database
 from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache
+
+
+def serialized_campaign_operation(method):
+    """Keep journal changes and exchange outcomes in one account-wide operation."""
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self.execution_barrier.context_cache.execution_lock:
+            return method(self, *args, **kwargs)
+    return locked
+
 from strategy import (
     calculate_indicators,
     canonical_indicator_config_from_env,
@@ -1020,15 +1031,22 @@ class FuturesWilliamsRuntime:
         return campaign.side == "SELL" and qty < 0 and math.isclose(abs(qty), expected, rel_tol=1e-12, abs_tol=1e-12)
 
     def _liquidation_guard(self, campaign, position):
-        liq = float(position.get("liquidationPrice", 0) or 0)
-        stop = float(campaign.current_stop_price or 0)
-        entry = float(position.get("entryPrice", 0) or campaign.average_entry_price or 0)
-        if not all(math.isfinite(value) and value > 0 for value in (liq, stop, entry)):
-            return False
-        buffer = max(0.0, float(os.getenv("FUTURES_LIQUIDATION_BUFFER_PCT", "0.01")))
-        if campaign.side == "BUY":
-            return liq < stop and ((stop - liq) / stop) >= buffer
-        return liq > stop and ((liq - stop) / stop) >= buffer
+        return self._liquidation_status(campaign, position) == "PASS"
+
+    def _liquidation_status(self, campaign, position, stop=None):
+        from futures_leverage import liquidation_protection_status
+        return liquidation_protection_status(campaign.side,
+            campaign.current_stop_price if stop is None else stop,
+            position.get("liquidationPrice"), os.getenv("FUTURES_LIQUIDATION_BUFFER_PCT", "0.01"))
+
+    def _record_liquidation_status(self, campaign, status):
+        campaign.tags["liquidation_guard_status"] = status
+        campaign.tags["liquidation_guard_audited_at_ms"] = int(time.time() * 1000)
+        if status == "UNKNOWN":
+            campaign.reconciliation_state = "REQUIRED"
+            campaign.health = "RED"
+        self.db.save_campaign(campaign)
+        self._set_state(campaign.symbol, "RECONCILE_REQUIRED" if status == "UNKNOWN" else "OPEN")
 
     def _fail_safe_flatten(self, campaign, reason):
         """Flatten when the structural stop cannot safely sit before liquidation."""
@@ -1036,6 +1054,8 @@ class FuturesWilliamsRuntime:
         # The exit revalidates exact ownership at the execution boundary. Latching
         # RECONCILE_REQUIRED before it would block the very reduce-only close.
         try:
+            if reason.startswith("LIQUIDATION_GUARD") and self._liquidation_status(campaign, self._position(symbol)) != "UNSAFE":
+                raise RuntimeError("Liquidation breach is no longer confirmed; automatic exit blocked")
             return self._exit_market(campaign, reason)
         finally:
             # The known position may be flat, but the protection/liquidation fault
@@ -1063,6 +1083,11 @@ class FuturesWilliamsRuntime:
             fees=0.0,
         )
 
+    def _require_new_risk_controls(self):
+        for flag in ("kill_switch_latched", "entry_admission_paused"):
+            if str(self.db.state_get(flag, "false")).strip().lower() not in {"false", "0", ""}:
+                raise RuntimeError(f"New Futures exposure blocked: {flag}")
+
     def _futures_pre_submit_checks(self, intent):
         """Final exchange-state checks immediately before a Futures mutation."""
         if not intent.campaign_id:
@@ -1071,16 +1096,26 @@ class FuturesWilliamsRuntime:
         campaign = self.engine.load_campaign(intent.campaign_id)
         if campaign is None:
             raise RuntimeError(f"{intent.symbol}: campaign {intent.campaign_id} not found")
-        if campaign.state == CampaignState.RECONCILE_REQUIRED and intent.purpose != "CAMPAIGN_FLAT_CLEANUP":
+        safety_management = intent.purpose in {"CAMPAIGN_FLAT_CLEANUP", "CAMPAIGN_CANCEL_ENTRY", "CAMPAIGN_EXIT", "CAMPAIGN_PROTECTION", "CAMPAIGN_TRAIL"}
+        if campaign.state == CampaignState.RECONCILE_REQUIRED and not safety_management:
             raise RuntimeError(f"{intent.symbol}: campaign requires reconciliation")
         if campaign.symbol != intent.symbol or campaign.side != intent.side and intent.purpose.upper() in {
             "CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"
         }:
             raise RuntimeError(f"{intent.symbol}: order/campaign direction mismatch")
 
+        purpose = intent.purpose.upper()
+        if purpose == "CAMPAIGN_CANCEL_ENTRY":
+            if campaign.tags.get("pending_order_client_id") != intent.client_order_id:
+                raise RuntimeError("Entry cancellation lacks durable campaign ownership")
+            order = self.client.get_order(intent.symbol, orig_client_order_id=intent.client_order_id, conditional=True)
+            if (order.get("clientOrderId") != intent.client_order_id or order.get("symbol") != intent.symbol
+                    or order.get("side") != campaign.side):
+                raise RuntimeError("Entry cancellation exchange identity does not match campaign")
+            return
+
         position = self._position(intent.symbol)
         pos_qty = abs(self._signed_position_qty(position))
-        purpose = intent.purpose.upper()
 
         if purpose == "CAMPAIGN_FLAT_CLEANUP":
             if not math.isfinite(pos_qty) or pos_qty != 0:
@@ -1122,7 +1157,8 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError(
                     f"{intent.symbol}: protection mutation requires an exact active campaign position"
                 )
-            if not self._liquidation_guard(campaign, position):
+            stop = campaign.tags.get("pending_protection_price", campaign.current_stop_price) if purpose == "CAMPAIGN_TRAIL" else campaign.current_stop_price
+            if self._liquidation_status(campaign, position, stop) == "UNSAFE":
                 raise RuntimeError(
                     f"{intent.symbol}: liquidation safety buffer is violated"
                 )
@@ -1131,6 +1167,8 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError(
                     f"{intent.symbol}: exit requires the exact active campaign position"
                 )
+            if str(campaign.tags.get("pending_exit_reason", "")).startswith("LIQUIDATION_GUARD") and self._liquidation_status(campaign, position) != "UNSAFE":
+                raise RuntimeError("Liquidation breach is no longer confirmed before exit submission")
 
     def _submit(self, intent, fn, checks=None):
         if self.dry_run:
@@ -1231,7 +1269,9 @@ class FuturesWilliamsRuntime:
         # Rounding down must also reduce the reported margin reservation.
         return qty, risk_quote, qty * trigger
 
+    @serialized_campaign_operation
     def _arm_entry(self, candidate: FuturesCandidate):
+        self._require_new_risk_controls()
         if self.dry_run:
             self.db.log_event("INFO", "futures_dry_run_entry_blocked", "DRY_RUN=true; conditional entry not submitted", {"symbol": candidate.symbol})
             return {"state": "DRY_RUN_BLOCKED", "symbol": candidate.symbol}
@@ -1384,7 +1424,9 @@ class FuturesWilliamsRuntime:
             self._set_state(symbol, "RECONCILE_REQUIRED")
             raise
 
+    @serialized_campaign_operation
     def _arm_add_on(self, campaign, signal):
+        self._require_new_risk_controls()
         if self.dry_run:
             self.db.log_event("INFO", "futures_dry_run_add_on_blocked", "DRY_RUN=true; conditional add-on not submitted", {"symbol": campaign.symbol})
             return {"state": "DRY_RUN_BLOCKED", "symbol": campaign.symbol}
@@ -1512,6 +1554,31 @@ class FuturesWilliamsRuntime:
             lambda _snapshot: None,
         )
 
+    @serialized_campaign_operation
+    def cancel_pending_entries(self):
+        """Cancel only durably owned entry intents, then resolve any racing fill."""
+        errors = []
+        for symbol, cid in list(self._pending_entries()):
+            try:
+                campaign = self._active_campaign(symbol)
+                if campaign is None or campaign.tags.get("pending_order_client_id") != cid:
+                    raise RuntimeError("Pending entry lacks a matching durable campaign")
+                order = self.client.get_order(symbol, orig_client_order_id=cid, conditional=True)
+                if str(order.get("status", "")).upper() not in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"}:
+                    intent = OrderIntent.new(symbol, campaign.side, "CANCEL", {}, client_order_id=cid,
+                        purpose="CAMPAIGN_CANCEL_ENTRY", campaign_id=campaign.campaign_id)
+                    self._submit(intent, lambda: self.client.cancel_order(symbol, order_id=order["orderId"]))
+                confirmed = self.client.get_order(symbol, orig_client_order_id=cid, conditional=True)
+                if str(confirmed.get("status", "")).upper() not in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"}:
+                    raise RuntimeError("Entry cancellation is not terminal on the exchange")
+            except Exception as exc:
+                self._set_state(symbol, "RECONCILE_REQUIRED")
+                errors.append(f"{symbol}: {exc}")
+        self._reconcile_pending()
+        pending = self._pending_entries()
+        return {"ok": not errors and not pending, "errors": errors, "pending_entries": len(pending)}
+
+    @serialized_campaign_operation
     def _protect(self, campaign):
         symbol = campaign.symbol
         qty = abs(float(campaign.position_qty))
@@ -1575,6 +1642,7 @@ class FuturesWilliamsRuntime:
         self.db.save_campaign(campaign)
         return result
 
+    @serialized_campaign_operation
     def _replace_protection(self, campaign, proposed, *, allow_same_price: bool = False):
         """Place the new reduce-only stop before removing the old stop."""
         current = float(campaign.current_stop_price or 0)
@@ -1676,6 +1744,7 @@ class FuturesWilliamsRuntime:
         return True
 
 
+    @serialized_campaign_operation
     def _exit_market(self, campaign, reason):
         """Durable reduce-only market exit; protection is cancelled only after flat."""
         symbol = campaign.symbol
@@ -1879,6 +1948,7 @@ class FuturesWilliamsRuntime:
             raise
 
 
+    @serialized_campaign_operation
     def _reconcile_pending_exits(self):
         results = []
         for symbol, cid in list(self._pending_exits()):
@@ -1979,7 +2049,7 @@ class FuturesWilliamsRuntime:
                     self._set_state(symbol, "RECONCILE_REQUIRED")
                     continue
 
-                if status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                if status in {"CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"}:
                     if remaining > max(
                         float(os.getenv("MIN_RECOVERY_QTY", "0.000001")), 0.0
                     ):
@@ -2022,6 +2092,7 @@ class FuturesWilliamsRuntime:
         return results
 
 
+    @serialized_campaign_operation
     def _reconcile_pending(self):
         results = []
         for symbol, cid in list(self._pending_entries()):
@@ -2217,7 +2288,7 @@ class FuturesWilliamsRuntime:
                                 campaign.position_qty,
                                 campaign.average_entry_price,
                             )
-                        if not self._liquidation_guard(campaign, position):
+                        if self._liquidation_status(campaign, position) == "UNSAFE":
                             result = self._fail_safe_flatten(
                                 campaign, "LIQUIDATION_GUARD_ADD_ON"
                             )
@@ -2251,7 +2322,7 @@ class FuturesWilliamsRuntime:
                         campaign.transition(CampaignState.OPEN_INITIAL, reason="initial entry filled")
                         self.db.set_campaign_signal_state(signal_id, SignalState.FILLED.value)
                         self._record_trade_if_missing(campaign, order, avg, pos_qty)
-                        if not self._liquidation_guard(campaign, position):
+                        if self._liquidation_status(campaign, position) == "UNSAFE":
                             result = self._fail_safe_flatten(
                                 campaign, "LIQUIDATION_GUARD_ENTRY"
                             )
@@ -2282,11 +2353,11 @@ class FuturesWilliamsRuntime:
 
                     self.db.state_delete(f"entry_client_order_id:{symbol}")
                     campaign.tags.pop("pending_order_id", None)
-                    self.db.save_campaign(campaign)
-                    results.append({"symbol": symbol, "campaign_id": campaign.campaign_id, "state": "OPEN", "filled_quantity": executed})
+                    self._record_liquidation_status(campaign, self._liquidation_status(campaign, position))
+                    results.append({"symbol": symbol, "campaign_id": campaign.campaign_id, "state": self.state(symbol), "filled_quantity": executed})
                     continue
 
-                if status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                if status in {"CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"}:
                     self._set_pending_signal_state(campaign, SignalState.CANCELLED)
                     self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.CANCELLED.value)
                     campaign.pending_risk_quote = 0.0
@@ -2462,6 +2533,7 @@ class FuturesWilliamsRuntime:
         except (ValueError, ArithmeticError):
             return False
 
+    @serialized_campaign_operation
     def recover(self):
         results = self._reconcile_pending()
         exit_results = self._reconcile_pending_exits()
@@ -2491,7 +2563,7 @@ class FuturesWilliamsRuntime:
                 self._set_state(symbol, "RECONCILE_REQUIRED")
                 continue
             try:
-                if not self._liquidation_guard(campaign, position):
+                if self._liquidation_status(campaign, position) == "UNSAFE":
                     self._fail_safe_flatten(
                         campaign, "LIQUIDATION_GUARD_RECOVERY"
                     )
@@ -2519,8 +2591,7 @@ class FuturesWilliamsRuntime:
                     campaign.tags.pop("pending_protection_price", None)
                 campaign.reconciliation_state = "CLEAN"
                 campaign.health = "GREEN"
-                self.db.save_campaign(campaign)
-                self._set_state(symbol, "OPEN")
+                self._record_liquidation_status(campaign, self._liquidation_status(campaign, position))
             except Exception as exc:
                 self._set_state(symbol, "RECONCILE_REQUIRED")
                 self.db.log_event("ERROR", "futures_recovery_error", str(exc), {"symbol": symbol})
@@ -2642,7 +2713,8 @@ class FuturesWilliamsRuntime:
             self.recover()
             self.recovered = True
 
-        self._reconcile_pending()
+        # Position protection and pending exits do not depend on scanner success.
+        self.recover()
         # DRY_RUN suppresses order mutations, not market-data collection.
         # Always scan first so Testnet diagnostics can prove the configured
         # universe and strategy pipeline are operational without placing orders.

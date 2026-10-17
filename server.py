@@ -128,6 +128,7 @@ class ControlState:
         self.paused = False
         self.last_error = None
         self.desired_running = False
+        self._control_epoch = 0
         self.api_key = ''
         self.api_secret = ''
         self.testnet = True
@@ -230,29 +231,29 @@ class ControlState:
                 )
             return t._multi_position_trader
 
-    def loop(self):
+    def loop(self, control_epoch=None):
         t = self.ensure_trader()
         try:
             t.setup()
-            # A successful explicit START is the controlled re-arm after KILL.
-            t.db.state_set('kill_switch_latched', 'false')
             with self.lock:
+                if control_epoch is not None and (control_epoch != self._control_epoch or not self.desired_running):
+                    return
+                # Only the still-current explicit START may re-arm after KILL.
+                t.db.state_set('kill_switch_latched', 'false')
+                t.db.state_set('entry_admission_paused', str(self.paused).lower())
                 self.running = True
                 self.desired_running = True
                 self.last_error = None
             while self.running:
-                if not self.paused:
-                    try:
+                try:
+                    if self.paused:
+                        if getattr(t, 'is_futures_runtime', False):
+                            t.recover()
+                    else:
                         t.process()
-                    except Exception as e:
-                        self.last_error = (
-                            f'{type(e).__name__}: {e}'
-                        )
-                        t.db.log_event(
-                            'ERROR',
-                            'api_loop_error',
-                            self.last_error,
-                        )
+                except Exception as e:
+                    self.last_error = f'{type(e).__name__}: {e}'
+                    t.db.log_event('ERROR', 'api_loop_error', self.last_error)
                 time.sleep(t.poll_seconds)
         except Exception as e:
             self.last_error = f'{type(e).__name__}: {e}'
@@ -272,8 +273,11 @@ class ControlState:
             ):
                 return False
             self.paused = False
+            self.desired_running = True
+            self._control_epoch += 1
             self.thread = threading.Thread(
                 target=self.loop,
+                args=(self._control_epoch,),
                 daemon=True,
                 name='williams-trader',
             )
@@ -284,9 +288,12 @@ class ControlState:
     def stop(self):
         with self.lock:
             self.desired_running = False
+            self._control_epoch = getattr(self, '_control_epoch', 0) + 1
             self.running = False
             self.paused = False
             thread = self.thread
+            if self.trader is not None:
+                self.trader.db.state_set('entry_admission_paused', 'true')
         if (
             thread is not None
             and thread.is_alive()
@@ -298,10 +305,12 @@ class ControlState:
     def pause(self):
         with self.lock:
             self.paused = True
+            self.ensure_trader().db.state_set('entry_admission_paused', 'true')
         return True
 
     def resume(self):
         with self.lock:
+            self.ensure_trader().db.state_set('entry_admission_paused', 'false')
             self.paused = False
         return True
 
@@ -309,6 +318,7 @@ class ControlState:
         metrics.inc("kill_switch_total")
         with self.lock:
             self.desired_running = False
+            self._control_epoch = getattr(self, '_control_epoch', 0) + 1
             # Close only Williams-managed Futures campaigns; never cancel
         # unrelated account orders.
         with self.lock:
@@ -319,9 +329,19 @@ class ControlState:
         t = self.ensure_trader()
         # Persist the emergency latch before attempting any close operation.
         t.db.state_set('kill_switch_latched', 'true')
+        t.db.state_set('entry_admission_paused', 'true')
         multi = self.ensure_multi()
         errors = []
         closed = []
+
+        cancel_pending = getattr(multi, 'cancel_pending_entries', None)
+        if callable(cancel_pending):
+            try:
+                cancelled = cancel_pending()
+                if not cancelled.get('ok', False):
+                    errors.append('pending entries: ' + str(cancelled))
+            except Exception as exc:
+                errors.append('pending entries: ' + str(exc))
 
         try:
             open_trades = list(multi.open_trades())
@@ -335,12 +355,18 @@ class ControlState:
                 continue
             try:
                 result = multi.manual_sell(symbol)
-                closed.append({"symbol": symbol, "result": result})
+                if result.get('sold') is True and result.get('state', 'CLOSED') in {'CLOSED', 'FLAT'}:
+                    closed.append({"symbol": symbol, "result": result})
+                else:
+                    errors.append(f"{symbol}: close not confirmed: {result}")
             except Exception as exc:
                 errors.append(f"{symbol}: {exc}")
 
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=3)
+        worker_stopped = thread is None or not thread.is_alive()
+        if not worker_stopped:
+            errors.append('Trading worker has not stopped; entry admission remains latched')
 
         t.db.log_event(
             "ERROR" if errors else "WARNING",
@@ -362,7 +388,7 @@ class ControlState:
 
         return {
             "killed": True,
-            "trading_stopped": True,
+            "trading_stopped": worker_stopped,
             "closed_positions": closed,
             "errors": errors,
             "state": "RECONCILE_REQUIRED" if errors else "FLAT",

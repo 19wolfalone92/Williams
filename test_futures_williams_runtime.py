@@ -482,7 +482,8 @@ def test_liquidation_guard_violation_uses_fail_safe_flatten():
     runtime._exit_market = lambda campaign, reason: calls.append(("exit", reason)) or {
         "state": "CLOSED", "symbol": campaign.symbol
     }
-    campaign = type("C", (), {"symbol": "BTCUSDT"})()
+    campaign = type("C", (), {"symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 95.0})()
+    runtime._position = lambda _: {"liquidationPrice": "96"}
     result = runtime._fail_safe_flatten(campaign, "LIQUIDATION_GUARD_TEST")
     assert result["state"] == "CLOSED"
     assert ("state", "BTCUSDT", "RECONCILE_REQUIRED") in calls
@@ -740,7 +741,7 @@ def test_dry_run_still_scans_market_data_but_never_arms_orders():
     runtime.dry_run = True
     runtime.scanner = Scanner()
     runtime.db = DB()
-    runtime._reconcile_pending = lambda: None
+    runtime.recover = lambda: {"ok": True}
     runtime._arm_entry = lambda *_: (_ for _ in ()).throw(
         AssertionError("DRY_RUN must never arm an entry")
     )

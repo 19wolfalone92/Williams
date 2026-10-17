@@ -126,7 +126,8 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("side", pending.getString("side")).put("avgPrice", entry.toString())
         }
         fun posts(path: String) = requests.count { it.method == "POST" && it.url.encodedPath == path }
-        fun adapter() = BinanceUsdMFuturesTestnetAdapter("key", "secret", client)
+        fun adapter(admission: () -> Unit = {}) = BinanceUsdMFuturesTestnetAdapter("key", "secret", client,
+            beforeExposureMutation = admission)
         companion object {
             fun params(r: Request): Map<String, String> = if (r.body is FormBody) {
                 val body = r.body as FormBody
@@ -249,6 +250,42 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals("CANCELED", exchange.orders.getValue("42").getString("status"))
             assertTrue(coordinator.isManagedOpenPosition("BTCUSDT", direction))
         }
+    }
+
+    @Test fun anOperatorBlockAtTransportPreventsNewExposureButAllowsProtectionAndReduction() {
+        val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator = NativeFuturesCampaignCoordinator(Journal()) {
+            exchange.adapter { error("operator paused during preflight") }
+        }
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+        assertFalse(coordinator.submitPendingEntry(plan(exchange.direction)).getBoolean("accepted"))
+        assertEquals(0, exchange.posts("/fapi/v1/algoOrder"))
+        exchange.quantity = 1.0
+        exchange.mark = 102.0
+        val adapter = exchange.adapter { error("operator paused") }
+        adapter.placeProtectiveStop("BTCUSDT", "LONG", "95", "W2PS_SAFE")
+        adapter.closeMarketPosition("BTCUSDT", "LONG", "1", "W2X_SAFE")
+        assertEquals(1, exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(1, exchange.posts("/fapi/v1/order"))
+    }
+
+    @Test fun strategyExitCannotCloseAnExternallyIncreasedPosition() {
+        val (coordinator, exchange) = open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.quantity = 2.0
+        val result = coordinator.closePosition("BTCUSDT", exchange.direction, "2", "W2X_FOREIGN", "STRATEGY_EXIT")
+        assertFalse(result.toString(), result.getBoolean("ok"))
+        assertEquals(0, exchange.posts("/fapi/v1/order"))
+    }
+
+    @Test fun entryFillAndLiveQuantityMayUseDifferentDecimalScales() {
+        val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator = NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+        assertTrue(coordinator.submitPendingEntry(plan(exchange.direction)).getBoolean("accepted"))
+        exchange.fill()
+        exchange.orders.getValue("42").put("executedQty", "1.00000000")
+        val result = coordinator.reconcile()
+        assertTrue(result.toString(), result.getBoolean("ok"))
     }
 
     @Test fun unknownLiquidationDataBlocksAdmissionWithoutAuthorizingAnExit() {
