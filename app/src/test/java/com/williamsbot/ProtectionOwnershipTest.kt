@@ -29,19 +29,22 @@ class ProtectionOwnershipTest {
     @Test
     fun emergencyCloseRequiresCurrentProtectedCampaignAndMatchingDirection() {
         assertTrue(isManagedOpenPositionIntent(
-            "OPEN_PROTECTED", "LONG", "LONG", "PROTECTED", "W2PS_current"
+            "OPEN_PROTECTED", "LONG", "LONG", "PROTECTED", "W2PS_current", true
         ))
         assertFalse(isManagedOpenPositionIntent(
-            "CLOSED_OR_STOPPED", "LONG", "LONG", "PROTECTED", "W2PS_current"
+            "CLOSED_OR_STOPPED", "LONG", "LONG", "PROTECTED", "W2PS_current", true
         ))
         assertFalse(isManagedOpenPositionIntent(
-            "OPEN_PROTECTED", "SHORT", "LONG", "PROTECTED", "W2PS_current"
+            "OPEN_PROTECTED", "SHORT", "LONG", "PROTECTED", "W2PS_current", true
         ))
         assertFalse(isManagedOpenPositionIntent(
-            "OPEN_PROTECTED", "LONG", "LONG", "SUBMISSION_UNKNOWN", "W2PS_current"
+            "OPEN_PROTECTED", "LONG", "LONG", "SUBMISSION_UNKNOWN", "W2PS_current", true
         ))
         assertFalse(isManagedOpenPositionIntent(
-            "OPEN_PROTECTED", "LONG", "LONG", "PROTECTED", ""
+            "OPEN_PROTECTED", "LONG", "LONG", "PROTECTED", "", true
+        ))
+        assertFalse(isManagedOpenPositionIntent(
+            "OPEN_PROTECTED", "LONG", "LONG", "PROTECTED", "W2PS_current", false
         ))
     }
 
@@ -113,7 +116,7 @@ class ProtectionOwnershipTest {
             latest.optString("direction"),
             "LONG",
             latest.optString("protection_status"),
-            latest.optString("protection_client_id")
+            latest.optString("protection_client_id"), true
         ))
         assertNull(latestEntryIntentIndex(intents, "ETHUSDT"))
     }

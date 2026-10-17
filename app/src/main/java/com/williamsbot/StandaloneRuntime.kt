@@ -263,10 +263,10 @@ internal fun diagnosticConsistencyFindings(
         topLevelRuntimeState != runtimeState) {
         add("RUNTIME_STATE_MISMATCH: status.state=$topLevelRuntimeState but execution_state_contract.state=$runtimeState")
     }
-    if (coordinatorState == "RECONCILE_REQUIRED" && runtimeState != "RECONCILE_REQUIRED") {
+    if (coordinatorState == "RECONCILE_REQUIRED" && !reconciliationRunning && runtimeState != "RECONCILE_REQUIRED") {
         add("STATE_MISMATCH: coordinator requires reconciliation but runtime state is $runtimeState")
     }
-    if (coordinatorState == "RECONCILE_REQUIRED" && !runtimeReconcileRequired) {
+    if (coordinatorState == "RECONCILE_REQUIRED" && !reconciliationRunning && !runtimeReconcileRequired) {
         add("RECONCILE_LATCH_MISMATCH: coordinator requires reconciliation but runtime reconcile_required is false")
     }
     if (!coordinatorReady && executionEnabled) {
@@ -287,6 +287,21 @@ internal fun diagnosticConsistencyFindings(
             add("RISK_BASELINE_UNSAFE_EXECUTION: execution is enabled without a known UTC daily-risk baseline")
         }
     }
+}
+
+internal fun authoritativeRuntimeDisplayState(
+    campaignMode: Boolean, running: Boolean, paused: Boolean, killLatched: Boolean,
+    coordinatorState: String, fallbackState: String
+): String = when {
+    !campaignMode -> fallbackState
+    killLatched -> "KILL_SWITCH_LATCHED"
+    !running -> "STOPPED"
+    paused -> "PAUSED"
+    coordinatorState == "READY" -> "READY_FLAT"
+    coordinatorState == "OPEN_PROTECTED" -> "OPEN"
+    coordinatorState == "ENTRY_PENDING" -> "ENTRY_PENDING"
+    coordinatorState == "EXIT_PENDING" -> "EXIT_PENDING"
+    else -> "RECONCILE_REQUIRED"
 }
 
 /** Diagnostic severity must not call a stopped monitor healthy just because both flags are false. */
@@ -1759,10 +1774,18 @@ private class NativeEngine(
         }
     }
 
-    fun health(): JSONObject =
-        JSONObject()
-            .put("ok", running && !reconcileRequired && !killLatched)
-            .put("execution_ready", executionReady())
+    fun health(): JSONObject {
+        val coordinator = runCatching { futuresCampaignCoordinator.status() }.getOrElse {
+            JSONObject().put("state", "RECONCILE_REQUIRED").put("blocker", it.message)
+        }
+        val displayState = authoritativeRuntimeDisplayState(campaignEngineEnabled, running, paused,
+            killLatched, coordinator.optString("state"), stateName())
+        val activeReconciliation = futuresReconciliationRunning || coordinator.optBoolean("reconciliation_running", false)
+        val enabled = executionReady() && !activeReconciliation && coordinator.optBoolean("ready_for_new_entry", false)
+        return JSONObject()
+            .put("ok", running && !reconcileRequired && !killLatched &&
+                coordinator.optString("state") in setOf("READY", "OPEN_PROTECTED", "ENTRY_PENDING"))
+            .put("execution_ready", enabled)
             .put("service", "williams-native")
             .put("version", BuildConfig.VERSION_NAME)
             .put("standalone", true)
@@ -1792,9 +1815,9 @@ private class NativeEngine(
             .put("analysis_timeframes", JSONArray(analysisFrames))
             .put(
                 "execution_enabled",
-                executionReady()
+                enabled
             )
-            .put("state", stateName())
+            .put("state", displayState)
             .put("open_positions", positionList().size)
             .put("max_open_positions", maxOpenPositions)
             .put("reserved_risk_pct", reservedRiskPct())
@@ -1803,9 +1826,9 @@ private class NativeEngine(
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
-            .put("futures_coordinator_state", stateMachine.state.name)
-            .put("futures_coordinator_blocker", lastError ?: JSONObject.NULL)
-            .put("futures_reconciliation_in_progress", futuresReconciliationRunning)
+            .put("futures_coordinator_state", coordinator.optString("state"))
+            .put("futures_coordinator_blocker", coordinator.opt("blocker") ?: JSONObject.NULL)
+            .put("futures_reconciliation_in_progress", activeReconciliation)
             .put("last_reconciliation_attempt_at_ms", lastReconciliationAttemptAtMs)
             .put("last_reconciliation_completed_at_ms", lastReconciliationCompletedAtMs)
             .put("last_reconciliation_result", lastReconciliationResult)
@@ -1814,8 +1837,8 @@ private class NativeEngine(
             .put("last_rest_reconcile_ms", lastRestReconcileMs)
             .put("execution_state_contract", JSONObject()
                 .put("version", 1)
-                .put("state", stateName())
-                .put("execution_enabled", executionReady())
+                .put("state", displayState)
+                .put("execution_enabled", enabled)
                 .put("reconciliation_required", reconcileRequired)
                 .put("user_stream_sync_required", userStreamSyncRequired)
                 .put("kill_switch_latched", killLatched))
@@ -1845,6 +1868,7 @@ private class NativeEngine(
                 "auth_configured",
                 key().isNotBlank() && secret().isNotBlank()
             )
+    }
 
     fun configure(j: JSONObject): JSONObject =
         configure(j.optString("api_key"), j.optString("api_secret"))
@@ -4304,6 +4328,22 @@ private class NativeEngine(
                 lastError = reason
                 blocked
             }
+            // The reconciliation Door has been released. Each verified safety
+            // exit gets its own durable Door and stable id; the original blocked
+            // result remains blocked until a subsequent fresh snapshot is safe.
+            val requiredExits = result.optJSONArray("required_safety_exits") ?: JSONArray()
+            val safetyExitResults = JSONArray()
+            for (index in 0 until requiredExits.length()) {
+                val request = requiredExits.getJSONObject(index)
+                val outcome = runCatching {
+                    withCampaignMutation(symbol = request.getString("symbol"), purpose = "LIQUIDATION_GUARD_EXIT",
+                        allowPaused = true, allowStopped = true, allowKillLatched = true,
+                        allowReconcileRequired = true, waitForDoorMs = waitForDoorMs
+                    ) { futuresCampaignCoordinator.executeRequiredSafetyExit(request) }
+                }.getOrElse { JSONObject().put("ok", false).put("blocker", it.message ?: it.javaClass.simpleName) }
+                safetyExitResults.put(JSONObject().put("symbol", request.optString("symbol")).put("result", outcome))
+            }
+            if (safetyExitResults.length() > 0) result.put("safety_exit_results", safetyExitResults)
             if (result.optBoolean("ok", false)) {
                 lastRestReconcileMs = System.currentTimeMillis()
                 lastReconciliationResult = "SUCCESS"
@@ -8202,20 +8242,12 @@ private class NativeEngine(
         // In campaign mode the exchange coordinator is authoritative. The local FSM can
         // lag during a REST reconciliation; never display ENTRY_PENDING/READY as if it
         // were settled while the coordinator is still reconciling or protection is unknown.
-        val effectiveDisplayState = when {
-            !campaignEngineEnabled -> stateName()
-            killLatched -> "KILL_SWITCH_LATCHED"
-            !running -> "STOPPED"
-            paused -> "PAUSED"
-            coordinatorState == "READY" -> "READY_FLAT"
-            coordinatorState == "OPEN_PROTECTED" -> "OPEN"
-            coordinatorState == "ENTRY_PENDING" -> "ENTRY_PENDING"
-            coordinatorState == "EXIT_PENDING" -> "EXIT_PENDING"
-            else -> "RECONCILE_REQUIRED"
-        }
-        val coordinatorReconciliationInProgress =
-            coordinatorState == "RECONCILE_REQUIRED" &&
-                futuresRuntimeStatus.optString("blocker") == "exchange_reconciliation_in_progress"
+        val effectiveDisplayState = authoritativeRuntimeDisplayState(campaignEngineEnabled, running, paused,
+            killLatched, coordinatorState, stateName())
+        val coordinatorReconciliationInProgress = futuresRuntimeStatus.optBoolean("reconciliation_running", false)
+        val reconciliationObserved = coordinatorReconciliationInProgress || futuresReconciliationRunning
+        val executionEnabledSnapshot = executionReady() && !reconciliationObserved &&
+            futuresRuntimeStatus.optBoolean("ready_for_new_entry", false)
 
         return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
@@ -8223,6 +8255,10 @@ private class NativeEngine(
             .put("interval", interval)
             .put("testnet", true)
             .put("running", running)
+            .put("futures_reconciliation_in_progress", reconciliationObserved)
+            .put("last_reconciliation_attempt_at_ms", lastReconciliationAttemptAtMs)
+            .put("last_reconciliation_completed_at_ms", lastReconciliationCompletedAtMs)
+            .put("last_reconciliation_result", lastReconciliationResult)
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
@@ -8231,7 +8267,7 @@ private class NativeEngine(
             .put("paused", paused)
             .put("recovered", !reconcileRequired && (futuresRuntimeStatus.optString("state") in setOf("READY", "OPEN_PROTECTED", "ENTRY_PENDING")))
             .put("state", effectiveDisplayState)
-            .put("execution_enabled", executionReady())
+            .put("execution_enabled", executionEnabledSnapshot)
             .put("position_symbol", firstPosition?.optString("symbol") ?: JSONObject.NULL)
             .put("position_direction", firstPosition?.optString("direction") ?: JSONObject.NULL)
             .put("position_qty", firstPosition?.opt("qty") ?: JSONObject.NULL)
@@ -8289,8 +8325,8 @@ private class NativeEngine(
             .put("reconcile_required", reconcileRequired)
             .put("execution_state_contract", JSONObject()
                 .put("version", 1)
-                .put("state", stateMachine.state.name)
-                .put("execution_enabled", executionReady())
+                .put("state", effectiveDisplayState)
+                .put("execution_enabled", executionEnabledSnapshot)
                 .put("reconciliation_required", reconcileRequired)
                 .put("user_stream_sync_required", userStreamSyncRequired)
                 .put("kill_switch_latched", killLatched))
@@ -8762,6 +8798,15 @@ private class NativeEngine(
                 "; max_running_duration_ms=300000" +
                 "; last_failure=" + statusSnapshot.optString("user_stream_reconcile_failure", "none")
         )
+        val coordinatorTaskHealthy = reconciliationTaskLifecycleHealthy(
+            coordinatorSnapshot.optBoolean("reconciliation_running", false),
+            coordinatorSnapshot.optLong("reconciliation_started_at_ms", 0L), userNowMs
+        )
+        test("campaign_reconciliation_lifecycle", "runtime", coordinatorTaskHealthy, "FAIL",
+            "running=" + coordinatorSnapshot.optBoolean("reconciliation_running", false) +
+                "; started_at_ms=" + coordinatorSnapshot.optLong("reconciliation_started_at_ms", 0L) +
+                "; finished_at_ms=" + coordinatorSnapshot.optLong("reconciliation_finished_at_ms", 0L) +
+                "; max_running_duration_ms=300000")
         val userEventAgeMs = if (lastUserEventMs > 0L && userNowMs >= lastUserEventMs)
             userNowMs - lastUserEventMs else Long.MAX_VALUE
         test(

@@ -138,7 +138,8 @@ def test_android_campaign_and_intents_are_sqlite_backed():
     assert 'executionStore.writeState("futures_daily_pnl_usdt", dailyPnlQuote.toString())' in runtime
     assert 'executionStore.readState("futures_daily_pnl_usdt")' in runtime
     assert "executionStore.readState" in runtime
-    assert "private val executionStore: FuturesExecutionStore" in coordinator
+    assert "private val executionStore: FuturesCampaignStateStore" in coordinator
+    assert "DATABASE_VERSION), FuturesCampaignStateStore" in store
     assert "executionStore.writeState(intentsKey, array.toString())" in coordinator
     assert "SQLiteOpenHelper" in store
     assert "CREATE TABLE IF NOT EXISTS runtime_state" in store
@@ -429,7 +430,8 @@ def test_android_exit_requires_exchange_position_protection_and_filled_order_con
     # campaign journal or stop metadata was lost. They still require exchange
     # position, direction, exact quantity, order-FILLED and flat confirmation.
     assert 'val manualExit = reason == "MANUAL_EXIT" || reason == "KILL_SWITCH"' in coordinator
-    assert 'if (managedEntry == null && !manualExit)' in coordinator
+    assert 'if (managedEntry == null && reason != "MANUAL_EXIT")' in coordinator
+    assert '(reason != "KILL_SWITCH" || row.optBoolean("strategy_ownership_verified", false))' in coordinator
     assert 'if (!manualExit)' in coordinator
     assert 'managedEntry?.put("campaign_status", "CLOSED_OR_STOPPED")' in coordinator
     assert 'exitIntent.put("exchange_status", "EXIT_CONFIRMED")' in coordinator
