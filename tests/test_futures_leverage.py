@@ -117,3 +117,41 @@ def test_active_position_never_gets_releveraged_by_configuration_change():
     bot.client = SimpleNamespace(symbol_configuration=lambda s: {"symbol": s, "marginType": "ISOLATED", "leverage": 2})
     with pytest.raises(RuntimeError, match="ACTIVE_POSITION_MISMATCH"):
         bot._ensure_symbol_config("BTCUSDT")
+
+
+def test_pending_entry_never_gets_releveraged_after_restart():
+    bot = object.__new__(FuturesWilliamsRuntime)
+    bot.config = TradingConfig(futures_leverage=10)
+    bot._position = lambda s: {"positionAmt": "0", "entryPrice": "0"}
+    bot.db = SimpleNamespace(state_get=lambda key: "existing-client-order-id")
+    bot.client = SimpleNamespace(symbol_configuration=lambda s: {"symbol": s, "marginType": "ISOLATED", "leverage": 2})
+    with pytest.raises(RuntimeError, match="ACTIVE_POSITION_MISMATCH"):
+        bot._ensure_symbol_config("BTCUSDT")
+
+
+@pytest.mark.parametrize("amount,side,stop", [(1, "BUY", 99), (-1, "SELL", 101)])
+def test_add_on_uses_fresh_symbol_config_without_v2_position_fields_and_combined_tier(amount, side, stop):
+    bot = object.__new__(FuturesWilliamsRuntime)
+    bot.config = TradingConfig(futures_leverage=5)
+    bot._leverage_confirmations = {}
+    bot._position = lambda s: {"positionAmt": str(amount), "entryPrice": "100"}
+    bot.client = SimpleNamespace(
+        symbol_configuration=lambda s: {"symbol": s, "marginType": "ISOLATED", "leverage": 5, "maxNotionalValue": "10000"},
+        leverage_brackets=lambda s: brackets(s),
+    )
+    bot._ensure_symbol_config("BTCUSDT")  # No margin/leverage POST methods exist on this client.
+    bot._validate_entry_leverage("BTCUSDT", 1, 100, stop, side)
+    bot.config = replace(bot.config, futures_leverage=20)
+    bot._position = lambda s: {"positionAmt": str(amount * 9), "entryPrice": "100"}
+    with pytest.raises(ValueError, match="LEVERAGE_LIMIT"):
+        bot._validate_entry_leverage("BTCUSDT", 1, 100, stop, side)
+
+
+def test_add_on_rejects_opposite_or_malformed_existing_position():
+    bot = object.__new__(FuturesWilliamsRuntime)
+    bot._position = lambda s: {"positionAmt": "-1", "entryPrice": "100"}
+    with pytest.raises(RuntimeError, match="DIRECTION_MISMATCH"):
+        bot._validate_entry_leverage("BTCUSDT", 1, 100, 99, "BUY")
+    bot._position = lambda s: {"positionAmt": "1", "entryPrice": "0"}
+    with pytest.raises(RuntimeError, match="Invalid position"):
+        bot._validate_entry_leverage("BTCUSDT", 1, 100, 99, "BUY")

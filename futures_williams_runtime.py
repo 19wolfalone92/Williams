@@ -581,7 +581,6 @@ class FuturesWilliamsRuntime:
         self.wave_top_n = 0
         self.liquidity_preselect = int(os.getenv("FUTURES_SCAN_TOP_N", "40"))
         self._locks: set[str] = set()
-        self._initialised_symbols: set[str] = set()
         self._leverage_confirmations: dict[str, dict] = {}
         self.equity_breaker = EquityCircuitBreaker(self.max_daily_loss_pct)
 
@@ -791,7 +790,8 @@ class FuturesWilliamsRuntime:
         amount = float(position.get("positionAmt", "nan"))
         if not math.isfinite(amount):
             raise RuntimeError("Invalid position amount before leverage configuration")
-        if amount != 0:
+        pending_entry = amount == 0 and bool(self.db.state_get(f"entry_client_order_id:{symbol}"))
+        if amount != 0 or pending_entry:
             # Do not change the margin policy of an existing campaign after a
             # restart/config edit. Exits and protection remain independent.
             # V3 positionRisk does not supply leverage/marginType. Read the
@@ -814,15 +814,19 @@ class FuturesWilliamsRuntime:
                 or str(configuration.get("leverage", "")) != str(leverage)):
             raise RuntimeError("Binance symbol configuration does not match requested isolated leverage")
         self._leverage_confirmations[symbol] = configuration
-        self._initialised_symbols.add(symbol)
 
-    def _validate_entry_leverage(self, symbol, qty, entry, stop):
+    def _validate_entry_leverage(self, symbol, qty, entry, stop, side):
         from futures_leverage import validate_isolated_leverage
         position = self._position(symbol)
         amount = float(position.get("positionAmt", "nan"))
         position_entry = float(position.get("entryPrice", 0) or 0)
-        if not math.isfinite(amount) or not math.isfinite(position_entry):
+        if (not math.isfinite(amount) or not math.isfinite(position_entry)
+                or (amount != 0 and position_entry <= 0)):
             raise RuntimeError("Invalid position before leverage risk assessment")
+        if (side not in {"BUY", "SELL"} or (side == "BUY" and stop >= entry)
+                or (side == "SELL" and stop <= entry)
+                or (amount != 0 and ((amount > 0) != (side == "BUY")))):
+            raise RuntimeError("FUTURES_LEVERAGE_DIRECTION_MISMATCH: position or structural stop conflicts with entry")
         # Add-ons must fit the combined exposure's tier, not just the new order.
         total_qty = qty + abs(amount)
         average_entry = (qty * entry + abs(amount) * position_entry) / total_qty
@@ -1280,7 +1284,7 @@ class FuturesWilliamsRuntime:
         qty, risk_quote, notional = self._size_from_risk(
             symbol, trigger, stop, initial_risk_pct
         )
-        self._validate_entry_leverage(symbol, qty, trigger, stop)
+        self._validate_entry_leverage(symbol, qty, trigger, stop, signal.side)
         campaign = self.engine.create_campaign(signal, initial_risk_pct=initial_risk_pct)
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
@@ -1418,7 +1422,7 @@ class FuturesWilliamsRuntime:
             stop,
             add_risk_pct,
         )
-        self._validate_entry_leverage(signal.symbol, qty, trigger, stop)
+        self._validate_entry_leverage(signal.symbol, qty, trigger, stop, signal.side)
         campaign.tags["pending_order_quantity"] = qty
         campaign.tags["pending_order_trigger"] = trigger
         campaign.pending_risk_quote = risk_quote
