@@ -82,9 +82,15 @@ internal fun planFuturesStopTrail(
             val price = if (direction == "LONG") floorTick(extreme - tickSize)
                 else ceilTick(extreme + tickSize)
             if (usable(price)) {
+                // The most recent *usable* confirmed post-entry pivot is the
+                // appropriate candidate. A more recent pivot may produce a
+                // stop already crossed by mark price; do not let it mask an
+                // older, still-valid improvement.
                 proposals += FuturesStopTrailProposal(price, "CONFIRMED_H1_FRACTAL", bars[i].openTimeMs)
+                break
             }
-            break
+            // Keep searching older confirmed post-entry pivots; never widen
+            // the stop or cross the mark-price safety gap.
         }
     }
 
