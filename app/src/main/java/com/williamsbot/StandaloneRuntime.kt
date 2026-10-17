@@ -5223,26 +5223,50 @@ private class NativeEngine(
                 } ?: throw IllegalStateException(symbol + " has no latest exchange-confirmed protected campaign")
             val oldStop = intent.optString("protective_stop").toDoubleOrNull()
                 ?: throw IllegalStateException(symbol + " structural stop is missing")
-            val trail = candles.takeLast(campaignTrailBars)
-            val proposed = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-                normalizePrice((trail.minOfOrNull { it.l } ?: oldStop) - rules.tick, rules.tick)
-            } else {
-                normalizeTriggerPrice((trail.maxOfOrNull { it.h } ?: oldStop) + rules.tick, rules.tick)
-            }
-            val tighter = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) proposed > oldStop && proposed < mark
-                else proposed < oldStop && proposed > mark
-            if (tighter) {
-                val clientId = ("W2T_" + symbol.take(8) + "_" + latest.t.toString(16)).take(36)
+            val initialStop = intent.optString("initial_protective_stop").toDoubleOrNull()
+                ?: throw IllegalStateException(symbol + " initial structural stop is missing; trailing needs verified initial risk")
+            val entry = row.optString("entryPrice").toDoubleOrNull()
+                ?.takeIf { it.isFinite() && it > 0.0 }
+                ?: throw IllegalStateException(symbol + " exchange-confirmed entry price is missing")
+            // H1 pivot confirmation takes two fully closed bars on the right.
+            // The old trailing rule used the minimum/maximum of the last 3-5
+            // candles, which could stay below/above the initial stop during a
+            // large favorable move and had no break-even fallback.
+            val trail = proposeWilliamsFuturesStopTrail(
+                direction = dir,
+                closedBars = candles.map { FuturesTrailBar(it.h, it.l) },
+                entryPrice = entry,
+                initialStop = initialStop,
+                currentStop = oldStop,
+                markPrice = mark,
+                tickSize = rules.tick,
+                feeBufferPerSide = feeBufferPerSidePct,
+                slippageBuffer = maxSlippagePct
+            )
+            if (trail != null && trail.stopPrice >= rules.minPrice &&
+                (!rules.maxPrice.isFinite() || trail.stopPrice <= rules.maxPrice)) {
+                // A candle timestamp alone is NOT a unique client order ID.
+                // Multiple legitimate trails can occur during the same closed H1
+                // candle; reuse would cause Binance duplicate-ID ambiguities.
+                val clientId = ("W2T_" + symbol.take(8) + "_" +
+                    java.util.UUID.randomUUID().toString().replace("-", "").take(18)).take(36)
                 val result = withCampaignMutation(
                     symbol = symbol,
-                    purpose = "STRUCTURAL_STOP_TRAIL",
-                    allowPaused = true
+                    purpose = "STRUCTURAL_STOP_TRAIL_" + trail.source,
+                    allowPaused = true,
+                    allowKillLatched = true
                 ) {
                     futuresCampaignCoordinator.trailProtectiveStop(
-                        symbol, direction, fmtPrice(proposed, rules.tick), clientId
+                        symbol, direction, fmtPrice(trail.stopPrice, rules.tick), clientId
                     )
                 }
                 if (!result.optBoolean("ok", false)) throw IllegalStateException(result.optString("blocker", result.optString("error")))
+                runCatching {
+                    auditStore.recordCockpitEvent(
+                        "STOP_TRAIL", state = "EXCHANGE_CONFIRMED",
+                        detail = "$symbol $dir ${trail.source}: $oldStop -> ${trail.stopPrice}; H1 fractal center=${trail.fractalCenterIndex ?: "n/a"}"
+                    )
+                }
             }
         }
         return true
