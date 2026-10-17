@@ -39,6 +39,9 @@ class NativeFuturesCoordinatorLifecycleTest {
         var leverage = 2
         var badConfirmation = false
         var loseCloseReply = false
+        var closeFraction = 1.0
+        var closeStatus = "FILLED"
+        var positionSide = "BOTH"
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
             requests += request
@@ -88,12 +91,12 @@ class NativeFuturesCoordinatorLifecycleTest {
                     check(p["reduceOnly"] == "true")
                     check(p["side"] == if (quantity > 0) "SELL" else "BUY")
                     check(p.getValue("quantity").toDouble() == kotlin.math.abs(quantity))
-                    val row = JSONObject(p).put("orderId", "99").put("status", "FILLED")
+                    val row = JSONObject(p).put("orderId", "99").put("status", closeStatus)
                         .put("clientOrderId", p.getValue("newClientOrderId"))
                         .put("origQty", kotlin.math.abs(quantity).toString())
-                        .put("executedQty", kotlin.math.abs(quantity).toString()).put("avgPrice", mark.toString())
+                        .put("executedQty", (kotlin.math.abs(quantity) * closeFraction).toString()).put("avgPrice", mark.toString())
                     orders["99"] = row
-                    quantity = 0.0
+                    quantity *= 1.0 - closeFraction
                     if (loseCloseReply) { code = 503; JSONObject().put("code", -1000).put("msg", "lost close reply") } else row
                 } else {
                     orders.values.singleOrNull { it.optString("orderId") == p["orderId"] ||
@@ -108,7 +111,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         }.build()
 
         fun positions() = JSONArray().apply {
-            if (quantity != 0.0) put(JSONObject().put("symbol", "BTCUSDT").put("positionSide", "BOTH")
+            if (quantity != 0.0) put(JSONObject().put("symbol", "BTCUSDT").put("positionSide", positionSide)
                 .put("positionAmt", quantity.toString()).put("entryPrice", entry.toString())
                 .put("markPrice", mark.toString()).put("liquidationPrice", liquidation))
         }
@@ -286,6 +289,25 @@ class NativeFuturesCoordinatorLifecycleTest {
         exchange.orders.getValue("42").put("executedQty", "1.00000000")
         val result = coordinator.reconcile()
         assertTrue(result.toString(), result.getBoolean("ok"))
+    }
+
+    @Test fun aConfirmedPartialExitExplainsTheExactResidualCampaignQuantity() {
+        val (coordinator, exchange) = open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.closeFraction = 0.4
+        exchange.closeStatus = "EXPIRED_IN_MATCH"
+        assertFalse(coordinator.closePosition("BTCUSDT", exchange.direction, "1", "W2X_PARTIAL", "STRATEGY_EXIT").getBoolean("ok"))
+        val result = coordinator.reconcile()
+        assertTrue(result.toString(), result.getBoolean("ok"))
+        assertEquals(0.6, exchange.quantity, 1e-12)
+        assertTrue(coordinator.isManagedOpenPosition("BTCUSDT", exchange.direction))
+    }
+
+    @Test fun hedgeRowsCannotBeAdoptedAfterAContradictoryOneWayModeReply() {
+        val (coordinator, exchange) = open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.positionSide = "LONG"
+        val result = coordinator.reconcile()
+        assertFalse(result.toString(), result.getBoolean("ok"))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
     }
 
     @Test fun unknownLiquidationDataBlocksAdmissionWithoutAuthorizingAnExit() {

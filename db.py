@@ -1068,6 +1068,14 @@ class Database:
         ).fetchone()
         return float(r['pnl'] or 0)
 
+    def pnl_today_all(self):
+        """Net realized PnL across the portfolio, including recorded commissions."""
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(COALESCE(pnl,0) - ABS(COALESCE(fees,0))),0) AS pnl "
+            "FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
+        ).fetchone()
+        return float(row['pnl'])
+
     def consecutive_losses(self, symbol, limit=20):
         rows = self.conn.execute(
             'SELECT pnl FROM trades WHERE symbol=? '

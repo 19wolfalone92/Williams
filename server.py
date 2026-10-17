@@ -123,6 +123,7 @@ class ControlState:
     def __init__(self):
         self.lock = threading.RLock()
         self.trader = None
+        self.scanner = None
         self.thread = None
         self.running = False
         self.paused = False
@@ -320,8 +321,7 @@ class ControlState:
             self.desired_running = False
             self._control_epoch = getattr(self, '_control_epoch', 0) + 1
             # Close only Williams-managed Futures campaigns; never cancel
-        # unrelated account orders.
-        with self.lock:
+            # unrelated account orders.
             self.running = False
             self.paused = True
             thread = self.thread

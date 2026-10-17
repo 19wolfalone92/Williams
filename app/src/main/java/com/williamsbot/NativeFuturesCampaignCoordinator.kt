@@ -794,6 +794,9 @@ internal class NativeFuturesCampaignCoordinator(
                 val amount = row.optString("positionAmt").toDoubleOrNull()
                     ?: throw IllegalStateException("Binance returned a malformed position amount for $symbol")
                 if (amount == 0.0) continue
+                check(amount.isFinite() && row.optString("positionSide", "BOTH") == "BOTH") {
+                    "Live Futures position does not prove the required one-way mode"
+                }
                 if (symbol !in allowedSymbols) {
                     throw IllegalStateException(
                         "Unmanaged live Futures position $symbol detected outside the approved ten-symbol universe; manual reconciliation required"
@@ -2621,6 +2624,9 @@ internal class NativeFuturesCampaignCoordinator(
                 return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
             }
             val liveAmount = liveForSymbol.single().second
+            check(liveForSymbol.single().first.optString("positionSide", "BOTH") == "BOTH") {
+                "Exit requires an exchange-confirmed one-way position"
+            }
             val liveDirection = if (liveAmount.signum() > 0) Direction.LONG else Direction.SHORT
             val requestedQty = quantity.toBigDecimal()
             if (liveDirection != direction || requestedQty.compareTo(liveAmount.abs()) != 0) {

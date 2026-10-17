@@ -30,14 +30,6 @@ from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache
 
 
-def serialized_campaign_operation(method):
-    """Keep journal changes and exchange outcomes in one account-wide operation."""
-    @wraps(method)
-    def locked(self, *args, **kwargs):
-        with self.execution_barrier.context_cache.execution_lock:
-            return method(self, *args, **kwargs)
-    return locked
-
 from strategy import (
     calculate_indicators,
     canonical_indicator_config_from_env,
@@ -65,6 +57,15 @@ from binance_futures_client import BinanceFuturesClient
 from trading_config import DEFAULT_FUTURES_SYMBOLS, TradingConfig
 from wave_engine import MultiTimeframeWaveEngine
 from williams_directional_context import evaluate_direction
+
+def serialized_campaign_operation(method):
+    """Keep journal changes and exchange outcomes in one account-wide operation."""
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self.execution_barrier.context_cache.execution_lock:
+            return method(self, *args, **kwargs)
+    return locked
+
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -1026,6 +1027,14 @@ class FuturesWilliamsRuntime:
             return False
         if expected <= 0:
             return abs(qty) <= 1e-12
+        try:
+            entry = float(position["entryPrice"])
+            expected_entry = float(campaign.average_entry_price)
+            if not (math.isfinite(entry) and math.isfinite(expected_entry) and entry > 0 and
+                    math.isclose(entry, expected_entry, rel_tol=1e-8, abs_tol=1e-8)):
+                return False
+        except (KeyError, TypeError, ValueError):
+            return False
         if campaign.side == "BUY":
             return qty > 0 and math.isclose(qty, expected, rel_tol=1e-12, abs_tol=1e-12)
         return campaign.side == "SELL" and qty < 0 and math.isclose(abs(qty), expected, rel_tol=1e-12, abs_tol=1e-12)
@@ -1555,10 +1564,12 @@ class FuturesWilliamsRuntime:
         )
 
     @serialized_campaign_operation
-    def cancel_pending_entries(self):
+    def cancel_pending_entries(self, only_symbol=None):
         """Cancel only durably owned entry intents, then resolve any racing fill."""
         errors = []
         for symbol, cid in list(self._pending_entries()):
+            if only_symbol is not None and symbol != only_symbol:
+                continue
             try:
                 campaign = self._active_campaign(symbol)
                 if campaign is None or campaign.tags.get("pending_order_client_id") != cid:
@@ -1575,7 +1586,7 @@ class FuturesWilliamsRuntime:
                 self._set_state(symbol, "RECONCILE_REQUIRED")
                 errors.append(f"{symbol}: {exc}")
         self._reconcile_pending()
-        pending = self._pending_entries()
+        pending = [(symbol, cid) for symbol, cid in self._pending_entries() if only_symbol is None or symbol == only_symbol]
         return {"ok": not errors and not pending, "errors": errors, "pending_entries": len(pending)}
 
     @serialized_campaign_operation
@@ -1748,6 +1759,15 @@ class FuturesWilliamsRuntime:
     def _exit_market(self, campaign, reason):
         """Durable reduce-only market exit; protection is cancelled only after flat."""
         symbol = campaign.symbol
+        # An armed addition can reopen exposure after a successful market close.
+        # Cancel/reconcile it first; a racing fill changes the quantity we must close.
+        if campaign.state == CampaignState.ADD_ON_PENDING:
+            cancelled = self.cancel_pending_entries(symbol)
+            if not cancelled["ok"]:
+                raise RuntimeError(f"{symbol}: cannot exit while a pending addition is unresolved")
+            campaign = self.engine.load_campaign(campaign.campaign_id)
+            if campaign is None:
+                raise RuntimeError("Campaign disappeared during pending-addition cancellation")
         existing_exit = str(campaign.tags.get("pending_exit_client_id", "") or "")
         if campaign.state in {CampaignState.EXIT_SIGNALLED, CampaignState.EXIT_PENDING} and existing_exit:
             raise RuntimeError(f"{symbol}: exit already pending ({existing_exit})")
@@ -1862,6 +1882,13 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError(
                     f"{symbol}: Futures exit left residual position {remaining}"
                 )
+
+            result = self.client.get_order(symbol, orig_client_order_id=cid)
+            if (str(result.get("status", "")).upper() != "FILLED" or
+                    result.get("symbol") != symbol or result.get("side") != side or
+                    result.get("clientOrderId") != cid or
+                    not math.isclose(float(result.get("executedQty", "nan")), qty, rel_tol=1e-12, abs_tol=1e-12)):
+                raise RuntimeError("Futures exit is not confirmed filled for the exact campaign quantity")
 
             self._cleanup_campaign_protection(campaign)
 
@@ -1989,6 +2016,8 @@ class FuturesWilliamsRuntime:
                     order.get("orderId") is not None
                     and durable_order_id != str(order.get("orderId"))
                 ):
+                    if durable_order_id:
+                        raise RuntimeError("Pending exit exchange order id changed")
                     self.db.save_campaign_order(
                         PendingOrderRecord(
                             order_id=str(order.get("orderId", "")),
@@ -2009,6 +2038,10 @@ class FuturesWilliamsRuntime:
                 )
                 position = self._position(symbol)
                 remaining = abs(self._signed_position_qty(position))
+                if (order.get("symbol") != symbol or order.get("clientOrderId") != cid or
+                        order.get("side") != ("SELL" if campaign.side == "BUY" else "BUY") or
+                        not all(math.isfinite(x) for x in (executed, remaining)) or executed < 0):
+                    raise RuntimeError("Pending exit identity/quantity cannot be verified")
 
                 if status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED"}:
                     results.append({
@@ -2050,19 +2083,8 @@ class FuturesWilliamsRuntime:
                     continue
 
                 if status in {"CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"}:
-                    if remaining > max(
-                        float(os.getenv("MIN_RECOVERY_QTY", "0.000001")), 0.0
-                    ):
-                        if campaign.state == CampaignState.EXIT_PENDING:
-                            campaign.transition(
-                                CampaignState.TREND_ACTIVE,
-                                reason=f"exit order {status.lower()} without fill",
-                            )
-                        campaign.tags.pop("pending_exit_client_id", None)
-                        campaign.tags.pop("pending_exit_order_id", None)
-                        self.db.state_delete(f"exit_client_order_id:{symbol}")
-                        self._set_state(symbol, "OPEN")
-                        self.db.save_campaign(campaign)
+                    if remaining > 0:
+                        self._accept_terminal_exit_remainder(campaign, order, position, executed, remaining)
                         results.append({
                             "symbol": symbol,
                             "campaign_id": campaign.campaign_id,
@@ -2090,6 +2112,52 @@ class FuturesWilliamsRuntime:
                     "error": str(exc),
                 })
         return results
+
+    def _accept_terminal_exit_remainder(self, campaign, order, position, executed, remaining):
+        """Attribute a partial exit before releasing its reservation or changing quantity."""
+        original = float(campaign.position_qty)
+        signed = self._signed_position_qty(position)
+        if (not math.isfinite(original) or original <= 0 or executed > original or
+                not math.isclose(original - executed, remaining, rel_tol=1e-12, abs_tol=1e-12) or
+                (signed > 0) != (campaign.side == "BUY") or position.get("positionSide", "BOTH") != "BOTH"):
+            raise RuntimeError("Terminal exit does not explain the exact remaining campaign position")
+        partial = None
+        trade = self.db.open_trade(campaign.symbol)
+        if executed > 0:
+            if trade is None:
+                raise RuntimeError("Partial exit has no open campaign trade")
+            fills = self.client.my_trades(campaign.symbol, order_id=order["orderId"], limit=1000)
+            total = sum(float(fill.get("qty", "nan")) for fill in fills)
+            quote = sum(float(fill.get("qty", "nan")) * float(fill.get("price", "nan")) for fill in fills)
+            fees = sum(float(fill.get("commission", 0)) for fill in fills)
+            if (not all(math.isfinite(x) for x in (total, quote, fees)) or quote <= 0 or
+                    not math.isclose(total, executed, rel_tol=1e-12, abs_tol=1e-12) or
+                    any(float(fill.get("commission", 0)) != 0 and fill.get("commissionAsset") != "USDT" for fill in fills)):
+                raise RuntimeError("Partial exit fills/quote commissions are incomplete")
+            entry = float(campaign.average_entry_price)
+            price = quote / total
+            pnl = (price - entry) * executed * (1 if campaign.side == "BUY" else -1)
+            partial = dict(entry_time=trade["entry_time"], exit_time=datetime.now(timezone.utc).isoformat(),
+                symbol=campaign.symbol, side=trade["side"], entry_price=entry, exit_price=price, quantity=executed,
+                pnl=pnl, pnl_pct=pnl / (entry * executed), fees=fees + float(trade.get("fees") or 0) * executed / original,
+                reason="PARTIAL_CAMPAIGN_EXIT:" + order["clientOrderId"])
+        with self.db.transaction():
+            if partial is not None:
+                if self.db.conn.execute("SELECT 1 FROM trades WHERE reason=?", (partial["reason"],)).fetchone():
+                    raise RuntimeError("Partial exit was already accounted; reconciliation required")
+                self.db.save_trade(**partial)
+                campaign.realized_pnl_quote += partial["pnl"] - partial["fees"]
+                self.db.update_trade_position(trade["id"], remaining, campaign.average_entry_price)
+                self.db.conn.execute("UPDATE trades SET fees=? WHERE id=?", (float(trade.get("fees") or 0) * remaining / original, trade["id"]))
+            campaign.open_risk_quote *= remaining / original
+            campaign.position_qty = remaining
+            if campaign.state == CampaignState.EXIT_PENDING:
+                campaign.transition(CampaignState.TREND_ACTIVE, reason="terminal exit remainder confirmed")
+            campaign.tags.pop("pending_exit_client_id", None)
+            campaign.tags.pop("pending_exit_order_id", None)
+            self.db.state_delete(f"exit_client_order_id:{campaign.symbol}")
+            self._set_state(campaign.symbol, "OPEN")
+            self.db.save_campaign(campaign)
 
 
     @serialized_campaign_operation
@@ -2385,7 +2453,16 @@ class FuturesWilliamsRuntime:
         """Finalize a flat campaign only when a bot-owned exit fill is proven."""
         filled = []
         for o in (orders or []):
-            if str(o.get("status", "")).upper() != "FILLED":
+            if str(o.get("status", "")).upper() not in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH"}:
+                continue
+            try:
+                quantity = float(o.get("executedQty", "nan"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if (o.get("symbol") != campaign.symbol or
+                    o.get("side") != ("SELL" if campaign.side == "BUY" else "BUY") or
+                    not math.isfinite(quantity) or quantity <= 0 or
+                    not math.isclose(quantity, campaign.position_qty, rel_tol=1e-12, abs_tol=1e-12)):
                 continue
             cid = str(o.get("clientOrderId", ""))
             if not cid.startswith(("WILLF_STOP_", "WILLF_EXIT_")):

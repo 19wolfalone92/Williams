@@ -38,6 +38,20 @@ internal fun hasLiveFuturesPosition(rows: JSONArray): Boolean {
     return false
 }
 
+internal fun validateFuturesPositionSnapshot(rows: JSONArray): JSONArray {
+    val identities = mutableSetOf<Pair<String, String>>()
+    for (index in 0 until rows.length()) {
+        val row = rows.optJSONObject(index) ?: error("Malformed Futures position row")
+        val symbol = row.optString("symbol")
+        val side = row.optString("positionSide", "BOTH")
+        check(symbol.isNotBlank() && side in setOf("BOTH", "LONG", "SHORT") &&
+            row.optString("positionAmt").toBigDecimalOrNull() != null && identities.add(symbol to side)) {
+            "Malformed or duplicate Futures position identity/amount"
+        }
+    }
+    return rows
+}
+
 internal class BinanceUsdMFuturesTestnetAdapter(
     private val apiKey: String,
     apiSecret: String,
@@ -285,7 +299,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     }
 
     fun positions(): JSONArray =
-        JSONArray(requestRaw("GET", "/fapi/v3/positionRisk", emptyMap(), signed = true))
+        validateFuturesPositionSnapshot(JSONArray(requestRaw("GET", "/fapi/v3/positionRisk", emptyMap(), signed = true)))
 
     fun order(symbol: String, clientOrderId: String): JSONObject {
         requireSymbol(symbol)

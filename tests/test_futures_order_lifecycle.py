@@ -22,6 +22,8 @@ class DemoExchangeModel:
         self.bad_leverage_confirmation = False
         self.bad_brackets = False
         self.liquidation_price = "MODEL"
+        self.close_fraction = 1.0
+        self.close_status = "FILLED"
 
     def request(self, method, path, params=None, signed=False):
         p = params or {}
@@ -81,11 +83,13 @@ class DemoExchangeModel:
                 assert p["reduceOnly"] == "true"
                 assert p["side"] == ("SELL" if self.amount > 0 else "BUY")
                 assert float(p["quantity"]) == quantity
-                self.amount = 0.0
+                self.amount *= 1.0 - self.close_fraction
                 self.orders[oid] = {**p, "orderId": oid, "clientOrderId": p["newClientOrderId"], "status": "FILLED",
-                                    "executedQty": str(quantity), "origQty": str(quantity), "avgPrice": str(self.price)}
+                                    "executedQty": str(quantity * self.close_fraction), "origQty": str(quantity), "avgPrice": str(self.price)}
+                self.orders[oid]["status"] = self.close_status
                 return dict(self.orders[oid])
-            row = self.orders[int(p["orderId"])]
+            row = self.orders[int(p["orderId"])] if "orderId" in p else next(
+                row for row in self.orders.values() if row.get("clientOrderId") == p["origClientOrderId"])
             if method == "DELETE" and row["status"] == "PARTIALLY_FILLED":
                 row["status"] = "FILLED"
                 row["executedQty"] = row["origQty"]
@@ -193,6 +197,44 @@ def test_emergency_cancel_resolves_an_entry_fill_racing_cancellation(armed_runti
     assert exchange.amount != 0
     assert bot.manual_sell("BTCUSDT")["sold"]
     assert exchange.amount == 0
+
+
+def test_a_terminal_partial_exit_accounts_for_the_fill_and_preserves_the_owned_remainder(armed_runtime):
+    bot, exchange, armed = armed_runtime
+    exchange.fill_entry()
+    bot._reconcile_pending()
+    campaign = bot.engine.load_campaign(armed["campaign_id"])
+    original = campaign.position_qty
+    exchange.close_fraction = 0.4
+    exchange.close_status = "EXPIRED_IN_MATCH"
+    with pytest.raises(RuntimeError, match="residual|terminal failure"):
+        bot._exit_market(campaign, "MODEL_PARTIAL_EXIT")
+    recovered = bot._reconcile_pending_exits()
+    assert not any("error" in result for result in recovered), recovered
+    remaining = bot.engine.load_campaign(campaign.campaign_id)
+    assert remaining.position_qty == pytest.approx(original * 0.6)
+    assert not bot._pending_exits()
+    assert bot.recover()["ok"]
+    partial = [dict(r) for r in bot.db.conn.execute("SELECT * FROM trades WHERE exit_time IS NOT NULL")]
+    assert len(partial) == 1 and partial[0]["quantity"] == pytest.approx(original * 0.4)
+    assert bot.db.open_trade("BTCUSDT")["quantity"] == pytest.approx(original * 0.6)
+
+
+def test_a_campaign_exit_cancels_a_still_armed_add_on_before_closing(armed_runtime):
+    bot, exchange, armed = armed_runtime
+    exchange.fill_entry()
+    bot._reconcile_pending()
+    campaign = bot.engine.load_campaign(armed["campaign_id"])
+    now = int(time.time() * 1000)
+    signal = SignalSpec.new(symbol="BTCUSDT", side="BUY", signal_type=SignalType.SUPER_AO,
+        role=SignalRole.ADD_ON, timeframe="1h", signal_bar_time_ms=now, trigger_price=103,
+        protective_reference=95, expires_at_ms=now + 3600000)
+    bot._arm_add_on(campaign, signal)
+    campaign = bot.engine.load_campaign(campaign.campaign_id)
+    assert bot._pending_entries()
+    assert bot._exit_market(campaign, "MANUAL_EXIT")["state"] == "CLOSED"
+    assert not bot._pending_entries()
+    assert all(row["algoStatus"] != "NEW" for row in exchange.algos.values())
 
 
 
