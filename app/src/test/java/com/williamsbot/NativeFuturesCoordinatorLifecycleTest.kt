@@ -67,7 +67,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 }
                 "/fapi/v1/symbolConfig" -> JSONArray().put(JSONObject().put("symbol", "BTCUSDT")
                     .put("marginType", "ISOLATED").put("leverage", leverage).put("maxNotionalValue", "1000000"))
-                "/fapi/v1/openOrders" -> JSONArray()
+                "/fapi/v1/openOrders" -> JSONArray(orders.values.filter { it.optString("status") in setOf("NEW", "PARTIALLY_FILLED") })
                 "/fapi/v1/openAlgoOrders" -> JSONArray(algos.values.filter { it.optString("algoStatus") == "NEW" })
                 "/fapi/v1/algoOrder" -> when (request.method) {
                     "POST" -> {
@@ -98,6 +98,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 } else {
                     orders.values.singleOrNull { it.optString("orderId") == p["orderId"] ||
                         it.optString("clientOrderId") == p["origClientOrderId"] }
+                        ?.also { if (request.method == "DELETE") it.put("status", "CANCELED") }
                         ?: run { code = 400; JSONObject().put("code", -2013).put("msg", "Order does not exist.") }
                 }
                 else -> throw AssertionError("Unexpected exchange route ${request.method} ${request.url.encodedPath}")
@@ -111,16 +112,17 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("positionAmt", quantity.toString()).put("entryPrice", entry.toString())
                 .put("markPrice", mark.toString()).put("liquidationPrice", liquidation))
         }
-        fun fill() {
+        fun fill(fraction: Double = 1.0, childClientId: String? = null) {
             val pending = algos.values.single { it.optString("closePosition") != "true" }
             entry = pending.getString("triggerPrice").toDouble()
-            quantity = pending.getString("quantity").toDouble() *
+            quantity = pending.getString("quantity").toDouble() * fraction *
                 if (pending.getString("side") == "BUY") 1.0 else -1.0
             mark = if (quantity > 0) 102.0 else 98.0
             pending.put("algoStatus", "FINISHED").put("actualOrderId", "42")
             orders["42"] = JSONObject().put("symbol", "BTCUSDT").put("orderId", "42")
-                .put("clientOrderId", pending.getString("clientAlgoId")).put("status", "FILLED")
-                .put("origQty", kotlin.math.abs(quantity).toString()).put("executedQty", kotlin.math.abs(quantity).toString())
+                .put("clientOrderId", childClientId ?: pending.getString("clientAlgoId"))
+                .put("status", if (fraction == 1.0) "FILLED" else "PARTIALLY_FILLED")
+                .put("origQty", pending.getString("quantity")).put("executedQty", kotlin.math.abs(quantity).toString())
                 .put("side", pending.getString("side")).put("avgPrice", entry.toString())
         }
         fun posts(path: String) = requests.count { it.method == "POST" && it.url.encodedPath == path }
@@ -203,6 +205,49 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertFalse(coordinator.executeRequiredSafetyExit(request).getBoolean("ok"))
             assertEquals(1, exchange.posts("/fapi/v1/order"))
             assertTrue(coordinator.reconcile().getBoolean("ok"))
+        }
+    }
+
+    @Test fun trailingRevalidatesTheLivePositionBeforeAnyStopMutation() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.values()) {
+            for (change in listOf("flat", "reversed", "increased")) {
+                val (coordinator, exchange) = open(direction)
+                exchange.quantity = when (change) {
+                    "flat" -> 0.0
+                    "reversed" -> -exchange.quantity
+                    else -> exchange.quantity * 2
+                }
+                val before = exchange.posts("/fapi/v1/algoOrder")
+                val result = coordinator.trailProtectiveStop("BTCUSDT", direction,
+                    if (direction.name == "LONG") "96" else "104", "W2PS_STALE")
+                assertFalse("$direction $change: $result", result.getBoolean("ok"))
+                assertEquals(before, exchange.posts("/fapi/v1/algoOrder"))
+                assertEquals("RECONCILE_REQUIRED", coordinator.state.name)
+            }
+        }
+    }
+
+    @Test fun reconciliationCannotAdoptAnExternalQuantityIncreaseAsAStrategyFill() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.values()) {
+            val (coordinator, exchange) = open(direction)
+            exchange.quantity *= 2
+            val result = coordinator.reconcile()
+            assertFalse(result.toString(), result.getBoolean("ok"))
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
+    @Test fun aTriggeredAlgoChildIsOwnedByItsExactOrderIdAndPartialRemainderIsCancelled() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.values()) {
+            val exchange = Exchange(direction)
+            val coordinator = NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.fill(fraction = 0.4, childClientId = "EXCHANGE_GENERATED_CHILD")
+            val result = coordinator.reconcile()
+            assertTrue(result.toString(), result.getBoolean("ok"))
+            assertEquals("CANCELED", exchange.orders.getValue("42").getString("status"))
+            assertTrue(coordinator.isManagedOpenPosition("BTCUSDT", direction))
         }
     }
 

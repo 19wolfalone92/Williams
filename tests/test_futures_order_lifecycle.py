@@ -21,6 +21,7 @@ class DemoExchangeModel:
         self.leverage = 2
         self.bad_leverage_confirmation = False
         self.bad_brackets = False
+        self.liquidation_price = "MODEL"
 
     def request(self, method, path, params=None, signed=False):
         p = params or {}
@@ -51,7 +52,7 @@ class DemoExchangeModel:
             return {"canTrade": True, "assets": [], "totalWalletBalance": "10000", "totalUnrealizedProfit": "0", "availableBalance": "10000"}
         if path.endswith("positionRisk"):
             return [{"symbol": "BTCUSDT", "positionAmt": str(self.amount), "entryPrice": str(self.entry_price),
-                     "liquidationPrice": "50" if self.amount > 0 else "200", "positionSide": "BOTH",
+                     "liquidationPrice": self.liquidation_price if self.liquidation_price != "MODEL" else ("50" if self.amount > 0 else "200"), "positionSide": "BOTH",
                      "leverage": str(self.leverage), "marginType": "isolated"}]
         if path.endswith("openOrders") or path.endswith("allOrders"):
             return list(self.orders.values()) if path.endswith("allOrders") else []
@@ -105,6 +106,92 @@ class DemoExchangeModel:
         self.orders[oid] = {"orderId": oid, "symbol": "BTCUSDT", "side": row["side"],
                             "status": "FILLED" if fraction == 1 else "PARTIALLY_FILLED",
                             "origQty": str(quantity), "executedQty": str(quantity * fraction), "avgPrice": str(self.entry_price)}
+
+
+@pytest.fixture
+def armed_runtime(monkeypatch, tmp_path, request):
+    side = getattr(request, "param", "BUY")
+    monkeypatch.setenv("WILLIAMS_DB_PATH", str(tmp_path / "deep-lifecycle.sqlite3"))
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("FUTURES_LEVERAGE", "2")
+    monkeypatch.setenv("FUTURES_SYMBOL_LEVERAGES", "")
+    bot = FuturesWilliamsRuntime("test-key", "test-secret", testnet=True)
+    exchange = DemoExchangeModel()
+    monkeypatch.setattr(bot.client, "_request", exchange.request)
+    now = int(time.time() * 1000)
+    signal = SignalSpec.new(symbol="BTCUSDT", side=side, signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY,
+        timeframe="1h", signal_bar_time_ms=now - 1000, trigger_price=101 if side == "BUY" else 99,
+        protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000)
+    candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
+    armed = bot._arm_entry(candidate)
+    try:
+        yield bot, exchange, armed
+    finally:
+        bot.client.session.close()
+        bot.db.conn.close()
+
+
+@pytest.mark.parametrize("armed_runtime", ["BUY", "SELL"], indirect=True)
+@pytest.mark.parametrize("price", ["0", "NaN", None, "malformed"])
+def test_unknown_liquidation_protects_the_fill_without_automatic_flatten(armed_runtime, price):
+    bot, exchange, armed = armed_runtime
+    exchange.fill_entry()
+    exchange.liquidation_price = price
+    bot._reconcile_pending()
+    assert not any(method == "POST" and path.endswith("/order") for method, path, _ in exchange.calls)
+    assert any(row.get("closePosition") == "true" and row["algoStatus"] == "NEW" for row in exchange.algos.values())
+    assert not bot._pending_entries()
+    assert bot.state("BTCUSDT") == "RECONCILE_REQUIRED"
+    exchange.liquidation_price = "MODEL"
+    assert bot.recover()["ok"]
+    assert bot.state("BTCUSDT") == "OPEN"
+
+
+@pytest.mark.parametrize("armed_runtime", ["BUY", "SELL"], indirect=True)
+def test_unknown_liquidation_during_recovery_retains_existing_protection(armed_runtime):
+    bot, exchange, armed = armed_runtime
+    exchange.fill_entry()
+    bot._reconcile_pending()
+    stop = exchange.algos[2]
+    exchange.liquidation_price = "0"
+    assert not bot.recover()["ok"]
+    assert exchange.amount != 0 and stop["algoStatus"] == "NEW"
+    assert not any(method == "POST" and path.endswith("/order") for method, path, _ in exchange.calls)
+
+
+def test_scanner_failure_does_not_skip_position_ownership_reconciliation(armed_runtime):
+    bot, exchange, armed = armed_runtime
+    exchange.fill_entry()
+    bot._reconcile_pending()
+    bot.preflight_report = {"ready": True}
+    bot.recovered = True
+    exchange.amount *= 2
+    bot.scanner.scan = lambda: []
+    bot.scanner.last_scan_status = {"state": "FAILED", "reason": "model market outage"}
+    assert bot.process() == []
+    assert bot.state("BTCUSDT") == "RECONCILE_REQUIRED"
+
+
+def test_expired_in_match_entry_retires_pending_reservation(armed_runtime):
+    bot, exchange, armed = armed_runtime
+    exchange.algos[1]["algoStatus"] = "EXPIRED_IN_MATCH"
+    bot._reconcile_pending()
+    assert not bot._pending_entries()
+    assert bot.state("BTCUSDT") == "FLAT"
+    assert bot.db.campaign_risk_reserved_quote() == 0
+
+
+def test_emergency_cancel_resolves_an_entry_fill_racing_cancellation(armed_runtime):
+    bot, exchange, armed = armed_runtime
+    bot.db.state_set("kill_switch_latched", "true")
+    exchange.cancel_fill = True
+    result = bot.cancel_pending_entries()
+    assert result["ok"], result
+    assert not bot._pending_entries()
+    assert exchange.amount != 0
+    assert bot.manual_sell("BTCUSDT")["sold"]
+    assert exchange.amount == 0
+
 
 
 @pytest.mark.parametrize("side", ["BUY", "SELL"])
