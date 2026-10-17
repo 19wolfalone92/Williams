@@ -102,7 +102,7 @@ internal fun assessFuturesEntryRisk(
     ) return blocked("Futures risk reservation exceeds the 0.25% per-entry cap or is invalid")
     if (!feeBufferPerSidePct.isFinite() || feeBufferPerSidePct < 0.0 ||
         !maxSlippagePct.isFinite() || maxSlippagePct < 0.0 ||
-        !leverage.isFinite() || leverage <= 0.0 ||
+        !leverage.isFinite() || leverage < 1.0 || leverage > MAX_CONFIGURED_FUTURES_LEVERAGE || leverage % 1.0 != 0.0 ||
         !availableMarginBufferPct.isFinite() || availableMarginBufferPct <= 0.0 ||
         availableMarginBufferPct > 1.0
     ) return blocked("Futures fee/slippage/margin risk assumptions are invalid")
@@ -650,7 +650,8 @@ internal class NativeFuturesCampaignCoordinator(
         val riskPct: Double,
         val signalType: String = "",
         val signalBarTimeMs: Long = 0L,
-        val signalReason: String = ""
+        val signalReason: String = "",
+        val leverage: Int = 2
     )
 
     @Volatile var state: State = State.UNINITIALIZED
@@ -1791,6 +1792,7 @@ internal class NativeFuturesCampaignCoordinator(
         }
         try {
             validatePlan(plan)
+            parseFuturesLeverage(plan.leverage)
         } catch (failure: Exception) {
             return@synchronized safePreflightRejection(
                 "Invalid Futures entry plan rejected before order mutation: " +
@@ -1834,11 +1836,21 @@ internal class NativeFuturesCampaignCoordinator(
             protectiveStop = plan.protectiveStop,
             equityUsdt = preflightAccount.equityUsdt,
             availableUsdt = preflightAccount.availableUsdt,
-            riskBudgetPct = plan.riskPct
+            riskBudgetPct = plan.riskPct,
+            leverage = plan.leverage.toDouble()
         )
         if (riskCheck.blocker != null) {
             return@synchronized safePreflightRejection(riskCheck.blocker)
         }
+        val leverageBlocker = try {
+            futuresLeverageBlocker(
+                preflightAdapter.leverageBrackets(plan.symbol), plan.symbol, plan.leverage,
+                riskCheck.notionalUsdt, plan.entryPrice.toDouble(), plan.protectiveStop.toDouble()
+            )
+        } catch (failure: Exception) {
+            "Futures leverage limits unavailable: " + (failure.message ?: failure.javaClass.simpleName)
+        }
+        if (leverageBlocker != null) return@synchronized safePreflightRejection(leverageBlocker)
 
         // Distinct approved symbols may hold concurrent campaigns, but each live
         // position must be owned by a durable campaign with exchange-confirmed stop.
@@ -1923,6 +1935,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("protective_stop", plan.protectiveStop)
             .put("initial_protective_stop", plan.protectiveStop)
             .put("risk_pct", plan.riskPct)
+            .put("requested_leverage", plan.leverage)
             .put("signal_type", plan.signalType)
             .put("signal_bar_time_ms", plan.signalBarTimeMs)
             .put("signal_reason", safeDiagnosticText(plan.signalReason))
@@ -1947,10 +1960,20 @@ internal class NativeFuturesCampaignCoordinator(
         lastBlocker = "pending_entry_submission_in_progress"
 
         val adapter = adapterFactory()
+        var orderSubmissionAttempted = false
         try {
             adapter.serverTime()
             adapter.requireOneWayMode()
-            adapter.ensureIsolatedTwoX(plan.symbol)
+            val leverageConfirmation = adapter.ensureIsolatedLeverage(plan.symbol, plan.leverage)
+            val confirmedNotionalCap = leverageConfirmation.getString("maxNotionalValue").toDouble()
+            val worstNotional = riskCheck.notionalUsdt * maxOf(1.0, plan.protectiveStop.toDouble() / plan.entryPrice.toDouble())
+            check(confirmedNotionalCap.isFinite() && worstNotional < confirmedNotionalCap) {
+                "FUTURES_LEVERAGE_NOTIONAL_CAP: confirmed exchange limit is below planned exposure"
+            }
+            intent.put("confirmed_leverage", leverageConfirmation.getInt("leverage"))
+                .put("leverage_confirmed_at_ms", System.currentTimeMillis())
+            saveIntents(currentIntents)
+            orderSubmissionAttempted = true
             val result = when (plan.kind) {
                 EntryKind.LIMIT -> adapter.placeLimitOrder(
                     symbol = plan.symbol,
@@ -1986,6 +2009,7 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("state", state.name)
                 .put("direction", plan.direction.name)
                 .put("entry_kind", plan.kind.name)
+                .put("leverage", plan.leverage)
                 .put("order", result)
                 .put("protection", "PENDING_FILL")
                 .put("risk_estimate", JSONObject()
@@ -1996,6 +2020,21 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("all_in_risk_pct", riskCheck.estimatedAllInRiskPct)
                     .put("initial_margin_usdt", riskCheck.initialMarginUsdt))
         } catch (failure: Exception) {
+            if (!orderSubmissionAttempted) {
+                // Account configuration can fail or time out, but no entry was
+                // sent. Do not reserve a phantom SUBMISSION_UNKNOWN order.
+                intent.put("exchange_status", "REJECTED")
+                    .put("order_status", "REJECTED")
+                    .put("campaign_status", "CLOSED_OR_STOPPED")
+                    .put("error", failure.message ?: failure.javaClass.simpleName)
+                saveIntents(currentIntents)
+                state = State.RECONCILE_REQUIRED
+                lastBlocker = "futures_account_configuration_failed_before_order"
+                return@synchronized JSONObject().put("accepted", false)
+                    .put("safe_rejection", true).put("mutation_attempted", true)
+                    .put("order_mutation_attempted", false).put("state", state.name)
+                    .put("blocker", lastBlocker).put("error", intent.optString("error"))
+            }
             intent.put("exchange_status", "SUBMISSION_UNKNOWN")
                 .put("order_status", "SUBMISSION_UNKNOWN")
                 .put("campaign_status", "ENTRY_PENDING")
@@ -2608,6 +2647,8 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("entry_price", item.opt("entry_price") ?: JSONObject.NULL)
                     .put("quantity", item.opt("quantity") ?: JSONObject.NULL)
                     .put("risk_pct", item.opt("risk_pct") ?: JSONObject.NULL)
+                    .put("requested_leverage", item.opt("requested_leverage") ?: JSONObject.NULL)
+                    .put("confirmed_leverage", item.opt("confirmed_leverage") ?: JSONObject.NULL)
                     .put("executed_qty", item.opt("executed_qty") ?: JSONObject.NULL)
                     .put("client_id_suffix", item.optString("client_id").takeLast(8))
                     .put("order_status", orderStatus)

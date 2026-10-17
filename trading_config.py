@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Mapping, Sequence
+from futures_leverage import parse_leverage, parse_symbol_leverages
 
 
 DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
@@ -78,6 +79,7 @@ class TradingConfig:
     execution_timeframe: str = "1h"
     market: str = "futures_usdt"
     futures_leverage: int = 2
+    futures_symbol_leverages: tuple[tuple[str, int], ...] = ()
     futures_margin_type: str = "ISOLATED"
     futures_force_one_way: bool = True
 
@@ -110,6 +112,17 @@ class TradingConfig:
 
     dry_run: bool = True
     allow_live: bool = False
+
+    def __post_init__(self):
+        parse_leverage(self.futures_leverage)
+        symbols = [symbol for symbol, _ in self.futures_symbol_leverages]
+        if len(symbols) != len(set(symbols)) or any(s not in DEFAULT_FUTURES_SYMBOLS for s in symbols):
+            raise ValueError("FUTURES_SYMBOL_LEVERAGES contains an unknown or duplicate symbol")
+        for _, leverage in self.futures_symbol_leverages:
+            parse_leverage(leverage)
+
+    def leverage_for(self, symbol: str) -> int:
+        return parse_leverage(dict(self.futures_symbol_leverages).get(symbol.upper(), self.futures_leverage))
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "TradingConfig":
@@ -169,7 +182,10 @@ class TradingConfig:
                 raise ValueError("EXECUTION_TIMEFRAME must be H1 for the canonical Williams campaign")
             if structural_timeframes != DEFAULT_STRUCTURAL_TFS:
                 raise ValueError("STRUCTURAL_TIMEFRAMES must be D1,H4,H1,M15 for the canonical Williams campaign")
-        futures_leverage = max(1, min(2, _int(source, "FUTURES_LEVERAGE", 2)))
+        futures_leverage = parse_leverage(source.get("FUTURES_LEVERAGE", "2"))
+        futures_symbol_leverages = parse_symbol_leverages(
+            source.get("FUTURES_SYMBOL_LEVERAGES", ""), DEFAULT_FUTURES_SYMBOLS
+        )
         futures_margin_type = str(source.get("FUTURES_MARGIN_TYPE", "ISOLATED")).strip().upper()
         if market == "futures_usdt" and futures_margin_type != "ISOLATED":
             raise ValueError("FUTURES_MARGIN_TYPE must be ISOLATED")
@@ -185,6 +201,7 @@ class TradingConfig:
             execution_timeframe=execution_timeframe,
             market=market,
             futures_leverage=futures_leverage,
+            futures_symbol_leverages=futures_symbol_leverages,
             futures_margin_type=futures_margin_type,
             futures_force_one_way=futures_force_one_way,
             allow_long=_bool(source, "ALLOW_LONG", True),
