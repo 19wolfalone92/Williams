@@ -279,18 +279,21 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             legs = [price[1]-price[0], price[3]-price[2], price[5]-price[4]]
             if min(legs) <= 0 or legs[1] < min(legs[0], legs[2]):
                 reasons.append("W3_SHORTEST_OR_NEGATIVE_MOTIVE_LEG")
-        label = f"W{n}" if n <= 5 else {6:"A", 7:"B", 8:"C", 9:"ABC_COMPLETE"}[n]
+        # A motive sequence has FIVE LEGS but SIX pivot endpoints.
+        # Previous mapping treated two pivots as W2 and six as A; that
+        # off-by-one silently misclassified late W5 as a correction.
+        label = f"W{n-1}" if n <= 6 else {7:"A", 8:"B", 9:"C"}[n]
         if n >= 7 and price[6] >= price[5]:
             reasons.append("A_NOT_CORRECTIVE")
         if n >= 8 and price[7] <= price[6]:
             reasons.append("B_NOT_RETRACING_A")
         if n >= 9 and price[8] >= price[6]:
             reasons.append("C_NOT_EXTENDING_A_COMPLEX_CORRECTION_POSSIBLE")
-        inv = p[0].price if n <= 3 else p[1].price if n <= 5 else p[5].price
+        inv = p[0].price if n <= 3 else p[1].price if n <= 6 else p[5].price
         last_bar = bars[-1]
         # A/C must remain on the corrective side of the old W5. B may exceed
         # it in an irregular correction: keep that alternative explicitly.
-        if n <= 5 and sign * (last_bar.c - inv) <= 0:
+        if n <= 6 and sign * (last_bar.c - inv) <= 0:
             reasons.append("LIVE_PRICE_INVALIDATED_COUNT")
         leg = [b for b in bars if b.t >= p[-1].extreme_at]
         h = WaveHypothesis(
@@ -372,7 +375,7 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) ->
             if observed:
                 h.leg_low = min(b.l for b in observed)
                 h.leg_high = max(b.h for b in observed)
-                if len(h.anchors) <= 5 and (
+                if len(h.anchors) <= 6 and (
                     h.direction == "UP" and h.leg_low <= h.invalidation or
                     h.direction == "DOWN" and h.leg_high >= h.invalidation
                 ):
