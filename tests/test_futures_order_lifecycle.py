@@ -25,6 +25,7 @@ class DemoExchangeModel:
         self.close_fraction = 1.0
         self.close_status = "FILLED"
         self.market_add_timeout_after_fill = False
+        self.market_close_timeout_after_fill=False
 
     def request(self, method, path, params=None, signed=False):
         p = params or {}
@@ -91,14 +92,15 @@ class DemoExchangeModel:
                     if self.market_add_timeout_after_fill:
                         raise BinanceAPIError("simulated response lost AFTER the MARKET fill")
                     return dict(self.orders[oid])
-                quantity = abs(self.amount)
+                quantity = float(p["quantity"])
+                assert quantity<=abs(self.amount)
                 assert p["reduceOnly"] == "true"
                 assert p["side"] == ("SELL" if self.amount > 0 else "BUY")
-                assert float(p["quantity"]) == quantity
-                self.amount *= 1.0 - self.close_fraction
+                self.amount -= quantity*self.close_fraction*(1 if self.amount>0 else -1)
                 self.orders[oid] = {**p, "orderId": oid, "clientOrderId": p["newClientOrderId"], "status": "FILLED",
                                     "executedQty": str(quantity * self.close_fraction), "origQty": str(quantity), "avgPrice": str(self.price)}
                 self.orders[oid]["status"] = self.close_status
+                if self.market_close_timeout_after_fill:raise BinanceAPIError("simulated reply lost AFTER reduction fill")
                 return dict(self.orders[oid])
             row = self.orders[int(p["orderId"])] if "orderId" in p else next(
                 row for row in self.orders.values() if row.get("clientOrderId") == p["origClientOrderId"])
@@ -430,3 +432,62 @@ def test_ntd_close_event_uses_one_market_order_and_recovers_its_aggregate_fill(a
     with pytest.raises(RuntimeError,match="already admitted"):
         bot._arm_add_on(updated,signal)
     assert len([p for method,path,p in exchange.calls if method=="POST" and path.endswith("/order") and p.get("reduceOnly")!="true"])==1
+
+
+@pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
+@pytest.mark.parametrize("lost",[False,True])
+def test_course_intentional_trim_is_attributed_once_and_keeps_its_exchange_stop(armed_runtime,lost):
+    bot,exchange,armed=armed_runtime
+    exchange.fill_entry();bot._reconcile_pending()
+    campaign=bot.engine.load_campaign(armed["campaign_id"])
+    # Arrange an already-owned Course position; this test concerns reduction
+    # ownership/recovery, whose entry formation has independent source tests.
+    campaign.tags["strategy_profile"]="COURSE_PROFITUNITY"
+    campaign.tags["pending_course_stage"]="W4"
+    bot.db.save_campaign(campaign)
+    original=campaign.position_qty
+    quantity=bot._normalize_qty(campaign.symbol,original*.5)
+    stop=next(row for row in exchange.algos.values() if row.get("closePosition")=="true")
+    stopid=stop["clientAlgoId"]
+    exchange.market_close_timeout_after_fill=lost
+    if lost:
+        with pytest.raises(RuntimeError):bot._exit_market(campaign,"COURSE_STAGE_TRIM",partial_quantity=quantity)
+        bot._reconcile_pending_exits()
+    else:
+        result=bot._exit_market(campaign,"COURSE_STAGE_TRIM",partial_quantity=quantity)
+        assert result["partial_reduction"]
+    assert bot.recover()["ok"]
+    updated=bot.engine.load_campaign(campaign.campaign_id)
+    assert updated.position_qty==pytest.approx(original-quantity)
+    assert updated.tags["course_plan"]["stage"]=="W4"
+    assert bot.db.open_trade(campaign.symbol)["quantity"]==pytest.approx(original-quantity)
+    assert not bot._pending_exits()
+    assert next(row for row in exchange.algos.values() if row["algoStatus"]=="NEW")["clientAlgoId"]==stopid
+    assert len([p for method,path,p in exchange.calls if method=="POST" and path.endswith("/order")])==1
+
+
+@pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
+def test_course_management_executes_an_observed_w4_trim_without_waiting_for_entry_session(armed_runtime,monkeypatch):
+    import pandas as pd
+    from tests.test_williams_wave_hierarchy import correction_report
+    bot,exchange,armed=armed_runtime
+    exchange.fill_entry();bot._reconcile_pending()
+    campaign=bot.engine.load_campaign(armed["campaign_id"])
+    original=campaign.position_qty
+    campaign.tags["strategy_profile"]="COURSE_PROFITUNITY"
+    campaign.tags["course_plan"]={"stage":"W3_EXTENSION","origin_at":10,"unit_quantity":original/10,"unit_is_actual":True}
+    bot.db.save_campaign(campaign)
+    now=int(time.time()*1000)
+    prices=[100+i*.1 for i in range(80)]
+    frame=pd.DataFrame({"open_time_ms":[now-(81-i)*3_600_000 for i in range(80)],"open":prices,
+        "high":[p+1 for p in prices],"low":[p-1 for p in prices],"close":prices,"volume":[1000]*80})
+    monkeypatch.setattr("futures_williams_runtime.fetch_klines",lambda *a,**k:frame)
+    monkeypatch.setattr("futures_williams_runtime.course_active_context",lambda *a,**k:{"phase":"W4"})
+    bot.scanner.wave_hierarchy=lambda *a,**k:correction_report()
+    bot.db.state_set("entry_admission_paused","true")
+    result=bot._trail(campaign)
+    assert result["partial_reduction"]
+    updated=bot.engine.load_campaign(campaign.campaign_id)
+    assert updated.tags["course_plan"]["stage"]=="W4"
+    assert 0<updated.position_qty<original
+    assert bot.recover()["ok"]

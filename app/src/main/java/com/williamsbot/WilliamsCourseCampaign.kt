@@ -87,3 +87,24 @@ internal fun acknowledgeWilliamsCourseFill(
     return s.copy(stage=proposed.stage,confirmedUnits=verifiedUnits,revision=s.revision+1,
         lastSignalCloseMs=signalCloseMs,confirmedFillIds=s.confirmedFillIds+fillId)
 }
+
+internal fun williamsCourseActiveContext(report:WilliamsWaveHierarchy,side:String,originAt:Long?=null):org.json.JSONObject? {
+    val direction=when(side) { "LONG","BUY"->"UP";"SHORT","SELL"->"DOWN";else->return null }
+    if("1h" in report.frameErrors) return null
+    val candidates=report.scenarios.filter { it.frame=="1h" && it.status=="PROVISIONAL" && it.direction==direction &&
+        it.activeLabel in listOf("W1","W2","W3","W4","W5","A","C") &&
+        (originAt==null || it.anchors.first().extremeAt==originAt) &&
+        (originAt!=null || it.activeLabel in listOf("W1","W3","W5")) }
+    if(candidates.size!=1) return null
+    val h=candidates.single()
+    return org.json.JSONObject().put("origin_at",h.anchors.first().extremeAt).put("phase",h.activeLabel)
+        .put("scenario_id",h.id).put("known_at",h.anchors.last().knownAt).put("observed_at",h.observedAt)
+}
+internal fun williamsCourseNextStage(stage:String,phase:String,newFormation:Boolean=false):String?=when {
+    stage=="W1" && phase=="W2" -> "W2"
+    stage=="W2" && phase=="W3" && newFormation -> "W3"
+    stage=="W3" && phase=="W3" && newFormation -> "W3_EXTENSION"
+    stage in listOf("W3","W3_EXTENSION") && phase=="W4" -> "W4"
+    stage=="W4" && phase=="W5" && newFormation -> "W5"
+    else -> null
+}

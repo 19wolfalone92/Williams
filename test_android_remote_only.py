@@ -424,7 +424,8 @@ def test_android_exit_requires_exchange_position_protection_and_filled_order_con
     assert "val adapterPreflight = adapterFactory()" in coordinator
     assert "adapterPreflight.positions()" in coordinator
     assert "adapterPreflight.openAlgoOrders(symbol)" in coordinator
-    assert "requestedQty.compareTo(liveAmount.abs()) != 0" in coordinator
+    assert "val quantityMatches=if(partialReduction) requestedQty<positionBefore else requestedQty.compareTo(positionBefore)==0" in coordinator
+    assert 'reason!="COURSE_STAGE_TRIM" || managedEntry?.optString("strategy_profile")!=williamsCourseProfile' in coordinator
     assert "val confirmedOrder = adapter.order(symbol, clientOrderId)" in coordinator
     assert 'if (finalOrderStatus != "FILLED")' in coordinator
     # Explicit operator exits are a risk-reducing escape hatch when the

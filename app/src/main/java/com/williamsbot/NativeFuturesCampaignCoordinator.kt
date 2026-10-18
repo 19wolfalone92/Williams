@@ -2263,6 +2263,16 @@ internal class NativeFuturesCampaignCoordinator(
             .put("campaign_status", "ENTRY_PENDING")
             .put("protection_status", "NOT_SUBMITTED")
             .put("created_at_ms", System.currentTimeMillis())
+        if(isAddition && plan.strategyProfile==williamsCourseProfile) {
+            val setup=runCatching { JSONObject(plan.setupContext) }.getOrDefault(JSONObject())
+            if(setup.has("course_target_stage") && setup.has("course_target_quantity")) {
+                val management=primary!!.optJSONObject("edition_management") ?: JSONObject()
+                management.put("course_pending_stage",setup.getString("course_target_stage"))
+                    .put("course_pending_target",setup.getDouble("course_target_quantity"))
+                    .put("course_pending_client_id",plan.clientId)
+                primary.put("edition_management",management)
+            }
+        }
         currentIntents.put(intent)
         saveIntents(currentIntents)
         state = State.ENTRY_PENDING
@@ -2786,6 +2796,11 @@ internal class NativeFuturesCampaignCoordinator(
             return@synchronized JSONObject().put("ok",false).put("blocker","Partial reductions require an owned Course stage")
         var positionBefore=java.math.BigDecimal.ZERO
         val adapterPreflight = adapterFactory()
+        if(partialReduction) {
+            val contract=futuresContractRuleBlocker(adapterPreflight.exchangeInfo(),symbol,quantity,
+                managedEntry!!.getString("entry_price"),managedEntry.getString("protective_stop"),marketOrder=true)
+            if(contract!=null) return@synchronized JSONObject().put("ok",false).put("blocker",contract)
+        }
         try {
             adapterPreflight.requireOneWayMode()
             val livePositions = adapterPreflight.positions()

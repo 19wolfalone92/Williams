@@ -55,4 +55,15 @@ class WilliamsCourseCampaignTest {
             assertEquals(0,s.revision)
         }
     }
+    @Test fun executionStagesRequireANewFormationForEveryIncreaseAndNeverExitOnAWaveLabelAlone() {
+        assertEquals("W2",williamsCourseNextStage("W1","W2"))
+        assertNull(williamsCourseNextStage("W2","W3"))
+        assertEquals("W3",williamsCourseNextStage("W2","W3",true))
+        assertEquals("W3_EXTENSION",williamsCourseNextStage("W3","W3",true))
+        assertEquals("W4",williamsCourseNextStage("W3","W4"))
+        assertEquals("W4",williamsCourseNextStage("W3_EXTENSION","W4"))
+        assertNull(williamsCourseNextStage("W4","W5"))
+        assertEquals("W5",williamsCourseNextStage("W4","W5",true))
+        assertNull(williamsCourseNextStage("W5","A",true))
+    }
 }

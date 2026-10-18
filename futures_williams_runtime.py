@@ -40,6 +40,7 @@ from williams_signals import (
     extract_short_signal_specs,
 )
 from williams_profiles import extract_profile_signals
+from williams_course_campaign import course_active_context,course_next_stage,TARGETS as COURSE_TARGETS
 from williams_edition_rules import TC2,NTD,COURSE,PROFILES,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan
 from campaign_engine import CampaignEngine
 from equity_breaker import EquityCircuitBreaker
@@ -832,6 +833,15 @@ class FuturesWilliamsRuntime:
         step = float(lot.get("stepSize", "0") or 0)
         minimum = float(lot.get("minQty", "0") or 0)
         maximum = float(lot.get("maxQty", "0") or 0)
+        market=f.get("MARKET_LOT_SIZE") or {}
+        market_step=Decimal(str(market.get("stepSize",0) or 0))
+        if market_step>0:
+            lot_step=Decimal(str(step))
+            scale=10**max(0,-lot_step.as_tuple().exponent,-market_step.as_tuple().exponent)
+            step=float(Decimal(math.lcm(int(lot_step*scale),int(market_step*scale)))/Decimal(scale))
+            minimum=max(minimum,float(market.get("minQty",0) or 0))
+            market_max=float(market.get("maxQty",0) or 0)
+            if market_max>0:maximum=min(maximum,market_max) if maximum>0 else market_max
         if step <= 0:
             raise RuntimeError(f"{symbol}: missing Futures stepSize")
         value = float(self.client.decimal_floor(qty, step))
@@ -1457,6 +1467,11 @@ class FuturesWilliamsRuntime:
         campaign.tags["trade_mode"] = candidate.trade_mode
         campaign.tags["strategy_profile"] = signal.strategy_profile
         campaign.tags["setup_context"] = dict(signal.setup_context)
+        if signal.strategy_profile==COURSE:
+            context=course_active_context(self.scanner.wave_hierarchy(symbol),signal.side)
+            if context and context["phase"] in COURSE_TARGETS:
+                campaign.tags["course_plan"]={"stage":context["phase"],"origin_at":context["origin_at"],
+                    "unit_quantity":qty/COURSE_TARGETS[context["phase"]],"unit_is_actual":False,"policy":"COURSE_BOOK_EXAMPLE_RATIOS_RISK_CAPPED"}
         campaign.tags["pending_order_type"] = "STOP_MARKET"
         campaign.tags["correction_context"] = dict(candidate.correction_context)
         campaign.pending_risk_quote = risk_quote
@@ -1607,6 +1622,17 @@ class FuturesWilliamsRuntime:
             stop,
             add_risk_pct,
         )
+        if profile==COURSE and campaign.tags.get("course_plan"):
+            plan=campaign.tags["course_plan"]
+            context=course_active_context(self.scanner.wave_hierarchy(signal.symbol),signal.side,plan["origin_at"])
+            next_stage=course_next_stage(plan["stage"],context["phase"],True) if context else None
+            if next_stage not in COURSE_TARGETS:raise RuntimeError("COURSE_STAGE_REQUIRES_CONFIRMED_NEW_FORMATION")
+            target=self._normalize_qty(signal.symbol,plan["unit_quantity"]*COURSE_TARGETS[next_stage])
+            admitted=self._normalize_qty(signal.symbol,min(qty,max(0,target-campaign.position_qty)))
+            if admitted<=0:raise RuntimeError("COURSE_TARGET_QUANTITY_ALREADY_REACHED")
+            ratio=admitted/qty;qty=admitted;risk_quote*=ratio;notional*=ratio
+            campaign.tags["course_pending_add_stage"]=next_stage
+            campaign.tags["course_pending_add_target"]=target
         self._validate_entry_leverage(signal.symbol, qty, trigger, stop, signal.side)
         if not self.db.try_claim_state(admitted_key,"true"):
             raise RuntimeError("This campaign signal is already owned by another admission")
@@ -1895,7 +1921,7 @@ class FuturesWilliamsRuntime:
 
 
     @serialized_campaign_operation
-    def _exit_market(self, campaign, reason):
+    def _exit_market(self, campaign, reason, *, partial_quantity=None):
         """Durable reduce-only market exit; protection is cancelled only after flat."""
         symbol = campaign.symbol
         # An armed addition can reopen exposure after a successful market close.
@@ -1939,7 +1965,12 @@ class FuturesWilliamsRuntime:
                 f"{symbol}: position is flat without attributable campaign exit"
             )
 
-        qty = self._full_market_close_qty(symbol, pos_qty)
+        is_partial=partial_quantity is not None
+        if is_partial and (campaign.tags.get("strategy_profile")!=COURSE or reason!="COURSE_STAGE_TRIM"):
+            raise RuntimeError("Partial reduction requires an owned Course campaign stage")
+        qty = self._full_market_close_qty(symbol, float(partial_quantity) if is_partial else pos_qty)
+        if is_partial and not 0<qty<pos_qty:raise RuntimeError("Course reduction must leave positive owned exposure")
+        campaign.tags["pending_exit_is_course_reduction"]=is_partial
 
         if campaign.state != CampaignState.EXIT_SIGNALLED:
             campaign.transition(
@@ -2016,6 +2047,13 @@ class FuturesWilliamsRuntime:
 
             verify = self._position(symbol)
             remaining = abs(self._signed_position_qty(verify))
+            if is_partial:
+                confirmed=self.client.get_order(symbol,orig_client_order_id=cid)
+                executed=float(confirmed.get("executedQty",0) or 0)
+                if str(confirmed.get("status","")).upper()!="FILLED" or not math.isclose(executed,qty,rel_tol=1e-12,abs_tol=1e-12):
+                    raise RuntimeError("Course reduction fill is not terminal and complete")
+                self._accept_terminal_exit_remainder(campaign,confirmed,verify,executed,remaining)
+                return {"state":campaign.state.value,"symbol":symbol,"partial_reduction":True,"remaining_quantity":remaining}
             if not math.isfinite(remaining) or remaining > 0:
                 self._set_state(symbol, "RECONCILE_REQUIRED")
                 raise RuntimeError(
@@ -2194,6 +2232,13 @@ class FuturesWilliamsRuntime:
                     continue
 
                 if status == "FILLED":
+                    if campaign.tags.get("pending_exit_is_course_reduction",False) and campaign.tags.get("strategy_profile")==COURSE:
+                        requested=float(campaign.tags.get("pending_exit_quantity",0) or 0)
+                        if not math.isclose(executed,requested,rel_tol=1e-12,abs_tol=1e-12):
+                            raise RuntimeError("Course reduction executed quantity differs from its durable request")
+                        self._accept_terminal_exit_remainder(campaign,order,position,executed,remaining)
+                        results.append({"symbol":symbol,"state":campaign.state.value,"partial_reduction":True,"remaining_quantity":remaining})
+                        continue
                     if not math.isfinite(remaining) or remaining > 0:
                         self._set_state(symbol, "RECONCILE_REQUIRED")
                         campaign.mark_reconcile_required(
@@ -2288,6 +2333,12 @@ class FuturesWilliamsRuntime:
                 campaign.realized_pnl_quote += partial["pnl"] - partial["fees"]
                 self.db.update_trade_position(trade["id"], remaining, campaign.average_entry_price)
                 self.db.conn.execute("UPDATE trades SET fees=? WHERE id=?", (float(trade.get("fees") or 0) * remaining / original, trade["id"]))
+            if campaign.tags.get("pending_exit_is_course_reduction",False):
+                requested=float(campaign.tags.get("pending_exit_quantity",0) or 0)
+                pending_stage=campaign.tags.pop("pending_course_stage",None)
+                if pending_stage and math.isclose(executed,requested,rel_tol=1e-12,abs_tol=1e-12):
+                    campaign.tags.setdefault("course_plan",{})["stage"]=pending_stage
+                campaign.tags.pop("pending_exit_is_course_reduction",None)
             campaign.open_risk_quote *= remaining / original
             campaign.position_qty = remaining
             if campaign.state == CampaignState.EXIT_PENDING:
@@ -2830,8 +2881,17 @@ class FuturesWilliamsRuntime:
                     campaign.current_stop_price = float(managed[0].get("stopPrice", campaign.current_stop_price) or campaign.current_stop_price)
                     campaign.tags.pop("pending_protection_client_id", None)
                     campaign.tags.pop("pending_protection_price", None)
+                course_plan=campaign.tags.get("course_plan")
+                if course_plan and not course_plan.get("unit_is_actual",False) and campaign.additions==0:
+                    course_plan["unit_quantity"]=campaign.position_qty/COURSE_TARGETS[course_plan["stage"]]
+                    course_plan["unit_is_actual"]=True
+                pending_stage=campaign.tags.get("course_pending_add_stage")
+                if pending_stage and math.isclose(campaign.position_qty,float(campaign.tags.get("course_pending_add_target",0)),rel_tol=1e-9,abs_tol=1e-9):
+                    campaign.tags["course_plan"]["stage"]=pending_stage
+                    campaign.tags.pop("course_pending_add_stage",None);campaign.tags.pop("course_pending_add_target",None)
                 campaign.reconciliation_state = "CLEAN"
                 campaign.health = "GREEN"
+                self.db.save_campaign(campaign)
                 self._record_liquidation_status(campaign, self._liquidation_status(campaign, position))
             except Exception as exc:
                 self._set_state(symbol, "RECONCILE_REQUIRED")
@@ -2878,6 +2938,16 @@ class FuturesWilliamsRuntime:
                     # crossing the entry's durable structural boundary is.
                     return self._exit_market(campaign,"CORRECTION_PARENT_PRICE_INVALIDATED")
             if profile==COURSE:
+                plan=tags.get("course_plan")
+                if plan and hasattr(self,"scanner"):
+                    context=course_active_context(self.scanner.wave_hierarchy(symbol),campaign.side,plan["origin_at"])
+                    stage=course_next_stage(plan["stage"],context["phase"]) if context else None
+                    if stage in {"W2","W4"}:
+                        target=plan["unit_quantity"]*COURSE_TARGETS[stage]
+                        reduction=self._normalize_qty(symbol,max(0,campaign.position_qty-target))
+                        if 0<reduction<campaign.position_qty:
+                            tags["pending_course_stage"]=stage;self.db.save_campaign(campaign)
+                            return self._exit_market(campaign,"COURSE_STAGE_TRIM",partial_quantity=reduction)
                 higher=closed_strategy_frame(fetch_klines(self.client,symbol,"6h",limit=80),"6h",
                     int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
                 airbag=course_airbag_stop("LONG" if campaign.side=="BUY" else "SHORT",wave_bars_from_dataframe(higher),tick)

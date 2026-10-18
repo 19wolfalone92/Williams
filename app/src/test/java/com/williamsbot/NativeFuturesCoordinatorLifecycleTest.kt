@@ -112,7 +112,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                         .put("origQty", requested.toString())
                         .put("executedQty", (requested * closeFraction).toString()).put("avgPrice", mark.toString())
                     orders[exitId] = row
-                    quantity -= (if(quantity>0) 1 else -1)*requested*closeFraction
+                    quantity=(quantity.toString().toBigDecimal()-(if(quantity>0) 1 else -1).toBigDecimal()*requested.toString().toBigDecimal()*closeFraction.toString().toBigDecimal()).toDouble()
                     if (loseCloseReply) { code = 503; JSONObject().put("code", -1000).put("msg", "lost close reply") } else row
                 } else {
                     orders.values.singleOrNull { it.optString("orderId") == p["orderId"] ||

@@ -5290,6 +5290,48 @@ private class NativeEngine(
                 if(editionStop!=null && (if(dir=="LONG") mark<=editionStop else mark>=editionStop))
                     editionExit="NTD_FIVE_ZONE_PROTECTION_CROSSED"
             } else if(profile==williamsCourseProfile) {
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                val setup=runCatching { JSONObject(intent.optString("setup_context")) }.getOrDefault(JSONObject())
+                val initialStage=setup.optString("course_initial_stage")
+                if(!management.has("course_unit_quantity") && initialStage in courseTargets && setup.has("course_origin_at")) {
+                    management.put("course_stage",initialStage).put("course_origin_at",setup.getLong("course_origin_at"))
+                        .put("course_unit_quantity",abs(signedQty)/courseTargets.getValue(initialStage))
+                        .put("policy","COURSE_BOOK_EXAMPLE_RATIOS_RISK_CAPPED")
+                }
+                fun filledIntent(cid:String):Boolean=(0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
+                    it.optString("client_id")==cid && it.optString("order_status")=="FILLED" &&
+                        (it.optString("intent_role")=="ADD_ON" || it.optString("exchange_status")=="EXIT_CONFIRMED")
+                }
+                val pendingStage=management.optString("course_pending_stage")
+                val pendingTarget=management.optDouble("course_pending_target",Double.NaN)
+                if(pendingStage.isNotEmpty() && pendingTarget.isFinite() && abs(abs(signedQty)-pendingTarget)<=maxOf(1e-9,pendingTarget*1e-9) &&
+                    filledIntent(management.optString("course_pending_client_id"))) {
+                    management.put("course_stage",pendingStage).remove("course_pending_stage")
+                    management.remove("course_pending_target");management.remove("course_pending_client_id")
+                }
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+                if(management.has("course_unit_quantity")) {
+                    val context=williamsCourseActiveContext(waveHierarchyFor(symbol),dir,management.getLong("course_origin_at"))
+                    val stage=context?.let { williamsCourseNextStage(management.getString("course_stage"),it.getString("phase")) }
+                    if(stage in listOf("W2","W4")) {
+                        val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
+                        val target=floorStep(management.getDouble("course_unit_quantity")*courseTargets.getValue(stage!!),step)
+                        val reduction=floorStep(maxOf(0.0,abs(signedQty)-target),step)
+                        if(reduction>0 && reduction<abs(signedQty)) {
+                            val seed=intent.getString("client_id")+":"+stage+":"+candles.last().t+":"+abs(signedQty)
+                            val digest=java.security.MessageDigest.getInstance("SHA-256").digest(seed.toByteArray()).joinToString("") { "%02x".format(it) }.take(20)
+                            val cid="W2R_${symbol.take(7)}_$digest"
+                            management.put("course_pending_stage",stage).put("course_pending_target",abs(signedQty)-reduction)
+                                .put("course_pending_client_id",cid)
+                            futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+                            val trimmed=withCampaignMutation(symbol,"COURSE_STAGE_REDUCTION",allowPaused=true) {
+                                futuresCampaignCoordinator.closePosition(symbol,direction,fmtQty(reduction,rules.decimals),cid,"COURSE_STAGE_TRIM",partialReduction=true)
+                            }
+                            if(!trimmed.optBoolean("ok",false)) throw IllegalStateException(trimmed.optString("blocker","Course reduction requires reconciliation"))
+                            continue
+                        }
+                    }
+                }
                 val higher=fetchCandles(symbol,"6h",100).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
                 val checked=closedWilliamsWaveBars(higher,"6h",futuresMarketData.exchangeNowMs())
                 val airbag=williamsCourseAirbagStop(dir,checked,rules.tick)
@@ -5402,7 +5444,16 @@ private class NativeEngine(
         val loss=abs(price-stop)/price+2*feeBufferPerSidePct+maxSlippagePct
         val notional=minOf(account.equityUsdt*.25,account.availableUsdt*leverage*.95,account.equityUsdt*risk/loss)
         val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
-        val quantity=floorStep(notional/price,step)
+        var quantity=floorStep(notional/price,step)
+        val setup=runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject())
+        val courseManagement=owner.optJSONObject("edition_management")
+        if(profile==williamsCourseProfile && courseManagement?.has("course_unit_quantity")==true) {
+            val context=williamsCourseActiveContext(waveHierarchyFor(symbol),direction,courseManagement.getLong("course_origin_at")) ?: return
+            val targetStage=williamsCourseNextStage(courseManagement.getString("course_stage"),context.getString("phase"),true) ?: return
+            val target=floorStep(courseManagement.getDouble("course_unit_quantity")*courseTargets.getValue(targetStage),step)
+            quantity=floorStep(minOf(quantity,maxOf(0.0,target-owner.getString("confirmed_position_qty").toDouble())),step)
+            setup.put("course_target_stage",targetStage).put("course_target_quantity",target)
+        }
         if(!quantity.isFinite() || quantity<=0) return
         val clientId=additionClientId(signal)
         if((0 until all.length()).any { all.optJSONObject(it)?.optString("client_id")==clientId }) return
@@ -5412,7 +5463,7 @@ private class NativeEngine(
             fmtQty(quantity,rules.decimals),fmtPrice(price,rules.tick),owner.getString("protective_stop"),clientId,risk,
             signalType=signal.type,signalBarTimeMs=signal.signalBarTimeMs,signalReason=signal.reason,leverage=leverage,
             strategyProfile=profile,entryClientId=parentId,executionSemantics=signal.executionSemantics,
-            referenceClose=if(market) signal.triggerPrice else 0.0,setupContext=signal.setupContext)
+            referenceClose=if(market) signal.triggerPrice else 0.0,setupContext=setup.toString())
         lastOrder=withCampaignMutation(symbol,"WILLIAMS_CAMPAIGN_ADDITION") {
             val submitNow=futuresMarketData.exchangeNowMs()
             check(profile==williamsProfile && isWithinWilliamsEntrySessionUtc(submitNow) && checkFuturesDailyLoss()) {
@@ -5667,7 +5718,14 @@ private class NativeEngine(
             signalReason = signal.reason,
             tradeMode = if (correction.allowed) "CORRECTION" else "TREND",
             waveContext = if (correction.allowed) correction.toJson().toString() else "",
-            strategyProfile=signal.strategyProfile,executionSemantics=signal.executionSemantics,setupContext=signal.setupContext
+            strategyProfile=signal.strategyProfile,executionSemantics=signal.executionSemantics,
+            setupContext=(runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject()).apply {
+                if(signal.strategyProfile==williamsCourseProfile) {
+                    williamsCourseActiveContext(hierarchy,direction.name)?.let { context ->
+                        put("course_origin_at",context.getLong("origin_at")).put("course_initial_stage",context.getString("phase"))
+                    }
+                }
+            }).toString()
         )
         runCatching { auditStore.recordCockpitEvent("SIGNAL_RISK", symbol, direction.name, signal.type,
             "${signal.reason}; H1 bar=${signal.signalBarTimeMs}; trigger=$trigger; stop=$stop; qty=$qty; reserved_risk=$riskPct") }

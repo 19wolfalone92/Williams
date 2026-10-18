@@ -104,3 +104,31 @@ def acknowledge_course_fill(
     return replace(state,stage=proposal.stage,confirmed_units=new_confirmed_units,
                    revision=state.revision+1,last_signal_close_ms=signal_close_ms,
                    processed_fill_ids=(*state.processed_fill_ids,fill_id))
+
+
+def course_active_context(report,side,origin_at=None):
+    """Pin a unique real H1 motive origin; competing degrees remain unresolved."""
+    direction={"BUY":"UP","LONG":"UP","SELL":"DOWN","SHORT":"DOWN"}.get(side)
+    if not direction or report is None or "1h" in report.frame_errors:return None
+    candidates=[s for s in report.scenarios if s.frame=="1h" and s.status=="PROVISIONAL" and s.direction==direction
+                and s.active_label in {"W1","W2","W3","W4","W5","A","C"}
+                and (origin_at is None or s.anchors[0].extreme_at==origin_at)]
+    if origin_at is None:candidates=[s for s in candidates if s.active_label in {"W1","W3","W5"}]
+    if len(candidates)!=1:return None
+    h=candidates[0]
+    return {"origin_at":h.anchors[0].extreme_at,"phase":h.active_label,"scenario_id":h.scenario_id,
+            "known_at":h.anchors[-1].known_at,"observed_at":h.observed_at}
+
+
+def course_next_stage(stage,phase,new_formation=False):
+    """Explicit Course example ratio policy; quantities always pass Futures risk.
+
+    W3 expansion is optional, so a directly observed W4 may reduce either
+    W3 or W3_EXTENSION. Wave labels cannot cause a full exit by themselves.
+    """
+    if stage=="W1" and phase=="W2":return "W2"
+    if stage=="W2" and phase=="W3" and new_formation:return "W3"
+    if stage=="W3" and phase=="W3" and new_formation:return "W3_EXTENSION"
+    if stage in {"W3","W3_EXTENSION"} and phase=="W4":return "W4"
+    if stage=="W4" and phase=="W5" and new_formation:return "W5"
+    return None
