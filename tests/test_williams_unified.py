@@ -45,7 +45,8 @@ def test_unified_uses_all_three_sources_and_deduplicates_only_same_signal_id(mon
 
     monkeypatch.setattr(profiles, "extract_profile_signals", fake_source)
     signals = profiles.extract_profile_signals(
-        "BTCUSDT", pd.DataFrame({"stub": [1]}),
+        "BTCUSDT", pd.DataFrame({"open":[100.0],"high":[101.0],"low":[99.0],"close":[100.0],
+                                 "volume":[10.0],"ao":[0.1],"ac":[0.01]}),
         profile=UNIFIED, side="LONG", timeframe="1h", tick_size=0.01
     )
     assert seen == [(TC2, "LONG"), (NTD, "LONG"), (COURSE, "LONG")]
