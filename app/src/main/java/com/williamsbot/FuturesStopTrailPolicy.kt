@@ -35,16 +35,19 @@ internal fun planFuturesStopTrail(
     openedObservedAtMs: Long,
     bars: List<FuturesTrailBar>,
     breakEvenAtR: Double = 1.0,
-    feeAndSlippageAllowancePct: Double = 0.0035
+    feeAndSlippageAllowancePct: Double = 0.0035,
+    breakEvenEnabled: Boolean = true
 ): FuturesStopTrailProposal? {
     if (direction != "LONG" && direction != "SHORT") return null
-    if (listOf(oldStop, actualEntry, initialStop, markPrice, tickSize, breakEvenAtR,
+    if (listOf(oldStop, actualEntry, markPrice, tickSize, breakEvenAtR,
             feeAndSlippageAllowancePct).any { !it.isFinite() }) return null
-    if (oldStop <= 0.0 || actualEntry <= 0.0 || initialStop <= 0.0 ||
+    if (oldStop <= 0.0 || actualEntry <= 0.0 ||
         markPrice <= 0.0 || tickSize <= 0.0 || breakEvenAtR <= 0.0 ||
         feeAndSlippageAllowancePct < 0.0) return null
-    if (direction == "LONG" && initialStop >= actualEntry) return null
-    if (direction == "SHORT" && initialStop <= actualEntry) return null
+    if (breakEvenEnabled && (!initialStop.isFinite() || initialStop <= 0.0 ||
+        direction == "LONG" && initialStop >= actualEntry ||
+        direction == "SHORT" && initialStop <= actualEntry)) return null
+    if (bars.zipWithNext().any { (a,b) -> a.openTimeMs >= b.openTimeMs }) return null
 
     fun floorTick(price: Double): Double = floor(price / tickSize + 1e-12) * tickSize
     fun ceilTick(price: Double): Double = ceil(price / tickSize - 1e-12) * tickSize
@@ -96,7 +99,7 @@ internal fun planFuturesStopTrail(
 
     val oneR = abs(initialStop - actualEntry)
     val favorable = if (direction == "LONG") markPrice - actualEntry else actualEntry - markPrice
-    if (oneR > 0.0 && favorable >= breakEvenAtR * oneR) {
+    if (breakEvenEnabled && oneR > 0.0 && favorable >= breakEvenAtR * oneR) {
         // Cover a configured fee/slippage allowance. Exact net flatness cannot
         // be guaranteed across funding, gaps and unexpected execution slippage.
         val rawBreakEven = if (direction == "LONG") {
@@ -112,4 +115,33 @@ internal fun planFuturesStopTrail(
 
     return if (direction == "LONG") proposals.maxByOrNull { it.stop }
     else proposals.minByOrNull { it.stop }
+}
+
+/** TC2 chapter 12: the 3/5 CLOSED price-bar stop also moves without a new
+ * confirmed fractal or +1R move. Unknown original R disables only break-even. */
+internal fun planWilliamsCampaignStop(
+    direction: String, oldStop: Double, actualEntry: Double, initialStop: Double?,
+    markPrice: Double, tickSize: Double, openedObservedAtMs: Long,
+    bars: List<FuturesTrailBar>, window: Int = 5, feeAllowance: Double = .0035
+): FuturesStopTrailProposal? {
+    if (direction !in listOf("LONG","SHORT") || window !in listOf(3,5) ||
+        listOf(oldStop,markPrice,tickSize).any { !it.isFinite() || it <= 0 } ||
+        bars.any { !it.high.isFinite() || !it.low.isFinite() || it.low <= 0 || it.high < it.low } ||
+        bars.zipWithNext().any { (a,b) -> a.openTimeMs >= b.openTimeMs }) return null
+    val validR = initialStop != null && initialStop.isFinite() && initialStop > 0 &&
+        (if (direction == "LONG") initialStop < actualEntry else initialStop > actualEntry)
+    val proposals = mutableListOf<FuturesStopTrailProposal>()
+    planFuturesStopTrail(direction,oldStop,actualEntry,initialStop ?: Double.NaN,markPrice,tickSize,
+        openedObservedAtMs,bars,feeAndSlippageAllowancePct=feeAllowance,breakEvenEnabled=validR)?.let { proposals += it }
+    if (bars.size >= window && openedObservedAtMs > 0 && bars.last().openTimeMs+3_600_000L > openedObservedAtMs) {
+        val price = if (direction == "LONG") {
+            floor((bars.takeLast(window).minOf { it.low }-tickSize)/tickSize+1e-12)*tickSize
+        } else ceil((bars.takeLast(window).maxOf { it.high }+tickSize)/tickSize-1e-12)*tickSize
+        val gap = max(2*tickSize,markPrice*.00025)
+        if (price > 0 && if (direction == "LONG") price > oldStop+tickSize*.5 && price+gap < markPrice
+            else price < oldStop-tickSize*.5 && price-gap > markPrice) {
+            proposals += FuturesStopTrailProposal(price,"TC2_LAST_${window}_CLOSED_BARS")
+        }
+    }
+    return if (direction == "LONG") proposals.maxByOrNull { it.stop } else proposals.minByOrNull { it.stop }
 }

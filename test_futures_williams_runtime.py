@@ -324,7 +324,7 @@ def test_teeth_close_exit_uses_only_closed_bars_for_short(monkeypatch):
 def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypatch):
     monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "NTD_FIVE_DIMENSIONS")
     n = 55
-    close = [100.0 + i for i in range(n)]
+    close = [100.0 + (i * 0.1) ** 3 for i in range(n)]
     frame = pd.DataFrame({
         "open": [x - 0.5 for x in close],
         "high": [x + 1.0 for x in close],
@@ -335,7 +335,7 @@ def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypa
 
     class Client:
         def ticker_price(self, symbol):
-            return {"price": "200"}
+            return {"price": "1000"}
 
     runtime = object.__new__(FuturesWilliamsRuntime)
     runtime.dry_run = False
@@ -356,7 +356,7 @@ def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypa
     runtime._trail(campaign)
     assert campaign.tags["ntd_five_colour_trail_active"] is True
     assert proposed
-    # Five green bars activate the NTD rule: trail below the latest completed bar,
+    # Five joint AO/AC green zone bars activate the NTD rule: trail below the latest completed bar,
     # tighter than the older 3/5-bar structural minimum in this monotonic test.
     assert math.isclose(proposed[-1], float(frame.iloc[-2]["low"]) - 0.1)
 
