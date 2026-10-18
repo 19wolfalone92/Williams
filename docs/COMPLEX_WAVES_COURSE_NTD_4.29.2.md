@@ -20,6 +20,7 @@ An ordinary impulse has **five motive legs but six endpoints**. The previous `hy
 * `williams_wave_hierarchy.py` and `WilliamsWaveHierarchy.kt` now surface these complex alternatives in actual per-symbol hierarchical diagnostic JSON.
 * `williams_course_campaign.py` and `WilliamsCourseCampaign.kt` implement independent staged Course risk-unit plans with mirrored LONG/SHORT policy, sequential phases W1 -> W2 -> W3 -> W3_EXTENSION -> W4 -> W5 -> EXIT, explicit exchange-reconciled fill acknowledgment, immutable stage revision, idempotent fill IDs, rejecting partial/mismatched fills, stale signals, missing protection and exceeded risk-slot budgets. A proposed state transition **does not change the actual campaign** until an independently confirmed fill is acknowledged.
 * Added Python and Android targeted regression suites, including mirrors and no-lookahead.
+* Added `williams_ntd_research.py` and scanner `latest_ntd_research[symbol]`: the five *separate* NTD families (external fractal, AO 5/34, AC, zone, Balance Line) are now evaluated on closed H1 candles for evaluated Futures pairs, always with `can_place_orders=false`. No TC2 order or profile admission changes.
 
 ## Intentional stop before unsafe live execution
 
