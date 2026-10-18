@@ -41,7 +41,7 @@ internal fun detectWilliamsComplexWave(
         val x=p.map { it.price*sign }
         val w1=x[1]-x[0];val w3=x[3]-x[2];val w5=x[5]-x[4]
         if(w1<=0||w3<=0||w5<=0||!(x[0]<x[2]&&x[2]<x[1]) ||
-           !(x[2]<x[4]&&x[4]<x[3])||w3<minOf(w1,w5)) continue
+           !(x[2]<x[4]&&x[4]<x[3])||x[3]<=x[1]||w3<minOf(w1,w5)) continue
         if(n==6) {
             if(x[4]<=x[1]) add("ENDING_OR_LEADING_DIAGONAL_CANDIDATE",p,
                 listOf("W4_OVERLAPS_W1","INTERNAL_3_OR_5_LEGS_UNVERIFIED"),p[2].price)
@@ -53,9 +53,10 @@ internal fun detectWilliamsComplexWave(
             val a=x[5]-x[6];val b=x[7]-x[6];val c=x[7]-x[8]
             if(a<=0 || b<=0 || c<=0) continue
             val fraction=b/a
-            if(fraction<0.90 && x[8]<x[6]) add("ZIGZAG_ABC_CANDIDATE",p,
-                listOf("B_BELOW_90_PERCENT_OF_A","INTERNAL_5_3_5_UNVERIFIED"),p[7].price)
-            else if(fraction>=0.90) {
+            if(fraction<1.0 && x[8]<x[6]) add("ZIGZAG_ABC_CANDIDATE",p,
+                listOf("B_BELOW_A_ORIGIN","INTERNAL_5_3_5_UNVERIFIED")+
+                    (if(fraction>=0.90) listOf("DEEP_B_RETRACEMENT_ALTERNATIVE") else emptyList()),p[7].price)
+            if(fraction>=0.90) {
                 val kind=if(x[7]>x[5] && x[8]<x[6]) "EXPANDED_FLAT_ABC_CANDIDATE"
                     else if(x[7]>x[5]) "RUNNING_FLAT_ABC_CANDIDATE"
                     else if(x[8]>x[6]) "FLAT_ABC_INCOMPLETE_OR_TRUNCATED_C_CANDIDATE"
