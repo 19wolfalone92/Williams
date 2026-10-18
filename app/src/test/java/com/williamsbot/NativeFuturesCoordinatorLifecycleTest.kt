@@ -39,6 +39,8 @@ class NativeFuturesCoordinatorLifecycleTest {
         var leverage = 2
         var badConfirmation = false
         var loseCloseReply = false
+        var loseAdditionReply = false
+        var additionFraction = 1.0
         var closeFraction = 1.0
         var closeStatus = "FILLED"
         var positionSide = "BOTH"
@@ -87,7 +89,19 @@ class NativeFuturesCoordinatorLifecycleTest {
                         else { if (request.method == "DELETE") row.put("algoStatus", "CANCELED"); row }
                     }
                 }
-                "/fapi/v1/order" -> if (request.method == "POST") {
+                "/fapi/v1/order" -> if (request.method == "POST" && p["reduceOnly"]!="true") {
+                    check(quantity!=0.0 && p["side"]==if(quantity>0) "BUY" else "SELL")
+                    val added=p.getValue("quantity").toDouble()*additionFraction
+                    val id=(100+orders.size).toString()
+                    val old=kotlin.math.abs(quantity)
+                    entry=(entry*old+mark*added)/(old+added)
+                    quantity+=(if(quantity>0) added else -added)
+                    val row=JSONObject(p).put("orderId",id).put("status",if(additionFraction==1.0) "FILLED" else "PARTIALLY_FILLED")
+                        .put("clientOrderId",p.getValue("newClientOrderId")).put("origQty",p.getValue("quantity"))
+                        .put("executedQty",added.toString()).put("avgPrice",mark.toString())
+                    orders[id]=row
+                    if(loseAdditionReply) { code=503;JSONObject().put("code",-1000).put("msg","lost addition reply") } else row
+                } else if (request.method == "POST") {
                     check(p["reduceOnly"] == "true")
                     check(p["side"] == if (quantity > 0) "SELL" else "BUY")
                     check(p.getValue("quantity").toDouble() == kotlin.math.abs(quantity))
@@ -157,6 +171,68 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertTrue(reconciled.toString(), reconciled.getBoolean("ok"))
         assertEquals("OPEN_PROTECTED", coordinator.state.name)
         return coordinator to exchange
+    }
+
+    @Test fun ntdMarketAdditionsAreOwnedProtectedAndRecoverLostRepliesForBothSides() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(lost in listOf(false,true)) for(fraction in listOf(.5,1.0)) {
+            val journal=Journal();val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().toString(),coordinator.status().optBoolean("ready_for_new_entry"))
+            val initial=plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL",
+                signalBarTimeMs=System.currentTimeMillis()-7_200_000L)
+            assertTrue(coordinator.submitPendingEntry(initial).getBoolean("accepted"))
+            exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val oldProtection=exchange.algos.values.single { it.optString("closePosition")=="true" }.getString("clientAlgoId")
+            val leverageCalls=exchange.posts("/fapi/v1/leverage")
+            exchange.loseAdditionReply=lost;exchange.additionFraction=fraction
+            val addition=initial.copy(kind=NativeFuturesCampaignCoordinator.EntryKind.MARKET,quantity="0.5",
+                entryPrice=exchange.mark.toString(),clientId="W2A_NTD_${direction.name}_${lost}_$fraction",riskPct=.001,
+                entryClientId=initial.clientId,signalType="ZONE_ADD_ON",executionSemantics="MARKET_ON_CLOSE",
+                referenceClose=exchange.mark,signalBarTimeMs=System.currentTimeMillis()-3_601_000L)
+            val submitted=coordinator.submitPendingEntry(addition)
+            assertEquals(submitted.toString(),!lost,submitted.getBoolean("accepted"))
+            // New coordinator represents process death after an unknown response.
+            val recovered=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val reconciled=recovered.reconcile()
+            assertTrue(reconciled.toString(),reconciled.getBoolean("ok"))
+            assertEquals(reconciled.toString(),"OPEN_PROTECTED",recovered.state.name)
+            assertEquals(1+.5*fraction,kotlin.math.abs(exchange.quantity),1e-9)
+            assertEquals(leverageCalls,exchange.posts("/fapi/v1/leverage"))
+            val protection=exchange.algos.values.filter { it.optString("algoStatus")=="NEW" && it.optString("closePosition")=="true" }
+            assertEquals(1,protection.size);assertEquals(oldProtection,protection.single().getString("clientAlgoId"))
+            assertFalse(recovered.submitPendingEntry(addition).getBoolean("accepted"))
+            assertEquals(1,exchange.posts("/fapi/v1/order"))
+            val closed=recovered.closePosition("BTCUSDT",direction,kotlin.math.abs(exchange.quantity).toString(),
+                "W2X_NTD_${direction.name}_${lost}_$fraction","TEST_EXIT")
+            assertTrue(closed.toString(),closed.getBoolean("ok"))
+            assertEquals(0.0,exchange.quantity,0.0)
+        }
+    }
+
+    @Test fun ntdCloseEventCannotUseAStaleFutureOrMovedPriceOrAnotherEdition() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) {
+            val (coordinator,exchange)=open(direction)
+            val owner=coordinator.intentsSnapshot().getJSONObject(0)
+            val base=plan(direction).copy(kind=NativeFuturesCampaignCoordinator.EntryKind.MARKET,quantity="0.1",
+                entryPrice=exchange.mark.toString(),clientId="W2A_BAD_CLOSE",riskPct=.001,
+                entryClientId=owner.getString("client_id"),signalType="ZONE_ADD_ON",executionSemantics="MARKET_ON_CLOSE",
+                referenceClose=exchange.mark,signalBarTimeMs=System.currentTimeMillis()-3_601_000L)
+            assertFalse(coordinator.submitPendingEntry(base).getBoolean("accepted"))
+            assertFalse(coordinator.submitPendingEntry(base.copy(strategyProfile=williamsNtdProfile)).getBoolean("accepted"))
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
+            assertEquals(1.0,kotlin.math.abs(exchange.quantity),0.0)
+        }
+    }
+
+    @Test fun manualQuantityCannotBeClaimedAsAnAdditionFill() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) {
+            val (coordinator,exchange)=open(direction)
+            exchange.quantity*=1.5
+            val result=coordinator.reconcile()
+            assertFalse(result.toString(),result.getBoolean("ok"))
+            assertEquals("RECONCILE_REQUIRED",coordinator.state.name)
+            assertTrue(exchange.algos.values.any { it.optString("algoStatus")=="NEW" && it.optString("closePosition")=="true" })
+        }
     }
 
     @Test fun automaticAndForcedLongShortEntriesProtectTrailAndCloseAtSeveralLeverages() {

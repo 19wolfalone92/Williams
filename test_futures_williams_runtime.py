@@ -384,6 +384,10 @@ def test_ntd_teeth_exit_uses_close_beyond_line_not_only_a_fresh_crossing(monkeyp
         ("BUY", 95.0, 95.0),  # Already below Teeth on the previous close too.
         ("SELL", 105.0, 105.0),  # Already above Teeth on the previous close too.
     ):
+        frame["close"]=close_price
+        frame["open"]=close_price
+        frame["high"]=max(close_price,100.0)+1
+        frame["low"]=min(close_price,100.0)-1
         class Client:
             def ticker_price(self, symbol):
                 return {"price": str(market_price)}

@@ -13,7 +13,7 @@ private val ENTRY_ORDER_ACTIVE_STATUSES = setOf(
     "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN",
     "ACCEPTED", "TRIGGERED", "CANCEL_SUBMISSION_UNKNOWN"
 )
-private val ENTRY_ORDER_TERMINAL_STATUSES = setOf(
+internal val ENTRY_ORDER_TERMINAL_STATUSES = setOf(
     "FILLED", "FINISHED", "EXPIRED", "EXPIRED_IN_MATCH", "CANCELED", "CANCELLED", "REJECTED"
 )
 private val ACTIVE_CAMPAIGN_STATUSES = setOf(
@@ -978,6 +978,7 @@ internal class NativeFuturesCampaignCoordinator(
                 }
             }
             var hasPendingExit = false
+            var hasPendingAddition = false
             var anyUnprotected = false
             val requiredSafetyExits = JSONArray()
             var actualRiskAuditBlocked = false
@@ -1047,7 +1048,7 @@ internal class NativeFuturesCampaignCoordinator(
                     intent.put("order_status",observed).put("exchange_status",observed)
                         .put("executed_qty",order?.optString("executedQty","0") ?: "0")
                         .put("campaign_status",if (observed in ENTRY_ORDER_TERMINAL_STATUSES) "CLOSED_OR_STOPPED" else "ENTRY_PENDING")
-                    if (observed !in ENTRY_ORDER_TERMINAL_STATUSES) hasPendingEntry=true
+                    if (observed !in ENTRY_ORDER_TERMINAL_STATUSES) hasPendingAddition=true
                     saveIntents(persisted)
                     continue
                 }
@@ -1945,7 +1946,7 @@ internal class NativeFuturesCampaignCoordinator(
             }
             saveIntents(persisted)
 
-            val hasPendingEntry = (0 until persisted.length()).any { index ->
+            val hasPendingEntry = hasPendingAddition || (0 until persisted.length()).any { index ->
                 val intent = persisted.optJSONObject(index) ?: return@any true
                 val symbol = intent.optString("symbol").uppercase(Locale.US)
                 intent.optString("intent_role", "ENTRY") == "ENTRY" &&
