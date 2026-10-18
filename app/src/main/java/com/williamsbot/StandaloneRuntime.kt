@@ -7391,7 +7391,7 @@ private class NativeEngine(
                 .getOrDefault(JSONArray())
             val summary = JSONObject().put("as_of",cutoff)
                 .put("scenarios",JSONArray(report.scenarios.map { JSONObject().put("id",it.id).put("status",it.status)
-                    .put("label",it.label).put("w4_zero",it.w4Zero) }))
+                    .put("label",it.label).put("active_label",it.activeLabel).put("w4_zero",it.w4Zero) }))
                 .put("links",JSONArray(report.links.map { it.toJson() }))
             val bounded = JSONArray()
             for (i in maxOf(0,revisions.length()-31) until revisions.length()) bounded.put(revisions.get(i))
@@ -7447,14 +7447,14 @@ private class NativeEngine(
             .minByOrNull { williamsWaveFrames.getValue(it.frame) }
         val nestedW3ParentW5 = hierarchy.links.any { link ->
             val p = viable[link.parent]; val c = viable[link.child]
-            p?.label == "W5" && c?.label == "W3" && p.direction == decisionDirection &&
+            p?.activeLabel == "W5" && c?.activeLabel == "W3" && p.direction == decisionDirection &&
                 c.direction == decisionDirection && link.relationship == "ALIGNED"
         }
         val countertrendCorrectionImpulse = hierarchy.links.any { link ->
-            viable[link.parent]?.label in listOf("W2","W4","A","C") && link.relationship == "ALIGNED"
+            viable[link.parent]?.activeLabel in listOf("W2","W4","A","C") && link.relationship == "ALIGNED"
         }
         val lateSenior = viable.values.any { it.frame in listOf("6h","1d") &&
-            it.direction == decisionDirection && it.label in listOf("W5","A","B","C") }
+            it.direction == decisionDirection && it.activeLabel in listOf("W5","A","B","C") }
         val exhaustion = if (nestedW3ParentW5 || lateSenior || setup.position==5)
             maxOf(65.0,setup.exhaustionRisk) else setup.exhaustionRisk
         val bonus = (if (htfConfirmed) 8.0 else 0.0) + (if (dailyAligned) 4.0 else 0.0) -
@@ -7469,12 +7469,12 @@ private class NativeEngine(
         var score = (baseCandidate.score+bonus).coerceIn(0.0,100.0)
         if (!finalSignal && baseCandidate.signal) score=minOf(score,84.0)
         val path = williamsRequiredWaveFrames.joinToString(" ; ") { frame ->
-            val labels = viable.values.filter { it.frame==frame }.map { it.label }.distinct()
+            val labels = viable.values.filter { it.frame==frame }.map { it.label+"→"+it.activeLabel }.distinct()
             frame+":"+(if (labels.isEmpty()) "?" else labels.joinToString("|"))
         }
         return baseCandidate.copy(score=score,signal=finalSignal,htfCandidate=htfConfirmed,
             wave=setup.copy(exhaustionRisk=exhaustion,path=path,entryFrame=campaignExecutionTimeframe,
-                entryWave=setup.position,parentFrame=parent?.frame ?: "",parentWave=parent?.label?.removePrefix("W")?.toIntOrNull() ?: 0,
+                entryWave=setup.position,parentFrame=parent?.frame ?: "",parentWave=parent?.activeLabel?.removePrefix("W")?.toIntOrNull() ?: 0,
                 entryConfidence=setup.confidence,nestedW3ParentW5=nestedW3ParentW5,
                 countertrendCorrectionImpulse=countertrendCorrectionImpulse),
             reason=if (finalSignal && campaignEngineEnabled) "H1 Williams conditional candidate; context, wave correction mode, risk and exchange proof checked before submission"

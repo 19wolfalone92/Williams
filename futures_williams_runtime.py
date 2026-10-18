@@ -3165,7 +3165,7 @@ class FuturesWilliamsRuntime:
                 revision_key = "wave_revisions:"+symbol
                 history = json.loads(self.db.state_get(revision_key,"[]"))
                 summary = {"as_of":report.as_of,"scenarios":[{"id":s.scenario_id,"status":s.status,
-                    "w4_zero":s.w4_zero} for s in report.scenarios],"links":report.links}
+                    "w4_zero":s.w4_zero,"last_confirmed_leg":s.label,"active_label":s.active_label} for s in report.scenarios],"links":report.links}
                 with self.db.transaction():
                     self.db.state_set(key,encoded)
                     self.db.state_set(revision_key,json.dumps((history+[summary])[-32:]))
