@@ -8,6 +8,7 @@ import kotlin.math.abs
  * Timestamp/price containment is observable; an infallible Elliott count is not.
  * This module cannot submit, cancel or reverse an exchange order. */
 internal val williamsWaveFrames = linkedMapOf(
+    "1m" to 60_000L,"3m" to 180_000L,"5m" to 300_000L,
     "15m" to 900_000L, "30m" to 1_800_000L, "1h" to 3_600_000L,
     "2h" to 7_200_000L, "4h" to 14_400_000L, "6h" to 21_600_000L,
     "8h" to 28_800_000L, "12h" to 43_200_000L, "1d" to 86_400_000L
@@ -107,7 +108,8 @@ internal fun confirmedWilliamsWaveAnchors(bars: List<WilliamsWaveBar>, duration:
     val alternating = mutableListOf<WilliamsWaveAnchor>()
     for (p in raw) {
         if (alternating.isEmpty() || p.kind != alternating.last().kind) alternating += p
-        else if ((p.price > alternating.last().price) == (p.kind == "HIGH")) alternating[alternating.lastIndex] = p
+        else if (if (p.kind=="HIGH") p.price>alternating.last().price else p.price<alternating.last().price)
+            alternating[alternating.lastIndex] = p
     }
     return alternating
 }
@@ -142,7 +144,7 @@ private fun enrichWaveRhythm(h: WilliamsWaveScenario, frames: Map<String, List<W
     if (w3Indexes.isEmpty()) { h.w4Zero = "MISSING_W3_MOMENTUM"; return }
     val w3 = w3Indexes.maxBy { sign * osc[it] }
     val end = if (p.size >= 5) p[4].extremeAt else stop
-    val cross = indexes.any { it > w3 && bars[it].t <= end && sign * osc[it] <= 0 }
+    val cross = indexes.any { it > w3 && bars[it].t <= end && sign * osc[it] < 0 }
     h.w4Zero = when {
         h.scaleBars !in 100..140 -> "WRONG_SCALE"
         sign * osc[w3] <= 0 -> "MISSING_W3_MOMENTUM"
@@ -246,6 +248,7 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
     val scenarios = mutableListOf<WilliamsWaveScenario>()
     val warnings = mutableListOf<String>()
     for ((frame,bars) in valid) {
+        if (frame !in williamsRequiredWaveFrames) continue
         val hypotheses = williamsHypothesesFromAnchors(frame,bars,
             confirmedWilliamsWaveAnchors(bars,williamsWaveFrames.getValue(frame)))
         for (h in hypotheses) {
@@ -273,6 +276,17 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
     return WilliamsWaveHierarchy(asOf,scenarios,linkWilliamsWaveHypotheses(scenarios),errors,warnings)
 }
 
+internal fun suggestedWilliamsAnalyticalFrames(report: WilliamsWaveHierarchy): List<String> {
+    val choices=mutableListOf<String>()
+    for (frame in listOf("6h","1d","1h")) {
+        val h=report.scenarios.filter { it.frame==frame && it.status=="PROVISIONAL" &&
+            it.anchors.size>=4 && it.w4Zero!="MINIMUM_ONLY" }.maxByOrNull { it.anchors.size } ?: continue
+        val choice=suggestWilliamsWaveScale(report.asOf-h.anchors.first().extremeAt,williamsWaveFrames)
+        if (choice?.withinBookRange==true && choice.timeframe !in choices) choices+=choice.timeframe
+    }
+    return choices.take(2)
+}
+
 internal data class WilliamsCorrectionContext(
     val allowed: Boolean = false, val reason: String = "NO_CONFIRMED_CORRECTION_PATH",
     val parentId: String = "", val parentInvalidation: Double = 0.0, val decisionId: String = "",
@@ -292,6 +306,7 @@ internal fun williamsCorrectionEntryContext(
         return WilliamsCorrectionContext(reason="CORRECTION_HISTORY_INCOMPLETE")
     if (signalAt <= 0 || signalAt + 3_600_000L > report.asOf || report.asOf-signalAt > 18_000_000L)
         return WilliamsCorrectionContext(reason="CORRECTION_H1_SIGNAL_NOT_CLOSED_OR_FRESH")
+    val approvals=linkedMapOf<String,WilliamsCorrectionContext>()
     val byId = report.scenarios.filter { it.status == "PROVISIONAL" }.associateBy { it.id }
     for (senior in byId.values) {
         if (!(senior.frame == "6h" && senior.direction != direction && senior.label in listOf("W4","A","C") &&
@@ -314,18 +329,27 @@ internal fun williamsCorrectionEntryContext(
                         (if (senior.anchors.size >= 8) listOf(senior.anchors[7].price) else emptyList())
                     if (senior.direction == "UP") listOf(0.0,terminal.max()) else listOf(terminal.min(),0.0)
                 }
-            return WilliamsCorrectionContext(true,"H1_WISE_MAN_IN_CONTAINED_H6_CORRECTION",senior.id,
+            approvals[senior.id] = WilliamsCorrectionContext(true,"H1_WISE_MAN_IN_CONTAINED_H6_CORRECTION",senior.id,
                 senior.invalidation,decision.id,bounds[0],bounds[1])
         }
     }
+    if (approvals.size==1) return approvals.values.first()
+    if (approvals.size>1) return WilliamsCorrectionContext(reason="COMPETING_CORRECTION_PARENTS_UNRESOLVED")
     return WilliamsCorrectionContext()
 }
 
 internal fun williamsCorrectionPriceAllowed(context: JSONObject, mark: Double): Boolean {
     val lower = context.optDouble("parent_floor",Double.NaN)
     val upper = context.optDouble("parent_ceiling",Double.NaN)
-    return listOf(mark,lower,upper).all { it.isFinite() } && mark > 0 && lower >= 0 && upper >= 0 &&
+    return williamsCorrectionBoundsValid(context) && mark.isFinite() && mark > 0 &&
         (lower == 0.0 || mark > lower) && (upper == 0.0 || mark < upper) && (lower > 0 || upper > 0)
+}
+
+internal fun williamsCorrectionBoundsValid(context: JSONObject): Boolean {
+    val lower = context.optDouble("parent_floor",Double.NaN)
+    val upper = context.optDouble("parent_ceiling",Double.NaN)
+    return lower.isFinite() && upper.isFinite() && lower >= 0 && upper >= 0 && (lower > 0 || upper > 0) &&
+        (lower == 0.0 || upper == 0.0 || lower < upper)
 }
 
 internal fun williamsOpposingLevelTriggered(

@@ -56,7 +56,7 @@ def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_a
         ):
             proposals.append({"stop": price, "reason": reason})
 
-    if len(bars) >= window and opened_at > 0 and bars[-1].t + 3_600_000 > opened_at:
+    if len(bars) >= window and (opened_at <= 0 or bars[-1].t + 3_600_000 > opened_at):
         offer(min(b.l for b in bars[-window:])-tick if long else max(b.h for b in bars[-window:])+tick,
               f"TC2_LAST_{window}_CLOSED_BARS")
     for i in range(len(bars)-3, 1, -1):

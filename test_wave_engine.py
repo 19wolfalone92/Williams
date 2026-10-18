@@ -27,6 +27,15 @@ def pivots(*items):
     ]
 
 
+def with_containment_evidence(snapshot):
+    # Explicit causal interval/price fixtures; TF labels alone are insufficient.
+    step=MultiTimeframeWaveEngine.INTERVAL_SECONDS[snapshot.interval]*1000
+    now=2_000_000_000_000
+    return replace(snapshot,cycle_start_ms=now-400*step,active_leg_start_ms=now-100*step,
+                   observed_end_ms=now,active_leg_low=80.0,active_leg_high=200.0,
+                   anchor_prices=[100.0,120.0,110.0])
+
+
 def test_estimates_up_wave_2():
     e = engine(base_interval="1h", min_bars=140)
     position, label, confidence, *_ = e._estimate_position(
@@ -131,7 +140,7 @@ def test_nested_w3_inside_parent_w5_is_detected_and_not_a_veto():
         data_ok=True,
     )
 
-    report = e._build_report({"4h": parent, "1h": child})
+    report = e._build_report({"4h": with_containment_evidence(parent), "1h": with_containment_evidence(child)})
 
     assert report.nested_w3 is True
     assert report.nested_w3_parent_w5 is True
@@ -232,7 +241,7 @@ def test_w5_exhaustion_does_not_veto_nested_w3_context():
         structural_confidence=88.0, impulse_score=92.0, exhaustion_risk=12.0,
         alligator_bullish=True, ao=3.0, data_bars=200, data_ok=True,
     )
-    report = e._build_report({"4h": parent, "1h": child})
+    report = e._build_report({"4h": with_containment_evidence(parent), "1h": with_containment_evidence(child)})
     assert report.nested_w3_parent_w5 is True
     assert report.wave_score > 50.0
 
@@ -274,7 +283,7 @@ def test_w3_can_be_nested_inside_parent_w1_w3_and_w5():
     for parent_position in (1, 3, 5):
         parent = _wave_snapshot("1d", parent_position)
         child = _wave_snapshot("4h", 3)
-        report = e._build_report({"1d": parent, "4h": child})
+        report = e._build_report({"1d": with_containment_evidence(parent), "4h": with_containment_evidence(child)})
         assert report.nested_w3 is True
         assert parent_position in report.nested_w3_parent_positions
         if parent_position == 5:
@@ -332,3 +341,21 @@ def test_point_zero_rejects_non_w3_w5_divergence():
     bullets, count, _ = e._point_zero_bullets(data, ps, DIRECTION_UP)
     assert bullets["divergence"] is False
     assert count < 5
+
+
+def test_wave_labels_alone_do_not_establish_parentage():
+    e=engine(base_interval="1h",intervals=["4h","1h"])
+    report=e._build_report({"4h":_wave_snapshot("4h",5),"1h":_wave_snapshot("1h",3)})
+    assert report.nested_w3 is False
+    assert report.nested_w3_parent_w5 is False
+    # With a valid older frame present, a child cannot silently enter without proof.
+    assert report.entry_interval != "1h"
+
+
+def test_classic_wave_count_does_not_soft_score_impossible_w2_or_shortest_w3():
+    e=engine(base_interval="1h")
+    assert e._sequence_fit(pivots((DIRECTION_DOWN,100),(DIRECTION_UP,110),(DIRECTION_DOWN,99)),DIRECTION_UP,3)==0
+    ps=pivots((DIRECTION_DOWN,100),(DIRECTION_UP,110),(DIRECTION_DOWN,108),
+              (DIRECTION_UP,112),(DIRECTION_DOWN,111),(DIRECTION_UP,125))
+    assert e._sequence_fit(ps,DIRECTION_UP,5)==0
+    assert e._full_impulse_completed(ps,DIRECTION_UP) is False

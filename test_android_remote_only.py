@@ -166,10 +166,10 @@ def test_android_reversal_htf_gate_matches_python_campaign_contract():
     python = _read(ROOT / "futures_williams_runtime.py")
 
     # Directional context is ranked only after both H1 hypotheses are preserved.
-    # A D1 conflict vetoes that side, while H4 alignment ranks allowed candidates.
+    # The ordinary D1 veto remains; only separately proven correction context overrides it.
     assert "internal fun directionalSignalContextRank(" in android
     assert "val freshSignals = candidate.campaignSignals.filter" in android
-    assert "directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)" in android
+    assert "directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear)" in android
     assert "internal fun campaignSignalDirection(signalType: String): String?" in android
     assert "WILLIAMS_SIGNAL_DIRECTION_UNKNOWN: refusing to default an unknown signal to LONG" in android
     assert "return signal_type != SignalType.REVERSAL" in python
@@ -296,12 +296,13 @@ def test_android_williams_indicator_decisions_use_chart_aligned_alligator_and_ca
     assert "private fun alligator(" in runtime
     assert "Super AO is independent of WM3/fractals." in runtime
     assert "priorFractalValid" not in runtime
-    assert "candles[fractalCenter].h > centerTeeth" in runtime
-    assert "trigger > currentTeeth" in runtime
-    assert "fun upGroupStart(i: Int): Int" in runtime
-    assert "fun downGroupStart(i: Int): Int" in runtime
-    assert "candles[i + 1].h == candles[i].h" in runtime
-    assert ".minOf { candles[it].l } - tick" in runtime
+    setups=_read(ANDROID / "java/com/williamsbot/WilliamsSetupRules.kt")
+    assert 'selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)' in runtime
+    assert "p<=teeth[i]" in setups
+    assert "trigger<=teeth.last()" in setups
+    assert "if (value==p) start=j" in setups
+    assert ".minOf { bars[it].l }-tick" in setups
+    assert "bar.h<mouth.min()" in setups
 
 
 def test_android_kill_switch_never_closes_an_unmanaged_or_unreconciled_position():
@@ -652,10 +653,10 @@ def test_android_williams_stop_entries_reject_any_intervening_trigger_cross():
     assert "fun triggerStillPending(signalIndex: Int, trigger: Double): Boolean" in long_signals
     assert "for (later in signalIndex + 1..current)" in long_signals
     assert "if (candles[later].h >= trigger) return false" in long_signals
-    assert long_signals.count("triggerStillPending(") == 4  # helper + WM1 + WM2 + WM3
+    assert long_signals.count("triggerStillPending(") == 3  # helper + WM1 + WM2; WM3 has a pure tested selector
     assert "if (triggerStillPending(i, trigger))" in long_signals
     assert "if (triggerStillPending(signalIndex, trigger))" in long_signals
-    assert "triggerStillPending(fractalCenter, trigger)" in long_signals
+    assert 'selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)' in long_signals
 
 
 
@@ -788,7 +789,7 @@ def test_android_candidate_state_never_labels_short_as_confirmed_long():
 
 
 
-def test_scanner_explains_the_same_newest_signal_that_execution_selects():
+def test_scanner_explains_the_first_still_valid_presenting_signal():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     assert "val primarySignal = campaignEntryCandidate(candidate)" in runtime
@@ -828,8 +829,8 @@ def test_android_futures_long_and_short_readiness_uses_h1_signal_not_m5_mtf_gate
     assert "junior != null" not in final_gate
     assert "entryInsideCorrection" not in final_gate
     assert "middle?.position !in listOf(2, 4)" not in final_gate
-    assert "M15/M5 wave analysis is displayed as diagnostics only" in enrich
-    assert "submitNativeFuturesCampaignEntry performs" in enrich
+    assert "H1 is the sole signal authority" in enrich
+    assert "submitNativeFuturesCampaignEntry" in enrich
     submit = runtime.split("private fun submitNativeFuturesCampaignEntry(", 1)[1].split(
         "private fun performCampaignScan(", 1
     )[0]
@@ -839,7 +840,7 @@ def test_android_futures_long_and_short_readiness_uses_h1_signal_not_m5_mtf_gate
     assert '"SHORT" -> NativeFuturesCampaignCoordinator.Direction.SHORT' in submit
     assert "WILLIAMS_SIGNAL_DIRECTION_UNKNOWN" in submit
     assert "val freshSignals = candidate.campaignSignals.filter" in submit
-    assert "directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)" in submit
+    assert "directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear)" in submit
     assert "neither LONG nor SHORT is allowed by D1/H4" in submit
     assert "internal fun directionalSignalContextRank(" in runtime
 
@@ -847,16 +848,17 @@ def test_android_futures_long_and_short_readiness_uses_h1_signal_not_m5_mtf_gate
 def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     wave = runtime.split("private fun waveInfo(", 1)[1].split(
-        "private fun bullishTrendHint(", 1
+        "private fun neutralWave(", 1
     )[0]
     enrich = runtime.split("private fun enrichWithMtf(", 1)[1].split(
         "private fun toJson(", 1
     )[0]
     assert "val alligatorBearish" in runtime
     assert "val bearish =" in wave
-    assert "alligatorBearish = bearish" in wave
+    assert "alligatorBearish=bearish" in wave
     assert 'primaryDecisionSignal?.type?.startsWith("SHORT_", ignoreCase = true) == true' in enrich
     assert "htf4h.alligatorBearish && !htf4h.aoPositive" in enrich
     assert "htf1d.alligatorBearish && !htf1d.aoPositive" in enrich
-    assert "it.position == 3 && it.direction == decisionDirection" in enrich
-    assert "junior.alligatorBearish && !junior.aoPositive" in enrich
+    assert "hierarchy.links.any" in enrich
+    assert 'link.relationship == "ALIGNED"' in enrich
+    assert 'p?.label == "W5" && c?.label == "W3"' in enrich

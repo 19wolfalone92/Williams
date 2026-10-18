@@ -133,7 +133,7 @@ internal fun planWilliamsCampaignStop(
     val proposals = mutableListOf<FuturesStopTrailProposal>()
     planFuturesStopTrail(direction,oldStop,actualEntry,initialStop ?: Double.NaN,markPrice,tickSize,
         openedObservedAtMs,bars,feeAndSlippageAllowancePct=feeAllowance,breakEvenEnabled=validR)?.let { proposals += it }
-    if (bars.size >= window && openedObservedAtMs > 0 && bars.last().openTimeMs+3_600_000L > openedObservedAtMs) {
+    if (bars.size >= window && (openedObservedAtMs <= 0 || bars.last().openTimeMs+3_600_000L > openedObservedAtMs)) {
         val price = if (direction == "LONG") {
             floor((bars.takeLast(window).minOf { it.low }-tickSize)/tickSize+1e-12)*tickSize
         } else ceil((bars.takeLast(window).maxOf { it.high }+tickSize)/tickSize-1e-12)*tickSize

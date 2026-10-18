@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from math import isfinite
 from typing import Mapping, Sequence
 
-FRAME_MS = {"15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
+FRAME_MS = {"1m":60_000,"3m":180_000,"5m":300_000,"15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
             "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
             "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000}
 REQUIRED_FRAMES = ("1d", "6h", "1h", "15m")
@@ -150,7 +150,7 @@ def confirmed_wave_anchors(bars: Sequence[WaveBar], duration: int) -> list[WaveA
     for p in raw:
         if not alternating or p.kind != alternating[-1].kind:
             alternating.append(p)
-        elif (p.price > alternating[-1].price) == (p.kind == "HIGH"):
+        elif (p.price > alternating[-1].price if p.kind=="HIGH" else p.price < alternating[-1].price):
             alternating[-1] = p
     return alternating
 
@@ -200,7 +200,7 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
         return
     w3 = max(w3_indexes, key=lambda i: sign * osc[i])
     end = p[4].extreme_at if len(p) >= 5 else stop
-    cross = any(sign * osc[i] <= 0 for i in indexes
+    cross = any(sign * osc[i] < 0 for i in indexes
                 if i > w3 and bars[i].t <= end)
     if not 100 <= h.scale_bars <= 140:
         h.w4_zero = "WRONG_SCALE"
@@ -326,6 +326,8 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) ->
         except (ValueError, TypeError, OverflowError) as exc:
             errors[frame] = str(exc)
     for frame, bars in valid.items():
+        if frame not in REQUIRED_FRAMES:
+            continue  # analytical resolution is not automatic parent genealogy
         hypotheses = hypotheses_from_anchors(frame, bars, confirmed_wave_anchors(bars, FRAME_MS[frame]))
         for h in hypotheses:
             # A daily candle is not fabricated up to the current hour. The
@@ -358,9 +360,28 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) ->
     return WaveHierarchy(as_of, scenarios, link_wave_hypotheses(scenarios), errors, warnings)
 
 
+def suggested_analytical_frames(report: WaveHierarchy) -> list[str]:
+    """At most two real native resolutions; never fabricate 100-140 samples."""
+    choices = []
+    for frame in ("6h","1d","1h"):
+        candidates = [s for s in report.scenarios if s.frame==frame and s.status=="PROVISIONAL"
+                      and len(s.anchors)>=4 and s.w4_zero!="MINIMUM_ONLY"]
+        if not candidates:
+            continue
+        h = max(candidates,key=lambda s:len(s.anchors))
+        duration = report.as_of-h.anchors[0].extreme_at
+        options = [(abs(duration//step-120),name) for name,step in FRAME_MS.items()
+                   if 100<=duration//step<=140]
+        if options:
+            choice=min(options)[1]
+            if choice not in choices:
+                choices.append(choice)
+    return choices[:2]
+
+
 def correction_entry_context(report: WaveHierarchy, side: str, signal_at: int,
                              signal_type: str) -> dict:
-    """Project correction mode: TC2 H1 WM1 + structural D1/H6/H1/M15 proof.
+    """Project correction mode: a TC2 H1 Wise Man + structural D1/H6/H1/M15 proof.
 
     A conservative engineering policy, not a rule claiming the book mandates
     these particular four timeframes. Every ordinary risk/execution gate remains.
@@ -373,6 +394,7 @@ def correction_entry_context(report: WaveHierarchy, side: str, signal_at: int,
         return blocked | {"reason": "CORRECTION_HISTORY_INCOMPLETE"}
     if signal_at <= 0 or signal_at + FRAME_MS["1h"] > report.as_of or report.as_of - signal_at > 5 * FRAME_MS["1h"]:
         return blocked | {"reason": "CORRECTION_H1_SIGNAL_NOT_CLOSED_OR_FRESH"}
+    approvals = {}
     by_id = {s.scenario_id: s for s in report.scenarios if s.status == "PROVISIONAL"}
     for senior in by_id.values():
         if not (senior.frame == "6h" and senior.direction != direction
@@ -406,20 +428,34 @@ def correction_entry_context(report: WaveHierarchy, side: str, signal_at: int,
                 if len(senior.anchors) >= 8:
                     terminal.append(senior.anchors[7].price)
                 bounds = [0.0, max(terminal)] if senior.direction == "UP" else [min(terminal), 0.0]
-            return {"allowed": True, "mode": "CORRECTION", "reason": "H1_WISE_MAN_IN_CONTAINED_H6_CORRECTION",
+            approvals[senior.scenario_id] = {"allowed": True, "mode": "CORRECTION", "reason": "H1_WISE_MAN_IN_CONTAINED_H6_CORRECTION",
                     "parent_scenario_id": senior.scenario_id, "parent_invalidation": senior.invalidation,
                     "parent_floor": bounds[0], "parent_ceiling": bounds[1],
                     "decision_scenario_id": decision.scenario_id, "signal_at": signal_at}
+    if len(approvals)==1:
+        return next(iter(approvals.values()))
+    if len(approvals)>1:
+        return blocked | {"reason":"COMPETING_CORRECTION_PARENTS_UNRESOLVED"}
     return blocked
+
+
+def correction_bounds_valid(context: dict) -> bool:
+    try:
+        lower = float(context["parent_floor"])
+        upper = float(context["parent_ceiling"])
+        return (all(isfinite(v) for v in (lower, upper)) and lower >= 0 and upper >= 0
+                and (lower == 0 or upper == 0 or lower < upper) and (lower > 0 or upper > 0))
+    except (TypeError, ValueError, KeyError):
+        return False
 
 
 def correction_price_allowed(context: dict, mark: float) -> bool:
     try:
         lower = float(context["parent_floor"])
         upper = float(context["parent_ceiling"])
-        return (all(isfinite(v) for v in (mark, lower, upper)) and mark > 0 and lower >= 0 and upper >= 0
+        return (correction_bounds_valid(context) and isfinite(mark) and mark > 0
                 and (lower == 0 or mark > lower) and (upper == 0 or mark < upper)
-                and (lower > 0 or upper > 0))
+                )
     except (TypeError, ValueError, KeyError):
         return False
 

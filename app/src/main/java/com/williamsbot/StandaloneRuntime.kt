@@ -743,12 +743,6 @@ private data class CandleN(
     val v: Double
 )
 
-private data class PivotN(
-    val kind: String,
-    val price: Double,
-    val index: Int
-)
-
 private data class WaveInfo(
     val position: Int,
     val phase: String,
@@ -4399,9 +4393,9 @@ private class NativeEngine(
     }
 
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
-        // Select the most recent still-valid confirmed setup, never the oldest one
-        // returned by a historical scan.
-        candidate.campaignSignals.sortedByDescending { it.signalBarTimeMs }.firstOrNull()
+        // TC2's first still-valid presenting Wise Man. Consumed levels have
+        // already been removed by their causal trigger checks.
+        candidate.campaignSignals.minByOrNull { it.signalBarTimeMs }
 
     // Legacy Spot-era campaign submission/management/recovery implementation removed.
     // Entry, trailing protection, and exits are owned by NativeFuturesCampaignCoordinator.
@@ -5190,27 +5184,32 @@ private class NativeEngine(
             .onFailure { lastError = "Futures trade audit backfill failed: " + (it.message ?: it.javaClass.simpleName) }
         val positions = futuresCampaignCoordinator.positionsSnapshot()
         val intents = futuresCampaignCoordinator.intentsSnapshot()
-        // A conditional correction entry must not survive loss/invalidation of
-        // its parent. Cancel only that symbol; racing fills are reconciled and
-        // protected by the coordinator before the next strategy action.
+        // Accepted conditional entries have a bounded H1 life. A correction
+        // additionally needs its original parent to remain valid before fill.
         for (i in 0 until intents.length()) {
-            val pending = intents.optJSONObject(i) ?: continue
-            if (pending.optString("intent_role","ENTRY") != "ENTRY" ||
-                pending.optString("trade_mode") != "CORRECTION" ||
-                campaignLifecycleStatus(pending) != "ENTRY_PENDING") continue
-            val symbol = pending.optString("symbol")
-            val proof = runCatching { JSONObject(pending.optString("wave_context_at_entry")) }.getOrNull()
-            val current = williamsCorrectionEntryContext(waveHierarchyFor(symbol),pending.optString("direction"),
-                pending.optLong("signal_bar_time_ms"),pending.optString("signal_type"))
-            val mark = futuresMarketData.markPrice(symbol)
-            val boundaryOk = williamsCorrectionPriceAllowed(current.toJson(),mark)
-            if (!current.allowed || current.parentId != proof?.optString("parent_scenario_id") || !boundaryOk) {
-                val result = withCampaignMutation(symbol,"INVALIDATED_CORRECTION_ENTRY_CANCEL",allowPaused=true) {
-                    futuresCampaignCoordinator.cancelPendingEntries("CORRECTION_PARENT_INVALIDATED",symbol)
+            val pending=intents.optJSONObject(i) ?: continue
+            if (pending.optString("intent_role","ENTRY")!="ENTRY" || campaignLifecycleStatus(pending)!="ENTRY_PENDING") continue
+            val symbol=pending.optString("symbol")
+            val signalAt=pending.optLong("signal_bar_time_ms",0L)
+            val expires=pending.optLong("signal_expires_at_ms",if (signalAt>0) signalAt+18_000_000L else 0L)
+            val expired=expires>0 && futuresMarketData.exchangeNowMs()>=expires
+            var invalidCorrection=false
+            if (pending.optString("trade_mode")=="CORRECTION") {
+                val prior=runCatching { JSONObject(pending.optString("wave_context_at_entry")) }.getOrNull()
+                val current=williamsCorrectionEntryContext(waveHierarchyFor(symbol),pending.optString("direction"),
+                    signalAt,pending.optString("signal_type"))
+                invalidCorrection=!current.allowed || current.parentId!=prior?.optString("parent_scenario_id") ||
+                    !williamsCorrectionPriceAllowed(current.toJson(),futuresMarketData.markPrice(symbol))
+            }
+            if (expired || invalidCorrection) {
+                val reason=if (expired) "H1_SIGNAL_EXPIRED" else "CORRECTION_PARENT_INVALIDATED"
+                val result=withCampaignMutation(symbol,"WILLIAMS_INVALIDATED_ENTRY_CANCEL",allowPaused=true) {
+                    futuresCampaignCoordinator.cancelPendingEntries(reason,symbol)
                 }
                 if (!result.optBoolean("ok",false)) throw IllegalStateException(result.optString("blocker"))
-                // The previously captured positions/intents are now stale.
-                return false
+                reconcileRequired=true
+                persistSafetyFlag("reconcile_required",true)
+                return false // force a fresh position/intent snapshot after a possible racing fill
             }
         }
         for (i in 0 until positions.length()) {
@@ -5234,14 +5233,19 @@ private class NativeEngine(
                     campaignLifecycleStatus(it) == "OPEN_PROTECTED" }
                 ?: throw IllegalStateException(symbol + " has no latest exchange-confirmed protected campaign")
             val openedAt = intent.optLong("position_open_observed_at_ms",0L)
+            require(mark.isFinite() && mark > 0) { "Invalid mark during Williams management" }
+            val correctionProof = if (intent.optString("trade_mode") == "CORRECTION") {
+                val proof = JSONObject(intent.optString("wave_context_at_entry"))
+                require(williamsCorrectionBoundsValid(proof)) { "Correction proof invalid; retain confirmed protection" }
+                proof
+            } else null
+            val boundaryExit = correctionProof != null && !williamsCorrectionPriceAllowed(correctionProof,mark)
             val opposing = triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt)
-            // TC2 uses price-bar/fractal protection and TRIGGERED opposite Wise Men.
-            // An NTD close-only Teeth stop must not leak into this trading profile.
-            if (opposing != null) {
-                val hierarchy = waveHierarchyFor(symbol)
-                val correction = williamsCorrectionEntryContext(hierarchy,
-                    if (dir == "LONG") "SHORT" else "LONG",opposing.signalBarTimeMs,opposing.type)
-                val exitReason = if (correction.allowed) "HIGHER_WAVE_IMPULSE_COMPLETION_CONFIRMED"
+            if (opposing != null || boundaryExit) {
+                val correction = if (opposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
+                    if (dir == "LONG") "SHORT" else "LONG",opposing.signalBarTimeMs,opposing.type) else WilliamsCorrectionContext()
+                val exitReason = if (boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
+                    else if (correction.allowed) "HIGHER_WAVE_IMPULSE_COMPLETION_CONFIRMED"
                     else "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
                 val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"),rules)
                 val clientId = ("W2O_"+symbol.take(8)+"_"+System.nanoTime().toString(16).takeLast(12)).take(36)
@@ -5393,14 +5397,10 @@ private class NativeEngine(
             if (corrections[signal.signalId]?.allowed == true) 2 else 0)
         // Only a causally contained, validated correction mode may override the
         // project's D1/H4 trend filter. H1 remains the only signal authority.
-        val signal = freshSignals.maxWithOrNull(
-            compareBy<CampaignSignalN> {
-                contextRank(it)
-            }.thenBy { nativeRank(it.type) }
-                .thenBy { it.signalBarTimeMs }
-        )?.takeIf {
-            contextRank(it) > 0
-        } ?: run {
+        val signal = freshSignals.filter { contextRank(it)>0 }.minWithOrNull(
+            compareBy<CampaignSignalN> { it.signalBarTimeMs }
+                .thenByDescending { contextRank(it) }.thenByDescending { nativeRank(it.type) }
+        ) ?: run {
             lastError = "WILLIAMS_DIRECTIONAL_CONTEXT_BLOCKED: neither LONG nor SHORT is allowed by D1/H4 for $symbol"
             return
         }
@@ -6782,65 +6782,10 @@ private class NativeEngine(
                 teethS[i] > jawS[i] &&
                 candles[i].c > lipsS[i]
 
-        fun upGroupStart(i: Int): Int {
-            var start = i
-            while (start > 0 && candles[start - 1].h == candles[i].h) start--
-            return start
-        }
-
-        fun downGroupStart(i: Int): Int {
-            var start = i
-            while (start > 0 && candles[start - 1].l == candles[i].l) start--
-            return start
-        }
-
-        // A plateau of equal extremes is one fractal group, not several
-        // artificial signals. Anchor it at the last equal-extreme bar so the
-        // two required right-hand bars are fully closed before confirmation.
-        fun upFractal(i: Int): Boolean {
-            if (i + 2 >= candles.size) return false
-            if (i + 1 < candles.size && candles[i + 1].h == candles[i].h) return false
-            val start = upGroupStart(i)
-            if (start < 2) return false
-            return candles[start - 1].h < candles[i].h &&
-                candles[start - 2].h < candles[i].h &&
-                candles[i + 1].h < candles[i].h &&
-                candles[i + 2].h < candles[i].h
-        }
-
-        fun downFractal(i: Int): Boolean {
-            if (i + 2 >= candles.size) return false
-            if (i + 1 < candles.size && candles[i + 1].l == candles[i].l) return false
-            val start = downGroupStart(i)
-            if (start < 2) return false
-            return candles[start - 1].l > candles[i].l &&
-                candles[start - 2].l > candles[i].l &&
-                candles[i + 1].l > candles[i].l &&
-                candles[i + 2].l > candles[i].l
-        }
-
-        fun latestUpFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (upFractal(i)) return i
-            }
-            return null
-        }
-
-        fun latestDownFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (downFractal(i)) return i
-            }
-            return null
-        }
-
+        val waveBars = candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
         fun angulationScore(i: Int): Double {
-            val start = max(0, i - 4)
-            if (i - start < 2 || !jawS[i].isFinite()) return 0.0
-            val now = max(0.0, jawS[i] - candles[i].l)
-            val then = if (jawS[start].isFinite()) {
-                max(0.0, jawS[start] - candles[start].l)
-            } else 0.0
-            return max(0.0, now - then) / max(candles[i].c, 1e-9) * 100.0
+            val start = maxOf(0,i-4)
+            return williamsIncreasingJawDistanceScore("LONG",waveBars.subList(start,i+1),jawS.subList(start,i+1))
         }
 
         val current = candles.lastIndex
@@ -6862,19 +6807,8 @@ private class NativeEngine(
         val reversalStart = max(2, candles.lastIndex - 20)
         for (i in candles.lastIndex downTo reversalStart) {
             val priorLow = min(candles[i - 1].l, candles[i - 2].l)
-            val range = max(candles[i].h - candles[i].l, 1e-12)
-            val closeLocation = (candles[i].c - candles[i].l) / range
-            val belowMouth =
-                jawS[i].isFinite() &&
-                    teethS[i].isFinite() &&
-                    lipsS[i].isFinite() &&
-                    candles[i].l < min(jawS[i], min(teethS[i], lipsS[i]))
-            if (
-                candles[i].l < priorLow &&
-                closeLocation >= 0.50 &&
-                belowMouth &&
-                angulationScore(i) > 0.0
-            ) {
+            if (validWilliamsReversalBar("LONG",waveBars[i],priorLow,
+                listOf(jawS[i],teethS[i],lipsS[i]),angulationScore(i))) {
                 val trigger = candles[i].h + tick
                 if (triggerStillPending(i, trigger)) {
                     out += CampaignSignalN(
@@ -6926,34 +6860,14 @@ private class NativeEngine(
         // WM3: most recent confirmed buy fractal. The pivot defines the level, but
         // the signal timestamp is the second right-hand bar close when the
         // five-bar fractal first becomes knowable. Never backdate a decision.
-        val fractalCenter = latestUpFractal(candles.lastIndex - 2)
-        if (fractalCenter != null) {
-            val trigger = candles[fractalCenter].h + tick
-            val centerTeeth = teethS[fractalCenter]
-            val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
-            // Book rule: qualify the middle bar against the Teeth value at
-            // the fractal's own chart coordinate, then re-check the live
-            // pending trigger against current Teeth after confirmation.
-            if (
-                centerTeeth.isFinite() &&
-                candles[fractalCenter].h > centerTeeth &&
-                triggerStillPending(fractalCenter, trigger) &&
-                trigger > currentTeeth
-            ) {
-                out += CampaignSignalN(
-                    signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[fractalCenter].t),
-                    type = "FRACTAL",
-                    role = "ENTRY",
-                    signalBarTimeMs = candles[fractalCenter + 2].t,
-                    triggerPrice = trigger,
-                    protectivePrice = (upGroupStart(fractalCenter)..fractalCenter)
-                        .minOf { candles[it].l } - tick,
-                    teethAtDetection = currentTeeth,
-                    invalidationPrice = (upGroupStart(fractalCenter)..fractalCenter)
-                        .minOf { candles[it].l } - tick,
-                    reason = "WM3 confirmed buy fractal; trigger must remain above Teeth"
-                )
-            }
+        val fractal = selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)
+        if (fractal != null) {
+            out += CampaignSignalN(
+                signalId=campaignSignalId(symbol,frame,"FRACTAL",candles[fractal.center].t),
+                type="FRACTAL",role="ENTRY",signalBarTimeMs=candles[fractal.confirmation].t,
+                triggerPrice=fractal.trigger,protectivePrice=fractal.protective,
+                teethAtDetection=fractal.currentTeeth,invalidationPrice=fractal.protective,
+                reason="WM3 eligible confirmed fractal outside Teeth; waiting for actual trigger")
         }
 
         // Keep at most one signal per family, ordered by formation time. The
@@ -7219,22 +7133,6 @@ private class NativeEngine(
         )
     }
 
-    private fun isCountertrendCorrectionImpulse(
-        child: WaveInfo,
-        frames: List<WaveInfo>
-    ): Boolean {
-        if (child.position !in 1..5 || child.direction == "NEUTRAL") return false
-        val childSeconds = frameSeconds(child.path.substringBefore(":"))
-        val parent = frames
-            .filter { it.path != child.path && frameSeconds(it.path.substringBefore(":")) > childSeconds && it.position in listOf(2, 4) }
-            .sortedBy { frameSeconds(it.path.substringBefore(":")) }
-            .firstOrNull()
-        // Parent W2/W4 is a correction against its parent's impulse direction.
-        // Its A/C legs may be five-wave impulses, but they must not be treated
-        // as a continuation entry in the opposite direction.
-        return parent != null && parent.direction != child.direction
-    }
-
     private fun waveHierarchyFor(symbol: String, refresh: Boolean = false): WilliamsWaveHierarchy {
         val now = futuresMarketData.exchangeNowMs()
         val cutoff = now / 900_000L * 900_000L
@@ -7245,6 +7143,13 @@ private class NativeEngine(
                 .getOrDefault(emptyList()).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
         }
         var report = buildWilliamsWaveHierarchy(frames, cutoff)
+        for (recommended in suggestedWilliamsAnalyticalFrames(report)) {
+            if (recommended in frames) continue
+            frames[recommended] = runCatching { fetchCandles(symbol,recommended,240) }
+                .getOrDefault(emptyList()).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        }
+        report = buildWilliamsWaveHierarchy(frames,cutoff)
+
         val previous = executionStore.readState("wave_hierarchy_" + symbol)
         val proof = report.toJson().toString()
         if (previous != proof) {
@@ -7291,236 +7196,56 @@ private class NativeEngine(
 
     private fun enrichWithMtf(baseCandidate: BaseAnalysis): BaseAnalysis {
         val symbol = baseCandidate.symbol
-        val frames = mutableListOf<WaveInfo>()
-        frames.add(baseCandidate.wave)
-
-        // The higher timeframe supplies the market context; a lower timeframe
-        // supplies the actual entry trigger. A child Wave 3 is therefore
-        // allowed inside a parent Wave 3 OR a parent Wave 5.
-        // MTF enrichment reads the already-warmed execution cache. The
-        // scanner must never trigger full-history reconstruction itself.
-        val mtfFrames = listOf("5m", "15m", "30m", "1h", "4h", "6h", "1d")
-        for (frame in mtfFrames) {
-            runCatching { fetchCandles(symbol, frame, 150) }
-                .getOrNull()?.takeIf { it.size >= 40 }
-                ?.let { frames.add(waveInfo(it, frame)) }
-        }
-
         val hierarchy = waveHierarchyFor(symbol)
         val setup = baseCandidate.wave
-        var bonus = 0.0
-        var exhaustion = setup.exhaustionRisk
-
         val primaryDecisionSignal = campaignEntryCandidate(baseCandidate)
         val shortSetup = primaryDecisionSignal?.type?.startsWith("SHORT_", ignoreCase = true) == true
-        val decisionDirection = if (primaryDecisionSignal == null) setup.direction
-            else if (shortSetup) "DOWN" else "UP"
-        val htf4h = frames.firstOrNull { it.path.startsWith("4h:") }
-        val htfConfirmed =
-            htf4h != null && htf4h.direction == decisionDirection &&
-                if (shortSetup) {
-                    htf4h.alligatorBearish && !htf4h.aoPositive
-                } else {
-                    htf4h.alligatorBullish && htf4h.aoPositive
-                }
-        val htf1d = frames.firstOrNull { it.path.startsWith("1d:") }
-        val dailyAligned = htf1d != null && htf1d.direction == decisionDirection &&
-            if (shortSetup) htf1d.alligatorBearish && !htf1d.aoPositive
+        val decisionDirection = if (primaryDecisionSignal == null) setup.direction else if (shortSetup) "DOWN" else "UP"
+        val htf4h = runCatching { waveInfo(fetchCandles(symbol,"4h",150),"4h") }.getOrNull()
+        val htf1d = runCatching { waveInfo(fetchCandles(symbol,"1d",150),"1d") }.getOrNull()
+        val htfConfirmed = htf4h != null && if (shortSetup) htf4h.alligatorBearish && !htf4h.aoPositive
+            else htf4h.alligatorBullish && htf4h.aoPositive
+        val dailyAligned = htf1d != null && if (shortSetup) htf1d.alligatorBearish && !htf1d.aoPositive
             else htf1d.alligatorBullish && htf1d.aoPositive
-
-        if (htfConfirmed) bonus += 8.0
-        if (dailyAligned) bonus += 4.0
-        if (setup.position == 3) {
-            bonus += 6.0
-            exhaustion = min(exhaustion, 30.0)
+        val viable = hierarchy.scenarios.filter { it.status == "PROVISIONAL" }.associateBy { it.id }
+        val decision = viable.values.filter { it.frame == "1h" }.maxByOrNull { it.anchors.size }
+        val parent = hierarchy.links.filter { it.child == decision?.id }.mapNotNull { viable[it.parent] }
+            .minByOrNull { williamsWaveFrames.getValue(it.frame) }
+        val nestedW3ParentW5 = hierarchy.links.any { link ->
+            val p = viable[link.parent]; val c = viable[link.child]
+            p?.label == "W5" && c?.label == "W3" && p.direction == decisionDirection &&
+                c.direction == decisionDirection && link.relationship == "ALIGNED"
         }
-
-        val parentW5 = frames.filter {
-            it.position == 5 && it.direction == decisionDirection
+        val countertrendCorrectionImpulse = hierarchy.links.any { link ->
+            viable[link.parent]?.label in listOf("W2","W4","A","C") && link.relationship == "ALIGNED"
         }
-        val childW3 = frames.filter {
-            it.position == 3 && it.direction == decisionDirection &&
-                if (shortSetup) it.alligatorBearish && !it.aoPositive
-                else it.alligatorBullish && it.aoPositive
+        val lateSenior = viable.values.any { it.frame in listOf("6h","1d") &&
+            it.direction == decisionDirection && it.label in listOf("W5","A","B","C") }
+        val exhaustion = if (nestedW3ParentW5 || lateSenior || setup.position==5)
+            maxOf(65.0,setup.exhaustionRisk) else setup.exhaustionRisk
+        val bonus = (if (htfConfirmed) 8.0 else 0.0) + (if (dailyAligned) 4.0 else 0.0) -
+            (if (nestedW3ParentW5 || lateSenior) 12.0 else 0.0)
+        // H1 is the sole signal authority. M15 never manufactures an entry.
+        // Its contained structure validates the separately labelled correction
+        // mode in submitNativeFuturesCampaignEntry; it does not veto TREND entries.
+        val finalSignal = if (campaignEngineEnabled) {
+            primaryDecisionSignal != null && baseCandidate.atrPct in 0.0..0.08 &&
+                baseCandidate.spreadPct in 0.0..0.0015
+        } else baseCandidate.signal
+        var score = (baseCandidate.score+bonus).coerceIn(0.0,100.0)
+        if (!finalSignal && baseCandidate.signal) score=minOf(score,84.0)
+        val path = williamsRequiredWaveFrames.joinToString(" ; ") { frame ->
+            val labels = viable.values.filter { it.frame==frame }.map { it.label }.distinct()
+            frame+":"+(if (labels.isEmpty()) "?" else labels.joinToString("|"))
         }
-
-        val nestedW3ParentW5 = parentW5.any { parent ->
-            childW3.any { child ->
-                frameSeconds(child.path.substringBefore(":")) <
-                    frameSeconds(parent.path.substringBefore(":"))
-            }
-        }
-
-        val countertrendCorrectionWaves = frames.filter { child ->
-            isCountertrendCorrectionImpulse(child, frames)
-        }
-        val countertrendCorrectionImpulse = countertrendCorrectionWaves.isNotEmpty()
-
-        if (countertrendCorrectionImpulse) {
-            bonus -= 10.0
-            exhaustion = max(exhaustion, 55.0)
-        }
-
-        if (nestedW3ParentW5) {
-            // A W3 inside a possible senior W5 is a late-stage scenario.
-            // TF coincidence does not establish real wave parentage. Do not
-            // award a positive entry bonus or REDUCE exhaustion here.
-            // This only changes candidate ranking, never the H1 entry gate.
-            exhaustion = provisionalWave3InsideWave5Caution(true, exhaustion)
-        } else if (setup.position == 5) {
-            bonus -= 12.0
-            exhaustion = max(exhaustion, 65.0)
-        }
-
-        // Find the lowest available timeframe with a fresh Wave 3 that is
-        // aligned with the higher-timeframe direction. This is the execution
-        // timeframe; the 1h/4h wave is context, not necessarily the entry.
-        val entryCandidates = frames
-            .filter {
-                it.position == 3 && it.direction == decisionDirection &&
-                    (if (shortSetup) it.alligatorBearish && !it.aoPositive
-                     else it.alligatorBullish && it.aoPositive) &&
-                    !isCountertrendCorrectionImpulse(it, frames)
-            }
-            .sortedBy { frameSeconds(it.path.substringBefore(":")) }
-
-        val entry = entryCandidates.firstOrNull()
-
-        // Find the actual nearest larger wave regardless of direction. A W3
-        // inside a parent W2/W4 is part of the correction tree (A/C or B),
-        // not a continuation entry, so direction alone must not select a
-        // distant bullish parent and accidentally bless it.
-        val parent = if (entry != null) {
-            frames
-                .filter {
-                    val seconds = frameSeconds(it.path.substringBefore(":"))
-                    seconds > frameSeconds(entry.path.substringBefore(":")) &&
-                        it.position in 1..5
-                }
-                .sortedBy { frameSeconds(it.path.substringBefore(":")) }
-                .firstOrNull()
-        } else {
-            null
-        }
-
-        // Three-level hierarchy: senior = main trend, middle = order-control
-        // wave, junior = precise entry wave. Senior/middle do not need their
-        // own entry signal; only the junior setup triggers the order.
-        val junior = entry
-        val middle = parent
-        val senior = middle?.let { m ->
-            frames
-                .filter {
-                    val s = frameSeconds(it.path.substringBefore(":"))
-                    s > frameSeconds(m.path.substringBefore(":")) &&
-                        it.position in 1..5
-                }
-                .sortedBy { frameSeconds(it.path.substringBefore(":")) }
-                .firstOrNull()
-        }
-
-        val entryInsideCorrection = parent?.position in listOf(2, 4)
-        val entrySignal =
-            junior != null &&
-                !entryInsideCorrection &&
-                middle?.position !in listOf(2, 4) &&
-                junior.confidence >= 55.0 &&
-                junior.direction == decisionDirection &&
-                (if (shortSetup) junior.alligatorBearish && !junior.aoPositive
-                 else junior.alligatorBullish && junior.aoPositive)
-
-        if (entrySignal) {
-            // A lower-TF Wave 3 is the preferred entry, especially when the
-            // parent is Wave 3. A child W3 inside a parent W5 is allowed but
-            // receives a smaller quality bonus.
-            bonus += if (parent?.position == 3) 14.0 else 7.0
-            // AO bearish divergence warns that the junior impulse is losing
-            // momentum. It lowers priority rather than blindly vetoing a
-            // strong nested W3.
-            if (junior.aoBearishDivergence) bonus -= 12.0
-            if (junior.aoBullishDivergence) bonus += 4.0
-        }
-
-        var score = (baseCandidate.score + bonus).coerceIn(0.0, 100.0)
-
-        // The campaign's sole decision is the confirmed-closed H1 Williams signal.
-        // M15/M5 wave analysis is displayed as diagnostics only: it must never veto
-        // or manufacture a campaign entry. submitNativeFuturesCampaignEntry performs
-        // the authoritative closed-H4 context check and D1 macro veto immediately
-        // before passing the signal through the risk gate and Execution Door.
-        val finalSignal =
-            if (campaignEngineEnabled) {
-                primaryDecisionSignal != null &&
-                    baseCandidate.atrPct in 0.0..0.08 &&
-                    baseCandidate.spreadPct in 0.0..0.0015
-            } else {
-                entrySignal &&
-                    baseCandidate.atrPct <= 0.08 &&
-                    baseCandidate.spreadPct <= 0.0015 &&
-                    baseCandidate.riskReward >= 1.5
-            }
-
-        if (!finalSignal && baseCandidate.signal) {
-            score = min(score, 84.0)
-        }
-
-        val path = frames
-            .sortedByDescending { frameSeconds(it.path.substringBefore(":")) }
-            .joinToString(" > ") {
-                it.path.substringBefore(":") +
-                    ":" +
-                    if (it.position > 0) "W" + it.position else "?"
-            }
-
-        val entryFrame =
-            junior?.path?.substringBefore(":") ?: ""
-        val parentFrame =
-            middle?.path?.substringBefore(":") ?: ""
-
-        val reason = when {
-            finalSignal && campaignEngineEnabled ->
-                "H1 Williams " + (if (shortSetup) "SHORT" else "LONG") +
-                    " conditional-stop candidate; closed H4 context, D1 veto, risk and exchange reconciliation are checked before any order"
-            countertrendCorrectionImpulse ->
-                "MTF diagnostic: possible countertrend correction structure; lower timeframes do not decide the campaign"
-            setup.position == 5 && !nestedW3ParentW5 ->
-                "MTF diagnostic: estimated Wave 5/exhaustion context"
-            entrySignal && middle?.position == 3 ->
-                "MTF diagnostic: $entryFrame Wave 3 inside parent $parentFrame Wave 3"
-            entrySignal && nestedW3ParentW5 ->
-                "MTF diagnostic: $entryFrame Wave 3 inside parent Wave 5"
-            finalSignal ->
-                "MTF context diagnostic completed; entry policy remains separate"
-            else ->
-                baseCandidate.reason
-        }
-
-        return baseCandidate.copy(
-            score = score,
-            signal = finalSignal,
-            htfCandidate = htfConfirmed,
-            obi = baseCandidate.obi,
-            tradeFlowImbalance = baseCandidate.tradeFlowImbalance,
-            wave = setup.copy(
-                confidence = min(
-                    100.0,
-                    setup.confidence +
-                        if (htfConfirmed) 10.0 else 0.0
-                ),
-                exhaustionRisk = exhaustion,
-                path = path,
-                entryFrame = if (campaignEngineEnabled) campaignExecutionTimeframe else entryFrame,
-                entryWave = if (campaignEngineEnabled) setup.position else junior?.position ?: 0,
-                parentFrame = parentFrame,
-                parentWave = middle?.position ?: 0,
-                entryConfidence = if (campaignEngineEnabled) setup.confidence else junior?.confidence ?: 0.0,
-                nestedW3ParentW5 = nestedW3ParentW5,
-                countertrendCorrectionImpulse = countertrendCorrectionImpulse
-            ),
-            reason = reason,
-            campaignReady = campaignEngineEnabled && finalSignal,
-            waveHierarchy = hierarchy
-        )
+        return baseCandidate.copy(score=score,signal=finalSignal,htfCandidate=htfConfirmed,
+            wave=setup.copy(exhaustionRisk=exhaustion,path=path,entryFrame=campaignExecutionTimeframe,
+                entryWave=setup.position,parentFrame=parent?.frame ?: "",parentWave=parent?.label?.removePrefix("W")?.toIntOrNull() ?: 0,
+                entryConfidence=setup.confidence,nestedW3ParentW5=nestedW3ParentW5,
+                countertrendCorrectionImpulse=countertrendCorrectionImpulse),
+            reason=if (finalSignal && campaignEngineEnabled) "H1 Williams conditional candidate; context, wave correction mode, risk and exchange proof checked before submission"
+                else baseCandidate.reason,
+            campaignReady=campaignEngineEnabled && finalSignal,waveHierarchy=hierarchy)
     }
 
     private fun toJson(candidate: BaseAnalysis): JSONObject {
@@ -7552,46 +7277,14 @@ private class NativeEngine(
 
         val riskReward =
             candidate.riskReward
-        // Book diagnostic only: the 100-140-bar cycle and W4 AO zero-line
-        // crossing are NOT themselves a Williams entry, exit or reversal.
-        // PivotN.index is confirmation time (pivot + 2), so recover the
-        // actual price-pivot index before linking it to an AO leg.
-        val wave4Pivots = fractalPivots(candidate.candles)
-        val proposedAnchors = when {
-            wave.position == 4 && wave4Pivots.size >= 5 -> wave4Pivots.takeLast(5)
-            wave.position == 5 && wave4Pivots.size >= 6 -> wave4Pivots.takeLast(6)
-            else -> emptyList()
-        }
         val lastH1 = candidate.candles.lastIndex
-        val aoHistory = if (proposedAnchors.isNotEmpty()) {
-            (0..lastH1).map { ao(candidate.candles, it) }
-        } else emptyList()
-        val wave4Evidence = if (proposedAnchors.size >= 5 && wave.direction in setOf("UP", "DOWN")) {
-            val start = proposedAnchors[0].index - 2
-            val w3Start = proposedAnchors[2].index - 2
-            val w3End = proposedAnchors[3].index - 2
-            val sample = if (start >= 0 && w3Start >= 0 && w3End >= w3Start &&
-                w3End < aoHistory.size) (w3Start..w3End).filter { aoHistory[it].isFinite() }
-                else emptyList()
-            val w3Extreme = if (wave.direction == "DOWN") {
-                sample.minByOrNull { aoHistory[it] }
-            } else sample.maxByOrNull { aoHistory[it] }
-            if (w3Extreme == null) null else evaluateWilliamsWave4Zero(
-                closedAo = aoHistory, cycleStart = start,
-                w3OscillatorExtreme = w3Extreme, observedEnd = lastH1,
-                direction = wave.direction
-            )
-        } else null
-        val wave4Trace = JSONObject()
-            .put("status", wave4Evidence?.status?.name ?: "UNASSESSED")
-            .put("examined_bars", wave4Evidence?.examinedBars ?: JSONObject.NULL)
-            .put("closest_abs_ao", wave4Evidence?.closestAbsAo ?: JSONObject.NULL)
-            .put("w3_abs_ao", wave4Evidence?.w3AbsAo ?: JSONObject.NULL)
-            .put("zero_cross_bar_index", wave4Evidence?.crossedBarIndex ?: JSONObject.NULL)
-            .put("source", "TRADING_CHAOS_CH7_5_34_OSCILLATOR")
-            .put("wave_labels", "PROVISIONAL")
-            .put("wave4_completion_confirmed", false)
-            .put("can_place_orders", false)
+        val rhythm = candidate.waveHierarchy?.scenarios?.filter { it.frame == "1h" && it.status == "PROVISIONAL" }
+            ?.maxByOrNull { it.anchors.size }
+        val wave4Trace = JSONObject().put("status",rhythm?.w4Zero ?: "UNASSESSED")
+            .put("examined_bars",rhythm?.scaleBars ?: JSONObject.NULL)
+            .put("analytical_frame",rhythm?.scaleFrame ?: "")
+            .put("source","TRADING_CHAOS_CH7_5_34_OSCILLATOR")
+            .put("wave_labels","PROVISIONAL").put("wave4_completion_confirmed",false).put("can_place_orders",false)
         val h1Ao = ao(candidate.candles, lastH1)
         val h1Ac = if (lastH1 >= 4) nativeAcFromClosedAo(
             (lastH1 - 4..lastH1).map { ao(candidate.candles, it) }
@@ -7620,6 +7313,7 @@ private class NativeEngine(
             .put("wave4_zero_line_diagnostic", wave4Trace)
             .put("wave_hierarchy", candidate.waveHierarchy?.toJson() ?: JSONObject().put("state","NOT_ANALYSED"))
             .put("strategy_profile", "TC2_THREE_WISE_MEN")
+            .put("wave_scores_calibrated", false)
             .put("symbol", candidate.symbol)
             .put("score", candidate.score)
             .put("signal", candidate.signal)
@@ -7841,257 +7535,30 @@ private class NativeEngine(
             candles[i].l < candles[i + 2].l
     }
 
-    private fun fractalPivots(
-        candles: List<CandleN>
-    ): List<PivotN> {
-        if (candles.size < 10) return emptyList()
-
-        val pivots = mutableListOf<PivotN>()
-        for (i in 2 until candles.size - 2) {
-            val up = isUpFractal(candles, i)
-            val down = isDownFractal(candles, i)
-
-            if (up && !down) {
-                pivots.add(PivotN("UP", candles[i].h, i + 2))
-            } else if (down && !up) {
-                pivots.add(PivotN("DOWN", candles[i].l, i + 2))
-            }
-        }
-
-        val alternating = mutableListOf<PivotN>()
-        for (pivot in pivots) {
-            if (alternating.isEmpty()) {
-                alternating.add(pivot)
-                continue
-            }
-
-            val last = alternating.last()
-            if (pivot.kind != last.kind) {
-                alternating.add(pivot)
-            } else {
-                val moreExtreme =
-                    if (pivot.kind == "UP") {
-                        pivot.price > last.price
-                    } else {
-                        pivot.price < last.price
-                    }
-
-                if (moreExtreme) {
-                    alternating[alternating.lastIndex] = pivot
-                }
-            }
-        }
-
-        return alternating.takeLast(8)
-    }
-
-    private fun waveInfo(
-        candles: List<CandleN>,
-        frame: String
-    ): WaveInfo {
-        if (candles.size < 40) {
-            return neutralWave(candles, frame)
-        }
-
-        val pivots = fractalPivots(candles)
+    private fun waveInfo(candles: List<CandleN>, frame: String): WaveInfo {
+        if (candles.size < 40 || frame !in williamsWaveFrames) return neutralWave(candles,frame)
+        val bars = candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        val primary = williamsHypothesesFromAnchors(frame,bars,
+            confirmedWilliamsWaveAnchors(bars,williamsWaveFrames.getValue(frame)))
+            .filter { it.status == "PROVISIONAL" }.maxByOrNull { it.anchors.size }
+        val lines = alligator(candles,candles.lastIndex)
         val current = candles.last().c
-        val previous = candles[candles.lastIndex - 1].c
-
-        val series = candles.takeLast(
-            min(140, candles.size)
-        )
-
-        val low =
-            series.minOfOrNull { it.l } ?: current
-        val high =
-            series.maxOfOrNull { it.h } ?: current
-        val range = max(1e-9, high - low)
-
-        val normalized =
-            (current - low) / range
-
-        val trendClose =
-            candles[
-                max(0, candles.lastIndex - 8)
-            ].c
-
-        val direction =
-            when {
-                bullishTrendHint(candles) -> "UP"
-                bearishTrendHint(candles) -> "DOWN"
-                current > trendClose -> "UP"
-                current < trendClose -> "DOWN"
-                else -> "NEUTRAL"
-            }
-
-        val alligatorValues =
-            alligator(candles, candles.lastIndex)
-
-        val bullish =
-            alligatorValues.lips >
-                alligatorValues.teeth &&
-                alligatorValues.teeth >
-                alligatorValues.jaw &&
-                current >
-                alligatorValues.lips
-        val bearish =
-            alligatorValues.lips <
-                alligatorValues.teeth &&
-                alligatorValues.teeth <
-                alligatorValues.jaw &&
-                current <
-                alligatorValues.lips
-
-        val aoPositive =
-            ao(candles, candles.lastIndex) > 0.0
-        val aoBearDiv = aoBearishDivergence(candles)
-        val aoBullDiv = aoBullishDivergence(candles)
-
-        var position = 0
-        var phase = "UNKNOWN"
-        var confidence = 40.0
-        var exhaustion = 20.0
-
-        // Structural W1-W5 estimate: fractals are only the swing anchors.
-        // Price progression and correction depth validate the count; AO/Alligator
-        // confirm momentum but do not manufacture a wave label by themselves.
-        if (pivots.size >= 2) {
-            val p = pivots.takeLast(6)
-            val expected = if (direction == "UP") listOf("DOWN","UP","DOWN","UP","DOWN","UP")
-            else listOf("UP","DOWN","UP","DOWN","UP","DOWN")
-
-            fun fitFor(n: Int): Double {
-                if (p.size < n) return 0.0
-                val s = p.takeLast(n)
-                val exp = expected.take(n)
-                if (s.map { it.kind } != exp) return 0.0
-                var score = 50.0
-                fun impulse(a: Double, b: Double): Double = abs(b - a)
-
-                if (n >= 2) {
-                    val w1 = if (direction == "UP") s[1].price - s[0].price else s[0].price - s[1].price
-                    score += if (w1 > 0.0) 8.0 else -18.0
-                }
-                if (n >= 3) {
-                    val validW2 = if (direction == "UP") s[2].price > s[0].price else s[2].price < s[0].price
-                    score += if (validW2) 10.0 else -28.0
-                    val w1 = impulse(s[0].price, s[1].price)
-                    val retr = if (w1 > 0.0) impulse(s[1].price, s[2].price) / w1 else 9.0
-                    score += when { retr in 0.236..0.786 -> 7.0; retr > 1.0 -> -10.0; else -> 0.0 }
-                }
-                if (n >= 4) {
-                    val extendsW1 = if (direction == "UP") s[3].price > s[1].price else s[3].price < s[1].price
-                    score += if (extendsW1) 12.0 else -25.0
-                    val w1 = impulse(s[0].price, s[1].price)
-                    val w3 = impulse(s[2].price, s[3].price)
-                    if (w1 > 0.0 && w3 >= w1 * 0.90) score += 8.0
-                    else if (w1 > 0.0 && w3 < w1 * 0.65) score -= 8.0
-                }
-                if (n >= 5) {
-                    val validW4 = if (direction == "UP") s[4].price > s[1].price else s[4].price < s[1].price
-                    val beforeW3 = if (direction == "UP") s[4].price < s[3].price else s[4].price > s[3].price
-                    score += when { validW4 && beforeW3 -> 10.0; validW4 -> 2.0; else -> -18.0 }
-                }
-                if (n >= 6) {
-                    val extendsW3 = if (direction == "UP") s[5].price > s[3].price else s[5].price < s[3].price
-                    score += if (extendsW3) 10.0 else -22.0
-                    val w1 = impulse(s[0].price, s[1].price)
-                    val w3 = impulse(s[2].price, s[3].price)
-                    val w5 = impulse(s[4].price, s[5].price)
-                    if (minOf(w1, w3, w5) > 0.0) score += if (w3 >= minOf(w1, w5) * 0.85) 5.0 else -12.0
-                }
-                if (n == 4) {
-                    val aoAtW3 = ao(candles, s[3].index.coerceIn(0, candles.lastIndex))
-                    if ((direction == "UP" && aoAtW3 > 0.0) || (direction == "DOWN" && aoAtW3 < 0.0)) score += 6.0
-                }
-                return score.coerceIn(0.0, 100.0)
-            }
-
-            // Active impulse leg starts at the latest confirmed corrective pivot.
-            // D/U pivot counts of 3 and 5 correspond to W3/W5 setups respectively.
-            val active = when {
-                direction == "UP" && p.last().kind == "DOWN" -> true
-                direction == "DOWN" && p.last().kind == "UP" -> true
-                else -> false
-            }
-            if (active) {
-                val candidates = listOf(5 to fitFor(5), 3 to fitFor(3), 1 to fitFor(2))
-                val best = candidates.filter { it.second > 0.0 }.maxByOrNull {
-                    // Prefer a well-formed W3 over a weak W5. A W5 needs a clear
-                    // structure; otherwise the engine deliberately falls back.
-                    it.second + if (it.first == 3) 2.0 else 0.0
-                }
-                if (best != null) {
-                    position = best.first
-                    phase = "IMPULSE"
-                    confidence = best.second
-                    exhaustion = if (position == 5) 58.0 else if (position == 3) 22.0 else 18.0
-                }
-            } else {
-                position = if (p.last().kind == "UP") 4 else 2
-                phase = "CORRECTION"
-                confidence = if (position == 4) fitFor(5).coerceAtLeast(48.0) else fitFor(3).coerceAtLeast(48.0)
-                exhaustion = if (position == 4) 35.0 else 28.0
-            }
-
-            if (aoBearDiv && position == 5) exhaustion = min(95.0, exhaustion + 18.0)
-            if (aoBullDiv && position == 3) confidence = min(98.0, confidence + 8.0)
-        } else if (bullish) {
-            position = 1
-            phase = "IMPULSE"
-            confidence = 48.0
-            exhaustion = 18.0
-        }
-        if (bullish && aoPositive) {
-            confidence =
-                min(98.0, confidence + 6.0)
-        }
-
-        val currentLegPct =
-            if (range > 0.0) {
-                abs(current - low) / range
-            } else {
-                0.0
-            }
-
-        val lastPivot =
-            pivots.lastOrNull()
-
-        val path =
-            if (position > 0) {
-                frame + ":W" + position
-            } else {
-                frame + ":?"
-            }
-
-        return WaveInfo(
-            position = position,
-            phase = phase,
-            confidence = confidence,
-            exhaustionRisk = exhaustion,
-            direction = direction,
-            path = path,
-            alligatorBullish = bullish,
-            alligatorBearish = bearish,
-            aoPositive = aoPositive,
-            aoBearishDivergence = aoBearDiv,
-            aoBullishDivergence = aoBullDiv,
-            currentLegPct = currentLegPct
-        )
-    }
-
-    private fun bullishTrendHint(candles: List<CandleN>): Boolean {
-        if (candles.size < 10) return false
-        val current = candles.last().c
-        val past = candles[candles.lastIndex - 8].c
-        return current > past
-    }
-
-    private fun bearishTrendHint(candles: List<CandleN>): Boolean {
-        if (candles.size < 10) return false
-        val current = candles.last().c
-        val past = candles[candles.lastIndex - 8].c
-        return current < past
+        val bullish = lines.lips > lines.teeth && lines.teeth > lines.jaw && current > lines.lips
+        val bearish = lines.lips < lines.teeth && lines.teeth < lines.jaw && current < lines.lips
+        val position = primary?.label?.removePrefix("W")?.toIntOrNull() ?: 0
+        val late = position == 5 || primary?.label in listOf("A","B","C","ABC_COMPLETE")
+        val divergence = if (primary?.direction == "DOWN") aoBullishDivergence(candles)
+            else aoBearishDivergence(candles)
+        val exhaustion = if (late) if (divergence) 85.0 else 65.0 else 25.0
+        // This is an explicitly uncalibrated display score, not a posterior.
+        val confidence = primary?.let { minOf(85.0,50.0+(it.anchors.size-2)*5.0) } ?: 0.0
+        return WaveInfo(position=position,
+            phase=if (primary == null) "UNKNOWN" else if (position in listOf(2,4) || late && position==0) "CORRECTION" else "IMPULSE",
+            confidence=confidence,exhaustionRisk=exhaustion,direction=primary?.direction ?: "NEUTRAL",
+            path=frame+":"+(primary?.label ?: "?"),alligatorBullish=bullish,alligatorBearish=bearish,
+            aoPositive=ao(candles,candles.lastIndex)>0.0,aoBearishDivergence=aoBearishDivergence(candles),
+            aoBullishDivergence=aoBullishDivergence(candles),
+            currentLegPct=primary?.anchors?.lastOrNull()?.let { abs(current-it.price)/it.price*100.0 } ?: 0.0)
     }
 
     private fun neutralWave(

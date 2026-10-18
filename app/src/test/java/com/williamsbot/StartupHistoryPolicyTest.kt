@@ -18,6 +18,12 @@ class StartupHistoryPolicyTest {
         assertEquals(StartupHistoryPolicy(90, 45), startupHistoryPolicy("15m"))
     }
 
+    @Test fun h6HasAnExplicitWarmupAndContextReadinessRequirement() {
+        assertEquals(StartupHistoryPolicy(240,140),startupHistoryPolicy("6h"))
+        org.junit.Assert.assertFalse(historyReadinessStatus("6h",139L,false).contextReady)
+        org.junit.Assert.assertTrue(historyReadinessStatus("6h",140L,false).contextReady)
+    }
+
     @Test
     fun diagnostic_distinguishes_ready_h1_working_set_from_full_backfill() {
         val status = historyReadinessStatus("1h", 179, false)

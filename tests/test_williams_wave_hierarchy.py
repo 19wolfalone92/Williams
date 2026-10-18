@@ -77,6 +77,14 @@ def test_plateau_pivot_has_a_separate_real_confirmation_time():
     assert confirmed_wave_anchors(bars[:-1],HOUR) == []
 
 
+def test_equal_separate_pivots_do_not_break_long_short_reflection_symmetry():
+    lows=[103,102,100,102,103,102,100,102,103]
+    bars=[WaveBar(i*HOUR,105,110,l,105) for i,l in enumerate(lows)]
+    mirrored=[replace(b,o=220-b.o,h=220-b.l,l=220-b.h,c=220-b.c) for b in bars]
+    assert [p.index for p in confirmed_wave_anchors(bars,HOUR)]==[2]
+    assert [p.index for p in confirmed_wave_anchors(mirrored,HOUR)]==[2]
+
+
 def hypothesis(frame,direction,label,prices,times,leg_start,low,high):
     anchors = [WaveAnchor("LOW" if (i%2==0)==(direction=="UP") else "HIGH",p,i,t*HOUR,(t+3)*HOUR)
                for i,(p,t) in enumerate(zip(prices,times))]
@@ -123,6 +131,27 @@ def test_contained_correction_mode_is_bidirectional_and_has_structural_price_bou
     assert correction_price_allowed(proof,mark)
     assert not correction_price_allowed(proof,proof["parent_floor"])
     assert not correction_price_allowed(proof,proof["parent_ceiling"])
+
+
+def test_post_w5_long_correction_uses_a_floor_instead_of_an_inverted_ceiling():
+    r=correction_report()
+    h=hypothesis("6h","DOWN","A",[220,200,210,150,180,120],[80,100,200,250,280,300],300,110,180)
+    h.w4_zero="MINIMUM_ONLY";h.momentum_shift=True
+    r.scenarios[1]=h;r.links=link_wave_hypotheses(r.scenarios)
+    proof=correction_entry_context(r,"LONG",339*HOUR,"REVERSAL")
+    assert proof["allowed"]
+    assert proof["parent_floor"]==120 and proof["parent_ceiling"]==0
+    assert correction_price_allowed(proof,150)
+    assert not correction_price_allowed(proof,119)
+
+
+def test_different_viable_correction_parents_are_not_silently_resolved_by_list_order():
+    r=correction_report()
+    other=deepcopy(r.scenarios[1]);other.scenario_id="another-parent"
+    r.scenarios.append(other);r.links=link_wave_hypotheses(r.scenarios)
+    result=correction_entry_context(r,"LONG",339*HOUR,"REVERSAL")
+    assert not result["allowed"]
+    assert result["reason"]=="COMPETING_CORRECTION_PARENTS_UNRESOLVED"
 
 
 @pytest.mark.parametrize("defect", ["zero","history","conflict","future_signal","stale_signal","no_signal","no_junior"])

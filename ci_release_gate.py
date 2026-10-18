@@ -363,16 +363,16 @@ def main() -> None:
     must(runtime_source, "val signalIndex = candles.lastIndex - (streak - 3)", "StandaloneRuntime.kt WM2")
     must(runtime_source, "fun triggerStillPending(signalIndex: Int, trigger: Double): Boolean", "StandaloneRuntime.kt trigger chronology")
     must(runtime_source, "triggerStillPending(signalIndex, trigger)", "StandaloneRuntime.kt WM2 trigger")
-    must(runtime_source, "triggerStillPending(fractalCenter, trigger)", "StandaloneRuntime.kt WM3 trigger")
+    must(runtime_source, 'selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)', "StandaloneRuntime.kt WM3 trigger")
     must(runtime_source, "triggerStillPending(i, trigger)", "StandaloneRuntime.kt WM1 trigger")
     must_not(runtime_source, "priorFractalValid", "StandaloneRuntime.kt WM2")
     must(runtime_source, "val rawWorkCandles = candles", "StandaloneRuntime.kt H1 decision series")
     must_not(runtime_source, "getOrElse { candles }", "StandaloneRuntime.kt H1 fallback")
     must(runtime_source, '.put("take_profit_pct", 0.0)', "StandaloneRuntime.kt canonical Futures settings")
-    must(runtime_source, "candles[fractalCenter].h > centerTeeth", "StandaloneRuntime.kt")
-    must(runtime_source, "fun upGroupStart(i: Int): Int", "StandaloneRuntime.kt")
-    must(runtime_source, "fun downGroupStart(i: Int): Int", "StandaloneRuntime.kt")
-    must(runtime_source, ".minOf { candles[it].l } - tick", "StandaloneRuntime.kt")
+    setup_source=read("app/src/main/java/com/williamsbot/WilliamsSetupRules.kt")
+    for needle in ("p<=teeth[i]", "trigger<=teeth.last()", "if (value==p) start=j",
+                   ".minOf { bars[it].l }-tick", "bars[it].h>=trigger", "bar.h<mouth.min()"):
+        must(setup_source,needle,"WilliamsSetupRules.kt confirmed book setup")
     must(runtime_source, "val slowValues = medianPrices.subList(index - 33, index + 1)", "StandaloneRuntime.kt")
     must_not(runtime_source, "medians.subList(index - 34, index + 1).average()", "StandaloneRuntime.kt")
     indicator_test = read("app/src/test/java/com/williamsbot/WilliamsIndicatorParityTest.kt")
@@ -384,9 +384,16 @@ def main() -> None:
     ):
         must(indicator_test, needle, "WilliamsIndicatorParityTest.kt")
 
+    hierarchy_source = read("app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt")
+    for needle in ("TIME_AND_PRICE_CONTAINMENT", "COMPETING_SENIOR_IMPULSE_UNRESOLVED",
+                   "CORRECTION_HISTORY_INCOMPLETE", "MOMENTUM_FADE_BEFORE_PIVOT"):
+        must(hierarchy_source, needle, "WilliamsWaveHierarchy.kt")
+    for needle in ("planWilliamsCampaignStop(", "triggeredOpposingSignal(",
+                   "CORRECTION_PARENT_INVALIDATED", "williamsCorrectionPriceAllowed("):
+        must(runtime_source, needle, "StandaloneRuntime.kt causal wave/management integration")
     must(runtime_source, "val freshSignals = candidate.campaignSignals.filter", "StandaloneRuntime.kt directional hypotheses")
     must(runtime_source, "isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)", "StandaloneRuntime.kt H1 signal freshness")
-    must(runtime_source, "directionalSignalContextRank(it.type, d1Bull, d1Bear, h4Bull, h4Bear)", "StandaloneRuntime.kt D1/H4 directional selection")
+    must(runtime_source, "directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear)", "StandaloneRuntime.kt D1/H4 directional selection")
     must(runtime_source, "private fun estimateManagedEquity(): Double =\n        liveFuturesEquity", "StandaloneRuntime.kt")
     equity_test = read("app/src/test/java/com/williamsbot/FuturesAccountEquityTest.kt")
     for needle in (
