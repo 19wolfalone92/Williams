@@ -178,6 +178,60 @@ def test_scanner_failure_does_not_skip_position_ownership_reconciliation(armed_r
     assert bot.state("BTCUSDT") == "RECONCILE_REQUIRED"
 
 
+@pytest.mark.parametrize("racing_fill",[False,True])
+def test_project_h1_expiry_cancels_a_durably_owned_old_pending_signal_and_protects_a_racing_fill(armed_runtime,monkeypatch,racing_fill):
+    bot,exchange,_=armed_runtime
+    campaign=bot._active_campaign("BTCUSDT")
+    observed=time.time()
+    campaign.tags["pending_signal"]["signal"]["expires_at_ms"]=int((observed+80*3600)*1000)
+    bot.db.save_campaign(campaign)
+    exchange.cancel_fill=racing_fill
+    monkeypatch.setattr(time,"time",lambda:observed+6*3600)
+    bot._reconcile_pending()
+    assert not bot._pending_entries()
+    assert any(method=="DELETE" and path.endswith("algoOrder") for method,path,_ in exchange.calls)
+    if racing_fill:
+        assert exchange.amount>0
+        assert any(o.get("closePosition")=="true" and o["algoStatus"]=="NEW" for o in exchange.algos.values())
+    else:
+        assert exchange.amount==0
+        assert bot.db.campaign_risk_reserved_quote()==0
+
+
+def test_five_bar_protection_still_moves_when_scanner_is_unavailable(armed_runtime,monkeypatch):
+    import pandas as pd
+    bot,exchange,_=armed_runtime
+    exchange.fill_entry()
+    bot._reconcile_pending()
+    observed=time.time()+2*3600
+    monkeypatch.setattr(time,"time",lambda:observed)
+    end=pd.Timestamp(observed,unit="s",tz="UTC").floor("h")-pd.Timedelta(hours=1)
+    prices=[97+i*.1 for i in range(80)]
+    frame=pd.DataFrame({"open":prices,"high":[p+1 for p in prices],"low":[p-1 for p in prices],
+                        "close":prices,"volume":[1000]*80},index=pd.date_range(end=end,periods=80,freq="h"))
+    monkeypatch.setattr("futures_williams_runtime.fetch_klines",lambda *a,**k:frame)
+    exchange.price=110
+    bot.scanner.scan=lambda:[]
+    bot.scanner.last_scan_status={"state":"FAILED","reason":"model outage"}
+    assert bot.process()==[]
+    assert bot._active_campaign("BTCUSDT").current_stop_price>95
+    assert exchange.algos[2]["algoStatus"]=="CANCELED"
+    assert any(o.get("closePosition")=="true" and o["algoStatus"]=="NEW" for o in exchange.algos.values())
+    assert not any(method=="POST" and path.endswith("/order") for method,path,_ in exchange.calls)
+
+
+def test_ntd_close_event_cannot_accidentally_be_sent_as_a_tc2_stop_order(armed_runtime):
+    bot,exchange,_=armed_runtime
+    campaign=bot._active_campaign("BTCUSDT")
+    signal=SignalSpec.new(symbol="BTCUSDT",side="BUY",signal_type=SignalType.ZONE_ADD_ON,
+        role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=int(time.time()*1000),
+        trigger_price=100,protective_reference=95,execution_semantics="MARKET_ON_CLOSE")
+    before=len(exchange.calls)
+    with pytest.raises(RuntimeError,match="execution semantics"):
+        bot._arm_add_on(campaign,signal)
+    assert len(exchange.calls)==before
+
+
 def test_expired_in_match_entry_retires_pending_reservation(armed_runtime):
     bot, exchange, armed = armed_runtime
     exchange.algos[1]["algoStatus"] = "EXPIRED_IN_MATCH"

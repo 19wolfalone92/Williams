@@ -250,6 +250,8 @@ class ControlState:
                     if self.paused:
                         if getattr(t, 'is_futures_runtime', False):
                             t.recover()
+                            if callable(getattr(t, 'manage_open_positions', None)):
+                                t.manage_open_positions()
                     else:
                         t.process()
                 except Exception as e:

@@ -658,6 +658,7 @@ class MarketScanner:
         for raw in candidate.campaign_signal_specs:
             try:
                 spec = SignalSpec(
+                    execution_semantics=str(raw.get("execution_semantics","STOP_ENTRY")),
                     signal_id=str(raw["signal_id"]),
                     symbol=str(raw["symbol"]),
                     side=str(raw["side"]),

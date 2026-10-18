@@ -200,6 +200,9 @@ def test_pending_signal_has_explicit_durable_lifecycle():
 def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypatch):
     frame = pd.DataFrame({
         "low": list(range(80, 160)),
+        "open": list(range(90, 170)),
+        "close": list(range(90, 170)),
+        "volume": [1000.0] * 80,
         "high": list(range(100, 180)),
     })
 
@@ -324,7 +327,7 @@ def test_teeth_close_exit_uses_only_closed_bars_for_short(monkeypatch):
 def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypatch):
     monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "NTD_FIVE_DIMENSIONS")
     n = 55
-    close = [100.0 + i for i in range(n)]
+    close = [100.0 + (i * 0.1) ** 3 for i in range(n)]
     frame = pd.DataFrame({
         "open": [x - 0.5 for x in close],
         "high": [x + 1.0 for x in close],
@@ -335,7 +338,7 @@ def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypa
 
     class Client:
         def ticker_price(self, symbol):
-            return {"price": "200"}
+            return {"price": "1000"}
 
     runtime = object.__new__(FuturesWilliamsRuntime)
     runtime.dry_run = False
@@ -356,7 +359,7 @@ def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypa
     runtime._trail(campaign)
     assert campaign.tags["ntd_five_colour_trail_active"] is True
     assert proposed
-    # Five green bars activate the NTD rule: trail below the latest completed bar,
+    # Five joint AO/AC green zone bars activate the NTD rule: trail below the latest completed bar,
     # tighter than the older 3/5-bar structural minimum in this monotonic test.
     assert math.isclose(proposed[-1], float(frame.iloc[-2]["low"]) - 0.1)
 
@@ -768,17 +771,17 @@ def test_tc2_wm1_is_not_blocked_by_directional_htf_confirmation_policy():
 
 def test_ntd_green_zone_add_on_uses_matching_ao_ac_and_price_colours_without_zero_gate():
     ind = pd.DataFrame({
-        "open_time_ms": [1_700_000_000_000, 1_700_000_300_000],
-        "open": [99.0, 100.0],
-        "high": [100.0, 102.0],
-        "low": [98.0, 99.0],
-        "close": [99.5, 101.5],
-        "ao": [-1.1, -1.0],
-        "ac": [-0.6, -0.5],
-        "teeth_shifted": [99.0, 99.5],
-        "long_fractal_outside": [True, True],
-        "bullish_alligator": [True, True],
-        "alligator_awake": [True, True],
+        "open_time_ms": [1_699_999_700_000,1_700_000_000_000,1_700_000_300_000],
+        "open": [98.0,99.0,102.0],
+        "high": [100.0,100.0,103.0],
+        "low": [97.0,98.0,99.0],
+        "close": [98.5,99.5,101.5],
+        "ao": [-1.2,-1.1,-1.0],
+        "ac": [-0.7,-0.6,-0.5],
+        "teeth_shifted": [98.0,99.0,99.5],
+        "long_fractal_outside": [True,True,True],
+        "bullish_alligator": [True,True,True],
+        "alligator_awake": [True,True,True],
     })
     signals = extract_ntd_zone_add_on_specs(
         "BTCUSDT", ind, side="LONG", timeframe="5m", tick_size=0.1
@@ -786,23 +789,24 @@ def test_ntd_green_zone_add_on_uses_matching_ao_ac_and_price_colours_without_zer
     assert len(signals) == 1
     assert signals[0].signal_type == SignalType.ZONE_ADD_ON
     assert signals[0].role == SignalRole.ADD_ON
+    assert signals[0].execution_semantics == "MARKET_ON_CLOSE"
     assert signals[0].side == "BUY"
-    assert math.isclose(signals[0].trigger_price, 102.1)
+    assert math.isclose(signals[0].trigger_price, 101.5)
 
 
 def test_ntd_red_zone_add_on_is_mirrored_and_gray_zone_is_blocked():
     ind = pd.DataFrame({
-        "open_time_ms": [1_700_000_000_000, 1_700_000_300_000],
-        "open": [101.0, 100.0],
-        "high": [102.0, 101.0],
-        "low": [100.0, 98.0],
-        "close": [100.5, 98.5],
-        "ao": [1.1, 1.0],
-        "ac": [0.6, 0.5],
-        "teeth_shifted": [101.0, 100.5],
-        "short_fractal_outside": [True, True],
-        "bearish_alligator": [True, True],
-        "alligator_awake": [True, True],
+        "open_time_ms": [1_699_999_700_000,1_700_000_000_000,1_700_000_300_000],
+        "open": [102.0,101.0,97.0],
+        "high": [103.0,102.0,101.0],
+        "low": [100.0,100.0,96.0],
+        "close": [101.5,100.5,98.5],
+        "ao": [1.2,1.1,1.0],
+        "ac": [0.7,0.6,0.5],
+        "teeth_shifted": [102.0,101.0,100.5],
+        "short_fractal_outside": [True,True,True],
+        "bearish_alligator": [True,True,True],
+        "alligator_awake": [True,True,True],
     })
     signals = extract_ntd_zone_add_on_specs(
         "BTCUSDT", ind, side="SHORT", timeframe="5m", tick_size=0.1
@@ -810,10 +814,11 @@ def test_ntd_red_zone_add_on_is_mirrored_and_gray_zone_is_blocked():
     assert len(signals) == 1
     assert signals[0].signal_type == SignalType.ZONE_ADD_ON
     assert signals[0].role == SignalRole.ADD_ON
+    assert signals[0].execution_semantics == "MARKET_ON_CLOSE"
     assert signals[0].side == "SELL"
-    assert math.isclose(signals[0].trigger_price, 97.9)
+    assert math.isclose(signals[0].trigger_price, 98.5)
 
-    ind.loc[1, "ac"] = 0.7  # AO falls while AC rises: Gray Zone.
+    ind.loc[2, "ac"] = 0.7  # AO falls while AC rises: Gray Zone.
     assert extract_ntd_zone_add_on_specs(
         "BTCUSDT", ind, side="SHORT", timeframe="5m", tick_size=0.1
     ) == []

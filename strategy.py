@@ -239,12 +239,24 @@ def calculate_indicators(df, cfg):
         if not (np.isfinite(high_value) and np.isfinite(low_value)):
             continue
 
-        high_start = anchor
-        while high_start > 0 and highs[high_start - 1] == high_value:
-            high_start -= 1
-        low_start = anchor
-        while low_start > 0 and lows[low_start - 1] == low_value:
-            low_start -= 1
+        def left_neighbours(values,value,high):
+            start=anchor
+            count=0
+            j=anchor-1
+            while j>=0 and count<left:
+                prior=values[j]
+                if not np.isfinite(prior):
+                    break
+                if prior==value:
+                    start=j
+                elif (prior<value if high else prior>value):
+                    count+=1
+                else:
+                    break
+                j-=1
+            return count==left,start
+        high_left_ok,high_start=left_neighbours(highs,high_value,True)
+        low_left_ok,low_start=left_neighbours(lows,low_value,False)
 
         # If the equal-extreme group continues to the next bar, defer it until
         # the group's last bar; this avoids duplicate pivots for one plateau.
@@ -256,10 +268,8 @@ def calculate_indicators(df, cfg):
 
         if (
             high_is_group_end
-            and high_start >= left
-            and np.isfinite(highs[high_start-left:high_start]).all()
+            and high_left_ok
             and np.isfinite(highs[anchor+1:confirmation+1]).all()
-            and (highs[high_start-left:high_start] < high_value).all()
             and (highs[anchor+1:confirmation+1] < high_value).all()
         ):
             x.iloc[anchor, x.columns.get_loc("fractal_up")] = True
@@ -273,10 +283,8 @@ def calculate_indicators(df, cfg):
 
         if (
             low_is_group_end
-            and low_start >= left
-            and np.isfinite(lows[low_start-left:low_start]).all()
+            and low_left_ok
             and np.isfinite(lows[anchor+1:confirmation+1]).all()
-            and (lows[low_start-left:low_start] > low_value).all()
             and (lows[anchor+1:confirmation+1] > low_value).all()
         ):
             x.iloc[anchor, x.columns.get_loc("fractal_down")] = True
@@ -361,8 +369,8 @@ def calculate_indicators(df, cfg):
     x["short_fractal_signal"] = x["short_below_fractal"] & x["short_previous_above_fractal"]
 
     # First Wise Man: divergent/reversal bar. The source rule requires a new
-    # extreme and a close in the signal half of the bar. The extra mouth gate
-    # is the conservative spot-market overlay used by this bot.
+    # extreme, a close in the signal half, and a bar fully outside the mouth.
+    # TC2 PDF128 explicitly rejects a divergent bar piercing the Alligator.
     bar_range = (x["high"] - x["low"]).replace(0, np.nan)
     close_location = (x["close"] - x["low"]) / bar_range
     prior_low = x["low"].shift(1).rolling(2).min()
@@ -371,13 +379,13 @@ def calculate_indicators(df, cfg):
         (x["low"] < prior_low)
         & (close_location >= 0.50)
         & x["jaw_current"].notna()
-        & (x["low"] < x[["jaw_current", "teeth_current", "lips_current"]].min(axis=1))
+        & (x["high"] < x[["jaw_current", "teeth_current", "lips_current"]].min(axis=1))
     )
     x["bearish_reversal_bar"] = (
         (x["high"] > prior_high)
         & (close_location <= 0.50)
         & x["jaw_current"].notna()
-        & (x["high"] > x[["jaw_current", "teeth_current", "lips_current"]].max(axis=1))
+        & (x["low"] > x[["jaw_current", "teeth_current", "lips_current"]].max(axis=1))
     )
     x["long_reversal_signal"] = x["bullish_reversal_bar"]
     x["short_reversal_signal"] = x["bearish_reversal_bar"]

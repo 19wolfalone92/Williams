@@ -32,16 +32,17 @@ internal fun historyReadinessStatus(
 ): HistoryReadinessStatus {
     val minimum = when (interval) {
         "1h" -> 150
+        "6h" -> 140
         "4h", "1d", "15m" -> 45
         else -> 40
     }
     val count = candleCount.coerceAtLeast(0L)
     val workingReady = count >= minimum
     val decisionFrame = interval == "1h"
-    val contextFrame = interval == "4h" || interval == "1d"
+    val contextFrame = interval in listOf("4h","6h","1d")
     val executionMonitoringFrame = interval == "15m"
     val decisionReady = decisionFrame && count >= 150
-    val contextReady = contextFrame && count >= 45
+    val contextReady = contextFrame && count >= (if (interval=="6h") 140 else 45)
     val executionReady = executionMonitoringFrame && count >= 45
     val scope = when {
         fullHistoryComplete && workingReady -> "FULL_HISTORY"

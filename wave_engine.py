@@ -98,6 +98,12 @@ class WaveSnapshot:
     reason: str = ""
     data_bars: int = 0
     data_ok: bool = True
+    cycle_start_ms: int = 0
+    active_leg_start_ms: int = 0
+    observed_end_ms: int = 0
+    active_leg_low: float = 0.0
+    active_leg_high: float = 0.0
+    anchor_prices: List[float] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -493,6 +499,18 @@ class MultiTimeframeWaveEngine:
         expected = [self._expected_kind(direction, i) for i in range(len(seq))]
         if any(p.kind != k for p, k in zip(seq, expected)):
             return 0.0
+        sign = 1 if direction == DIRECTION_UP else -1
+        p = [sign*x.price for x in seq]
+        if len(p)>=2 and p[1]<=p[0]:
+            return 0.0
+        if len(p)>=3 and not p[0]<p[2]<p[1]:
+            return 0.0
+        if len(p)>=4 and p[3]<=p[1]:
+            return 0.0
+        if len(p)>=5 and not p[1]<p[4]<p[3]:
+            return 0.0
+        if len(p)>=6 and (p[5]<=p[4] or p[3]-p[2]<min(p[1]-p[0],p[5]-p[4])):
+            return 0.0
 
         score = 50.0
 
@@ -599,7 +617,7 @@ class MultiTimeframeWaveEngine:
             w5_len = abs(seq[5].price - seq[4].price)
             if min(w1_len, w3_len, w5_len) > 0:
                 # W3 should not be the shortest of the three impulse legs.
-                if w3_len >= min(w1_len, w5_len) * 0.85:
+                if w3_len >= min(w1_len, w5_len):
                     score += 5.0
                 else:
                     score -= 12.0
@@ -634,20 +652,10 @@ class MultiTimeframeWaveEngine:
         ]:
             return False
 
-        if direction == DIRECTION_UP:
-            return (
-                seq[2].price > seq[0].price
-                and seq[3].price > seq[1].price
-                and seq[4].price > seq[2].price
-                and seq[5].price > seq[3].price
-            )
-
-        return (
-            seq[2].price < seq[0].price
-            and seq[3].price < seq[1].price
-            and seq[4].price < seq[2].price
-            and seq[5].price < seq[3].price
-        )
+        sign = 1 if direction==DIRECTION_UP else -1
+        p = [sign*x.price for x in seq]
+        return (p[1]>p[0] and p[0]<p[2]<p[1] and p[3]>p[1] and
+                p[1]<p[4]<p[3] and p[5]>p[4] and p[3]-p[2]>=min(p[1]-p[0],p[5]-p[4]))
 
     def _estimate_position(
         self,
@@ -1134,6 +1142,18 @@ class MultiTimeframeWaveEngine:
         )
         confidence = max(0.0, min(100.0, confidence))
 
+        sequence = list(pivots[-(6 if wave_label == "A" else max(1,position)):])
+        times = {}
+        if isinstance(clean.index,pd.DatetimeIndex) and sequence:
+            start = sequence[0].center_index
+            active = sequence[-1].center_index
+            if 0<=start<=active<len(clean):
+                times = dict(cycle_start_ms=int(clean.index[start].timestamp()*1000),
+                    active_leg_start_ms=int(clean.index[active].timestamp()*1000),
+                    observed_end_ms=int(clean.index[-1].timestamp()*1000)+self.INTERVAL_SECONDS.get(interval,0)*1000,
+                    active_leg_low=float(clean.iloc[active:]["low"].min()),
+                    active_leg_high=float(clean.iloc[active:]["high"].max()),
+                    anchor_prices=[p.price for p in sequence])
         return WaveSnapshot(
             interval=interval,
             wave_degree=degree,
@@ -1191,6 +1211,7 @@ class MultiTimeframeWaveEngine:
             reason=reason,
             data_bars=len(clean),
             data_ok=True,
+            **times,
         )
 
     @staticmethod
@@ -1308,6 +1329,11 @@ class MultiTimeframeWaveEngine:
         """
         if not (parent.data_ok and child.data_ok):
             return "NONE"
+        if (parent.active_leg_start_ms<=0 or child.cycle_start_ms<parent.active_leg_start_ms
+                or child.observed_end_ms<=0 or parent.observed_end_ms<child.observed_end_ms
+                or not child.anchor_prices or parent.active_leg_low<=0
+                or any(not parent.active_leg_low<=p<=parent.active_leg_high for p in child.anchor_prices)):
+            return "NONE"
         if parent.direction not in (DIRECTION_UP, DIRECTION_DOWN):
             return "NONE"
         if child.position not in (1, 3, 5):
@@ -1421,9 +1447,9 @@ class MultiTimeframeWaveEngine:
             elif setup.direction != overall:
                 direction_consistency = 30.0
 
-        nested_bonus = 10.0 if nested_w3 else 0.0
+        nested_bonus = 10.0 if nested_w3 and not nested_parent_w5 else 0.0
         if nested_parent_w5:
-            nested_bonus += 10.0
+            exhaustion = max(65.0,exhaustion)
 
         # Countertrend five-wave structure inside parent W2/W4 is a correction,
         # not a LONG continuation. Do not reward it as bullish alignment.
@@ -1497,14 +1523,17 @@ class MultiTimeframeWaveEngine:
         for child in execution_candidates:
             parent = next(
                 (
-                    p for p in ordered
+                    p for p in sorted(ordered,key=lambda s:self.INTERVAL_SECONDS.get(s.interval,0))
                     if self.INTERVAL_SECONDS.get(p.interval, 0)
                     > self.INTERVAL_SECONDS.get(child.interval, 0)
+                    and self._nested_relationship(p,child)!="NONE"
                 ),
                 None,
             )
 
             if parent is None:
+                if any(self.INTERVAL_SECONDS.get(p.interval,0)>self.INTERVAL_SECONDS.get(child.interval,0) for p in ordered):
+                    continue
                 entry_interval = child.interval
                 entry_position = child.position
                 entry_allowed = True
@@ -1565,8 +1594,6 @@ class MultiTimeframeWaveEngine:
         primary_count = setup.primary_count if setup is not None else ""
         alternative_count = setup.alternative_count if setup is not None else ""
         entry_score = float(wave_score)
-        if nested_parent_w5 and setup is not None and setup.position == 3:
-            entry_score += 8.0
         if setup is not None and setup.position == 5:
             entry_score -= min(25.0, float(setup.exhaustion_risk) * 0.25)
         entry_score = max(0.0, min(100.0, entry_score))

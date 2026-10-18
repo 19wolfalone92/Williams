@@ -32,6 +32,12 @@ class WilliamsWaveRhythmTest {
         assertEquals(0.2, r.closestAbsAo!!, 1e-8)
     }
 
+    @Test fun merelyTouchingZeroDoesNotClaimACrossThroughZero() {
+        val r=evaluateWilliamsWave4Zero(fixture(-8.0,0.0),0,55,119,"DOWN")
+        assertEquals(Wave4ZeroStatus.NEAR_ZERO_UNCONFIRMED,r.status)
+        assertNull(r.crossedBarIndex)
+    }
+
     @Test fun wrongScaleBlocksConfirmationDespiteCross() {
         val r = evaluateWilliamsWave4Zero(fixture(-8.0, 0.1, 75), 0, 55, 74, "DOWN")
         // no cross on this 75-bar sequence, but scale remains unsuitable

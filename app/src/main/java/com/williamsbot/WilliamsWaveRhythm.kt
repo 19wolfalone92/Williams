@@ -63,7 +63,7 @@ internal fun evaluateWilliamsWave4Zero(
     val correction = (w3OscillatorExtreme + 1..observedEnd)
     val nearest = correction.minOf { abs(closedAo[it]) }
     val cross = correction.firstOrNull { index ->
-        if (direction == "UP") closedAo[index] <= 0.0 else closedAo[index] >= 0.0
+        if (direction == "UP") closedAo[index] < 0.0 else closedAo[index] > 0.0
     }
 
     // When the sequence is not represented at a suitable resolution,

@@ -120,7 +120,7 @@ def test_wm3_consumers_use_actual_confirmation_and_whole_plateau_stop():
     assert confirmation_i == 6
     assert center_i == 4
     assert trigger_base == 12.0
-    assert protective == 10.0  # minimum low across equal-high bars 3 and 4
+    assert protective == 8.0  # minimum low of five closed bars through confirmation (TC2)
 
     # The middle bar itself must qualify against Teeth when the fractal forms;
     # checking only the later confirmation/current Teeth is insufficient.

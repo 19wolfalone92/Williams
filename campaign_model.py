@@ -143,6 +143,7 @@ class SignalSpec:
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     expires_at_ms: int = 0
     source_candle_index: int = -1
+    execution_semantics: str = "STOP_ENTRY"
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

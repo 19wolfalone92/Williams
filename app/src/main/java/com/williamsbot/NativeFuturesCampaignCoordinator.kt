@@ -652,7 +652,9 @@ internal class NativeFuturesCampaignCoordinator(
         val signalType: String = "",
         val signalBarTimeMs: Long = 0L,
         val signalReason: String = "",
-        val leverage: Int = 2
+        val leverage: Int = 2,
+        val tradeMode: String = "TREND",
+        val waveContext: String = ""
     )
 
     @Volatile var state: State = State.UNINITIALIZED
@@ -2088,7 +2090,10 @@ internal class NativeFuturesCampaignCoordinator(
             .put("requested_leverage", plan.leverage)
             .put("signal_type", plan.signalType)
             .put("signal_bar_time_ms", plan.signalBarTimeMs)
+            .put("signal_expires_at_ms", if (plan.signalBarTimeMs>0) plan.signalBarTimeMs+18_000_000L else 0L)
             .put("signal_reason", safeDiagnosticText(plan.signalReason))
+            .put("trade_mode", plan.tradeMode)
+            .put("wave_context_at_entry", plan.waveContext)
             .put("risk_budget_usdt", preflightAccount.equityUsdt * plan.riskPct)
             .put("risk_equity_snapshot_usdt", preflightAccount.equityUsdt)
             .put("risk_available_snapshot_usdt", preflightAccount.availableUsdt)
@@ -2202,7 +2207,7 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     /** Cancel unfilled entries on STOP/KILL without retrying ambiguous mutations. */
-    fun cancelPendingEntries(reason: String): JSONObject = synchronized(lock) {
+    fun cancelPendingEntries(reason: String, onlySymbol: String? = null): JSONObject = synchronized(lock) {
         val adapter = adapterFactory()
         val all = intents()
         val openPositions = adapter.positions()
@@ -2284,6 +2289,7 @@ internal class NativeFuturesCampaignCoordinator(
                 val intent = all.optJSONObject(i) ?: continue
                 if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
                 val symbol = intent.optString("symbol")
+                if (onlySymbol != null && !symbol.equals(onlySymbol, true)) continue
                 val status = exchangeOrderStatus(intent)
                 if (status !in activeStatuses) continue
                 val clientId = intent.optString("client_id")
@@ -2849,6 +2855,8 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("signal_type", item.optString("signal_type"))
                     .put("signal_bar_time_ms", item.optLong("signal_bar_time_ms"))
                     .put("signal_reason", item.optString("signal_reason"))
+                    .put("trade_mode",item.optString("trade_mode","TREND"))
+                    .put("wave_context_at_entry",item.optString("wave_context_at_entry"))
                     .put("entry_price", item.opt("entry_price") ?: JSONObject.NULL)
                     .put("quantity", item.opt("quantity") ?: JSONObject.NULL)
                     .put("risk_pct", item.opt("risk_pct") ?: JSONObject.NULL)

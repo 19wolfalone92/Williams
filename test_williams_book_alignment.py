@@ -80,8 +80,9 @@ def test_reversal_bar_needs_followup_extreme_breakout():
     open_ = close.copy()
     volume = pd.Series(1000.0, index=idx)
     # Create a bullish reversal bar, then a later breakout beyond its high.
-    low.iloc[70] = low.iloc[69] - 2.0
-    high.iloc[70] = close.iloc[70] + 1.0
+    low.iloc[70] = 98.0
+    high.iloc[70] = 101.8
+    open_.iloc[70] = 100.0
     close.iloc[70] = low.iloc[70] + 0.75 * (high.iloc[70] - low.iloc[70])
     high.iloc[71] = high.iloc[70] + 0.2
     close.iloc[71] = high.iloc[70] + 0.1

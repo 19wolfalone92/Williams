@@ -325,7 +325,10 @@ def _latest_confirmed_fractal(
         )
         if group_start_i < 0 or group_start_i > center_i:
             continue
-        group = ind.iloc[group_start_i:center_i + 1]
+        # TC2 ch12 PDF156: a first fractal entry uses the opposite fractal
+        # or a 3-5-bar structural stop. Do not substitute the single up/down
+        # fractal bar's other edge. Preserve the whole plateau if it is longer.
+        group = ind.iloc[min(group_start_i,max(0,confirmation_i-4)):confirmation_i+1]
         trigger_base = float(center["high"] if direction == "LONG" else center["low"])
         trigger = trigger_base + tick if direction == "LONG" else trigger_base - tick
         protective = float(
@@ -609,59 +612,43 @@ def extract_ntd_zone_add_on_specs(
     tick_size: float,
     max_age_bars: int = 1,
 ) -> list[SignalSpec]:
-    """Detect NTD Green/Red Zone continuation additions on a closed price bar.
+    """NTD ch7: two matching zone bars + favourable CLOSE vs previous CLOSE.
 
-    NTD zone colour is determined by AO and AC histogram direction, not by
-    whether either oscillator is above/below zero. A same-colour price bar in
-    the matching zone can propose a continuation add-on after the external
-    fractal gate. It can never open a flat campaign.
+    Add only through the fifth zone bar. The book enters at the completed
+    close, not at a later stop above/below that bar. Execution is explicitly
+    marked MARKET_ON_CLOSE; the active TC2 runtime must refuse this profile.
     """
     direction = str(side or "").upper()
-    if direction not in {"LONG", "SHORT"} or ind is None or len(ind) < 2:
+    if direction not in {"LONG","SHORT"} or ind is None or len(ind)<3:
         return []
-    required = {"open", "high", "low", "close", "ao", "ac"}
-    if not ({"teeth_current", "teeth_shifted"} & set(ind.columns)):
-        return []
-    gate_col = "long_fractal_outside" if direction == "LONG" else "short_fractal_outside"
+    required={"high","low","close","ao","ac"}
+    gate_col="long_fractal_outside" if direction=="LONG" else "short_fractal_outside"
     if not required.issubset(ind.columns) or gate_col not in ind.columns:
         return []
-    current = ind.iloc[-1]
-    previous = ind.iloc[-2]
-    if not bool(current.get(gate_col, False)):
+    current,previous=ind.iloc[-1],ind.iloc[-2]
+    if not bool(current.get(gate_col,False)):
         return []
-
-    try:
-        ao_now, ao_prev = float(current["ao"]), float(previous["ao"])
-        ac_now, ac_prev = float(current["ac"]), float(previous["ac"])
-        open_price = float(current["open"])
-        high = float(current["high"])
-        low = float(current["low"])
-        close = float(current["close"])
-        teeth = float(current.get("teeth_current", current.get("teeth_shifted", 0.0)) or 0.0)
-    except (TypeError, ValueError):
+    sign=1 if direction=="LONG" else -1
+    run=0
+    for i in range(len(ind)-1,0,-1):
+        a,b=ind.iloc[i-1],ind.iloc[i]
+        values=[float(a["ao"]),float(b["ao"]),float(a["ac"]),float(b["ac"])]
+        if not all(math.isfinite(v) for v in values) or sign*(values[1]-values[0])<=0 or sign*(values[3]-values[2])<=0:
+            break
+        run+=1
+    if not 2<=run<=5:
         return []
-    values = (ao_now, ao_prev, ac_now, ac_prev, open_price, high, low, close)
-    if not all(math.isfinite(v) for v in values) or min(open_price, high, low, close) <= 0 or high < low:
+    high,low,close=float(current["high"]),float(current["low"]),float(current["close"])
+    prior_close=float(previous["close"])
+    if not all(math.isfinite(v) and v>0 for v in (high,low,close,prior_close)) or high<max(low,close) or close<low:
         return []
-
-    is_long = direction == "LONG"
-    # AO/AC colour is the direction of each histogram relative to its previous
-    # closed value. The zone rule does not impose a zero-line restriction.
-    if is_long:
-        if not (ao_now > ao_prev and ac_now > ac_prev and close > open_price):
-            return []
-        order_side = "BUY"
-        trigger = high + max(float(tick_size), 1e-12)
-        protective = low
-    else:
-        if not (ao_now < ao_prev and ac_now < ac_prev and close < open_price):
-            return []
-        order_side = "SELL"
-        trigger = low - max(float(tick_size), 1e-12)
-        protective = high
-    if trigger <= 0 or (is_long and close >= trigger) or (not is_long and close <= trigger):
+    if sign*(close-prior_close)<=0:
         return []
-
+    is_long=direction=="LONG"
+    order_side="BUY" if is_long else "SELL"
+    trigger=close
+    protective=low if is_long else high
+    teeth=float(current.get("teeth_current",current.get("teeth_shifted",0.0)) or 0.0)
     signal_time = _row_time_ms(current)
     if signal_time <= 0:
         return []
@@ -674,14 +661,15 @@ def extract_ntd_zone_add_on_specs(
         signal_bar_time_ms=signal_time,
         trigger_price=trigger,
         protective_reference=protective,
-        trigger_buffer_ticks=1,
+        trigger_buffer_ticks=0,
+        execution_semantics="MARKET_ON_CLOSE",
         teeth_at_detection=teeth,
         alligator_bullish=bool(current.get("bullish_alligator", False)),
         alligator_awake=bool(current.get("alligator_awake", False)),
         reason=(
-            "NTD Green Zone continuation add-on; BUY STOP above closed green bar"
+            "NTD Green Zone add-on at favourable completed close; execution unsupported by TC2"
             if is_long else
-            "NTD Red Zone continuation add-on; SELL STOP below closed red bar"
+            "NTD Red Zone add-on at favourable completed close; execution unsupported by TC2"
         ),
         source_candle_index=len(ind) - 1,
         expires_at_ms=_expiry(signal_time, timeframe, max_age_bars),
@@ -865,9 +853,9 @@ def extract_long_signal_specs(
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
-                    protective_reference=protective,
+                    protective_reference=protective - tick,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(wave_invalidation_price or (protective - tick)),
                     teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
                     alligator_bullish=bool(row.get("bullish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
@@ -899,9 +887,9 @@ def extract_long_signal_specs(
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
-                    protective_reference=protective,
+                    protective_reference=protective - tick,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(wave_invalidation_price or (protective - tick)),
                     teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
                     alligator_bullish=bool(row.get("bullish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
@@ -934,7 +922,7 @@ def extract_long_signal_specs(
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
-                    protective_reference=protective,
+                    protective_reference=protective - tick,
                     trigger_buffer_ticks=1,
                     teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
                     alligator_bullish=bool(row.get("bullish_alligator", False)),
@@ -968,9 +956,9 @@ def extract_long_signal_specs(
                     # knowable only when the second right-hand bar closes.
                     signal_bar_time_ms=confirmation_time,
                     trigger_price=trigger,
-                    protective_reference=protective,
+                    protective_reference=protective - tick,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(wave_invalidation_price or (protective - tick)),
                     teeth_at_detection=float(teeth),
                     alligator_bullish=bool(current.get("bullish_alligator", False)),
                     alligator_awake=bool(current.get("alligator_awake", False)),
@@ -1038,9 +1026,9 @@ def extract_short_signal_specs(
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
-                    protective_reference=protective,
+                    protective_reference=protective + tick,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(wave_invalidation_price or (protective + tick)),
                     teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
                     alligator_bullish=bool(row.get("bearish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
@@ -1070,9 +1058,9 @@ def extract_short_signal_specs(
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
-                    protective_reference=protective,
+                    protective_reference=protective + tick,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(wave_invalidation_price or (protective + tick)),
                     teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
                     alligator_bullish=bool(row.get("bearish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
@@ -1102,7 +1090,7 @@ def extract_short_signal_specs(
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
-                    protective_reference=protective,
+                    protective_reference=protective + tick,
                     trigger_buffer_ticks=1,
                     teeth_at_detection=float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0),
                     alligator_bullish=bool(row.get("bearish_alligator", False)),
@@ -1134,9 +1122,9 @@ def extract_short_signal_specs(
                     # earlier timestamp, so Wise-Men sequencing cannot look ahead.
                     signal_bar_time_ms=confirmation_time,
                     trigger_price=trigger,
-                    protective_reference=protective,
+                    protective_reference=protective + tick,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(wave_invalidation_price or (protective + tick)),
                     teeth_at_detection=float(teeth),
                     alligator_bullish=bool(current.get("bearish_alligator", False)),
                     alligator_awake=bool(current.get("alligator_awake", False)),
