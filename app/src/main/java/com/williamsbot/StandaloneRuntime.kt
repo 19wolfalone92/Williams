@@ -1144,7 +1144,7 @@ private class NativeEngine(
     @Volatile private var futuresLeverageSettings = prefs.getString("futures_leverage_settings_v1", null)?.let {
         FuturesLeverageSettings.fromJson(JSONObject(it))
     } ?: FuturesLeverageSettings()
-    @Volatile private var williamsProfile=prefs.getString("williams_strategy_profile_v1",williamsTc2Profile) ?: williamsTc2Profile
+    @Volatile private var williamsProfile=prefs.getString("williams_strategy_profile_v1",williamsUnifiedProfile) ?: williamsUnifiedProfile
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
         NativeFuturesCampaignCoordinator(executionStore) {
@@ -5343,7 +5343,8 @@ private class NativeEngine(
                 }
                 editionStop=if(dir=="LONG") candidates.maxOrNull() else candidates.minOrNull()
             }
-            val opposing = triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile)
+            val opposing = triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,
+                if(williamsProfile==williamsUnifiedProfile) williamsUnifiedProfile else profile)
             if (opposing != null || boundaryExit || editionExit.isNotEmpty()) {
                 val correction = if (opposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
                     if (dir == "LONG") "SHORT" else "LONG",opposing.signalBarTimeMs,opposing.type) else WilliamsCorrectionContext()
@@ -5407,7 +5408,7 @@ private class NativeEngine(
 
     private fun submitNativeFuturesAddition(candidate:BaseAnalysis,owner:JSONObject) {
         val symbol=candidate.symbol;val profile=owner.optString("strategy_profile",williamsTc2Profile)
-        if(profile!=williamsProfile || profile !in williamsEditionProfiles || !executionReady()) return
+        if(!williamsProfileAllowsSource(williamsProfile,profile) || !executionReady()) return
         val all=futuresCampaignCoordinator.intentsSnapshot()
         val parentId=owner.getString("client_id")
         val children=(0 until all.length()).mapNotNull { all.optJSONObject(it) }
@@ -5471,7 +5472,7 @@ private class NativeEngine(
             referenceClose=if(market) signal.triggerPrice else 0.0,setupContext=setup.toString())
         lastOrder=withCampaignMutation(symbol,"WILLIAMS_CAMPAIGN_ADDITION") {
             val submitNow=futuresMarketData.exchangeNowMs()
-            check(profile==williamsProfile && isWithinWilliamsEntrySessionUtc(submitNow) && checkFuturesDailyLoss()) {
+            check(williamsProfileAllowsSource(williamsProfile,profile) && isWithinWilliamsEntrySessionUtc(submitNow) && checkFuturesDailyLoss()) {
                 "Addition profile/session/daily risk changed before mutation"
             }
             val fresh=editionCampaignSignals(symbol,fetchCandles(symbol,"1h",220),"1h",rules.tick,profile)
@@ -5539,7 +5540,7 @@ private class NativeEngine(
         fun profitReentry(signal:CampaignSignalN)=signal.strategyProfile==williamsNtdProfile &&
             williamsNtdReentryEligible(owned,symbol,campaignSignalDirection(signal.type).orEmpty(),signal.signalBarTimeMs)
         val freshSignals = candidate.campaignSignals.filter {
-            it.strategyProfile==williamsProfile && (it.role=="ENTRY" || profitReentry(it)) &&
+            williamsProfileAllowsSource(williamsProfile,it.strategyProfile) && (it.role=="ENTRY" || profitReentry(it)) &&
                 (it.executionSemantics=="STOP_ENTRY" || profitReentry(it) && it.executionSemantics=="MARKET_ON_CLOSE" &&
                     williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,contextNow,it.triggerPrice,futuresMarketData.markPrice(symbol))==null) &&
                 isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)
@@ -5594,7 +5595,14 @@ private class NativeEngine(
             if (corrections[signal.signalId]?.allowed == true) 2 else 0)
         // Only a causally contained, validated correction mode may override the
         // project's D1/H4 trend filter. H1 remains the only signal authority.
-        val signal = freshSignals.filter { contextRank(it)>0 }.minWithOrNull(
+        val allowedSignals = freshSignals.filter { contextRank(it)>0 }
+        if(williamsProfile==williamsUnifiedProfile && williamsUnifiedDirectionsConflict(
+                allowedSignals.mapNotNull { campaignSignalDirection(it.type) })) {
+            lastError="WILLIAMS_UNIFIED_DIRECTION_CONFLICT: fresh LONG and SHORT H1 entries disagree for $symbol; no order armed"
+            runCatching { auditStore.recordCockpitEvent("SIGNAL_CONFLICT",symbol,detail=lastError.orEmpty()) }
+            return
+        }
+        val signal = allowedSignals.minWithOrNull(
             compareBy<CampaignSignalN> { it.signalBarTimeMs }
                 .thenByDescending { contextRank(it) }.thenByDescending { nativeRank(it.type) }
         ) ?: run {
@@ -5757,7 +5765,9 @@ private class NativeEngine(
             }
             // Revalidate the H1 scenario at the last possible point before mutation.
             // A queued/stale candidate must never survive a slow scan or a door wait.
-            require(signal.strategyProfile==williamsProfile) { "Williams edition changed after analysis" }
+            require(williamsProfileAllowsSource(williamsProfile,signal.strategyProfile)) {
+                "Williams source is no longer enabled after analysis"
+            }
             val submitNow = futuresMarketData.exchangeNowMs()
             if (!isWithinWilliamsEntrySessionUtc(submitNow)) {
                 return@withCampaignMutation JSONObject()
@@ -6980,8 +6990,16 @@ private class NativeEngine(
 
     private fun editionCampaignSignals(symbol:String,candles:List<CandleN>,frame:String,tick:Double,
         profile:String=williamsProfile,exitMode:Boolean=false):List<CampaignSignalN> {
+        if(profile==williamsUnifiedProfile) {
+            // One causal H1 snapshot, three independent rule extractors. Preserve
+            // each source on its own signal for replay, journal and risk controls.
+            return williamsSourceProfiles.flatMap {
+                editionCampaignSignals(symbol,candles,frame,tick,it,exitMode)
+            }.distinctBy { it.signalId }.sortedWith(
+                compareBy<CampaignSignalN> { it.signalBarTimeMs }.thenBy { it.signalId })
+        }
         if(profile==williamsTc2Profile) return longCampaignSignals(symbol,candles,frame,tick)+shortCampaignSignals(symbol,candles,frame,tick)
-        if(profile !in williamsEditionProfiles || frame!="1h" || candles.size<45) return emptyList()
+        if(profile !in williamsSourceProfiles || frame!="1h" || candles.size<45) return emptyList()
         val bars=candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
         if(!validWilliamsEditionBars(bars) || bars.zipWithNext().any { (a,b) -> b.t-a.t!=3_600_000L }) return emptyList()
         val jaw=williamsAlligatorLine(candles,13,8).map { it ?: Double.NaN }
@@ -7422,8 +7440,8 @@ private class NativeEngine(
             val prefix = candles.take(candles.size-omitted)
             val signals=editionCampaignSignals(symbol,prefix,"1h",tick,profile,exitMode=true)
                 .filter { campaignSignalDirection(it.type)==opposingSide }
-            for (signal in signals.filter { profile==williamsNtdProfile || it.role == "ENTRY" }) {
-                if(profile==williamsNtdProfile && signal.executionSemantics=="MARKET_ON_CLOSE") {
+            for (signal in signals.filter { it.strategyProfile==williamsNtdProfile || it.role == "ENTRY" }) {
+                if(signal.strategyProfile==williamsNtdProfile && signal.executionSemantics=="MARKET_ON_CLOSE") {
                     if(williamsOpposingCloseEventTriggered(signal.signalBarTimeMs,3_600_000L,openedAt,now)) return signal
                     continue
                 }
