@@ -734,14 +734,36 @@ internal fun observeFuturesEquityFromPersistedBaseline(
     return breaker.observe(equity, nowMs)
 }
 
-private data class CandleN(
+internal data class CandleN(
     val t: Long,
     val o: Double,
     val h: Double,
     val l: Double,
     val c: Double,
-    val v: Double
+    val v: Double,
+    val exchangeClosed: Boolean = true // REST/history defaults; WS must provide k.x
 )
+
+internal fun validNativeCandle(c:CandleN):Boolean = c.t>=0 &&
+    listOf(c.o,c.h,c.l,c.c,c.v).all { it.isFinite() } && minOf(c.o,c.l,c.c)>0 &&
+    c.h>=maxOf(c.o,c.l,c.c) && c.l<=minOf(c.o,c.c) && c.v>=0
+
+internal fun upsertNativeCandleObservation(candles:MutableList<CandleN>,incoming:CandleN):Boolean {
+    if (!validNativeCandle(incoming)) return false
+    val existing=candles.indexOfLast { it.t==incoming.t }
+    if (existing>=0) {
+        if (candles[existing].exchangeClosed && !incoming.exchangeClosed) return false
+        candles[existing]=incoming
+    } else {
+        val after=candles.indexOfFirst { it.t>incoming.t }
+        if (after<0) candles.add(incoming) else candles.add(after,incoming)
+    }
+    while (candles.size>600) candles.removeAt(0)
+    return true
+}
+
+internal fun closedNativeStrategyCandles(candles:List<CandleN>,clockClosed:(CandleN)->Boolean):List<CandleN> =
+    candles.filter { it.exchangeClosed && clockClosed(it) }
 
 private data class WaveInfo(
     val position: Int,
@@ -3371,17 +3393,17 @@ private class NativeEngine(
             k.optString("h").toDoubleOrNull() ?: return,
             k.optString("l").toDoubleOrNull() ?: return,
             k.optString("c").toDoubleOrNull() ?: return,
-            k.optString("v").toDoubleOrNull() ?: return
+            k.optString("v").toDoubleOrNull() ?: return,
+            exchangeClosed=k.optBoolean("x",false)
         )
+        if (!validNativeCandle(candle)) {
+            lastError="INVALID_MARKET_KLINE: $symbol $frame; observation ignored"
+            return
+        }
         val key = symbol + ":" + frame
         val list = liveCandleCache.computeIfAbsent(key) { mutableListOf() }
         synchronized(list) {
-            if (list.isNotEmpty() && list.last().t == candle.t) {
-                list[list.lastIndex] = candle
-            } else {
-                list.add(candle)
-                if (list.size > 600) list.removeAt(0)
-            }
+            if (!upsertNativeCandleObservation(list,candle)) return
             val snapshotCandles = list.toList()
             candleCache[key] = System.currentTimeMillis() to snapshotCandles
 
@@ -3623,7 +3645,7 @@ private class NativeEngine(
                 // It is valid for display, never for a trading decision. Strategy
                 // reads are restricted to bars closed according to Binance server time.
                 val exchangeNowMs = futuresMarketData.exchangeNowMs()
-                val closed = live.filter {
+                val closed = closedNativeStrategyCandles(live) {
                     futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)
                 }
                 if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs)) {
@@ -8536,7 +8558,7 @@ private class NativeEngine(
             for (symbol in coreSymbols) {
                 val key = "$symbol:1h"
                 val source = candleCache[key]?.second ?: if (symbol == primarySymbol && interval == "1h") primaryCandles else emptyList()
-                val candles = if (clockFresh) source.filter { futuresMarketData.isKlineOpenTimeClosed(it.t, "1h", now) } else emptyList()
+                val candles = if (clockFresh) closedNativeStrategyCandles(source) { futuresMarketData.isKlineOpenTimeClosed(it.t, "1h", now) } else emptyList()
                 val observed = JSONObject()
                 if (candles.size >= 40) {
                     val index = candles.lastIndex

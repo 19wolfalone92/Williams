@@ -50,12 +50,24 @@ internal data class WilliamsWaveLink(val parent: String, val child: String, val 
 }
 internal data class WilliamsWaveHierarchy(
     val asOf: Long, val scenarios: List<WilliamsWaveScenario>, val links: List<WilliamsWaveLink>,
-    val frameErrors: Map<String, String>, val warnings: List<String>
+    val frameErrors: Map<String, String>, val warnings: List<String>,
+    val frameCandleCounts:Map<String,Int> = emptyMap()
 ) {
+    private fun containedChain():Boolean {
+        val byId=scenarios.associateBy { it.id }
+        fun path(node:String,index:Int):Boolean {
+            if (index==williamsRequiredWaveFrames.lastIndex) return true
+            return links.any { it.parent==node && byId[it.child]?.frame==williamsRequiredWaveFrames[index+1] && path(it.child,index+1) }
+        }
+        return scenarios.any { it.frame=="1d" && path(it.id,0) }
+    }
     fun toJson(): JSONObject = JSONObject().put("schema_version", 1).put("as_of", asOf)
         .put("wave_labels", "HYPOTHESES_NOT_CERTAINTY").put("chain", JSONArray(williamsRequiredWaveFrames))
         .put("scenarios", JSONArray(scenarios.map { it.toJson() }))
         .put("links", JSONArray(links.map { it.toJson() })).put("frame_errors", JSONObject(frameErrors))
+        .put("frame_candle_counts",JSONObject(frameCandleCounts)).put("contained_chain_observed",containedChain())
+        .put("full_history",false).put("can_place_orders",false)
+        .put("squat_volume_input","KLINE_BASE_VOLUME_PROXY_NOT_CANONICAL_TICK_VOLUME")
         .put("warnings", JSONArray(warnings.map {
             JSONObject().put("scenario_id", it).put("state", "EXHAUSTION_WARNING")
                 .put("can_close", false).put("can_reverse", false)
@@ -273,7 +285,7 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
                 sign * osc[osc.lastIndex-1] < sign * osc[osc.lastIndex-2]) warnings += "$frame:MOMENTUM_FADE_BEFORE_PIVOT"
         }
     }
-    return WilliamsWaveHierarchy(asOf,scenarios,linkWilliamsWaveHypotheses(scenarios),errors,warnings)
+    return WilliamsWaveHierarchy(asOf,scenarios,linkWilliamsWaveHypotheses(scenarios),errors,warnings,valid.mapValues { it.value.size })
 }
 
 internal fun suggestedWilliamsAnalyticalFrames(report: WilliamsWaveHierarchy): List<String> {

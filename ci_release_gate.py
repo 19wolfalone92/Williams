@@ -391,6 +391,8 @@ def main() -> None:
     for needle in ("planWilliamsCampaignStop(", "triggeredOpposingSignal(",
                    "CORRECTION_PARENT_INVALIDATED", "williamsCorrectionPriceAllowed("):
         must(runtime_source, needle, "StandaloneRuntime.kt causal wave/management integration")
+    must(runtime_source,'exchangeClosed=k.optBoolean("x",false)',"StandaloneRuntime.kt final WS close proof")
+    must(runtime_source,"val closed = closedNativeStrategyCandles(live)","StandaloneRuntime.kt closed-only strategy cache")
     must(runtime_source, "val freshSignals = candidate.campaignSignals.filter", "StandaloneRuntime.kt directional hypotheses")
     must(runtime_source, "isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)", "StandaloneRuntime.kt H1 signal freshness")
     must(runtime_source, "directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear)", "StandaloneRuntime.kt D1/H4 directional selection")

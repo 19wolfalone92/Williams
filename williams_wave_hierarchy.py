@@ -86,11 +86,22 @@ class WaveHierarchy:
     links: list[dict]
     frame_errors: dict[str, str]
     warnings: list[dict]
+    frame_candle_counts: dict[str,int] = field(default_factory=dict)
 
     def to_dict(self):
+        by_id={s.scenario_id:s for s in self.scenarios}
+        edges={(e["parent"],e["child"]) for e in self.links}
+        def path(node,index):
+            if index==len(REQUIRED_FRAMES)-1:
+                return True
+            return any(p==node and by_id.get(c) and by_id[c].frame==REQUIRED_FRAMES[index+1] and path(c,index+1)
+                       for p,c in edges)
+        contained=any(s.frame=="1d" and path(s.scenario_id,0) for s in self.scenarios)
         return asdict(self) | {"schema_version": 1,
                               "wave_labels": "HYPOTHESES_NOT_CERTAINTY",
-                              "chain": list(REQUIRED_FRAMES)}
+                              "chain": list(REQUIRED_FRAMES),"contained_chain_observed":contained,
+                              "full_history":False,"can_place_orders":False,
+                              "squat_volume_input":"KLINE_BASE_VOLUME_PROXY_NOT_CANONICAL_TICK_VOLUME"}
 
 
 def closed_wave_bars(bars: Sequence[WaveBar], frame: str, as_of: int) -> list[WaveBar]:
@@ -357,7 +368,8 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) ->
                 warnings.append({"scenario_id": frame + ":MOMENTUM_FADE_BEFORE_PIVOT",
                                  "state": "EXHAUSTION_WARNING", "can_close": False,
                                  "can_reverse": False})
-    return WaveHierarchy(as_of, scenarios, link_wave_hypotheses(scenarios), errors, warnings)
+    return WaveHierarchy(as_of, scenarios, link_wave_hypotheses(scenarios), errors, warnings,
+                         {frame:len(bars) for frame,bars in valid.items()})
 
 
 def suggested_analytical_frames(report: WaveHierarchy) -> list[str]:
