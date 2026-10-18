@@ -5,6 +5,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsEditionRulesTest {
+    @Test fun unifiedBooksAllowEveryVerifiedSourceWithoutChangingItsIdentity() {
+        assertEquals(4,williamsEditionProfiles.size)
+        assertEquals(3,williamsSourceProfiles.size)
+        for(source in williamsSourceProfiles) {
+            assertTrue(williamsProfileAllowsSource(williamsUnifiedProfile,source))
+            assertTrue(williamsProfileAllowsSource(source,source))
+        }
+        assertFalse(williamsProfileAllowsSource(williamsTc2Profile,williamsNtdProfile))
+        assertFalse(williamsProfileAllowsSource(williamsNtdProfile,williamsCourseProfile))
+        assertFalse(williamsProfileAllowsSource(williamsUnifiedProfile,"UNKNOWN"))
+        assertFalse(williamsProfileAllowsSource(williamsUnifiedProfile,williamsUnifiedProfile))
+    }
+
+    @Test fun unifiedBooksBlockOppositeDirectionsButNotSameDirectionEvidence() {
+        assertFalse(williamsUnifiedDirectionsConflict(listOf("LONG","LONG","LONG")))
+        assertFalse(williamsUnifiedDirectionsConflict(listOf("SHORT","SHORT")))
+        assertFalse(williamsUnifiedDirectionsConflict(listOf("UNKNOWN","LONG")))
+        assertTrue(williamsUnifiedDirectionsConflict(listOf("LONG","SHORT")))
+        assertTrue(williamsUnifiedDirectionsConflict(listOf("SHORT","LONG","LONG")))
+    }
     @Test fun sourceRuleExamplesHaveTheSameLevelsAndDirectionsAsPython() {
         val cases=JSONObject(requireNotNull(javaClass.getResource("/williams_editions_contract.json")).readText()).getJSONArray("cases")
         for (i in 0 until cases.length()) {
