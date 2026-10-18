@@ -27,6 +27,10 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
         raise ValueError("Invalid Williams edition or direction")
     if ind is None or ind.empty:return []
     if profile==UNIFIED:
+        # A missing open/volume or indicator is not permission to fall back
+        # silently to a different trading system. Incomplete data fail closed.
+        if not {"open","high","low","close","volume","ao","ac"}.issubset(ind.columns):
+            return []
         # Independent source-specific detectors share a closed-bar snapshot,
         # but their orders retain the source's initiating and management rules.
         combined = [
