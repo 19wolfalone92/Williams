@@ -67,6 +67,9 @@ internal data class WilliamsWaveHierarchy(
         .put("links", JSONArray(links.map { it.toJson() })).put("frame_errors", JSONObject(frameErrors))
         .put("frame_candle_counts",JSONObject(frameCandleCounts)).put("contained_chain_observed",containedChain())
         .put("full_history",false).put("can_place_orders",false)
+        .put("complex_wave_patterns", JSONArray(scenarios.filter { it.anchors.size >= 6 }
+            .flatMap { scenario -> detectWilliamsComplexWave(scenario.anchors,scenario.direction,asOf)
+                .map { it.toJson().put("frame",scenario.frame).put("source_scenario_id",scenario.id) } }.take(48)))
         .put("squat_volume_input","KLINE_BASE_VOLUME_PROXY_NOT_CANONICAL_TICK_VOLUME")
         .put("warnings", JSONArray(warnings.map {
             JSONObject().put("scenario_id", it).put("state", "EXHAUSTION_WARNING")
