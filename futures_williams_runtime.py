@@ -1442,6 +1442,8 @@ class FuturesWilliamsRuntime:
         if reentry:signal=__import__("dataclasses").replace(signal,role=SignalRole.ENTRY)
         if signal.role!=SignalRole.ENTRY or _signal_profile_entry_block_reason(signal.strategy_profile):
             raise RuntimeError("Invalid edition-specific initiating signal")
+        if signal.strategy_profile==NTD and signal.signal_type not in {SignalType.FRACTAL,SignalType.AO_SAUCER,SignalType.AO_ZERO_LINE,SignalType.AO_TWIN_PEAKS,SignalType.AC_SIGNAL,SignalType.ZONE_ADD_ON,SignalType.BALANCE_LINE}:
+            raise RuntimeError("Signal does not belong to NTD")
         if signal.strategy_profile==NTD and signal.signal_type!=SignalType.FRACTAL and not reentry:
             raise RuntimeError("NTD must initiate with its first external fractal")
         if signal.strategy_profile==COURSE and signal.signal_type not in {SignalType.COURSE_HUMP,SignalType.COURSE_THUMB,SignalType.COURSE_SQUAT}:

@@ -564,7 +564,7 @@ def test_android_trailing_stop_retains_confirmed_protection_after_ambiguous_repl
     assert "untrackedRemainder" in coordinator
     assert '.remove("previous_protection_client_id")' in coordinator
     assert "val predecessor = findProtectiveStop(" in coordinator
-    assert '.put("trail_recovery_at_ms", System.currentTimeMillis())' in coordinator
+    assert '.put("trail_recovery_at_ms", clock())' in coordinator
     assert "val afterCleanup = adapter.openAlgoOrders(symbol)" in coordinator
     assert "trackedPredecessorStillOpen" in coordinator
     assert "if (currentStopSafe)" in coordinator

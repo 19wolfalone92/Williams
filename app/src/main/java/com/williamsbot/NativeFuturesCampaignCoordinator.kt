@@ -3173,6 +3173,9 @@ internal class NativeFuturesCampaignCoordinator(
             "Symbol is outside the approved Futures universe"
         }
         require(plan.strategyProfile in williamsEditionProfiles) { "Unknown Williams edition" }
+        val family=plan.signalType.removePrefix("SHORT_").removePrefix("LONG_")
+        require(plan.strategyProfile!=williamsNtdProfile || family in setOf("FRACTAL","AO_SAUCER","AO_ZERO_LINE","AO_TWIN_PEAKS","AC_SIGNAL","ZONE_ADD_ON","BALANCE_LINE")) { "Signal does not belong to NTD" }
+        require(plan.strategyProfile!=williamsCourseProfile || family in setOf("COURSE_HUMP","COURSE_THUMB","COURSE_SQUAT")) { "Signal does not belong to Course" }
         require(plan.entryClientId.isNotBlank() || plan.reentryOwnerId.isNotBlank() || plan.strategyProfile!=williamsNtdProfile ||
             plan.signalType.removePrefix("SHORT_")=="FRACTAL") { "NTD cycle must start with an external fractal" }
         require(plan.kind!=EntryKind.MARKET || ((plan.entryClientId.isNotBlank() || plan.reentryOwnerId.isNotBlank()) &&
