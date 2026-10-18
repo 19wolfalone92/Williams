@@ -245,19 +245,20 @@ internal fun assessActualFuturesPositionRisk(
 }
 
 /** Sum each admitted entry exactly once while its primary campaign remains active. */
-internal fun futuresCampaignReservedRisk(owner:JSONObject,all:JSONArray):Double {
-    if(!isEntryCampaignReserved(owner)) return 0.0
-    var total=conservativeRiskReservation(owner.optDouble("risk_pct",Double.NaN),.006)
+internal fun futuresCampaignRiskComponents(owner:JSONObject,all:JSONArray):List<Double> {
+    if(!isEntryCampaignReserved(owner)) return emptyList()
+    val components=mutableListOf(conservativeRiskReservation(owner.optDouble("risk_pct",Double.NaN),.006))
     for(i in 0 until all.length()) {
         val child=all.optJSONObject(i) ?: error("Malformed Futures risk journal")
         if(child.optString("intent_role")!="ADD_ON" || child.optString("entry_client_id")!=owner.optString("client_id")) continue
         val status=exchangeOrderStatus(child)
         val executed=child.optString("executed_qty","0").toBigDecimalOrNull() ?: error("Malformed child fill reservation")
         if(status !in ENTRY_ORDER_TERMINAL_STATUSES || executed.signum()>0 || status=="FILLED")
-            total+=conservativeRiskReservation(child.optDouble("risk_pct",Double.NaN),.006)
+            components+=conservativeRiskReservation(child.optDouble("risk_pct",Double.NaN),.006)
     }
-    return total
+    return components
 }
+internal fun futuresCampaignReservedRisk(owner:JSONObject,all:JSONArray):Double=futuresCampaignRiskComponents(owner,all).sum()
 
 internal fun assessActualFuturesCampaignRisk(direction:String,quantity:Double,entry:Double,stop:Double,
     equity:Double,reserved:Double):FuturesActualPositionRiskCheck {
@@ -1784,13 +1785,10 @@ internal class NativeFuturesCampaignCoordinator(
                             riskAudit.blocker.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_RESERVATION:")
                         ) {
                             val currentClientIdForRiskAudit = matchingIntent.optString("client_id")
-                            val otherActiveRisks = (0 until persisted.length()).mapNotNull { riskIndex ->
-                                val other = persisted.optJSONObject(riskIndex) ?: return@mapNotNull null
-                                if (other.optString("intent_role", "ENTRY") != "ENTRY" ||
-                                    other.optString("client_id") == currentClientIdForRiskAudit ||
-                                    campaignLifecycleStatus(other) !in ACTIVE_CAMPAIGN_STATUSES
-                                ) return@mapNotNull null
-                                futuresCampaignReservedRisk(other,persisted)
+                            val otherActiveRisks = (0 until persisted.length()).flatMap { riskIndex ->
+                                val other=persisted.getJSONObject(riskIndex)
+                                if(other.optString("intent_role","ENTRY")=="ENTRY" && other.optString("client_id")!=currentClientIdForRiskAudit &&
+                                    campaignLifecycleStatus(other) in ACTIVE_CAMPAIGN_STATUSES) futuresCampaignRiskComponents(other,persisted) else emptyList()
                             }
                             val adjustmentBlocker = actualRiskReservationAdjustmentBlocker(
                                 actualRiskPct = riskAudit.actualAllInRiskPct,
@@ -1825,6 +1823,22 @@ internal class NativeFuturesCampaignCoordinator(
                         }
                         if (actualRiskAuditBlocker != null) {
                             matchingIntent.put("actual_risk_audit_blocker", actualRiskAuditBlocker)
+                        }
+                    }
+                    for(j in 0 until persisted.length()) {
+                        val child=persisted.optJSONObject(j) ?: continue
+                        if(child.optString("intent_role")!="ADD_ON" || child.optString("entry_client_id")!=matchingIntent.optString("client_id")) continue
+                        val execution=entryExecutions[child.optString("client_id")] ?: continue
+                        val quantity=execution.optString("executedQty","0").toDoubleOrNull() ?: continue
+                        if(quantity<=0) continue
+                        val check=assessActualFuturesPositionRisk(direction,quantity,execution.getString("avgPrice").toDouble(),
+                            child.getString("initial_protective_stop").toDouble(),child.optDouble("risk_equity_snapshot_usdt",Double.NaN),
+                            child.optDouble("risk_pct",Double.NaN))
+                        child.put("actual_risk_audit_status",if(check.blocker==null) "PASS" else "BLOCKED")
+                            .put("actual_all_in_risk_pct",check.actualAllInRiskPct)
+                        if(check.blocker!=null) {
+                            actualRiskAuditBlocked=true;actualRiskAuditBlocker="ADDITION_FILL_RISK: "+check.blocker
+                            child.put("actual_risk_audit_blocker",actualRiskAuditBlocker)
                         }
                     }
                     val liquidation = assessFuturesLiquidationProtection(
@@ -2235,9 +2249,9 @@ internal class NativeFuturesCampaignCoordinator(
 
         // Sum active intent risk conservatively. Missing/invalid reservations cannot
         // silently free aggregate portfolio capacity.
-        val reservedRiskPcts=(0 until currentIntents.length()).mapNotNull { i ->
+        val reservedRiskPcts=(0 until currentIntents.length()).flatMap { i ->
             val row=currentIntents.optJSONObject(i) ?: error("Malformed Futures risk intent")
-            if(row.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(row)) futuresCampaignReservedRisk(row,currentIntents) else null
+            if(row.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(row)) futuresCampaignRiskComponents(row,currentIntents) else emptyList()
         }
         val riskBlocker = futuresPortfolioRiskBlocker(plan.riskPct, reservedRiskPcts)
         if (riskBlocker != null) return@synchronized safePreflightRejection(riskBlocker)

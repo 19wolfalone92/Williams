@@ -186,6 +186,31 @@ class NativeFuturesCoordinatorLifecycleTest {
         return coordinator to exchange
     }
 
+    @Test fun severalNtdAdditionsUseSeparateEntryCapsAndOneAggregatePortfolioCap() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) {
+            val exchange=Exchange(direction);var now=System.currentTimeMillis()
+            val coordinator=NativeFuturesCampaignCoordinator(Journal(),clock={now}) { exchange.adapter() }
+            coordinator.reconcile()
+            val initial=plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL",signalBarTimeMs=now-7_200_000L)
+            assertTrue(coordinator.submitPendingEntry(initial).getBoolean("accepted"))
+            exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
+            for(i in 1..3) {
+                now+=3_600_000L
+                val addition=initial.copy(kind=NativeFuturesCampaignCoordinator.EntryKind.MARKET,quantity="0.1",
+                    entryPrice=exchange.mark.toString(),clientId="W2A_MULTI_${direction.name}_$i",riskPct=.001,
+                    entryClientId=initial.clientId,signalType="ZONE_ADD_ON",executionSemantics="MARKET_ON_CLOSE",
+                    referenceClose=exchange.mark,signalBarTimeMs=now-3_601_000L)
+                val admitted=coordinator.submitPendingEntry(addition)
+                assertTrue(admitted.toString(),admitted.getBoolean("accepted"))
+                val verified=coordinator.reconcile()
+                assertTrue(verified.toString(),verified.getBoolean("ok"))
+            }
+            assertEquals(3,exchange.posts("/fapi/v1/order"))
+            assertEquals(.005,futuresCampaignReservedRisk(coordinator.intentsSnapshot().getJSONObject(0),coordinator.intentsSnapshot()),1e-9)
+            assertEquals("OPEN_PROTECTED",coordinator.state.name)
+        }
+    }
+
     @Test fun profitableNtdCycleReentersAnyDimensionOnceOnlyAfterVerifiedFeesAndActualClose() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(market in listOf(false,true)) {
             val journal=Journal();val exchange=Exchange(direction)

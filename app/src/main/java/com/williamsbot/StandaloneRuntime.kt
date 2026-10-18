@@ -2766,8 +2766,7 @@ private class NativeEngine(
         val intents = futuresCampaignCoordinator.intentsSnapshot()
         val riskUsed = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.sumOf { intent ->
             if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
-                intent.optDouble("risk_pct", Double.NaN).takeIf { it.isFinite() && it > 0.0 }
-                    ?: maxTotalRiskPct
+                futuresCampaignReservedRisk(intent,intents)
             } else 0.0
         }
         val riskPct = min(campaignInitialRiskPct, min(maxRiskPerTradePct, maxTotalRiskPct - riskUsed))
