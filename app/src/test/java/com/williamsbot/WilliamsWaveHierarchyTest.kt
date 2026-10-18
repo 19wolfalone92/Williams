@@ -48,7 +48,7 @@ class WilliamsWaveHierarchyTest {
             val anchors=parts.mapIndexed { i,(k,p) ->
                 WilliamsWaveAnchor(k,p,positions[i],positions[i]*hour,(positions[i]+3)*hour)
             }
-            return williamsHypothesesFromAnchors("1h",candles,anchors).first { it.label=="A" }
+            return williamsHypothesesFromAnchors("1h",candles,anchors).first { it.label=="W5" }
         }
         val diagonal=count(115.0)
         assertEquals("ALTERNATIVE",diagonal.status)
