@@ -173,6 +173,17 @@ internal fun williamsCourseRhythm(bars:List<WilliamsWaveBar>):Pair<String,String
     return twr to momentum
 }
 
+internal fun williamsOpposingCloseEventTriggered(signalAt:Long,frameMs:Long,openedAt:Long,now:Long):Boolean {
+    if(minOf(signalAt,frameMs,openedAt,now)<=0L || signalAt>Long.MAX_VALUE-frameMs) return false
+    val knownAt=signalAt+frameMs
+    return openedAt<knownAt && knownAt<=now && (now-knownAt)/frameMs<5L
+}
+
+internal fun williamsAdditionTimeEligible(profile:String,signalAt:Long,family:String,originAt:Long,originFamily:String,latestAt:Long):Boolean =
+    if(profile==williamsNtdProfile) originAt>0 && signalAt>=originAt &&
+        (signalAt>originAt || family.removePrefix("SHORT_")!=originFamily.removePrefix("SHORT_"))
+    else signalAt>latestAt
+
 internal fun williamsMarketOnCloseReason(
     signalAt:Long,frameMs:Long,now:Long,reference:Double,mark:Double,
     maximumAgeMs:Long=90_000L,maximumDeviation:Double=.0015

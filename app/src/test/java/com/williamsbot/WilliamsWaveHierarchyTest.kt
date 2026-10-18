@@ -52,6 +52,7 @@ class WilliamsWaveHierarchyTest {
         }
         val diagonal=count(115.0)
         assertEquals("ALTERNATIVE",diagonal.status)
+        assertEquals(110.0,diagonal.invalidation,1e-9)
         assertTrue(diagonal.invalidReasons.isEmpty())
         assertTrue(diagonal.alternatives.contains("UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP"))
         val invalid=count(109.0)

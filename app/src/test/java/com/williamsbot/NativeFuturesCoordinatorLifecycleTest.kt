@@ -300,7 +300,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
             assertTrue(coordinator.reconcile().toString(),coordinator.status().optBoolean("ready_for_new_entry"))
             val initial=plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL",
-                signalBarTimeMs=System.currentTimeMillis()-7_200_000L)
+                signalBarTimeMs=System.currentTimeMillis()-3_601_000L)
             assertTrue(coordinator.submitPendingEntry(initial).getBoolean("accepted"))
             exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
             val oldProtection=exchange.algos.values.single { it.optString("closePosition")=="true" }.getString("clientAlgoId")
@@ -309,7 +309,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             val addition=initial.copy(kind=NativeFuturesCampaignCoordinator.EntryKind.MARKET,quantity="0.5",
                 entryPrice=exchange.mark.toString(),clientId="W2A_NTD_${direction.name}_${lost}_$fraction",riskPct=.001,
                 entryClientId=initial.clientId,signalType="ZONE_ADD_ON",executionSemantics="MARKET_ON_CLOSE",
-                referenceClose=exchange.mark,signalBarTimeMs=System.currentTimeMillis()-3_601_000L)
+                referenceClose=exchange.mark,signalBarTimeMs=initial.signalBarTimeMs)
             val submitted=coordinator.submitPendingEntry(addition)
             assertEquals(submitted.toString(),!lost,submitted.getBoolean("accepted"))
             // New coordinator represents process death after an unknown response.

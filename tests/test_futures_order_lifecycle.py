@@ -417,10 +417,19 @@ def test_ntd_close_event_uses_one_market_order_and_recovers_its_aggregate_fill(a
     monkeypatch.setattr(bot,"_daily_entry_guard",lambda:(True,"MODEL_TRADING_SESSION"))
     exchange.price=101.1 if campaign.side=="BUY" else 98.9
     exchange.market_add_timeout_after_fill=lost_response
-    signal=SignalSpec.new(symbol="BTCUSDT",side=campaign.side,signal_type=SignalType.ZONE_ADD_ON,
-        role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=closed_at-3_600_000,
-        trigger_price=exchange.price,protective_reference=campaign.current_stop_price,
-        execution_semantics="MARKET_ON_CLOSE",strategy_profile="NTD_FIVE_DIMENSIONS",expires_at_ms=closed_at+90_000)
+    import pandas as pd
+    from williams_profiles import extract_profile_signals
+    sign=1 if campaign.side=="BUY" else -1
+    prices=[exchange.price-sign*.2]*43+[exchange.price-sign*.1,exchange.price]
+    ind=pd.DataFrame({"open_time_ms":[closed_at-(45-i)*3_600_000 for i in range(45)],
+        "open":prices,"high":[p+.5 for p in prices],"low":[p-.5 for p in prices],"close":prices,"volume":[1000]*45,
+        "ao":[0]*43+[sign,2*sign],"ac":[0]*43+[sign,2*sign],
+        "jaw_current":[90 if sign==1 else 110]*45,"teeth_current":[91 if sign==1 else 109]*45,
+        "lips_current":[92 if sign==1 else 108]*45,
+        "long_fractal_outside":[sign==1]*45,"short_fractal_outside":[sign==-1]*45})
+    signal=next(s for s in extract_profile_signals("BTCUSDT",ind,profile="NTD_FIVE_DIMENSIONS",
+        side="LONG" if sign==1 else "SHORT",timeframe="1h",tick_size=.1) if s.signal_type==SignalType.ZONE_ADD_ON)
+    assert signal.expires_at_ms==closed_at+90_000
     try:bot._arm_add_on(campaign,signal)
     except (RuntimeError,BinanceAPIError):
         assert lost_response

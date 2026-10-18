@@ -39,9 +39,9 @@ from williams_signals import (
     extract_long_signal_specs,
     extract_short_signal_specs,
 )
-from williams_profiles import extract_profile_signals
+from williams_profiles import extract_profile_signals,addition_signal_time_allowed
 from williams_course_campaign import course_active_context,course_next_stage,TARGETS as COURSE_TARGETS
-from williams_edition_rules import TC2,NTD,COURSE,PROFILES,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan
+from williams_edition_rules import TC2,NTD,COURSE,PROFILES,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan,opposing_close_event_triggered
 from campaign_engine import CampaignEngine
 from equity_breaker import EquityCircuitBreaker
 from campaign_model import (
@@ -1555,7 +1555,7 @@ class FuturesWilliamsRuntime:
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
         campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
-        campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
+        campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
         campaign.tags["directional_context_at_entry"] = dict(candidate.directional_context)
         campaign.tags["scanner_score_at_entry"] = float(candidate.score)
         campaign.tags["trade_mode"] = candidate.trade_mode
@@ -1574,7 +1574,7 @@ class FuturesWilliamsRuntime:
         campaign.tags["pending_order_quantity"] = qty
         campaign.tags["pending_risk_equity"]=equity
         campaign.tags["pending_order_trigger"] = trigger
-        campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
+        campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
         campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["pending_order_stop"] = stop
         campaign.tags["pending_order_client_id"] = self._client_id("ENTRY")
@@ -1672,6 +1672,8 @@ class FuturesWilliamsRuntime:
         profile=campaign.tags.get("strategy_profile",TC2)
         if signal.strategy_profile!=profile:
             raise RuntimeError("Add-on profile does not match the durable campaign edition")
+        if profile==NTD and not addition_signal_time_allowed(signal,campaign):
+            raise RuntimeError("NTD addition must be a distinct formation in the owned fractal cycle")
         market_close=(profile==NTD and signal.signal_type==SignalType.ZONE_ADD_ON and signal.execution_semantics=="MARKET_ON_CLOSE")
         if signal.execution_semantics != "STOP_ENTRY" and not market_close:
             raise RuntimeError("Unsupported signal execution semantics: " + signal.execution_semantics)
@@ -1739,7 +1741,7 @@ class FuturesWilliamsRuntime:
         campaign.pending_risk_quote = risk_quote
         campaign.capital_reserved_quote = notional / self.config.leverage_for(signal.symbol)
         campaign.tags["pending_order_client_id"] = self._client_id("ADD")
-        campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
+        campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
         self.db.save_campaign(campaign)
         cid = campaign.tags["pending_order_client_id"]
         if not self.db.try_claim_state(f"entry_client_order_id:{signal.symbol}", cid):
@@ -3138,6 +3140,9 @@ class FuturesWilliamsRuntime:
             for signal in signals:
                 if profile!=NTD and signal.role != SignalRole.ENTRY:
                     continue
+                if signal.execution_semantics=="MARKET_ON_CLOSE" and profile==NTD:
+                    if opposing_close_event_triggered(signal.signal_bar_time_ms,FRAME_MS[interval],opened,now):return signal
+                    continue
                 if signal.execution_semantics!="STOP_ENTRY":continue
                 subsequent = wave_bars_from_dataframe(closed.iloc[len(prefix):])
                 if opposing_level_triggered(opposite,signal.trigger_price,
@@ -3245,7 +3250,6 @@ class FuturesWilliamsRuntime:
                     self._set_state(symbol, "RECONCILE_REQUIRED")
                 continue
 
-            latest = int(campaign.tags.get("last_signal_time_ms", 0) or 0)
             eligible = []
             # TC2 campaign management admits later valid same-direction Wise-Men
             # signals as additions. A reversal add may be disabled explicitly as
@@ -3260,18 +3264,25 @@ class FuturesWilliamsRuntime:
                         continue
                     if signal.strategy_profile!=campaign.tags.get("strategy_profile",TC2):
                         continue
-                    if signal.signal_bar_time_ms <= latest:
+                    if not addition_signal_time_allowed(signal,campaign):
                         continue
+                    if signal.execution_semantics=="MARKET_ON_CLOSE":
+                        try:
+                            close_reason=market_on_close_reason(signal.signal_bar_time_ms,FRAME_MS.get(signal.timeframe,0),
+                                int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)),signal.trigger_price,
+                                float(self.client.ticker_price(symbol).get("price",0) or 0))
+                        except (ValueError,TypeError,RuntimeError):continue
+                        if close_reason is not None:continue
                     if self.db.state_get(f"campaign_signal_admitted:{campaign.campaign_id}:{signal.signal_id}") is not None:continue
                     if signal.signal_type == SignalType.REVERSAL and not allow_reversal:
                         continue
                     eligible.append(signal)
 
             if eligible and symbol not in pending_symbols:
-                signal = min(eligible, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
+                signal = min(eligible, key=lambda s: (s.execution_semantics!="MARKET_ON_CLOSE",s.signal_bar_time_ms, s.created_at_ms))
                 try:
                     result = self._arm_add_on(campaign, signal)
-                    campaign.tags["last_signal_time_ms"] = signal.signal_bar_time_ms
+                    campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),signal.signal_bar_time_ms)
                     self.db.save_campaign(campaign)
                 except Exception as exc:
                     self.db.log_event("WARNING", "futures_add_on_blocked", str(exc), {"symbol": symbol})

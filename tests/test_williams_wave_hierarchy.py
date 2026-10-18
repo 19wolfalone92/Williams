@@ -284,6 +284,7 @@ def test_overlapping_fourth_keeps_non_executable_diagonal_hypothesis():
                 if h.label=="W5"][0]
     diag=count(points)
     assert diag.status=="ALTERNATIVE"
+    assert diag.invalidation==110.0
     assert diag.invalid_reasons==[]
     assert "UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP" in diag.alternatives
     assert diag.status!="PROVISIONAL"

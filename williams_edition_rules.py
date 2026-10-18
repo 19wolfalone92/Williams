@@ -232,6 +232,16 @@ def course_rhythm(bars):
     return {"twr":twr,"momentum":momentum}
 
 
+def opposing_close_event_triggered(signal_at,frame_ms,opened_at,now):
+    """Risk reduction after a real close, including a bounded offline interval.
+
+    This is not permission to replay a new MARKET entry at a historical price.
+    """
+    if min(signal_at,frame_ms,opened_at,now)<=0:return False
+    known_at=signal_at+frame_ms
+    return opened_at<known_at<=now and now-known_at<5*frame_ms
+
+
 def market_on_close_reason(signal_at,frame_ms,now,reference,mark,max_age_ms=90_000,max_deviation=.0015):
     """A just-completed bar event is a MARKET request, never a backfilled price.
 

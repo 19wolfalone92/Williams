@@ -58,8 +58,10 @@ internal fun detectWilliamsComplexWave(
             else if(fraction>=0.90) {
                 val kind=if(x[7]>x[5] && x[8]<x[6]) "EXPANDED_FLAT_ABC_CANDIDATE"
                     else if(x[7]>x[5]) "RUNNING_FLAT_ABC_CANDIDATE"
+                    else if(x[8]>x[6]) "FLAT_ABC_INCOMPLETE_OR_TRUNCATED_C_CANDIDATE"
                     else "REGULAR_FLAT_ABC_CANDIDATE"
-                add(kind,p,listOf("B_RETRACES_AT_LEAST_90_PERCENT_A","INTERNAL_3_3_5_UNVERIFIED"),p[7].price)
+                add(kind,p,listOf("B_RETRACES_AT_LEAST_90_PERCENT_A","INTERNAL_3_3_5_UNVERIFIED")+
+                    (if(x[7]<=x[5] && x[8]>x[6]) listOf("C_DOES_NOT_REACH_A") else emptyList()),p[7].price)
             }
         }
     }

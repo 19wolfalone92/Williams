@@ -76,6 +76,7 @@ class WaveHypothesis:
     squat: bool = False
     target_zone: bool = False
     alternatives: list[str] = field(default_factory=list)
+    leg_observation_start: int = 0
 
     @property
     def active_label(self):
@@ -193,6 +194,24 @@ def confirmed_wave_anchors(bars: Sequence[WaveBar], duration: int) -> list[WaveA
     return alternating
 
 
+def wave_leg_observation_start(anchor,frame,frames):
+    """First bar boundary definitely after the latest parent extreme.
+
+    A parent's OHLC cannot establish whether its opposite extreme came before
+    or after its pivot. Use the final matching extreme in the finest complete
+    available subdivision of that parent candle; never guess intrabar order.
+    """
+    end=anchor.extreme_at+FRAME_MS[frame]
+    for f in sorted(frames,key=lambda x:FRAME_MS[x]):
+        duration=FRAME_MS[f]
+        if duration>FRAME_MS[frame]:continue
+        part=[b for b in frames[f] if anchor.extreme_at<=b.t<end]
+        if not part or part[0].t!=anchor.extreme_at or part[-1].t+duration!=end:continue
+        matches=[b for b in part if abs((b.h if anchor.kind=="HIGH" else b.l)-anchor.price)<=max(1e-9,anchor.price*1e-9)]
+        if matches:return matches[-1].t+duration
+    return end
+
+
 def _ao(bars):
     mid = [(b.h + b.l) / 2 for b in bars]
     return [sum(mid[i-4:i+1]) / 5 - sum(mid[i-33:i+1]) / 34
@@ -302,7 +321,7 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             reasons.append("B_NOT_RETRACING_A")
         if n >= 9 and price[8] >= price[6]:
             reasons.append("C_NOT_EXTENDING_A_COMPLEX_CORRECTION_POSSIBLE")
-        inv = p[0].price if n <= 3 else p[1].price if n <= 6 else p[5].price
+        inv = p[0].price if n <= 3 else p[2].price if n<=6 and diagonal_overlap else p[1].price if n <= 6 else p[5].price
         last_bar = bars[-1]
         # A/C must remain on the corrective side of the old W5. B may exceed
         # it in an irregular correction: keep that alternative explicitly.
@@ -385,15 +404,16 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) ->
             # A daily candle is not fabricated up to the current hour. The
             # already-known daily leg is observed further using genuine closed
             # lower-frame candles, each retaining its own indicator resolution.
+            h.leg_observation_start=wave_leg_observation_start(h.anchors[-1],frame,valid)
             observed = [b for f, series in valid.items() if FRAME_MS[f] <= FRAME_MS[frame]
-                        for b in series if h.leg_start <= b.t and b.t + FRAME_MS[f] <= as_of]
+                        for b in series if h.leg_observation_start <= b.t and b.t + FRAME_MS[f] <= as_of]
             h.observed_at = as_of
             if observed:
-                h.leg_low = min(b.l for b in observed)
-                h.leg_high = max(b.h for b in observed)
+                h.leg_low = min(h.anchors[-1].price,min(b.l for b in observed))
+                h.leg_high = max(h.anchors[-1].price,max(b.h for b in observed))
                 if len(h.anchors) <= 6 and (
-                    h.direction == "UP" and h.leg_low <= h.invalidation or
-                    h.direction == "DOWN" and h.leg_high >= h.invalidation
+                    h.direction == "UP" and min(b.l for b in observed) <= h.invalidation or
+                    h.direction == "DOWN" and max(b.h for b in observed) >= h.invalidation
                 ):
                     h.status = "INVALIDATED"
                     h.invalid_reasons.append("LOWER_FRAME_OBSERVED_INVALIDATION")

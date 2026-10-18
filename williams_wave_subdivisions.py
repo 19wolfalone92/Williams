@@ -53,6 +53,8 @@ def prove_wave_subdivisions(parent,children,expected,*,parent_duration,as_of):
 
 
 def enrich_complex_subdivisions(pattern,parent,children,*,parent_duration,as_of):
+    if pattern.startswith("FLAT_ABC_INCOMPLETE_OR_TRUNCATED_C"):
+        return SubdivisionProof("UNRESOLVED",(3,3,5),(),0,"C_END_OR_TRUNCATION_UNCONFIRMED")
     if pattern.startswith("ZIGZAG_ABC"):
         expected=(5,3,5);points=parent[-4:]
     elif "FLAT_ABC" in pattern:

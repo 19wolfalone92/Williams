@@ -120,9 +120,11 @@ def detect_complex_wave_patterns(
                 kind = ("EXPANDED_FLAT_ABC_CANDIDATE"
                         if p[7] > p[5] and p[8] < p[6]
                         else "RUNNING_FLAT_ABC_CANDIDATE" if p[7] > p[5]
+                        else "FLAT_ABC_INCOMPLETE_OR_TRUNCATED_C_CANDIDATE" if p[8] > p[6]
                         else "REGULAR_FLAT_ABC_CANDIDATE")
                 add(kind, sub,
-                    ("B_RETRACES_AT_LEAST_90_PERCENT_A", "INTERNAL_3_3_5_UNVERIFIED"), sub[7][1])
+                    ("B_RETRACES_AT_LEAST_90_PERCENT_A", "INTERNAL_3_3_5_UNVERIFIED")+
+                    (("C_DOES_NOT_REACH_A",) if p[7]<=p[5] and p[8]>p[6] else ()), sub[7][1])
             # A, B and C are unknown-degree correction legs, not
             # necessarily the final correction of a larger wave.
     # Contracting symmetrical triangle: decreasing swing highs and increasing

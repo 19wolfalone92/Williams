@@ -33,6 +33,22 @@ class WilliamsEditionRulesTest {
         assertEquals("CLOSE_EVENT_EXPIRED",williamsMarketOnCloseReason(1000,3_600_000,3_691_001,100.0,100.0))
         assertEquals("CLOSE_EVENT_SLIPPAGE_LIMIT",williamsMarketOnCloseReason(1000,3_600_000,3_601_000,100.0,101.0))
     }
+    @Test fun oppositeCloseEventsReduceOnlyOlderPositionsWithinTheRecoveryWindow() {
+        assertTrue(williamsOpposingCloseEventTriggered(100,1000,100,1100))
+        assertFalse(williamsOpposingCloseEventTriggered(100,1000,1100,1100))
+        assertFalse(williamsOpposingCloseEventTriggered(100,1000,100,1099))
+        assertTrue(williamsOpposingCloseEventTriggered(100,1000,100,6099))
+        assertFalse(williamsOpposingCloseEventTriggered(100,1000,100,6100))
+        assertFalse(williamsOpposingCloseEventTriggered(100,1000,0,1100))
+        assertFalse(williamsOpposingCloseEventTriggered(Long.MAX_VALUE,1000,100,Long.MAX_VALUE))
+    }
+    @Test fun ntdDimensionsCanShareTheFractalConfirmationBarWithoutReusingItsFamily() {
+        assertTrue(williamsAdditionTimeEligible(williamsNtdProfile,100,"AC_SIGNAL",100,"FRACTAL",200))
+        assertTrue(williamsAdditionTimeEligible(williamsNtdProfile,100,"SHORT_AC_SIGNAL",100,"SHORT_FRACTAL",200))
+        assertFalse(williamsAdditionTimeEligible(williamsNtdProfile,100,"FRACTAL",100,"FRACTAL",100))
+        assertFalse(williamsAdditionTimeEligible(williamsNtdProfile,99,"AC_SIGNAL",100,"FRACTAL",100))
+        assertFalse(williamsAdditionTimeEligible(williamsTc2Profile,100,"SUPER_AO",100,"FRACTAL",100))
+    }
     @Test fun bothOutsideFractalsRemainVisibleWithoutInventingTheirIntrabarOrder() {
         val highs=listOf(10.0,11.0,15.0,11.0,10.0);val lows=listOf(8.0,7.0,3.0,7.0,8.0)
         val bars=highs.indices.map { i -> WilliamsWaveBar((i+1)*3_600_000L,(highs[i]+lows[i])/2,highs[i],lows[i],(highs[i]+lows[i])/2,100.0) }
