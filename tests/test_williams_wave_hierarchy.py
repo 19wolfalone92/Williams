@@ -216,3 +216,47 @@ def test_shared_android_wave_contract_fixture():
         actual = [{"label":s.label,"direction":s.direction,"status":s.status,
                    "w4_zero":s.w4_zero,"scale_bars":s.scale_bars} for s in report.scenarios]
         assert actual == case["expected"]
+
+
+@pytest.mark.parametrize("mirror,side", [(False,"LONG"),(True,"SHORT")])
+def test_real_four_frame_candles_and_h1_wise_man_can_reach_correction_mode(mirror,side):
+    """No hand-constructed scenarios/links or mocked indicator/signal detectors.
+
+    The same nested synthetic OHLC history is consumed by Android. Higher
+    candles were aggregated from a single M15 path, not independently invented.
+    """
+    from strategy import calculate_indicators, canonical_indicator_config_from_env
+    from williams_signals import extract_long_signal_specs, extract_short_signal_specs
+
+    payload=json.loads((Path(__file__).parents[1]/"app/src/test/resources/williams_correction_contract.json").read_text())
+    frames={f:[WaveBar(*row) for row in rows] for f,rows in payload["frames"].items()}
+    if mirror:
+        total=payload["mirror_sum"]
+        frames={f:[replace(b,o=total-b.o,h=total-b.l,l=total-b.h,c=total-b.c) for b in bars]
+                for f,bars in frames.items()}
+    report=build_wave_hierarchy(frames,payload["as_of"])
+    assert not report.frame_errors
+    assert report.to_dict()["contained_chain_observed"]
+    h1=pd.DataFrame([{"open":b.o,"high":b.h,"low":b.l,"close":b.c,"volume":b.v} for b in frames["1h"]],
+                    index=pd.to_datetime([b.t for b in frames["1h"]],unit="ms",utc=True))
+    indicators=calculate_indicators(h1,canonical_indicator_config_from_env())
+    detector=extract_short_signal_specs if mirror else extract_long_signal_specs
+    signal=next(s for s in detector("BTCUSDT",indicators,timeframe="1h",tick_size=.1)
+                if s.signal_type.value=="FRACTAL")
+    assert signal.signal_bar_time_ms==payload["signal_at"]
+    expected_trigger=payload["mirror_sum"]-payload["long_trigger"] if mirror else payload["long_trigger"]
+    assert signal.trigger_price==pytest.approx(expected_trigger)
+    proof=correction_entry_context(report,side,signal.signal_bar_time_ms,signal.signal_type.value)
+    assert proof["allowed"]
+    parent=next(s for s in report.scenarios if s.scenario_id==proof["parent_scenario_id"])
+    assert (parent.frame,parent.label,parent.scale_bars,parent.w4_zero)==("6h","W4",120,"MINIMUM_ONLY")
+    assert parent.anchors[0].extreme_at==payload["parent_origin"]
+    assert correction_price_allowed(proof,frames["1h"][-1].c)
+    expected_bounds=(payload["mirror_sum"]-payload["long_ceiling"],payload["mirror_sum"]-payload["long_floor"]) if mirror else (payload["long_floor"],payload["long_ceiling"])
+    assert (proof["parent_floor"],proof["parent_ceiling"])==pytest.approx(expected_bounds)
+    # Missing junior evidence must revoke the very same real candle permission.
+    missing=build_wave_hierarchy({f:bars for f,bars in frames.items() if f!="15m"},payload["as_of"])
+    assert not correction_entry_context(missing,side,signal.signal_bar_time_ms,signal.signal_type.value)["allowed"]
+    # Future higher and lower candles cannot change this already-known path.
+    future={f:bars+[replace(bars[-1],t=bars[-1].t+FRAME_MS[f],h=float("nan"))] for f,bars in frames.items()}
+    assert build_wave_hierarchy(future,payload["as_of"]).to_dict()==report.to_dict()
