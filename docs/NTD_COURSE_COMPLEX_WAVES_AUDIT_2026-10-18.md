@@ -18,7 +18,7 @@
 * Requires one reference extreme moving AWAY from the Jaw, two moving TOWARD it.
 * Doubles the number of required reference extremes for BUY in a RED AO/AC zone and SELL in a GREEN zone. Gray does not double.
 * Preserves the full Alligator-mouth constraint and excludes previously touched triggers. For actual execution, formation lifetime and protective orders require separate proofs; a preliminary `protective_reference` does not authorize Futures trading.
-* Emits research-only `BALANCE_LINE` add-on `SignalSpec` in Python and `ntd_balance_line_diagnostics` for LONG and SHORT in Android market JSON.
+* Emits research-only `BALANCE_LINE` early-entry candidate `SignalSpec` (NTD can precede the first fractal) in Python and `ntd_balance_line_diagnostics` for LONG and SHORT in Android market JSON.
 * Independently testable in both languages. This patch does **not** enable `NTD_FIVE_DIMENSIONS` as an exchange-executable profile, because a five-dimensional campaign and exchange lifecycle has not undergone Android Demo acceptance.
 
 ### Complex wave correction
