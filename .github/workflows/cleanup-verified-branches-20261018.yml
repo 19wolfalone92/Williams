@@ -1,0 +1,60 @@
+name: One-time cleanup of verified merged Williams branches
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cleanup-verified-branches-20261018.yml'
+permissions:
+  contents: write
+jobs:
+  cleanup:
+    if: github.repository == '19wolfalone92/Williams'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Remove only unchanged and proven-integrated branch heads
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          while IFS='|' read -r branch expected mode pr; do
+            [[ -n "$branch" ]] || continue
+            [[ "$branch" != "main" ]] || exit 5
+            actual="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch}" --jq .object.sha)"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "SKIP changed branch: $branch"
+              continue
+            fi
+            if [[ "$mode" == "ancestor" ]]; then
+              behind="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${expected}...main" --jq .behind_by)"
+              [[ "$behind" == "0" ]] || { echo "SKIP branch not in main: $branch"; continue; }
+            elif [[ "$mode" == "merged" ]]; then
+              merged_at="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" --jq .merged_at)"
+              pr_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" --jq .head.sha)"
+              [[ "$merged_at" != "null" && "$pr_sha" == "$expected" ]] || { echo "SKIP unmerged/moved branch: $branch"; continue; }
+            else
+              echo "Unexpected mode $mode"; exit 6
+            fi
+            echo "DELETE verified integrated branch: $branch"
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}"
+          done <<'BRANCHES'
+          codex/book-wave-hierarchy-4.29|ae8dd16378af7c03f366d0842fcd3559db5940f3|ancestor|0
+          codex/deep-futures-audit-4.28.2|b3ed820caa6fb7c83be1a94d75273a4af4835f55|ancestor|0
+          codex/futures-runtime-safety-4.28.1|c4c33813db3df8d39f051a5240019c3ecf3d11c4|ancestor|0
+          codex/futures-variable-leverage-4.28|38fd568e74ae0605980a1d3022149ff721a59b58|ancestor|0
+          fix/diagnostics7-exit-lifecycle-audit-20261017|9577f97da842d61e761bf45e29d95ef632bff195|ancestor|0
+          fix/futures-fractal-be-20261017|cb09da6f008df4bfb1d140c261e95d60616679a3|ancestor|0
+          fix/main-postmerge-trailing-diagnostics-20261017|b6dd5c6ab00b292909394ba4324c2c6b09c0c206|ancestor|0
+          futures-williams-campaign|3e3bf88d99d26a42258dc9a18c1a01d208cea5f4|ancestor|0
+          codex/internal-wave-grammar-4.30.3|2cd71789b9ff86d4ddc0277a7c303ca6dc3835e1|merged|90
+          codex/historical-waves-4.30.1|3b7b8f896d686a165aab161e6bbffca8a57556e1|merged|89
+          codex/book-profiles-waves-4.30|bd8eb220da90b5b1d934c5b7f8ef62e7df9b799d|merged|88
+          feature/complex-wave-course-ntd-20261018|743c85695b83f4a8ff61fa72705c8effa8016019|merged|87
+          fix/ntd-balance-line-course-audit-20261018|cd46bd19ca9bb7742e6ff21b4a76d74a1fca3134|merged|86
+          feature/williams-wave-rhythm-audit-20261017|cbf6233624160218f2a47eea4f1933ce77f0f6df|merged|84
+          feat/cockpit-4-27-main-integration|40de93b6c3bb63d58391ac988d484c91b43c0bab|merged|75
+          fix/comprehensive-audit-20261016|683374f89b0d78d8a39a826477a05bcb4bd1dde3|merged|70
+          williams-4-24-final|2e6f4ca784744030a81e758bd0170c9f27d2dd1c|merged|32
+          fix/android-startup-crash-4-22-3|c3922b056acb0aac382dbfa21ee8d16dc197d1af|merged|24
+          BRANCHES
