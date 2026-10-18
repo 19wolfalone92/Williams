@@ -2108,7 +2108,8 @@ internal class NativeFuturesCampaignCoordinator(
     fun submitPendingEntry(plan: EntryPlan): JSONObject = synchronized(lock) {
         val currentIntents = intents()
         val selected=editionSelectionProvider?.invoke()
-        if(selected!=null && plan.signalType!="OPERATOR_FORCED_DIRECTION" && selected!=plan.strategyProfile)
+        if(selected!=null && plan.signalType!="OPERATOR_FORCED_DIRECTION" &&
+            !williamsProfileAllowsSource(selected,plan.strategyProfile))
             return@synchronized safePreflightRejection("Williams edition changed while entry waited for coordinator admission")
         val isAddition=plan.entryClientId.isNotBlank()
         val prior=latestEntryIntentIndex(currentIntents,plan.symbol)?.let { currentIntents.optJSONObject(it) }
