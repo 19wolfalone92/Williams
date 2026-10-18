@@ -40,7 +40,7 @@ def test_real_sequence_bars_not_cached_bar_count_control_the_w4_scale(mirror,dir
     assert senior.anchors[0].known_at == 53*HOUR
     assert senior.terminal_fractal is True
     # Another valid suffix is a competing smaller count, not erased by a winner.
-    assert any(s.label == "W2" and s.status == "PROVISIONAL" for s in report.scenarios)
+    assert any(s.label == "W1" and s.status == "PROVISIONAL" for s in report.scenarios)
     assert not correction_entry_context(report,"LONG",169*HOUR,"REVERSAL")["allowed"]
 
 
@@ -94,7 +94,7 @@ def hypothesis(frame,direction,label,prices,times,leg_start,low,high):
 
 def correction_report(mirror=False):
     d = hypothesis("1d","DOWN","W3",[260,210,240],[5,20,50],50,50,280)
-    senior = hypothesis("6h","DOWN","W4",[220,180,200,100],[80,100,200,300],300,95,180)
+    senior = hypothesis("6h","DOWN","W4",[220,180,200,100,130],[80,100,200,300,320],300,95,180)
     senior.w4_zero = "MINIMUM_ONLY"
     senior.momentum_shift = True
     decision = hypothesis("1h","UP","W3",[110,145,130],[310,320,330],330,125,165)
@@ -219,7 +219,7 @@ def test_shared_android_wave_contract_fixture():
 
 
 @pytest.mark.parametrize("mirror,side", [(False,"LONG"),(True,"SHORT")])
-def test_real_four_frame_candles_and_h1_wise_man_can_reach_correction_mode(mirror,side):
+def test_four_frame_history_does_not_promote_w3_to_w4_and_false_approve_correction(mirror,side):
     """No hand-constructed scenarios/links or mocked indicator/signal detectors.
 
     The same nested synthetic OHLC history is consumed by Android. Higher
@@ -247,13 +247,12 @@ def test_real_four_frame_candles_and_h1_wise_man_can_reach_correction_mode(mirro
     expected_trigger=payload["mirror_sum"]-payload["long_trigger"] if mirror else payload["long_trigger"]
     assert signal.trigger_price==pytest.approx(expected_trigger)
     proof=correction_entry_context(report,side,signal.signal_bar_time_ms,signal.signal_type.value)
-    assert proof["allowed"]
-    parent=next(s for s in report.scenarios if s.scenario_id==proof["parent_scenario_id"])
-    assert (parent.frame,parent.label,parent.scale_bars,parent.w4_zero)==("6h","W4",120,"MINIMUM_ONLY")
-    assert parent.anchors[0].extreme_at==payload["parent_origin"]
-    assert correction_price_allowed(proof,frames["1h"][-1].c)
-    expected_bounds=(payload["mirror_sum"]-payload["long_ceiling"],payload["mirror_sum"]-payload["long_floor"]) if mirror else (payload["long_floor"],payload["long_ceiling"])
-    assert (proof["parent_floor"],proof["parent_ceiling"])==pytest.approx(expected_bounds)
+    # Correct counting is not optional: the former 4-pivot "W4" was only
+    # W3, so a countertrend approval here had been a false positive.
+    assert not proof["allowed"]
+    assert not any(s.frame=="6h" and s.label=="W4" and len(s.anchors)<5
+                   for s in report.scenarios if s.status=="PROVISIONAL")
+    assert any(s.frame=="6h" and s.label=="W3" for s in report.scenarios)
     # Missing junior evidence must revoke the very same real candle permission.
     missing=build_wave_hierarchy({f:bars for f,bars in frames.items() if f!="15m"},payload["as_of"])
     assert not correction_entry_context(missing,side,signal.signal_bar_time_ms,signal.signal_type.value)["allowed"]
