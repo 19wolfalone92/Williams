@@ -244,6 +244,33 @@ internal fun assessActualFuturesPositionRisk(
     return result
 }
 
+/** Sum each admitted entry exactly once while its primary campaign remains active. */
+internal fun futuresCampaignReservedRisk(owner:JSONObject,all:JSONArray):Double {
+    if(!isEntryCampaignReserved(owner)) return 0.0
+    var total=conservativeRiskReservation(owner.optDouble("risk_pct",Double.NaN),.006)
+    for(i in 0 until all.length()) {
+        val child=all.optJSONObject(i) ?: error("Malformed Futures risk journal")
+        if(child.optString("intent_role")!="ADD_ON" || child.optString("entry_client_id")!=owner.optString("client_id")) continue
+        val status=exchangeOrderStatus(child)
+        val executed=child.optString("executed_qty","0").toBigDecimalOrNull() ?: error("Malformed child fill reservation")
+        if(status !in ENTRY_ORDER_TERMINAL_STATUSES || executed.signum()>0 || status=="FILLED")
+            total+=conservativeRiskReservation(child.optDouble("risk_pct",Double.NaN),.006)
+    }
+    return total
+}
+
+internal fun assessActualFuturesCampaignRisk(direction:String,quantity:Double,entry:Double,stop:Double,
+    equity:Double,reserved:Double):FuturesActualPositionRiskCheck {
+    if(direction !in setOf("LONG","SHORT") || listOf(quantity,entry,stop,equity,reserved).any { !it.isFinite() || it<=0 } || reserved>.006)
+        return FuturesActualPositionRiskCheck(blocker="Invalid aggregate campaign risk inputs")
+    val gross=quantity*maxOf(0.0,if(direction=="LONG") entry-stop else stop-entry)
+    val fees=quantity*entry*.0035;val loss=gross+fees;val risk=loss/equity;val budget=equity*reserved
+    return FuturesActualPositionRiskCheck(
+        blocker=if(loss>budget+1e-9) "ACTUAL_FUTURES_CAMPAIGN_RISK_EXCEEDS_RESERVATION" else null,
+        grossStopLossUsdt=gross,estimatedFeesAndSlippageUsdt=fees,estimatedAllInLossUsdt=loss,
+        actualAllInRiskPct=risk,reservedRiskUsdt=budget)
+}
+
 /** Structural H1 recovery result for a known bot-owned position whose stop journal is missing. */
 internal data class RecoveredStructuralStop(
     val stopPrice: String,
@@ -634,7 +661,7 @@ internal class NativeFuturesCampaignCoordinator(
     private val adapterFactory: () -> BinanceUsdMFuturesTestnetAdapter
 ) {
     enum class Direction { LONG, SHORT }
-    enum class EntryKind { STOP, TAKE_PROFIT, LIMIT }
+    enum class EntryKind { STOP, TAKE_PROFIT, LIMIT, MARKET }
     enum class State {
         UNINITIALIZED, RECONCILE_REQUIRED, READY, ENTRY_PENDING,
         POSITION_UNPROTECTED, OPEN_PROTECTED, EXIT_PENDING
@@ -654,7 +681,12 @@ internal class NativeFuturesCampaignCoordinator(
         val signalReason: String = "",
         val leverage: Int = 2,
         val tradeMode: String = "TREND",
-        val waveContext: String = ""
+        val waveContext: String = "",
+        val strategyProfile: String = williamsTc2Profile,
+        val entryClientId: String = "",
+        val executionSemantics: String = "STOP_ENTRY",
+        val referenceClose: Double = 0.0,
+        val setupContext: String = ""
     )
 
     @Volatile var state: State = State.UNINITIALIZED
@@ -851,7 +883,7 @@ internal class NativeFuturesCampaignCoordinator(
                     else exchangeOrderStatus(item)
                 val lifecycle = campaignLifecycleStatus(item)
                 val clientId = item.optString("client_id")
-                if (role == "ENTRY" && orderStatus in activeStatuses &&
+                if (role in setOf("ENTRY", "ADD_ON") && orderStatus in activeStatuses &&
                     lifecycle !in TERMINAL_CAMPAIGN_STATUSES
                 ) addOwner(activeEntryClientIdsBySymbol, symbol, clientId)
                 if (role == "EXIT" && orderStatus in (activeStatuses + "EXIT_PENDING")) {
@@ -872,11 +904,14 @@ internal class NativeFuturesCampaignCoordinator(
             for (i in 0 until persisted.length()) {
                 val owner = persisted.optJSONObject(i) ?: continue
                 val symbol = owner.optString("symbol")
-                if (owner.optString("intent_role", "ENTRY") != "ENTRY" ||
-                    campaignLifecycleStatus(owner) in TERMINAL_CAMPAIGN_STATUSES ||
+                if (owner.optString("intent_role", "ENTRY") !in setOf("ENTRY", "ADD_ON") ||
+                    (owner.optString("intent_role","ENTRY")=="ENTRY" && campaignLifecycleStatus(owner) in TERMINAL_CAMPAIGN_STATUSES) ||
+                    (owner.optString("intent_role")=="ADD_ON" && (0 until persisted.length()).mapNotNull { persisted.optJSONObject(it) }
+                        .none { it.optString("client_id")==owner.optString("entry_client_id") &&
+                            campaignLifecycleStatus(it) !in TERMINAL_CAMPAIGN_STATUSES }) ||
                     !owner.optBoolean("strategy_ownership_verified", false)) continue
                 val cid = owner.optString("client_id")
-                val execution = if (owner.optString("kind") == EntryKind.LIMIT.name) {
+                val execution = if (owner.optString("kind") in setOf(EntryKind.LIMIT.name, EntryKind.MARKET.name)) {
                     standardOrderOrNull(adapter, symbol, cid)
                 } else {
                     val parent = conditionalOrderOrNull(adapter, symbol, cid)
@@ -898,6 +933,11 @@ internal class NativeFuturesCampaignCoordinator(
                     check(owner.optString("actual_entry_order_id").let { it.isBlank() || it == actualId }) {
                         "Entry matching-engine order id changed"
                     }
+                    val executed = execution.optString("executedQty").toBigDecimalOrNull()
+                        ?: error("Malformed entry execution quantity")
+                    val planned = owner.optString("quantity").toBigDecimalOrNull()
+                        ?: error("Malformed entry planned quantity")
+                    check(executed.signum() >= 0 && executed <= planned) { "Entry execution exceeds its own intent" }
                     owner.put("actual_entry_order_id", actualId)
                     entryExecutions[cid] = execution
                 }
@@ -944,7 +984,10 @@ internal class NativeFuturesCampaignCoordinator(
             var actualRiskAuditBlocker: String? = null
             // Resolve persisted entry and exit intents against Binance. Older completed
             // campaigns on a symbol must not be mistaken for the campaign now in market.
-            for (i in 0 until persisted.length()) {
+            val resolutionOrder=(0 until persisted.length()).sortedBy {
+                when(persisted.optJSONObject(it)?.optString("intent_role")) { "ADD_ON" -> 0; "EXIT" -> 1; else -> 2 }
+            }
+            for (i in resolutionOrder) {
                 val intent = persisted.optJSONObject(i)
                     ?: throw IllegalStateException("Persisted Futures intent is malformed")
                 val symbol = intent.optString("symbol").uppercase(Locale.US)
@@ -956,6 +999,58 @@ internal class NativeFuturesCampaignCoordinator(
                 val position = openBySymbol[symbol]
                 val prior = campaignLifecycleStatus(intent)
                 val priorOrderStatus = exchangeOrderStatus(intent)
+                if (role == "ADD_ON") {
+                    val primary = (0 until persisted.length()).mapNotNull { persisted.optJSONObject(it) }
+                        .singleOrNull { it.optString("intent_role","ENTRY")=="ENTRY" &&
+                            it.optString("client_id")==intent.optString("entry_client_id") }
+                        ?: error("Addition has no unique durable campaign owner")
+                    check(primary.optString("symbol")==symbol &&
+                        primary.optString("direction")==intent.optString("direction") &&
+                        primary.optString("strategy_profile",williamsTc2Profile)==intent.optString("strategy_profile",williamsTc2Profile)) {
+                        "Addition campaign/profile identity mismatch"
+                    }
+                    var order = entryExecutions[clientId]
+                    var conditional = if (intent.optString("kind") in setOf("STOP","TAKE_PROFIT"))
+                        conditionalOrderOrNull(adapter,symbol,clientId) else null
+                    val conditionalStatus = conditional?.let { it.optString("algoStatus",it.optString("status")) }.orEmpty()
+                    val executed = order?.optString("executedQty")?.toBigDecimalOrNull() ?: java.math.BigDecimal.ZERO
+                    val parentIsOpen = position != null && campaignLifecycleStatus(primary) !in TERMINAL_CAMPAIGN_STATUSES
+                    val ageExpired = intent.optLong("signal_expires_at_ms",0L).let { it>0 && System.currentTimeMillis()>=it }
+                    // Cancel a partially executed remainder, an expired formation, or
+                    // any orphan addition before a completed campaign can be retired.
+                    if (executed.signum()>0 || !parentIsOpen || ageExpired) {
+                        if (conditional != null && conditionalStatus !in ENTRY_ORDER_TERMINAL_STATUSES) {
+                            intent.put("order_status","CANCEL_SUBMISSION_UNKNOWN"); saveIntents(persisted)
+                            adapter.cancelAlgoOrder(symbol,clientId)
+                            conditional=adapter.queryAlgoOrder(symbol,clientId)
+                            check(conditional.optString("algoStatus",conditional.optString("status")) in ENTRY_ORDER_TERMINAL_STATUSES) {
+                                "Addition conditional cancellation is not confirmed"
+                            }
+                        }
+                        if (order != null && order.optString("status") in activeStatuses) {
+                            intent.put("order_status","CANCEL_SUBMISSION_UNKNOWN"); saveIntents(persisted)
+                            adapter.cancelOrderById(symbol,order.getString("orderId"))
+                            order=adapter.orderById(symbol,order.getString("orderId"))
+                            check(order.optString("status") in ENTRY_ORDER_TERMINAL_STATUSES) { "Addition remainder remains active" }
+                            entryExecutions[clientId]=order
+                        }
+                        val refreshed=adapter.positions()
+                        openBySymbol.remove(symbol)
+                        for (j in 0 until refreshed.length()) {
+                            val row=refreshed.getJSONObject(j)
+                            if (row.optString("symbol")==symbol && row.getString("positionAmt").toBigDecimal().signum()!=0)
+                                openBySymbol[symbol]=row
+                        }
+                    }
+                    val observed=order?.optString("status") ?: conditional?.let { it.optString("algoStatus",it.optString("status")) }
+                    check(!observed.isNullOrBlank()) { "Addition submission remains unqueryable; no retry admitted" }
+                    intent.put("order_status",observed).put("exchange_status",observed)
+                        .put("executed_qty",order?.optString("executedQty","0") ?: "0")
+                        .put("campaign_status",if (observed in ENTRY_ORDER_TERMINAL_STATUSES) "CLOSED_OR_STOPPED" else "ENTRY_PENDING")
+                    if (observed !in ENTRY_ORDER_TERMINAL_STATUSES) hasPendingEntry=true
+                    saveIntents(persisted)
+                    continue
+                }
                 if (role == "EXIT") {
                     val order = standardOrderOrNull(adapter, symbol, clientId)
                     if (order == null) {
@@ -1158,7 +1253,7 @@ internal class NativeFuturesCampaignCoordinator(
                 }
                 val kind = intent.optString("kind")
                 val order = when (kind) {
-                    EntryKind.LIMIT.name -> standardOrderOrNull(adapter, symbol, clientId)
+                    EntryKind.LIMIT.name, EntryKind.MARKET.name -> standardOrderOrNull(adapter, symbol, clientId)
                     EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name ->
                         conditionalOrderOrNull(adapter, symbol, clientId)
                     else -> throw IllegalStateException("Unknown entry kind for $clientId")
@@ -1256,10 +1351,21 @@ internal class NativeFuturesCampaignCoordinator(
                     val verifiedOwner = checkNotNull(matchingIntent)
                     val fill = entryExecutions[verifiedOwner.optString("client_id")]
                         ?: throw IllegalStateException("$symbol live position has no exchange-confirmed campaign fill")
-                    val entered = fill.optString("executedQty").toBigDecimalOrNull()
-                        ?: throw IllegalStateException("$symbol campaign fill quantity is malformed")
-                    val planned = verifiedOwner.optString("quantity").toBigDecimalOrNull()
-                        ?: throw IllegalStateException("$symbol planned entry quantity is malformed")
+                    val components = mutableListOf(fill)
+                    for (j in 0 until persisted.length()) {
+                        val child=persisted.optJSONObject(j) ?: error("Malformed addition ledger")
+                        if (child.optString("intent_role")!="ADD_ON" ||
+                            child.optString("entry_client_id")!=verifiedOwner.optString("client_id")) continue
+                        val confirmed=entryExecutions[child.optString("client_id")]
+                        if (confirmed!=null && confirmed.optString("executedQty","0").toBigDecimal().signum()>0) components+=confirmed
+                    }
+                    val entered=components.fold(java.math.BigDecimal.ZERO) { total,row -> total+row.getString("executedQty").toBigDecimal() }
+                    val enteredCost=components.fold(java.math.BigDecimal.ZERO) { total,row ->
+                        val qty=row.getString("executedQty").toBigDecimal()
+                        val price=row.getString("avgPrice").toBigDecimal()
+                        check(qty.signum()>0 && price.signum()>0) { "Non-positive campaign execution" }
+                        total+qty*price
+                    }
                     val exited = (0 until persisted.length()).mapNotNull { persisted.optJSONObject(it) }
                         .filter { it.optString("intent_role") == "EXIT" &&
                             it.optString("entry_client_id") == verifiedOwner.optString("client_id") }
@@ -1268,10 +1374,10 @@ internal class NativeFuturesCampaignCoordinator(
                                 ?: throw IllegalStateException("$symbol exit fill quantity is malformed"))
                         }
                     val liveQuantity = position.getString("positionAmt").toBigDecimal().abs()
-                    check(entered.signum() > 0 && entered <= planned && (entered - exited).compareTo(liveQuantity) == 0) {
+                    check(entered.signum() > 0 && (entered - exited).compareTo(liveQuantity) == 0) {
                         "$symbol exchange quantity cannot be attributed to campaign entry/exit fills"
                     }
-                    val fillPrice = fill.optString("avgPrice").toDoubleOrNull()
+                    val fillPrice = enteredCost.divide(entered,java.math.MathContext.DECIMAL128).toDouble()
                     val positionPrice = position.optString("entryPrice").toDoubleOrNull()
                     check(fillPrice != null && fillPrice.isFinite() && fillPrice > 0 &&
                         positionPrice != null && positionPrice.isFinite() &&
@@ -1616,8 +1722,13 @@ internal class NativeFuturesCampaignCoordinator(
                             "$symbol stop is exchange-confirmed but original structural stop is missing; manual risk reconciliation required"
                         matchingIntent.put("actual_risk_audit_status", "UNKNOWN_ORIGINAL_STOP")
                     } else {
-                        val reservedPct = matchingIntent.optDouble("risk_pct", Double.NaN)
-                        val riskAudit = assessActualFuturesPositionRisk(
+                        val additions=(0 until persisted.length()).mapNotNull { persisted.optJSONObject(it) }
+                            .filter { it.optString("intent_role")=="ADD_ON" && it.optString("entry_client_id")==matchingIntent.optString("client_id") }
+                        val reservedPct = futuresCampaignReservedRisk(matchingIntent,persisted)
+                        val riskAudit = if(additions.any { it.optString("executed_qty","0").toDoubleOrNull()?.let { q -> q>0 }==true })
+                            assessActualFuturesCampaignRisk(direction,positionQty,positionEntry,
+                                matchingIntent.getString("protective_stop").toDouble(),actualRiskAccount.equityUsdt,reservedPct)
+                        else assessActualFuturesPositionRisk(
                             direction = direction,
                             quantity = positionQty,
                             actualEntryPrice = positionEntry,
@@ -1642,7 +1753,7 @@ internal class NativeFuturesCampaignCoordinator(
                                     other.optString("client_id") == currentClientIdForRiskAudit ||
                                     campaignLifecycleStatus(other) !in ACTIVE_CAMPAIGN_STATUSES
                                 ) return@mapNotNull null
-                                other.optDouble("risk_pct", Double.NaN)
+                                futuresCampaignReservedRisk(other,persisted)
                             }
                             val adjustmentBlocker = actualRiskReservationAdjustmentBlocker(
                                 actualRiskPct = riskAudit.actualAllInRiskPct,
@@ -1933,6 +2044,21 @@ internal class NativeFuturesCampaignCoordinator(
     /** Persist the entry request before any account/order mutation. */
     fun submitPendingEntry(plan: EntryPlan): JSONObject = synchronized(lock) {
         val currentIntents = intents()
+        val isAddition=plan.entryClientId.isNotBlank()
+        val primary=(0 until currentIntents.length()).mapNotNull { currentIntents.optJSONObject(it) }
+            .singleOrNull { it.optString("intent_role","ENTRY")=="ENTRY" && it.optString("client_id")==plan.entryClientId }
+        if ((0 until currentIntents.length()).any { currentIntents.optJSONObject(it)?.optString("client_id")==plan.clientId })
+            return@synchronized safePreflightRejection("Formation client id already admitted; no duplicate submission")
+        if (isAddition && (primary==null || campaignLifecycleStatus(primary)!="OPEN_PROTECTED" ||
+            primary.optString("symbol")!=plan.symbol || primary.optString("direction")!=plan.direction.name ||
+            primary.optString("strategy_profile",williamsTc2Profile)!=plan.strategyProfile ||
+            plan.leverage!=primary.optInt("requested_leverage") ||
+            plan.protectiveStop.toBigDecimalOrNull()!=primary.optString("protective_stop").toBigDecimalOrNull() ||
+            plan.signalBarTimeMs<=primary.optLong("signal_bar_time_ms",0L) ||
+            (0 until currentIntents.length()).mapNotNull { currentIntents.optJSONObject(it) }.any {
+                it.optString("intent_role")=="ADD_ON" && it.optString("entry_client_id")==plan.entryClientId &&
+                    exchangeOrderStatus(it) !in ENTRY_ORDER_TERMINAL_STATUSES }))
+            return@synchronized safePreflightRejection("Addition requires the same protected campaign, stop, leverage and a new formation")
         val coordinatorCanAdmit = state == State.READY || state == State.OPEN_PROTECTED ||
             (state == State.ENTRY_PENDING &&
                 confirmedPendingEntriesAllowConcurrentAdmission(currentIntents))
@@ -1996,7 +2122,7 @@ internal class NativeFuturesCampaignCoordinator(
         val leverageBlocker = try {
             futuresLeverageBlocker(
                 preflightAdapter.leverageBrackets(plan.symbol), plan.symbol, plan.leverage,
-                riskCheck.notionalUsdt, plan.entryPrice.toDouble(), plan.protectiveStop.toDouble()
+                riskCheck.notionalUsdt+(if(isAddition) primary!!.getString("confirmed_position_qty").toDouble()*plan.entryPrice.toDouble() else 0.0), plan.entryPrice.toDouble(), plan.protectiveStop.toDouble()
             )
         } catch (failure: Exception) {
             "Futures leverage limits unavailable: " + (failure.message ?: failure.javaClass.simpleName)
@@ -2058,26 +2184,34 @@ internal class NativeFuturesCampaignCoordinator(
             intents = currentIntents,
             maxPositions = allowedSymbols.size
         )
-        if (slotBlocker != null) return@synchronized safePreflightRejection(slotBlocker)
+        if (!isAddition && slotBlocker != null) return@synchronized safePreflightRejection(slotBlocker)
+        if (isAddition) {
+            val live=openPositionRows[plan.symbol] ?: return@synchronized safePreflightRejection("Addition requires a live owned position")
+            if (live.optString("positionAmt").toBigDecimal().abs().compareTo(primary!!.getString("confirmed_position_qty").toBigDecimal())!=0)
+                return@synchronized safePreflightRejection("Position changed since ownership reconciliation")
+        }
 
         // Sum active intent risk conservatively. Missing/invalid reservations cannot
         // silently free aggregate portfolio capacity.
-        val reservedRiskPcts = (0 until currentIntents.length()).mapNotNull { i ->
-            val intent = currentIntents.optJSONObject(i)
-                ?: throw IllegalStateException("Persisted Futures intent is malformed")
-            if (intent.optString("intent_role", "ENTRY") != "ENTRY" ||
-                !isEntryCampaignReserved(intent)
-            ) {
-                null
-            } else {
-                intent.optDouble("risk_pct", Double.NaN)
-            }
+        val reservedRiskPcts=(0 until currentIntents.length()).mapNotNull { i ->
+            val row=currentIntents.optJSONObject(i) ?: error("Malformed Futures risk intent")
+            if(row.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(row)) futuresCampaignReservedRisk(row,currentIntents) else null
         }
         val riskBlocker = futuresPortfolioRiskBlocker(plan.riskPct, reservedRiskPcts)
         if (riskBlocker != null) return@synchronized safePreflightRejection(riskBlocker)
 
+        if (plan.kind==EntryKind.MARKET) {
+            val reason=williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,System.currentTimeMillis(),
+                plan.referenceClose,preflightAdapter.markPrice(plan.symbol))
+            if (reason!=null) return@synchronized safePreflightRejection(reason)
+        }
         val intent = JSONObject()
-            .put("intent_role", "ENTRY")
+            .put("intent_role", if (isAddition) "ADD_ON" else "ENTRY")
+            .put("entry_client_id",plan.entryClientId)
+            .put("strategy_profile",plan.strategyProfile)
+            .put("execution_semantics",plan.executionSemantics)
+            .put("reference_close",plan.referenceClose)
+            .put("setup_context",plan.setupContext)
             .put("strategy_ownership_verified", true)
             .put("symbol", plan.symbol)
             .put("direction", plan.direction.name)
@@ -2119,9 +2253,11 @@ internal class NativeFuturesCampaignCoordinator(
         try {
             adapter.serverTime()
             adapter.requireOneWayMode()
-            val leverageConfirmation = adapter.ensureIsolatedLeverage(plan.symbol, plan.leverage)
+            val leverageConfirmation = if (!isAddition) adapter.ensureIsolatedLeverage(plan.symbol, plan.leverage)
+                else adapter.requireIsolatedLeverage(plan.symbol,plan.leverage)
             val confirmedNotionalCap = leverageConfirmation.getString("maxNotionalValue").toDouble()
-            val worstNotional = riskCheck.notionalUsdt * maxOf(1.0, plan.protectiveStop.toDouble() / plan.entryPrice.toDouble())
+            val plannedNotional=riskCheck.notionalUsdt+(if(isAddition) primary!!.getString("confirmed_position_qty").toDouble()*plan.entryPrice.toDouble() else 0.0)
+            val worstNotional = plannedNotional * maxOf(1.0, plan.protectiveStop.toDouble() / plan.entryPrice.toDouble())
             check(confirmedNotionalCap.isFinite() && worstNotional < confirmedNotionalCap) {
                 "FUTURES_LEVERAGE_NOTIONAL_CAP: confirmed exchange limit is below planned exposure"
             }
@@ -2130,6 +2266,11 @@ internal class NativeFuturesCampaignCoordinator(
             saveIntents(currentIntents)
             orderSubmissionAttempted = true
             val result = when (plan.kind) {
+                EntryKind.MARKET -> {
+                    check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,System.currentTimeMillis(),
+                        plan.referenceClose,adapter.markPrice(plan.symbol))==null) { "NTD close-event expired or moved before mutation" }
+                    adapter.newOrder(plan.symbol,if (plan.direction==Direction.LONG) "BUY" else "SELL",plan.quantity,false,plan.clientId)
+                }
                 EntryKind.LIMIT -> adapter.placeLimitOrder(
                     symbol = plan.symbol,
                     side = if (plan.direction == Direction.LONG) "BUY" else "SELL",
@@ -2156,6 +2297,7 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("campaign_status", "ENTRY_PENDING")
                 .put("exchange_order_id", result.optString("orderId", result.optString("algoId", "")))
                 .put("submitted_at_ms", System.currentTimeMillis())
+                .put("executed_qty",result.optString("executedQty","0"))
             saveIntents(currentIntents)
             lastBlocker = "entry pending exchange fill and confirmed protective stop"
             JSONObject()
@@ -2287,7 +2429,7 @@ internal class NativeFuturesCampaignCoordinator(
             }
             for (i in 0 until all.length()) {
                 val intent = all.optJSONObject(i) ?: continue
-                if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
+                if (intent.optString("intent_role", "ENTRY") !in setOf("ENTRY","ADD_ON")) continue
                 val symbol = intent.optString("symbol")
                 if (onlySymbol != null && !symbol.equals(onlySymbol, true)) continue
                 val status = exchangeOrderStatus(intent)
@@ -2299,7 +2441,7 @@ internal class NativeFuturesCampaignCoordinator(
                     // A previous cancellation may have reached Binance before process death.
                     // Query the exchange; never issue the same cancel again blindly.
                     val observed = when (intent.optString("kind")) {
-                        EntryKind.LIMIT.name -> runCatching { adapter.order(symbol, clientId) }.getOrNull()
+                        EntryKind.LIMIT.name, EntryKind.MARKET.name -> runCatching { adapter.order(symbol, clientId) }.getOrNull()
                         EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name ->
                             runCatching { adapter.queryAlgoOrder(symbol, clientId) }.getOrNull()
                         else -> throw IllegalStateException("Unknown pending-entry type; cannot reconcile cancellation")
@@ -2330,14 +2472,14 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("cancel_attempt_at_ms", System.currentTimeMillis())
                 saveIntents(all)
                 val result = when (intent.optString("kind")) {
-                    EntryKind.LIMIT.name -> adapter.cancelOrder(symbol, clientId)
+                    EntryKind.LIMIT.name, EntryKind.MARKET.name -> adapter.cancelOrder(symbol, clientId)
                     EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name -> adapter.cancelAlgoOrder(symbol, clientId)
                     else -> throw IllegalStateException("Unknown pending-entry type; cannot cancel safely")
                 }
                 // A successful DELETE response is not enough to declare cancellation:
                 // read back the exact client id and require a terminal exchange status.
                 val confirmed = when (intent.optString("kind")) {
-                    EntryKind.LIMIT.name -> adapter.order(symbol, clientId)
+                    EntryKind.LIMIT.name, EntryKind.MARKET.name -> adapter.order(symbol, clientId)
                     EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name -> adapter.queryAlgoOrder(symbol, clientId)
                     else -> throw IllegalStateException("Unknown pending-entry type; cannot confirm cancellation")
                 }
@@ -2556,6 +2698,13 @@ internal class NativeFuturesCampaignCoordinator(
         require(quantity.toBigDecimalOrNull()?.signum() == 1)
         require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
         val intents = intents()
+        if ((0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
+                it.optString("intent_role")=="ADD_ON" && it.optString("symbol")==symbol && exchangeOrderStatus(it) in activeStatuses }) {
+            val cancelled=cancelPendingEntries("POSITION_EXIT_CANCEL_ADDITIONS",symbol)
+            state=State.RECONCILE_REQUIRED
+            return@synchronized JSONObject().put("ok",false).put("blocker","Addition canceled before exit; reconcile possible racing fill")
+                .put("cancellation",cancelled)
+        }
         val unresolvedExit = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }
             .lastOrNull {
                 it.optString("intent_role") == "EXIT" &&
@@ -2915,10 +3064,25 @@ internal class NativeFuturesCampaignCoordinator(
             .put("position_sides", JSONArray().put("LONG").put("SHORT"))
     }
 
+    fun saveManagementState(symbol:String, clientId:String, state:JSONObject) = synchronized(lock) {
+        val all=intents()
+        val owner=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.singleOrNull {
+            it.optString("client_id")==clientId && it.optString("symbol")==symbol && it.optString("intent_role","ENTRY")=="ENTRY"
+        } ?: error("Management state has no campaign owner")
+        owner.put("edition_management",JSONObject(state.toString()))
+        saveIntents(all)
+    }
+
     private fun validatePlan(plan: EntryPlan) {
         require(plan.symbol.uppercase(Locale.US) in allowedSymbols) {
             "Symbol is outside the approved Futures universe"
         }
+        require(plan.strategyProfile in williamsEditionProfiles) { "Unknown Williams edition" }
+        require(plan.entryClientId.isNotBlank() || plan.strategyProfile!=williamsNtdProfile ||
+            plan.signalType.removePrefix("SHORT_")=="FRACTAL") { "NTD cycle must start with an external fractal" }
+        require(plan.kind!=EntryKind.MARKET || (plan.entryClientId.isNotBlank() &&
+            plan.strategyProfile==williamsNtdProfile && plan.signalType.removePrefix("SHORT_")=="ZONE_ADD_ON" &&
+            plan.executionSemantics=="MARKET_ON_CLOSE")) { "Market exposure is only a verified NTD zone addition" }
         require(plan.quantity.toBigDecimalOrNull()?.signum() == 1) { "Quantity must be positive" }
         val price = plan.entryPrice.toBigDecimalOrNull()
             ?: throw IllegalArgumentException("Entry price is invalid")

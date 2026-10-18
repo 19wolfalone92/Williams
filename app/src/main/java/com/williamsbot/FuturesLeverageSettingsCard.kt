@@ -35,21 +35,40 @@ internal fun FuturesLeverageSettingsCard(status: Status, onSave: (JSONObject) ->
     var overrides by remember(status.futuresLeverageSettingsJson) {
         mutableStateOf(loaded?.symbolLeverages?.mapValues { it.value.toString() }.orEmpty())
     }
+    var profile by remember(status.strategyProfile) { mutableStateOf(status.strategyProfile) }
+    var profilesExpanded by remember { mutableStateOf(false) }
     var selectedSymbol by remember { mutableStateOf("BTCUSDT") }
     var symbolsExpanded by remember { mutableStateOf(false) }
     val payload = runCatching {
         FuturesLeverageSettings(
             parseFuturesLeverage(defaultText),
             overrides.filterValues { it.isNotBlank() }.mapValues { parseFuturesLeverage(it.value) }
-        ).toJson()
+        ).toJson().put("strategy_profile",profile)
     }.getOrNull()
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Плечо Futures", style = MaterialTheme.typography.titleMedium)
+            Text("Стратегия и плечо Futures", style = MaterialTheme.typography.titleMedium)
             Text("Общее плечо и отдельное для каждой пары • LONG и SHORT • ISOLATED",
                 style = MaterialTheme.typography.bodySmall)
             Text("Плечо фиксируется при подготовке входа. Binance подтвердит его перед ордером; лимит биржи, маржа и структурный стоп могут заблокировать вход.",
                 style = MaterialTheme.typography.bodySmall)
+            Box {
+                OutlinedButton(onClick={ profilesExpanded=true }) { Text("Книга: "+when(profile) {
+                    williamsNtdProfile -> "Новые измерения"
+                    williamsCourseProfile -> "Profitunity Course"
+                    else -> "Торговый хаос 2"
+                }) }
+                DropdownMenu(expanded=profilesExpanded,onDismissRequest={ profilesExpanded=false }) {
+                    williamsEditionProfiles.forEach { edition ->
+                        DropdownMenuItem(text={ Text(when(edition) {
+                            williamsNtdProfile -> "NTD · пять измерений"
+                            williamsCourseProfile -> "Course · Hump, Thumb, Air Bag"
+                            else -> "TC2 · три мудреца"
+                        }) },onClick={ profile=edition;profilesExpanded=false })
+                    }
+                }
+            }
+            Text("Книга меняется после сверки Binance, без позиций и ожидающих входов. Стопы открытой кампании следуют выбранной при входе книге.",style=MaterialTheme.typography.bodySmall)
             OutlinedTextField(
                 value = defaultText, onValueChange = { defaultText = it },
                 label = { Text("Общее плечо, 1–125×") }, singleLine = true,
@@ -78,7 +97,7 @@ internal fun FuturesLeverageSettingsCard(status: Status, onSave: (JSONObject) ->
             Text("Риск на вход и общий лимит риска сохраняются. Настройка применяется к следующим входам.",
                 style = MaterialTheme.typography.bodySmall)
             Button(onClick = { payload?.let(onSave) }, enabled = loaded != null && payload != null,
-                modifier = Modifier.fillMaxWidth()) { Text("СОХРАНИТЬ ПЛЕЧО") }
+                modifier = Modifier.fillMaxWidth()) { Text("СОХРАНИТЬ НАСТРОЙКИ") }
         }
     }
 }

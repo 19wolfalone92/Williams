@@ -278,6 +278,7 @@ data class Status(
     val allowShort: Boolean = false,
     val futuresLeverage: Int = 0,
     val futuresLeverageSettingsJson: String = "",
+    val strategyProfile:String=williamsTc2Profile,
     val futuresMarginType: String = "UNKNOWN",
     val futuresForceOneWay: Boolean = false,
     val scanDurationMs: Long = 0L,
@@ -4096,6 +4097,7 @@ internal fun parseStatus(json: JSONObject): Status {
             json.optBoolean("allow_short", false),
         futuresLeverage =
             json.optInt("futures_leverage", 0),
+        strategyProfile=json.optString("strategy_profile",williamsTc2Profile),
         futuresLeverageSettingsJson =
             json.optJSONObject("futures_leverage_settings")?.toString().orEmpty(),
         futuresMarginType =

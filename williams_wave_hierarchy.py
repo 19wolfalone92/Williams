@@ -22,7 +22,7 @@ def wave_bars_from_dataframe(frame):
     import pandas as pd
     bars = []
     for index, row in frame.iterrows():
-        stamp = row.get("open_time", index)
+        stamp = row.get("open_time_ms", row.get("open_time", index))
         if isinstance(stamp, pd.Timestamp):
             t = int(stamp.timestamp() * 1000)
         elif isinstance(stamp, (int, float)):

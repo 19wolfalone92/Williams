@@ -196,6 +196,11 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             if (failure !is FuturesHttpException || failure.exchangeCode != -4046) throw failure
         }
         setLeverage(symbol, leverage)
+        return requireIsolatedLeverage(symbol,leverage)
+    }
+
+    /** Live additions verify the pinned setting without changing account leverage. */
+    fun requireIsolatedLeverage(symbol:String,leverage:Int):JSONObject {
         val confirmed = symbolConfiguration(symbol)
         check(confirmed.optString("marginType").equals("ISOLATED", ignoreCase = true) &&
             confirmed.opt("leverage")?.toString() == leverage.toString()) {

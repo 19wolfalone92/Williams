@@ -510,6 +510,8 @@ def calculate_indicators(df, cfg):
     x["mfi_volume_proxy"] = mfi_volume
     x["mfi_proxy"] = (x["high"] - x["low"]) / mfi_volume.replace(0, np.nan)
     x["volume_up"] = (mfi_volume > mfi_volume.shift(1)).fillna(False).astype(bool)
+    # Consolidate indicator blocks before the derived MFI/profitunity columns.
+    x = x.copy()
     x["volume_down"] = (mfi_volume < mfi_volume.shift(1)).fillna(False).astype(bool)
     x["mfi_up"] = (x["mfi_proxy"] > x["mfi_proxy"].shift(1)).fillna(False).astype(bool)
     x["mfi_down"] = (x["mfi_proxy"] < x["mfi_proxy"].shift(1)).fillna(False).astype(bool)

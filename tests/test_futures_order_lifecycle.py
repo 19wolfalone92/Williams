@@ -24,6 +24,7 @@ class DemoExchangeModel:
         self.liquidation_price = "MODEL"
         self.close_fraction = 1.0
         self.close_status = "FILLED"
+        self.market_add_timeout_after_fill = False
 
     def request(self, method, path, params=None, signed=False):
         p = params or {}
@@ -79,6 +80,17 @@ class DemoExchangeModel:
         if path.endswith("/order"):
             if method == "POST":
                 oid = len(self.orders) + 100
+                if p.get("reduceOnly")!="true":
+                    assert p["type"]=="MARKET"
+                    assert self.amount!=0 and p["side"]==("BUY" if self.amount>0 else "SELL")
+                    quantity=float(p["quantity"]);old=abs(self.amount)
+                    self.entry_price=(self.entry_price*old+self.price*quantity)/(old+quantity)
+                    self.amount+=(quantity if self.amount>0 else -quantity)
+                    self.orders[oid]={**p,"orderId":oid,"clientOrderId":p["newClientOrderId"],"status":"FILLED",
+                        "executedQty":str(quantity),"origQty":str(quantity),"avgPrice":str(self.price)}
+                    if self.market_add_timeout_after_fill:
+                        raise BinanceAPIError("simulated response lost AFTER the MARKET fill")
+                    return dict(self.orders[oid])
                 quantity = abs(self.amount)
                 assert p["reduceOnly"] == "true"
                 assert p["side"] == ("SELL" if self.amount > 0 else "BUY")
@@ -114,18 +126,21 @@ class DemoExchangeModel:
 
 @pytest.fixture
 def armed_runtime(monkeypatch, tmp_path, request):
-    side = getattr(request, "param", "BUY")
+    option=getattr(request,"param","BUY")
+    side=option["side"] if isinstance(option,dict) else option
+    profile=option.get("profile","TC2_THREE_WISE_MEN") if isinstance(option,dict) else "TC2_THREE_WISE_MEN"
     monkeypatch.setenv("WILLIAMS_DB_PATH", str(tmp_path / "deep-lifecycle.sqlite3"))
     monkeypatch.setenv("DRY_RUN", "false")
     monkeypatch.setenv("FUTURES_LEVERAGE", "2")
     monkeypatch.setenv("FUTURES_SYMBOL_LEVERAGES", "")
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE",profile)
     bot = FuturesWilliamsRuntime("test-key", "test-secret", testnet=True)
     exchange = DemoExchangeModel()
     monkeypatch.setattr(bot.client, "_request", exchange.request)
     now = int(time.time() * 1000)
-    signal = SignalSpec.new(symbol="BTCUSDT", side=side, signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY,
-        timeframe="1h", signal_bar_time_ms=now - 1000, trigger_price=101 if side == "BUY" else 99,
-        protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000)
+    signal = SignalSpec.new(symbol="BTCUSDT", side=side, signal_type=SignalType.FRACTAL if profile=="NTD_FIVE_DIMENSIONS" else SignalType.REVERSAL, role=SignalRole.ENTRY,
+        timeframe="1h", signal_bar_time_ms=now - (7_200_000 if profile=="NTD_FIVE_DIMENSIONS" else 1000), trigger_price=101 if side == "BUY" else 99,
+        protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000,strategy_profile=profile)
     candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
     armed = bot._arm_entry(candidate)
     bot.preflight_report = {"ready": True}
@@ -381,3 +396,37 @@ def test_leverage_failure_never_sends_an_entry(monkeypatch, tmp_path, failure, s
     finally:
         bot.client.session.close()
         bot.db.conn.close()
+
+
+@pytest.mark.parametrize("armed_runtime",[{"side":"BUY","profile":"NTD_FIVE_DIMENSIONS"},{"side":"SELL","profile":"NTD_FIVE_DIMENSIONS"}],indirect=True)
+@pytest.mark.parametrize("lost_response",[False,True])
+def test_ntd_close_event_uses_one_market_order_and_recovers_its_aggregate_fill(armed_runtime,monkeypatch,lost_response):
+    bot,exchange,_=armed_runtime
+    exchange.fill_entry();bot._reconcile_pending()
+    campaign=bot.engine.load_campaign(bot.db.open_campaigns()[0]["campaign_id"])
+    before=abs(exchange.amount)
+    # Advance the exchange/model clock to the next real hourly boundary after
+    # the original position exists; this is not a signal predating its entry.
+    closed_at=(int(time.time()*1000)//3_600_000+1)*3_600_000
+    monkeypatch.setattr(time,"time",lambda:(closed_at+1000)/1000)
+    monkeypatch.setattr(bot,"_daily_entry_guard",lambda:(True,"MODEL_TRADING_SESSION"))
+    exchange.price=101.1 if campaign.side=="BUY" else 98.9
+    exchange.market_add_timeout_after_fill=lost_response
+    signal=SignalSpec.new(symbol="BTCUSDT",side=campaign.side,signal_type=SignalType.ZONE_ADD_ON,
+        role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=closed_at-3_600_000,
+        trigger_price=exchange.price,protective_reference=campaign.current_stop_price,
+        execution_semantics="MARKET_ON_CLOSE",strategy_profile="NTD_FIVE_DIMENSIONS",expires_at_ms=closed_at+90_000)
+    try:bot._arm_add_on(campaign,signal)
+    except (RuntimeError,BinanceAPIError):
+        assert lost_response
+    bot._reconcile_pending()
+    updated=bot.engine.load_campaign(campaign.campaign_id)
+    assert abs(exchange.amount)>before
+    assert updated.position_qty==pytest.approx(abs(exchange.amount)) and updated.additions==1
+    assert not bot._pending_entries()
+    market=[p for method,path,p in exchange.calls if method=="POST" and path.endswith("/order") and p.get("reduceOnly")!="true"]
+    assert len(market)==1 and market[0]["type"]=="MARKET" and "stopPrice" not in market[0]
+    assert any(a.get("closePosition")=="true" and a["algoStatus"]=="NEW" for a in exchange.algos.values())
+    with pytest.raises(RuntimeError,match="already admitted"):
+        bot._arm_add_on(updated,signal)
+    assert len([p for method,path,p in exchange.calls if method=="POST" and path.endswith("/order") and p.get("reduceOnly")!="true"])==1
