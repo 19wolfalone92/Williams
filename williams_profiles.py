@@ -30,11 +30,11 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
         kwargs=dict(side=side,timeframe=timeframe,tick_size=tick_size)
         for detector in (extract_ntd_fractal_signal_specs,extract_ntd_ao_signal_specs,extract_ntd_ac_signal_specs,extract_ntd_zone_add_on_specs):
             work=ind
-            if detector==extract_ntd_zone_add_on_specs:
-                work=ind.copy()
-                work["long_fractal_outside" if side=="LONG" else "short_fractal_outside"]=True
-                # This emits continuation evidence only. Durable fractal-cycle
-                # ownership is required by both Futures execution coordinators.
+            # Never fabricate the independently calculated confirmed-fractal
+            # gate to make AO/AC zone additions appear admissible. The
+            # detector consumes the REAL long/short_fractal_outside field
+            # from strategy.py. Missing or false evidence fails closed,
+            # independently of exchange campaign ownership and risk checks.
             if exit_mode and detector==extract_ntd_fractal_signal_specs:
                 work=ind.copy()
                 # An opposing exit signal is allowed on the position's side of
