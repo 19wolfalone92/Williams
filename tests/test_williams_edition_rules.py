@@ -92,3 +92,51 @@ def test_an_outside_fractal_is_not_deleted_but_cannot_establish_two_ordered_turn
     (90_001,100,"CLOSE_EVENT_EXPIRED"),(10,101,"CLOSE_EVENT_SLIPPAGE_LIMIT")])
 def test_close_event_requires_a_real_just_closed_bar_and_bounded_actual_market_price(age,price,reason):
     assert market_on_close_reason(1000,3_600_000,3_601_000+age,100,price)==reason
+
+
+@pytest.mark.parametrize("short",[False,True])
+def test_fast_lips_selection_applies_only_on_next_completed_bar_and_survives_restart(short):
+    from williams_edition_rules import ntd_management_plan
+    series=bars([91,93,95,97,99,101],[89,91,93,95,97,99])
+    teeth=[80]*6;lips=[98,99,100,102,104,105];osc=[0]*6
+    if short:
+        series=mirror(series);teeth=[300-v for v in teeth];lips=[300-v for v in lips]
+    side="SHORT" if short else "LONG"
+    first=ntd_management_plan(side,series,teeth,lips,osc,osc,.1,1)
+    assert first["exit_reason"]==""
+    assert first["state"]["lips_selected_at"]==series[-1].t
+    same=ntd_management_plan(side,series,teeth,lips,osc,osc,.1,1,first["state"])
+    assert same["exit_reason"]==""
+    nxt=bars([103],[101])[0]
+    nxt=replace(nxt,t=series[-1].t+3_600_000)
+    if short:nxt=mirror([nxt])[0]
+    second=ntd_management_plan(side,series+[nxt],teeth+[teeth[-1]],lips+[194 if short else 106],osc+[0],osc+[0],.1,1,first["state"])
+    assert second["exit_reason"]=="LIPS_CLOSE_EXIT"
+
+
+def test_five_zone_bars_keep_one_bar_protection_after_colour_changes():
+    from williams_edition_rules import ntd_management_plan
+    series=bars([101,102,103,104,105,106],[99,100,101,102,103,104])
+    result=ntd_management_plan("LONG",series,[80]*6,[90]*6,list(range(6)),list(range(6)),.1,1)
+    assert result["stop"]==pytest.approx(103.9)
+    series.append(replace(series[-1],t=series[-1].t+3_600_000,h=107,l=105,o=106,c=106))
+    result=ntd_management_plan("LONG",series,[80]*7,[90]*7,list(range(6))+[4],list(range(6))+[4],.1,1,result["state"])
+    assert result["stop"]==pytest.approx(104.9)
+
+
+def test_python_consumes_the_same_manual_book_cases_as_android():
+    import json
+    from pathlib import Path
+    cases=json.loads((Path(__file__).parents[1]/"app/src/test/resources/williams_editions_contract.json").read_text())["cases"]
+    for c in cases:
+        series=[WaveBar(*r) for r in c["bars"]]
+        if c["operation"]=="AIRBAG":
+            assert course_airbag_stop(c["side"],series,c["tick"])==pytest.approx(c["expected_stop"])
+            continue
+        if c["operation"]=="BALANCE":
+            result=ntd_balance_line_setup(c["side"],series,*[c[k] for k in ("jaw","teeth","lips","ao","ac")],c["tick"])
+        else:
+            result=(course_thumb_setup if c["operation"]=="THUMB" else course_hump_setup)(c["side"],series,c["tick"])
+        assert result is not None
+        assert result.trigger==pytest.approx(c["expected_trigger"])
+        assert result.stop==pytest.approx(c["expected_stop"])

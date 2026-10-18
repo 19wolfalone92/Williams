@@ -93,12 +93,12 @@ def hypothesis(frame,direction,label,prices,times,leg_start,low,high):
 
 
 def correction_report(mirror=False):
-    d = hypothesis("1d","DOWN","W3",[260,210,240],[5,20,50],50,50,280)
-    senior = hypothesis("6h","DOWN","W4",[220,180,200,100,130],[80,100,200,300,320],300,95,180)
+    d = hypothesis("1d","DOWN","W2",[260,210,240],[5,20,50],50,50,280)
+    senior = hypothesis("6h","DOWN","W3",[220,180,200,100],[80,100,200,300],300,95,180)
     senior.w4_zero = "MINIMUM_ONLY"
     senior.momentum_shift = True
-    decision = hypothesis("1h","UP","W3",[110,145,130],[310,320,330],330,125,165)
-    junior = hypothesis("15m","UP","W3",[131,143,137],[331,334,336],336,136,150)
+    decision = hypothesis("1h","UP","W2",[110,145,130],[310,320,330],330,125,165)
+    junior = hypothesis("15m","UP","W2",[131,143,137],[331,334,336],336,136,150)
     scenarios = [d,senior,decision,junior]
     if mirror:
         for h in scenarios:
@@ -112,14 +112,14 @@ def correction_report(mirror=False):
 def test_parent_requires_time_and_price_containment_and_nearest_degree():
     report = correction_report()
     links = {(e["parent"],e["child"]) for e in report.links}
-    assert links == {("1d:W3","6h:W4"),("6h:W4","1h:W3"),("1h:W3","15m:W3")}
+    assert links == {("1d:W2","6h:W3"),("6h:W3","1h:W2"),("1h:W2","15m:W2")}
     # A stale child beginning before the active parent leg is not its subwave.
     report.scenarios[2].anchors[0] = replace(report.scenarios[2].anchors[0],extreme_at=290*HOUR)
-    assert not any(e["parent"]=="6h:W4" and e["child"]=="1h:W3" for e in link_wave_hypotheses(report.scenarios))
+    assert not any(e["parent"]=="6h:W3" and e["child"]=="1h:W2" for e in link_wave_hypotheses(report.scenarios))
     # Same timeframe numbers and direction cannot override a price contradiction.
     report = correction_report()
     report.scenarios[2].anchors[1] = replace(report.scenarios[2].anchors[1],price=300)
-    assert not any(e["parent"]=="6h:W4" and e["child"]=="1h:W3" for e in link_wave_hypotheses(report.scenarios))
+    assert not any(e["parent"]=="6h:W3" and e["child"]=="1h:W2" for e in link_wave_hypotheses(report.scenarios))
 
 
 @pytest.mark.parametrize("mirror,side,mark", [(False,"LONG",150),(True,"SHORT",250)])
@@ -127,7 +127,7 @@ def test_contained_correction_mode_is_bidirectional_and_has_structural_price_bou
     proof = correction_entry_context(correction_report(mirror),side,339*HOUR,"REVERSAL")
     assert proof["allowed"] is True
     assert proof["mode"] == "CORRECTION"
-    assert proof["parent_scenario_id"] == "6h:W4"
+    assert proof["parent_scenario_id"] == "6h:W3"
     assert correction_price_allowed(proof,mark)
     assert not correction_price_allowed(proof,proof["parent_floor"])
     assert not correction_price_allowed(proof,proof["parent_ceiling"])
@@ -161,11 +161,11 @@ def test_wave_number_or_zero_cross_alone_never_authorizes_a_correction(defect):
     if defect=="zero": r.scenarios[1].w4_zero="NEAR_ZERO_UNCONFIRMED"
     if defect=="history": r.frame_errors["15m"]="STALE"
     if defect=="conflict":
-        h = deepcopy(r.scenarios[1]);h.scenario_id="competing";h.label="W3";h.w4_zero="NO_ZERO_CROSS";r.scenarios.append(h)
+        h = deepcopy(r.scenarios[1]);h.scenario_id="competing";h.label="W2";h.anchors=h.anchors[:3];h.w4_zero="NO_ZERO_CROSS";r.scenarios.append(h)
     if defect=="future_signal": signal_at=340*HOUR
     if defect=="stale_signal": signal_at=300*HOUR
     if defect=="no_signal": kind="AO_DIVERGENCE"
-    if defect=="no_junior": r.links=[e for e in r.links if e["child"]!="15m:W3"]
+    if defect=="no_junior": r.links=[e for e in r.links if e["child"]!="15m:W2"]
     assert not correction_entry_context(r,"LONG",signal_at,kind)["allowed"]
 
 
@@ -219,7 +219,7 @@ def test_shared_android_wave_contract_fixture():
 
 
 @pytest.mark.parametrize("mirror,side", [(False,"LONG"),(True,"SHORT")])
-def test_four_frame_history_does_not_promote_w3_to_w4_and_false_approve_correction(mirror,side):
+def test_four_frame_history_distinguishes_completed_w3_from_active_w4_before_admission(mirror,side):
     """No hand-constructed scenarios/links or mocked indicator/signal detectors.
 
     The same nested synthetic OHLC history is consumed by Android. Higher
@@ -247,9 +247,16 @@ def test_four_frame_history_does_not_promote_w3_to_w4_and_false_approve_correcti
     expected_trigger=payload["mirror_sum"]-payload["long_trigger"] if mirror else payload["long_trigger"]
     assert signal.trigger_price==pytest.approx(expected_trigger)
     proof=correction_entry_context(report,side,signal.signal_bar_time_ms,signal.signal_type.value)
-    # Correct counting is not optional: the former 4-pivot "W4" was only
-    # W3, so a countertrend approval here had been a false positive.
-    assert not proof["allowed"]
+    # Four pivots complete W3. The subsequent contained price is the ACTIVE
+    # W4. Neither a completed W4 nor a wave number alone may authorize a trade.
+    assert proof["allowed"]
+    parent=next(s for s in report.scenarios if s.scenario_id==proof["parent_scenario_id"])
+    assert parent.label=="W3" and parent.active_label=="W4"
+    assert len(parent.anchors)==4 and parent.leg_start==parent.anchors[-1].extreme_at
+    assert parent.w4_zero=="MINIMUM_ONLY" and parent.momentum_shift
+    assert correction_price_allowed(proof,expected_trigger)
+    incomplete=deepcopy(report);incomplete.links=[e for e in incomplete.links if e["parent"]!=parent.scenario_id]
+    assert not correction_entry_context(incomplete,side,signal.signal_bar_time_ms,signal.signal_type.value)["allowed"]
     assert not any(s.frame=="6h" and s.label=="W4" and len(s.anchors)<5
                    for s in report.scenarios if s.status=="PROVISIONAL")
     assert any(s.frame=="6h" and s.label=="W3" for s in report.scenarios)

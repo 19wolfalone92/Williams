@@ -123,8 +123,8 @@ def ntd_balance_line_setup(side, bars, jaw, teeth, lips, ao, ac, tick, require_m
     window=bars[max(0,base-4):base+1]
     stop=min(b.l for b in window)-tick if sign==1 else max(b.h for b in window)+tick
     if stop<=0 or sign*(trigger-stop)<=0:return None
-    return EditionSetup("BALANCE_LINE",side,base,trigger,stop,stop,
-        {"base_index":base,"record_indices":records,"required_extremes":needed,
+    return EditionSetup("BALANCE_LINE",side,n-1,trigger,stop,stop,
+        {"formation_key":f"{bars[base].t}:{bars[target].t}:{needed}","base_index":base,"record_indices":records,"required_extremes":needed,
          "adverse_zone":adverse,"signal_index":target})
 
 

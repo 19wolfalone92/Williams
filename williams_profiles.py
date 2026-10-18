@@ -23,6 +23,7 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
         detector=extract_long_signal_specs if side=="LONG" else extract_short_signal_specs
         return detector(symbol,ind,timeframe=timeframe,tick_size=tick_size,**tc2_kwargs)
     bars=wave_bars_from_dataframe(ind)
+    if timeframe not in FRAME_MS or any(b.t-a.t!=FRAME_MS[timeframe] for a,b in zip(bars,bars[1:])):return []
     specs=[]
     setups=[]
     if profile==NTD:
@@ -71,6 +72,8 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
             protective_reference=setup.stop,invalidation_price=setup.invalidation,source_candle_index=setup.known_index,
             expires_at_ms=when+5*FRAME_MS[timeframe],strategy_profile=profile,setup_context=setup.context,
             reason=profile+": "+setup.kind+"; confirmed closed-bar formation"))
+    specs=[replace(s,signal_id=f"{s.symbol}:{timeframe}:{s.side}:BALANCE_LINE:{s.setup_context['formation_key']}")
+        if s.signal_type==SignalType.BALANCE_LINE else s for s in specs]
     # A single-tick buffer also protects AO/AC/fractal signal-bar extrema.
     specs=[replace(s,protective_reference=s.protective_reference+(-tick_size if side=="LONG" else tick_size))
         if s.signal_type not in {SignalType.BALANCE_LINE,SignalType.COURSE_HUMP,SignalType.COURSE_THUMB,SignalType.COURSE_SQUAT} else s for s in specs]

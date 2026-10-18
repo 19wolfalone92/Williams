@@ -86,8 +86,8 @@ internal fun williamsNtdBalanceLineSetup(
     val window=bars.subList(maxOf(0,base-4),base+1)
     val stop=if (sign==1) window.minOf { it.l }-tick else window.maxOf { it.h }+tick
     if (stop<=0 || sign*(trigger-stop)<=0) return null
-    return WilliamsEditionSetup("BALANCE_LINE",side,base,trigger,stop,stop,JSONObject()
-        .put("base_index",base).put("record_indices",JSONArray(records)).put("required_extremes",required)
+    return WilliamsEditionSetup("BALANCE_LINE",side,n-1,trigger,stop,stop,JSONObject()
+        .put("formation_key","${bars[base].t}:${bars[target].t}:$required").put("base_index",base).put("record_indices",JSONArray(records)).put("required_extremes",required)
         .put("adverse_zone",adverse).put("signal_index",target),role="ADD_ON")
 }
 

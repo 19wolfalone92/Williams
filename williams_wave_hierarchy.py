@@ -76,8 +76,19 @@ class WaveHypothesis:
     target_zone: bool = False
     alternatives: list[str] = field(default_factory=list)
 
+    @property
+    def active_label(self):
+        # label describes the LAST CONFIRMED leg. Price observed after the last
+        # pivot belongs to the NEXT provisional leg, not that completed leg.
+        return {2:"W2",3:"W3",4:"W4",5:"W5",6:"A",7:"B",8:"C"}.get(len(self.anchors),"NEXT_SEQUENCE_UNRESOLVED")
+
+    @property
+    def active_direction(self):
+        return ("DOWN" if self.direction=="UP" else "UP") if self.active_label in {"W2","W4","A","C"} else self.direction
+
     def to_dict(self):
-        return asdict(self)
+        return asdict(self) | {"active_label":self.active_label,"active_direction":self.active_direction,
+                              "last_confirmed_leg":self.label}
 
 
 @dataclass
@@ -110,7 +121,7 @@ class WaveHierarchy:
                 complex_patterns.append(p.to_dict() | {
                     "source_scenario_id":scenario.scenario_id,
                     "frame":scenario.frame})
-        return asdict(self) | {"complex_wave_patterns":complex_patterns[:48],
+        return asdict(self) | {"scenarios":[s.to_dict() for s in self.scenarios],"complex_wave_patterns":complex_patterns[:48],
                               "schema_version": 1,
                               "wave_labels": "HYPOTHESES_NOT_CERTAINTY",
                               "chain": list(REQUIRED_FRAMES),"contained_chain_observed":contained,
@@ -342,11 +353,9 @@ def link_wave_hypotheses(scenarios: Sequence[WaveHypothesis]) -> list[dict]:
         for parent in parents:
             if FRAME_MS[parent.frame] != nearest:
                 continue
-            expected = parent.direction
-            if parent.label in ("W2", "W4", "A", "C"):
-                expected = "DOWN" if expected == "UP" else "UP"
+            expected = parent.active_direction
             links.append({"parent": parent.scenario_id, "child": child.scenario_id,
-                          "parent_leg": parent.label,
+                          "parent_leg": parent.active_label,
                           "relationship": "ALIGNED" if child.direction == expected else "COUNTERTREND",
                           "proof": "TIME_AND_PRICE_CONTAINMENT", "wave_genealogy_confirmed": False})
     return links
@@ -435,7 +444,7 @@ def correction_entry_context(report: WaveHierarchy, side: str, signal_at: int,
     by_id = {s.scenario_id: s for s in report.scenarios if s.status == "PROVISIONAL"}
     for senior in by_id.values():
         if not (senior.frame == "6h" and senior.direction != direction
-                and senior.label in {"W4", "A", "C"}
+                and senior.active_label in {"W4", "A", "C"}
                 and senior.w4_zero == "MINIMUM_ONLY" and senior.momentum_shift
                 and senior.anchors[3].known_at <= signal_at + FRAME_MS["1h"]):
             continue
@@ -453,12 +462,12 @@ def correction_entry_context(report: WaveHierarchy, side: str, signal_at: int,
             # An alternative at this same degree still counting W3/W5 in the
             # old direction cannot be silently discarded to approve a reversal.
             conflict = any(s.frame == "6h" and s.direction == senior.direction
-                           and s.label in {"W3", "W5"} and s.w4_zero != "MINIMUM_ONLY"
+                           and s.active_label in {"W3", "W5"} and s.w4_zero != "MINIMUM_ONLY"
                            and s.anchors[0].extreme_at <= senior.anchors[3].extreme_at
                            for s in by_id.values())
             if conflict:
                 return blocked | {"reason": "COMPETING_SENIOR_IMPULSE_UNRESOLVED"}
-            if senior.label == "W4":
+            if senior.active_label == "W4":
                 bounds = sorted([senior.anchors[1].price, senior.anchors[3].price])
             else:
                 terminal = [senior.anchors[5].price]
@@ -468,7 +477,8 @@ def correction_entry_context(report: WaveHierarchy, side: str, signal_at: int,
             approvals[senior.scenario_id] = {"allowed": True, "mode": "CORRECTION", "reason": "H1_WISE_MAN_IN_CONTAINED_H6_CORRECTION",
                     "parent_scenario_id": senior.scenario_id, "parent_invalidation": senior.invalidation,
                     "parent_floor": bounds[0], "parent_ceiling": bounds[1],
-                    "decision_scenario_id": decision.scenario_id, "signal_at": signal_at}
+                    "decision_scenario_id": decision.scenario_id, "signal_at": signal_at,
+                    "parent_active_leg":senior.active_label,"parent_last_confirmed_leg":senior.label}
     if len(approvals)==1:
         return next(iter(approvals.values()))
     if len(approvals)>1:

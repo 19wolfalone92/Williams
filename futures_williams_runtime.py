@@ -2339,6 +2339,16 @@ class FuturesWilliamsRuntime:
                     cap=signal_at_ms+5*3_600_000
                     expires_at_ms=min(expires_at_ms,cap) if expires_at_ms>0 else cap
                 invalid_correction=False
+                invalid_edition=False
+                profile=campaign.tags.get("strategy_profile",TC2)
+                if status in {"NEW","PENDING_NEW"} and executed<=0 and profile!=TC2 and conditional:
+                    closed=closed_strategy_frame(fetch_klines(self.client,symbol,campaign.execution_timeframe,limit=220),
+                        campaign.execution_timeframe,int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
+                    indicators=calculate_indicators(closed,canonical_indicator_config_from_env())
+                    setups=extract_profile_signals(symbol,indicators,profile=profile,
+                        side="LONG" if campaign.side=="BUY" else "SHORT",timeframe=campaign.execution_timeframe,tick_size=self._tick(symbol))
+                    invalid_edition=not any(s.signal_type.value==(signal_payload or {}).get("signal_type") and
+                        math.isclose(s.trigger_price,float((signal_payload or {}).get("trigger_price",0)),rel_tol=1e-12) for s in setups)
                 if status in {"NEW","PENDING_NEW"} and executed<=0 and campaign.tags.get("trade_mode")=="CORRECTION":
                     proof=correction_entry_context(self.scanner.wave_hierarchy(symbol),campaign.side,
                         signal_at_ms,campaign.current_signal_type)
@@ -2349,7 +2359,7 @@ class FuturesWilliamsRuntime:
                 if (
                     status in {"NEW", "PENDING_NEW"}
                     and executed <= 0
-                    and (invalid_correction or expires_at_ms>0 and int(time.time()*1000)>=expires_at_ms)
+                    and (invalid_correction or invalid_edition or expires_at_ms>0 and int(time.time()*1000)>=expires_at_ms)
                 ):
                     order_id = order.get("orderId")
                     if order_id is None:
@@ -3075,6 +3085,7 @@ class FuturesWilliamsRuntime:
                         continue
                     if signal.signal_bar_time_ms <= latest:
                         continue
+                    if self.db.state_get(f"campaign_signal_admitted:{campaign.campaign_id}:{signal.signal_id}") is not None:continue
                     if signal.signal_type == SignalType.REVERSAL and not allow_reversal:
                         continue
                     eligible.append(signal)
