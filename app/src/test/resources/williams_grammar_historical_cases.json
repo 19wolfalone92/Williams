@@ -1,0 +1,477 @@
+{
+  "source": "BINANCE_PUBLIC_USDS_M_MAINNET",
+  "period": "2024-09-12..2025-01-15 UTC",
+  "cases": [
+    {
+      "symbol": "ADAUSDT",
+      "frame": "6h",
+      "as_of": 1729447200000,
+      "candidate": {
+        "pattern": "ENDING_OR_LEADING_DIAGONAL_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "DOWN",
+        "start_at": 1728259200000,
+        "end_at": 1729382400000,
+        "known_at": 1729447200000,
+        "invalidation": 0.3595,
+        "reasons": [
+          "W4_OVERLAPS_W1",
+          "INTERNAL_3_OR_5_LEGS_UNVERIFIED"
+        ],
+        "can_place_orders": false
+      },
+      "parent": [
+        {
+          "kind": "HIGH",
+          "price": 0.3683,
+          "index": 100,
+          "extreme_at": 1728259200000,
+          "known_at": 1728324000000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.3311,
+          "index": 115,
+          "extreme_at": 1728583200000,
+          "known_at": 1728648000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3595,
+          "index": 125,
+          "extreme_at": 1728799200000,
+          "known_at": 1728864000000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.3391,
+          "index": 143,
+          "extreme_at": 1729188000000,
+          "known_at": 1729252800000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3569,
+          "index": 148,
+          "extreme_at": 1729296000000,
+          "known_at": 1729360800000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.348,
+          "index": 152,
+          "extreme_at": 1729382400000,
+          "known_at": 1729447200000
+        }
+      ],
+      "operation": "REJECTED_NONEXTENDING_W3"
+    },
+    {
+      "symbol": "ADAUSDT",
+      "frame": "6h",
+      "as_of": 1729728000000,
+      "candidate": {
+        "pattern": "ENDING_OR_LEADING_DIAGONAL_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "UP",
+        "start_at": 1729382400000,
+        "end_at": 1729663200000,
+        "known_at": 1729728000000,
+        "invalidation": 0.3531,
+        "reasons": [
+          "W4_OVERLAPS_W1",
+          "INTERNAL_3_OR_5_LEGS_UNVERIFIED"
+        ],
+        "can_place_orders": false
+      },
+      "parent": [
+        {
+          "kind": "LOW",
+          "price": 0.348,
+          "index": 152,
+          "extreme_at": 1729382400000,
+          "known_at": 1729447200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.373,
+          "index": 156,
+          "extreme_at": 1729468800000,
+          "known_at": 1729533600000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.3531,
+          "index": 158,
+          "extreme_at": 1729512000000,
+          "known_at": 1729576800000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3682,
+          "index": 160,
+          "extreme_at": 1729555200000,
+          "known_at": 1729620000000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.3549,
+          "index": 162,
+          "extreme_at": 1729598400000,
+          "known_at": 1729663200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3693,
+          "index": 165,
+          "extreme_at": 1729663200000,
+          "known_at": 1729728000000
+        }
+      ],
+      "operation": "REJECTED_NONEXTENDING_W3"
+    },
+    {
+      "symbol": "ADAUSDT",
+      "frame": "6h",
+      "as_of": 1730138400000,
+      "candidate": {
+        "pattern": "ZIGZAG_ABC_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "UP",
+        "start_at": 1729382400000,
+        "end_at": 1730073600000,
+        "known_at": 1730138400000,
+        "invalidation": 0.3423,
+        "reasons": [
+          "B_BELOW_90_PERCENT_OF_A",
+          "INTERNAL_5_3_5_UNVERIFIED"
+        ],
+        "can_place_orders": false
+      },
+      "parent": [
+        {
+          "kind": "LOW",
+          "price": 0.348,
+          "index": 152,
+          "extreme_at": 1729382400000,
+          "known_at": 1729447200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.373,
+          "index": 156,
+          "extreme_at": 1729468800000,
+          "known_at": 1729533600000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.3531,
+          "index": 158,
+          "extreme_at": 1729512000000,
+          "known_at": 1729576800000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3682,
+          "index": 160,
+          "extreme_at": 1729555200000,
+          "known_at": 1729620000000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.3549,
+          "index": 162,
+          "extreme_at": 1729598400000,
+          "known_at": 1729663200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3693,
+          "index": 165,
+          "extreme_at": 1729663200000,
+          "known_at": 1729728000000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.3393,
+          "index": 169,
+          "extreme_at": 1729749600000,
+          "known_at": 1729814400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3423,
+          "index": 183,
+          "extreme_at": 1730052000000,
+          "known_at": 1730116800000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.3301,
+          "index": 184,
+          "extreme_at": 1730073600000,
+          "known_at": 1730138400000
+        }
+      ],
+      "operation": "REJECTED_NONEXTENDING_W3"
+    },
+    {
+      "symbol": "ADAUSDT",
+      "frame": "1h",
+      "as_of": 1733166000000,
+      "candidate": {
+        "pattern": "ZIGZAG_ABC_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "DOWN",
+        "start_at": 1732953600000,
+        "end_at": 1733155200000,
+        "known_at": 1733166000000,
+        "invalidation": 1.0574,
+        "reasons": [
+          "B_BELOW_A_ORIGIN",
+          "INTERNAL_5_3_5_UNVERIFIED",
+          "DEEP_B_RETRACEMENT_ALTERNATIVE"
+        ],
+        "can_place_orders": false
+      },
+      "parent": [
+        {
+          "kind": "HIGH",
+          "price": 1.1516,
+          "index": 1904,
+          "extreme_at": 1732953600000,
+          "known_at": 1732964400000
+        },
+        {
+          "kind": "LOW",
+          "price": 1.072,
+          "index": 1909,
+          "extreme_at": 1732971600000,
+          "known_at": 1732982400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 1.0979,
+          "index": 1917,
+          "extreme_at": 1733000400000,
+          "known_at": 1733011200000
+        },
+        {
+          "kind": "LOW",
+          "price": 1.0381,
+          "index": 1922,
+          "extreme_at": 1733018400000,
+          "known_at": 1733029200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 1.0786,
+          "index": 1929,
+          "extreme_at": 1733043600000,
+          "known_at": 1733054400000
+        },
+        {
+          "kind": "LOW",
+          "price": 1.0562,
+          "index": 1937,
+          "extreme_at": 1733072400000,
+          "known_at": 1733083200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 1.1929,
+          "index": 1945,
+          "extreme_at": 1733101200000,
+          "known_at": 1733112000000
+        },
+        {
+          "kind": "LOW",
+          "price": 1.0574,
+          "index": 1955,
+          "extreme_at": 1733137200000,
+          "known_at": 1733148000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 1.2444,
+          "index": 1960,
+          "extreme_at": 1733155200000,
+          "known_at": 1733166000000
+        }
+      ],
+      "operation": "RETAINED_DEEP_B_ZIGZAG"
+    },
+    {
+      "symbol": "AVAXUSDT",
+      "frame": "1h",
+      "as_of": 1727229600000,
+      "candidate": {
+        "pattern": "ZIGZAG_ABC_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "DOWN",
+        "start_at": 1727074800000,
+        "end_at": 1727218800000,
+        "known_at": 1727229600000,
+        "invalidation": 26.906,
+        "reasons": [
+          "B_BELOW_A_ORIGIN",
+          "INTERNAL_5_3_5_UNVERIFIED",
+          "DEEP_B_RETRACEMENT_ALTERNATIVE"
+        ],
+        "can_place_orders": false
+      },
+      "parent": [
+        {
+          "kind": "HIGH",
+          "price": 27.856,
+          "index": 271,
+          "extreme_at": 1727074800000,
+          "known_at": 1727085600000
+        },
+        {
+          "kind": "LOW",
+          "price": 27.213,
+          "index": 272,
+          "extreme_at": 1727078400000,
+          "known_at": 1727089200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 27.741,
+          "index": 278,
+          "extreme_at": 1727100000000,
+          "known_at": 1727110800000
+        },
+        {
+          "kind": "LOW",
+          "price": 27.076,
+          "index": 285,
+          "extreme_at": 1727125200000,
+          "known_at": 1727136000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 27.471,
+          "index": 287,
+          "extreme_at": 1727132400000,
+          "known_at": 1727143200000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.822,
+          "index": 289,
+          "extreme_at": 1727139600000,
+          "known_at": 1727150400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 27.807,
+          "index": 300,
+          "extreme_at": 1727179200000,
+          "known_at": 1727190000000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.906,
+          "index": 302,
+          "extreme_at": 1727186400000,
+          "known_at": 1727197200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 28.549,
+          "index": 311,
+          "extreme_at": 1727218800000,
+          "known_at": 1727229600000
+        }
+      ],
+      "operation": "RETAINED_DEEP_B_ZIGZAG"
+    },
+    {
+      "symbol": "BNBUSDT",
+      "frame": "1h",
+      "as_of": 1728108000000,
+      "candidate": {
+        "pattern": "ZIGZAG_ABC_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "UP",
+        "start_at": 1727956800000,
+        "end_at": 1728097200000,
+        "known_at": 1728108000000,
+        "invalidation": 557.92,
+        "reasons": [
+          "B_BELOW_A_ORIGIN",
+          "INTERNAL_5_3_5_UNVERIFIED",
+          "DEEP_B_RETRACEMENT_ALTERNATIVE"
+        ],
+        "can_place_orders": false
+      },
+      "parent": [
+        {
+          "kind": "LOW",
+          "price": 533.4,
+          "index": 516,
+          "extreme_at": 1727956800000,
+          "known_at": 1727967600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 546.45,
+          "index": 524,
+          "extreme_at": 1727985600000,
+          "known_at": 1727996400000
+        },
+        {
+          "kind": "LOW",
+          "price": 540.99,
+          "index": 525,
+          "extreme_at": 1727989200000,
+          "known_at": 1728000000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 556.92,
+          "index": 541,
+          "extreme_at": 1728046800000,
+          "known_at": 1728057600000
+        },
+        {
+          "kind": "LOW",
+          "price": 545.02,
+          "index": 542,
+          "extreme_at": 1728050400000,
+          "known_at": 1728061200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 557.97,
+          "index": 547,
+          "extreme_at": 1728068400000,
+          "known_at": 1728079200000
+        },
+        {
+          "kind": "LOW",
+          "price": 554.52,
+          "index": 551,
+          "extreme_at": 1728082800000,
+          "known_at": 1728093600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 557.92,
+          "index": 553,
+          "extreme_at": 1728090000000,
+          "known_at": 1728100800000
+        },
+        {
+          "kind": "LOW",
+          "price": 551.61,
+          "index": 555,
+          "extreme_at": 1728097200000,
+          "known_at": 1728108000000
+        }
+      ],
+      "operation": "RETAINED_DEEP_B_ZIGZAG"
+    }
+  ]
+}

@@ -89,19 +89,34 @@ def independent_proof_check(parent,children,proof,duration,as_of):
     actual=tuple(b-a for a,b in zip(selected,selected[1:]))
     assert actual==proof.expected==proof.observed
     assert proof.child_known_at<=as_of
-    for a,b,n in zip(selected,selected[1:],proof.expected):
+    assert len(proof.leg_patterns)==len(proof.expected)
+    for a,b,n,shape in zip(selected,selected[1:],proof.expected,proof.leg_patterns):
         leg=children[a:b+1]
         assert len(leg)==n+1 and all(p.known_at<=as_of for p in leg)
         assert all(x.extreme_at<y.extreme_at and x.kind!=y.kind for x,y in zip(leg,leg[1:]))
         origin,end=leg[0].price,leg[-1].price
-        assert all(min(origin,end)<=p.price<=max(origin,end) for p in leg)
-        direction=1 if end>origin else -1
+        direction=1 if leg[0].kind=="LOW" else -1
         displacements=[direction*(p.price-origin) for p in leg]
-        assert displacements[1]>displacements[2]>0
-        if n==3:assert displacements[3]>displacements[1]
+        assert displacements[1]>0 and displacements[-1]>0
+        if n==3:
+            assert displacements[2]<displacements[1]
+            assert displacements[3]>displacements[2]
+            if shape=="ZIGZAG_PRICE_SKELETON":
+                assert 0<displacements[2]<displacements[1]<displacements[3]
+            elif shape=="REGULAR_FLAT_PRICE_SKELETON":
+                assert displacements[2]==0 and displacements[3]>=displacements[1]
+            elif shape=="EXPANDED_FLAT_PRICE_SKELETON":
+                assert displacements[2]<0 and displacements[3]>displacements[1]
+            else:
+                assert shape=="RUNNING_FLAT_PRICE_SKELETON"
+                assert displacements[2]<0<displacements[3]<=displacements[1]
         else:
+            assert displacements[1]>displacements[2]>0
             assert displacements[3]>displacements[4]>displacements[1]
-            assert displacements[5]>displacements[3]
+            if shape=="IMPULSE_PRICE_SKELETON":assert displacements[5]>displacements[3]
+            else:
+                assert shape=="TRUNCATED_IMPULSE_PRICE_SKELETON"
+                assert displacements[4]<displacements[5]<=displacements[3]
             motive=[abs(leg[i+1].price-leg[i].price) for i in (0,2,4)]
             assert motive[1]>=min(motive[0],motive[2])
 
@@ -176,6 +191,7 @@ def audit(root,output):
                         if "INCOMPLETE_OR_TRUNCATED_C" in candidate.pattern:assert proof.status=="UNRESOLVED"
                         coverage[candidate.pattern][proof.status]+=1
                         coverage[candidate.pattern][proof.reason]+=1
+                        for shape in proof.leg_patterns:totals["internal_leg_"+shape]+=1
                         totals["unique_candidates"]+=1
                         if proof.status=="PRICE_SUBDIVISIONS_CONFIRMED":
                             p=parent[-len(proof.expected)-1:]

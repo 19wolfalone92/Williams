@@ -88,7 +88,7 @@ def detect_complex_wave_patterns(
         if n == 6:
             w1, w3, w5 = p[1]-p[0], p[3]-p[2], p[5]-p[4]
             if (w1 <= 0 or w3 <= 0 or w5 <= 0 or
-                    not p[0] < p[2] < p[1] or not p[2] < p[4] < p[3] or
+                    not p[0] < p[2] < p[1] or not p[2] < p[4] < p[3] or p[3] <= p[1] or
                     w3 < min(w1, w5)):
                 continue
             if p[4] <= p[1]:
@@ -105,7 +105,7 @@ def detect_complex_wave_patterns(
             q = sub[:6]
             e1, e3, e5 = p[1]-p[0], p[3]-p[2], p[5]-p[4]
             if (e1 <= 0 or e3 <= 0 or e5 <= 0 or
-                    not p[0] < p[2] < p[1] or not p[2] < p[4] < p[3] or
+                    not p[0] < p[2] < p[1] or not p[2] < p[4] < p[3] or p[3] <= p[1] or
                     e3 < min(e1,e5)):
                 continue
             # A moves against the original trend, B with it, C against.
@@ -113,10 +113,14 @@ def detect_complex_wave_patterns(
             if a <= 0 or b <= 0 or c <= 0:
                 continue
             b_fraction = b/a
-            if b_fraction < 0.90 and p[8] < p[6]:
+            # A's internal five versus three distinguishes zigzag from flat.
+            # The 90% flat boundary cannot exclude an otherwise admissible
+            # deep-B zigzag before those real child pivots have been checked.
+            if b_fraction < 1.0 and p[8] < p[6]:
                 add("ZIGZAG_ABC_CANDIDATE", sub,
-                    ("B_BELOW_90_PERCENT_OF_A", "INTERNAL_5_3_5_UNVERIFIED"), sub[7][1])
-            elif b_fraction >= 0.90:
+                    ("B_BELOW_A_ORIGIN", "INTERNAL_5_3_5_UNVERIFIED") +
+                    (("DEEP_B_RETRACEMENT_ALTERNATIVE",) if b_fraction >= 0.90 else ()), sub[7][1])
+            if b_fraction >= 0.90:
                 kind = ("EXPANDED_FLAT_ABC_CANDIDATE"
                         if p[7] > p[5] and p[8] < p[6]
                         else "RUNNING_FLAT_ABC_CANDIDATE" if p[7] > p[5]

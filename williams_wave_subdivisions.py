@@ -14,17 +14,22 @@ class SubdivisionProof:
     observed:tuple[int,...]
     child_known_at:int
     reason:str
+    # Only the actual price grammar at this degree, never recursive
+    # certification or permission to trade a named Elliott pattern.
+    leg_patterns:tuple[str,...]=()
     def to_dict(self):return asdict(self)
 
 
-def prove_wave_subdivisions(parent,children,expected,*,parent_duration,as_of):
+def prove_wave_subdivisions(parent,children,expected,*,parent_duration,as_of,allow_flat_corrections=True):
     if len(parent)!=len(expected)+1 or parent_duration<=0 or any(n not in {3,5} for n in expected):
         return SubdivisionProof("UNRESOLVED",tuple(expected),(),0,"INVALID_SUBDIVISION_CONTRACT")
     if not parent or any(p.known_at>as_of for p in parent):
         return SubdivisionProof("UNRESOLVED",tuple(expected),(),0,"PARENT_NOT_CONFIRMED")
     known=[p for p in children if p.known_at<=as_of]
-    if any(not isfinite(p.price) or p.price<=0 or p.known_at<p.extreme_at or p.kind not in {"LOW","HIGH"} for p in (*parent,*known)):
+    if any(not isfinite(p.price) or p.price<=0 or p.extreme_at<0 or p.known_at<p.extreme_at or p.kind not in {"LOW","HIGH"} for p in (*parent,*known)):
         return SubdivisionProof("UNRESOLVED",tuple(expected),(),0,"INVALID_PIVOT")
+    if any(a.extreme_at>=b.extreme_at or a.kind==b.kind for a,b in zip(parent,parent[1:])):
+        return SubdivisionProof("UNRESOLVED",tuple(expected),(),0,"PARENT_ORDER_AMBIGUOUS")
     if any(a.extreme_at>=b.extreme_at or a.kind==b.kind for a,b in zip(known,known[1:])):
         return SubdivisionProof("UNRESOLVED",tuple(expected),(),0,"CHILD_ORDER_AMBIGUOUS")
     def matches(p,c):
@@ -36,20 +41,37 @@ def prove_wave_subdivisions(parent,children,expected,*,parent_duration,as_of):
         endpoints.append(found[0])
     if any(a>=b for a,b in zip(endpoints,endpoints[1:])):
         return SubdivisionProof("UNRESOLVED",tuple(expected),(),0,"CHILD_ENDPOINT_ORDER_INVALID")
-    observed=tuple(b-a for a,b in zip(endpoints,endpoints[1:]));last_known=0
+    observed=tuple(b-a for a,b in zip(endpoints,endpoints[1:]));last_known=0;shapes=[]
     for leg,(a,b),needed in zip(range(len(expected)),zip(endpoints,endpoints[1:]),expected):
         sub=known[a:b+1];sign=1 if sub[0].kind=="LOW" else -1
-        p=[sign*x.price for x in sub];lo,hi=sorted([sub[0].price,sub[-1].price])
+        p=[sign*x.price for x in sub]
         last_known=max(last_known,max(x.known_at for x in sub))
-        if b-a!=needed or any(x.price<lo or x.price>hi for x in sub):
-            return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"SUBDIVISION_COUNT_OR_PRICE_CONTAINMENT_FAILED")
+        if b-a!=needed:
+            return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"SUBDIVISION_COUNT_FAILED")
         if needed==5:
             lengths=[p[1]-p[0],p[3]-p[2],p[5]-p[4]]
-            if not (p[0]<p[2]<p[1]<p[4]<p[3]<p[5]) or lengths[1]<min(lengths[0],lengths[2]):
+            # A completed fifth can end short of W3. Its price envelope is
+            # then bounded by W3, not by the orthodox final endpoint W5.
+            if not (p[0]<p[2]<p[1]<p[4]<p[3] and p[5]>p[4]) or lengths[1]<min(lengths[0],lengths[2]):
                 return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"INTERNAL_IMPULSE_GEOMETRY_FAILED")
-        elif not (p[0]<p[2]<p[1]<p[3]):
-            return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"INTERNAL_ABC_GEOMETRY_FAILED")
-    return SubdivisionProof("PRICE_SUBDIVISIONS_CONFIRMED",tuple(expected),observed,last_known,"REAL_CONFIRMED_CHILD_PIVOTS")
+            shapes.append("IMPULSE_PRICE_SKELETON" if p[5]>p[3] else "TRUNCATED_IMPULSE_PRICE_SKELETON")
+        else:
+            # A corrective three may be flat: expanded B crosses its own
+            # origin, and a running C need not exceed A. Those excursions
+            # must remain visible in evidence rather than be discarded by
+            # an endpoint-envelope shortcut intended for simple zigzags.
+            if not (p[1]>p[0] and p[2]<p[1] and p[3]>max(p[0],p[2])):
+                return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"INTERNAL_ABC_GEOMETRY_FAILED")
+            if p[2]<p[0]:
+                shape="EXPANDED_FLAT_PRICE_SKELETON" if p[3]>p[1] else "RUNNING_FLAT_PRICE_SKELETON"
+            elif p[3]>=p[1]:
+                shape="REGULAR_FLAT_PRICE_SKELETON" if p[2]==p[0] else "ZIGZAG_PRICE_SKELETON"
+            else:
+                return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"INTERNAL_ABC_GEOMETRY_FAILED")
+            shapes.append(shape)
+            if not allow_flat_corrections and shape!="ZIGZAG_PRICE_SKELETON":
+                return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"DIAGONAL_REQUIRES_ZIGZAG_SUBWAVES")
+    return SubdivisionProof("PRICE_SUBDIVISIONS_CONFIRMED",tuple(expected),observed,last_known,"REAL_CONFIRMED_CHILD_PIVOTS",tuple(shapes))
 
 
 def enrich_complex_subdivisions(pattern,parent,children,*,parent_duration,as_of):
@@ -69,8 +91,9 @@ def enrich_complex_subdivisions(pattern,parent,children,*,parent_duration,as_of)
         expected=(5,3,5)*5;points=parent[-16:]
     elif "ENDING_OR_LEADING_DIAGONAL" in pattern:
         points=parent[-6:]
-        corrections=prove_wave_subdivisions(points,children,(3,3,3,3,3),parent_duration=parent_duration,as_of=as_of)
+        corrections=prove_wave_subdivisions(points,children,(3,3,3,3,3),parent_duration=parent_duration,as_of=as_of,allow_flat_corrections=False)
         if corrections.status=="PRICE_SUBDIVISIONS_CONFIRMED":return corrections
         expected=(5,3,5,3,5)
     else:return SubdivisionProof("UNRESOLVED",(),(),0,"PATTERN_HAS_COMPETING_INTERNAL_GRAMMARS")
-    return prove_wave_subdivisions(points,children,expected,parent_duration=parent_duration,as_of=as_of)
+    return prove_wave_subdivisions(points,children,expected,parent_duration=parent_duration,as_of=as_of,
+                                   allow_flat_corrections="DIAGONAL" not in pattern)
