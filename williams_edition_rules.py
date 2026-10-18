@@ -13,7 +13,19 @@ from williams_wave_hierarchy import WaveBar
 TC2 = "TC2_THREE_WISE_MEN"
 NTD = "NTD_FIVE_DIMENSIONS"
 COURSE = "COURSE_PROFITUNITY"
-PROFILES = (TC2, NTD, COURSE)
+UNIFIED = "WILLIAMS_UNIFIED"
+SOURCE_PROFILES = (TC2, NTD, COURSE)
+PROFILES = SOURCE_PROFILES + (UNIFIED,)
+
+
+def profile_allows_source(selected: str, source: str) -> bool:
+    """The scanner selection may combine sources; an order always pins one."""
+    return source in SOURCE_PROFILES and (selected == UNIFIED or selected == source)
+
+
+def unified_direction_conflict(directions) -> bool:
+    """Do not allow competing fresh LONG/SHORT entry hypotheses to arm."""
+    return len({side for side in directions if side in {"LONG", "SHORT"}}) > 1
 
 
 @dataclass(frozen=True)

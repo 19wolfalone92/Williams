@@ -7,7 +7,18 @@ import kotlin.math.abs
 internal const val williamsTc2Profile="TC2_THREE_WISE_MEN"
 internal const val williamsNtdProfile="NTD_FIVE_DIMENSIONS"
 internal const val williamsCourseProfile="COURSE_PROFITUNITY"
-internal val williamsEditionProfiles=listOf(williamsTc2Profile,williamsNtdProfile,williamsCourseProfile)
+internal const val williamsUnifiedProfile="WILLIAMS_UNIFIED"
+internal val williamsSourceProfiles=listOf(williamsTc2Profile,williamsNtdProfile,williamsCourseProfile)
+internal val williamsEditionProfiles=williamsSourceProfiles+williamsUnifiedProfile
+
+/** Unified selection scans all three sources but journals the real source for
+ * each individual campaign. Never reinterpret a live legacy campaign. */
+internal fun williamsProfileAllowsSource(selected:String,source:String):Boolean =
+    source in williamsSourceProfiles && (selected==williamsUnifiedProfile || selected==source)
+
+/** Contradictory fresh H1 entry hypotheses must not choose a side by chance. */
+internal fun williamsUnifiedDirectionsConflict(directions:Iterable<String>):Boolean =
+    directions.filter { it=="LONG" || it=="SHORT" }.toSet().size>1
 
 internal data class WilliamsEditionSetup(
     val kind:String,val side:String,val knownIndex:Int,val trigger:Double,val stop:Double,

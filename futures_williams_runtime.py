@@ -41,7 +41,7 @@ from williams_signals import (
 )
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed
 from williams_course_campaign import course_active_context,course_next_stage,TARGETS as COURSE_TARGETS
-from williams_edition_rules import TC2,NTD,COURSE,PROFILES,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan,opposing_close_event_triggered
+from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,unified_direction_conflict,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan,opposing_close_event_triggered
 from campaign_engine import CampaignEngine
 from equity_breaker import EquityCircuitBreaker
 from campaign_model import (
@@ -422,7 +422,7 @@ class FuturesWilliamsScanner:
             return []
 
         profile = os.getenv(
-            "WILLIAMS_SIGNAL_PROFILE", "TC2_THREE_WISE_MEN"
+            "WILLIAMS_SIGNAL_PROFILE", "WILLIAMS_UNIFIED"
         ).strip().upper()
         profile_block_reason = _signal_profile_entry_block_reason(profile)
         if profile_block_reason:
@@ -549,7 +549,7 @@ class FuturesWilliamsScanner:
             "failures": {},
         }
         profile = os.getenv(
-            "WILLIAMS_SIGNAL_PROFILE", "TC2_THREE_WISE_MEN"
+            "WILLIAMS_SIGNAL_PROFILE", "WILLIAMS_UNIFIED"
         ).strip().upper()
         if profile not in PROFILES:
             self.last_scan_status = {
@@ -1466,6 +1466,9 @@ class FuturesWilliamsRuntime:
             self.db.log_event("INFO", "futures_dry_run_entry_blocked", "DRY_RUN=true; conditional entry not submitted", {"symbol": candidate.symbol})
             return {"state": "DRY_RUN_BLOCKED", "symbol": candidate.symbol}
         signal = candidate.signal
+        selected_profile=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()
+        if not profile_allows_source(selected_profile,signal.strategy_profile):
+            raise RuntimeError("Williams signal source changed before Futures entry")
         reentry=self._ntd_reentry_source(signal) if signal.strategy_profile==NTD else None
         market_close=bool(reentry and signal.signal_type==SignalType.ZONE_ADD_ON and signal.execution_semantics=="MARKET_ON_CLOSE")
         if signal.execution_semantics != "STOP_ENTRY" and not market_close:
@@ -1670,6 +1673,8 @@ class FuturesWilliamsRuntime:
         if self.db.state_get(admitted_key,""):
             raise RuntimeError("This campaign signal was already admitted; reconcile instead of resubmitting")
         profile=campaign.tags.get("strategy_profile",TC2)
+        if not profile_allows_source(os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper(),profile):
+            raise RuntimeError("Williams signal source is no longer enabled")
         if signal.strategy_profile!=profile:
             raise RuntimeError("Add-on profile does not match the durable campaign edition")
         if profile==NTD and not addition_signal_time_allowed(signal,campaign):
@@ -3131,16 +3136,18 @@ class FuturesWilliamsRuntime:
         now = int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
         opposite = "LONG" if campaign.side=="SELL" else "SHORT"
         profile=getattr(campaign,"tags",{}).get("strategy_profile",TC2)
+        unified=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()==UNIFIED
+        exit_profile=UNIFIED if unified else profile
         extract = extract_long_signal_specs if opposite=="LONG" else extract_short_signal_specs
         for omitted in range(min(5,len(closed)-45)+1):
             prefix = closed if omitted==0 else closed.iloc[:-omitted]
             ind = calculate_indicators(prefix,canonical_indicator_config_from_env())
-            signals=(extract(campaign.symbol,ind,timeframe=interval,tick_size=tick) if profile==TC2 else
-                extract_profile_signals(campaign.symbol,ind,profile=profile,side=opposite,timeframe=interval,tick_size=tick,exit_mode=True))
+            signals=(extract(campaign.symbol,ind,timeframe=interval,tick_size=tick) if exit_profile==TC2 else
+                extract_profile_signals(campaign.symbol,ind,profile=exit_profile,side=opposite,timeframe=interval,tick_size=tick,exit_mode=True))
             for signal in signals:
-                if profile!=NTD and signal.role != SignalRole.ENTRY:
+                if signal.strategy_profile!=NTD and signal.role != SignalRole.ENTRY:
                     continue
-                if signal.execution_semantics=="MARKET_ON_CLOSE" and profile==NTD:
+                if signal.execution_semantics=="MARKET_ON_CLOSE" and signal.strategy_profile==NTD:
                     if opposing_close_event_triggered(signal.signal_bar_time_ms,FRAME_MS[interval],opened,now):return signal
                     continue
                 if signal.execution_semantics!="STOP_ENTRY":continue
@@ -3174,7 +3181,7 @@ class FuturesWilliamsRuntime:
             if not signals:
                 signals = [candidate.signal]
             for signal in signals:
-                if signal.strategy_profile!=campaign.tags.get("strategy_profile",TC2):continue
+                if signal.strategy_profile!=campaign.tags.get("strategy_profile",TC2) and os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()!=UNIFIED:continue
                 if signal.role == SignalRole.ADD_ON:
                     continue
                 if signal.symbol != campaign.symbol or signal.side != opposite:
@@ -3288,7 +3295,16 @@ class FuturesWilliamsRuntime:
                     self.db.log_event("WARNING", "futures_add_on_blocked", str(exc), {"symbol": symbol})
 
         active_symbols = {str(r["symbol"]).upper() for r in self.db.open_trades()}
+        unified=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()==UNIFIED
+        conflicts={symbol for symbol,rows in by_symbol.items()
+                   if unified and unified_direction_conflict(
+                       c.side for c in rows if c.signal.role==SignalRole.ENTRY)}
+        for symbol in sorted(conflicts):
+            self.db.log_event("WARNING","williams_unified_direction_conflict",
+                "Both LONG and SHORT entries present; no exposure admitted",{"symbol":symbol})
         for candidate in candidates:
+            if candidate.symbol in conflicts:
+                continue
             if candidate.symbol in active_symbols:
                 continue
             if candidate.signal.strategy_profile==NTD and self._ntd_reentry_source(candidate.signal):

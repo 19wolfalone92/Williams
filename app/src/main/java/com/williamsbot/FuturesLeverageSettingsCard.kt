@@ -35,15 +35,15 @@ internal fun FuturesLeverageSettingsCard(status: Status, onSave: (JSONObject) ->
     var overrides by remember(status.futuresLeverageSettingsJson) {
         mutableStateOf(loaded?.symbolLeverages?.mapValues { it.value.toString() }.orEmpty())
     }
-    var profile by remember(status.strategyProfile) { mutableStateOf(status.strategyProfile) }
-    var profilesExpanded by remember { mutableStateOf(false) }
+    // The selector of mutually exclusive books is retired. Changing the
+    // runtime selection still requires a flat, reconciled Futures account.
     var selectedSymbol by remember { mutableStateOf("BTCUSDT") }
     var symbolsExpanded by remember { mutableStateOf(false) }
     val payload = runCatching {
         FuturesLeverageSettings(
             parseFuturesLeverage(defaultText),
             overrides.filterValues { it.isNotBlank() }.mapValues { parseFuturesLeverage(it.value) }
-        ).toJson().put("strategy_profile",profile)
+        ).toJson().put("strategy_profile",williamsUnifiedProfile)
     }.getOrNull()
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -52,23 +52,14 @@ internal fun FuturesLeverageSettingsCard(status: Status, onSave: (JSONObject) ->
                 style = MaterialTheme.typography.bodySmall)
             Text("Плечо фиксируется при подготовке входа. Binance подтвердит его перед ордером; лимит биржи, маржа и структурный стоп могут заблокировать вход.",
                 style = MaterialTheme.typography.bodySmall)
-            Box {
-                OutlinedButton(onClick={ profilesExpanded=true }) { Text("Книга: "+when(profile) {
-                    williamsNtdProfile -> "Новые измерения"
-                    williamsCourseProfile -> "Profitunity Course"
-                    else -> "Торговый хаос 2"
-                }) }
-                DropdownMenu(expanded=profilesExpanded,onDismissRequest={ profilesExpanded=false }) {
-                    williamsEditionProfiles.forEach { edition ->
-                        DropdownMenuItem(text={ Text(when(edition) {
-                            williamsNtdProfile -> "NTD · пять измерений"
-                            williamsCourseProfile -> "Course · Hump, Thumb, Air Bag"
-                            else -> "TC2 · три мудреца"
-                        }) },onClick={ profile=edition;profilesExpanded=false })
-                    }
-                }
-            }
-            Text("Книга меняется после сверки Binance, без позиций и ожидающих входов. Стопы открытой кампании следуют выбранной при входе книге.",style=MaterialTheme.typography.bodySmall)
+            Text("Единая стратегия Вильямса",style=MaterialTheme.typography.titleSmall)
+            Text("Торговый хаос 1/2: контекст, волны и три мудреца • Новые измерения: фракталы, AO, AC, зона и Balance Line • Course: Hump, Thumb, Squat и Air Bag.",
+                style=MaterialTheme.typography.bodySmall)
+            Text("Система анализирует все источники одновременно, но каждый ордер сохраняет конкретный источник и его защитные правила. Встречные подтверждённые входы блокируются. Активация единого режима — только без позиций и ожидающих заявок, после сверки Binance.",
+                style=MaterialTheme.typography.bodySmall)
+            if(status.strategyProfile!=williamsUnifiedProfile) Text(
+                "Сейчас включён старый профиль. Нажми «Сохранить настройки», чтобы перейти на единую стратегию при безопасном состоянии счёта.",
+                style=MaterialTheme.typography.bodySmall)
             OutlinedTextField(
                 value = defaultText, onValueChange = { defaultText = it },
                 label = { Text("Общее плечо, 1–125×") }, singleLine = true,

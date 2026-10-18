@@ -1,10 +1,10 @@
-"""Select one book edition; never silently mix its initiating/continuation rules."""
+"""Select all Williams evidence sources while retaining edition-owned campaigns."""
 from dataclasses import replace
 from math import isfinite
 
 from campaign_model import SignalRole, SignalSpec, SignalType
 from williams_edition_rules import (
-    TC2,NTD,COURSE,PROFILES,ntd_balance_line_setup,course_hump_setup,
+    TC2,NTD,COURSE,UNIFIED,SOURCE_PROFILES,PROFILES,ntd_balance_line_setup,course_hump_setup,
     course_thumb_setup,course_squat_setup,course_rhythm,
 )
 from williams_signals import (
@@ -26,6 +26,20 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
     if profile not in PROFILES or side not in {"LONG","SHORT"}:
         raise ValueError("Invalid Williams edition or direction")
     if ind is None or ind.empty:return []
+    if profile==UNIFIED:
+        # A missing open/volume or indicator is not permission to fall back
+        # silently to a different trading system. Incomplete data fail closed.
+        if not {"open","high","low","close","volume","ao","ac"}.issubset(ind.columns):
+            return []
+        # Independent source-specific detectors share a closed-bar snapshot,
+        # but their orders retain the source's initiating and management rules.
+        combined = [
+            s for source in SOURCE_PROFILES
+            for s in extract_profile_signals(symbol,ind,profile=source,side=side,
+                timeframe=timeframe,tick_size=tick_size,exit_mode=exit_mode,**tc2_kwargs)
+        ]
+        return sorted({s.signal_id:s for s in combined}.values(),
+                      key=lambda s:(s.signal_bar_time_ms,s.signal_id))
     if profile==TC2:
         detector=extract_long_signal_specs if side=="LONG" else extract_short_signal_specs
         return detector(symbol,ind,timeframe=timeframe,tick_size=tick_size,**tc2_kwargs)
