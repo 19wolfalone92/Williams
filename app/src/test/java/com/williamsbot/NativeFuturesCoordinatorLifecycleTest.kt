@@ -104,13 +104,15 @@ class NativeFuturesCoordinatorLifecycleTest {
                 } else if (request.method == "POST") {
                     check(p["reduceOnly"] == "true")
                     check(p["side"] == if (quantity > 0) "SELL" else "BUY")
-                    check(p.getValue("quantity").toDouble() == kotlin.math.abs(quantity))
-                    val row = JSONObject(p).put("orderId", "99").put("status", closeStatus)
+                    val requested=p.getValue("quantity").toDouble()
+                    check(requested<=kotlin.math.abs(quantity))
+                    val exitId=(90+orders.size).toString()
+                    val row = JSONObject(p).put("orderId", exitId).put("status", closeStatus)
                         .put("clientOrderId", p.getValue("newClientOrderId"))
-                        .put("origQty", kotlin.math.abs(quantity).toString())
-                        .put("executedQty", (kotlin.math.abs(quantity) * closeFraction).toString()).put("avgPrice", mark.toString())
-                    orders["99"] = row
-                    quantity *= 1.0 - closeFraction
+                        .put("origQty", requested.toString())
+                        .put("executedQty", (requested * closeFraction).toString()).put("avgPrice", mark.toString())
+                    orders[exitId] = row
+                    quantity -= (if(quantity>0) 1 else -1)*requested*closeFraction
                     if (loseCloseReply) { code = 503; JSONObject().put("code", -1000).put("msg", "lost close reply") } else row
                 } else {
                     orders.values.singleOrNull { it.optString("orderId") == p["orderId"] ||
@@ -142,6 +144,17 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("origQty", pending.getString("quantity")).put("executedQty", kotlin.math.abs(quantity).toString())
                 .put("side", pending.getString("side")).put("avgPrice", entry.toString())
         }
+        fun fillAddition(clientId:String) {
+            val parent=algos.values.single { it.optString("clientAlgoId")==clientId }
+            val qty=parent.getString("quantity").toDouble();val price=parent.getString("triggerPrice").toDouble()
+            val old=kotlin.math.abs(quantity);entry=(entry*old+price*qty)/(old+qty)
+            quantity+=(if(quantity>0) qty else -qty);mark=price+(if(quantity>0) 1 else -1)
+            val id=(40+orders.size).toString()
+            parent.put("algoStatus","FINISHED").put("actualOrderId",id)
+            orders[id]=JSONObject().put("symbol","BTCUSDT").put("orderId",id).put("clientOrderId",clientId)
+                .put("status","FILLED").put("origQty",qty.toString()).put("executedQty",qty.toString())
+                .put("side",parent.getString("side")).put("avgPrice",price.toString())
+        }
         fun posts(path: String) = requests.count { it.method == "POST" && it.url.encodedPath == path }
         fun adapter(admission: () -> Unit = {}) = BinanceUsdMFuturesTestnetAdapter("key", "secret", client,
             beforeExposureMutation = admission)
@@ -171,6 +184,40 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertTrue(reconciled.toString(), reconciled.getBoolean("ok"))
         assertEquals("OPEN_PROTECTED", coordinator.state.name)
         return coordinator to exchange
+    }
+
+    @Test fun coursePartialReductionsKeepProtectionAndReExpansionUsesTheRemainingAverage() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(lost in listOf(false,true)) {
+            val journal=Journal();val exchange=Exchange(direction)
+            var coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            coordinator.reconcile()
+            val initial=plan(direction).copy(strategyProfile=williamsCourseProfile,signalType="COURSE_HUMP",
+                signalBarTimeMs=System.currentTimeMillis()-7_200_000L)
+            assertTrue(coordinator.submitPendingEntry(initial).getBoolean("accepted"))
+            exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val protection=exchange.algos.values.single { it.optString("closePosition")=="true" }.getString("clientAlgoId")
+            exchange.loseCloseReply=lost
+            val reduced=coordinator.closePosition("BTCUSDT",direction,"0.7","W2X_COURSE_TRIM_${direction.name}_$lost",
+                "COURSE_STAGE_TRIM",partialReduction=true)
+            if(!lost) assertTrue(reduced.toString(),reduced.getBoolean("ok"))
+            coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertEquals(.3,kotlin.math.abs(exchange.quantity),1e-8)
+            assertEquals("OPEN_PROTECTED",coordinator.state.name)
+            val trigger=exchange.mark+if(direction.name=="LONG") 1 else -1
+            val addition=initial.copy(quantity="0.4",entryPrice=trigger.toString(),riskPct=.001,
+                clientId="W2A_COURSE_${direction.name}_$lost",entryClientId=initial.clientId,
+                signalBarTimeMs=System.currentTimeMillis()-3_601_000L)
+            val admitted=coordinator.submitPendingEntry(addition)
+            assertTrue(admitted.toString(),admitted.getBoolean("accepted"))
+            exchange.fillAddition(addition.clientId)
+            val verified=coordinator.reconcile()
+            assertTrue(verified.toString(),verified.getBoolean("ok"))
+            assertEquals(.7,kotlin.math.abs(exchange.quantity),1e-8)
+            assertEquals(protection,exchange.algos.values.single { it.optString("algoStatus")=="NEW" && it.optString("closePosition")=="true" }.getString("clientAlgoId"))
+            assertEquals(3,exchange.posts("/fapi/v1/algoOrder"))
+
+        }
     }
 
     @Test fun ntdMarketAdditionsAreOwnedProtectedAndRecoverLostRepliesForBothSides() {

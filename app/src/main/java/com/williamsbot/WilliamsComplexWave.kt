@@ -82,5 +82,20 @@ internal fun detectWilliamsComplexWave(
         add("W_X_Y_X_Z_COMBINATION_UNRESOLVED",p,
             listOf("INTERNAL_CORRECTION_COMPONENTS_NOT_PROVEN"),p.first().price)
     }
+    for((count,groups,name) in listOf(Triple(10,3,"W_X_Y_ZIGZAG_COMBINATION_CANDIDATE"),
+        Triple(16,5,"W_X_Y_X_Z_ZIGZAG_COMBINATION_CANDIDATE"))) {
+        if(anchors.size<count) continue
+        val sub=anchors.takeLast(count)
+        if(sub.first().kind==first) continue
+        val values=sub.map { -sign*it.price };var valid=true
+        for(g in 0 until groups) {
+            val orientation=if(g%2==0) 1 else -1
+            val p=values.subList(g*3,g*3+4).map { orientation*it }
+            valid=valid && p[0]<p[2] && p[2]<p[1] && p[1]<p[3]
+            if(g%2==1) valid=valid && values[g*3-3]<values[g*3+3] && values[g*3+3]<values[g*3]
+            if(g%2==0 && g>0) valid=valid && values[g*3+3]>values[g*3-3]
+        }
+        if(valid) add(name,sub,listOf("ABC_COMPONENT_BOUNDARIES_OBSERVED","INTERNAL_COMPONENT_DEGREES_UNVERIFIED"),sub.first().price)
+    }
     return result
 }

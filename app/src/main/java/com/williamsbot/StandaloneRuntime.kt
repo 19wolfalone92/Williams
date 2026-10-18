@@ -8031,7 +8031,7 @@ private class NativeEngine(
         val futuresReservedRiskPct = (0 until futuresIntents.length()).sumOf { i ->
             val intent = futuresIntents.optJSONObject(i) ?: return@sumOf 0.0
             if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
-                intent.optDouble("risk_pct", 0.0)
+                futuresCampaignReservedRisk(intent,futuresIntents)
             } else 0.0
         }
         val utcDayStart = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {

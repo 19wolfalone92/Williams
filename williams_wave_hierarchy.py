@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field
 from math import isfinite
 from typing import Mapping, Sequence
 from williams_complex_waves import detect_complex_wave_patterns
+from williams_wave_subdivisions import enrich_complex_subdivisions
 
 FRAME_MS = {"1m":60_000,"3m":180_000,"5m":300_000,"15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
             "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
@@ -99,6 +100,7 @@ class WaveHierarchy:
     frame_errors: dict[str, str]
     warnings: list[dict]
     frame_candle_counts: dict[str,int] = field(default_factory=dict)
+    complex_structures: list[dict] = field(default_factory=list)
 
     def to_dict(self):
         by_id={s.scenario_id:s for s in self.scenarios}
@@ -121,7 +123,7 @@ class WaveHierarchy:
                 complex_patterns.append(p.to_dict() | {
                     "source_scenario_id":scenario.scenario_id,
                     "frame":scenario.frame})
-        return asdict(self) | {"scenarios":[s.to_dict() for s in self.scenarios],"complex_wave_patterns":complex_patterns[:48],
+        return asdict(self) | {"scenarios":[s.to_dict() for s in self.scenarios],"complex_wave_patterns":(self.complex_structures or complex_patterns)[:48],
                               "schema_version": 1,
                               "wave_labels": "HYPOTHESES_NOT_CERTAINTY",
                               "chain": list(REQUIRED_FRAMES),"contained_chain_observed":contained,
@@ -402,8 +404,23 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) ->
                 warnings.append({"scenario_id": frame + ":MOMENTUM_FADE_BEFORE_PIVOT",
                                  "state": "EXHAUSTION_WARNING", "can_close": False,
                                  "can_reverse": False})
+    structures=[]
+    anchors_by_frame={frame:confirmed_wave_anchors(bars,FRAME_MS[frame]) for frame,bars in valid.items()}
+    for frame in REQUIRED_FRAMES:
+        if frame not in valid:continue
+        lower=[f for f in REQUIRED_FRAMES if f in valid and FRAME_MS[f]<FRAME_MS[frame]]
+        child_frame=max(lower,key=lambda f:FRAME_MS[f]) if lower else ""
+        points=anchors_by_frame[frame]
+        for direction in ("UP","DOWN"):
+            for evidence in detect_complex_wave_patterns(points,direction=direction,as_of=as_of):
+                parent=[p for p in points if evidence.start_at<=p.extreme_at<=evidence.end_at]
+                proof=enrich_complex_subdivisions(evidence.pattern,parent,anchors_by_frame.get(child_frame,[]),
+                    parent_duration=FRAME_MS[frame],as_of=as_of)
+                structures.append(evidence.to_dict()|{"frame":frame,"child_frame":child_frame,
+                    "source_scenario_id":f"{frame}:{direction}:{evidence.start_at}:{len(parent)}",
+                    "internal_proof":proof.to_dict(),"can_place_orders":False})
     return WaveHierarchy(as_of, scenarios, link_wave_hypotheses(scenarios), errors, warnings,
-                         {frame:len(bars) for frame,bars in valid.items()})
+                         {frame:len(bars) for frame,bars in valid.items()},structures)
 
 
 def suggested_analytical_frames(report: WaveHierarchy) -> list[str]:

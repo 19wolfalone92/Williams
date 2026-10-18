@@ -56,7 +56,8 @@ internal data class WilliamsWaveLink(val parent: String, val child: String, val 
 internal data class WilliamsWaveHierarchy(
     val asOf: Long, val scenarios: List<WilliamsWaveScenario>, val links: List<WilliamsWaveLink>,
     val frameErrors: Map<String, String>, val warnings: List<String>,
-    val frameCandleCounts:Map<String,Int> = emptyMap()
+    val frameCandleCounts:Map<String,Int> = emptyMap(),
+    val complexStructures:List<JSONObject> = emptyList()
 ) {
     private fun containedChain():Boolean {
         val byId=scenarios.associateBy { it.id }
@@ -72,7 +73,7 @@ internal data class WilliamsWaveHierarchy(
         .put("links", JSONArray(links.map { it.toJson() })).put("frame_errors", JSONObject(frameErrors))
         .put("frame_candle_counts",JSONObject(frameCandleCounts)).put("contained_chain_observed",containedChain())
         .put("full_history",false).put("can_place_orders",false)
-        .put("complex_wave_patterns", JSONArray(scenarios.filter { it.anchors.size >= 6 }
+        .put("complex_wave_patterns", if(complexStructures.isNotEmpty()) JSONArray(complexStructures.take(48)) else JSONArray(scenarios.filter { it.anchors.size >= 6 }
             .flatMap { scenario -> detectWilliamsComplexWave(scenario.anchors,scenario.direction,asOf)
                 .map { it.toJson().put("frame",scenario.frame).put("source_scenario_id",scenario.id) } }.take(48)))
         .put("squat_volume_input","KLINE_BASE_VOLUME_PROXY_NOT_CANONICAL_TICK_VOLUME")
@@ -298,7 +299,22 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
                 sign * osc[osc.lastIndex-1] < sign * osc[osc.lastIndex-2]) warnings += "$frame:MOMENTUM_FADE_BEFORE_PIVOT"
         }
     }
-    return WilliamsWaveHierarchy(asOf,scenarios,linkWilliamsWaveHypotheses(scenarios),errors,warnings,valid.mapValues { it.value.size })
+    val structures=mutableListOf<JSONObject>()
+    val anchorsByFrame=valid.mapValues { (frame,bars)->confirmedWilliamsWaveAnchors(bars,williamsWaveFrames.getValue(frame)) }
+    for(frame in williamsRequiredWaveFrames) {
+        if(frame !in valid) continue
+        val childFrame=williamsRequiredWaveFrames.filter { it in valid && williamsWaveFrames.getValue(it)<williamsWaveFrames.getValue(frame) }
+            .maxByOrNull { williamsWaveFrames.getValue(it) }.orEmpty()
+        val points=anchorsByFrame.getValue(frame)
+        for(direction in listOf("UP","DOWN")) for(evidence in detectWilliamsComplexWave(points,direction,asOf)) {
+            val parent=points.filter { it.extremeAt in evidence.startAt..evidence.endAt }
+            val proof=enrichWilliamsComplexSubdivisions(evidence.pattern,parent,anchorsByFrame[childFrame].orEmpty(),
+                williamsWaveFrames.getValue(frame),asOf)
+            structures+=evidence.toJson().put("frame",frame).put("child_frame",childFrame)
+                .put("source_scenario_id","$frame:$direction:${evidence.startAt}:${parent.size}").put("internal_proof",proof.toJson())
+        }
+    }
+    return WilliamsWaveHierarchy(asOf,scenarios,linkWilliamsWaveHypotheses(scenarios),errors,warnings,valid.mapValues { it.value.size },structures)
 }
 
 internal fun suggestedWilliamsAnalyticalFrames(report: WilliamsWaveHierarchy): List<String> {

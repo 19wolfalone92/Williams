@@ -1085,7 +1085,10 @@ internal class NativeFuturesCampaignCoordinator(
                         intent.put("executed_qty", executed.toPlainString())
                         val exitStatus = order.optString("status").uppercase(Locale.US)
                         if (exitStatus == "FILLED") {
-                            if (position == null) {
+                            if(intent.optBoolean("partial_reduction",false) && executed.compareTo(intent.getString("quantity").toBigDecimal())==0) {
+                                intent.put("exchange_status","EXIT_CONFIRMED").put("order_status","FILLED")
+                                    .put("exchange_order_id",order.optString("orderId")).put("reduction_confirmed_at_ms",System.currentTimeMillis())
+                            } else if (position == null) {
                                 intent.put("exchange_status", "EXIT_CONFIRMED")
                                     .put("order_status", "FILLED")
                                     .put("exchange_order_id", order.optString("orderId"))
@@ -1361,11 +1364,27 @@ internal class NativeFuturesCampaignCoordinator(
                         if (confirmed!=null && confirmed.optString("executedQty","0").toBigDecimal().signum()>0) components+=confirmed
                     }
                     val entered=components.fold(java.math.BigDecimal.ZERO) { total,row -> total+row.getString("executedQty").toBigDecimal() }
-                    val enteredCost=components.fold(java.math.BigDecimal.ZERO) { total,row ->
-                        val qty=row.getString("executedQty").toBigDecimal()
-                        val price=row.getString("avgPrice").toBigDecimal()
-                        check(qty.signum()>0 && price.signum()>0) { "Non-positive campaign execution" }
-                        total+qty*price
+                    var remainingQty=java.math.BigDecimal.ZERO
+                    var remainingCost=java.math.BigDecimal.ZERO
+                    for(j in 0 until persisted.length()) {
+                        val row=persisted.getJSONObject(j);val cid=row.optString("client_id")
+                        val isEntry=cid==verifiedOwner.optString("client_id") ||
+                            row.optString("intent_role")=="ADD_ON" && row.optString("entry_client_id")==verifiedOwner.optString("client_id")
+                        if(isEntry) {
+                            val actual=entryExecutions[cid] ?: continue
+                            val q=actual.getString("executedQty").toBigDecimal()
+                            if(q.signum()==0) continue
+                            val price=actual.getString("avgPrice").toBigDecimal()
+                            check(price.signum()>0) { "Non-positive entry execution price" }
+                            remainingQty+=q;remainingCost+=q*price
+                        } else if(row.optString("intent_role")=="EXIT" && row.optString("entry_client_id")==verifiedOwner.optString("client_id")) {
+                            val q=row.optString("executed_qty","0").toBigDecimal()
+                            check(q.signum()>=0 && q<=remainingQty) { "Reduction exceeds attributed campaign quantity" }
+                            if(q.signum()>0) {
+                                val average=remainingCost.divide(remainingQty,java.math.MathContext.DECIMAL128)
+                                remainingCost-=average*q;remainingQty-=q
+                            }
+                        }
                     }
                     val exited = (0 until persisted.length()).mapNotNull { persisted.optJSONObject(it) }
                         .filter { it.optString("intent_role") == "EXIT" &&
@@ -1375,10 +1394,10 @@ internal class NativeFuturesCampaignCoordinator(
                                 ?: throw IllegalStateException("$symbol exit fill quantity is malformed"))
                         }
                     val liveQuantity = position.getString("positionAmt").toBigDecimal().abs()
-                    check(entered.signum() > 0 && (entered - exited).compareTo(liveQuantity) == 0) {
+                    check(entered.signum() > 0 && (entered - exited).compareTo(liveQuantity) == 0 && remainingQty.compareTo(liveQuantity)==0) {
                         "$symbol exchange quantity cannot be attributed to campaign entry/exit fills"
                     }
-                    val fillPrice = enteredCost.divide(entered,java.math.MathContext.DECIMAL128).toDouble()
+                    val fillPrice = remainingCost.divide(remainingQty,java.math.MathContext.DECIMAL128).toDouble()
                     val positionPrice = position.optString("entryPrice").toDoubleOrNull()
                     check(fillPrice != null && fillPrice.isFinite() && fillPrice > 0 &&
                         positionPrice != null && positionPrice.isFinite() &&
@@ -2693,7 +2712,8 @@ internal class NativeFuturesCampaignCoordinator(
         direction: Direction,
         quantity: String,
         clientOrderId: String,
-        reason: String
+        reason: String,
+        partialReduction:Boolean=false
     ): JSONObject = synchronized(lock) {
         require(symbol in allowedSymbols)
         require(quantity.toBigDecimalOrNull()?.signum() == 1)
@@ -2762,6 +2782,9 @@ internal class NativeFuturesCampaignCoordinator(
         // MANUAL_EXIT is the explicit operator's risk-reducing override. If the
         // campaign journal is missing, continue only to the live Binance position
         // and exact quantity/direction checks below; never use this path for entries.
+        if(partialReduction && (reason!="COURSE_STAGE_TRIM" || managedEntry?.optString("strategy_profile")!=williamsCourseProfile))
+            return@synchronized JSONObject().put("ok",false).put("blocker","Partial reductions require an owned Course stage")
+        var positionBefore=java.math.BigDecimal.ZERO
         val adapterPreflight = adapterFactory()
         try {
             adapterPreflight.requireOneWayMode()
@@ -2785,7 +2808,9 @@ internal class NativeFuturesCampaignCoordinator(
             }
             val liveDirection = if (liveAmount.signum() > 0) Direction.LONG else Direction.SHORT
             val requestedQty = quantity.toBigDecimal()
-            if (liveDirection != direction || requestedQty.compareTo(liveAmount.abs()) != 0) {
+            positionBefore=liveAmount.abs()
+            val quantityMatches=if(partialReduction) requestedQty<positionBefore else requestedQty.compareTo(positionBefore)==0
+            if (liveDirection != direction || !quantityMatches) {
                 state = State.RECONCILE_REQUIRED
                 lastBlocker = "$symbol exit direction/quantity does not exactly match the live Binance position; exit mutation blocked"
                 return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
@@ -2831,7 +2856,8 @@ internal class NativeFuturesCampaignCoordinator(
             .put("quantity", quantity)
             .put("client_id", clientOrderId)
             .put("entry_client_id", managedEntry?.optString("client_id") ?: JSONObject.NULL)
-            .put("reason", reason)
+            .put("reason", reason).put("partial_reduction",partialReduction)
+            .put("position_before_qty",positionBefore.toPlainString())
             .put("exchange_status", "SUBMISSION_UNKNOWN")
             .put("created_at_ms", System.currentTimeMillis())
         intents.put(exitIntent)
@@ -2866,6 +2892,22 @@ internal class NativeFuturesCampaignCoordinator(
             }
 
             val remaining = adapter.positions()
+            if(partialReduction) {
+                val row=(0 until remaining.length()).mapNotNull { remaining.optJSONObject(it) }.singleOrNull { it.optString("symbol")==symbol }
+                    ?: error("Course reduction unexpectedly left the campaign flat")
+                val signed=row.getString("positionAmt").toBigDecimal()
+                val expected=positionBefore-quantity.toBigDecimal()
+                check(signed.abs().compareTo(expected)==0 && (signed.signum()>0)==(direction==Direction.LONG)) { "Course trim remainder does not match its confirmed fill" }
+                check(confirmedOrder.getString("executedQty").toBigDecimal().compareTo(quantity.toBigDecimal())==0) { "Course trim fill is incomplete" }
+                exitIntent.put("exchange_status","EXIT_CONFIRMED").put("order_status","FILLED")
+                    .put("executed_qty",quantity).put("reduction_confirmed_at_ms",System.currentTimeMillis())
+                managedEntry!!.put("campaign_status","OPEN_PROTECTED").put("confirmed_position_qty",expected.toPlainString())
+                saveIntents(intents)
+                state=State.RECONCILE_REQUIRED
+                val verified=reconcile()
+                return@synchronized JSONObject().put("ok",verified.optBoolean("ok",false)).put("partial_reduction",true)
+                    .put("remaining_qty",expected.toPlainString()).put("state",state.name).put("reconciliation",verified)
+            }
             val stillOpen = (0 until remaining.length()).any { i ->
                 val row = remaining.optJSONObject(i)
                     ?: throw IOException("Malformed position row after exit for $symbol")

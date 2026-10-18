@@ -145,4 +145,20 @@ def detect_complex_wave_patterns(
         sub=pts[-12:]
         add("W_X_Y_X_Z_COMBINATION_UNRESOLVED", sub,
             ("INTERNAL_CORRECTION_COMPONENTS_NOT_PROVEN",), sub[0][1])
+    # Actual ABC component boundaries, rather than 8/12 arbitrary swings.
+    # W/X/Y requires 9 legs (10 endpoints); W/X/Y/X/Z 15 (16 endpoints).
+    for count,groups,name in ((10,3,"W_X_Y_ZIGZAG_COMBINATION_CANDIDATE"),
+                              (16,5,"W_X_Y_X_Z_ZIGZAG_COMBINATION_CANDIDATE")):
+        if len(pts)<count:continue
+        sub=pts[-count:]
+        if sub[0][0]==wanted:continue  # correction begins opposite the motive origin
+        values=[-sign*p[1] for p in sub]
+        valid=True
+        for g in range(groups):
+            block=values[g*3:g*3+4];orientation=1 if g%2==0 else -1
+            a,b,c,d=[orientation*v for v in block]
+            valid=valid and a<c<b<d
+            if g%2==1:valid=valid and values[g*3-3]<values[g*3+3]<values[g*3]
+            if g%2==0 and g>0:valid=valid and values[g*3+3]>values[g*3-3]
+        if valid:add(name,sub,("ABC_COMPONENT_BOUNDARIES_OBSERVED","INTERNAL_COMPONENT_DEGREES_UNVERIFIED"),sub[0][1])
     return result
