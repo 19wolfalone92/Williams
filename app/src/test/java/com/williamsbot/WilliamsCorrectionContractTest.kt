@@ -5,7 +5,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsCorrectionContractTest {
-    @Test fun realFourFrameCandlesAndH1FractalReachBothCorrectionDirections() {
+    @Test fun fourFrameCandlesBlockFalseWaveFourCorrectionLongAndShort() {
         val fixture=JSONObject(requireNotNull(javaClass.getResource("/williams_correction_contract.json")).readText())
         val raw=fixture.getJSONObject("frames")
         val total=fixture.getDouble("mirror_sum")
@@ -35,18 +35,11 @@ class WilliamsCorrectionContractTest {
             assertEquals(expectedTrigger,signal.trigger,1e-9)
             val type=if (mirror) "SHORT_FRACTAL" else "FRACTAL"
             val proof=williamsCorrectionEntryContext(report,side,signalAt,type)
-            assertTrue(proof.allowed)
-            val parent=report.scenarios.single { it.id==proof.parentId }
-            assertEquals("6h",parent.frame)
-            assertEquals("W4",parent.label)
-            assertEquals(120,parent.scaleBars)
-            assertEquals("MINIMUM_ONLY",parent.w4Zero)
-            assertEquals(fixture.getLong("parent_origin"),parent.anchors.first().extremeAt)
-            val floor=if (mirror) total-fixture.getDouble("long_ceiling") else fixture.getDouble("long_floor")
-            val ceiling=if (mirror) total-fixture.getDouble("long_floor") else fixture.getDouble("long_ceiling")
-            assertEquals(floor,proof.parentFloor,1e-9)
-            assertEquals(ceiling,proof.parentCeiling,1e-9)
-            assertTrue(williamsCorrectionPriceAllowed(proof.toJson(),h1.last().c))
+            // Four higher-frame pivot endpoints mean W3, not W4.
+            // The previous test greenlit a countertrend trade by mislabeling W3.
+            assertFalse(proof.allowed)
+            assertFalse(report.scenarios.any { it.frame=="6h" && it.label=="W4" &&
+                it.status=="PROVISIONAL" && it.anchors.size < 5 })
             val missing=buildWilliamsWaveHierarchy(frames.filterKeys { it!="15m" },now)
             assertFalse(williamsCorrectionEntryContext(missing,side,signalAt,type).allowed)
             val future=frames.mapValues { (frame,bars) ->
