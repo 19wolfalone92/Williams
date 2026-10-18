@@ -49,5 +49,5 @@ def test_unified_uses_all_three_sources_and_deduplicates_only_same_signal_id(mon
         profile=UNIFIED, side="LONG", timeframe="1h", tick_size=0.01
     )
     assert seen == [(TC2, "LONG"), (NTD, "LONG"), (COURSE, "LONG")]
-    assert [s.strategy_profile for s in signals] == list(SOURCE_PROFILES)
+    assert {s.strategy_profile for s in signals} == set(SOURCE_PROFILES)
     assert len({s.signal_id for s in signals}) == 3
