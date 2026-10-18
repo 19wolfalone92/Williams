@@ -28,7 +28,7 @@ class WilliamsWaveHierarchyTest {
                 assertEquals(e.getString("w4_zero"),s.w4Zero)
                 assertEquals(e.getInt("scale_bars"),s.scaleBars)
             }
-            val completed=report.scenarios.first { it.label=="A" }
+            val completed=report.scenarios.first { it.label=="W5" }
             assertEquals(121,completed.scaleBars)
             assertEquals(50*hour,completed.anchors.first().extremeAt)
             assertEquals(53*hour,completed.anchors.first().knownAt)
