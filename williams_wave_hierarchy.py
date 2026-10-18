@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from math import isfinite
 from typing import Mapping, Sequence
+from williams_complex_waves import detect_complex_wave_patterns
 
 FRAME_MS = {"1m":60_000,"3m":180_000,"5m":300_000,"15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
             "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
@@ -97,7 +98,20 @@ class WaveHierarchy:
             return any(p==node and by_id.get(c) and by_id[c].frame==REQUIRED_FRAMES[index+1] and path(c,index+1)
                        for p,c in edges)
         contained=any(s.frame=="1d" and path(s.scenario_id,0) for s in self.scenarios)
-        return asdict(self) | {"schema_version": 1,
+        complex_patterns = []
+        # The outer leg's changing label is not proof of the internal degree.
+        # Serialize non-trading complex alternatives beside existing counts.
+        for scenario in self.scenarios:
+            if len(scenario.anchors) < 6:
+                continue
+            for p in detect_complex_wave_patterns(scenario.anchors,
+                                                  direction=scenario.direction,
+                                                  as_of=self.as_of):
+                complex_patterns.append(p.to_dict() | {
+                    "source_scenario_id":scenario.scenario_id,
+                    "frame":scenario.frame})
+        return asdict(self) | {"complex_wave_patterns":complex_patterns[:48],
+                              "schema_version": 1,
                               "wave_labels": "HYPOTHESES_NOT_CERTAINTY",
                               "chain": list(REQUIRED_FRAMES),"contained_chain_observed":contained,
                               "full_history":False,"can_place_orders":False,
