@@ -862,4 +862,4 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
     assert "htf1d.alligatorBearish && !htf1d.aoPositive" in enrich
     assert "hierarchy.links.any" in enrich
     assert 'link.relationship == "ALIGNED"' in enrich
-    assert 'p?.label == "W5" && c?.label == "W3"' in enrich
+    assert 'p?.activeLabel == "W5" && c?.activeLabel == "W3"' in enrich
