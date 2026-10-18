@@ -703,6 +703,18 @@ internal class NativeFuturesCampaignCoordinator(
     private val lock = Any()
     @Volatile private var observationSink: ((JSONArray) -> Unit)? = null
 
+    @Volatile private var editionSelectionProvider:(()->String)?=null
+    fun setEditionSelectionProvider(provider:()->String)=synchronized(lock) {
+        check(state==State.UNINITIALIZED) { "Edition selection must be bound before reconciliation" }
+        editionSelectionProvider=provider
+    }
+    fun configureWhenFlat(save:()->Unit)=synchronized(lock) {
+        check(state==State.READY && reservedFuturesPositionSymbols(emptyList(),intents()).isEmpty()) {
+            "Смена книги доступна после сверки Binance, без позиций и ожидающих входов"
+        }
+        save()
+    }
+
     fun setObservationSink(sink: (JSONArray) -> Unit) {
         observationSink = sink
     }
@@ -2095,6 +2107,9 @@ internal class NativeFuturesCampaignCoordinator(
     /** Persist the entry request before any account/order mutation. */
     fun submitPendingEntry(plan: EntryPlan): JSONObject = synchronized(lock) {
         val currentIntents = intents()
+        val selected=editionSelectionProvider?.invoke()
+        if(selected!=null && plan.signalType!="OPERATOR_FORCED_DIRECTION" && selected!=plan.strategyProfile)
+            return@synchronized safePreflightRejection("Williams edition changed while entry waited for coordinator admission")
         val isAddition=plan.entryClientId.isNotBlank()
         val prior=latestEntryIntentIndex(currentIntents,plan.symbol)?.let { currentIntents.optJSONObject(it) }
         val reentry=plan.reentryOwnerId.isNotBlank() && plan.reentryOwnerId==prior?.optString("client_id") &&

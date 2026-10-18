@@ -186,6 +186,23 @@ class NativeFuturesCoordinatorLifecycleTest {
         return coordinator to exchange
     }
 
+    @Test fun profileSelectionAndEntryAdmissionShareOneAuthorityAndPendingCampaignPreventsSwitching() {
+        var selected=williamsTc2Profile
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+        coordinator.setEditionSelectionProvider { selected }
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+        val stale=plan(NativeFuturesCampaignCoordinator.Direction.LONG)
+        coordinator.configureWhenFlat { selected=williamsNtdProfile }
+        assertFalse(coordinator.submitPendingEntry(stale).getBoolean("accepted"))
+        assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+        assertTrue(coordinator.submitPendingEntry(stale.copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL")).getBoolean("accepted"))
+        try {
+            coordinator.configureWhenFlat { selected=williamsCourseProfile }
+            fail("A pending campaign must prevent edition changes")
+        } catch(expected:IllegalStateException) { assertEquals(williamsNtdProfile,selected) }
+    }
+
     @Test fun severalNtdAdditionsUseSeparateEntryCapsAndOneAggregatePortfolioCap() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.values()) {
             val exchange=Exchange(direction);var now=System.currentTimeMillis()

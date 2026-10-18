@@ -1154,6 +1154,7 @@ private class NativeEngine(
                     check(RuntimeServiceState.active) { "Runtime service is not active before Futures exposure mutation" }
                 })
         }.also { coordinator ->
+            coordinator.setEditionSelectionProvider { williamsProfile }
             coordinator.setObservationSink { auditStore.recordCampaignSnapshot(it) }
             coordinator.setStructuralStopRecoveryProvider { symbol, direction, mark, quantity, entry ->
                 recoverMissingStructuralStop(symbol, direction, mark, quantity, entry)
@@ -9056,21 +9057,18 @@ private class NativeEngine(
         val next = FuturesLeverageSettings.fromJson(payload)
         val profile=payload.optString("strategy_profile",williamsProfile)
         require(profile in williamsEditionProfiles) { "Неизвестный профиль Вильямса" }
-        if(profile!=williamsProfile) {
-            check(futuresCampaignCoordinator.state==NativeFuturesCampaignCoordinator.State.READY &&
-                reservedFuturesPositionSymbols(emptyList(),futuresCampaignCoordinator.intentsSnapshot()).isEmpty()) {
-                "Смена книги доступна после сверки Binance, без позиций и ожидающих входов"
+        fun persist() {
+            check(prefs.edit().putString("williams_strategy_profile_v1",profile)
+                .putString("futures_leverage_settings_v1", next.toJson().toString()).commit()) {
+                "Не удалось сохранить настройки стратегии"
             }
+            futuresLeverageSettings=next
+            williamsProfile=profile
         }
-        check(prefs.edit().putString("williams_strategy_profile_v1",profile)
-            .putString("futures_leverage_settings_v1", next.toJson().toString()).commit()) {
-            "Не удалось сохранить плечо"
-        }
-        futuresLeverageSettings = next
-        williamsProfile=profile
+        if(profile!=williamsProfile) futuresCampaignCoordinator.configureWhenFlat { persist() } else persist()
         runCatching { auditStore.recordCockpitEvent("LEVERAGE_SETTINGS", detail = next.toJson().toString()) }
         return JSONObject().put("saved", true).put("settings", next.toJson())
-            .put("message", "Плечо сохранено для следующих входов; Binance подтвердит его перед ордером.")
+            .put("message", "Настройки сохранены для следующих входов; Binance подтвердит плечо перед ордером.")
     }
 
     fun settings(): JSONObject =
