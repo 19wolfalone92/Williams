@@ -405,7 +405,9 @@ def extract_ntd_balance_line_signal_specs(
         symbol=symbol,
         side="BUY" if side.upper()=="LONG" else "SELL",
         signal_type=SignalType.BALANCE_LINE,
-        role=SignalRole.ADD_ON,
+        # NTD p99: Balance-Line fifth dimension can lead the first fractal,
+        # so role means research ENTRY hypothesis only; execution stays blocked.
+        role=SignalRole.ENTRY,
         timeframe=timeframe,
         signal_bar_time_ms=signal_time,
         trigger_price=evidence.trigger_price,
