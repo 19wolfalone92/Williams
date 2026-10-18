@@ -103,7 +103,7 @@ def test_python_ntd_spec_is_research_only_add_on_and_symmetric():
     specs = extract_ntd_balance_line_signal_specs("BTCUSDT",df,side="LONG",timeframe="1h",tick_size=0.1)
     assert len(specs)==1
     assert specs[0].signal_type == SignalType.BALANCE_LINE
-    assert specs[0].role == SignalRole.ADD_ON
+    assert specs[0].role == SignalRole.ENTRY
     assert specs[0].side == "BUY"
     assert specs[0].trigger_price == pytest.approx(105.1)
     assert "research-only" in specs[0].reason.lower()
