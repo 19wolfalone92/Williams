@@ -260,3 +260,29 @@ def test_real_four_frame_candles_and_h1_wise_man_can_reach_correction_mode(mirro
     # Future higher and lower candles cannot change this already-known path.
     future={f:bars+[replace(bars[-1],t=bars[-1].t+FRAME_MS[f],h=float("nan"))] for f,bars in frames.items()}
     assert build_wave_hierarchy(future,payload["as_of"]).to_dict()==report.to_dict()
+
+
+def test_overlapping_fourth_keeps_non_executable_diagonal_hypothesis():
+    """An overlap is not an ordinary impulse, but a diagonal is possible."""
+    from williams_wave_hierarchy import WaveAnchor, WaveBar, hypotheses_from_anchors
+
+    hour = 3_600_000
+    candles = [WaveBar(i*hour, 130.0,131.0,129.0,130.0,1000)
+               for i in range(180)]
+    points = [("LOW",100.,10),("HIGH",120.,30),("LOW",110.,50),
+              ("HIGH",140.,75),("LOW",115.,100),("HIGH",150.,130)]
+    def count(points):
+        pivots = [WaveAnchor(k,p,i,i*hour,(i+3)*hour)
+                  for k,p,i in points]
+        return [h for h in hypotheses_from_anchors("1h",candles,pivots)
+                if h.label=="A"][0]
+    diag=count(points)
+    assert diag.status=="ALTERNATIVE"
+    assert diag.invalid_reasons==[]
+    assert "UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP" in diag.alternatives
+    assert diag.status!="PROVISIONAL"
+    invalid=count(points[:4]+[("LOW",109.,100)]+points[5:])
+    assert invalid.status=="INVALIDATED"
+    assert "W4_BREACHES_W3_OR_W4_END" in invalid.invalid_reasons
+    ordinary=count(points[:4]+[("LOW",125.,100)]+points[5:])
+    assert ordinary.status=="PROVISIONAL"
