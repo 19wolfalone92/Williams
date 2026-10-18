@@ -3189,7 +3189,9 @@ internal class NativeFuturesCampaignCoordinator(
         require(plan.symbol.uppercase(Locale.US) in allowedSymbols) {
             "Symbol is outside the approved Futures universe"
         }
-        require(plan.strategyProfile in williamsEditionProfiles) { "Unknown Williams edition" }
+        require(plan.strategyProfile in williamsSourceProfiles) {
+            "Futures exposure requires a pinned Williams source, never the unified selector itself"
+        }
         val family=plan.signalType.removePrefix("SHORT_").removePrefix("LONG_")
         require(plan.strategyProfile!=williamsNtdProfile || family in setOf("FRACTAL","AO_SAUCER","AO_ZERO_LINE","AO_TWIN_PEAKS","AC_SIGNAL","ZONE_ADD_ON","BALANCE_LINE")) { "Signal does not belong to NTD" }
         require(plan.strategyProfile!=williamsCourseProfile || family in setOf("COURSE_HUMP","COURSE_THUMB","COURSE_SQUAT")) { "Signal does not belong to Course" }
