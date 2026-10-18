@@ -523,3 +523,21 @@ def test_ntd_profitable_authenticated_cycle_allows_one_new_dimension_entry(armed
         bot._reconcile_pending()
         current=bot.engine.load_campaign(admitted["campaign_id"])
         assert current.position_qty>0 and current.tags["strategy_profile"]=="NTD_FIVE_DIMENSIONS"
+
+
+@pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
+def test_actual_gap_fill_cannot_reuse_the_planned_risk_reservation(armed_runtime):
+    bot,exchange,armed=armed_runtime
+    exchange.fill_entry()
+    actual=106 if exchange.amount>0 else 94
+    exchange.entry_price=actual
+    exchange.orders[42]["avgPrice"]=str(actual)
+    result=bot._reconcile_pending()
+    assert result
+    campaign=bot.engine.load_campaign(armed["campaign_id"])
+    assert campaign.tags["actual_risk_audit"]["status"]=="BLOCKED"
+    assert campaign.tags["actual_risk_audit"]["reason"]=="ACTUAL_ENTRY_RISK_EXCEEDS_0_25_PERCENT"
+    assert bot.state(campaign.symbol)=="RECONCILE_REQUIRED"
+    assert any(row.get("closePosition")=="true" and row["algoStatus"]=="NEW" for row in exchange.algos.values())
+    assert not bot.recover()["ok"]
+    assert bot.manual_sell(campaign.symbol)["sold"]

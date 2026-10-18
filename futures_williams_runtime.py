@@ -1388,6 +1388,35 @@ class FuturesWilliamsRuntime:
         # Rounding down must also reduce the reported margin reservation.
         return qty, risk_quote, qty * trigger
 
+    def _audit_confirmed_futures_risk(self,campaign):
+        """Measure protected exposure after fills; never mistake its plan for actual risk."""
+        equity=self._equity()
+        allowance=2*float(os.getenv("FEE_BUFFER_PER_SIDE_PCT","0.001"))+float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT","0.0015"))
+        qty=float(campaign.position_qty);entry=float(campaign.average_entry_price);stop=float(campaign.current_stop_price)
+        if not all(math.isfinite(v) and v>0 for v in (equity,qty,entry,stop)):
+            raise RuntimeError("ACTUAL_FUTURES_RISK_INPUTS_UNPROVEN")
+        gross=qty*max(0,(entry-stop) if campaign.side=="BUY" else (stop-entry))
+        measured=gross+qty*entry*allowance
+        campaign.open_risk_quote=measured
+        reason=""
+        for fill in campaign.tags.get("verified_entry_risk_components",[]):
+            values=[float(fill[k]) for k in ("quantity","price","stop","equity")]
+            if not all(math.isfinite(v) and v>0 for v in values):reason="ACTUAL_ENTRY_RISK_UNPROVEN";break
+            q,p,s,e=values
+            loss=q*(abs(p-s)+p*allowance)
+            if loss>e*.0025+1e-9:reason="ACTUAL_ENTRY_RISK_EXCEEDS_0_25_PERCENT";break
+        others=sum(float(row["open_risk_quote"] or 0)+float(row["pending_risk_quote"] or 0)
+            for row in self.db.open_campaigns() if row["campaign_id"]!=campaign.campaign_id)
+        if not reason and measured+others+float(campaign.pending_risk_quote or 0)>equity*self.config.max_total_risk_pct+1e-9:
+            reason="ACTUAL_PORTFOLIO_RISK_EXCEEDS_0_60_PERCENT"
+        campaign.tags["actual_risk_audit"]={"status":"BLOCKED" if reason else "PASS","reason":reason,
+            "measured_quote":measured,"equity":equity,"checked_at":int(time.time()*1000)}
+        if reason:
+            campaign.reconciliation_state="REQUIRED";campaign.health="RED"
+            self._set_state(campaign.symbol,"RECONCILE_REQUIRED")
+        self.db.save_campaign(campaign)
+        return not reason
+
     def _ntd_reentry_source(self,signal):
         row=self.db.conn.execute("SELECT campaign_id FROM campaigns WHERE symbol=? ORDER BY created_at DESC,rowid DESC LIMIT 1",(signal.symbol,)).fetchone()
         previous=self.engine.load_campaign(row["campaign_id"]) if row else None
@@ -1543,6 +1572,7 @@ class FuturesWilliamsRuntime:
         campaign.capital_reserved_quote = notional / self.config.leverage_for(symbol)
         campaign.tags["futures_leverage"] = self.config.leverage_for(symbol)
         campaign.tags["pending_order_quantity"] = qty
+        campaign.tags["pending_risk_equity"]=equity
         campaign.tags["pending_order_trigger"] = trigger
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
@@ -1702,6 +1732,8 @@ class FuturesWilliamsRuntime:
         if not self.db.try_claim_state(admitted_key,"true"):
             raise RuntimeError("This campaign signal is already owned by another admission")
         campaign.tags["pending_order_quantity"] = qty
+        campaign.tags["pending_order_stop"]=stop
+        campaign.tags["pending_risk_equity"]=equity
         campaign.tags["pending_order_trigger"] = trigger
         campaign.tags["pending_order_type"] = "MARKET" if market_close else "STOP_MARKET"
         campaign.pending_risk_quote = risk_quote
@@ -2556,6 +2588,7 @@ class FuturesWilliamsRuntime:
                                 f"{symbol}: partial conditional order cancellation ambiguous: {exc}"
                             ) from exc
 
+                    execution_price=avg
                     position = self._position(symbol)
                     pos_qty = abs(self._signed_position_qty(position))
                     avg = float(position.get("entryPrice", avg) or avg)
@@ -2700,9 +2733,15 @@ class FuturesWilliamsRuntime:
                             continue
                         self._set_state(symbol, "OPEN")
 
+                    components=campaign.tags.setdefault("verified_entry_risk_components",[])
+                    if not any(fill["client_id"]==cid for fill in components):
+                        components.append({"client_id":cid,"quantity":executed,"price":execution_price,
+                            "stop":float(campaign.tags.get("pending_order_stop",campaign.initial_stop_price)),
+                            "equity":float(campaign.tags.get("pending_risk_equity") or self._equity())})
                     self.db.state_delete(f"entry_client_order_id:{symbol}")
                     campaign.tags.pop("pending_order_id", None)
                     self._record_liquidation_status(campaign, self._liquidation_status(campaign, position))
+                    self._audit_confirmed_futures_risk(campaign)
                     results.append({"symbol": symbol, "campaign_id": campaign.campaign_id, "state": self.state(symbol), "filled_quantity": executed})
                     continue
 
@@ -2960,6 +2999,7 @@ class FuturesWilliamsRuntime:
                 campaign.health = "GREEN"
                 self.db.save_campaign(campaign)
                 self._record_liquidation_status(campaign, self._liquidation_status(campaign, position))
+                self._audit_confirmed_futures_risk(campaign)
             except Exception as exc:
                 self._set_state(symbol, "RECONCILE_REQUIRED")
                 self.db.log_event("ERROR", "futures_recovery_error", str(exc), {"symbol": symbol})
