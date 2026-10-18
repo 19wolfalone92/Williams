@@ -32,7 +32,7 @@ def rhythm_bars(mirror=False):
 def test_real_sequence_bars_not_cached_bar_count_control_the_w4_scale(mirror,direction):
     bars = rhythm_bars(mirror)
     report = build_wave_hierarchy({"1h":bars},len(bars)*HOUR)
-    senior = next(s for s in report.scenarios if s.label == "A" and s.direction == direction)
+    senior = next(s for s in report.scenarios if s.label == "W5" and s.direction == direction)
     assert senior.status == "PROVISIONAL"
     assert senior.w4_zero == "MINIMUM_ONLY"
     assert senior.scale_bars == 121  # origin at bar 50, observed through bar 170
@@ -275,7 +275,7 @@ def test_overlapping_fourth_keeps_non_executable_diagonal_hypothesis():
         pivots = [WaveAnchor(k,p,i,i*hour,(i+3)*hour)
                   for k,p,i in points]
         return [h for h in hypotheses_from_anchors("1h",candles,pivots)
-                if h.label=="A"][0]
+                if h.label=="W5"][0]
     diag=count(points)
     assert diag.status=="ALTERNATIVE"
     assert diag.invalid_reasons==[]
