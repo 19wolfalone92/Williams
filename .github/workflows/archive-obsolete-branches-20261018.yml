@@ -1,0 +1,60 @@
+name: One-time archival of obsolete Williams branches
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/archive-obsolete-branches-20261018.yml'
+permissions:
+  contents: write
+  pull-requests: read
+jobs:
+  archive:
+    if: github.repository == '19wolfalone92/Williams'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify, tag, and delete obsolete unreferenced branches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          prs_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&per_page=100")"
+          while IFS='|' read -r branch expected; do
+            [[ -n "$branch" ]] || continue
+            [[ "$branch" != main ]] || exit 5
+            actual="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch}" --jq .object.sha)"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "SKIP changed: $branch"
+              continue
+            fi
+            is_in_pr="$(jq -r --arg name "$branch" 'any(.[]; .head.ref == $name or .base.ref == $name)' <<< "$prs_json")"
+            if [[ "$is_in_pr" == "true" ]]; then
+              echo "SKIP referenced by an open PR: $branch"
+              continue
+            fi
+            backup="refs/tags/branch-archive-20261018/${branch}"
+            echo "Preserving $branch at $backup ($expected)"
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="$backup" -f sha="$expected" >/dev/null
+            echo "DELETE archived branch: $branch"
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}"
+          done <<'BRANCHES'
+          archive/main-before-futures-consolidation-20261016|04da5f9c09572e99ff310be3a1908179165e528c
+          audit/p0-controlled-corrections|38694ed7c11d45a87af5642d9d67f7d91dd5d38b
+          audit/p0-team-history-recovery|7a397e498e9a0f332577b92379c7f7f9a0059c1c
+          audit/task-0005-p1-remediation|777b855bbad7e25a1267101adacbfe307a9953b7
+          audit/williams-2.1-forensic-20261010|2cee3f2e1a68c53953ef0f8567f2c59a2d90989f
+          audit/williams-2.1-task-002-16-device-evidence|658413dde1f021cd4a3c262ad465c363c460989a
+          audit/williams-2.1-task-007-recovery|e7ab3e72a0a7a85823ec898da28a1761476b84de
+          audit/williams-2.1-task-008-spot-testnet|7c4514d22ebca19861de2183317f7c39f3263e0c
+          audit/williams-book-conformance-wm2-current|330707480696d06f2f0fb99cd082b264eaeb5a77
+          campaign-final-hardening-20261008|7c198268ef1ca0f0ced4bc04a87c616b3465f797
+          campaign-hardening-repair-20261008|eca30cc023a228d6a0658816fc202bbe2de61e1a
+          feat/campaign-engine-hardening|88ec8e982a3e1b12c8b8ede4de7d30473092b2cd
+          task-0011-durable-boundary|1aa9d23b2ba926c48e71d90f2361dc1a500555ba
+          williams-intraday-core-1.0-20261008|84e1b2ca0d0ddedb290cd3661ca6960ca7026104
+          audit/williams-book-conformance-wm2|dc9de762a03389ca95eda6ccb72056abc4b8f27a
+          fix/deep-runtime-self-heal-4.23.0|2e58995a43cf2855be798a5e72b706c63de959af
+          fix/diagnostics6-reconcile-20261017|d9537c68ac24b03a76345986709dbd0dde5aae17
+          fix/williams-fractal-break-even-trailing-20261017|1942b1fb0010ce9c92e80d28b9a3f1b8a8306b4f
+          BRANCHES
