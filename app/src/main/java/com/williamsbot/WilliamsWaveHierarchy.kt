@@ -193,7 +193,11 @@ internal fun williamsHypothesesFromAnchors(
         if (price[1] <= price[0]) reasons += "W1_NOT_IMPULSIVE"
         if (n >= 3 && !(price[0] < price[2] && price[2] < price[1])) reasons += "W2_INVALIDATES_ORIGIN"
         if (n >= 4 && price[3] <= price[1]) reasons += "W3_DOES_NOT_EXTEND_W1"
-        if (n >= 5 && !(price[1] < price[4] && price[4] < price[3])) reasons += "CLASSIC_W4_OVERLAP_OR_INVALID_RETRACEMENT"
+        // W4/W1 overlap may be a leading/ending diagonal rather than a
+        // normal impulse. Never elevate it to a tradable confirmed count:
+        // price containment alone cannot prove diagonal subwave geometry.
+        val diagonalOverlap = n >= 5 && price[2] < price[4] && price[4] <= price[1]
+        if (n >= 5 && !(price[2] < price[4] && price[4] < price[3])) reasons += "W4_BREACHES_W3_OR_W4_END"
         if (n >= 6) {
             val legs = listOf(price[1]-price[0],price[3]-price[2],price[5]-price[4])
             if (legs.min() <= 0 || legs[1] < minOf(legs[0],legs[2])) reasons += "W3_SHORTEST_OR_NEGATIVE_MOTIVE_LEG"
@@ -208,7 +212,8 @@ internal fun williamsHypothesesFromAnchors(
         val direction = if (sign == 1) "UP" else "DOWN"
         val h = WilliamsWaveScenario("$frame:$direction:${p.first().extremeAt}:$n",frame,direction,label,p,
             bars.last().t+duration,p.last().extremeAt,leg.minOf { it.l },leg.maxOf { it.h },inv,
-            if (reasons.isEmpty()) "PROVISIONAL" else "INVALIDATED",reasons)
+            if (reasons.isNotEmpty()) "INVALIDATED" else if (diagonalOverlap) "ALTERNATIVE" else "PROVISIONAL",reasons)
+        if (diagonalOverlap && reasons.isEmpty()) h.alternatives += "UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP"
         val activeSign = if (n in listOf(2,4,6,8)) -sign else sign
         if (n < 9 && reasons.isEmpty() && activeSign * (bars.last().c-p.last().price) <= 0) {
             h.status = "UNRESOLVED"; h.alternatives += "PRIOR_LEG_EXTENSION_OR_UNCONFIRMED_TURN"
