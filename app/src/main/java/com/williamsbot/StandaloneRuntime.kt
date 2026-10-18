@@ -5420,10 +5420,14 @@ private class NativeEngine(
                 .joinToString("") { "%02x".format(it) }.take(20)
             return "W2A_${symbol.take(7)}_$digest"
         }
-        val signal=candidate.campaignSignals.filter { it.strategyProfile==profile &&
-            campaignSignalDirection(it.type)==direction && it.signalBarTimeMs>latest &&
-            isSignalFresh(it.signalBarTimeMs,now,18_000_000L) && children.none { child -> child.optString("client_id")==additionClientId(it) } }.minByOrNull { it.signalBarTimeMs } ?: return
         val rules=symbolFilters(symbol);val mark=futuresMarketData.markPrice(symbol)
+        val signal=candidate.campaignSignals.filter { it.strategyProfile==profile &&
+            campaignSignalDirection(it.type)==direction && williamsAdditionTimeEligible(profile,it.signalBarTimeMs,it.type,
+                owner.optLong("signal_bar_time_ms"),owner.optString("signal_type"),latest) &&
+            isSignalFresh(it.signalBarTimeMs,now,18_000_000L) &&
+            (it.executionSemantics!="MARKET_ON_CLOSE" || williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,now,it.triggerPrice,mark)==null) &&
+            children.none { child -> child.optString("client_id")==additionClientId(it) } }
+            .minWithOrNull(compareBy<CampaignSignalN> { it.executionSemantics!="MARKET_ON_CLOSE" }.thenBy { it.signalBarTimeMs }) ?: return
         val market=signal.executionSemantics=="MARKET_ON_CLOSE"
         if(market && (profile!=williamsNtdProfile || signal.type.removePrefix("SHORT_")!="ZONE_ADD_ON" ||
             williamsMarketOnCloseReason(signal.signalBarTimeMs,3_600_000L,now,signal.triggerPrice,mark)!=null)) return
@@ -7417,8 +7421,13 @@ private class NativeEngine(
         for (omitted in 0..minOf(5,candles.size-45)) {
             val prefix = candles.take(candles.size-omitted)
             val signals=editionCampaignSignals(symbol,prefix,"1h",tick,profile,exitMode=true)
-                .filter { campaignSignalDirection(it.type)==opposingSide && it.executionSemantics=="STOP_ENTRY" }
+                .filter { campaignSignalDirection(it.type)==opposingSide }
             for (signal in signals.filter { profile==williamsNtdProfile || it.role == "ENTRY" }) {
+                if(profile==williamsNtdProfile && signal.executionSemantics=="MARKET_ON_CLOSE") {
+                    if(williamsOpposingCloseEventTriggered(signal.signalBarTimeMs,3_600_000L,openedAt,now)) return signal
+                    continue
+                }
+                if(signal.executionSemantics!="STOP_ENTRY") continue
                 if (williamsOpposingLevelTriggered(opposingSide,signal.triggerPrice,
                     signal.signalBarTimeMs+3_600_000L,openedAt,mark,
                     candles.drop(prefix.size).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },

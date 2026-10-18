@@ -43,6 +43,8 @@ internal fun proveWilliamsWaveSubdivisions(parent:List<WilliamsWaveAnchor>,child
 }
 internal fun enrichWilliamsComplexSubdivisions(pattern:String,parent:List<WilliamsWaveAnchor>,children:List<WilliamsWaveAnchor>,
     parentDuration:Long,asOf:Long):WilliamsSubdivisionProof {
+    if(pattern.startsWith("FLAT_ABC_INCOMPLETE_OR_TRUNCATED_C"))
+        return WilliamsSubdivisionProof("UNRESOLVED",listOf(3,3,5),emptyList(),0L,"C_END_OR_TRUNCATION_UNCONFIRMED")
     val expected=when {
         pattern.startsWith("ZIGZAG_ABC") -> listOf(5,3,5)
         pattern.contains("FLAT_ABC") -> listOf(3,3,5)

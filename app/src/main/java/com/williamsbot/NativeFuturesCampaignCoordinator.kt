@@ -2125,7 +2125,8 @@ internal class NativeFuturesCampaignCoordinator(
             primary.optString("strategy_profile",williamsTc2Profile)!=plan.strategyProfile ||
             plan.leverage!=primary.optInt("requested_leverage") ||
             plan.protectiveStop.toBigDecimalOrNull()!=primary.optString("protective_stop").toBigDecimalOrNull() ||
-            plan.signalBarTimeMs<=primary.optLong("signal_bar_time_ms",0L) ||
+            !williamsAdditionTimeEligible(plan.strategyProfile,plan.signalBarTimeMs,plan.signalType,
+                primary.optLong("signal_bar_time_ms",0L),primary.optString("signal_type"),primary.optLong("signal_bar_time_ms",0L)) ||
             (0 until currentIntents.length()).mapNotNull { currentIntents.optJSONObject(it) }.any {
                 it.optString("intent_role")=="ADD_ON" && it.optString("entry_client_id")==plan.entryClientId &&
                     exchangeOrderStatus(it) !in ENTRY_ORDER_TERMINAL_STATUSES }))

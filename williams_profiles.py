@@ -15,6 +15,13 @@ from williams_signals import (
 from williams_wave_hierarchy import FRAME_MS,wave_bars_from_dataframe
 
 
+def addition_signal_time_allowed(signal,campaign):
+    if signal.signal_id==campaign.origin_signal_id:return False
+    if campaign.tags.get("strategy_profile",TC2)==NTD:
+        return signal.signal_bar_time_ms>=int(campaign.tags.get("signal_bar_time_ms",0))>0
+    return signal.signal_bar_time_ms>int(campaign.tags.get("last_signal_time_ms",0))
+
+
 def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_mode=False,**tc2_kwargs):
     if profile not in PROFILES or side not in {"LONG","SHORT"}:
         raise ValueError("Invalid Williams edition or direction")
@@ -40,7 +47,7 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
                 # An opposing exit signal is allowed on the position's side of
                 # the mouth. It cannot authorize a reverse/new position.
                 work["teeth_current"]=1e-12 if side=="LONG" else float(ind.high.max())*100
-            specs.extend(detector(symbol,work,**kwargs))
+            specs.extend(detector(symbol,work,**kwargs,**({"exit_mode":exit_mode} if detector==extract_ntd_zone_add_on_specs else {})))
         def line(name):
             col=next((c for c in (name+"_current",name+"_shifted",name) if c in ind),None)
             return [float(v) for v in ind[col]] if col else [float("nan")]*len(ind)
@@ -65,8 +72,8 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
             if setup is None:continue
             # Course PDF92: Hump/fractal follows current AO momentum. The
             # Thumb is a distinct counter-move tool for a bracketed market.
-            if setup.kind=="COURSE_HUMP" and rhythm["momentum"]!=direction:continue
-            if setup.kind=="COURSE_SQUAT" and (rhythm["twr"]!=direction or rhythm["momentum"]!=direction):continue
+            if not exit_mode and setup.kind=="COURSE_HUMP" and rhythm["momentum"]!=direction:continue
+            if not exit_mode and setup.kind=="COURSE_SQUAT" and (rhythm["twr"]!=direction or rhythm["momentum"]!=direction):continue
             setups.append(replace(setup,context=setup.context|{"rhythm":rhythm}))
     for setup in setups:
         when=bars[setup.known_index].t
@@ -77,6 +84,8 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
             protective_reference=setup.stop,invalidation_price=setup.invalidation,source_candle_index=setup.known_index,
             expires_at_ms=when+5*FRAME_MS[timeframe],strategy_profile=profile,setup_context=setup.context,
             reason=profile+": "+setup.kind+"; confirmed closed-bar formation"))
+    specs=[replace(s,expires_at_ms=s.signal_bar_time_ms+FRAME_MS[timeframe]+90_000)
+        if s.signal_type==SignalType.ZONE_ADD_ON and s.execution_semantics=="MARKET_ON_CLOSE" else s for s in specs]
     specs=[replace(s,signal_id=f"{s.symbol}:{timeframe}:{s.side}:BALANCE_LINE:{s.setup_context['formation_key']}")
         if s.signal_type==SignalType.BALANCE_LINE else s for s in specs]
     # A single-tick buffer also protects AO/AC/fractal signal-bar extrema.

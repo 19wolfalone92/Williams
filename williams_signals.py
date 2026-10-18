@@ -672,6 +672,7 @@ def extract_ntd_zone_add_on_specs(
     timeframe: str,
     tick_size: float,
     max_age_bars: int = 1,
+    exit_mode: bool = False,
 ) -> list[SignalSpec]:
     """NTD ch7: two matching zone bars + favourable CLOSE vs previous CLOSE.
 
@@ -684,10 +685,10 @@ def extract_ntd_zone_add_on_specs(
         return []
     required={"high","low","close","ao","ac"}
     gate_col="long_fractal_outside" if direction=="LONG" else "short_fractal_outside"
-    if not required.issubset(ind.columns) or gate_col not in ind.columns:
+    if not required.issubset(ind.columns) or (not exit_mode and gate_col not in ind.columns):
         return []
     current,previous=ind.iloc[-1],ind.iloc[-2]
-    if not bool(current.get(gate_col,False)):
+    if not exit_mode and not bool(current.get(gate_col,False)):
         return []
     sign=1 if direction=="LONG" else -1
     run=0
@@ -733,7 +734,7 @@ def extract_ntd_zone_add_on_specs(
             "NTD Red Zone add-on at favourable completed close; execution unsupported by TC2"
         ),
         source_candle_index=len(ind) - 1,
-        expires_at_ms=_expiry(signal_time, timeframe, max_age_bars),
+        expires_at_ms=_expiry(signal_time, timeframe, max_age_bars)+90_000,
     )]
 
 

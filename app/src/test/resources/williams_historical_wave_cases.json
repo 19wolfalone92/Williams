@@ -1,0 +1,3235 @@
+{
+  "source": "BINANCE_PUBLIC_USDS_M_MAINNET",
+  "source_period": "2024-09-12..2025-01-15 UTC",
+  "cases": [
+    {
+      "symbol": "AVAXUSDT",
+      "frame": "1d",
+      "child_frame": "6h",
+      "as_of": 1729728000000,
+      "candidate": {
+        "pattern": "ENDING_OR_LEADING_DIAGONAL_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "UP",
+        "start_at": 1727913600000,
+        "end_at": 1729468800000,
+        "known_at": 1729728000000,
+        "invalidation": 25.05,
+        "reasons": [
+          "W4_OVERLAPS_W1",
+          "INTERNAL_3_OR_5_LEGS_UNVERIFIED"
+        ],
+        "can_place_orders": false
+      },
+      "proof": {
+        "status": "PRICE_SUBDIVISIONS_CONFIRMED",
+        "expected": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "observed": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "child_known_at": 1729533600000,
+        "reason": "REAL_CONFIRMED_CHILD_PIVOTS"
+      },
+      "parent": [
+        {
+          "kind": "LOW",
+          "price": 23.866,
+          "index": 21,
+          "extreme_at": 1727913600000,
+          "known_at": 1728172800000
+        },
+        {
+          "kind": "HIGH",
+          "price": 27.728,
+          "index": 25,
+          "extreme_at": 1728259200000,
+          "known_at": 1728518400000
+        },
+        {
+          "kind": "LOW",
+          "price": 25.05,
+          "index": 28,
+          "extreme_at": 1728518400000,
+          "known_at": 1728777600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 29.858,
+          "index": 32,
+          "extreme_at": 1728864000000,
+          "known_at": 1729123200000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.786,
+          "index": 35,
+          "extreme_at": 1729123200000,
+          "known_at": 1729382400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 29.333,
+          "index": 39,
+          "extreme_at": 1729468800000,
+          "known_at": 1729728000000
+        }
+      ],
+      "child": [
+        {
+          "kind": "LOW",
+          "price": 23.866,
+          "index": 86,
+          "extreme_at": 1727956800000,
+          "known_at": 1728021600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 26.472,
+          "index": 90,
+          "extreme_at": 1728043200000,
+          "known_at": 1728108000000
+        },
+        {
+          "kind": "LOW",
+          "price": 25.08,
+          "index": 95,
+          "extreme_at": 1728151200000,
+          "known_at": 1728216000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 27.728,
+          "index": 102,
+          "extreme_at": 1728302400000,
+          "known_at": 1728367200000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.01,
+          "index": 106,
+          "extreme_at": 1728388800000,
+          "known_at": 1728453600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 26.354,
+          "index": 113,
+          "extreme_at": 1728540000000,
+          "known_at": 1728604800000
+        },
+        {
+          "kind": "LOW",
+          "price": 25.05,
+          "index": 115,
+          "extreme_at": 1728583200000,
+          "known_at": 1728648000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 29.364,
+          "index": 122,
+          "extreme_at": 1728734400000,
+          "known_at": 1728799200000
+        },
+        {
+          "kind": "LOW",
+          "price": 28.269,
+          "index": 127,
+          "extreme_at": 1728842400000,
+          "known_at": 1728907200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 29.858,
+          "index": 128,
+          "extreme_at": 1728864000000,
+          "known_at": 1728928800000
+        },
+        {
+          "kind": "LOW",
+          "price": 27.236,
+          "index": 137,
+          "extreme_at": 1729058400000,
+          "known_at": 1729123200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 28.257,
+          "index": 140,
+          "extreme_at": 1729123200000,
+          "known_at": 1729188000000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.786,
+          "index": 143,
+          "extreme_at": 1729188000000,
+          "known_at": 1729252800000
+        },
+        {
+          "kind": "HIGH",
+          "price": 28.446,
+          "index": 148,
+          "extreme_at": 1729296000000,
+          "known_at": 1729360800000
+        },
+        {
+          "kind": "LOW",
+          "price": 27.701,
+          "index": 150,
+          "extreme_at": 1729339200000,
+          "known_at": 1729404000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 29.333,
+          "index": 156,
+          "extreme_at": 1729468800000,
+          "known_at": 1729533600000
+        },
+        {
+          "kind": "LOW",
+          "price": 27.363,
+          "index": 158,
+          "extreme_at": 1729512000000,
+          "known_at": 1729576800000
+        }
+      ],
+      "operation": "SUBDIVISION"
+    },
+    {
+      "symbol": "AVAXUSDT",
+      "frame": "1h",
+      "child_frame": "15m",
+      "as_of": 1730214000000,
+      "candidate": {
+        "pattern": "ENDING_OR_LEADING_DIAGONAL_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "UP",
+        "start_at": 1730134800000,
+        "end_at": 1730203200000,
+        "known_at": 1730214000000,
+        "invalidation": 26.167,
+        "reasons": [
+          "W4_OVERLAPS_W1",
+          "INTERNAL_3_OR_5_LEGS_UNVERIFIED"
+        ],
+        "can_place_orders": false
+      },
+      "proof": {
+        "status": "PRICE_SUBDIVISIONS_CONFIRMED",
+        "expected": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "observed": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "child_known_at": 1730205900000,
+        "reason": "REAL_CONFIRMED_CHILD_PIVOTS"
+      },
+      "parent": [
+        {
+          "kind": "LOW",
+          "price": 25.331,
+          "index": 1121,
+          "extreme_at": 1730134800000,
+          "known_at": 1730145600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 26.522,
+          "index": 1126,
+          "extreme_at": 1730152800000,
+          "known_at": 1730163600000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.167,
+          "index": 1128,
+          "extreme_at": 1730160000000,
+          "known_at": 1730170800000
+        },
+        {
+          "kind": "HIGH",
+          "price": 26.974,
+          "index": 1131,
+          "extreme_at": 1730170800000,
+          "known_at": 1730181600000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.459,
+          "index": 1135,
+          "extreme_at": 1730185200000,
+          "known_at": 1730196000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 26.837,
+          "index": 1140,
+          "extreme_at": 1730203200000,
+          "known_at": 1730214000000
+        }
+      ],
+      "child": [
+        {
+          "kind": "LOW",
+          "price": 25.331,
+          "index": 4484,
+          "extreme_at": 1730134800000,
+          "known_at": 1730137500000
+        },
+        {
+          "kind": "HIGH",
+          "price": 25.78,
+          "index": 4486,
+          "extreme_at": 1730136600000,
+          "known_at": 1730139300000
+        },
+        {
+          "kind": "LOW",
+          "price": 25.468,
+          "index": 4491,
+          "extreme_at": 1730141100000,
+          "known_at": 1730143800000
+        },
+        {
+          "kind": "HIGH",
+          "price": 26.522,
+          "index": 4505,
+          "extreme_at": 1730153700000,
+          "known_at": 1730156400000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.242,
+          "index": 4507,
+          "extreme_at": 1730155500000,
+          "known_at": 1730158200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 26.473,
+          "index": 4508,
+          "extreme_at": 1730156400000,
+          "known_at": 1730159100000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.167,
+          "index": 4512,
+          "extreme_at": 1730160000000,
+          "known_at": 1730162700000
+        },
+        {
+          "kind": "HIGH",
+          "price": 26.424,
+          "index": 4515,
+          "extreme_at": 1730162700000,
+          "known_at": 1730165400000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.24,
+          "index": 4518,
+          "extreme_at": 1730165400000,
+          "known_at": 1730168100000
+        },
+        {
+          "kind": "HIGH",
+          "price": 26.974,
+          "index": 4524,
+          "extreme_at": 1730170800000,
+          "known_at": 1730173500000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.584,
+          "index": 4534,
+          "extreme_at": 1730179800000,
+          "known_at": 1730182500000
+        },
+        {
+          "kind": "HIGH",
+          "price": 26.713,
+          "index": 4536,
+          "extreme_at": 1730181600000,
+          "known_at": 1730184300000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.459,
+          "index": 4543,
+          "extreme_at": 1730187900000,
+          "known_at": 1730190600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 26.661,
+          "index": 4546,
+          "extreme_at": 1730190600000,
+          "known_at": 1730193300000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.481,
+          "index": 4553,
+          "extreme_at": 1730196900000,
+          "known_at": 1730199600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 26.837,
+          "index": 4560,
+          "extreme_at": 1730203200000,
+          "known_at": 1730205900000
+        },
+        {
+          "kind": "LOW",
+          "price": 26.58,
+          "index": 4563,
+          "extreme_at": 1730205900000,
+          "known_at": 1730208600000
+        }
+      ],
+      "operation": "SUBDIVISION"
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "frame": "1h",
+      "child_frame": "15m",
+      "as_of": 1735117200000,
+      "candidate": {
+        "pattern": "ENDING_OR_LEADING_DIAGONAL_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "UP",
+        "start_at": 1735034400000,
+        "end_at": 1735106400000,
+        "known_at": 1735117200000,
+        "invalidation": 0.32759,
+        "reasons": [
+          "W4_OVERLAPS_W1",
+          "INTERNAL_3_OR_5_LEGS_UNVERIFIED"
+        ],
+        "can_place_orders": false
+      },
+      "proof": {
+        "status": "PRICE_SUBDIVISIONS_CONFIRMED",
+        "expected": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "observed": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "child_known_at": 1735110000000,
+        "reason": "REAL_CONFIRMED_CHILD_PIVOTS"
+      },
+      "parent": [
+        {
+          "kind": "LOW",
+          "price": 0.31745,
+          "index": 2482,
+          "extreme_at": 1735034400000,
+          "known_at": 1735045200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.34032,
+          "index": 2487,
+          "extreme_at": 1735052400000,
+          "known_at": 1735063200000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.32759,
+          "index": 2492,
+          "extreme_at": 1735070400000,
+          "known_at": 1735081200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3399,
+          "index": 2496,
+          "extreme_at": 1735084800000,
+          "known_at": 1735095600000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33109,
+          "index": 2500,
+          "extreme_at": 1735099200000,
+          "known_at": 1735110000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33538,
+          "index": 2502,
+          "extreme_at": 1735106400000,
+          "known_at": 1735117200000
+        }
+      ],
+      "child": [
+        {
+          "kind": "LOW",
+          "price": 0.31745,
+          "index": 9930,
+          "extreme_at": 1735036200000,
+          "known_at": 1735038900000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.32175,
+          "index": 9934,
+          "extreme_at": 1735039800000,
+          "known_at": 1735042500000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.319,
+          "index": 9937,
+          "extreme_at": 1735042500000,
+          "known_at": 1735045200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.34032,
+          "index": 9950,
+          "extreme_at": 1735054200000,
+          "known_at": 1735056900000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33158,
+          "index": 9955,
+          "extreme_at": 1735058700000,
+          "known_at": 1735061400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33882,
+          "index": 9961,
+          "extreme_at": 1735064100000,
+          "known_at": 1735066800000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.32759,
+          "index": 9968,
+          "extreme_at": 1735070400000,
+          "known_at": 1735073100000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3384,
+          "index": 9982,
+          "extreme_at": 1735083000000,
+          "known_at": 1735085700000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33479,
+          "index": 9985,
+          "extreme_at": 1735085700000,
+          "known_at": 1735088400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3399,
+          "index": 9987,
+          "extreme_at": 1735087500000,
+          "known_at": 1735090200000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33279,
+          "index": 9992,
+          "extreme_at": 1735092000000,
+          "known_at": 1735094700000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33609,
+          "index": 9995,
+          "extreme_at": 1735094700000,
+          "known_at": 1735097400000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33109,
+          "index": 10000,
+          "extreme_at": 1735099200000,
+          "known_at": 1735101900000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33487,
+          "index": 10005,
+          "extreme_at": 1735103700000,
+          "known_at": 1735106400000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33236,
+          "index": 10006,
+          "extreme_at": 1735104600000,
+          "known_at": 1735107300000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33538,
+          "index": 10009,
+          "extreme_at": 1735107300000,
+          "known_at": 1735110000000
+        }
+      ],
+      "operation": "SUBDIVISION"
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "frame": "1h",
+      "child_frame": "15m",
+      "as_of": 1735117200000,
+      "candidate": {
+        "pattern": "CONTRACTING_TRIANGLE_ABCDE_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "UP",
+        "start_at": 1735034400000,
+        "end_at": 1735106400000,
+        "known_at": 1735117200000,
+        "invalidation": 0.33109,
+        "reasons": [
+          "HIGHER_LOWS_LOWER_HIGHS",
+          "INTERNAL_3_3_3_3_3_UNVERIFIED"
+        ],
+        "can_place_orders": false
+      },
+      "proof": {
+        "status": "PRICE_SUBDIVISIONS_CONFIRMED",
+        "expected": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "observed": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "child_known_at": 1735110000000,
+        "reason": "REAL_CONFIRMED_CHILD_PIVOTS"
+      },
+      "parent": [
+        {
+          "kind": "LOW",
+          "price": 0.31745,
+          "index": 2482,
+          "extreme_at": 1735034400000,
+          "known_at": 1735045200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.34032,
+          "index": 2487,
+          "extreme_at": 1735052400000,
+          "known_at": 1735063200000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.32759,
+          "index": 2492,
+          "extreme_at": 1735070400000,
+          "known_at": 1735081200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3399,
+          "index": 2496,
+          "extreme_at": 1735084800000,
+          "known_at": 1735095600000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33109,
+          "index": 2500,
+          "extreme_at": 1735099200000,
+          "known_at": 1735110000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33538,
+          "index": 2502,
+          "extreme_at": 1735106400000,
+          "known_at": 1735117200000
+        }
+      ],
+      "child": [
+        {
+          "kind": "LOW",
+          "price": 0.31745,
+          "index": 9930,
+          "extreme_at": 1735036200000,
+          "known_at": 1735038900000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.32175,
+          "index": 9934,
+          "extreme_at": 1735039800000,
+          "known_at": 1735042500000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.319,
+          "index": 9937,
+          "extreme_at": 1735042500000,
+          "known_at": 1735045200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.34032,
+          "index": 9950,
+          "extreme_at": 1735054200000,
+          "known_at": 1735056900000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33158,
+          "index": 9955,
+          "extreme_at": 1735058700000,
+          "known_at": 1735061400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33882,
+          "index": 9961,
+          "extreme_at": 1735064100000,
+          "known_at": 1735066800000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.32759,
+          "index": 9968,
+          "extreme_at": 1735070400000,
+          "known_at": 1735073100000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3384,
+          "index": 9982,
+          "extreme_at": 1735083000000,
+          "known_at": 1735085700000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33479,
+          "index": 9985,
+          "extreme_at": 1735085700000,
+          "known_at": 1735088400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3399,
+          "index": 9987,
+          "extreme_at": 1735087500000,
+          "known_at": 1735090200000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33279,
+          "index": 9992,
+          "extreme_at": 1735092000000,
+          "known_at": 1735094700000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33609,
+          "index": 9995,
+          "extreme_at": 1735094700000,
+          "known_at": 1735097400000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33109,
+          "index": 10000,
+          "extreme_at": 1735099200000,
+          "known_at": 1735101900000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33487,
+          "index": 10005,
+          "extreme_at": 1735103700000,
+          "known_at": 1735106400000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33236,
+          "index": 10006,
+          "extreme_at": 1735104600000,
+          "known_at": 1735107300000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33538,
+          "index": 10009,
+          "extreme_at": 1735107300000,
+          "known_at": 1735110000000
+        }
+      ],
+      "operation": "SUBDIVISION"
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "frame": "1h",
+      "child_frame": "15m",
+      "as_of": 1735117200000,
+      "candidate": {
+        "pattern": "CONTRACTING_TRIANGLE_ABCDE_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "DOWN",
+        "start_at": 1735034400000,
+        "end_at": 1735106400000,
+        "known_at": 1735117200000,
+        "invalidation": 0.33109,
+        "reasons": [
+          "HIGHER_LOWS_LOWER_HIGHS",
+          "INTERNAL_3_3_3_3_3_UNVERIFIED"
+        ],
+        "can_place_orders": false
+      },
+      "proof": {
+        "status": "PRICE_SUBDIVISIONS_CONFIRMED",
+        "expected": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "observed": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "child_known_at": 1735110000000,
+        "reason": "REAL_CONFIRMED_CHILD_PIVOTS"
+      },
+      "parent": [
+        {
+          "kind": "LOW",
+          "price": 0.31745,
+          "index": 2482,
+          "extreme_at": 1735034400000,
+          "known_at": 1735045200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.34032,
+          "index": 2487,
+          "extreme_at": 1735052400000,
+          "known_at": 1735063200000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.32759,
+          "index": 2492,
+          "extreme_at": 1735070400000,
+          "known_at": 1735081200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3399,
+          "index": 2496,
+          "extreme_at": 1735084800000,
+          "known_at": 1735095600000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33109,
+          "index": 2500,
+          "extreme_at": 1735099200000,
+          "known_at": 1735110000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33538,
+          "index": 2502,
+          "extreme_at": 1735106400000,
+          "known_at": 1735117200000
+        }
+      ],
+      "child": [
+        {
+          "kind": "LOW",
+          "price": 0.31745,
+          "index": 9930,
+          "extreme_at": 1735036200000,
+          "known_at": 1735038900000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.32175,
+          "index": 9934,
+          "extreme_at": 1735039800000,
+          "known_at": 1735042500000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.319,
+          "index": 9937,
+          "extreme_at": 1735042500000,
+          "known_at": 1735045200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.34032,
+          "index": 9950,
+          "extreme_at": 1735054200000,
+          "known_at": 1735056900000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33158,
+          "index": 9955,
+          "extreme_at": 1735058700000,
+          "known_at": 1735061400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33882,
+          "index": 9961,
+          "extreme_at": 1735064100000,
+          "known_at": 1735066800000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.32759,
+          "index": 9968,
+          "extreme_at": 1735070400000,
+          "known_at": 1735073100000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3384,
+          "index": 9982,
+          "extreme_at": 1735083000000,
+          "known_at": 1735085700000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33479,
+          "index": 9985,
+          "extreme_at": 1735085700000,
+          "known_at": 1735088400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.3399,
+          "index": 9987,
+          "extreme_at": 1735087500000,
+          "known_at": 1735090200000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33279,
+          "index": 9992,
+          "extreme_at": 1735092000000,
+          "known_at": 1735094700000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33609,
+          "index": 9995,
+          "extreme_at": 1735094700000,
+          "known_at": 1735097400000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33109,
+          "index": 10000,
+          "extreme_at": 1735099200000,
+          "known_at": 1735101900000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33487,
+          "index": 10005,
+          "extreme_at": 1735103700000,
+          "known_at": 1735106400000
+        },
+        {
+          "kind": "LOW",
+          "price": 0.33236,
+          "index": 10006,
+          "extreme_at": 1735104600000,
+          "known_at": 1735107300000
+        },
+        {
+          "kind": "HIGH",
+          "price": 0.33538,
+          "index": 10009,
+          "extreme_at": 1735107300000,
+          "known_at": 1735110000000
+        }
+      ],
+      "operation": "SUBDIVISION"
+    },
+    {
+      "symbol": "LTCUSDT",
+      "frame": "1h",
+      "child_frame": "15m",
+      "as_of": 1733205600000,
+      "candidate": {
+        "pattern": "RUNNING_FLAT_ABC_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "UP",
+        "start_at": 1733018400000,
+        "end_at": 1733194800000,
+        "known_at": 1733205600000,
+        "invalidation": 139.85,
+        "reasons": [
+          "B_RETRACES_AT_LEAST_90_PERCENT_A",
+          "INTERNAL_3_3_5_UNVERIFIED"
+        ],
+        "can_place_orders": false
+      },
+      "proof": {
+        "status": "PRICE_SUBDIVISIONS_CONFIRMED",
+        "expected": [
+          3,
+          3,
+          5
+        ],
+        "observed": [
+          3,
+          3,
+          5
+        ],
+        "child_known_at": 1733200200000,
+        "reason": "REAL_CONFIRMED_CHILD_PIVOTS"
+      },
+      "parent": [
+        {
+          "kind": "HIGH",
+          "price": 129.7,
+          "index": 1959,
+          "extreme_at": 1733151600000,
+          "known_at": 1733162400000
+        },
+        {
+          "kind": "LOW",
+          "price": 118.18,
+          "index": 1961,
+          "extreme_at": 1733158800000,
+          "known_at": 1733169600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 139.85,
+          "index": 1965,
+          "extreme_at": 1733173200000,
+          "known_at": 1733184000000
+        },
+        {
+          "kind": "LOW",
+          "price": 129.12,
+          "index": 1971,
+          "extreme_at": 1733194800000,
+          "known_at": 1733205600000
+        }
+      ],
+      "child": [
+        {
+          "kind": "LOW",
+          "price": 120.25,
+          "index": 7836,
+          "extreme_at": 1733151600000,
+          "known_at": 1733154300000
+        },
+        {
+          "kind": "HIGH",
+          "price": 129.7,
+          "index": 7837,
+          "extreme_at": 1733152500000,
+          "known_at": 1733155200000
+        },
+        {
+          "kind": "LOW",
+          "price": 119.18,
+          "index": 7842,
+          "extreme_at": 1733157000000,
+          "known_at": 1733159700000
+        },
+        {
+          "kind": "HIGH",
+          "price": 122.94,
+          "index": 7844,
+          "extreme_at": 1733158800000,
+          "known_at": 1733161500000
+        },
+        {
+          "kind": "LOW",
+          "price": 118.18,
+          "index": 7847,
+          "extreme_at": 1733161500000,
+          "known_at": 1733164200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 138.98,
+          "index": 7858,
+          "extreme_at": 1733171400000,
+          "known_at": 1733174100000
+        },
+        {
+          "kind": "LOW",
+          "price": 134.83,
+          "index": 7861,
+          "extreme_at": 1733174100000,
+          "known_at": 1733176800000
+        },
+        {
+          "kind": "HIGH",
+          "price": 139.85,
+          "index": 7863,
+          "extreme_at": 1733175900000,
+          "known_at": 1733178600000
+        },
+        {
+          "kind": "LOW",
+          "price": 131.36,
+          "index": 7873,
+          "extreme_at": 1733184900000,
+          "known_at": 1733187600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 133.82,
+          "index": 7877,
+          "extreme_at": 1733188500000,
+          "known_at": 1733191200000
+        },
+        {
+          "kind": "LOW",
+          "price": 129.27,
+          "index": 7882,
+          "extreme_at": 1733193000000,
+          "known_at": 1733195700000
+        },
+        {
+          "kind": "HIGH",
+          "price": 131.3,
+          "index": 7883,
+          "extreme_at": 1733193900000,
+          "known_at": 1733196600000
+        },
+        {
+          "kind": "LOW",
+          "price": 129.12,
+          "index": 7887,
+          "extreme_at": 1733197500000,
+          "known_at": 1733200200000
+        }
+      ],
+      "operation": "SUBDIVISION"
+    },
+    {
+      "symbol": "BTCUSDT",
+      "frame": "1h",
+      "direction": "UP",
+      "as_of": 1731754800000,
+      "candidate": {
+        "pattern": "REGULAR_FLAT_ABC_CANDIDATE",
+        "status": "ALTERNATIVE",
+        "direction": "UP",
+        "start_at": 1731625200000,
+        "end_at": 1731744000000,
+        "known_at": 1731754800000,
+        "invalidation": 91849.8,
+        "reasons": [
+          "B_RETRACES_AT_LEAST_90_PERCENT_A",
+          "INTERNAL_3_3_5_UNVERIFIED"
+        ],
+        "can_place_orders": false
+      },
+      "parent": [
+        {
+          "kind": "LOW",
+          "price": 86714.0,
+          "index": 1535,
+          "extreme_at": 1731625200000,
+          "known_at": 1731636000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 88544.5,
+          "index": 1539,
+          "extreme_at": 1731639600000,
+          "known_at": 1731650400000
+        },
+        {
+          "kind": "LOW",
+          "price": 87111.0,
+          "index": 1540,
+          "extreme_at": 1731643200000,
+          "known_at": 1731654000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 90780.0,
+          "index": 1548,
+          "extreme_at": 1731672000000,
+          "known_at": 1731682800000
+        },
+        {
+          "kind": "LOW",
+          "price": 87815.0,
+          "index": 1551,
+          "extreme_at": 1731682800000,
+          "known_at": 1731693600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 91921.5,
+          "index": 1558,
+          "extreme_at": 1731708000000,
+          "known_at": 1731718800000
+        },
+        {
+          "kind": "LOW",
+          "price": 90900.0,
+          "index": 1560,
+          "extreme_at": 1731715200000,
+          "known_at": 1731726000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 91849.8,
+          "index": 1565,
+          "extreme_at": 1731733200000,
+          "known_at": 1731744000000
+        },
+        {
+          "kind": "LOW",
+          "price": 91076.2,
+          "index": 1568,
+          "extreme_at": 1731744000000,
+          "known_at": 1731754800000
+        }
+      ],
+      "reason": "C_DOES_NOT_REACH_A_BUT_LABELLED_REGULAR_FLAT",
+      "operation": "CLASSIFY",
+      "expected_pattern": "FLAT_ABC_INCOMPLETE_OR_TRUNCATED_C_CANDIDATE"
+    },
+    {
+      "operation": "INVALIDATION",
+      "symbol": "ETHUSDT",
+      "frame": "15m",
+      "as_of": 1732406400000,
+      "candidate": {
+        "direction": "DOWN"
+      },
+      "parent": [
+        {
+          "kind": "HIGH",
+          "price": 3438.6,
+          "index": 6982,
+          "extreme_at": 1732383000000,
+          "known_at": 1732385700000
+        },
+        {
+          "kind": "LOW",
+          "price": 3403.35,
+          "index": 6984,
+          "extreme_at": 1732384800000,
+          "known_at": 1732387500000
+        },
+        {
+          "kind": "HIGH",
+          "price": 3436.11,
+          "index": 6989,
+          "extreme_at": 1732389300000,
+          "known_at": 1732392000000
+        },
+        {
+          "kind": "LOW",
+          "price": 3381.51,
+          "index": 6993,
+          "extreme_at": 1732392900000,
+          "known_at": 1732395600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 3430.61,
+          "index": 6998,
+          "extreme_at": 1732397400000,
+          "known_at": 1732400100000
+        },
+        {
+          "kind": "LOW",
+          "price": 3383.16,
+          "index": 7005,
+          "extreme_at": 1732403700000,
+          "known_at": 1732406400000
+        }
+      ],
+      "frames": {
+        "15m": [
+          {
+            "t": 1732190400000,
+            "o": 3150.01,
+            "h": 3219.2,
+            "l": 3148.52,
+            "c": 3216.52,
+            "v": 194983.421
+          },
+          {
+            "t": 1732191300000,
+            "o": 3216.52,
+            "h": 3300.0,
+            "l": 3216.04,
+            "c": 3290.03,
+            "v": 320664.832
+          },
+          {
+            "t": 1732192200000,
+            "o": 3290.02,
+            "h": 3321.0,
+            "l": 3271.04,
+            "c": 3319.18,
+            "v": 259190.061
+          },
+          {
+            "t": 1732193100000,
+            "o": 3319.17,
+            "h": 3319.8,
+            "l": 3285.72,
+            "c": 3288.05,
+            "v": 168659.802
+          },
+          {
+            "t": 1732194000000,
+            "o": 3288.05,
+            "h": 3370.0,
+            "l": 3287.45,
+            "c": 3367.93,
+            "v": 260481.367
+          },
+          {
+            "t": 1732194900000,
+            "o": 3367.93,
+            "h": 3368.05,
+            "l": 3331.69,
+            "c": 3350.73,
+            "v": 221543.827
+          },
+          {
+            "t": 1732195800000,
+            "o": 3350.73,
+            "h": 3356.98,
+            "l": 3330.81,
+            "c": 3350.0,
+            "v": 105359.932
+          },
+          {
+            "t": 1732196700000,
+            "o": 3349.99,
+            "h": 3354.99,
+            "l": 3342.0,
+            "c": 3350.79,
+            "v": 74612.082
+          },
+          {
+            "t": 1732197600000,
+            "o": 3350.78,
+            "h": 3374.92,
+            "l": 3344.06,
+            "c": 3369.4,
+            "v": 90291.713
+          },
+          {
+            "t": 1732198500000,
+            "o": 3369.4,
+            "h": 3371.43,
+            "l": 3350.17,
+            "c": 3354.4,
+            "v": 74375.464
+          },
+          {
+            "t": 1732199400000,
+            "o": 3354.39,
+            "h": 3358.83,
+            "l": 3310.08,
+            "c": 3343.64,
+            "v": 201225.157
+          },
+          {
+            "t": 1732200300000,
+            "o": 3343.65,
+            "h": 3366.42,
+            "l": 3336.85,
+            "c": 3348.05,
+            "v": 125245.918
+          },
+          {
+            "t": 1732201200000,
+            "o": 3348.06,
+            "h": 3348.92,
+            "l": 3301.42,
+            "c": 3323.05,
+            "v": 133086.808
+          },
+          {
+            "t": 1732202100000,
+            "o": 3323.06,
+            "h": 3333.0,
+            "l": 3263.0,
+            "c": 3265.19,
+            "v": 170730.488
+          },
+          {
+            "t": 1732203000000,
+            "o": 3265.19,
+            "h": 3284.0,
+            "l": 3239.18,
+            "c": 3281.83,
+            "v": 273925.756
+          },
+          {
+            "t": 1732203900000,
+            "o": 3281.82,
+            "h": 3290.0,
+            "l": 3263.0,
+            "c": 3279.2,
+            "v": 131191.681
+          },
+          {
+            "t": 1732204800000,
+            "o": 3279.21,
+            "h": 3302.94,
+            "l": 3279.06,
+            "c": 3302.2,
+            "v": 89769.504
+          },
+          {
+            "t": 1732205700000,
+            "o": 3302.2,
+            "h": 3323.69,
+            "l": 3298.46,
+            "c": 3319.2,
+            "v": 84730.715
+          },
+          {
+            "t": 1732206600000,
+            "o": 3319.2,
+            "h": 3339.0,
+            "l": 3313.29,
+            "c": 3336.13,
+            "v": 63527.051
+          },
+          {
+            "t": 1732207500000,
+            "o": 3336.12,
+            "h": 3344.35,
+            "l": 3318.0,
+            "c": 3333.96,
+            "v": 63945.394
+          },
+          {
+            "t": 1732208400000,
+            "o": 3333.97,
+            "h": 3333.97,
+            "l": 3315.34,
+            "c": 3318.61,
+            "v": 49300.068
+          },
+          {
+            "t": 1732209300000,
+            "o": 3318.61,
+            "h": 3344.42,
+            "l": 3318.08,
+            "c": 3335.73,
+            "v": 38931.103
+          },
+          {
+            "t": 1732210200000,
+            "o": 3335.73,
+            "h": 3353.83,
+            "l": 3334.47,
+            "c": 3348.81,
+            "v": 54334.437
+          },
+          {
+            "t": 1732211100000,
+            "o": 3348.8,
+            "h": 3352.9,
+            "l": 3338.53,
+            "c": 3352.9,
+            "v": 26501.97
+          },
+          {
+            "t": 1732212000000,
+            "o": 3352.91,
+            "h": 3365.0,
+            "l": 3345.36,
+            "c": 3347.42,
+            "v": 73185.732
+          },
+          {
+            "t": 1732212900000,
+            "o": 3347.41,
+            "h": 3359.8,
+            "l": 3341.2,
+            "c": 3353.61,
+            "v": 28888.579
+          },
+          {
+            "t": 1732213800000,
+            "o": 3353.6,
+            "h": 3364.83,
+            "l": 3348.26,
+            "c": 3359.13,
+            "v": 38261.468
+          },
+          {
+            "t": 1732214700000,
+            "o": 3359.12,
+            "h": 3388.0,
+            "l": 3354.0,
+            "c": 3382.33,
+            "v": 74721.86
+          },
+          {
+            "t": 1732215600000,
+            "o": 3382.34,
+            "h": 3389.99,
+            "l": 3367.23,
+            "c": 3385.57,
+            "v": 79572.065
+          },
+          {
+            "t": 1732216500000,
+            "o": 3385.52,
+            "h": 3388.57,
+            "l": 3344.62,
+            "c": 3350.73,
+            "v": 103130.623
+          },
+          {
+            "t": 1732217400000,
+            "o": 3350.73,
+            "h": 3364.03,
+            "l": 3348.73,
+            "c": 3362.28,
+            "v": 37621.18
+          },
+          {
+            "t": 1732218300000,
+            "o": 3362.27,
+            "h": 3364.57,
+            "l": 3338.07,
+            "c": 3349.99,
+            "v": 47908.966
+          },
+          {
+            "t": 1732219200000,
+            "o": 3349.99,
+            "h": 3362.0,
+            "l": 3348.01,
+            "c": 3357.53,
+            "v": 23945.291
+          },
+          {
+            "t": 1732220100000,
+            "o": 3357.53,
+            "h": 3365.71,
+            "l": 3356.32,
+            "c": 3363.01,
+            "v": 20555.039
+          },
+          {
+            "t": 1732221000000,
+            "o": 3363.01,
+            "h": 3370.8,
+            "l": 3338.41,
+            "c": 3345.39,
+            "v": 43183.124
+          },
+          {
+            "t": 1732221900000,
+            "o": 3345.39,
+            "h": 3360.0,
+            "l": 3336.9,
+            "c": 3350.21,
+            "v": 38974.166
+          },
+          {
+            "t": 1732222800000,
+            "o": 3350.41,
+            "h": 3356.06,
+            "l": 3339.0,
+            "c": 3354.89,
+            "v": 27154.258
+          },
+          {
+            "t": 1732223700000,
+            "o": 3354.89,
+            "h": 3357.31,
+            "l": 3346.2,
+            "c": 3352.21,
+            "v": 19493.768
+          },
+          {
+            "t": 1732224600000,
+            "o": 3352.21,
+            "h": 3359.19,
+            "l": 3340.5,
+            "c": 3345.93,
+            "v": 19377.018
+          },
+          {
+            "t": 1732225500000,
+            "o": 3345.93,
+            "h": 3349.89,
+            "l": 3337.07,
+            "c": 3348.23,
+            "v": 16226.795
+          },
+          {
+            "t": 1732226400000,
+            "o": 3348.22,
+            "h": 3377.24,
+            "l": 3346.74,
+            "c": 3369.3,
+            "v": 37787.402
+          },
+          {
+            "t": 1732227300000,
+            "o": 3369.3,
+            "h": 3382.26,
+            "l": 3363.01,
+            "c": 3366.04,
+            "v": 30895.768
+          },
+          {
+            "t": 1732228200000,
+            "o": 3366.06,
+            "h": 3375.01,
+            "l": 3364.0,
+            "c": 3369.28,
+            "v": 13532.133
+          },
+          {
+            "t": 1732229100000,
+            "o": 3369.27,
+            "h": 3377.89,
+            "l": 3365.68,
+            "c": 3374.31,
+            "v": 14487.605
+          },
+          {
+            "t": 1732230000000,
+            "o": 3374.31,
+            "h": 3379.28,
+            "l": 3357.37,
+            "c": 3360.28,
+            "v": 29390.096
+          },
+          {
+            "t": 1732230900000,
+            "o": 3360.27,
+            "h": 3370.41,
+            "l": 3358.92,
+            "c": 3365.6,
+            "v": 21817.572
+          },
+          {
+            "t": 1732231800000,
+            "o": 3365.61,
+            "h": 3372.0,
+            "l": 3358.88,
+            "c": 3372.0,
+            "v": 13968.648
+          },
+          {
+            "t": 1732232700000,
+            "o": 3372.0,
+            "h": 3374.57,
+            "l": 3358.01,
+            "c": 3358.42,
+            "v": 20666.666
+          },
+          {
+            "t": 1732233600000,
+            "o": 3358.69,
+            "h": 3375.76,
+            "l": 3358.09,
+            "c": 3365.44,
+            "v": 30539.796
+          },
+          {
+            "t": 1732234500000,
+            "o": 3365.44,
+            "h": 3369.08,
+            "l": 3347.7,
+            "c": 3354.01,
+            "v": 32109.435
+          },
+          {
+            "t": 1732235400000,
+            "o": 3354.02,
+            "h": 3354.02,
+            "l": 3327.06,
+            "c": 3333.61,
+            "v": 53733.135
+          },
+          {
+            "t": 1732236300000,
+            "o": 3333.61,
+            "h": 3333.61,
+            "l": 3313.02,
+            "c": 3319.41,
+            "v": 55308.811
+          },
+          {
+            "t": 1732237200000,
+            "o": 3319.41,
+            "h": 3331.97,
+            "l": 3307.03,
+            "c": 3330.79,
+            "v": 57824.335
+          },
+          {
+            "t": 1732238100000,
+            "o": 3330.8,
+            "h": 3334.04,
+            "l": 3314.53,
+            "c": 3323.97,
+            "v": 31827.312
+          },
+          {
+            "t": 1732239000000,
+            "o": 3323.96,
+            "h": 3330.64,
+            "l": 3313.69,
+            "c": 3319.89,
+            "v": 20580.978
+          },
+          {
+            "t": 1732239900000,
+            "o": 3319.89,
+            "h": 3329.89,
+            "l": 3319.2,
+            "c": 3324.35,
+            "v": 15540.536
+          },
+          {
+            "t": 1732240800000,
+            "o": 3324.35,
+            "h": 3336.0,
+            "l": 3323.34,
+            "c": 3329.96,
+            "v": 21822.7
+          },
+          {
+            "t": 1732241700000,
+            "o": 3329.96,
+            "h": 3345.18,
+            "l": 3326.66,
+            "c": 3342.84,
+            "v": 31680.25
+          },
+          {
+            "t": 1732242600000,
+            "o": 3342.84,
+            "h": 3345.61,
+            "l": 3328.02,
+            "c": 3331.35,
+            "v": 31754.126
+          },
+          {
+            "t": 1732243500000,
+            "o": 3331.36,
+            "h": 3343.6,
+            "l": 3322.34,
+            "c": 3333.3,
+            "v": 24282.732
+          },
+          {
+            "t": 1732244400000,
+            "o": 3333.3,
+            "h": 3337.8,
+            "l": 3323.45,
+            "c": 3337.64,
+            "v": 20972.224
+          },
+          {
+            "t": 1732245300000,
+            "o": 3337.65,
+            "h": 3384.88,
+            "l": 3337.56,
+            "c": 3355.97,
+            "v": 125737.511
+          },
+          {
+            "t": 1732246200000,
+            "o": 3355.97,
+            "h": 3370.33,
+            "l": 3351.89,
+            "c": 3357.91,
+            "v": 39564.794
+          },
+          {
+            "t": 1732247100000,
+            "o": 3357.9,
+            "h": 3378.27,
+            "l": 3355.92,
+            "c": 3368.66,
+            "v": 30262.525
+          },
+          {
+            "t": 1732248000000,
+            "o": 3368.67,
+            "h": 3376.54,
+            "l": 3360.31,
+            "c": 3368.39,
+            "v": 32553.085
+          },
+          {
+            "t": 1732248900000,
+            "o": 3368.39,
+            "h": 3424.16,
+            "l": 3365.25,
+            "c": 3423.06,
+            "v": 124427.265
+          },
+          {
+            "t": 1732249800000,
+            "o": 3423.05,
+            "h": 3429.99,
+            "l": 3406.56,
+            "c": 3410.53,
+            "v": 92129.592
+          },
+          {
+            "t": 1732250700000,
+            "o": 3410.54,
+            "h": 3410.54,
+            "l": 3385.18,
+            "c": 3393.06,
+            "v": 60128.162
+          },
+          {
+            "t": 1732251600000,
+            "o": 3393.06,
+            "h": 3394.29,
+            "l": 3372.44,
+            "c": 3378.86,
+            "v": 68007.249
+          },
+          {
+            "t": 1732252500000,
+            "o": 3378.86,
+            "h": 3389.78,
+            "l": 3375.01,
+            "c": 3386.54,
+            "v": 34805.298
+          },
+          {
+            "t": 1732253400000,
+            "o": 3386.55,
+            "h": 3397.51,
+            "l": 3380.0,
+            "c": 3396.45,
+            "v": 22742.418
+          },
+          {
+            "t": 1732254300000,
+            "o": 3396.45,
+            "h": 3397.95,
+            "l": 3378.55,
+            "c": 3378.61,
+            "v": 18974.254
+          },
+          {
+            "t": 1732255200000,
+            "o": 3378.61,
+            "h": 3387.1,
+            "l": 3371.59,
+            "c": 3376.55,
+            "v": 27353.592
+          },
+          {
+            "t": 1732256100000,
+            "o": 3376.62,
+            "h": 3376.97,
+            "l": 3361.2,
+            "c": 3369.55,
+            "v": 50909.835
+          },
+          {
+            "t": 1732257000000,
+            "o": 3369.55,
+            "h": 3372.95,
+            "l": 3357.01,
+            "c": 3364.82,
+            "v": 25062.895
+          },
+          {
+            "t": 1732257900000,
+            "o": 3364.83,
+            "h": 3374.55,
+            "l": 3361.69,
+            "c": 3374.52,
+            "v": 19275.332
+          },
+          {
+            "t": 1732258800000,
+            "o": 3374.52,
+            "h": 3382.54,
+            "l": 3367.23,
+            "c": 3375.06,
+            "v": 25132.085
+          },
+          {
+            "t": 1732259700000,
+            "o": 3375.06,
+            "h": 3386.41,
+            "l": 3373.0,
+            "c": 3382.37,
+            "v": 25837.965
+          },
+          {
+            "t": 1732260600000,
+            "o": 3382.37,
+            "h": 3389.62,
+            "l": 3376.51,
+            "c": 3378.39,
+            "v": 30361.033
+          },
+          {
+            "t": 1732261500000,
+            "o": 3378.39,
+            "h": 3378.76,
+            "l": 3361.0,
+            "c": 3365.66,
+            "v": 41224.885
+          },
+          {
+            "t": 1732262400000,
+            "o": 3365.65,
+            "h": 3380.39,
+            "l": 3365.65,
+            "c": 3379.23,
+            "v": 30157.218
+          },
+          {
+            "t": 1732263300000,
+            "o": 3379.22,
+            "h": 3382.0,
+            "l": 3369.14,
+            "c": 3381.4,
+            "v": 19815.01
+          },
+          {
+            "t": 1732264200000,
+            "o": 3381.39,
+            "h": 3384.62,
+            "l": 3372.5,
+            "c": 3379.69,
+            "v": 16326.154
+          },
+          {
+            "t": 1732265100000,
+            "o": 3379.68,
+            "h": 3383.38,
+            "l": 3371.24,
+            "c": 3374.99,
+            "v": 13444.949
+          },
+          {
+            "t": 1732266000000,
+            "o": 3375.0,
+            "h": 3379.78,
+            "l": 3371.03,
+            "c": 3374.47,
+            "v": 15237.798
+          },
+          {
+            "t": 1732266900000,
+            "o": 3374.47,
+            "h": 3387.06,
+            "l": 3361.6,
+            "c": 3362.52,
+            "v": 45159.432
+          },
+          {
+            "t": 1732267800000,
+            "o": 3362.51,
+            "h": 3371.7,
+            "l": 3352.9,
+            "c": 3364.77,
+            "v": 46726.93
+          },
+          {
+            "t": 1732268700000,
+            "o": 3364.76,
+            "h": 3370.25,
+            "l": 3358.85,
+            "c": 3367.02,
+            "v": 17758.645
+          },
+          {
+            "t": 1732269600000,
+            "o": 3367.03,
+            "h": 3372.97,
+            "l": 3345.44,
+            "c": 3348.15,
+            "v": 45915.979
+          },
+          {
+            "t": 1732270500000,
+            "o": 3348.15,
+            "h": 3352.41,
+            "l": 3323.0,
+            "c": 3335.8,
+            "v": 83787.038
+          },
+          {
+            "t": 1732271400000,
+            "o": 3335.79,
+            "h": 3340.99,
+            "l": 3327.26,
+            "c": 3332.7,
+            "v": 33210.727
+          },
+          {
+            "t": 1732272300000,
+            "o": 3332.69,
+            "h": 3334.07,
+            "l": 3321.66,
+            "c": 3325.04,
+            "v": 46199.514
+          },
+          {
+            "t": 1732273200000,
+            "o": 3325.04,
+            "h": 3335.73,
+            "l": 3313.62,
+            "c": 3334.9,
+            "v": 58880.703
+          },
+          {
+            "t": 1732274100000,
+            "o": 3334.9,
+            "h": 3344.35,
+            "l": 3328.45,
+            "c": 3340.99,
+            "v": 39065.763
+          },
+          {
+            "t": 1732275000000,
+            "o": 3340.99,
+            "h": 3348.27,
+            "l": 3338.2,
+            "c": 3338.76,
+            "v": 27694.385
+          },
+          {
+            "t": 1732275900000,
+            "o": 3338.77,
+            "h": 3348.98,
+            "l": 3337.07,
+            "c": 3346.99,
+            "v": 22741.365
+          },
+          {
+            "t": 1732276800000,
+            "o": 3347.0,
+            "h": 3348.0,
+            "l": 3338.77,
+            "c": 3343.99,
+            "v": 27910.441
+          },
+          {
+            "t": 1732277700000,
+            "o": 3343.99,
+            "h": 3357.84,
+            "l": 3331.52,
+            "c": 3356.6,
+            "v": 46928.179
+          },
+          {
+            "t": 1732278600000,
+            "o": 3356.6,
+            "h": 3359.93,
+            "l": 3347.4,
+            "c": 3348.54,
+            "v": 34675.732
+          },
+          {
+            "t": 1732279500000,
+            "o": 3348.54,
+            "h": 3357.91,
+            "l": 3340.18,
+            "c": 3350.58,
+            "v": 28535.415
+          },
+          {
+            "t": 1732280400000,
+            "o": 3350.59,
+            "h": 3350.96,
+            "l": 3330.28,
+            "c": 3338.33,
+            "v": 42511.681
+          },
+          {
+            "t": 1732281300000,
+            "o": 3338.34,
+            "h": 3340.67,
+            "l": 3260.42,
+            "c": 3268.67,
+            "v": 241006.237
+          },
+          {
+            "t": 1732282200000,
+            "o": 3268.69,
+            "h": 3300.0,
+            "l": 3266.14,
+            "c": 3281.06,
+            "v": 148858.818
+          },
+          {
+            "t": 1732283100000,
+            "o": 3281.07,
+            "h": 3308.37,
+            "l": 3272.46,
+            "c": 3296.28,
+            "v": 104620.108
+          },
+          {
+            "t": 1732284000000,
+            "o": 3296.27,
+            "h": 3312.34,
+            "l": 3282.69,
+            "c": 3307.03,
+            "v": 64691.914
+          },
+          {
+            "t": 1732284900000,
+            "o": 3307.03,
+            "h": 3311.36,
+            "l": 3289.17,
+            "c": 3295.49,
+            "v": 40888.617
+          },
+          {
+            "t": 1732285800000,
+            "o": 3295.49,
+            "h": 3315.2,
+            "l": 3285.83,
+            "c": 3302.58,
+            "v": 76488.279
+          },
+          {
+            "t": 1732286700000,
+            "o": 3302.4,
+            "h": 3307.91,
+            "l": 3283.74,
+            "c": 3290.92,
+            "v": 51490.655
+          },
+          {
+            "t": 1732287600000,
+            "o": 3290.91,
+            "h": 3312.62,
+            "l": 3285.26,
+            "c": 3308.59,
+            "v": 58138.034
+          },
+          {
+            "t": 1732288500000,
+            "o": 3308.58,
+            "h": 3316.2,
+            "l": 3293.77,
+            "c": 3302.25,
+            "v": 49951.903
+          },
+          {
+            "t": 1732289400000,
+            "o": 3302.25,
+            "h": 3325.0,
+            "l": 3296.6,
+            "c": 3320.11,
+            "v": 46381.729
+          },
+          {
+            "t": 1732290300000,
+            "o": 3320.09,
+            "h": 3326.42,
+            "l": 3311.73,
+            "c": 3316.37,
+            "v": 36166.275
+          },
+          {
+            "t": 1732291200000,
+            "o": 3316.36,
+            "h": 3316.95,
+            "l": 3294.3,
+            "c": 3297.01,
+            "v": 51340.541
+          },
+          {
+            "t": 1732292100000,
+            "o": 3297.0,
+            "h": 3310.45,
+            "l": 3296.48,
+            "c": 3305.48,
+            "v": 21831.948
+          },
+          {
+            "t": 1732293000000,
+            "o": 3305.48,
+            "h": 3309.14,
+            "l": 3292.58,
+            "c": 3299.34,
+            "v": 30837.467
+          },
+          {
+            "t": 1732293900000,
+            "o": 3299.34,
+            "h": 3319.72,
+            "l": 3297.73,
+            "c": 3311.21,
+            "v": 30871.166
+          },
+          {
+            "t": 1732294800000,
+            "o": 3311.2,
+            "h": 3322.4,
+            "l": 3306.46,
+            "c": 3318.09,
+            "v": 24976.49
+          },
+          {
+            "t": 1732295700000,
+            "o": 3318.08,
+            "h": 3324.21,
+            "l": 3304.26,
+            "c": 3313.3,
+            "v": 40180.531
+          },
+          {
+            "t": 1732296600000,
+            "o": 3313.31,
+            "h": 3314.75,
+            "l": 3298.4,
+            "c": 3305.0,
+            "v": 26606.433
+          },
+          {
+            "t": 1732297500000,
+            "o": 3305.01,
+            "h": 3307.85,
+            "l": 3295.81,
+            "c": 3299.31,
+            "v": 20413.492
+          },
+          {
+            "t": 1732298400000,
+            "o": 3299.29,
+            "h": 3306.34,
+            "l": 3296.0,
+            "c": 3300.33,
+            "v": 16956.294
+          },
+          {
+            "t": 1732299300000,
+            "o": 3300.34,
+            "h": 3310.0,
+            "l": 3284.4,
+            "c": 3286.69,
+            "v": 38012.66
+          },
+          {
+            "t": 1732300200000,
+            "o": 3286.69,
+            "h": 3295.14,
+            "l": 3286.69,
+            "c": 3289.36,
+            "v": 22466.797
+          },
+          {
+            "t": 1732301100000,
+            "o": 3289.36,
+            "h": 3294.92,
+            "l": 3267.28,
+            "c": 3281.91,
+            "v": 59964.706
+          },
+          {
+            "t": 1732302000000,
+            "o": 3281.91,
+            "h": 3296.75,
+            "l": 3278.38,
+            "c": 3278.57,
+            "v": 31794.864
+          },
+          {
+            "t": 1732302900000,
+            "o": 3278.58,
+            "h": 3300.72,
+            "l": 3266.61,
+            "c": 3299.01,
+            "v": 52374.071
+          },
+          {
+            "t": 1732303800000,
+            "o": 3299.0,
+            "h": 3299.07,
+            "l": 3269.23,
+            "c": 3281.07,
+            "v": 41456.638
+          },
+          {
+            "t": 1732304700000,
+            "o": 3281.07,
+            "h": 3288.7,
+            "l": 3276.96,
+            "c": 3284.79,
+            "v": 21813.617
+          },
+          {
+            "t": 1732305600000,
+            "o": 3284.79,
+            "h": 3294.03,
+            "l": 3275.07,
+            "c": 3293.46,
+            "v": 23518.748
+          },
+          {
+            "t": 1732306500000,
+            "o": 3293.46,
+            "h": 3296.49,
+            "l": 3283.74,
+            "c": 3288.59,
+            "v": 19991.437
+          },
+          {
+            "t": 1732307400000,
+            "o": 3288.59,
+            "h": 3291.97,
+            "l": 3278.96,
+            "c": 3288.01,
+            "v": 15933.189
+          },
+          {
+            "t": 1732308300000,
+            "o": 3288.01,
+            "h": 3299.97,
+            "l": 3283.51,
+            "c": 3293.73,
+            "v": 17163.942
+          },
+          {
+            "t": 1732309200000,
+            "o": 3293.74,
+            "h": 3297.95,
+            "l": 3281.1,
+            "c": 3286.74,
+            "v": 27014.45
+          },
+          {
+            "t": 1732310100000,
+            "o": 3286.73,
+            "h": 3293.19,
+            "l": 3284.0,
+            "c": 3291.29,
+            "v": 10753.634
+          },
+          {
+            "t": 1732311000000,
+            "o": 3291.28,
+            "h": 3304.07,
+            "l": 3285.45,
+            "c": 3303.58,
+            "v": 14464.141
+          },
+          {
+            "t": 1732311900000,
+            "o": 3303.58,
+            "h": 3321.96,
+            "l": 3300.17,
+            "c": 3319.0,
+            "v": 47038.609
+          },
+          {
+            "t": 1732312800000,
+            "o": 3319.0,
+            "h": 3319.89,
+            "l": 3303.32,
+            "c": 3310.25,
+            "v": 23425.035
+          },
+          {
+            "t": 1732313700000,
+            "o": 3310.25,
+            "h": 3315.71,
+            "l": 3303.7,
+            "c": 3314.79,
+            "v": 13068.56
+          },
+          {
+            "t": 1732314600000,
+            "o": 3314.8,
+            "h": 3321.89,
+            "l": 3308.77,
+            "c": 3311.28,
+            "v": 20562.357
+          },
+          {
+            "t": 1732315500000,
+            "o": 3311.28,
+            "h": 3316.36,
+            "l": 3306.09,
+            "c": 3310.12,
+            "v": 9270.586
+          },
+          {
+            "t": 1732316400000,
+            "o": 3310.12,
+            "h": 3321.25,
+            "l": 3309.0,
+            "c": 3317.78,
+            "v": 18513.734
+          },
+          {
+            "t": 1732317300000,
+            "o": 3317.77,
+            "h": 3319.83,
+            "l": 3313.46,
+            "c": 3313.64,
+            "v": 11400.369
+          },
+          {
+            "t": 1732318200000,
+            "o": 3313.64,
+            "h": 3332.83,
+            "l": 3311.68,
+            "c": 3326.4,
+            "v": 26557.194
+          },
+          {
+            "t": 1732319100000,
+            "o": 3326.4,
+            "h": 3331.07,
+            "l": 3321.12,
+            "c": 3330.05,
+            "v": 15973.927
+          },
+          {
+            "t": 1732320000000,
+            "o": 3330.04,
+            "h": 3331.0,
+            "l": 3318.93,
+            "c": 3330.1,
+            "v": 23632.211
+          },
+          {
+            "t": 1732320900000,
+            "o": 3330.1,
+            "h": 3357.5,
+            "l": 3326.82,
+            "c": 3356.05,
+            "v": 70433.01
+          },
+          {
+            "t": 1732321800000,
+            "o": 3356.04,
+            "h": 3368.48,
+            "l": 3337.9,
+            "c": 3353.8,
+            "v": 88186.056
+          },
+          {
+            "t": 1732322700000,
+            "o": 3353.8,
+            "h": 3364.99,
+            "l": 3343.75,
+            "c": 3343.77,
+            "v": 42538.759
+          },
+          {
+            "t": 1732323600000,
+            "o": 3343.77,
+            "h": 3360.0,
+            "l": 3343.03,
+            "c": 3345.03,
+            "v": 27429.691
+          },
+          {
+            "t": 1732324500000,
+            "o": 3345.03,
+            "h": 3349.97,
+            "l": 3325.19,
+            "c": 3336.59,
+            "v": 57247.852
+          },
+          {
+            "t": 1732325400000,
+            "o": 3336.59,
+            "h": 3346.39,
+            "l": 3325.44,
+            "c": 3331.0,
+            "v": 46782.156
+          },
+          {
+            "t": 1732326300000,
+            "o": 3330.99,
+            "h": 3346.37,
+            "l": 3330.04,
+            "c": 3346.37,
+            "v": 19969.902
+          },
+          {
+            "t": 1732327200000,
+            "o": 3346.37,
+            "h": 3351.26,
+            "l": 3336.07,
+            "c": 3337.34,
+            "v": 30014.642
+          },
+          {
+            "t": 1732328100000,
+            "o": 3337.35,
+            "h": 3340.15,
+            "l": 3328.16,
+            "c": 3333.6,
+            "v": 21888.278
+          },
+          {
+            "t": 1732329000000,
+            "o": 3333.6,
+            "h": 3335.83,
+            "l": 3322.11,
+            "c": 3333.68,
+            "v": 36334.854
+          },
+          {
+            "t": 1732329900000,
+            "o": 3333.69,
+            "h": 3337.75,
+            "l": 3315.28,
+            "c": 3328.89,
+            "v": 28380.193
+          },
+          {
+            "t": 1732330800000,
+            "o": 3328.9,
+            "h": 3333.75,
+            "l": 3322.8,
+            "c": 3332.83,
+            "v": 17705.64
+          },
+          {
+            "t": 1732331700000,
+            "o": 3332.84,
+            "h": 3345.62,
+            "l": 3331.47,
+            "c": 3342.06,
+            "v": 20600.837
+          },
+          {
+            "t": 1732332600000,
+            "o": 3342.07,
+            "h": 3344.5,
+            "l": 3333.34,
+            "c": 3336.47,
+            "v": 17105.701
+          },
+          {
+            "t": 1732333500000,
+            "o": 3336.48,
+            "h": 3348.88,
+            "l": 3332.32,
+            "c": 3348.88,
+            "v": 11486.68
+          },
+          {
+            "t": 1732334400000,
+            "o": 3348.88,
+            "h": 3353.53,
+            "l": 3340.5,
+            "c": 3350.5,
+            "v": 29154.029
+          },
+          {
+            "t": 1732335300000,
+            "o": 3350.55,
+            "h": 3355.18,
+            "l": 3336.07,
+            "c": 3337.79,
+            "v": 32545.075
+          },
+          {
+            "t": 1732336200000,
+            "o": 3337.8,
+            "h": 3359.0,
+            "l": 3337.79,
+            "c": 3341.99,
+            "v": 45061.944
+          },
+          {
+            "t": 1732337100000,
+            "o": 3341.99,
+            "h": 3358.6,
+            "l": 3329.04,
+            "c": 3357.0,
+            "v": 53011.588
+          },
+          {
+            "t": 1732338000000,
+            "o": 3356.99,
+            "h": 3365.0,
+            "l": 3346.66,
+            "c": 3350.12,
+            "v": 32398.1
+          },
+          {
+            "t": 1732338900000,
+            "o": 3350.11,
+            "h": 3351.99,
+            "l": 3340.53,
+            "c": 3343.01,
+            "v": 15414.276
+          },
+          {
+            "t": 1732339800000,
+            "o": 3343.01,
+            "h": 3349.14,
+            "l": 3331.59,
+            "c": 3348.38,
+            "v": 25703.763
+          },
+          {
+            "t": 1732340700000,
+            "o": 3348.38,
+            "h": 3354.92,
+            "l": 3347.76,
+            "c": 3351.25,
+            "v": 16477.281
+          },
+          {
+            "t": 1732341600000,
+            "o": 3351.26,
+            "h": 3354.65,
+            "l": 3346.43,
+            "c": 3354.36,
+            "v": 9595.51
+          },
+          {
+            "t": 1732342500000,
+            "o": 3354.36,
+            "h": 3354.85,
+            "l": 3345.55,
+            "c": 3345.93,
+            "v": 10811.349
+          },
+          {
+            "t": 1732343400000,
+            "o": 3345.92,
+            "h": 3352.64,
+            "l": 3344.24,
+            "c": 3348.88,
+            "v": 9075.747
+          },
+          {
+            "t": 1732344300000,
+            "o": 3348.88,
+            "h": 3351.8,
+            "l": 3345.86,
+            "c": 3346.4,
+            "v": 10015.98
+          },
+          {
+            "t": 1732345200000,
+            "o": 3346.39,
+            "h": 3353.29,
+            "l": 3344.3,
+            "c": 3349.71,
+            "v": 8301.882
+          },
+          {
+            "t": 1732346100000,
+            "o": 3349.72,
+            "h": 3354.65,
+            "l": 3346.0,
+            "c": 3349.89,
+            "v": 15478.576
+          },
+          {
+            "t": 1732347000000,
+            "o": 3349.89,
+            "h": 3350.68,
+            "l": 3338.01,
+            "c": 3344.0,
+            "v": 20358.98
+          },
+          {
+            "t": 1732347900000,
+            "o": 3344.01,
+            "h": 3349.28,
+            "l": 3339.0,
+            "c": 3344.31,
+            "v": 25965.773
+          },
+          {
+            "t": 1732348800000,
+            "o": 3344.32,
+            "h": 3347.45,
+            "l": 3339.01,
+            "c": 3344.79,
+            "v": 19614.009
+          },
+          {
+            "t": 1732349700000,
+            "o": 3344.79,
+            "h": 3406.49,
+            "l": 3342.96,
+            "c": 3405.59,
+            "v": 162254.819
+          },
+          {
+            "t": 1732350600000,
+            "o": 3405.58,
+            "h": 3407.96,
+            "l": 3375.84,
+            "c": 3382.19,
+            "v": 101337.097
+          },
+          {
+            "t": 1732351500000,
+            "o": 3382.18,
+            "h": 3382.21,
+            "l": 3363.74,
+            "c": 3371.45,
+            "v": 49572.445
+          },
+          {
+            "t": 1732352400000,
+            "o": 3371.45,
+            "h": 3376.44,
+            "l": 3358.41,
+            "c": 3367.7,
+            "v": 43072.805
+          },
+          {
+            "t": 1732353300000,
+            "o": 3367.7,
+            "h": 3367.71,
+            "l": 3342.31,
+            "c": 3363.06,
+            "v": 55565.276
+          },
+          {
+            "t": 1732354200000,
+            "o": 3363.06,
+            "h": 3373.0,
+            "l": 3361.41,
+            "c": 3367.61,
+            "v": 22138.812
+          },
+          {
+            "t": 1732355100000,
+            "o": 3367.62,
+            "h": 3369.99,
+            "l": 3361.0,
+            "c": 3362.49,
+            "v": 14307.314
+          },
+          {
+            "t": 1732356000000,
+            "o": 3362.48,
+            "h": 3367.67,
+            "l": 3352.37,
+            "c": 3367.67,
+            "v": 23525.183
+          },
+          {
+            "t": 1732356900000,
+            "o": 3367.66,
+            "h": 3369.98,
+            "l": 3361.61,
+            "c": 3362.41,
+            "v": 11666.546
+          },
+          {
+            "t": 1732357800000,
+            "o": 3362.4,
+            "h": 3362.54,
+            "l": 3348.06,
+            "c": 3353.41,
+            "v": 25779.796
+          },
+          {
+            "t": 1732358700000,
+            "o": 3353.4,
+            "h": 3358.3,
+            "l": 3345.22,
+            "c": 3351.16,
+            "v": 20426.427
+          },
+          {
+            "t": 1732359600000,
+            "o": 3351.15,
+            "h": 3358.52,
+            "l": 3350.0,
+            "c": 3356.99,
+            "v": 14089.206
+          },
+          {
+            "t": 1732360500000,
+            "o": 3356.98,
+            "h": 3366.68,
+            "l": 3356.98,
+            "c": 3366.11,
+            "v": 18379.4
+          },
+          {
+            "t": 1732361400000,
+            "o": 3366.1,
+            "h": 3366.4,
+            "l": 3353.6,
+            "c": 3355.19,
+            "v": 10287.825
+          },
+          {
+            "t": 1732362300000,
+            "o": 3355.2,
+            "h": 3362.18,
+            "l": 3353.08,
+            "c": 3357.31,
+            "v": 9445.362
+          },
+          {
+            "t": 1732363200000,
+            "o": 3357.3,
+            "h": 3360.9,
+            "l": 3351.0,
+            "c": 3359.41,
+            "v": 13144.554
+          },
+          {
+            "t": 1732364100000,
+            "o": 3359.41,
+            "h": 3371.04,
+            "l": 3356.74,
+            "c": 3370.38,
+            "v": 22077.105
+          },
+          {
+            "t": 1732365000000,
+            "o": 3370.39,
+            "h": 3416.5,
+            "l": 3370.38,
+            "c": 3409.34,
+            "v": 148426.543
+          },
+          {
+            "t": 1732365900000,
+            "o": 3409.33,
+            "h": 3432.98,
+            "l": 3398.35,
+            "c": 3403.01,
+            "v": 179384.965
+          },
+          {
+            "t": 1732366800000,
+            "o": 3403.0,
+            "h": 3425.68,
+            "l": 3395.05,
+            "c": 3413.79,
+            "v": 89041.202
+          },
+          {
+            "t": 1732367700000,
+            "o": 3413.79,
+            "h": 3418.91,
+            "l": 3406.75,
+            "c": 3412.01,
+            "v": 35372.631
+          },
+          {
+            "t": 1732368600000,
+            "o": 3412.01,
+            "h": 3425.53,
+            "l": 3412.01,
+            "c": 3417.68,
+            "v": 37780.191
+          },
+          {
+            "t": 1732369500000,
+            "o": 3417.69,
+            "h": 3448.4,
+            "l": 3417.06,
+            "c": 3438.24,
+            "v": 116886.039
+          },
+          {
+            "t": 1732370400000,
+            "o": 3438.24,
+            "h": 3471.83,
+            "l": 3430.58,
+            "c": 3457.45,
+            "v": 129911.185
+          },
+          {
+            "t": 1732371300000,
+            "o": 3457.46,
+            "h": 3483.7,
+            "l": 3454.03,
+            "c": 3482.17,
+            "v": 87415.619
+          },
+          {
+            "t": 1732372200000,
+            "o": 3482.18,
+            "h": 3498.94,
+            "l": 3474.37,
+            "c": 3483.11,
+            "v": 137390.861
+          },
+          {
+            "t": 1732373100000,
+            "o": 3483.11,
+            "h": 3495.04,
+            "l": 3472.03,
+            "c": 3475.08,
+            "v": 71471.978
+          },
+          {
+            "t": 1732374000000,
+            "o": 3475.07,
+            "h": 3483.66,
+            "l": 3452.87,
+            "c": 3465.61,
+            "v": 105379.731
+          },
+          {
+            "t": 1732374900000,
+            "o": 3465.61,
+            "h": 3475.0,
+            "l": 3461.2,
+            "c": 3474.99,
+            "v": 39165.304
+          },
+          {
+            "t": 1732375800000,
+            "o": 3474.99,
+            "h": 3477.63,
+            "l": 3457.6,
+            "c": 3458.84,
+            "v": 44770.821
+          },
+          {
+            "t": 1732376700000,
+            "o": 3458.85,
+            "h": 3471.84,
+            "l": 3446.01,
+            "c": 3463.13,
+            "v": 52908.931
+          },
+          {
+            "t": 1732377600000,
+            "o": 3463.13,
+            "h": 3473.64,
+            "l": 3457.46,
+            "c": 3458.32,
+            "v": 38967.205
+          },
+          {
+            "t": 1732378500000,
+            "o": 3458.33,
+            "h": 3461.57,
+            "l": 3381.0,
+            "c": 3402.97,
+            "v": 307987.36
+          },
+          {
+            "t": 1732379400000,
+            "o": 3402.96,
+            "h": 3421.0,
+            "l": 3387.49,
+            "c": 3413.93,
+            "v": 110829.927
+          },
+          {
+            "t": 1732380300000,
+            "o": 3413.93,
+            "h": 3421.0,
+            "l": 3402.72,
+            "c": 3416.34,
+            "v": 53962.01
+          },
+          {
+            "t": 1732381200000,
+            "o": 3416.36,
+            "h": 3420.9,
+            "l": 3392.1,
+            "c": 3414.06,
+            "v": 72037.83
+          },
+          {
+            "t": 1732382100000,
+            "o": 3414.06,
+            "h": 3432.59,
+            "l": 3405.42,
+            "c": 3432.17,
+            "v": 58188.99
+          },
+          {
+            "t": 1732383000000,
+            "o": 3432.17,
+            "h": 3438.6,
+            "l": 3425.44,
+            "c": 3430.6,
+            "v": 49776.875
+          },
+          {
+            "t": 1732383900000,
+            "o": 3430.61,
+            "h": 3434.21,
+            "l": 3421.17,
+            "c": 3427.82,
+            "v": 21806.093
+          },
+          {
+            "t": 1732384800000,
+            "o": 3427.81,
+            "h": 3427.82,
+            "l": 3403.35,
+            "c": 3422.48,
+            "v": 49474.768
+          },
+          {
+            "t": 1732385700000,
+            "o": 3422.48,
+            "h": 3428.79,
+            "l": 3413.99,
+            "c": 3428.1,
+            "v": 18238.11
+          },
+          {
+            "t": 1732386600000,
+            "o": 3428.1,
+            "h": 3434.23,
+            "l": 3417.43,
+            "c": 3429.27,
+            "v": 16495.495
+          },
+          {
+            "t": 1732387500000,
+            "o": 3429.28,
+            "h": 3434.0,
+            "l": 3425.0,
+            "c": 3426.82,
+            "v": 10119.608
+          },
+          {
+            "t": 1732388400000,
+            "o": 3426.82,
+            "h": 3428.61,
+            "l": 3418.48,
+            "c": 3424.59,
+            "v": 16273.718
+          },
+          {
+            "t": 1732389300000,
+            "o": 3424.57,
+            "h": 3436.11,
+            "l": 3420.0,
+            "c": 3421.94,
+            "v": 23564.155
+          },
+          {
+            "t": 1732390200000,
+            "o": 3421.95,
+            "h": 3425.39,
+            "l": 3406.0,
+            "c": 3406.01,
+            "v": 29878.658
+          },
+          {
+            "t": 1732391100000,
+            "o": 3406.01,
+            "h": 3419.6,
+            "l": 3403.0,
+            "c": 3410.21,
+            "v": 21613.864
+          },
+          {
+            "t": 1732392000000,
+            "o": 3410.21,
+            "h": 3411.44,
+            "l": 3394.2,
+            "c": 3394.21,
+            "v": 34507.786
+          },
+          {
+            "t": 1732392900000,
+            "o": 3394.2,
+            "h": 3407.0,
+            "l": 3381.51,
+            "c": 3384.3,
+            "v": 48299.063
+          },
+          {
+            "t": 1732393800000,
+            "o": 3384.31,
+            "h": 3407.1,
+            "l": 3381.8,
+            "c": 3406.57,
+            "v": 35395.523
+          },
+          {
+            "t": 1732394700000,
+            "o": 3406.57,
+            "h": 3408.0,
+            "l": 3400.0,
+            "c": 3408.0,
+            "v": 10498.56
+          },
+          {
+            "t": 1732395600000,
+            "o": 3407.99,
+            "h": 3420.17,
+            "l": 3404.5,
+            "c": 3416.41,
+            "v": 19596.1
+          },
+          {
+            "t": 1732396500000,
+            "o": 3416.42,
+            "h": 3424.98,
+            "l": 3415.1,
+            "c": 3421.33,
+            "v": 15036.127
+          },
+          {
+            "t": 1732397400000,
+            "o": 3421.33,
+            "h": 3430.61,
+            "l": 3420.76,
+            "c": 3430.07,
+            "v": 17547.609
+          },
+          {
+            "t": 1732398300000,
+            "o": 3430.06,
+            "h": 3430.07,
+            "l": 3413.25,
+            "c": 3419.78,
+            "v": 18185.019
+          },
+          {
+            "t": 1732399200000,
+            "o": 3419.79,
+            "h": 3426.29,
+            "l": 3406.67,
+            "c": 3413.51,
+            "v": 18879.029
+          },
+          {
+            "t": 1732400100000,
+            "o": 3413.51,
+            "h": 3415.98,
+            "l": 3407.0,
+            "c": 3414.19,
+            "v": 11183.477
+          },
+          {
+            "t": 1732401000000,
+            "o": 3414.19,
+            "h": 3416.24,
+            "l": 3395.17,
+            "c": 3403.09,
+            "v": 25378.395
+          },
+          {
+            "t": 1732401900000,
+            "o": 3403.08,
+            "h": 3412.93,
+            "l": 3398.91,
+            "c": 3408.37,
+            "v": 12522.755
+          },
+          {
+            "t": 1732402800000,
+            "o": 3408.38,
+            "h": 3408.87,
+            "l": 3395.96,
+            "c": 3406.22,
+            "v": 14068.36
+          },
+          {
+            "t": 1732403700000,
+            "o": 3406.21,
+            "h": 3409.37,
+            "l": 3383.16,
+            "c": 3392.28,
+            "v": 34398.029
+          },
+          {
+            "t": 1732404600000,
+            "o": 3392.28,
+            "h": 3403.21,
+            "l": 3390.62,
+            "c": 3400.89,
+            "v": 16845.574
+          },
+          {
+            "t": 1732405500000,
+            "o": 3400.89,
+            "h": 3402.51,
+            "l": 3385.03,
+            "c": 3396.33,
+            "v": 28999.913
+          }
+        ]
+      },
+      "expected_status": "ALTERNATIVE"
+    }
+  ]
+}

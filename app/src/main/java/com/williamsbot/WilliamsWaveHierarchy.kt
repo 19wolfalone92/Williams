@@ -31,7 +31,8 @@ internal data class WilliamsWaveScenario(
     var scaleFrame: String = "", var scaleBars: Int = 0, var w4Zero: String = "UNCONFIRMED",
     var divergence: Boolean = false, var momentumShift: Boolean = false,
     var terminalFractal: Boolean = false, var squat: Boolean = false, var targetZone: Boolean = false,
-    val alternatives: MutableList<String> = mutableListOf()
+    val alternatives: MutableList<String> = mutableListOf(),
+    var legObservationStart:Long = 0L
 ) {
     val activeLabel:String get()=when(anchors.size) { 2->"W2";3->"W3";4->"W4";5->"W5";6->"A";7->"B";8->"C";else->"NEXT_SEQUENCE_UNRESOLVED" }
     val activeDirection:String get()=if(activeLabel in listOf("W2","W4","A","C")) {
@@ -42,6 +43,7 @@ internal data class WilliamsWaveScenario(
         .put("direction", direction).put("label", label)
         .put("anchors", JSONArray(anchors.map { it.toJson() })).put("observed_at", observedAt)
         .put("leg_start", legStart).put("leg_low", legLow).put("leg_high", legHigh)
+        .put("leg_observation_start",legObservationStart)
         .put("invalidation", invalidation).put("status", status)
         .put("invalid_reasons", JSONArray(invalidReasons)).put("scale_frame", scaleFrame)
         .put("scale_bars", scaleBars).put("w4_zero", w4Zero).put("divergence", divergence)
@@ -217,7 +219,7 @@ internal fun williamsHypothesesFromAnchors(
         if (n >= 7 && price[6] >= price[5]) reasons += "A_NOT_CORRECTIVE"
         if (n >= 8 && price[7] <= price[6]) reasons += "B_NOT_RETRACING_A"
         if (n >= 9 && price[8] >= price[6]) reasons += "C_NOT_EXTENDING_A_COMPLEX_CORRECTION_POSSIBLE"
-        val inv = if (n <= 3) p[0].price else if (n <= 6) p[1].price else p[5].price
+        val inv = if (n <= 3) p[0].price else if(n<=6 && diagonalOverlap) p[2].price else if (n <= 6) p[1].price else p[5].price
         if (n <= 6 && sign * (bars.last().c-inv) <= 0) reasons += "LIVE_PRICE_INVALIDATED_COUNT"
         val leg = bars.filter { it.t >= p.last().extremeAt }
         val direction = if (sign == 1) "UP" else "DOWN"
@@ -268,6 +270,19 @@ internal fun linkWilliamsWaveHypotheses(scenarios: List<WilliamsWaveScenario>): 
     return links
 }
 
+internal fun williamsWaveLegObservationStart(anchor:WilliamsWaveAnchor,frame:String,frames:Map<String,List<WilliamsWaveBar>>):Long {
+    val end=anchor.extremeAt+williamsWaveFrames.getValue(frame)
+    for(f in frames.keys.sortedBy { williamsWaveFrames.getValue(it) }) {
+        val duration=williamsWaveFrames.getValue(f)
+        if(duration>williamsWaveFrames.getValue(frame)) continue
+        val part=frames.getValue(f).filter { it.t>=anchor.extremeAt && it.t<end }
+        if(part.isEmpty() || part.first().t!=anchor.extremeAt || part.last().t+duration!=end) continue
+        val matches=part.filter { kotlin.math.abs((if(anchor.kind=="HIGH") it.h else it.l)-anchor.price)<=maxOf(1e-9,anchor.price*1e-9) }
+        if(matches.isNotEmpty()) return matches.last().t+duration
+    }
+    return end
+}
+
 internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>>, asOf: Long): WilliamsWaveHierarchy {
     val valid = linkedMapOf<String,List<WilliamsWaveBar>>()
     val errors = linkedMapOf<String,String>()
@@ -282,13 +297,14 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
         val hypotheses = williamsHypothesesFromAnchors(frame,bars,
             confirmedWilliamsWaveAnchors(bars,williamsWaveFrames.getValue(frame)))
         for (h in hypotheses) {
+            h.legObservationStart=williamsWaveLegObservationStart(h.anchors.last(),frame,valid)
             val observed = valid.filterKeys { williamsWaveFrames.getValue(it) <= williamsWaveFrames.getValue(frame) }
-                .flatMap { (f,series) -> series.filter { it.t >= h.legStart && it.t + williamsWaveFrames.getValue(f) <= asOf } }
+                .flatMap { (f,series) -> series.filter { it.t >= h.legObservationStart && it.t + williamsWaveFrames.getValue(f) <= asOf } }
             h.observedAt = asOf
             if (observed.isNotEmpty()) {
-                h.legLow = observed.minOf { it.l }; h.legHigh = observed.maxOf { it.h }
-                if (h.anchors.size <= 6 && (h.direction == "UP" && h.legLow <= h.invalidation ||
-                    h.direction == "DOWN" && h.legHigh >= h.invalidation)) {
+                h.legLow = minOf(h.anchors.last().price,observed.minOf { it.l }); h.legHigh = maxOf(h.anchors.last().price,observed.maxOf { it.h })
+                if (h.anchors.size <= 6 && (h.direction == "UP" && observed.minOf { it.l } <= h.invalidation ||
+                    h.direction == "DOWN" && observed.maxOf { it.h } >= h.invalidation)) {
                     h.status = "INVALIDATED"; h.invalidReasons += "LOWER_FRAME_OBSERVED_INVALIDATION"
                 }
             }
