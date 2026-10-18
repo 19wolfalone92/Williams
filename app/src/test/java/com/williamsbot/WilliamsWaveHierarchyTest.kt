@@ -35,6 +35,30 @@ class WilliamsWaveHierarchyTest {
             assertFalse(williamsCorrectionEntryContext(report,"LONG",169*hour,"REVERSAL").allowed)
         }
     }
+    @Test fun fourthWaveOverlapRemainsResearchOnlyDiagonalAlternative() {
+        val candles=(0 until 180).map { i ->
+            WilliamsWaveBar(i*hour,130.0,131.0,129.0,130.0,1000.0)
+        }
+        fun count(w4:Double):WilliamsWaveScenario {
+            val parts=listOf(
+                "LOW" to 100.0,"HIGH" to 120.0,"LOW" to 110.0,
+                "HIGH" to 140.0,"LOW" to w4,"HIGH" to 150.0
+            )
+            val positions=listOf(10,30,50,75,100,130)
+            val anchors=parts.mapIndexed { i,(k,p) ->
+                WilliamsWaveAnchor(k,p,positions[i],positions[i]*hour,(positions[i]+3)*hour)
+            }
+            return williamsHypothesesFromAnchors("1h",candles,anchors).first { it.label=="A" }
+        }
+        val diagonal=count(115.0)
+        assertEquals("ALTERNATIVE",diagonal.status)
+        assertTrue(diagonal.invalidReasons.isEmpty())
+        assertTrue(diagonal.alternatives.contains("UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP"))
+        val invalid=count(109.0)
+        assertEquals("INVALIDATED",invalid.status)
+        assertTrue(invalid.invalidReasons.contains("W4_BREACHES_W3_OR_W4_END"))
+        assertEquals("PROVISIONAL",count(125.0).status)
+    }
     @Test fun allCausalPrefixesIgnoreFutureCandles() {
         val bars=fixtureBars(fixtureCases().getJSONObject(0))
         for (n in 40..bars.size step 3) {

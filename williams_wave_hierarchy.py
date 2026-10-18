@@ -253,7 +253,13 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             reasons.append("W2_INVALIDATES_ORIGIN")
         if n >= 4 and price[3] <= price[1]:
             reasons.append("W3_DOES_NOT_EXTEND_W1")
-        if n >= 5 and not price[1] < price[4] < price[3]:
+        # A wave-four/W1 overlap rules out an ordinary impulse but not
+        # every leading/ending diagonal. Keep it a NON-EXECUTABLE alternative
+        # only if W4 still holds above W3 origin in oriented price space.
+        diagonal_overlap = n >= 5 and price[2] < price[4] <= price[1]
+        if n >= 5 and not price[2] < price[4] < price[3]:
+            reasons.append("W4_BREACHES_W3_OR_W4_END")
+        elif n >= 5 and price[4] <= price[1] and not diagonal_overlap:
             reasons.append("CLASSIC_W4_OVERLAP_OR_INVALID_RETRACEMENT")
         if n >= 6:
             legs = [price[1]-price[0], price[3]-price[2], price[5]-price[4]]
@@ -278,7 +284,9 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             frame, "UP" if sign == 1 else "DOWN", label, p,
             last_bar.t + duration, p[-1].extreme_at,
             min(b.l for b in leg), max(b.h for b in leg), inv,
-            "INVALIDATED" if reasons else "PROVISIONAL", reasons)
+            "INVALIDATED" if reasons else ("ALTERNATIVE" if diagonal_overlap else "PROVISIONAL"), reasons)
+        if diagonal_overlap and not reasons:
+            h.alternatives.append("UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP")
         active_sign = -sign if n in (2, 4, 6, 8) else sign
         if n < 9 and not reasons and active_sign * (last_bar.c - p[-1].price) <= 0:
             h.status = "UNRESOLVED"

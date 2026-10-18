@@ -7307,6 +7307,33 @@ private class NativeEngine(
             .put("analytical_frame",rhythm?.scaleFrame ?: "")
             .put("source","TRADING_CHAOS_CH7_5_34_OSCILLATOR")
             .put("wave_labels","PROVISIONAL").put("wave4_completion_confirmed",false).put("can_place_orders",false)
+        // NTD chapter 8 is a distinct fifth-dimension research profile:
+        // never authorize a TC2 Futures order from these signals.
+        val ntdBars = if (lastH1 >= 44) (maxOf(34, lastH1 - 30)..lastH1).map { index ->
+            val candle = candidate.candles[index]
+            val lines = alligator(candidate.candles, index)
+            val values = (index - 4..index).map { ao(candidate.candles, it) }
+            WilliamsNtdBar(
+                h=candle.h, l=candle.l, jaw=lines.jaw, teeth=lines.teeth,
+                lips=lines.lips, ao=values.last(), ac=nativeAcFromClosedAo(values)
+            )
+        } else emptyList()
+        val ntdTick = runCatching { symbolFilters(candidate.symbol).tick }.getOrDefault(0.0)
+        fun ntdTrace(side: String): JSONObject {
+            val result = williamsNtdBalanceLine(ntdBars, side, ntdTick)
+            return JSONObject().put("side",side).put("status",result.status)
+                .put("base_index",result.baseIndex)
+                .put("reference_index",result.referenceIndex)
+                .put("required_reference_extremes",result.requiredSteps)
+                .put("completed_reference_extremes",result.completedSteps)
+                .put("trigger_price",if(result.triggerPrice>0) result.triggerPrice else JSONObject.NULL)
+                .put("protective_reference",if(result.protectiveReference>0) result.protectiveReference else JSONObject.NULL)
+                .put("zone",result.zone).put("jaw_relationship",result.relation)
+                .put("reason",result.reason).put("can_place_orders",false)
+        }
+        val ntdTrace = JSONObject().put("profile","NTD_CH8_BALANCE_LINE_RESEARCH_ONLY")
+            .put("long",ntdTrace("LONG")).put("short",ntdTrace("SHORT"))
+            .put("can_place_orders",false)
         val h1Ao = ao(candidate.candles, lastH1)
         val h1Ac = if (lastH1 >= 4) nativeAcFromClosedAo(
             (lastH1 - 4..lastH1).map { ao(candidate.candles, it) }
@@ -7333,6 +7360,7 @@ private class NativeEngine(
         return JSONObject()
             .put("directional_context_native", directionTrace)
             .put("wave4_zero_line_diagnostic", wave4Trace)
+            .put("ntd_balance_line_diagnostics", ntdTrace)
             .put("wave_hierarchy", candidate.waveHierarchy?.toJson() ?: JSONObject().put("state","NOT_ANALYSED"))
             .put("strategy_profile", "TC2_THREE_WISE_MEN")
             .put("wave_scores_calibrated", false)

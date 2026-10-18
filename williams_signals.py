@@ -365,6 +365,67 @@ def _latest_confirmed_fractal(
     return None
 
 
+
+def extract_ntd_balance_line_signal_specs(
+    symbol: str,
+    ind: pd.DataFrame,
+    *,
+    side: str,
+    timeframe: str,
+    tick_size: float,
+    max_age_bars: int = 20,
+) -> list[SignalSpec]:
+    """NTD ch.8 fifth dimension, isolated research signal, NOT TC2 executable.
+
+    The generator is symmetric and closed-bar-only; there is no exchange
+    permission until NTD profile, position provenance and Android parity pass.
+    """
+    from ntd_balance_line import ntd_balance_line_evidence
+
+    if ind is None or len(ind) < 5:
+        return []
+    required = {"high","low","jaw_current","teeth_current","lips_current","ao","ac"}
+    if not required.issubset(ind.columns):
+        return []
+    evidence = ntd_balance_line_evidence(
+        ind["high"],ind["low"],ind["jaw_current"],
+        ind["teeth_current"],ind["lips_current"],ind["ao"],ind["ac"],
+        side=side,tick_size=tick_size,lookback=max_age_bars,
+    )
+    if evidence.status != "CANDIDATE":
+        return []
+    base = ind.iloc[evidence.base_index]
+    signal_time = _row_time_ms(base)
+    if signal_time <= 0 or not _trigger_still_pending(
+        ind,evidence.base_index,side=("BUY" if side.upper()=="LONG" else "SELL"),
+        trigger_price=evidence.trigger_price,
+    ):
+        return []
+    return [SignalSpec.new(
+        symbol=symbol,
+        side="BUY" if side.upper()=="LONG" else "SELL",
+        signal_type=SignalType.BALANCE_LINE,
+        # NTD p99: Balance-Line fifth dimension can lead the first fractal,
+        # so role means research ENTRY hypothesis only; execution stays blocked.
+        role=SignalRole.ENTRY,
+        timeframe=timeframe,
+        signal_bar_time_ms=signal_time,
+        trigger_price=evidence.trigger_price,
+        protective_reference=evidence.protective_reference,
+        trigger_buffer_ticks=1,
+        source_candle_index=evidence.base_index,
+        teeth_at_detection=float(base["teeth_current"]),
+        alligator_bullish=bool(base.get("bullish_alligator",False)),
+        alligator_awake=bool(base.get("alligator_awake",False)),
+        reason=(
+            "NTD ch8 Balance Line research-only: right-to-left base, "
+            f"{evidence.confirmed_steps} reference extremes, {evidence.zone} zone; "
+            "NEVER authorize as a TC2 entry or add-on"
+        ),
+        expires_at_ms=_expiry(signal_time,timeframe,max_age_bars),
+    )]
+
+
 def extract_ntd_ao_signal_specs(
     symbol: str,
     ind: pd.DataFrame,
