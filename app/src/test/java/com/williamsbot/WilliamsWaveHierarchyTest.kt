@@ -28,7 +28,7 @@ class WilliamsWaveHierarchyTest {
                 assertEquals(e.getString("w4_zero"),s.w4Zero)
                 assertEquals(e.getInt("scale_bars"),s.scaleBars)
             }
-            val completed=report.scenarios.first { it.label=="A" }
+            val completed=report.scenarios.first { it.label=="W5" }
             assertEquals(121,completed.scaleBars)
             assertEquals(50*hour,completed.anchors.first().extremeAt)
             assertEquals(53*hour,completed.anchors.first().knownAt)
@@ -48,7 +48,7 @@ class WilliamsWaveHierarchyTest {
             val anchors=parts.mapIndexed { i,(k,p) ->
                 WilliamsWaveAnchor(k,p,positions[i],positions[i]*hour,(positions[i]+3)*hour)
             }
-            return williamsHypothesesFromAnchors("1h",candles,anchors).first { it.label=="A" }
+            return williamsHypothesesFromAnchors("1h",candles,anchors).first { it.label=="W5" }
         }
         val diagonal=count(115.0)
         assertEquals("ALTERNATIVE",diagonal.status)
@@ -98,7 +98,7 @@ class WilliamsWaveHierarchyTest {
     private fun correction(mirror:Boolean=false): WilliamsWaveHierarchy {
         var s=listOf(
             hypothesis("1d","DOWN","W3",listOf(260.0,210.0,240.0),listOf(5,20,50),50,50.0,280.0),
-            hypothesis("6h","DOWN","W4",listOf(220.0,180.0,200.0,100.0),listOf(80,100,200,300),300,95.0,180.0),
+            hypothesis("6h","DOWN","W4",listOf(220.0,180.0,200.0,100.0,130.0),listOf(80,100,200,300,320),300,95.0,180.0),
             hypothesis("1h","UP","W3",listOf(110.0,145.0,130.0),listOf(310,320,330),330,125.0,165.0),
             hypothesis("15m","UP","W3",listOf(131.0,143.0,137.0),listOf(331,334,336),336,136.0,150.0))
         s[1].w4Zero="MINIMUM_ONLY";s[1].momentumShift=true

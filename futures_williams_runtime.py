@@ -220,6 +220,8 @@ class FuturesWilliamsScanner:
         )
         self.latest_directional_view: dict[str, dict] = {}
         self.wave_reports: dict[str, WaveHierarchy] = {}
+        # Uncoupled edition-specific NTD evidence, not executable TC2 signals.
+        self.latest_ntd_research: dict[str, dict] = {}
         self.symbols: list[str] = []
         self.configured_symbols = len(DEFAULT_FUTURES_SYMBOLS)
         self.last_scan_status: dict = {
@@ -389,6 +391,18 @@ class FuturesWilliamsScanner:
             return []
         closed = closed_strategy_frame(frame,self.interval,int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
         ind = calculate_indicators(closed, self.config)
+        # Do not mix NTD fifth-dimension entries into TC2 exchange order gate.
+        # A diagnostic error must not abort existing position protection.
+        try:
+            from williams_ntd_research import ntd_five_dimensions_research
+            self.latest_ntd_research[symbol] = ntd_five_dimensions_research(
+                symbol, ind, self.interval, tick)
+        except Exception as exc:
+            self.latest_ntd_research[symbol] = {
+                "mode":"NTD_FIVE_DIMENSIONS_RESEARCH_ONLY",
+                "can_place_orders":False,"reason":"NTD_RESEARCH_DIAGNOSTIC_ERROR",
+                "error_type":type(exc).__name__,
+            }
         wave_snapshot = self.wave_engine.build_snapshot(
             self.interval,
             closed,
