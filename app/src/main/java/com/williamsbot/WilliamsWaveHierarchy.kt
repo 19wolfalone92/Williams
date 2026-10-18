@@ -205,12 +205,14 @@ internal fun williamsHypothesesFromAnchors(
             val legs = listOf(price[1]-price[0],price[3]-price[2],price[5]-price[4])
             if (legs.min() <= 0 || legs[1] < minOf(legs[0],legs[2])) reasons += "W3_SHORTEST_OR_NEGATIVE_MOTIVE_LEG"
         }
-        val label = if (n <= 5) "W$n" else mapOf(6 to "A",7 to "B",8 to "C",9 to "ABC_COMPLETE").getValue(n)
+        // Five motive legs require six confirmed pivot endpoints.
+        // Old n->label mapping called completed W5 an A correction.
+        val label = if (n <= 6) "W${n-1}" else mapOf(7 to "A",8 to "B",9 to "C").getValue(n)
         if (n >= 7 && price[6] >= price[5]) reasons += "A_NOT_CORRECTIVE"
         if (n >= 8 && price[7] <= price[6]) reasons += "B_NOT_RETRACING_A"
         if (n >= 9 && price[8] >= price[6]) reasons += "C_NOT_EXTENDING_A_COMPLEX_CORRECTION_POSSIBLE"
-        val inv = if (n <= 3) p[0].price else if (n <= 5) p[1].price else p[5].price
-        if (n <= 5 && sign * (bars.last().c-inv) <= 0) reasons += "LIVE_PRICE_INVALIDATED_COUNT"
+        val inv = if (n <= 3) p[0].price else if (n <= 6) p[1].price else p[5].price
+        if (n <= 6 && sign * (bars.last().c-inv) <= 0) reasons += "LIVE_PRICE_INVALIDATED_COUNT"
         val leg = bars.filter { it.t >= p.last().extremeAt }
         val direction = if (sign == 1) "UP" else "DOWN"
         val h = WilliamsWaveScenario("$frame:$direction:${p.first().extremeAt}:$n",frame,direction,label,p,
@@ -277,7 +279,7 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
             h.observedAt = asOf
             if (observed.isNotEmpty()) {
                 h.legLow = observed.minOf { it.l }; h.legHigh = observed.maxOf { it.h }
-                if (h.anchors.size <= 5 && (h.direction == "UP" && h.legLow <= h.invalidation ||
+                if (h.anchors.size <= 6 && (h.direction == "UP" && h.legLow <= h.invalidation ||
                     h.direction == "DOWN" && h.legHigh >= h.invalidation)) {
                     h.status = "INVALIDATED"; h.invalidReasons += "LOWER_FRAME_OBSERVED_INVALIDATION"
                 }
