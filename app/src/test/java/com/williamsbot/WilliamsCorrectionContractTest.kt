@@ -35,9 +35,14 @@ class WilliamsCorrectionContractTest {
             assertEquals(expectedTrigger,signal.trigger,1e-9)
             val type=if (mirror) "SHORT_FRACTAL" else "FRACTAL"
             val proof=williamsCorrectionEntryContext(report,side,signalAt,type)
-            // Four higher-frame pivot endpoints mean W3, not W4.
-            // The previous test greenlit a countertrend trade by mislabeling W3.
-            assertFalse(proof.allowed)
+            // Four pivots complete W3; price after that endpoint forms W4.
+            // Actual H1 fractal + AO zero + contained four-frame path are required.
+            assertTrue(proof.toJson().toString(),proof.allowed)
+            val parent=report.scenarios.single { it.id==proof.parentId }
+            assertEquals("W3",parent.label);assertEquals("W4",parent.activeLabel)
+            assertEquals(4,parent.anchors.size)
+            assertEquals(parent.anchors.last().extremeAt,parent.legStart)
+            assertTrue(williamsCorrectionPriceAllowed(proof.toJson(),expectedTrigger))
             assertFalse(report.scenarios.any { it.frame=="6h" && it.label=="W4" &&
                 it.status=="PROVISIONAL" && it.anchors.size < 5 })
             val missing=buildWilliamsWaveHierarchy(frames.filterKeys { it!="15m" },now)

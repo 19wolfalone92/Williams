@@ -135,6 +135,15 @@ def detect_complex_wave_patterns(
                 and all(a<b for a,b in zip(lows,lows[1:])) and max(lows)<min(highs):
             add("CONTRACTING_TRIANGLE_ABCDE_CANDIDATE", sub,
                 ("HIGHER_LOWS_LOWER_HIGHS", "INTERNAL_3_3_3_3_3_UNVERIFIED"), sub[-2][1])
+    if len(pts)>=6:
+        sub=pts[-6:];highs=[p[1] for p in sub if p[0]=="HIGH"];lows=[p[1] for p in sub if p[0]=="LOW"]
+        if len(highs)==3 and len(lows)==3 and max(lows)<min(highs):
+            close=lambda a,b:abs(a-b)<=max(abs(a),abs(b))*1e-9
+            if all(a<b for a,b in zip(highs,highs[1:])) and all(a>b for a,b in zip(lows,lows[1:])):
+                add("EXPANDING_TRIANGLE_ABCDE_CANDIDATE",sub,("DIVERGING_BOUNDARIES","INTERNAL_3_3_3_3_3_UNVERIFIED"),sub[-2][1])
+            elif (all(close(a,b) for a,b in zip(highs,highs[1:])) and all(a<b for a,b in zip(lows,lows[1:]))) or (
+                all(close(a,b) for a,b in zip(lows,lows[1:])) and all(a>b for a,b in zip(highs,highs[1:]))):
+                add("BARRIER_TRIANGLE_ABCDE_CANDIDATE",sub,("ONE_FLAT_ONE_CONVERGING_BOUNDARY","INTERNAL_3_3_3_3_3_UNVERIFIED"),sub[-2][1])
     # W-X-Y and W-X-Y-X-Z need the internal A/B/C segmentation. A
     # seven-/eleven-swing outer zigzag alone must not certify combinations.
     if len(pts) >= 8:
@@ -145,4 +154,20 @@ def detect_complex_wave_patterns(
         sub=pts[-12:]
         add("W_X_Y_X_Z_COMBINATION_UNRESOLVED", sub,
             ("INTERNAL_CORRECTION_COMPONENTS_NOT_PROVEN",), sub[0][1])
+    # Actual ABC component boundaries, rather than 8/12 arbitrary swings.
+    # W/X/Y requires 9 legs (10 endpoints); W/X/Y/X/Z 15 (16 endpoints).
+    for count,groups,name in ((10,3,"W_X_Y_ZIGZAG_COMBINATION_CANDIDATE"),
+                              (16,5,"W_X_Y_X_Z_ZIGZAG_COMBINATION_CANDIDATE")):
+        if len(pts)<count:continue
+        sub=pts[-count:]
+        if sub[0][0]==wanted:continue  # correction begins opposite the motive origin
+        values=[-sign*p[1] for p in sub]
+        valid=True
+        for g in range(groups):
+            block=values[g*3:g*3+4];orientation=1 if g%2==0 else -1
+            a,b,c,d=[orientation*v for v in block]
+            valid=valid and a<c<b<d
+            if g%2==1:valid=valid and values[g*3-3]<values[g*3+3]<values[g*3]
+            if g%2==0 and g>0:valid=valid and values[g*3+3]>values[g*3-3]
+        if valid:add(name,sub,("ABC_COMPONENT_BOUNDARIES_OBSERVED","INTERNAL_COMPONENT_DEGREES_UNVERIFIED"),sub[0][1])
     return result

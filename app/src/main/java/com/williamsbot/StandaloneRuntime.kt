@@ -693,11 +693,11 @@ internal fun isCampaignAddOnSignalForDirection(signalType: String, positionSigna
 /** Resolve only explicit strategy signal types; unknown types must never default to LONG. */
 internal fun campaignSignalDirection(signalType: String): String? {
     val type = signalType.trim().uppercase(Locale.US)
-    return when {
-        type.startsWith("SHORT_") -> "SHORT"
-        type.startsWith("LONG_") || type in setOf("REVERSAL", "SUPER_AO", "FRACTAL") -> "LONG"
-        else -> null
-    }
+    val family=type.removePrefix("SHORT_").removePrefix("LONG_")
+    if(type in setOf("LONG_BREAKOUT","SHORT_BREAKOUT")) return if(type.startsWith("SHORT_")) "SHORT" else "LONG"
+    if(family !in setOf("REVERSAL","SUPER_AO","FRACTAL","AO_SAUCER","AO_ZERO_LINE","AO_TWIN_PEAKS",
+        "AC_SIGNAL","ZONE_ADD_ON","BALANCE_LINE","COURSE_HUMP","COURSE_THUMB","COURSE_SQUAT")) return null
+    return if(type.startsWith("SHORT_")) "SHORT" else "LONG"
 }
 
 /** 0 means the direction is vetoed, 1 is an allowed reversal, 2 is aligned H4 context. */
@@ -871,7 +871,10 @@ private data class CampaignSignalN(
     val protectivePrice: Double,
     val teethAtDetection: Double,
     val invalidationPrice: Double,
-    val reason: String
+    val reason: String,
+    val strategyProfile:String=williamsTc2Profile,
+    val executionSemantics:String="STOP_ENTRY",
+    val setupContext:String=""
 )
 
 private data class BaseAnalysis(
@@ -1141,6 +1144,7 @@ private class NativeEngine(
     @Volatile private var futuresLeverageSettings = prefs.getString("futures_leverage_settings_v1", null)?.let {
         FuturesLeverageSettings.fromJson(JSONObject(it))
     } ?: FuturesLeverageSettings()
+    @Volatile private var williamsProfile=prefs.getString("williams_strategy_profile_v1",williamsTc2Profile) ?: williamsTc2Profile
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
         NativeFuturesCampaignCoordinator(executionStore) {
@@ -1150,6 +1154,7 @@ private class NativeEngine(
                     check(RuntimeServiceState.active) { "Runtime service is not active before Futures exposure mutation" }
                 })
         }.also { coordinator ->
+            coordinator.setEditionSelectionProvider { williamsProfile }
             coordinator.setObservationSink { auditStore.recordCampaignSnapshot(it) }
             coordinator.setStructuralStopRecoveryProvider { symbol, direction, mark, quantity, entry ->
                 recoverMissingStructuralStop(symbol, direction, mark, quantity, entry)
@@ -2762,8 +2767,7 @@ private class NativeEngine(
         val intents = futuresCampaignCoordinator.intentsSnapshot()
         val riskUsed = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.sumOf { intent ->
             if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
-                intent.optDouble("risk_pct", Double.NaN).takeIf { it.isFinite() && it > 0.0 }
-                    ?: maxTotalRiskPct
+                futuresCampaignReservedRisk(intent,intents)
             } else 0.0
         }
         val riskPct = min(campaignInitialRiskPct, min(maxRiskPerTradePct, maxTotalRiskPct - riskUsed))
@@ -5107,6 +5111,7 @@ private class NativeEngine(
                     entrySlippagePct = entrySlippagePct,
                     fillCount = summary.fillCount
                 )
+                futuresCampaignCoordinator.recordVerifiedCampaignResult(clientId,summary.netPnlUsdt,summary.feeKnown,summary.fillCount)
                 futuresCampaignCoordinator.markTradeJournalStatus(
                     clientId, "RECORDED",
                     "source=Binance userTrades; fills=${summary.fillCount}; fees_known=${summary.feeKnown}"
@@ -5210,12 +5215,20 @@ private class NativeEngine(
         // additionally needs its original parent to remain valid before fill.
         for (i in 0 until intents.length()) {
             val pending=intents.optJSONObject(i) ?: continue
-            if (pending.optString("intent_role","ENTRY")!="ENTRY" || campaignLifecycleStatus(pending)!="ENTRY_PENDING") continue
+            if (pending.optString("intent_role","ENTRY") !in setOf("ENTRY","ADD_ON") || campaignLifecycleStatus(pending)!="ENTRY_PENDING") continue
             val symbol=pending.optString("symbol")
             val signalAt=pending.optLong("signal_bar_time_ms",0L)
             val expires=pending.optLong("signal_expires_at_ms",if (signalAt>0) signalAt+18_000_000L else 0L)
             val expired=expires>0 && futuresMarketData.exchangeNowMs()>=expires
             var invalidCorrection=false
+            var invalidEdition=false
+            val profile=pending.optString("strategy_profile",williamsTc2Profile)
+            if(profile!=williamsTc2Profile && pending.optString("kind")!="MARKET") {
+                val current=editionCampaignSignals(symbol,fetchCandles(symbol,"1h",220),"1h",symbolFilters(symbol).tick,profile)
+                val expected=pending.optString("entry_price").toDoubleOrNull()
+                invalidEdition=current.none { it.type==pending.optString("signal_type") &&
+                    expected!=null && abs(it.triggerPrice-expected)<=symbolFilters(symbol).tick*.1 }
+            }
             if (pending.optString("trade_mode")=="CORRECTION") {
                 val prior=runCatching { JSONObject(pending.optString("wave_context_at_entry")) }.getOrNull()
                 val current=williamsCorrectionEntryContext(waveHierarchyFor(symbol),pending.optString("direction"),
@@ -5223,8 +5236,8 @@ private class NativeEngine(
                 invalidCorrection=!current.allowed || current.parentId!=prior?.optString("parent_scenario_id") ||
                     !williamsCorrectionPriceAllowed(current.toJson(),futuresMarketData.markPrice(symbol))
             }
-            if (expired || invalidCorrection) {
-                val reason=if (expired) "H1_SIGNAL_EXPIRED" else "CORRECTION_PARENT_INVALIDATED"
+            if (expired || invalidCorrection || invalidEdition) {
+                val reason=if (expired) "H1_SIGNAL_EXPIRED" else if(invalidEdition) "EDITION_FORMATION_INVALIDATED" else "CORRECTION_PARENT_INVALIDATED"
                 val result=withCampaignMutation(symbol,"WILLIAMS_INVALIDATED_ENTRY_CANCEL",allowPaused=true) {
                     futuresCampaignCoordinator.cancelPendingEntries(reason,symbol)
                 }
@@ -5262,11 +5275,79 @@ private class NativeEngine(
                 proof
             } else null
             val boundaryExit = correctionProof != null && !williamsCorrectionPriceAllowed(correctionProof,mark)
-            val opposing = triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt)
-            if (opposing != null || boundaryExit) {
+            val profile=intent.optString("strategy_profile",williamsTc2Profile)
+            require(profile in williamsEditionProfiles) { "Unknown durable strategy profile; retain protection" }
+            val bars=candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+            var editionExit="";var editionStop:Double?=null
+            if(profile==williamsNtdProfile) {
+                val aos=candles.indices.map { ao(candles,it) }
+                val acs=candles.indices.map { i -> if(i>=4) nativeAcFromClosedAo(aos.subList(i-4,i+1)) else Double.NaN }
+                val management=williamsNtdManagementPlan(dir,bars,
+                    williamsAlligatorLine(candles,8,5).map { it ?: Double.NaN },
+                    williamsAlligatorLine(candles,5,3).map { it ?: Double.NaN },aos,acs,rules.tick,openedAt,
+                    intent.optJSONObject("edition_management") ?: JSONObject())
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management.state)
+                editionExit=management.exitReason;editionStop=management.stop
+                if(editionStop!=null && (if(dir=="LONG") mark<=editionStop else mark>=editionStop))
+                    editionExit="NTD_FIVE_ZONE_PROTECTION_CROSSED"
+            } else if(profile==williamsCourseProfile) {
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                val setup=runCatching { JSONObject(intent.optString("setup_context")) }.getOrDefault(JSONObject())
+                val initialStage=setup.optString("course_initial_stage")
+                if(!management.has("course_unit_quantity") && initialStage in courseTargets && setup.has("course_origin_at")) {
+                    management.put("course_stage",initialStage).put("course_origin_at",setup.getLong("course_origin_at"))
+                        .put("course_unit_quantity",abs(signedQty)/courseTargets.getValue(initialStage))
+                        .put("policy","COURSE_BOOK_EXAMPLE_RATIOS_RISK_CAPPED")
+                }
+                fun filledIntent(cid:String):Boolean=(0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
+                    it.optString("client_id")==cid && it.optString("order_status")=="FILLED" &&
+                        (it.optString("intent_role")=="ADD_ON" || it.optString("exchange_status")=="EXIT_CONFIRMED")
+                }
+                val pendingStage=management.optString("course_pending_stage")
+                val pendingTarget=management.optDouble("course_pending_target",Double.NaN)
+                if(pendingStage.isNotEmpty() && pendingTarget.isFinite() && abs(abs(signedQty)-pendingTarget)<=maxOf(1e-9,pendingTarget*1e-9) &&
+                    filledIntent(management.optString("course_pending_client_id"))) {
+                    management.put("course_stage",pendingStage).remove("course_pending_stage")
+                    management.remove("course_pending_target");management.remove("course_pending_client_id")
+                }
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+                if(management.has("course_unit_quantity")) {
+                    val context=williamsCourseActiveContext(waveHierarchyFor(symbol),dir,management.getLong("course_origin_at"))
+                    val stage=context?.let { williamsCourseNextStage(management.getString("course_stage"),it.getString("phase")) }
+                    if(stage in listOf("W2","W4")) {
+                        val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
+                        val target=floorStep(management.getDouble("course_unit_quantity")*courseTargets.getValue(stage!!),step)
+                        val reduction=floorStep(maxOf(0.0,abs(signedQty)-target),step)
+                        if(reduction>0 && reduction<abs(signedQty)) {
+                            val seed=intent.getString("client_id")+":"+stage+":"+candles.last().t+":"+abs(signedQty)
+                            val digest=java.security.MessageDigest.getInstance("SHA-256").digest(seed.toByteArray()).joinToString("") { "%02x".format(it) }.take(20)
+                            val cid="W2R_${symbol.take(7)}_$digest"
+                            management.put("course_pending_stage",stage).put("course_pending_target",abs(signedQty)-reduction)
+                                .put("course_pending_client_id",cid)
+                            futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+                            val trimmed=withCampaignMutation(symbol,"COURSE_STAGE_REDUCTION",allowPaused=true) {
+                                futuresCampaignCoordinator.closePosition(symbol,direction,fmtQty(reduction,rules.decimals),cid,"COURSE_STAGE_TRIM",partialReduction=true)
+                            }
+                            if(!trimmed.optBoolean("ok",false)) throw IllegalStateException(trimmed.optString("blocker","Course reduction requires reconciliation"))
+                            continue
+                        }
+                    }
+                }
+                val higher=fetchCandles(symbol,"6h",100).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                val checked=closedWilliamsWaveBars(higher,"6h",futuresMarketData.exchangeNowMs())
+                val airbag=williamsCourseAirbagStop(dir,checked,rules.tick)
+                if(airbag!=null && (if(dir=="LONG") mark<=airbag else mark>=airbag)) editionExit="COURSE_HIGHER_FRAME_AIRBAG_TRIGGERED"
+                val old=intent.getString("protective_stop").toDouble()
+                val candidates=listOfNotNull(airbag,williamsCourseTwoFractalStop(dir,bars,rules.tick)).filter {
+                    if(dir=="LONG") it>old && it<mark else it<old && it>mark
+                }
+                editionStop=if(dir=="LONG") candidates.maxOrNull() else candidates.minOrNull()
+            }
+            val opposing = triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile)
+            if (opposing != null || boundaryExit || editionExit.isNotEmpty()) {
                 val correction = if (opposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
                     if (dir == "LONG") "SHORT" else "LONG",opposing.signalBarTimeMs,opposing.type) else WilliamsCorrectionContext()
-                val exitReason = if (boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
+                val exitReason = if(editionExit.isNotEmpty()) editionExit else if (boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
                     else if (correction.allowed) "HIGHER_WAVE_IMPULSE_COMPLETION_CONFIRMED"
                     else "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
                 val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"),rules)
@@ -5282,7 +5363,9 @@ private class NativeEngine(
             val originalStop = intent.optString("initial_protective_stop").toDoubleOrNull()
             val actualEntry = row.optString("entryPrice").toDoubleOrNull()
                 ?: throw IllegalStateException(symbol + " Binance entry price is missing for trailing")
-            val plan = planWilliamsCampaignStop(
+            val plan = if(profile!=williamsTc2Profile) editionStop?.takeIf {
+                if(dir=="LONG") it>oldStop && it<mark else it<oldStop && it>mark
+            }?.let { FuturesStopTrailProposal(it,"${profile}_PROTECTION") } else planWilliamsCampaignStop(
                 direction = dir,
                 oldStop = oldStop,
                 actualEntry = actualEntry,
@@ -5320,6 +5403,83 @@ private class NativeEngine(
             }
         }
         return true
+    }
+
+    private fun submitNativeFuturesAddition(candidate:BaseAnalysis,owner:JSONObject) {
+        val symbol=candidate.symbol;val profile=owner.optString("strategy_profile",williamsTc2Profile)
+        if(profile!=williamsProfile || profile !in williamsEditionProfiles || !executionReady()) return
+        val all=futuresCampaignCoordinator.intentsSnapshot()
+        val parentId=owner.getString("client_id")
+        val children=(0 until all.length()).mapNotNull { all.optJSONObject(it) }
+            .filter { it.optString("intent_role")=="ADD_ON" && it.optString("entry_client_id")==parentId }
+        if(children.any { exchangeOrderStatus(it) !in ENTRY_ORDER_TERMINAL_STATUSES }) return
+        val latest=maxOf(owner.optLong("signal_bar_time_ms"),children.maxOfOrNull { it.optLong("signal_bar_time_ms") } ?: 0L)
+        val now=futuresMarketData.exchangeNowMs();val direction=owner.getString("direction")
+        fun additionClientId(signal:CampaignSignalN):String {
+            val digest=java.security.MessageDigest.getInstance("SHA-256").digest(signal.signalId.toByteArray())
+                .joinToString("") { "%02x".format(it) }.take(20)
+            return "W2A_${symbol.take(7)}_$digest"
+        }
+        val signal=candidate.campaignSignals.filter { it.strategyProfile==profile &&
+            campaignSignalDirection(it.type)==direction && it.signalBarTimeMs>latest &&
+            isSignalFresh(it.signalBarTimeMs,now,18_000_000L) && children.none { child -> child.optString("client_id")==additionClientId(it) } }.minByOrNull { it.signalBarTimeMs } ?: return
+        val rules=symbolFilters(symbol);val mark=futuresMarketData.markPrice(symbol)
+        val market=signal.executionSemantics=="MARKET_ON_CLOSE"
+        if(market && (profile!=williamsNtdProfile || signal.type.removePrefix("SHORT_")!="ZONE_ADD_ON" ||
+            williamsMarketOnCloseReason(signal.signalBarTimeMs,3_600_000L,now,signal.triggerPrice,mark)!=null)) return
+        val price=if(market) mark else signal.triggerPrice
+        val stop=owner.getString("protective_stop").toDouble()
+        if((if(direction=="LONG") stop>=price || !market && price<=mark else stop<=price || !market && price>=mark)) return
+        val d1=waveInfo(fetchCandles(symbol,"1d",90),"1d")
+        val h4=waveInfo(fetchCandles(symbol,"4h",120),"4h")
+        if(direction=="LONG" && (d1.alligatorBearish || h4.alligatorBearish) ||
+            direction=="SHORT" && (d1.alligatorBullish || h4.alligatorBullish)) return
+        val reserved=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.filter {
+            it.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(it)
+        }.sumOf { futuresCampaignReservedRisk(it,all) }
+        val risk=minOf(campaignAddRiskCapPct,maxRiskPerTradePct,maxTotalRiskPct-reserved)
+        if(risk<=0) return
+        val account=parseFuturesAccountSnapshot(futuresCampaignCoordinator.accountSnapshot()) ?: return
+        val leverage=owner.optInt("requested_leverage",0)
+        if(leverage !in 1..125 || !futuresAccountFundedForEntry(account.availableUsdt,account.equityUsdt)) return
+        val loss=abs(price-stop)/price+2*feeBufferPerSidePct+maxSlippagePct
+        val notional=minOf(account.equityUsdt*.25,account.availableUsdt*leverage*.95,account.equityUsdt*risk/loss)
+        val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
+        var quantity=floorStep(notional/price,step)
+        val setup=runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject())
+        val courseManagement=owner.optJSONObject("edition_management")
+        if(profile==williamsCourseProfile && courseManagement?.has("course_unit_quantity")==true) {
+            val context=williamsCourseActiveContext(waveHierarchyFor(symbol),direction,courseManagement.getLong("course_origin_at")) ?: return
+            val targetStage=williamsCourseNextStage(courseManagement.getString("course_stage"),context.getString("phase"),true) ?: return
+            val target=floorStep(courseManagement.getDouble("course_unit_quantity")*courseTargets.getValue(targetStage),step)
+            quantity=floorStep(minOf(quantity,maxOf(0.0,target-owner.getString("confirmed_position_qty").toDouble())),step)
+            setup.put("course_target_stage",targetStage).put("course_target_quantity",target)
+        }
+        if(!quantity.isFinite() || quantity<=0) return
+        val clientId=additionClientId(signal)
+        if((0 until all.length()).any { all.optJSONObject(it)?.optString("client_id")==clientId }) return
+        val plan=NativeFuturesCampaignCoordinator.EntryPlan(symbol,
+            NativeFuturesCampaignCoordinator.Direction.valueOf(direction),
+            if(market) NativeFuturesCampaignCoordinator.EntryKind.MARKET else NativeFuturesCampaignCoordinator.EntryKind.STOP,
+            fmtQty(quantity,rules.decimals),fmtPrice(price,rules.tick),owner.getString("protective_stop"),clientId,risk,
+            signalType=signal.type,signalBarTimeMs=signal.signalBarTimeMs,signalReason=signal.reason,leverage=leverage,
+            strategyProfile=profile,entryClientId=parentId,executionSemantics=signal.executionSemantics,
+            referenceClose=if(market) signal.triggerPrice else 0.0,setupContext=setup.toString())
+        lastOrder=withCampaignMutation(symbol,"WILLIAMS_CAMPAIGN_ADDITION") {
+            val submitNow=futuresMarketData.exchangeNowMs()
+            check(profile==williamsProfile && isWithinWilliamsEntrySessionUtc(submitNow) && checkFuturesDailyLoss()) {
+                "Addition profile/session/daily risk changed before mutation"
+            }
+            val fresh=editionCampaignSignals(symbol,fetchCandles(symbol,"1h",220),"1h",rules.tick,profile)
+            check(fresh.any { it.signalId==signal.signalId && it.triggerPrice==signal.triggerPrice }) { "Addition formation no longer valid" }
+            if(!market) {
+                val current=futuresMarketData.markPrice(symbol)
+                check(if(direction=="LONG") current<price else current>price) { "Addition trigger already consumed" }
+            }
+            futuresCampaignCoordinator.submitPendingEntry(plan)
+        }
+        reconcileRequired=true
+        persistSafetyFlag("reconcile_required",true)
     }
 
     private fun submitNativeFuturesCampaignEntry(candidate: BaseAnalysis) {
@@ -5362,12 +5522,23 @@ private class NativeEngine(
             lastError = "FUTURES_ENTRY_SPREAD_BLOCKED: $symbol live spread=" + currentSpreadPct
             return
         }
+        val existing=futuresCampaignCoordinator.intentsSnapshot()
+        val owned=latestEntryIntentIndex(existing,symbol)?.let { existing.optJSONObject(it) }
+        if(owned!=null && campaignLifecycleStatus(owned)=="OPEN_PROTECTED") {
+            submitNativeFuturesAddition(candidate,owned)
+            return
+        }
         // Keep both directional hypotheses until D1/H4 context is known. Picking
         // the newest signal before applying the directional macro veto caused a
         // valid opposite-side alternative to be discarded prematurely.
         val contextNow = futuresMarketData.exchangeNowMs()
+        fun profitReentry(signal:CampaignSignalN)=signal.strategyProfile==williamsNtdProfile &&
+            williamsNtdReentryEligible(owned,symbol,campaignSignalDirection(signal.type).orEmpty(),signal.signalBarTimeMs)
         val freshSignals = candidate.campaignSignals.filter {
-            isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)
+            it.strategyProfile==williamsProfile && (it.role=="ENTRY" || profitReentry(it)) &&
+                (it.executionSemantics=="STOP_ENTRY" || profitReentry(it) && it.executionSemantics=="MARKET_ON_CLOSE" &&
+                    williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,contextNow,it.triggerPrice,futuresMarketData.markPrice(symbol))==null) &&
+                isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)
         }
         if (freshSignals.isEmpty()) {
             lastError = "WILLIAMS_SIGNAL_EXPIRED: no fresh confirmed H1 hypothesis for $symbol"
@@ -5480,7 +5651,7 @@ private class NativeEngine(
                 // Missing/corrupt risk is not zero risk. Reserve the full portfolio cap
                 // conservatively so a damaged journal can never authorize excess exposure.
                 conservativeRiskReservation(
-                    intent.optDouble("risk_pct", Double.NaN),
+                    futuresCampaignReservedRisk(intent,entries),
                     maxTotalRiskPct
                 )
             } else 0.0
@@ -5498,15 +5669,23 @@ private class NativeEngine(
         if (!futuresAccountFundedForEntry(available, equity)) return
         val mark = futuresMarketData.markPrice(symbol)
         val rules = symbolFilters(symbol)
+        val marketReentry=profitReentry(signal) && signal.executionSemantics=="MARKET_ON_CLOSE"
+        val reference=if(marketReentry) mark else signal.triggerPrice
         val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
-            normalizeTriggerPrice(signal.triggerPrice, rules.tick) else normalizePrice(signal.triggerPrice, rules.tick)
-        val stop = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
+            normalizeTriggerPrice(reference, rules.tick) else normalizePrice(reference, rules.tick)
+        var stop = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
             normalizePrice(signal.protectivePrice, rules.tick) else normalizeTriggerPrice(signal.protectivePrice, rules.tick)
+        if(signal.strategyProfile==williamsCourseProfile) {
+            val higher=closedWilliamsWaveBars(fetchCandles(symbol,"6h",100).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },"6h",contextNow)
+            val airbag=williamsCourseAirbagStop(direction.name,higher,rules.tick) ?: return
+            stop=if(direction.name=="LONG") normalizePrice(minOf(stop,airbag),rules.tick)
+                else normalizeTriggerPrice(maxOf(stop,airbag),rules.tick)
+        }
         if (trigger <= 0.0 || stop <= 0.0) return
         if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-            if (trigger <= mark || stop >= trigger) return
+            if (!marketReentry && trigger <= mark || stop >= trigger) return
         } else {
-            if (trigger >= mark || stop <= trigger) return
+            if (!marketReentry && trigger >= mark || stop <= trigger) return
         }
         val stopFraction = kotlin.math.abs(trigger - stop) / trigger
         if (!stopFraction.isFinite() || stopFraction <= 0.0) return
@@ -5534,18 +5713,28 @@ private class NativeEngine(
         val plan = NativeFuturesCampaignCoordinator.EntryPlan(
             symbol = symbol,
             direction = direction,
-            kind = NativeFuturesCampaignCoordinator.EntryKind.STOP,
+            kind = if(marketReentry) NativeFuturesCampaignCoordinator.EntryKind.MARKET else NativeFuturesCampaignCoordinator.EntryKind.STOP,
             quantity = fmtQty(qty, rules.decimals),
             entryPrice = fmtPrice(trigger, rules.tick),
             protectiveStop = fmtPrice(stop, rules.tick),
             clientId = clientId,
             riskPct = riskPct,
             signalType = signal.type,
+            reentryOwnerId=if(profitReentry(signal)) owned!!.getString("client_id") else "",
+            referenceClose=if(marketReentry) signal.triggerPrice else 0.0,
             leverage = entryLeverage,
             signalBarTimeMs = signal.signalBarTimeMs,
             signalReason = signal.reason,
             tradeMode = if (correction.allowed) "CORRECTION" else "TREND",
-            waveContext = if (correction.allowed) correction.toJson().toString() else ""
+            waveContext = if (correction.allowed) correction.toJson().toString() else "",
+            strategyProfile=signal.strategyProfile,executionSemantics=signal.executionSemantics,
+            setupContext=(runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject()).apply {
+                if(signal.strategyProfile==williamsCourseProfile) {
+                    williamsCourseActiveContext(hierarchy,direction.name)?.let { context ->
+                        put("course_origin_at",context.getLong("origin_at")).put("course_initial_stage",context.getString("phase"))
+                    }
+                }
+            }).toString()
         )
         runCatching { auditStore.recordCockpitEvent("SIGNAL_RISK", symbol, direction.name, signal.type,
             "${signal.reason}; H1 bar=${signal.signalBarTimeMs}; trigger=$trigger; stop=$stop; qty=$qty; reserved_risk=$riskPct") }
@@ -5564,6 +5753,7 @@ private class NativeEngine(
             }
             // Revalidate the H1 scenario at the last possible point before mutation.
             // A queued/stale candidate must never survive a slow scan or a door wait.
+            require(signal.strategyProfile==williamsProfile) { "Williams edition changed after analysis" }
             val submitNow = futuresMarketData.exchangeNowMs()
             if (!isWithinWilliamsEntrySessionUtc(submitNow)) {
                 return@withCampaignMutation JSONObject()
@@ -5600,7 +5790,8 @@ private class NativeEngine(
             // entry at the current market price.
             val submitMark = futuresMarketData.markPrice(symbol)
             require(
-                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
+                if(marketReentry) williamsMarketOnCloseReason(signal.signalBarTimeMs,3_600_000L,submitNow,signal.triggerPrice,submitMark)==null
+                else if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
                 else submitMark > trigger
             ) {
                 "H1_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
@@ -6783,6 +6974,39 @@ private class NativeEngine(
             if (source >= 0) values[source] else Double.NaN
         }
 
+    private fun editionCampaignSignals(symbol:String,candles:List<CandleN>,frame:String,tick:Double,
+        profile:String=williamsProfile,exitMode:Boolean=false):List<CampaignSignalN> {
+        if(profile==williamsTc2Profile) return longCampaignSignals(symbol,candles,frame,tick)+shortCampaignSignals(symbol,candles,frame,tick)
+        if(profile !in williamsEditionProfiles || frame!="1h" || candles.size<45) return emptyList()
+        val bars=candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        if(!validWilliamsEditionBars(bars) || bars.zipWithNext().any { (a,b) -> b.t-a.t!=3_600_000L }) return emptyList()
+        val jaw=williamsAlligatorLine(candles,13,8).map { it ?: Double.NaN }
+        val teeth=williamsAlligatorLine(candles,8,5).map { it ?: Double.NaN }
+        val lips=williamsAlligatorLine(candles,5,3).map { it ?: Double.NaN }
+        val aos=candles.indices.map { ao(candles,it) }
+        val acs=candles.indices.map { i -> if(i>=4) nativeAcFromClosedAo(aos.subList(i-4,i+1)) else Double.NaN }
+        val rhythm=williamsCourseRhythm(bars)
+        return listOf("LONG","SHORT").flatMap { side ->
+            val direction=if(side=="LONG") "UP" else "DOWN"
+            val setups=if(profile==williamsNtdProfile) williamsNtdSetups(side,bars,jaw,teeth,lips,aos,acs,tick,exitMode)
+                else listOfNotNull(williamsCourseHumpSetup(side,bars,tick),williamsCourseThumbSetup(side,bars,tick),williamsCourseSquatSetup(side,bars,tick)).filter {
+                    exitMode || when(it.kind) {
+                        "COURSE_HUMP" -> rhythm.second==direction
+                        "COURSE_SQUAT" -> rhythm.first==direction && rhythm.second==direction
+                        else -> true
+                    }
+                }
+            setups.filter { bars.last().t-bars[it.knownIndex].t<18_000_000L }.map { setup ->
+                val type=(if(side=="SHORT") "SHORT_" else "")+setup.kind
+                val whenMs=bars[setup.knownIndex].t
+                val id=if(setup.kind=="BALANCE_LINE") "$profile:$symbol:$frame:$side:BALANCE_LINE:${setup.context.getString("formation_key")}" else profile+":"+campaignSignalId(symbol,frame,type,whenMs)
+                CampaignSignalN(id,type,setup.role,whenMs,
+                    setup.trigger,setup.stop,teeth.last(),setup.invalidation,profile+": "+setup.kind,
+                    profile,setup.executionSemantics,setup.context.toString())
+            }
+        }.distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
+    }
+
     private fun longCampaignSignals(
         symbol: String,
         candles: List<CandleN>,
@@ -6997,19 +7221,7 @@ private class NativeEngine(
             // Build both directional hypotheses from the same exchange-confirmed
             // closed H1 series. Candidates reach execution only through the native
             // Futures coordinator after context, risk, and reconciliation gates pass.
-            (
-                longCampaignSignals(
-                    symbol = symbol,
-                    candles = workCandles,
-                    frame = campaignExecutionTimeframe,
-                    tick = campaignTick
-                ) + shortCampaignSignals(
-                    symbol = symbol,
-                    candles = workCandles,
-                    frame = campaignExecutionTimeframe,
-                    tick = campaignTick
-                )
-            ).distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
+            editionCampaignSignals(symbol,workCandles,campaignExecutionTimeframe,campaignTick)
         } else {
             emptyList()
         }
@@ -7179,7 +7391,7 @@ private class NativeEngine(
                 .getOrDefault(JSONArray())
             val summary = JSONObject().put("as_of",cutoff)
                 .put("scenarios",JSONArray(report.scenarios.map { JSONObject().put("id",it.id).put("status",it.status)
-                    .put("label",it.label).put("w4_zero",it.w4Zero) }))
+                    .put("label",it.label).put("active_label",it.activeLabel).put("w4_zero",it.w4Zero) }))
                 .put("links",JSONArray(report.links.map { it.toJson() }))
             val bounded = JSONArray()
             for (i in maxOf(0,revisions.length()-31) until revisions.length()) bounded.put(revisions.get(i))
@@ -7195,7 +7407,7 @@ private class NativeEngine(
 
     private fun triggeredOpposingSignal(
         symbol: String, direction: NativeFuturesCampaignCoordinator.Direction,
-        candles: List<CandleN>, tick: Double, mark: Double, openedAt: Long
+        candles: List<CandleN>, tick: Double, mark: Double, openedAt: Long, profile:String=williamsTc2Profile
     ): CampaignSignalN? {
         if (openedAt <= 0L) return null
         val now = futuresMarketData.exchangeNowMs()
@@ -7204,9 +7416,9 @@ private class NativeEngine(
         // crossed in a completed H1 bar while the app/scanner was offline.
         for (omitted in 0..minOf(5,candles.size-45)) {
             val prefix = candles.take(candles.size-omitted)
-            val signals = if (opposingSide == "LONG") longCampaignSignals(symbol,prefix,"1h",tick)
-                else shortCampaignSignals(symbol,prefix,"1h",tick)
-            for (signal in signals.filter { it.role == "ENTRY" }) {
+            val signals=editionCampaignSignals(symbol,prefix,"1h",tick,profile,exitMode=true)
+                .filter { campaignSignalDirection(it.type)==opposingSide && it.executionSemantics=="STOP_ENTRY" }
+            for (signal in signals.filter { profile==williamsNtdProfile || it.role == "ENTRY" }) {
                 if (williamsOpposingLevelTriggered(opposingSide,signal.triggerPrice,
                     signal.signalBarTimeMs+3_600_000L,openedAt,mark,
                     candles.drop(prefix.size).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
@@ -7235,14 +7447,14 @@ private class NativeEngine(
             .minByOrNull { williamsWaveFrames.getValue(it.frame) }
         val nestedW3ParentW5 = hierarchy.links.any { link ->
             val p = viable[link.parent]; val c = viable[link.child]
-            p?.label == "W5" && c?.label == "W3" && p.direction == decisionDirection &&
+            p?.activeLabel == "W5" && c?.activeLabel == "W3" && p.direction == decisionDirection &&
                 c.direction == decisionDirection && link.relationship == "ALIGNED"
         }
         val countertrendCorrectionImpulse = hierarchy.links.any { link ->
-            viable[link.parent]?.label in listOf("W2","W4","A","C") && link.relationship == "ALIGNED"
+            viable[link.parent]?.activeLabel in listOf("W2","W4","A","C") && link.relationship == "ALIGNED"
         }
         val lateSenior = viable.values.any { it.frame in listOf("6h","1d") &&
-            it.direction == decisionDirection && it.label in listOf("W5","A","B","C") }
+            it.direction == decisionDirection && it.activeLabel in listOf("W5","A","B","C") }
         val exhaustion = if (nestedW3ParentW5 || lateSenior || setup.position==5)
             maxOf(65.0,setup.exhaustionRisk) else setup.exhaustionRisk
         val bonus = (if (htfConfirmed) 8.0 else 0.0) + (if (dailyAligned) 4.0 else 0.0) -
@@ -7257,12 +7469,12 @@ private class NativeEngine(
         var score = (baseCandidate.score+bonus).coerceIn(0.0,100.0)
         if (!finalSignal && baseCandidate.signal) score=minOf(score,84.0)
         val path = williamsRequiredWaveFrames.joinToString(" ; ") { frame ->
-            val labels = viable.values.filter { it.frame==frame }.map { it.label }.distinct()
+            val labels = viable.values.filter { it.frame==frame }.map { it.label+"→"+it.activeLabel }.distinct()
             frame+":"+(if (labels.isEmpty()) "?" else labels.joinToString("|"))
         }
         return baseCandidate.copy(score=score,signal=finalSignal,htfCandidate=htfConfirmed,
             wave=setup.copy(exhaustionRisk=exhaustion,path=path,entryFrame=campaignExecutionTimeframe,
-                entryWave=setup.position,parentFrame=parent?.frame ?: "",parentWave=parent?.label?.removePrefix("W")?.toIntOrNull() ?: 0,
+                entryWave=setup.position,parentFrame=parent?.frame ?: "",parentWave=parent?.activeLabel?.removePrefix("W")?.toIntOrNull() ?: 0,
                 entryConfidence=setup.confidence,nestedW3ParentW5=nestedW3ParentW5,
                 countertrendCorrectionImpulse=countertrendCorrectionImpulse),
             reason=if (finalSignal && campaignEngineEnabled) "H1 Williams conditional candidate; context, wave correction mode, risk and exchange proof checked before submission"
@@ -7362,7 +7574,7 @@ private class NativeEngine(
             .put("wave4_zero_line_diagnostic", wave4Trace)
             .put("ntd_balance_line_diagnostics", ntdTrace)
             .put("wave_hierarchy", candidate.waveHierarchy?.toJson() ?: JSONObject().put("state","NOT_ANALYSED"))
-            .put("strategy_profile", "TC2_THREE_WISE_MEN")
+            .put("strategy_profile", williamsProfile)
             .put("wave_scores_calibrated", false)
             .put("symbol", candidate.symbol)
             .put("score", candidate.score)
@@ -7392,6 +7604,7 @@ private class NativeEngine(
                                 .put("signal_id", s.signalId)
                                 .put("type", s.type)
                                 .put("role", s.role)
+                                .put("strategy_profile",s.strategyProfile).put("execution_semantics",s.executionSemantics)
                                 .put("signal_bar_time_ms", s.signalBarTimeMs)
                                 .put("trigger_price", s.triggerPrice)
                                 .put("protective_price", s.protectivePrice)
@@ -7886,7 +8099,7 @@ private class NativeEngine(
         val futuresReservedRiskPct = (0 until futuresIntents.length()).sumOf { i ->
             val intent = futuresIntents.optJSONObject(i) ?: return@sumOf 0.0
             if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
-                intent.optDouble("risk_pct", 0.0)
+                futuresCampaignReservedRisk(intent,futuresIntents)
             } else 0.0
         }
         val utcDayStart = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
@@ -7948,6 +8161,7 @@ private class NativeEngine(
             .put("last_reconciliation_attempt_at_ms", lastReconciliationAttemptAtMs)
             .put("last_reconciliation_completed_at_ms", lastReconciliationCompletedAtMs)
             .put("last_reconciliation_result", lastReconciliationResult)
+            .put("strategy_profile",williamsProfile)
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
@@ -8841,17 +9055,25 @@ private class NativeEngine(
     @Synchronized
     fun configureFuturesLeverage(payload: JSONObject): JSONObject {
         val next = FuturesLeverageSettings.fromJson(payload)
-        check(prefs.edit().putString("futures_leverage_settings_v1", next.toJson().toString()).commit()) {
-            "Не удалось сохранить плечо"
+        val profile=payload.optString("strategy_profile",williamsProfile)
+        require(profile in williamsEditionProfiles) { "Неизвестный профиль Вильямса" }
+        fun persist() {
+            check(prefs.edit().putString("williams_strategy_profile_v1",profile)
+                .putString("futures_leverage_settings_v1", next.toJson().toString()).commit()) {
+                "Не удалось сохранить настройки стратегии"
+            }
+            futuresLeverageSettings=next
+            williamsProfile=profile
         }
-        futuresLeverageSettings = next
+        if(profile!=williamsProfile) futuresCampaignCoordinator.configureWhenFlat { persist() } else persist()
         runCatching { auditStore.recordCockpitEvent("LEVERAGE_SETTINGS", detail = next.toJson().toString()) }
         return JSONObject().put("saved", true).put("settings", next.toJson())
-            .put("message", "Плечо сохранено для следующих входов; Binance подтвердит его перед ордером.")
+            .put("message", "Настройки сохранены для следующих входов; Binance подтвердит плечо перед ордером.")
     }
 
     fun settings(): JSONObject =
         JSONObject()
+            .put("strategy_profile",williamsProfile)
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())

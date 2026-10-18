@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field
 from math import isfinite
 from typing import Mapping, Sequence
 from williams_complex_waves import detect_complex_wave_patterns
+from williams_wave_subdivisions import enrich_complex_subdivisions
 
 FRAME_MS = {"1m":60_000,"3m":180_000,"5m":300_000,"15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
             "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
@@ -22,7 +23,7 @@ def wave_bars_from_dataframe(frame):
     import pandas as pd
     bars = []
     for index, row in frame.iterrows():
-        stamp = row.get("open_time", index)
+        stamp = row.get("open_time_ms", row.get("open_time", index))
         if isinstance(stamp, pd.Timestamp):
             t = int(stamp.timestamp() * 1000)
         elif isinstance(stamp, (int, float)):
@@ -76,8 +77,19 @@ class WaveHypothesis:
     target_zone: bool = False
     alternatives: list[str] = field(default_factory=list)
 
+    @property
+    def active_label(self):
+        # label describes the LAST CONFIRMED leg. Price observed after the last
+        # pivot belongs to the NEXT provisional leg, not that completed leg.
+        return {2:"W2",3:"W3",4:"W4",5:"W5",6:"A",7:"B",8:"C"}.get(len(self.anchors),"NEXT_SEQUENCE_UNRESOLVED")
+
+    @property
+    def active_direction(self):
+        return ("DOWN" if self.direction=="UP" else "UP") if self.active_label in {"W2","W4","A","C"} else self.direction
+
     def to_dict(self):
-        return asdict(self)
+        return asdict(self) | {"active_label":self.active_label,"active_direction":self.active_direction,
+                              "last_confirmed_leg":self.label}
 
 
 @dataclass
@@ -88,6 +100,7 @@ class WaveHierarchy:
     frame_errors: dict[str, str]
     warnings: list[dict]
     frame_candle_counts: dict[str,int] = field(default_factory=dict)
+    complex_structures: list[dict] = field(default_factory=list)
 
     def to_dict(self):
         by_id={s.scenario_id:s for s in self.scenarios}
@@ -110,7 +123,7 @@ class WaveHierarchy:
                 complex_patterns.append(p.to_dict() | {
                     "source_scenario_id":scenario.scenario_id,
                     "frame":scenario.frame})
-        return asdict(self) | {"complex_wave_patterns":complex_patterns[:48],
+        return asdict(self) | {"scenarios":[s.to_dict() for s in self.scenarios],"complex_wave_patterns":(self.complex_structures or complex_patterns)[:48],
                               "schema_version": 1,
                               "wave_labels": "HYPOTHESES_NOT_CERTAINTY",
                               "chain": list(REQUIRED_FRAMES),"contained_chain_observed":contained,
@@ -304,6 +317,11 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             "INVALIDATED" if reasons else ("ALTERNATIVE" if diagonal_overlap else "PROVISIONAL"), reasons)
         if diagonal_overlap and not reasons:
             h.alternatives.append("UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP")
+            # Course PDF46 permits shallow overlap in futures. The percentage
+            # denominator is not formalized there; expose this explicit W1-range
+            # interpretation as an alternative, never an automatic order permit.
+            if (price[1]-price[4])/(price[1]-price[0])<=.10:
+                h.alternatives.append("FUTURES_SHALLOW_W4_OVERLAP_10_PERCENT_W1_RANGE_POLICY")
         active_sign = -sign if n in (2, 4, 6, 8) else sign
         if n < 9 and not reasons and active_sign * (last_bar.c - p[-1].price) <= 0:
             h.status = "UNRESOLVED"
@@ -342,11 +360,9 @@ def link_wave_hypotheses(scenarios: Sequence[WaveHypothesis]) -> list[dict]:
         for parent in parents:
             if FRAME_MS[parent.frame] != nearest:
                 continue
-            expected = parent.direction
-            if parent.label in ("W2", "W4", "A", "C"):
-                expected = "DOWN" if expected == "UP" else "UP"
+            expected = parent.active_direction
             links.append({"parent": parent.scenario_id, "child": child.scenario_id,
-                          "parent_leg": parent.label,
+                          "parent_leg": parent.active_label,
                           "relationship": "ALIGNED" if child.direction == expected else "COUNTERTREND",
                           "proof": "TIME_AND_PRICE_CONTAINMENT", "wave_genealogy_confirmed": False})
     return links
@@ -393,8 +409,23 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) ->
                 warnings.append({"scenario_id": frame + ":MOMENTUM_FADE_BEFORE_PIVOT",
                                  "state": "EXHAUSTION_WARNING", "can_close": False,
                                  "can_reverse": False})
+    structures=[]
+    anchors_by_frame={frame:confirmed_wave_anchors(bars,FRAME_MS[frame]) for frame,bars in valid.items()}
+    for frame in REQUIRED_FRAMES:
+        if frame not in valid:continue
+        lower=[f for f in REQUIRED_FRAMES if f in valid and FRAME_MS[f]<FRAME_MS[frame]]
+        child_frame=max(lower,key=lambda f:FRAME_MS[f]) if lower else ""
+        points=anchors_by_frame[frame]
+        for direction in ("UP","DOWN"):
+            for evidence in detect_complex_wave_patterns(points,direction=direction,as_of=as_of):
+                parent=[p for p in points if evidence.start_at<=p.extreme_at<=evidence.end_at]
+                proof=enrich_complex_subdivisions(evidence.pattern,parent,anchors_by_frame.get(child_frame,[]),
+                    parent_duration=FRAME_MS[frame],as_of=as_of)
+                structures.append(evidence.to_dict()|{"frame":frame,"child_frame":child_frame,
+                    "source_scenario_id":f"{frame}:{direction}:{evidence.start_at}:{len(parent)}",
+                    "internal_proof":proof.to_dict(),"can_place_orders":False})
     return WaveHierarchy(as_of, scenarios, link_wave_hypotheses(scenarios), errors, warnings,
-                         {frame:len(bars) for frame,bars in valid.items()})
+                         {frame:len(bars) for frame,bars in valid.items()},structures)
 
 
 def suggested_analytical_frames(report: WaveHierarchy) -> list[str]:
@@ -435,7 +466,7 @@ def correction_entry_context(report: WaveHierarchy, side: str, signal_at: int,
     by_id = {s.scenario_id: s for s in report.scenarios if s.status == "PROVISIONAL"}
     for senior in by_id.values():
         if not (senior.frame == "6h" and senior.direction != direction
-                and senior.label in {"W4", "A", "C"}
+                and senior.active_label in {"W4", "A", "C"}
                 and senior.w4_zero == "MINIMUM_ONLY" and senior.momentum_shift
                 and senior.anchors[3].known_at <= signal_at + FRAME_MS["1h"]):
             continue
@@ -453,12 +484,12 @@ def correction_entry_context(report: WaveHierarchy, side: str, signal_at: int,
             # An alternative at this same degree still counting W3/W5 in the
             # old direction cannot be silently discarded to approve a reversal.
             conflict = any(s.frame == "6h" and s.direction == senior.direction
-                           and s.label in {"W3", "W5"} and s.w4_zero != "MINIMUM_ONLY"
+                           and s.active_label in {"W3", "W5"} and s.w4_zero != "MINIMUM_ONLY"
                            and s.anchors[0].extreme_at <= senior.anchors[3].extreme_at
                            for s in by_id.values())
             if conflict:
                 return blocked | {"reason": "COMPETING_SENIOR_IMPULSE_UNRESOLVED"}
-            if senior.label == "W4":
+            if senior.active_label == "W4":
                 bounds = sorted([senior.anchors[1].price, senior.anchors[3].price])
             else:
                 terminal = [senior.anchors[5].price]
@@ -468,7 +499,8 @@ def correction_entry_context(report: WaveHierarchy, side: str, signal_at: int,
             approvals[senior.scenario_id] = {"allowed": True, "mode": "CORRECTION", "reason": "H1_WISE_MAN_IN_CONTAINED_H6_CORRECTION",
                     "parent_scenario_id": senior.scenario_id, "parent_invalidation": senior.invalidation,
                     "parent_floor": bounds[0], "parent_ceiling": bounds[1],
-                    "decision_scenario_id": decision.scenario_id, "signal_at": signal_at}
+                    "decision_scenario_id": decision.scenario_id, "signal_at": signal_at,
+                    "parent_active_leg":senior.active_label,"parent_last_confirmed_leg":senior.label}
     if len(approvals)==1:
         return next(iter(approvals.values()))
     if len(approvals)>1:

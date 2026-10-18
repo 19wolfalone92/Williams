@@ -79,3 +79,29 @@ def test_partial_btc_fill_cannot_invent_a_completed_course_stage():
         acknowledge_course_fill(s,p,fill_id="partial-order",
             confirmed_delta=1,new_confirmed_units=1,signal_close_ms=100000,
             exchange_reconciled=True,protective_stop_verified=True)
+
+
+def test_executable_course_policy_requires_phase_and_new_formation_for_each_increase():
+    from williams_course_campaign import course_next_stage
+    assert course_next_stage("W1","W2")=="W2"
+    assert course_next_stage("W2","W3") is None
+    assert course_next_stage("W2","W3",True)=="W3"
+    assert course_next_stage("W3","W3",True)=="W3_EXTENSION"
+    assert course_next_stage("W3","W4")=="W4"  # optional extension can be skipped
+    assert course_next_stage("W3_EXTENSION","W4")=="W4"
+    assert course_next_stage("W4","W5") is None
+    assert course_next_stage("W4","W5",True)=="W5"
+    assert course_next_stage("W5","A",True) is None  # wave label alone cannot exit
+
+
+def test_course_origin_is_explicit_and_competing_h1_degrees_cannot_size_a_plan():
+    from copy import deepcopy
+    from tests.test_williams_wave_hierarchy import correction_report
+    from williams_course_campaign import course_active_context
+    report=correction_report()
+    context=course_active_context(report,"LONG")
+    assert context and context["phase"]=="W3"
+    other=deepcopy(report.scenarios[2]);other.scenario_id="competing";other.anchors[0]=__import__('dataclasses').replace(other.anchors[0],extreme_at=other.anchors[0].extreme_at-1)
+    report.scenarios.append(other)
+    assert course_active_context(report,"LONG") is None
+    assert course_active_context(report,"LONG",context["origin_at"])["scenario_id"]==context["scenario_id"]

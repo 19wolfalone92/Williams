@@ -509,6 +509,8 @@ def calculate_indicators(df, cfg):
         x["mfi_proxy_source"] = "BASE_VOLUME_PROXY"
     x["mfi_volume_proxy"] = mfi_volume
     x["mfi_proxy"] = (x["high"] - x["low"]) / mfi_volume.replace(0, np.nan)
+    # Consolidate before the MFI-derived columns to avoid fragmented frames.
+    x = x.copy()
     x["volume_up"] = (mfi_volume > mfi_volume.shift(1)).fillna(False).astype(bool)
     x["volume_down"] = (mfi_volume < mfi_volume.shift(1)).fillna(False).astype(bool)
     x["mfi_up"] = (x["mfi_proxy"] > x["mfi_proxy"].shift(1)).fillna(False).astype(bool)

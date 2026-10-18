@@ -545,8 +545,9 @@ finding(
     "Futures runtime does not bypass new-first protection replacement"
 )
 finding(
-    "PASS" if "min(recent) - tick" in futures_runtime
-    and "max(recent) + tick" in futures_runtime
+    "PASS" if "plan_williams_stop(" in futures_runtime
+    and "min(b.l for b in bars[-window:])-tick" in read_text(ROOT / "williams_exit_policy.py")
+    and "max(b.h for b in bars[-window:])+tick" in read_text(ROOT / "williams_exit_policy.py")
     else "FAIL",
     "Structural trailing uses lowest-low / highest-high extremes"
 )

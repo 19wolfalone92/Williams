@@ -33,7 +33,12 @@ internal data class WilliamsWaveScenario(
     var terminalFractal: Boolean = false, var squat: Boolean = false, var targetZone: Boolean = false,
     val alternatives: MutableList<String> = mutableListOf()
 ) {
-    fun toJson(): JSONObject = JSONObject().put("scenario_id", id).put("frame", frame)
+    val activeLabel:String get()=when(anchors.size) { 2->"W2";3->"W3";4->"W4";5->"W5";6->"A";7->"B";8->"C";else->"NEXT_SEQUENCE_UNRESOLVED" }
+    val activeDirection:String get()=if(activeLabel in listOf("W2","W4","A","C")) {
+        if(direction=="UP") "DOWN" else "UP"
+    } else direction
+    fun toJson(): JSONObject = JSONObject().put("scenario_id", id)
+        .put("last_confirmed_leg",label).put("active_label",activeLabel).put("active_direction",activeDirection).put("frame", frame)
         .put("direction", direction).put("label", label)
         .put("anchors", JSONArray(anchors.map { it.toJson() })).put("observed_at", observedAt)
         .put("leg_start", legStart).put("leg_low", legLow).put("leg_high", legHigh)
@@ -51,7 +56,8 @@ internal data class WilliamsWaveLink(val parent: String, val child: String, val 
 internal data class WilliamsWaveHierarchy(
     val asOf: Long, val scenarios: List<WilliamsWaveScenario>, val links: List<WilliamsWaveLink>,
     val frameErrors: Map<String, String>, val warnings: List<String>,
-    val frameCandleCounts:Map<String,Int> = emptyMap()
+    val frameCandleCounts:Map<String,Int> = emptyMap(),
+    val complexStructures:List<JSONObject> = emptyList()
 ) {
     private fun containedChain():Boolean {
         val byId=scenarios.associateBy { it.id }
@@ -67,7 +73,7 @@ internal data class WilliamsWaveHierarchy(
         .put("links", JSONArray(links.map { it.toJson() })).put("frame_errors", JSONObject(frameErrors))
         .put("frame_candle_counts",JSONObject(frameCandleCounts)).put("contained_chain_observed",containedChain())
         .put("full_history",false).put("can_place_orders",false)
-        .put("complex_wave_patterns", JSONArray(scenarios.filter { it.anchors.size >= 6 }
+        .put("complex_wave_patterns", if(complexStructures.isNotEmpty()) JSONArray(complexStructures.take(48)) else JSONArray(scenarios.filter { it.anchors.size >= 6 }
             .flatMap { scenario -> detectWilliamsComplexWave(scenario.anchors,scenario.direction,asOf)
                 .map { it.toJson().put("frame",scenario.frame).put("source_scenario_id",scenario.id) } }.take(48)))
         .put("squat_volume_input","KLINE_BASE_VOLUME_PROXY_NOT_CANONICAL_TICK_VOLUME")
@@ -218,7 +224,11 @@ internal fun williamsHypothesesFromAnchors(
         val h = WilliamsWaveScenario("$frame:$direction:${p.first().extremeAt}:$n",frame,direction,label,p,
             bars.last().t+duration,p.last().extremeAt,leg.minOf { it.l },leg.maxOf { it.h },inv,
             if (reasons.isNotEmpty()) "INVALIDATED" else if (diagonalOverlap) "ALTERNATIVE" else "PROVISIONAL",reasons)
-        if (diagonalOverlap && reasons.isEmpty()) h.alternatives += "UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP"
+        if (diagonalOverlap && reasons.isEmpty()) {
+            h.alternatives += "UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP"
+            if((price[1]-price[4])/(price[1]-price[0])<=.10)
+                h.alternatives += "FUTURES_SHALLOW_W4_OVERLAP_10_PERCENT_W1_RANGE_POLICY"
+        }
         val activeSign = if (n in listOf(2,4,6,8)) -sign else sign
         if (n < 9 && reasons.isEmpty() && activeSign * (bars.last().c-p.last().price) <= 0) {
             h.status = "UNRESOLVED"; h.alternatives += "PRIOR_LEG_EXTENSION_OR_UNCONFIRMED_TURN"
@@ -250,10 +260,8 @@ internal fun linkWilliamsWaveHypotheses(scenarios: List<WilliamsWaveScenario>): 
             child.anchors.all { it.price in p.legLow..p.legHigh } }
         val nearest = parents.minOfOrNull { williamsWaveFrames.getValue(it.frame) } ?: continue
         for (parent in parents.filter { williamsWaveFrames.getValue(it.frame) == nearest }) {
-            val expected = if (parent.label in listOf("W2","W4","A","C")) {
-                if (parent.direction == "UP") "DOWN" else "UP"
-            } else parent.direction
-            links += WilliamsWaveLink(parent.id,child.id,parent.label,
+            val expected=parent.activeDirection
+            links += WilliamsWaveLink(parent.id,child.id,parent.activeLabel,
                 if (child.direction == expected) "ALIGNED" else "COUNTERTREND")
         }
     }
@@ -295,7 +303,22 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
                 sign * osc[osc.lastIndex-1] < sign * osc[osc.lastIndex-2]) warnings += "$frame:MOMENTUM_FADE_BEFORE_PIVOT"
         }
     }
-    return WilliamsWaveHierarchy(asOf,scenarios,linkWilliamsWaveHypotheses(scenarios),errors,warnings,valid.mapValues { it.value.size })
+    val structures=mutableListOf<JSONObject>()
+    val anchorsByFrame=valid.mapValues { (frame,bars)->confirmedWilliamsWaveAnchors(bars,williamsWaveFrames.getValue(frame)) }
+    for(frame in williamsRequiredWaveFrames) {
+        if(frame !in valid) continue
+        val childFrame=williamsRequiredWaveFrames.filter { it in valid && williamsWaveFrames.getValue(it)<williamsWaveFrames.getValue(frame) }
+            .maxByOrNull { williamsWaveFrames.getValue(it) }.orEmpty()
+        val points=anchorsByFrame.getValue(frame)
+        for(direction in listOf("UP","DOWN")) for(evidence in detectWilliamsComplexWave(points,direction,asOf)) {
+            val parent=points.filter { it.extremeAt in evidence.startAt..evidence.endAt }
+            val proof=enrichWilliamsComplexSubdivisions(evidence.pattern,parent,anchorsByFrame[childFrame].orEmpty(),
+                williamsWaveFrames.getValue(frame),asOf)
+            structures+=evidence.toJson().put("frame",frame).put("child_frame",childFrame)
+                .put("source_scenario_id","$frame:$direction:${evidence.startAt}:${parent.size}").put("internal_proof",proof.toJson())
+        }
+    }
+    return WilliamsWaveHierarchy(asOf,scenarios,linkWilliamsWaveHypotheses(scenarios),errors,warnings,valid.mapValues { it.value.size },structures)
 }
 
 internal fun suggestedWilliamsAnalyticalFrames(report: WilliamsWaveHierarchy): List<String> {
@@ -331,7 +354,7 @@ internal fun williamsCorrectionEntryContext(
     val approvals=linkedMapOf<String,WilliamsCorrectionContext>()
     val byId = report.scenarios.filter { it.status == "PROVISIONAL" }.associateBy { it.id }
     for (senior in byId.values) {
-        if (!(senior.frame == "6h" && senior.direction != direction && senior.label in listOf("W4","A","C") &&
+        if (!(senior.frame == "6h" && senior.direction != direction && senior.activeLabel in listOf("W4","A","C") &&
             senior.w4Zero == "MINIMUM_ONLY" && senior.momentumShift &&
             senior.anchors[3].knownAt <= signalAt + 3_600_000L)) continue
         val daily = report.links.any { it.child == senior.id && byId[it.parent]?.frame == "1d" }
@@ -342,10 +365,10 @@ internal fun williamsCorrectionEntryContext(
                 byId[it.child]?.let { s -> s.frame == "15m" && s.direction == direction } == true }
             if (!daily || !junior) continue
             val conflict = byId.values.any { it.frame == "6h" && it.direction == senior.direction &&
-                it.label in listOf("W3","W5") && it.w4Zero != "MINIMUM_ONLY" &&
+                it.activeLabel in listOf("W3","W5") && it.w4Zero != "MINIMUM_ONLY" &&
                 it.anchors.first().extremeAt <= senior.anchors[3].extremeAt }
             if (conflict) return WilliamsCorrectionContext(reason="COMPETING_SENIOR_IMPULSE_UNRESOLVED")
-            val bounds = if (senior.label == "W4") listOf(senior.anchors[1].price,senior.anchors[3].price).sorted()
+            val bounds = if (senior.activeLabel == "W4") listOf(senior.anchors[1].price,senior.anchors[3].price).sorted()
                 else {
                     val terminal = listOf(senior.anchors[5].price) +
                         (if (senior.anchors.size >= 8) listOf(senior.anchors[7].price) else emptyList())

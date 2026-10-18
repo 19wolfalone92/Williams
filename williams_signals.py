@@ -805,6 +805,11 @@ def extract_ntd_fractal_signal_specs(
         if not all(math.isfinite(v) and v > 0 for v in (level, teeth)):
             continue
         trigger = level + tick if is_long else level - tick
+        current_teeth=float(ind.iloc[-1].get("teeth_current",ind.iloc[-1].get("teeth_shifted",0.0)) or 0.0)
+        if not math.isfinite(current_teeth) or current_teeth<=0 or (
+            level<=current_teeth if is_long else level>=current_teeth
+        ):
+            continue
         if trigger <= 0:
             continue
         # Include the confirmation candle itself: a fractal only becomes

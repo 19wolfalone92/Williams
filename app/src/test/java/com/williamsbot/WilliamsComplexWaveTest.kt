@@ -45,4 +45,12 @@ class WilliamsComplexWaveTest {
         assertTrue("ORDINARY_IMPULSE_CANDIDATE" in labels(prices.map { 1000.0-it },
             direction="DOWN",firstLow=false))
     }
+    @Test fun expandingAndBarrierTrianglesKeepBothMirrorDirectionsAsAlternatives() {
+        for((prices,kind) in listOf(listOf(150.0,100.0,160.0,90.0,170.0,80.0) to "EXPANDING_TRIANGLE_ABCDE_CANDIDATE",
+            listOf(150.0,100.0,150.0,110.0,150.0,120.0) to "BARRIER_TRIANGLE_ABCDE_CANDIDATE")) for(mirror in listOf(false,true)) {
+            val points=prices.mapIndexed { i,p -> WilliamsWaveAnchor(if((i%2==0)!=mirror) "HIGH" else "LOW",
+                if(mirror) 300-p else p,i,i*3_600_000L,(i+3)*3_600_000L) }
+            assertTrue(detectWilliamsComplexWave(points,if(mirror) "DOWN" else "UP",40*3_600_000L).any { it.pattern==kind })
+        }
+    }
 }

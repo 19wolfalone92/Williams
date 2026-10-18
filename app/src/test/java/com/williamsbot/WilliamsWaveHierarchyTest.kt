@@ -97,10 +97,10 @@ class WilliamsWaveHierarchyTest {
     }
     private fun correction(mirror:Boolean=false): WilliamsWaveHierarchy {
         var s=listOf(
-            hypothesis("1d","DOWN","W3",listOf(260.0,210.0,240.0),listOf(5,20,50),50,50.0,280.0),
-            hypothesis("6h","DOWN","W4",listOf(220.0,180.0,200.0,100.0,130.0),listOf(80,100,200,300,320),300,95.0,180.0),
-            hypothesis("1h","UP","W3",listOf(110.0,145.0,130.0),listOf(310,320,330),330,125.0,165.0),
-            hypothesis("15m","UP","W3",listOf(131.0,143.0,137.0),listOf(331,334,336),336,136.0,150.0))
+            hypothesis("1d","DOWN","W2",listOf(260.0,210.0,240.0),listOf(5,20,50),50,50.0,280.0),
+            hypothesis("6h","DOWN","W3",listOf(220.0,180.0,200.0,100.0),listOf(80,100,200,300),300,95.0,180.0),
+            hypothesis("1h","UP","W2",listOf(110.0,145.0,130.0),listOf(310,320,330),330,125.0,165.0),
+            hypothesis("15m","UP","W2",listOf(131.0,143.0,137.0),listOf(331,334,336),336,136.0,150.0))
         s[1].w4Zero="MINIMUM_ONLY";s[1].momentumShift=true
         if (mirror) s=s.map { h -> h.copy(direction=if (h.direction=="UP") "DOWN" else "UP",
             anchors=h.anchors.map { a -> a.copy(price=400-a.price,kind=if (a.kind=="LOW") "HIGH" else "LOW") },
@@ -109,15 +109,15 @@ class WilliamsWaveHierarchyTest {
     }
     @Test fun parentRequiresBothTimeAndPriceContainment() {
         val report=correction()
-        assertEquals(setOf("1d:W3>6h:W4","6h:W4>1h:W3","1h:W3>15m:W3"),
+        assertEquals(setOf("1d:W2>6h:W3","6h:W3>1h:W2","1h:W2>15m:W2"),
             report.links.map { "${it.parent}>${it.child}" }.toSet())
         val old=report.scenarios[2]
         val earlier=old.copy(anchors=listOf(old.anchors[0].copy(extremeAt=290*hour))+old.anchors.drop(1))
         val changed=report.scenarios.map { if (it.id==old.id) earlier else it }
-        assertFalse(linkWilliamsWaveHypotheses(changed).any { it.parent=="6h:W4" && it.child=="1h:W3" })
+        assertFalse(linkWilliamsWaveHypotheses(changed).any { it.parent=="6h:W3" && it.child=="1h:W2" })
         val expensive=old.copy(anchors=listOf(old.anchors[0],old.anchors[1].copy(price=300.0),old.anchors[2]))
         assertFalse(linkWilliamsWaveHypotheses(report.scenarios.map { if (it.id==old.id) expensive else it })
-            .any { it.parent=="6h:W4" && it.child=="1h:W3" })
+            .any { it.parent=="6h:W3" && it.child=="1h:W2" })
     }
     @Test fun correctionModeIsSymmetricAndUsesStructuralBounds() {
         for (mirror in listOf(false,true)) {
@@ -135,13 +135,13 @@ class WilliamsWaveHierarchyTest {
         report=correction().copy(frameErrors=mapOf("15m" to "STALE"))
         assertFalse(williamsCorrectionEntryContext(report,"LONG",339*hour,"REVERSAL").allowed)
         report=correction()
-        val competing=report.scenarios[1].copy(id="competing",label="W3",w4Zero="NO_ZERO_CROSS")
+        val competing=report.scenarios[1].copy(id="competing",label="W2",anchors=report.scenarios[1].anchors.take(3),w4Zero="NO_ZERO_CROSS")
         report=report.copy(scenarios=report.scenarios+competing)
         assertFalse(williamsCorrectionEntryContext(report,"LONG",339*hour,"REVERSAL").allowed)
         report=correction()
         assertFalse(williamsCorrectionEntryContext(report,"LONG",340*hour,"REVERSAL").allowed)
         assertFalse(williamsCorrectionEntryContext(report,"LONG",339*hour,"AO_DIVERGENCE").allowed)
-        report=report.copy(links=report.links.filter { it.child!="15m:W3" })
+        report=report.copy(links=report.links.filter { it.child!="15m:W2" })
         assertFalse(williamsCorrectionEntryContext(report,"LONG",339*hour,"REVERSAL").allowed)
     }
     @Test fun oppositeSignalMustActuallyTriggerAndMustPostdateTheEntry() {

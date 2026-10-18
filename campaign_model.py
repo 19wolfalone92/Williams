@@ -61,9 +61,12 @@ class SignalType(str, Enum):
     AO_ZERO_LINE = "AO_ZERO_LINE"
     AO_TWIN_PEAKS = "AO_TWIN_PEAKS"
     AC_SIGNAL = "AC_SIGNAL"
-    BALANCE_LINE = "BALANCE_LINE"  # NTD ch8, research only until execution-admission parity
     # NTD Zones are continuation/add-on events, not standalone initial entries.
     ZONE_ADD_ON = "ZONE_ADD_ON"
+    BALANCE_LINE = "BALANCE_LINE"
+    COURSE_HUMP = "COURSE_HUMP"
+    COURSE_THUMB = "COURSE_THUMB"
+    COURSE_SQUAT = "COURSE_SQUAT"
 
 
 class SignalRole(str, Enum):
@@ -145,6 +148,8 @@ class SignalSpec:
     expires_at_ms: int = 0
     source_candle_index: int = -1
     execution_semantics: str = "STOP_ENTRY"
+    strategy_profile: str = "TC2_THREE_WISE_MEN"
+    setup_context: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -168,7 +173,7 @@ class SignalSpec:
     ) -> "SignalSpec":
         signal_id = (
             f"{str(symbol).upper()}:{str(timeframe).lower()}:"
-            f"{signal_type.value}:{int(signal_bar_time_ms)}"
+            f"{str(side).upper()}:{signal_type.value}:{int(signal_bar_time_ms)}"
         )
         return cls(
             signal_id=signal_id,

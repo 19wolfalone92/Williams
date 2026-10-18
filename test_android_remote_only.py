@@ -424,7 +424,8 @@ def test_android_exit_requires_exchange_position_protection_and_filled_order_con
     assert "val adapterPreflight = adapterFactory()" in coordinator
     assert "adapterPreflight.positions()" in coordinator
     assert "adapterPreflight.openAlgoOrders(symbol)" in coordinator
-    assert "requestedQty.compareTo(liveAmount.abs()) != 0" in coordinator
+    assert "val quantityMatches=if(partialReduction) requestedQty<positionBefore else requestedQty.compareTo(positionBefore)==0" in coordinator
+    assert 'reason!="COURSE_STAGE_TRIM" || managedEntry?.optString("strategy_profile")!=williamsCourseProfile' in coordinator
     assert "val confirmedOrder = adapter.order(symbol, clientOrderId)" in coordinator
     assert 'if (finalOrderStatus != "FILLED")' in coordinator
     # Explicit operator exits are a risk-reducing escape hatch when the
@@ -563,7 +564,7 @@ def test_android_trailing_stop_retains_confirmed_protection_after_ambiguous_repl
     assert "untrackedRemainder" in coordinator
     assert '.remove("previous_protection_client_id")' in coordinator
     assert "val predecessor = findProtectiveStop(" in coordinator
-    assert '.put("trail_recovery_at_ms", System.currentTimeMillis())' in coordinator
+    assert '.put("trail_recovery_at_ms", clock())' in coordinator
     assert "val afterCleanup = adapter.openAlgoOrders(symbol)" in coordinator
     assert "trackedPredecessorStillOpen" in coordinator
     assert "if (currentStopSafe)" in coordinator
@@ -861,4 +862,4 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
     assert "htf1d.alligatorBearish && !htf1d.aoPositive" in enrich
     assert "hierarchy.links.any" in enrich
     assert 'link.relationship == "ALIGNED"' in enrich
-    assert 'p?.label == "W5" && c?.label == "W3"' in enrich
+    assert 'p?.activeLabel == "W5" && c?.activeLabel == "W3"' in enrich
