@@ -140,3 +140,28 @@ def test_python_consumes_the_same_manual_book_cases_as_android():
         assert result is not None
         assert result.trigger==pytest.approx(c["expected_trigger"])
         assert result.stop==pytest.approx(c["expected_stop"])
+
+
+def test_competing_directions_on_one_bar_have_distinct_durable_signal_ownership():
+    from campaign_model import SignalSpec,SignalType,SignalRole
+    def make(side):
+        return SignalSpec.new(symbol="BTCUSDT",side=side,signal_type=SignalType.COURSE_SQUAT,role=SignalRole.ENTRY,
+            timeframe="1h",signal_bar_time_ms=1_700_000_000_000,trigger_price=101 if side=="BUY" else 99,
+            protective_reference=95 if side=="BUY" else 105)
+    assert make("BUY").signal_id!=make("SELL").signal_id
+    assert make("BUY").signal_id==make("BUY").signal_id
+
+
+def test_market_quantity_uses_the_common_grid_and_rejects_invalid_lot_metadata():
+    from decimal import Decimal,ROUND_FLOOR
+    from types import SimpleNamespace
+    from futures_williams_runtime import FuturesWilliamsRuntime
+    runtime=object.__new__(FuturesWilliamsRuntime)
+    filters={"LOT_SIZE":{"stepSize":"0.002","minQty":"0.002","maxQty":"100"},
+             "MARKET_LOT_SIZE":{"stepSize":"0.003","minQty":"0.003","maxQty":"100"}}
+    runtime._filters=lambda _:filters
+    runtime.client=SimpleNamespace(decimal_floor=lambda value,step:float((Decimal(str(value))/Decimal(str(step))).to_integral_value(rounding=ROUND_FLOOR)*Decimal(str(step))))
+    assert runtime._normalize_qty("BTCUSDT",.017)==pytest.approx(.012)
+    assert runtime._full_market_close_qty("BTCUSDT",.012)==pytest.approx(.012)
+    filters["LOT_SIZE"]["stepSize"]="-0.002"
+    with pytest.raises(RuntimeError,match="quantity grid"):runtime._normalize_qty("BTCUSDT",.017)

@@ -224,7 +224,11 @@ internal fun williamsHypothesesFromAnchors(
         val h = WilliamsWaveScenario("$frame:$direction:${p.first().extremeAt}:$n",frame,direction,label,p,
             bars.last().t+duration,p.last().extremeAt,leg.minOf { it.l },leg.maxOf { it.h },inv,
             if (reasons.isNotEmpty()) "INVALIDATED" else if (diagonalOverlap) "ALTERNATIVE" else "PROVISIONAL",reasons)
-        if (diagonalOverlap && reasons.isEmpty()) h.alternatives += "UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP"
+        if (diagonalOverlap && reasons.isEmpty()) {
+            h.alternatives += "UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP"
+            if((price[1]-price[4])/(price[1]-price[0])<=.10)
+                h.alternatives += "FUTURES_SHALLOW_W4_OVERLAP_10_PERCENT_W1_RANGE_POLICY"
+        }
         val activeSign = if (n in listOf(2,4,6,8)) -sign else sign
         if (n < 9 && reasons.isEmpty() && activeSign * (bars.last().c-p.last().price) <= 0) {
             h.status = "UNRESOLVED"; h.alternatives += "PRIOR_LEG_EXTENSION_OR_UNCONFIRMED_TURN"

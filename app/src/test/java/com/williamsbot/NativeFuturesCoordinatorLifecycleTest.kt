@@ -95,7 +95,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                     val id=(100+orders.size).toString()
                     val old=kotlin.math.abs(quantity)
                     entry=(entry*old+mark*added)/(old+added)
-                    quantity+=(if(quantity>0 || quantity==0.0 && direction.name=="LONG") added else -added)
+                    quantity=(quantity.toString().toBigDecimal()+(if(quantity>0 || quantity==0.0 && direction.name=="LONG") added else -added).toString().toBigDecimal()).toDouble()
                     val row=JSONObject(p).put("orderId",id).put("status",if(additionFraction==1.0) "FILLED" else "PARTIALLY_FILLED")
                         .put("clientOrderId",p.getValue("newClientOrderId")).put("origQty",p.getValue("quantity"))
                         .put("executedQty",added.toString()).put("avgPrice",mark.toString())
@@ -148,7 +148,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             val parent=algos.values.single { it.optString("clientAlgoId")==clientId }
             val qty=parent.getString("quantity").toDouble();val price=parent.getString("triggerPrice").toDouble()
             val old=kotlin.math.abs(quantity);entry=(entry*old+price*qty)/(old+qty)
-            quantity+=(if(quantity>0) qty else -qty);mark=price+(if(quantity>0) 1 else -1)
+            quantity=(quantity.toString().toBigDecimal()+(if(quantity>0) qty else -qty).toString().toBigDecimal()).toDouble();mark=price+(if(quantity>0) 1 else -1)
             val id=(200+orders.size).toString()
             parent.put("algoStatus","FINISHED").put("actualOrderId",id)
             orders[id]=JSONObject().put("symbol","BTCUSDT").put("orderId",id).put("clientOrderId",clientId)

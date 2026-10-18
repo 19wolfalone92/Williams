@@ -317,6 +317,11 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             "INVALIDATED" if reasons else ("ALTERNATIVE" if diagonal_overlap else "PROVISIONAL"), reasons)
         if diagonal_overlap and not reasons:
             h.alternatives.append("UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP")
+            # Course PDF46 permits shallow overlap in futures. The percentage
+            # denominator is not formalized there; expose this explicit W1-range
+            # interpretation as an alternative, never an automatic order permit.
+            if (price[1]-price[4])/(price[1]-price[0])<=.10:
+                h.alternatives.append("FUTURES_SHALLOW_W4_OVERLAP_10_PERCENT_W1_RANGE_POLICY")
         active_sign = -sign if n in (2, 4, 6, 8) else sign
         if n < 9 and not reasons and active_sign * (last_bar.c - p[-1].price) <= 0:
             h.status = "UNRESOLVED"

@@ -173,7 +173,7 @@ class SignalSpec:
     ) -> "SignalSpec":
         signal_id = (
             f"{str(symbol).upper()}:{str(timeframe).lower()}:"
-            f"{signal_type.value}:{int(signal_bar_time_ms)}"
+            f"{str(side).upper()}:{signal_type.value}:{int(signal_bar_time_ms)}"
         )
         return cls(
             signal_id=signal_id,

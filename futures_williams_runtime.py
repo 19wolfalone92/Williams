@@ -833,6 +833,8 @@ class FuturesWilliamsRuntime:
         step = float(lot.get("stepSize", "0") or 0)
         minimum = float(lot.get("minQty", "0") or 0)
         maximum = float(lot.get("maxQty", "0") or 0)
+        if not all(math.isfinite(v) for v in (step,minimum,maximum)) or step<=0 or minimum<0 or maximum<0:
+            raise RuntimeError("Invalid Futures LOT_SIZE quantity grid")
         market=f.get("MARKET_LOT_SIZE") or {}
         market_step=Decimal(str(market.get("stepSize",0) or 0))
         if market_step>0:

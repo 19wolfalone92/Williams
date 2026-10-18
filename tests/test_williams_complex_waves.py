@@ -73,3 +73,15 @@ def test_downside_mirror_price_and_kind():
     p=swings(mirrored,starts_low=False)
     out=detect_complex_wave_patterns(p,direction="DOWN",as_of=6200)
     assert "ORDINARY_IMPULSE_CANDIDATE" in names(out)
+
+
+@pytest.mark.parametrize("prices,kind",[([150,100,160,90,170,80],"EXPANDING_TRIANGLE_ABCDE_CANDIDATE"),
+    ([150,100,150,110,150,120],"BARRIER_TRIANGLE_ABCDE_CANDIDATE")])
+@pytest.mark.parametrize("mirror",[False,True])
+def test_triangle_boundary_variants_remain_causal_non_trading_candidates(prices,kind,mirror):
+    from williams_wave_hierarchy import WaveAnchor
+    from dataclasses import replace
+    points=[WaveAnchor("HIGH" if i%2==0 else "LOW",p,i,i*3_600_000,(i+3)*3_600_000) for i,p in enumerate(prices)]
+    if mirror:points=[replace(p,kind="LOW" if p.kind=="HIGH" else "HIGH",price=300-p.price) for p in points]
+    result=detect_complex_wave_patterns(points,direction="DOWN" if mirror else "UP",as_of=40*3_600_000)
+    assert any(p.pattern==kind and not p.can_place_orders for p in result)

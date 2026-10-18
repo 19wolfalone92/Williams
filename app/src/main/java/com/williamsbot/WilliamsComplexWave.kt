@@ -72,6 +72,17 @@ internal fun detectWilliamsComplexWave(
             add("CONTRACTING_TRIANGLE_ABCDE_CANDIDATE",p,
                 listOf("HIGHER_LOWS_LOWER_HIGHS","INTERNAL_3_3_3_3_3_UNVERIFIED"),p[p.lastIndex-1].price)
     }
+    if(anchors.size>=6) {
+        val p=anchors.takeLast(6);val highs=p.filter { it.kind=="HIGH" }.map { it.price };val lows=p.filter { it.kind=="LOW" }.map { it.price }
+        fun close(a:Double,b:Double)=kotlin.math.abs(a-b)<=maxOf(kotlin.math.abs(a),kotlin.math.abs(b))*1e-9
+        if(highs.size==3 && lows.size==3 && lows.max()<highs.min()) {
+            if(highs.zipWithNext().all { (a,b)->a<b } && lows.zipWithNext().all { (a,b)->a>b })
+                add("EXPANDING_TRIANGLE_ABCDE_CANDIDATE",p,listOf("DIVERGING_BOUNDARIES","INTERNAL_3_3_3_3_3_UNVERIFIED"),p[p.lastIndex-1].price)
+            else if(highs.zipWithNext().all { (a,b)->close(a,b) } && lows.zipWithNext().all { (a,b)->a<b } ||
+                lows.zipWithNext().all { (a,b)->close(a,b) } && highs.zipWithNext().all { (a,b)->a>b })
+                add("BARRIER_TRIANGLE_ABCDE_CANDIDATE",p,listOf("ONE_FLAT_ONE_CONVERGING_BOUNDARY","INTERNAL_3_3_3_3_3_UNVERIFIED"),p[p.lastIndex-1].price)
+        }
+    }
     if(anchors.size>=8) {
         val p=anchors.takeLast(8)
         add("W_X_Y_COMBINATION_UNRESOLVED",p,

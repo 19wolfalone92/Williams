@@ -135,6 +135,15 @@ def detect_complex_wave_patterns(
                 and all(a<b for a,b in zip(lows,lows[1:])) and max(lows)<min(highs):
             add("CONTRACTING_TRIANGLE_ABCDE_CANDIDATE", sub,
                 ("HIGHER_LOWS_LOWER_HIGHS", "INTERNAL_3_3_3_3_3_UNVERIFIED"), sub[-2][1])
+    if len(pts)>=6:
+        sub=pts[-6:];highs=[p[1] for p in sub if p[0]=="HIGH"];lows=[p[1] for p in sub if p[0]=="LOW"]
+        if len(highs)==3 and len(lows)==3 and max(lows)<min(highs):
+            close=lambda a,b:abs(a-b)<=max(abs(a),abs(b))*1e-9
+            if all(a<b for a,b in zip(highs,highs[1:])) and all(a>b for a,b in zip(lows,lows[1:])):
+                add("EXPANDING_TRIANGLE_ABCDE_CANDIDATE",sub,("DIVERGING_BOUNDARIES","INTERNAL_3_3_3_3_3_UNVERIFIED"),sub[-2][1])
+            elif (all(close(a,b) for a,b in zip(highs,highs[1:])) and all(a<b for a,b in zip(lows,lows[1:]))) or (
+                all(close(a,b) for a,b in zip(lows,lows[1:])) and all(a>b for a,b in zip(highs,highs[1:]))):
+                add("BARRIER_TRIANGLE_ABCDE_CANDIDATE",sub,("ONE_FLAT_ONE_CONVERGING_BOUNDARY","INTERNAL_3_3_3_3_3_UNVERIFIED"),sub[-2][1])
     # W-X-Y and W-X-Y-X-Z need the internal A/B/C segmentation. A
     # seven-/eleven-swing outer zigzag alone must not certify combinations.
     if len(pts) >= 8:
