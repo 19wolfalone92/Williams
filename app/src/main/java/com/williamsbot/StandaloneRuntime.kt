@@ -5111,6 +5111,7 @@ private class NativeEngine(
                     entrySlippagePct = entrySlippagePct,
                     fillCount = summary.fillCount
                 )
+                futuresCampaignCoordinator.recordVerifiedCampaignResult(clientId,summary.netPnlUsdt,summary.feeKnown,summary.fillCount)
                 futuresCampaignCoordinator.markTradeJournalStatus(
                     clientId, "RECORDED",
                     "source=Binance userTrades; fills=${summary.fillCount}; fees_known=${summary.feeKnown}"
@@ -5531,9 +5532,13 @@ private class NativeEngine(
         // the newest signal before applying the directional macro veto caused a
         // valid opposite-side alternative to be discarded prematurely.
         val contextNow = futuresMarketData.exchangeNowMs()
+        fun profitReentry(signal:CampaignSignalN)=signal.strategyProfile==williamsNtdProfile &&
+            williamsNtdReentryEligible(owned,symbol,campaignSignalDirection(signal.type).orEmpty(),signal.signalBarTimeMs)
         val freshSignals = candidate.campaignSignals.filter {
-            it.strategyProfile==williamsProfile && it.role=="ENTRY" &&
-                it.executionSemantics=="STOP_ENTRY" && isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)
+            it.strategyProfile==williamsProfile && (it.role=="ENTRY" || profitReentry(it)) &&
+                (it.executionSemantics=="STOP_ENTRY" || profitReentry(it) && it.executionSemantics=="MARKET_ON_CLOSE" &&
+                    williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,contextNow,it.triggerPrice,futuresMarketData.markPrice(symbol))==null) &&
+                isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)
         }
         if (freshSignals.isEmpty()) {
             lastError = "WILLIAMS_SIGNAL_EXPIRED: no fresh confirmed H1 hypothesis for $symbol"
@@ -5664,8 +5669,10 @@ private class NativeEngine(
         if (!futuresAccountFundedForEntry(available, equity)) return
         val mark = futuresMarketData.markPrice(symbol)
         val rules = symbolFilters(symbol)
+        val marketReentry=profitReentry(signal) && signal.executionSemantics=="MARKET_ON_CLOSE"
+        val reference=if(marketReentry) mark else signal.triggerPrice
         val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
-            normalizeTriggerPrice(signal.triggerPrice, rules.tick) else normalizePrice(signal.triggerPrice, rules.tick)
+            normalizeTriggerPrice(reference, rules.tick) else normalizePrice(reference, rules.tick)
         var stop = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
             normalizePrice(signal.protectivePrice, rules.tick) else normalizeTriggerPrice(signal.protectivePrice, rules.tick)
         if(signal.strategyProfile==williamsCourseProfile) {
@@ -5676,9 +5683,9 @@ private class NativeEngine(
         }
         if (trigger <= 0.0 || stop <= 0.0) return
         if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-            if (trigger <= mark || stop >= trigger) return
+            if (!marketReentry && trigger <= mark || stop >= trigger) return
         } else {
-            if (trigger >= mark || stop <= trigger) return
+            if (!marketReentry && trigger >= mark || stop <= trigger) return
         }
         val stopFraction = kotlin.math.abs(trigger - stop) / trigger
         if (!stopFraction.isFinite() || stopFraction <= 0.0) return
@@ -5706,13 +5713,15 @@ private class NativeEngine(
         val plan = NativeFuturesCampaignCoordinator.EntryPlan(
             symbol = symbol,
             direction = direction,
-            kind = NativeFuturesCampaignCoordinator.EntryKind.STOP,
+            kind = if(marketReentry) NativeFuturesCampaignCoordinator.EntryKind.MARKET else NativeFuturesCampaignCoordinator.EntryKind.STOP,
             quantity = fmtQty(qty, rules.decimals),
             entryPrice = fmtPrice(trigger, rules.tick),
             protectiveStop = fmtPrice(stop, rules.tick),
             clientId = clientId,
             riskPct = riskPct,
             signalType = signal.type,
+            reentryOwnerId=if(profitReentry(signal)) owned!!.getString("client_id") else "",
+            referenceClose=if(marketReentry) signal.triggerPrice else 0.0,
             leverage = entryLeverage,
             signalBarTimeMs = signal.signalBarTimeMs,
             signalReason = signal.reason,
@@ -5781,7 +5790,8 @@ private class NativeEngine(
             // entry at the current market price.
             val submitMark = futuresMarketData.markPrice(symbol)
             require(
-                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
+                if(marketReentry) williamsMarketOnCloseReason(signal.signalBarTimeMs,3_600_000L,submitNow,signal.triggerPrice,submitMark)==null
+                else if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
                 else submitMark > trigger
             ) {
                 "H1_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"

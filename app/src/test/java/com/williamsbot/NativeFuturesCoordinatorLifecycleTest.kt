@@ -90,12 +90,12 @@ class NativeFuturesCoordinatorLifecycleTest {
                     }
                 }
                 "/fapi/v1/order" -> if (request.method == "POST" && p["reduceOnly"]!="true") {
-                    check(quantity!=0.0 && p["side"]==if(quantity>0) "BUY" else "SELL")
+                    check(p["side"]==if(quantity>0 || quantity==0.0 && direction.name=="LONG") "BUY" else "SELL")
                     val added=p.getValue("quantity").toDouble()*additionFraction
                     val id=(100+orders.size).toString()
                     val old=kotlin.math.abs(quantity)
                     entry=(entry*old+mark*added)/(old+added)
-                    quantity+=(if(quantity>0) added else -added)
+                    quantity+=(if(quantity>0 || quantity==0.0 && direction.name=="LONG") added else -added)
                     val row=JSONObject(p).put("orderId",id).put("status",if(additionFraction==1.0) "FILLED" else "PARTIALLY_FILLED")
                         .put("clientOrderId",p.getValue("newClientOrderId")).put("origQty",p.getValue("quantity"))
                         .put("executedQty",added.toString()).put("avgPrice",mark.toString())
@@ -149,7 +149,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             val qty=parent.getString("quantity").toDouble();val price=parent.getString("triggerPrice").toDouble()
             val old=kotlin.math.abs(quantity);entry=(entry*old+price*qty)/(old+qty)
             quantity+=(if(quantity>0) qty else -qty);mark=price+(if(quantity>0) 1 else -1)
-            val id=(40+orders.size).toString()
+            val id=(200+orders.size).toString()
             parent.put("algoStatus","FINISHED").put("actualOrderId",id)
             orders[id]=JSONObject().put("symbol","BTCUSDT").put("orderId",id).put("clientOrderId",clientId)
                 .put("status","FILLED").put("origQty",qty.toString()).put("executedQty",qty.toString())
@@ -184,6 +184,38 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertTrue(reconciled.toString(), reconciled.getBoolean("ok"))
         assertEquals("OPEN_PROTECTED", coordinator.state.name)
         return coordinator to exchange
+    }
+
+    @Test fun profitableNtdCycleReentersAnyDimensionOnceOnlyAfterVerifiedFeesAndActualClose() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(market in listOf(false,true)) {
+            val journal=Journal();val exchange=Exchange(direction)
+            var now=System.currentTimeMillis()
+            val coordinator=NativeFuturesCampaignCoordinator(journal,clock={ now }) { exchange.adapter() }
+            coordinator.reconcile()
+            val initial=plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL",signalBarTimeMs=now-7_200_000L)
+            assertTrue(coordinator.submitPendingEntry(initial).getBoolean("accepted"))
+            exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.closePosition("BTCUSDT",direction,"1","W2X_NTD_PROFIT_${direction.name}_$market","TEST_PROFIT").getBoolean("ok"))
+            assertTrue(coordinator.recordVerifiedCampaignResult(initial.clientId,1.0,false,2))
+            var previous=coordinator.intentsSnapshot().getJSONObject(0)
+            now+=7_200_000L
+            assertFalse(williamsNtdReentryEligible(previous,"BTCUSDT",direction.name,now-3_601_000L))
+            assertTrue(coordinator.recordVerifiedCampaignResult(initial.clientId,1.0,true,2))
+            previous=coordinator.intentsSnapshot().getJSONObject(0)
+            assertTrue(williamsNtdReentryEligible(previous,"BTCUSDT",direction.name,now-3_601_000L))
+            val reentry=initial.copy(clientId="W2E_NTD_RE_${direction.name}_$market",quantity="0.5",riskPct=.001,
+                signalType=if(market) "ZONE_ADD_ON" else "AO_SAUCER",signalBarTimeMs=now-3_601_000L,
+                reentryOwnerId=initial.clientId,kind=if(market) NativeFuturesCampaignCoordinator.EntryKind.MARKET else NativeFuturesCampaignCoordinator.EntryKind.STOP,
+                executionSemantics=if(market) "MARKET_ON_CLOSE" else "STOP_ENTRY",
+                referenceClose=if(market) exchange.mark else 0.0,
+                entryPrice=(exchange.mark+if(market) 0 else if(direction.name=="LONG") 1 else -1).toString())
+            val admitted=coordinator.submitPendingEntry(reentry)
+            assertTrue(admitted.toString(),admitted.getBoolean("accepted"))
+            assertFalse(coordinator.submitPendingEntry(reentry.copy(clientId=reentry.clientId+"B")).getBoolean("accepted"))
+            assertFalse(williamsNtdReentryEligible(coordinator.intentsSnapshot().getJSONObject(0),"BTCUSDT",direction.name,now))
+            if(market) assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertEquals(if(market) "OPEN_PROTECTED" else "ENTRY_PENDING",coordinator.state.name)
+        }
     }
 
     @Test fun coursePartialReductionsKeepProtectionAndReExpansionUsesTheRemainingAverage() {

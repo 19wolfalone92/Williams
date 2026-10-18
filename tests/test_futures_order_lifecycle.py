@@ -83,7 +83,7 @@ class DemoExchangeModel:
                 oid = len(self.orders) + 100
                 if p.get("reduceOnly")!="true":
                     assert p["type"]=="MARKET"
-                    assert self.amount!=0 and p["side"]==("BUY" if self.amount>0 else "SELL")
+                    assert self.amount==0 or p["side"]==("BUY" if self.amount>0 else "SELL")
                     quantity=float(p["quantity"]);old=abs(self.amount)
                     self.entry_price=(self.entry_price*old+self.price*quantity)/(old+quantity)
                     self.amount+=(quantity if self.amount>0 else -quantity)
@@ -111,7 +111,10 @@ class DemoExchangeModel:
             return dict(row)
         if path.endswith("userTrades"):
             row = self.orders[int(p["orderId"])]
-            return [{"qty": row["executedQty"], "price": row["avgPrice"], "commission": "0", "commissionAsset": "USDT"}]
+            qty=float(row["executedQty"]);price=float(row["avgPrice"])
+            pnl=qty*(price-self.entry_price)*(1 if row["side"]=="SELL" else -1) if row.get("reduceOnly")=="true" else 0
+            return [{"id":int(p["orderId"])*100+1,"qty":row["executedQty"],"price":row["avgPrice"],"commission":"0",
+                "commissionAsset":"USDT","realizedPnl":str(pnl)}]
         raise AssertionError((method, path, p))
 
     def fill_entry(self, fraction=1.0):
@@ -491,3 +494,32 @@ def test_course_management_executes_an_observed_w4_trim_without_waiting_for_entr
     assert updated.tags["course_plan"]["stage"]=="W4"
     assert 0<updated.position_qty<original
     assert bot.recover()["ok"]
+
+
+@pytest.mark.parametrize("armed_runtime",[{"side":"BUY","profile":"NTD_FIVE_DIMENSIONS"},{"side":"SELL","profile":"NTD_FIVE_DIMENSIONS"}],indirect=True)
+@pytest.mark.parametrize("market",[False,True])
+def test_ntd_profitable_authenticated_cycle_allows_one_new_dimension_entry(armed_runtime,monkeypatch,market):
+    bot,exchange,armed=armed_runtime
+    exchange.fill_entry();bot._reconcile_pending()
+    previous=bot.engine.load_campaign(armed["campaign_id"])
+    exchange.price=104 if previous.side=="BUY" else 96
+    assert bot._exit_market(previous,"PROFIT_CYCLE")["state"]=="CLOSED"
+    previous=bot.engine.load_campaign(previous.campaign_id)
+    assert previous.tags.get("verified_trade_result",{}).get("net_pnl",0)>0
+    closed_at=(int(time.time()*1000)//3_600_000+3)*3_600_000
+    monkeypatch.setattr(time,"time",lambda:(closed_at+1000)/1000)
+    monkeypatch.setattr(bot,"_daily_entry_guard",lambda:(True,"MODEL_TRADING_SESSION"))
+    signal=SignalSpec.new(symbol="BTCUSDT",side=previous.side,signal_type=SignalType.ZONE_ADD_ON if market else SignalType.AO_SAUCER,
+        role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=closed_at-3_600_000,
+        trigger_price=exchange.price if market else exchange.price+(1 if previous.side=="BUY" else -1),
+        protective_reference=95 if previous.side=="BUY" else 105,execution_semantics="MARKET_ON_CLOSE" if market else "STOP_ENTRY",
+        strategy_profile="NTD_FIVE_DIMENSIONS",expires_at_ms=closed_at+3_600_000)
+    assert bot._ntd_reentry_source(signal).campaign_id==previous.campaign_id
+    candidate=FuturesCandidate("BTCUSDT","LONG" if previous.side=="BUY" else "SHORT",signal,(signal,),.01,.001,True,90)
+    admitted=bot._arm_entry(candidate)
+    assert bot.db.state_get("ntd_reentry_consumed:"+previous.campaign_id)==admitted["campaign_id"]
+    assert bot._ntd_reentry_source(signal) is None
+    if market:
+        bot._reconcile_pending()
+        current=bot.engine.load_campaign(admitted["campaign_id"])
+        assert current.position_qty>0 and current.tags["strategy_profile"]=="NTD_FIVE_DIMENSIONS"

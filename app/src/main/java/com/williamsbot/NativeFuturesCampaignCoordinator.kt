@@ -658,6 +658,7 @@ internal fun isManagedOpenPositionIntent(
  */
 internal class NativeFuturesCampaignCoordinator(
     private val executionStore: FuturesCampaignStateStore,
+    private val clock:()->Long=System::currentTimeMillis,
     private val adapterFactory: () -> BinanceUsdMFuturesTestnetAdapter
 ) {
     enum class Direction { LONG, SHORT }
@@ -686,7 +687,8 @@ internal class NativeFuturesCampaignCoordinator(
         val entryClientId: String = "",
         val executionSemantics: String = "STOP_ENTRY",
         val referenceClose: Double = 0.0,
-        val setupContext: String = ""
+        val setupContext: String = "",
+        val reentryOwnerId:String=""
     )
 
     @Volatile var state: State = State.UNINITIALIZED
@@ -744,12 +746,24 @@ internal class NativeFuturesCampaignCoordinator(
                         it.optString("client_id") == clientId
                 } ?: return@synchronized false
             row.put("trade_journal_status", status)
-                .put("trade_journal_updated_at_ms", System.currentTimeMillis())
+                .put("trade_journal_updated_at_ms", clock())
             if (detail.isNullOrBlank()) row.remove("trade_journal_detail")
             else row.put("trade_journal_detail", detail.take(500))
             saveIntents(rows)
             true
         }
+
+    fun recordVerifiedCampaignResult(clientId:String,netPnl:Double,feesKnown:Boolean,fillCount:Int):Boolean=synchronized(lock) {
+        if(!netPnl.isFinite() || fillCount<2) return@synchronized false
+        val all=intents()
+        val owner=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.singleOrNull {
+            it.optString("client_id")==clientId && it.optString("intent_role","ENTRY")=="ENTRY" &&
+                campaignLifecycleStatus(it)=="CLOSED_OR_STOPPED"
+        } ?: return@synchronized false
+        owner.put("verified_net_pnl_usdt",netPnl).put("net_result_fees_known",feesKnown)
+            .put("net_result_source","BINANCE_USER_TRADES").put("net_result_fill_count",fillCount)
+        saveIntents(all);true
+    }
 
     /** True only for the latest durable campaign whose position and stop are exchange-confirmed. */
     fun isManagedOpenPosition(symbol: String, direction: Direction): Boolean = synchronized(lock) {
@@ -807,7 +821,7 @@ internal class NativeFuturesCampaignCoordinator(
 
     fun reconcile(): JSONObject = synchronized(lock) {
         reconciliationRunning = true
-        reconciliationStartedAtMs = System.currentTimeMillis()
+        reconciliationStartedAtMs = clock()
         state = State.RECONCILE_REQUIRED
         lastBlocker = "exchange_reconciliation_in_progress"
         try {
@@ -938,6 +952,9 @@ internal class NativeFuturesCampaignCoordinator(
                     val planned = owner.optString("quantity").toBigDecimalOrNull()
                         ?: error("Malformed entry planned quantity")
                     check(executed.signum() >= 0 && executed <= planned) { "Entry execution exceeds its own intent" }
+                    check(entryExecutions.values.none { it.optString("symbol")==symbol && it.optString("orderId")==actualId }) {
+                        "One exchange fill cannot belong to two entry intents"
+                    }
                     owner.put("actual_entry_order_id", actualId)
                     entryExecutions[cid] = execution
                 }
@@ -1016,7 +1033,7 @@ internal class NativeFuturesCampaignCoordinator(
                     val conditionalStatus = conditional?.let { it.optString("algoStatus",it.optString("status")) }.orEmpty()
                     val executed = order?.optString("executedQty")?.toBigDecimalOrNull() ?: java.math.BigDecimal.ZERO
                     val parentIsOpen = position != null && campaignLifecycleStatus(primary) !in TERMINAL_CAMPAIGN_STATUSES
-                    val ageExpired = intent.optLong("signal_expires_at_ms",0L).let { it>0 && System.currentTimeMillis()>=it }
+                    val ageExpired = intent.optLong("signal_expires_at_ms",0L).let { it>0 && clock()>=it }
                     // Cancel a partially executed remainder, an expired formation, or
                     // any orphan addition before a completed campaign can be retired.
                     if (executed.signum()>0 || !parentIsOpen || ageExpired) {
@@ -1068,7 +1085,7 @@ internal class NativeFuturesCampaignCoordinator(
                         if (position == null && !stillOpenStandard && !stillOpenConditional) {
                             intent.put("exchange_status", "EXIT_CONFIRMED")
                                 .put("order_status", "NOT_FOUND_FLAT_CONFIRMED")
-                                .put("confirmed_flat_at_ms", System.currentTimeMillis())
+                                .put("confirmed_flat_at_ms", clock())
                         } else {
                             throw IllegalStateException(
                                 "Exit intent " + clientId + " is not queryable while " + symbol +
@@ -1087,12 +1104,12 @@ internal class NativeFuturesCampaignCoordinator(
                         if (exitStatus == "FILLED") {
                             if(intent.optBoolean("partial_reduction",false) && executed.compareTo(intent.getString("quantity").toBigDecimal())==0) {
                                 intent.put("exchange_status","EXIT_CONFIRMED").put("order_status","FILLED")
-                                    .put("exchange_order_id",order.optString("orderId")).put("reduction_confirmed_at_ms",System.currentTimeMillis())
+                                    .put("exchange_order_id",order.optString("orderId")).put("reduction_confirmed_at_ms",clock())
                             } else if (position == null) {
                                 intent.put("exchange_status", "EXIT_CONFIRMED")
                                     .put("order_status", "FILLED")
                                     .put("exchange_order_id", order.optString("orderId"))
-                                    .put("confirmed_flat_at_ms", System.currentTimeMillis())
+                                    .put("confirmed_flat_at_ms", clock())
                             } else {
                                 // The order is terminal, but the account still reports exposure.
                                 // Never resend that client id; reconcile the remaining position
@@ -1100,18 +1117,18 @@ internal class NativeFuturesCampaignCoordinator(
                                 intent.put("exchange_status", "EXIT_TERMINAL_POSITION_OPEN")
                                     .put("order_status", "FILLED")
                                     .put("exchange_order_id", order.optString("orderId"))
-                                    .put("last_reconciled_ms", System.currentTimeMillis())
+                                    .put("last_reconciled_ms", clock())
                             }
                         } else if (exitStatus in setOf("CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH")) {
                             intent.put("exchange_status", if (position == null) "EXIT_CONFIRMED" else "EXIT_TERMINAL_POSITION_OPEN")
                                 .put("order_status", exitStatus)
                                 .put("exchange_order_id", order.optString("orderId"))
-                                .put("last_reconciled_ms", System.currentTimeMillis())
+                                .put("last_reconciled_ms", clock())
                         } else {
                             hasPendingExit = true
                             intent.put("exchange_status", exitStatus)
                                 .put("exchange_order_id", order.optString("orderId"))
-                                .put("last_reconciled_ms", System.currentTimeMillis())
+                                .put("last_reconciled_ms", clock())
                         }
                     }
                     continue
@@ -1165,7 +1182,7 @@ internal class NativeFuturesCampaignCoordinator(
                                     // Persist the cancel mutation before network I/O. If DELETE
                                     // times out, the next reconcile resolves this same client id.
                                     intent.put("order_status", "CANCEL_SUBMISSION_UNKNOWN")
-                                        .put("cancel_remainder_requested_at_ms", System.currentTimeMillis())
+                                        .put("cancel_remainder_requested_at_ms", clock())
                                     saveIntents(persisted)
                                     if (matchingOpenOrder.optString("clientOrderId") == clientId) adapter.cancelOrder(symbol, clientId)
                                     else adapter.cancelOrderById(symbol, matchingOpenOrder.getString("orderId"))
@@ -1188,7 +1205,7 @@ internal class NativeFuturesCampaignCoordinator(
                                     // Durable intent precedes the Algo Order DELETE just as it
                                     // does for standard orders; a timeout cannot permit a retry.
                                     intent.put("order_status", "CANCEL_SUBMISSION_UNKNOWN")
-                                        .put("cancel_remainder_requested_at_ms", System.currentTimeMillis())
+                                        .put("cancel_remainder_requested_at_ms", clock())
                                     saveIntents(persisted)
                                     adapter.cancelAlgoOrder(symbol, clientId)
                                 }
@@ -1208,8 +1225,8 @@ internal class NativeFuturesCampaignCoordinator(
                         }
                         intent.put("exchange_status", finalOrderStatus)
                             .put("order_status", finalOrderStatus)
-                            .put("remainder_cancel_confirmed_at_ms", System.currentTimeMillis())
-                            .put("last_reconciled_ms", System.currentTimeMillis())
+                            .put("remainder_cancel_confirmed_at_ms", clock())
+                            .put("last_reconciled_ms", clock())
 
                         // Re-fetch exchange positions after cancellation: the final slice may
                         // fill while DELETE is in flight, or the position may be flat already.
@@ -1223,7 +1240,7 @@ internal class NativeFuturesCampaignCoordinator(
                         if (confirmedAmount.signum() == 0) {
                             openBySymbol.remove(symbol)
                             intent.put("campaign_status", "CLOSED_OR_STOPPED")
-                                .put("closed_observed_at_ms", System.currentTimeMillis())
+                                .put("closed_observed_at_ms", clock())
                             saveIntents(persisted)
                             continue
                         }
@@ -1237,7 +1254,7 @@ internal class NativeFuturesCampaignCoordinator(
                             ?: throw IllegalStateException("Binance omitted $symbol after confirming a non-zero position amount")
                     }
                     intent.put("campaign_status", "POSITION_OPEN")
-                        .put("last_reconciled_ms", System.currentTimeMillis())
+                        .put("last_reconciled_ms", clock())
                     continue
                 }
                 if (position != null && !isLatestCampaign) {
@@ -1252,7 +1269,7 @@ internal class NativeFuturesCampaignCoordinator(
                 if (prior in TERMINAL_CAMPAIGN_STATUSES) continue
                 if (prior in setOf("OPEN_PROTECTED", "POSITION_OPEN", "EXIT_PENDING")) {
                     intent.put("campaign_status", "CLOSED_OR_STOPPED")
-                        .put("closed_observed_at_ms", System.currentTimeMillis())
+                        .put("closed_observed_at_ms", clock())
                     continue
                 }
                 val kind = intent.optString("kind")
@@ -1280,8 +1297,8 @@ internal class NativeFuturesCampaignCoordinator(
                         intent.put("exchange_status", "NOT_FOUND_FLAT_CONFIRMED")
                             .put("order_status", "NOT_FOUND")
                             .put("campaign_status", "CLOSED_OR_STOPPED")
-                            .put("closed_observed_at_ms", System.currentTimeMillis())
-                            .put("last_reconciled_ms", System.currentTimeMillis())
+                            .put("closed_observed_at_ms", clock())
+                            .put("last_reconciled_ms", clock())
                         continue
                     }
                     throw IllegalStateException(
@@ -1297,13 +1314,13 @@ internal class NativeFuturesCampaignCoordinator(
                 }
                 intent.put("exchange_status", exchangeStatus)
                     .put("order_status", exchangeStatus)
-                    .put("last_reconciled_ms", System.currentTimeMillis())
+                    .put("last_reconciled_ms", clock())
                 when {
                     exchangeStatus in setOf("FILLED", "FINISHED") -> {
                         if (campaignLifecycleStatus(intent) != "FILL_CONFIRMATION_PENDING" ||
                             intent.optLong("fill_observed_at_ms", 0L) <= 0L
                         ) {
-                            intent.put("fill_observed_at_ms", System.currentTimeMillis())
+                            intent.put("fill_observed_at_ms", clock())
                         }
                         intent.put("campaign_status", "FILL_CONFIRMATION_PENDING")
                     }
@@ -1316,11 +1333,11 @@ internal class NativeFuturesCampaignCoordinator(
                         if (possiblePartialFill) {
                             intent.put("campaign_status", "FILL_CONFIRMATION_PENDING")
                             if (intent.optLong("fill_observed_at_ms", 0L) <= 0L) {
-                                intent.put("fill_observed_at_ms", System.currentTimeMillis())
+                                intent.put("fill_observed_at_ms", clock())
                             }
                         } else {
                             intent.put("campaign_status", "CLOSED_OR_STOPPED")
-                                .put("closed_observed_at_ms", System.currentTimeMillis())
+                                .put("closed_observed_at_ms", clock())
                         }
                     }
                     exchangeStatus in activeStatuses -> intent.put("campaign_status", "ENTRY_PENDING")
@@ -1432,7 +1449,7 @@ internal class NativeFuturesCampaignCoordinator(
                         lastBlocker = "$symbol has an exchange position without a recoverable protective H1 stop; manual close remains available, new entries blocked"
                         continue
                     }
-                    val recoveryClientId = "W2E_RECOVER_${symbol.take(6)}_${System.currentTimeMillis().toString(16).takeLast(8)}"
+                    val recoveryClientId = "W2E_RECOVER_${symbol.take(6)}_${clock().toString(16).takeLast(8)}"
                     matchingIntent = JSONObject()
                         .put("intent_role", "ENTRY")
                         .put("symbol", symbol)
@@ -1449,7 +1466,7 @@ internal class NativeFuturesCampaignCoordinator(
                         .put("protection_status", "NOT_SUBMITTED")
                         .put("recovery_source", "EXCHANGE_POSITION_PLUS_FIVE_CLOSED_H1_BARS")
                         .put("strategy_ownership_verified", false)
-                        .put("recovered_position_at_ms", System.currentTimeMillis())
+                        .put("recovered_position_at_ms", clock())
                     persisted.put(matchingIntent)
                     saveIntents(persisted)
                     anyUnprotected = true
@@ -1465,7 +1482,7 @@ internal class NativeFuturesCampaignCoordinator(
                     val persistedEntry = matchingIntent.optString("entry_price").toDoubleOrNull() ?: 0.0
                     if (!persistedEntry.isFinite() || persistedEntry <= 0.0) {
                         matchingIntent.put("entry_price", exchangeEntry.toString())
-                            .put("exchange_entry_recovered_at_ms", System.currentTimeMillis())
+                            .put("exchange_entry_recovered_at_ms", clock())
                     }
                     val persistedStop = matchingIntent.optString("protective_stop").toDoubleOrNull() ?: 0.0
                     if (!persistedStop.isFinite() || persistedStop <= 0.0) {
@@ -1509,7 +1526,7 @@ internal class NativeFuturesCampaignCoordinator(
                             matchingIntent
                                 .put("protective_stop", stopValue.toString())
                                 .put("protection_status", "PROTECTED")
-                                .put("protection_recovered_from_exchange_at_ms", System.currentTimeMillis())
+                                .put("protection_recovered_from_exchange_at_ms", clock())
                             if (riskPct != null) {
                                 val priorRisk = matchingIntent.optDouble("risk_pct", 0.0)
                                     .takeIf { it.isFinite() && it > 0.0 } ?: 0.0
@@ -1548,7 +1565,7 @@ internal class NativeFuturesCampaignCoordinator(
                                 .put("risk_pct", recovered.riskPct)
                                 .put("protection_status", "NOT_SUBMITTED")
                                 .put("recovery_stop_source", "H1_LAST_FIVE_CLOSED_BARS")
-                                .put("recovery_stop_at_ms", System.currentTimeMillis())
+                                .put("recovery_stop_at_ms", clock())
                             saveIntents(persisted)
                         } else {
                             anyUnprotected = true
@@ -1626,7 +1643,7 @@ internal class NativeFuturesCampaignCoordinator(
                             .put("previous_protection_client_id", attemptedClientId)
                             .put("previous_protective_stop", attemptedStop)
                             .put("protection_status", "SUBMISSION_UNKNOWN")
-                            .put("trail_recovery_at_ms", System.currentTimeMillis())
+                            .put("trail_recovery_at_ms", clock())
                         saveIntents(persisted)
                         protective = predecessor
                     }
@@ -1673,7 +1690,7 @@ internal class NativeFuturesCampaignCoordinator(
                             matchingIntent.put("protection_client_id", protectionClientId)
                         }
                         matchingIntent.put("protection_status", "SUBMISSION_UNKNOWN")
-                            .put("protection_attempt_at_ms", System.currentTimeMillis())
+                            .put("protection_attempt_at_ms", clock())
                         saveIntents(persisted)
                         try {
                             adapter.placeProtectiveStop(
@@ -1715,7 +1732,7 @@ internal class NativeFuturesCampaignCoordinator(
                     check(positionEntry.isFinite() && positionEntry > 0.0 &&
                         positionQty.isFinite() && positionQty > 0.0
                     ) { "$symbol exchange position lacks a valid entry price/quantity for audit" }
-                    val confirmedAt = System.currentTimeMillis()
+                    val confirmedAt = clock()
                     matchingIntent.put("campaign_status", "OPEN_PROTECTED")
                         .put("protection_status", "PROTECTED")
                         .put("protection_client_id", confirmedClientId)
@@ -1903,7 +1920,7 @@ internal class NativeFuturesCampaignCoordinator(
                         exit.optString("symbol").equals(symbol, true) &&
                         exit.optString("exchange_status").uppercase(Locale.US) != "EXIT_CONFIRMED"
                 }
-                val nowMs = System.currentTimeMillis()
+                val nowMs = clock()
                 val firstFlatAfterFill = intent.optLong("flat_after_fill_first_seen_at_ms", 0L)
                 val filledCampaignCanNowClose = shouldFinalizeFilledFlatCampaign(
                     lifecycleStatus = status,
@@ -2011,7 +2028,7 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("state", state.name)
                 .put("blocker", lastBlocker)
         } finally {
-            reconciliationFinishedAtMs = System.currentTimeMillis()
+            reconciliationFinishedAtMs = clock()
             reconciliationRunning = false
         }
     }
@@ -2065,6 +2082,11 @@ internal class NativeFuturesCampaignCoordinator(
     fun submitPendingEntry(plan: EntryPlan): JSONObject = synchronized(lock) {
         val currentIntents = intents()
         val isAddition=plan.entryClientId.isNotBlank()
+        val prior=latestEntryIntentIndex(currentIntents,plan.symbol)?.let { currentIntents.optJSONObject(it) }
+        val reentry=plan.reentryOwnerId.isNotBlank() && plan.reentryOwnerId==prior?.optString("client_id") &&
+            williamsNtdReentryEligible(prior,plan.symbol,plan.direction.name,plan.signalBarTimeMs)
+        if(plan.reentryOwnerId.isNotBlank() && (!reentry || isAddition))
+            return@synchronized safePreflightRejection("NTD reentry requires the latest profitable, unconsumed authenticated cycle")
         val primary=(0 until currentIntents.length()).mapNotNull { currentIntents.optJSONObject(it) }
             .singleOrNull { it.optString("intent_role","ENTRY")=="ENTRY" && it.optString("client_id")==plan.entryClientId }
         if ((0 until currentIntents.length()).any { currentIntents.optJSONObject(it)?.optString("client_id")==plan.clientId })
@@ -2221,13 +2243,13 @@ internal class NativeFuturesCampaignCoordinator(
         if (riskBlocker != null) return@synchronized safePreflightRejection(riskBlocker)
 
         if (plan.kind==EntryKind.MARKET) {
-            val reason=williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,System.currentTimeMillis(),
+            val reason=williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
                 plan.referenceClose,preflightAdapter.markPrice(plan.symbol))
             if (reason!=null) return@synchronized safePreflightRejection(reason)
         }
         val intent = JSONObject()
             .put("intent_role", if (isAddition) "ADD_ON" else "ENTRY")
-            .put("entry_client_id",plan.entryClientId)
+            .put("entry_client_id",plan.entryClientId).put("reentry_owner_id",plan.reentryOwnerId)
             .put("strategy_profile",plan.strategyProfile)
             .put("execution_semantics",plan.executionSemantics)
             .put("reference_close",plan.referenceClose)
@@ -2256,13 +2278,14 @@ internal class NativeFuturesCampaignCoordinator(
             .put("risk_estimated_all_in_loss_usdt", riskCheck.estimatedAllInLossUsdt)
             .put("risk_estimated_all_in_pct", riskCheck.estimatedAllInRiskPct)
             .put("risk_initial_margin_estimate_usdt", riskCheck.initialMarginUsdt)
-            .put("risk_assessed_at_ms", System.currentTimeMillis())
+            .put("risk_assessed_at_ms", clock())
             .put("client_id", plan.clientId)
             .put("exchange_status", "SUBMISSION_UNKNOWN")
             .put("order_status", "SUBMISSION_UNKNOWN")
             .put("campaign_status", "ENTRY_PENDING")
             .put("protection_status", "NOT_SUBMITTED")
-            .put("created_at_ms", System.currentTimeMillis())
+            .put("created_at_ms", clock())
+        if(reentry) prior!!.put("ntd_reentry_consumed_by",plan.clientId)
         if(isAddition && plan.strategyProfile==williamsCourseProfile) {
             val setup=runCatching { JSONObject(plan.setupContext) }.getOrDefault(JSONObject())
             if(setup.has("course_target_stage") && setup.has("course_target_quantity")) {
@@ -2292,12 +2315,12 @@ internal class NativeFuturesCampaignCoordinator(
                 "FUTURES_LEVERAGE_NOTIONAL_CAP: confirmed exchange limit is below planned exposure"
             }
             intent.put("confirmed_leverage", leverageConfirmation.getInt("leverage"))
-                .put("leverage_confirmed_at_ms", System.currentTimeMillis())
+                .put("leverage_confirmed_at_ms", clock())
             saveIntents(currentIntents)
             orderSubmissionAttempted = true
             val result = when (plan.kind) {
                 EntryKind.MARKET -> {
-                    check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,System.currentTimeMillis(),
+                    check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
                         plan.referenceClose,adapter.markPrice(plan.symbol))==null) { "NTD close-event expired or moved before mutation" }
                     adapter.newOrder(plan.symbol,if (plan.direction==Direction.LONG) "BUY" else "SELL",plan.quantity,false,plan.clientId)
                 }
@@ -2326,7 +2349,7 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("order_status", orderStatus)
                 .put("campaign_status", "ENTRY_PENDING")
                 .put("exchange_order_id", result.optString("orderId", result.optString("algoId", "")))
-                .put("submitted_at_ms", System.currentTimeMillis())
+                .put("submitted_at_ms", clock())
                 .put("executed_qty",result.optString("executedQty","0"))
             saveIntents(currentIntents)
             lastBlocker = "entry pending exchange fill and confirmed protective stop"
@@ -2366,7 +2389,7 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("order_status", "SUBMISSION_UNKNOWN")
                 .put("campaign_status", "ENTRY_PENDING")
                 .put("error", failure.message ?: failure.javaClass.simpleName)
-                .put("failed_at_ms", System.currentTimeMillis())
+                .put("failed_at_ms", clock())
             saveIntents(currentIntents)
             state = State.RECONCILE_REQUIRED
             lastBlocker = "ambiguous_entry_submission_reconcile_before_any_retry"
@@ -2443,7 +2466,7 @@ internal class NativeFuturesCampaignCoordinator(
                     possiblePartialFill -> "FILL_CONFIRMATION_PENDING"
                     else -> "CLOSED_OR_STOPPED"
                 }
-                val nowMs = System.currentTimeMillis()
+                val nowMs = clock()
                 intent.put("exchange_status", exchangeStatus)
                     .put("order_status", exchangeStatus)
                     .put("campaign_status", campaignStatus)
@@ -2499,7 +2522,7 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("exchange_status", "CANCEL_SUBMISSION_UNKNOWN")
                     .put("order_status", "CANCEL_SUBMISSION_UNKNOWN")
                     .put("cancel_reason", reason)
-                    .put("cancel_attempt_at_ms", System.currentTimeMillis())
+                    .put("cancel_attempt_at_ms", clock())
                 saveIntents(all)
                 val result = when (intent.optString("kind")) {
                     EntryKind.LIMIT.name, EntryKind.MARKET.name -> adapter.cancelOrder(symbol, clientId)
@@ -2643,7 +2666,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("protective_stop", proposed.stripTrailingZeros().toPlainString())
             .put("protection_client_id", clientAlgoId)
             .put("protection_status", "SUBMISSION_UNKNOWN")
-            .put("trail_attempt_at_ms", System.currentTimeMillis())
+            .put("trail_attempt_at_ms", clock())
         saveIntents(persisted)
 
         try {
@@ -2669,7 +2692,7 @@ internal class NativeFuturesCampaignCoordinator(
             }
             intent.put("protection_status", "PROTECTED")
                 .put("protective_stop", finalStop.optString("triggerPrice", proposed.toPlainString()))
-                .put("trailing_at_ms", System.currentTimeMillis())
+                .put("trailing_at_ms", clock())
             intent.remove("previous_protection_client_id")
             intent.remove("previous_protective_stop")
             saveIntents(persisted)
@@ -2874,7 +2897,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("reason", reason).put("partial_reduction",partialReduction)
             .put("position_before_qty",positionBefore.toPlainString())
             .put("exchange_status", "SUBMISSION_UNKNOWN")
-            .put("created_at_ms", System.currentTimeMillis())
+            .put("created_at_ms", clock())
         intents.put(exitIntent)
         managedEntry?.put("campaign_status", "EXIT_PENDING")
         saveIntents(intents)
@@ -2887,7 +2910,7 @@ internal class NativeFuturesCampaignCoordinator(
             exitIntent.put("exchange_order_id", result.optString("orderId", ""))
                 .put("exchange_status", responseStatus)
                 .put("order_status", responseStatus)
-                .put("submitted_at_ms", System.currentTimeMillis())
+                .put("submitted_at_ms", clock())
             saveIntents(intents)
 
             // A successful POST response is not proof of a completed exit. Query the
@@ -2897,7 +2920,7 @@ internal class NativeFuturesCampaignCoordinator(
             exitIntent.put("exchange_order_id", confirmedOrder.optString("orderId", result.optString("orderId", "")))
                 .put("exchange_status", finalOrderStatus)
                 .put("order_status", finalOrderStatus)
-                .put("last_reconciled_ms", System.currentTimeMillis())
+                .put("last_reconciled_ms", clock())
             saveIntents(intents)
             if (finalOrderStatus != "FILLED") {
                 state = if (finalOrderStatus in activeStatuses) State.EXIT_PENDING else State.RECONCILE_REQUIRED
@@ -2915,7 +2938,7 @@ internal class NativeFuturesCampaignCoordinator(
                 check(signed.abs().compareTo(expected)==0 && (signed.signum()>0)==(direction==Direction.LONG)) { "Course trim remainder does not match its confirmed fill" }
                 check(confirmedOrder.getString("executedQty").toBigDecimal().compareTo(quantity.toBigDecimal())==0) { "Course trim fill is incomplete" }
                 exitIntent.put("exchange_status","EXIT_CONFIRMED").put("order_status","FILLED")
-                    .put("executed_qty",quantity).put("reduction_confirmed_at_ms",System.currentTimeMillis())
+                    .put("executed_qty",quantity).put("reduction_confirmed_at_ms",clock())
                 managedEntry!!.put("campaign_status","OPEN_PROTECTED").put("confirmed_position_qty",expected.toPlainString())
                 saveIntents(intents)
                 state=State.RECONCILE_REQUIRED
@@ -2937,7 +2960,7 @@ internal class NativeFuturesCampaignCoordinator(
                 return@synchronized JSONObject().put("ok", false).put("state", state.name)
                     .put("blocker", lastBlocker).put("order", confirmedOrder)
             }
-            val confirmedFlatAt = System.currentTimeMillis()
+            val confirmedFlatAt = clock()
             exitIntent.put("exchange_status", "EXIT_CONFIRMED")
                 .put("order_status", "FILLED")
                 .put("confirmed_flat_at_ms", confirmedFlatAt)
@@ -3042,7 +3065,7 @@ internal class NativeFuturesCampaignCoordinator(
         val observedBlocker = if (reconciliationActive) "exchange_reconciliation_in_progress" else lastBlocker
         val persisted = intents()
         val pendingDetails = JSONArray()
-        val now = System.currentTimeMillis()
+        val now = clock()
         for (i in 0 until persisted.length()) {
             val item = persisted.optJSONObject(i) ?: continue
             val lifecycle = campaignLifecycleStatus(item)
@@ -3136,9 +3159,9 @@ internal class NativeFuturesCampaignCoordinator(
             "Symbol is outside the approved Futures universe"
         }
         require(plan.strategyProfile in williamsEditionProfiles) { "Unknown Williams edition" }
-        require(plan.entryClientId.isNotBlank() || plan.strategyProfile!=williamsNtdProfile ||
+        require(plan.entryClientId.isNotBlank() || plan.reentryOwnerId.isNotBlank() || plan.strategyProfile!=williamsNtdProfile ||
             plan.signalType.removePrefix("SHORT_")=="FRACTAL") { "NTD cycle must start with an external fractal" }
-        require(plan.kind!=EntryKind.MARKET || (plan.entryClientId.isNotBlank() &&
+        require(plan.kind!=EntryKind.MARKET || ((plan.entryClientId.isNotBlank() || plan.reentryOwnerId.isNotBlank()) &&
             plan.strategyProfile==williamsNtdProfile && plan.signalType.removePrefix("SHORT_")=="ZONE_ADD_ON" &&
             plan.executionSemantics=="MARKET_ON_CLOSE")) { "Market exposure is only a verified NTD zone addition" }
         require(plan.quantity.toBigDecimalOrNull()?.signum() == 1) { "Quantity must be positive" }

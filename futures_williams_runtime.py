@@ -1238,9 +1238,16 @@ class FuturesWilliamsRuntime:
             pending = campaign.tags.get("pending_signal")
             price_row = self.client.ticker_price(intent.symbol)
             current_price = float(price_row.get("price", 0) or 0)
-            reason = _pending_entry_preflight_reason(
-                pending, intent, current_price, int(time.time() * 1000)
-            )
+            if intent.order_type=="MARKET":
+                payload=(pending or {}).get("signal",{})
+                parent=campaign.tags.get("ntd_reentry_owner_id","")
+                if (campaign.tags.get("strategy_profile")!=NTD or payload.get("signal_type")!="ZONE_ADD_ON" or
+                    not parent or self.db.state_get("ntd_reentry_consumed:"+parent)!=campaign.campaign_id):
+                    raise RuntimeError("NTD market reentry has no owned profitable cycle")
+                reason=market_on_close_reason(int(payload.get("signal_bar_time_ms",0)),FRAME_MS.get(payload.get("timeframe"),0),
+                    int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)),float(payload.get("trigger_price",0)),current_price)
+            else:
+                reason = _pending_entry_preflight_reason(pending, intent, current_price, int(time.time() * 1000))
             if reason:
                 raise RuntimeError(f"{intent.symbol}: entry preflight blocked: {reason}")
         elif purpose == "CAMPAIGN_ADD_ON":
@@ -1379,6 +1386,48 @@ class FuturesWilliamsRuntime:
         # Rounding down must also reduce the reported margin reservation.
         return qty, risk_quote, qty * trigger
 
+    def _ntd_reentry_source(self,signal):
+        row=self.db.conn.execute("SELECT campaign_id FROM campaigns WHERE symbol=? ORDER BY created_at DESC,rowid DESC LIMIT 1",(signal.symbol,)).fetchone()
+        previous=self.engine.load_campaign(row["campaign_id"]) if row else None
+        if (previous is None or previous.state!=CampaignState.CLOSED or previous.side!=signal.side or
+            previous.tags.get("strategy_profile")!=NTD or self.db.state_get("ntd_reentry_consumed:"+previous.campaign_id)):
+            return None
+        proof=previous.tags.get("verified_trade_result",{})
+        if (proof.get("source")!="BINANCE_USER_TRADES" or not proof.get("fees_known") or
+            not math.isfinite(float(proof.get("net_pnl",float("nan")))) or float(proof["net_pnl"])<=0 or
+            signal.signal_bar_time_ms<=int(proof.get("closed_at",0))):return None
+        return previous
+
+    def _record_ntd_trade_result(self,campaign):
+        if campaign.tags.get("strategy_profile")!=NTD:return False
+        try:
+            owned={}
+            for row in self.db.conn.execute("SELECT * FROM campaign_orders WHERE campaign_id=? ORDER BY id",(campaign.campaign_id,)):
+                if row["order_type"] in {"MARKET","STOP_MARKET"}:owned[row["client_order_id"]]=dict(row)
+            seen=set();opened=closed=net=0.0
+            for cid,row in owned.items():
+                if not cid:continue
+                order=self.client.get_order(campaign.symbol,orig_client_order_id=cid,conditional=row["order_type"]=="STOP_MARKET")
+                qty=float(order.get("executedQty",0) or 0)
+                if qty<=0:continue
+                fills=self.client.my_trades(campaign.symbol,order_id=order.get("orderId"),limit=1000)
+                if len(fills)>=1000 or not math.isclose(sum(float(f["qty"]) for f in fills),qty,rel_tol=1e-12,abs_tol=1e-12):return False
+                for fill in fills:
+                    key=str(fill["id"])
+                    if key in seen:continue
+                    seen.add(key)
+                    amount=float(fill["qty"]);fee=float(fill["commission"]);pnl=float(fill["realizedPnl"])
+                    if not all(math.isfinite(v) for v in (amount,fee,pnl)) or amount<=0 or fee<0 or fill["commissionAsset"]!="USDT":return False
+                    if order["side"]==campaign.side:opened+=amount
+                    else:closed+=amount
+                    net+=pnl-fee
+            if len(seen)<2 or opened<=0 or not math.isclose(opened,closed,rel_tol=1e-12,abs_tol=1e-12):return False
+            campaign.tags["verified_trade_result"]={"source":"BINANCE_USER_TRADES","fees_known":True,"net_pnl":net,
+                "closed_at":int(time.time()*1000),"fill_count":len(seen)}
+            self.db.save_campaign(campaign);return True
+        except Exception:
+            return False  # Incomplete accounting never grants a re-entry cycle.
+
     @serialized_campaign_operation
     def _arm_entry(self, candidate: FuturesCandidate):
         self._require_new_risk_controls()
@@ -1386,11 +1435,14 @@ class FuturesWilliamsRuntime:
             self.db.log_event("INFO", "futures_dry_run_entry_blocked", "DRY_RUN=true; conditional entry not submitted", {"symbol": candidate.symbol})
             return {"state": "DRY_RUN_BLOCKED", "symbol": candidate.symbol}
         signal = candidate.signal
-        if signal.execution_semantics != "STOP_ENTRY":
+        reentry=self._ntd_reentry_source(signal) if signal.strategy_profile==NTD else None
+        market_close=bool(reentry and signal.signal_type==SignalType.ZONE_ADD_ON and signal.execution_semantics=="MARKET_ON_CLOSE")
+        if signal.execution_semantics != "STOP_ENTRY" and not market_close:
             raise RuntimeError("Unsupported signal execution semantics: " + signal.execution_semantics)
+        if reentry:signal=__import__("dataclasses").replace(signal,role=SignalRole.ENTRY)
         if signal.role!=SignalRole.ENTRY or _signal_profile_entry_block_reason(signal.strategy_profile):
             raise RuntimeError("Invalid edition-specific initiating signal")
-        if signal.strategy_profile==NTD and signal.signal_type!=SignalType.FRACTAL:
+        if signal.strategy_profile==NTD and signal.signal_type!=SignalType.FRACTAL and not reentry:
             raise RuntimeError("NTD must initiate with its first external fractal")
         if signal.strategy_profile==COURSE and signal.signal_type not in {SignalType.COURSE_HUMP,SignalType.COURSE_THUMB,SignalType.COURSE_SQUAT}:
             raise RuntimeError("Course requires a Course initiating formation")
@@ -1400,7 +1452,6 @@ class FuturesWilliamsRuntime:
                 candidate.side, signal.signal_bar_time_ms, signal.signal_type.value)
             if not verified["allowed"]:
                 raise RuntimeError("CORRECTION_CONTEXT_INVALIDATED: " + verified["reason"])
-        self._ensure_symbol_config(symbol)
         trigger = self._normalize_price(
             symbol,
             signal.trigger_price,
@@ -1437,9 +1488,15 @@ class FuturesWilliamsRuntime:
         current = float(self.client.ticker_price(symbol).get("price", 0) or 0)
         if current <= 0:
             raise RuntimeError("invalid current price")
-        if signal.side == "BUY" and current >= trigger:
+        if market_close:
+            reason=market_on_close_reason(signal.signal_bar_time_ms,FRAME_MS.get(signal.timeframe,0),
+                int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)),signal.trigger_price,current)
+            if reason:raise RuntimeError(reason)
+            trigger=current
+        self._ensure_symbol_config(symbol)
+        if not market_close and signal.side == "BUY" and current >= trigger:
             raise RuntimeError("LONG trigger already crossed")
-        if signal.side == "SELL" and current <= trigger:
+        if not market_close and signal.side == "SELL" and current <= trigger:
             raise RuntimeError("SHORT trigger already crossed")
 
         entry_ok, entry_reason = self._daily_entry_guard()
@@ -1458,6 +1515,10 @@ class FuturesWilliamsRuntime:
         )
         self._validate_entry_leverage(symbol, qty, trigger, stop, signal.side)
         campaign = self.engine.create_campaign(signal, initial_risk_pct=initial_risk_pct)
+        if reentry:
+            if not self.db.try_claim_state("ntd_reentry_consumed:"+reentry.campaign_id,campaign.campaign_id):
+                raise RuntimeError("NTD profit cycle was already consumed")
+            campaign.tags["ntd_reentry_owner_id"]=reentry.campaign_id
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
         campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
@@ -1472,7 +1533,7 @@ class FuturesWilliamsRuntime:
             if context and context["phase"] in COURSE_TARGETS:
                 campaign.tags["course_plan"]={"stage":context["phase"],"origin_at":context["origin_at"],
                     "unit_quantity":qty/COURSE_TARGETS[context["phase"]],"unit_is_actual":False,"policy":"COURSE_BOOK_EXAMPLE_RATIOS_RISK_CAPPED"}
-        campaign.tags["pending_order_type"] = "STOP_MARKET"
+        campaign.tags["pending_order_type"] = "MARKET" if market_close else "STOP_MARKET"
         campaign.tags["correction_context"] = dict(candidate.correction_context)
         campaign.pending_risk_quote = risk_quote
         campaign.capital_reserved_quote = notional / self.config.leverage_for(symbol)
@@ -1512,7 +1573,7 @@ class FuturesWilliamsRuntime:
         intent = OrderIntent.new(
             symbol,
             signal.side,
-            "STOP_MARKET",
+            "MARKET" if market_close else "STOP_MARKET",
             required_context_versions={},
             hypothesis_id=f"WILLIAMS_{signal.signal_type.value}",
             invalidation_level=stop,
@@ -1531,9 +1592,9 @@ class FuturesWilliamsRuntime:
                 lambda: self.client.order_safe(
                     symbol,
                     signal.side,
-                    "STOP_MARKET",
+                    "MARKET" if market_close else "STOP_MARKET",
                     quantity=self.client.decimal_format(qty),
-                    stop_price=self.client.decimal_format(trigger),
+                    stop_price=None if market_close else self.client.decimal_format(trigger),
                     new_client_order_id=cid,
                 ),
                 lambda _snapshot: None,
@@ -1544,7 +1605,7 @@ class FuturesWilliamsRuntime:
                     client_order_id=cid,
                     symbol=symbol,
                     side=signal.side,
-                    order_type="STOP_MARKET",
+                    order_type="MARKET" if market_close else "STOP_MARKET",
                     purpose="ENTRY",
                     status=str(result.get("status", "NEW")),
                     stop_price=trigger,
@@ -2138,6 +2199,7 @@ class FuturesWilliamsRuntime:
             self.db.state_delete(f"exit_client_order_id:{symbol}")
             self.db.state_delete(f"entry_client_order_id:{symbol}")
             self._set_state(symbol, "FLAT")
+            self._record_ntd_trade_result(campaign)
             return {
                 "state": "CLOSED",
                 "symbol": symbol,
@@ -2770,6 +2832,7 @@ class FuturesWilliamsRuntime:
         self.db.save_campaign(campaign)
         self.db.state_delete(f"entry_client_order_id:{campaign.symbol}")
         self._set_state(campaign.symbol, "FLAT")
+        self._record_ntd_trade_result(campaign)
         return True
 
     def _cleanup_campaign_protection(self, campaign):
@@ -3173,7 +3236,12 @@ class FuturesWilliamsRuntime:
         for candidate in candidates:
             if candidate.symbol in active_symbols:
                 continue
-            if candidate.signal.role != SignalRole.ENTRY:
+            if candidate.signal.strategy_profile==NTD and self._ntd_reentry_source(candidate.signal):
+                valid=[s for s in candidate.all_signals if self._ntd_reentry_source(s) and (
+                    s.execution_semantics=="STOP_ENTRY" or market_on_close_reason(s.signal_bar_time_ms,FRAME_MS.get(s.timeframe,0),
+                    int(time.time()*1000),s.trigger_price,float(self.client.ticker_price(s.symbol).get("price",0) or 0)) is None)]
+                if valid:candidate=__import__("dataclasses").replace(candidate,signal=min(valid,key=lambda s:s.signal_bar_time_ms))
+            if candidate.signal.role != SignalRole.ENTRY and not (candidate.signal.strategy_profile==NTD and self._ntd_reentry_source(candidate.signal)):
                 continue
             if len(self.open_positions()) >= self.max_open_positions:
                 break

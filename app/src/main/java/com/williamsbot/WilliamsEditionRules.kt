@@ -275,3 +275,14 @@ internal fun williamsNtdManagementPlan(side:String,bars:List<WilliamsWaveBar>,te
     }
     return WilliamsNtdManagement(s,reason)
 }
+
+/** NTD PDF118: after a proved profitable cycle, any dimension may re-enter.
+ * Fees and authenticated fills must be known; a price estimate is insufficient. */
+internal fun williamsNtdReentryEligible(owner:JSONObject?,symbol:String,direction:String,signalAt:Long):Boolean =
+    owner!=null && owner.optString("symbol")==symbol && owner.optString("direction")==direction &&
+    owner.optString("strategy_profile")==williamsNtdProfile && campaignLifecycleStatus(owner)=="CLOSED_OR_STOPPED" &&
+    owner.optString("net_result_source")=="BINANCE_USER_TRADES" && owner.optBoolean("net_result_fees_known",false) &&
+    owner.optDouble("verified_net_pnl_usdt",Double.NaN).let { it.isFinite() && it>0 } &&
+    owner.optString("ntd_reentry_consumed_by").isBlank() && owner.optLong("closed_observed_at_ms",0L).let {
+        it>0L && signalAt>it
+    }
