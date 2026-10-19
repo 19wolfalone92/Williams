@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 import re
+from math import isfinite
 from threading import RLock
 
 
@@ -46,7 +47,11 @@ def signal_facts(signals,bars,frame_ms):
     for s in signals:
         i=next((int(s.setup_context[k]) for k in ('formation_index','base_index','start_index','thumb_index') if k in s.setup_context),s.source_candle_index)
         formation=bars[i].t if 0<=i<len(bars) else s.signal_bar_time_ms
-        facts.append(dict(signal_id=s.signal_id,family=s.signal_type.value,type=s.signal_type.value,
+        def candle(bar):return [bar.t,bar.o,bar.h,bar.l,bar.c,bar.v] if bar is not None else None
+        confirmation=next((b for b in bars if b.t==s.signal_bar_time_ms),None)
+        facts.append(dict(formation_candle=candle(bars[i] if 0<=i<len(bars) else confirmation),
+            confirmation_candle=candle(confirmation),teeth_at_detection=s.teeth_at_detection if isfinite(s.teeth_at_detection) else None,
+            signal_id=s.signal_id,family=s.signal_type.value,type=s.signal_type.value,
             direction='LONG' if s.side=='BUY' else 'SHORT',role=s.role.value,
             signal_bar_time_ms=s.signal_bar_time_ms,known_at_ms=s.signal_bar_time_ms+frame_ms,
             formation_at_ms=formation,formation_time_basis='SOURCE_PIVOT_OR_BASE' if formation!=s.signal_bar_time_ms else 'SIGNAL_BAR',

@@ -82,6 +82,7 @@ internal class WilliamsSignalJournal(private val store:FuturesCampaignStateStore
             JSONObject(s.toString()).put("state",williamsSignalLifecycle(s,owner,now,data.optLong("snapshot_at_ms"),s.optLong("last_seen_at_ms")==data.optLong("snapshot_at_ms")))
                 .put("can_place_orders",false).apply { if(owner!=null) {
                     put("client_id",owner.optString("client_id")).put("order_status",owner.optString("order_status"))
+                    put("cancel_reason",owner.optString("cancel_reason")).put("exchange_observed_at_ms",maxOf(owner.optLong("last_reconciled_ms"),owner.optLong("created_at_ms")))
                     put("trigger",owner.optString("entry_price").toDoubleOrNull() ?: s.optDouble("trigger"))
                     put("protective_stop",owner.optString("protective_stop").toDoubleOrNull() ?: s.optDouble("protective_stop"))
                 } }
@@ -92,7 +93,7 @@ internal class WilliamsSignalJournal(private val store:FuturesCampaignStateStore
     fun orders(intents:JSONArray,now:Long) = synchronized(lock) {
         rows(intents).map { it.optString("symbol") }.distinct().filter { it.isNotBlank() }.forEach { symbol ->
             val data=load(symbol);rows(view(symbol,intents,now).getJSONArray("signals")).filter { it.has("client_id") }.forEach {
-                event(data,it,it.getString("state"),"EXCHANGE",it.optString("order_status"),now)
+                event(data,it,it.getString("state"),"EXCHANGE",it.optString("cancel_reason").ifBlank { it.optString("order_status") },now)
             };save(symbol,data)
         }
     }

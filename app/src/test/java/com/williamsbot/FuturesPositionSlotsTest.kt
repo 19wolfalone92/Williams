@@ -118,12 +118,15 @@ class FuturesPositionSlotsTest {
         }.timeInMillis
 
     @Test
-    fun entrySessionIsUtcEightToTwentyAndDoesNotDisablePositionManagement() {
-        assertFalse(isWithinWilliamsEntrySessionUtc(0L))
-        assertFalse(isWithinWilliamsEntrySessionUtc(utcMillis(7, 59)))
-        assertTrue(isWithinWilliamsEntrySessionUtc(utcMillis(8, 0)))
-        assertTrue(isWithinWilliamsEntrySessionUtc(utcMillis(19, 59)))
-        assertFalse(isWithinWilliamsEntrySessionUtc(utcMillis(20, 0)))
+    fun configuredEntryWindowIsUtcAndDefaultPolicyAllowsAllHours() {
+        val policy=WilliamsEntryTimePolicy("UTC_WINDOW","08:00","20:00")
+        assertTrue(WilliamsEntryTimePolicy().allows(utcMillis(1,0)))
+        assertTrue(WilliamsEntryTimePolicy().allows(utcMillis(23,0)))
+        assertFalse(policy.allows(0L))
+        assertFalse(policy.allows(utcMillis(7, 59)))
+        assertTrue(policy.allows(utcMillis(8, 0)))
+        assertTrue(policy.allows(utcMillis(19, 59)))
+        assertFalse(policy.allows(utcMillis(20, 0)))
         // The helper is exclusively an entry gate; position management is called
         // independently by the scanner and remains outside this time predicate.
     }

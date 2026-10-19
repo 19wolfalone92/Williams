@@ -63,7 +63,11 @@ class WilliamsEntryLifecycleTest {
         assertEquals(101.0,requireNotNull(chart(JSONArray().put(owner)).trigger),0.0)
         assertNull(chart(JSONArray().put(owner),now+120_001).trigger)
         assertEquals("TRIGGER_CROSSED_AWAITING_EXCHANGE",chart(JSONArray().put(owner),price=102.0).state)
-        owner.put("order_status","CANCELED");assertNull(chart(JSONArray().put(owner)).trigger)
+        owner.put("order_status","CANCELED").put("cancel_reason","OUTSIDE_CONFIGURED_ENTRY_TIME");assertNull(chart(JSONArray().put(owner)).trigger)
+        journal.orders(JSONArray().put(owner),now+1)
+        val cancelled=journal.view("BTCUSDT",JSONArray().put(owner),now+1).getJSONArray("events")
+        val last=cancelled.getJSONObject(cancelled.length()-1)
+        assertEquals("OUTSIDE_CONFIGURED_ENTRY_TIME",last.getString("reason"));assertEquals("ENTRY_TIME",last.getString("reason_category"))
         journal.observe("BTCUSDT",JSONArray(),now+1,WilliamsEntryTimePolicy())
         assertEquals("CANCELLED",journal.view("BTCUSDT",JSONArray().put(owner),now+1).getJSONArray("signals").getJSONObject(0).getString("state"))
     }

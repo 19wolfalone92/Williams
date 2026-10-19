@@ -65,3 +65,18 @@ def test_final_submission_gate_blocks_entry_and_addition_but_allows_cancel(monke
             runtime._futures_pre_submit_checks(SimpleNamespace(campaign_id='c',symbol='BTCUSDT',side='BUY',purpose=purpose))
     runtime.client.get_order=lambda *a,**kw:dict(clientOrderId='cid',symbol='BTCUSDT',side='BUY')
     runtime._futures_pre_submit_checks(SimpleNamespace(campaign_id='c',symbol='BTCUSDT',side='BUY',purpose='CAMPAIGN_CANCEL_ENTRY',client_order_id='cid'))
+
+
+def test_signal_fact_keeps_pivot_ohlc_separate_from_confirmation():
+    from campaign_model import SignalSpec,SignalType,SignalRole
+    from williams_wave_hierarchy import WaveBar
+    from williams_signal_lifecycle import signal_facts
+    bars=[WaveBar((n+1)*3_600_000,100,110+n,90,100+n,50+n) for n in range(5)]
+    spec=SignalSpec('fractal-1','BTCUSDT','BUY',SignalType.FRACTAL,SignalRole.ENTRY,'1h',bars[3].t,112,89,
+        source_candle_index=1,teeth_at_detection=float('nan'))
+    fact=signal_facts([spec],bars,3_600_000)[0]
+    assert fact['formation_candle']==[bars[1].t,100,111,90,101,51]
+    assert fact['confirmation_candle']==[bars[3].t,100,113,90,103,53]
+    assert fact['known_at_ms']==bars[3].t+3_600_000 and fact['formation_at_ms']==bars[1].t
+    assert fact['teeth_at_detection'] is None
+    json.dumps(fact,allow_nan=False)
