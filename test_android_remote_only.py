@@ -378,25 +378,30 @@ def test_android_execution_gate_requires_coordinator_and_stream_reconciliation()
     assert "if (shouldReconnectFuturesUserStream(event))" in user_stream
 
 
-def test_android_h1_context_requires_m15_fractal_execution_without_an_independent_direction():
+def test_android_book_native_h1_entry_does_not_require_m15_fractal():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    book = _read(ANDROID / "java/com/williamsbot/WilliamsBookH1EntryPolicy.kt")
     entry = runtime.split("private fun submitNativeFuturesCampaignEntry(", 1)[1].split(
         "private fun performCampaignScan(", 1
     )[0]
-    assert "M15_EXECUTION_BLOCKED" in entry
-    assert "latest closed M15 candle is stale" in entry
-    assert "submitM15Bull" not in entry
-    assert "submitM15Bear" not in entry
-    assert "m15Confirmed" not in entry
-    assert "M15_CONFIRMATION_BLOCKED" not in entry
-    # H1 supplies the approved directional parent. The exchange trigger and
-    # structural stop must come from a confirmed M15 fractal and be revalidated.
-    assert "val mtfParent = h1EntryParent(signal)" in entry
-    assert "val reference=junior.trigger" in entry
-    assert "normalizePrice(junior.stop" in entry
-    assert "M15_FRACTAL_REVALIDATION_FAILED" in entry
-    assert "M15_TRIGGER_ALREADY_CROSSED" in entry
-    assert "williamsMtfProofBlocker(plan.setupContext" in entry
+    # Source-book signals (WM1, WM2, WM3, NTD, Course) set the exact H1 trigger
+    # and structural protection. A newly detected M15 pivot cannot authorize it.
+    assert "val reference=signal.triggerPrice" in entry
+    assert "normalizePrice(signal.protectivePrice" in entry
+    assert "williamsBookH1Proof(" in entry
+    assert "williamsBookH1TriggerConsumed(" in entry
+    assert "williamsBookFractalTeethBlocker(" in entry
+    assert "H1_BOOK_PROOF_INVALID_BEFORE_SUBMISSION" in entry
+    assert "M15_EXECUTION_BLOCKED" not in entry
+    assert "val reference=junior.trigger" not in entry
+    assert "m15EntryDecision(symbol,mtfParent" not in entry
+    assert "coordinator.requireM15FractalForAutomatedEntries = false" in runtime
+    assert "coordinator.requireBookH1ProofForAutomatedEntries = true" in runtime
+    assert "coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }" in runtime
+    assert "if(requireBookH1ProofForAutomatedEntries && !isAddition" in coordinator
+    assert "val verifier=bookH1EntryVerifier ?: error" in coordinator
+    assert '"BOOK_NATIVE_H1_TRIGGER"' in book
     assert "val submitMark = futuresMarketData.markPrice(symbol)" in entry
     assert "futuresCampaignCoordinator.submitPendingEntry(plan)" in entry
 
