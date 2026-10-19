@@ -148,6 +148,9 @@ def armed_runtime(monkeypatch, tmp_path, request):
         protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000,strategy_profile=profile)
     candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
     armed = bot._arm_entry(candidate)
+    trace=bot.db.conn.execute("SELECT raw_json FROM events WHERE event='decision_trace_execution' ORDER BY id DESC LIMIT 1").fetchone()
+    assert trace and '"stage": "_arm_entry"' in trace[0]
+    assert "test-secret" not in trace[0]
     bot.preflight_report = {"ready": True}
     bot.recovered = True
     try:

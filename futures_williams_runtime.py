@@ -39,6 +39,7 @@ from williams_signals import (
     extract_long_signal_specs,
     extract_short_signal_specs,
 )
+from williams_decision_trace import build_decision_trace
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed
 from williams_course_campaign import course_active_context,course_next_stage,TARGETS as COURSE_TARGETS
 from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,unified_direction_conflict,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan,opposing_close_event_triggered
@@ -87,7 +88,13 @@ def serialized_campaign_operation(method):
     @wraps(method)
     def locked(self, *args, **kwargs):
         with self.execution_barrier.context_cache.execution_lock:
-            return method(self, *args, **kwargs)
+            try:
+                result=method(self, *args, **kwargs)
+            except Exception as failure:
+                self._record_execution_decision(method.__name__,args,None,failure)
+                raise
+            self._record_execution_decision(method.__name__,args,result,None)
+            return result
     return locked
 
 
@@ -213,6 +220,7 @@ class FuturesWilliamsScanner:
             client, base_interval=self.interval, intervals=[self.interval]
         )
         self.latest_directional_view: dict[str, dict] = {}
+        self.decision_traces: dict[str,dict] = {}
         self.wave_reports: dict[str, WaveHierarchy] = {}
         # Uncoupled edition-specific NTD evidence, not executable TC2 signals.
         self.latest_ntd_research: dict[str, dict] = {}
@@ -454,6 +462,14 @@ class FuturesWilliamsScanner:
         else:
             long_specs=extract_profile_signals(symbol,ind,profile=profile,side="LONG",timeframe=self.interval,tick_size=tick)
             short_specs=extract_profile_signals(symbol,ind,profile=profile,side="SHORT",timeframe=self.interval,tick_size=tick)
+        raw_signals=long_specs+short_specs
+        trace_bars=wave_bars_from_dataframe(ind) if {"open","high","low","close","volume"}.issubset(ind.columns) else []
+        hierarchy=self.wave_hierarchy(symbol,frame)
+        def last_value(name):
+            col=next((n for n in (name+"_current",name+"_shifted",name) if n in ind),None)
+            return float(ind[col].iloc[-1]) if col else float("nan")
+        self.decision_traces[symbol]=build_decision_trace(symbol,profile,trace_bars,int(time.time()*1000),
+            {name:last_value(name) for name in ("ao","ac","jaw","teeth","lips")},raw_signals,hierarchy.to_dict())
         self.last_signal_profile_error = None
         long_htf, short_htf = self._htf(symbol)
         # Rank only existing, valid Williams triggers. Divergence/wave count
@@ -590,6 +606,7 @@ class FuturesWilliamsScanner:
             "symbols": evaluated,
             "failures": failures,
             "directional_context": dict(self.latest_directional_view),
+            "decision_traces":dict(self.decision_traces),
             "wave_hierarchy": {s: r.to_dict() for s,r in self.wave_reports.items()},
         }
         return result
@@ -1416,6 +1433,21 @@ class FuturesWilliamsRuntime:
             self._set_state(campaign.symbol,"RECONCILE_REQUIRED")
         self.db.save_campaign(campaign)
         return not reason
+
+    def _record_execution_decision(self,stage,args,result,failure):
+        if stage not in {"_arm_entry","_arm_add_on","_trail","_exit_market"} or not args:return
+        try:
+            symbol=getattr(args[0],"symbol","")
+            if not symbol:return
+            event={"stage":stage,"observed_at_ms":int(time.time()*1000),"outcome":result,
+                "error_type":type(failure).__name__ if failure else None,
+                "blocker":str(failure)[:1000] if failure else None,"execution_proof":"SEE_DURABLE_CAMPAIGN_AND_EXCHANGE_LEDGER"}
+            import re
+            if event["blocker"]:
+                event["blocker"]=re.sub(r"(?i)(api[_-]?key|api[_-]?secret|signature|X-MBX-APIKEY)([\s=:]+)[^&\s]+",r"\1\2[REDACTED]",event["blocker"])
+            self.db.log_event("WARNING" if failure else "INFO","decision_trace_execution",stage,{"symbol":symbol,"decision":event})
+        except Exception:
+            pass  # Observation failure never turns a financial mutation into a retry.
 
     def _ntd_reentry_source(self,signal):
         row=self.db.conn.execute("SELECT campaign_id FROM campaigns WHERE symbol=? ORDER BY created_at DESC,rowid DESC LIMIT 1",(signal.symbol,)).fetchone()

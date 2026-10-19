@@ -2105,7 +2105,23 @@ internal class NativeFuturesCampaignCoordinator(
             .put("blocker", blocker)
 
     /** Persist the entry request before any account/order mutation. */
-    fun submitPendingEntry(plan: EntryPlan): JSONObject = synchronized(lock) {
+    fun submitPendingEntry(plan: EntryPlan): JSONObject {
+        val result=try { submitPendingEntryLocked(plan) } catch(failure:Exception) {
+            runCatching { recordEntryDecision(plan,JSONObject().put("accepted",false).put("blocker",safeDiagnosticText(failure.message ?: failure.javaClass.simpleName))) }
+            throw failure
+        }
+        runCatching { recordEntryDecision(plan,result) }
+        return result
+    }
+    private fun recordEntryDecision(plan:EntryPlan,result:JSONObject) {
+        val trace=JSONObject().put("stage","EXECUTION_COORDINATOR").put("observed_at_ms",clock())
+            .put("signal_bar_time_ms",plan.signalBarTimeMs).put("client_id",plan.clientId).put("direction",plan.direction.name)
+            .put("strategy_profile",plan.strategyProfile).put("signal_type",plan.signalType)
+            .put("quantity",plan.quantity).put("entry_price",plan.entryPrice).put("protective_stop",plan.protectiveStop)
+            .put("risk_pct",plan.riskPct).put("outcome",result)
+        executionStore.writeState("decision_execution_"+plan.symbol,trace.toString())
+    }
+    private fun submitPendingEntryLocked(plan: EntryPlan): JSONObject = synchronized(lock) {
         val currentIntents = intents()
         val selected=editionSelectionProvider?.invoke()
         if(selected!=null && plan.signalType!="OPERATOR_FORCED_DIRECTION" &&
