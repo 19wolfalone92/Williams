@@ -5237,7 +5237,7 @@ private class NativeEngine(
             // eligible WM3 was confirmed on closed H1 bars. Never reprice an order
             // directly on Binance; cancel its exact client id first.
             if (profile==williamsTc2Profile && pending.optString("intent_role","ENTRY")=="ENTRY" &&
-                positions.none { row -> row.optString("symbol")==symbol &&
+                CockpitDiagnostics.rows(positions).none { row -> row.optString("symbol")==symbol &&
                     (row.optString("positionAmt").toDoubleOrNull() ?: Double.NaN) != 0.0 }) {
                 val now=futuresMarketData.exchangeNowMs()
                 val tick=symbolFilters(symbol).tick
@@ -5279,6 +5279,7 @@ private class NativeEngine(
                         return false
                     }
                     val lock=JSONObject(next.toString()).put("symbol",symbol)
+                        .put("direction",pending.optString("direction"))
                         .put("recorded_at_ms",now).put("old_client_id",oldClientId)
                     check(executionStore.writeState("tc2_fractal_reanchor_$symbol",lock.toString())) {
                         "Cannot durably record target fractal after cancel; no replacement order"
@@ -5687,10 +5688,10 @@ private class NativeEngine(
             allowedSignals.filter { signal ->
                 signal.type in setOf("FRACTAL","SHORT_FRACTAL") &&
                     signal.strategyProfile==williamsTc2Profile &&
-                    reanchorLock.optString("direction",campaignSignalDirection(signal.type))==
+                    reanchorLock.optString("direction")==
                         campaignSignalDirection(signal.type) &&
                     reanchorLock.optString("signal_id")==signal.signalId &&
-                    reanchorLock.optLong("recorded_at_ms") in 1..contextNow &&
+                    reanchorLock.optLong("recorded_at_ms") in 1L..contextNow &&
                     contextNow-reanchorLock.optLong("recorded_at_ms")<=18_000_000L
             }
         } else allowedSignals
