@@ -5233,6 +5233,65 @@ private class NativeEngine(
             var invalidCorrection=false
             var invalidEdition=false
             val profile=pending.optString("strategy_profile",williamsTc2Profile)
+            // Re-anchor a still-unfilled conditional TC2 entry only after a newer
+            // eligible WM3 was confirmed on closed H1 bars. Never reprice an order
+            // directly on Binance; cancel its exact client id first.
+            if (profile==williamsTc2Profile && pending.optString("intent_role","ENTRY")=="ENTRY" &&
+                positions.none { row -> row.optString("symbol")==symbol &&
+                    (row.optString("positionAmt").toDoubleOrNull() ?: Double.NaN) != 0.0 }) {
+                val now=futuresMarketData.exchangeNowMs()
+                val tick=symbolFilters(symbol).tick
+                val bars=fetchCandles(symbol,"1h",220)
+                    .filter { it.t>0L && it.t+3_600_000L<=now }
+                val newFractals=editionCampaignSignals(symbol,bars,"1h",tick,williamsTc2Profile)
+                val next=confirmedBetterFractal(pending,JSONArray().apply {
+                    newFractals.forEach { signal ->
+                        put(JSONObject().put("signal_id",signal.signalId).put("type",signal.type)
+                            .put("role",signal.role).put("strategy_profile",signal.strategyProfile)
+                            .put("execution_semantics",signal.executionSemantics)
+                            .put("signal_bar_time_ms",signal.signalBarTimeMs)
+                            .put("formation_at_ms",signal.formationAtMs)
+                            .put("trigger_price",signal.triggerPrice)
+                            .put("protective_price",signal.protectivePrice))
+                    }
+                },futuresMarketData.markPrice(symbol),tick,now)
+                if(next!=null) {
+                    val oldClientId=pending.optString("client_id")
+                    val cancel=withCampaignMutation(symbol,"TC2_FRACTAL_REANCHOR_CANCEL",allowPaused=true) {
+                        futuresCampaignCoordinator.cancelPendingEntries("NEWER_CONFIRMED_TC2_FRACTAL",symbol)
+                    }
+                    // Require an exact terminal old order, fresh flat exchange
+                    // position, and no unresolved cancellation or partial fill.
+                    val after=futuresCampaignCoordinator.intentsSnapshot()
+                    val prior=(0 until after.length()).mapNotNull { after.optJSONObject(it) }
+                        .singleOrNull { it.optString("client_id")==oldClientId }
+                    val cancelled=cancel.optBoolean("ok") &&
+                        !cancel.optBoolean("positions_require_reconciliation",true) &&
+                        prior!=null &&
+                        exchangeOrderStatus(prior) in ENTRY_ORDER_TERMINAL_STATUSES &&
+                        campaignLifecycleStatus(prior)=="CLOSED_OR_STOPPED"
+                    reconcileRequired=true
+                    check(persistSafetyFlag("reconcile_required",true)) {
+                        "Failed to persist reconciliation latch after fractal cancellation"
+                    }
+                    if(!cancelled) {
+                        lastError="FRACTAL_REANCHOR_CANCEL_UNRESOLVED: $symbol/$oldClientId"
+                        return false
+                    }
+                    val lock=JSONObject(next.toString()).put("symbol",symbol)
+                        .put("recorded_at_ms",now).put("old_client_id",oldClientId)
+                    check(executionStore.writeState("tc2_fractal_reanchor_$symbol",lock.toString())) {
+                        "Cannot durably record target fractal after cancel; no replacement order"
+                    }
+                    runCatching { auditStore.recordCockpitEvent("FRACTAL_REANCHOR",symbol,
+                        pending.optString("direction"),"CANCEL_CONFIRMED",
+                        "old=$oldClientId; new_signal="+next.optString("signal_id")+
+                            "; from="+pending.optString("entry_price")+
+                            "; to="+next.optDouble("trigger_price")+
+                            "; fresh full risk sizing after next exchange reconciliation") }
+                    return false // No second mutation before fresh position reconciliation.
+                }
+            }
             if(profile!=williamsTc2Profile && pending.optString("kind")!="MARKET") {
                 val current=editionCampaignSignals(symbol,fetchCandles(symbol,"1h",220),"1h",symbolFilters(symbol).tick,profile)
                 val expected=pending.optString("entry_price").toDoubleOrNull()
@@ -5620,13 +5679,31 @@ private class NativeEngine(
         // Only a causally contained, validated correction mode may override the
         // project's D1/H4 trend filter. H1 remains the only signal authority.
         val allowedSignals = freshSignals.filter { contextRank(it)>0 }
+        val reanchorLock = executionStore.readState("tc2_fractal_reanchor_$symbol")
+            ?.let { runCatching { JSONObject(it) }.getOrNull() }
+        // A previously confirmed cancellation pins the next attempt to its
+        // exact new fractal. It must never fall back to a stale higher WM1/WM2.
+        val selectableSignals = if (reanchorLock!=null) {
+            allowedSignals.filter { signal ->
+                signal.type in setOf("FRACTAL","SHORT_FRACTAL") &&
+                    signal.strategyProfile==williamsTc2Profile &&
+                    reanchorLock.optString("direction",campaignSignalDirection(signal.type))==
+                        campaignSignalDirection(signal.type) &&
+                    reanchorLock.optString("signal_id")==signal.signalId &&
+                    reanchorLock.optLong("recorded_at_ms") in 1..contextNow &&
+                    contextNow-reanchorLock.optLong("recorded_at_ms")<=18_000_000L
+            }
+        } else allowedSignals
+        if(reanchorLock!=null && selectableSignals.isEmpty()) {
+            return rejectDecision(symbol,"FRACTAL_REANCHOR_TARGET_NOT_CURRENTLY_VALID: no fallback to old level")
+        }
         if(williamsProfile==williamsUnifiedProfile && williamsUnifiedDirectionsConflict(
-                allowedSignals.mapNotNull { campaignSignalDirection(it.type) })) {
+                selectableSignals.mapNotNull { campaignSignalDirection(it.type) })) {
             lastError="WILLIAMS_UNIFIED_DIRECTION_CONFLICT: fresh LONG and SHORT H1 entries disagree for $symbol; no order armed"
             runCatching { auditStore.recordCockpitEvent("SIGNAL_CONFLICT",symbol,detail=lastError.orEmpty()) }
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
-        val signal = allowedSignals.minWithOrNull(
+        val signal = selectableSignals.minWithOrNull(
             compareBy<CampaignSignalN> { it.signalBarTimeMs }
                 .thenByDescending { contextRank(it) }.thenByDescending { nativeRank(it.type) }
         ) ?: run {
@@ -5850,6 +5927,13 @@ private class NativeEngine(
                 stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures submission unresolved")
             }
         } else {
+            // A successfully persisted new Futures intent supersedes the
+            // one-shot re-anchor hint; its own client id remains authoritative.
+            if(reanchorLock!=null && signal.signalId==reanchorLock.optString("signal_id")) {
+                check(executionStore.writeState("tc2_fractal_reanchor_$symbol","")) {
+                    "Failed to clear consumed fractal replacement hint"
+                }
+            }
             // Force the next management pass to reconcile the new client id with
             // Binance before another symbol can be admitted. A fresh POST response
             // alone must not let the scanner skip position/protection reconciliation.
