@@ -5780,7 +5780,26 @@ private class NativeEngine(
         if(reanchorLock!=null && selectableSignals.isEmpty()) {
             return rejectDecision(symbol,"FRACTAL_REANCHOR_TARGET_NOT_CURRENTLY_VALID: no fallback to old level")
         }
-        val baseline = selectableSignals.minWithOrNull(
+        // A still-unproven older WM1 must not starve newer WM2/WM3 or a valid
+        // opposite-side hypothesis. Check optional M15 evidence BEFORE ranking
+        // the H1 signals, then recheck the chosen signal at exchange submission.
+        val needsAnyM15Proof=selectableSignals.any {
+            williamsRequiresM15ReversalProof(it.type,h4Bull,h4Bear)
+        }
+        val selectionM15 = if (needsAnyM15Proof) fetchCandles(symbol,"15m",120).filter {
+            it.t>0L && it.t+900_000L<=contextNow
+        }.map { WilliamsM15Bar(it.t,it.h,it.l,it.c) } else emptyList()
+        val eligibleSignals = selectableSignals.filter { hypothesis ->
+            if(!williamsRequiresM15ReversalProof(hypothesis.type,h4Bull,h4Bear)) true
+            else williamsM15ReversalEvidence(
+                campaignSignalDirection(hypothesis.type).orEmpty(),
+                hypothesis.signalBarTimeMs+3_600_000L,contextNow,symbolFilters(symbol).tick,
+                selectionM15).confirmed
+        }
+        if(selectableSignals.isNotEmpty() && eligibleSignals.isEmpty()) {
+            return rejectDecision(symbol,"M15_WM1_DIRECTIONAL_PROOF_PENDING: no causally confirmed H1 candidate for "+symbol)
+        }
+        val baseline = eligibleSignals.minWithOrNull(
             compareBy<CampaignSignalN> { it.signalBarTimeMs }
                 .thenByDescending { contextRank(it) }.thenByDescending { nativeRank(it.type) }
         ) ?: run {
@@ -5793,7 +5812,7 @@ private class NativeEngine(
         val currentMark=futuresMarketData.markPrice(symbol)
         val nearestFractal = if(reanchorLock==null && baseline.strategyProfile==williamsTc2Profile) {
             val side=campaignSignalDirection(baseline.type)
-            selectableSignals.filter { alt ->
+            eligibleSignals.filter { alt ->
                 alt.strategyProfile==williamsTc2Profile &&
                     alt.type==(if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL") &&
                     alt.role=="ENTRY" && alt.signalBarTimeMs>baseline.signalBarTimeMs &&
