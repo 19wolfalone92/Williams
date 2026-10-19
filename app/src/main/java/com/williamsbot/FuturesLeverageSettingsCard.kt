@@ -37,13 +37,18 @@ internal fun FuturesLeverageSettingsCard(status: Status, onSave: (JSONObject) ->
     }
     // The selector of mutually exclusive books is retired. Changing the
     // runtime selection still requires a flat, reconciled Futures account.
+    val loadedTime=remember(status.entryTimePolicyJson) { runCatching { WilliamsEntryTimePolicy.fromJson(JSONObject(status.entryTimePolicyJson)) }.getOrDefault(WilliamsEntryTimePolicy()) }
+    var timeMode by remember(status.entryTimePolicyJson) { mutableStateOf(loadedTime.mode) }
+    var startUtc by remember(status.entryTimePolicyJson) { mutableStateOf(loadedTime.startUtc) }
+    var endUtc by remember(status.entryTimePolicyJson) { mutableStateOf(loadedTime.endUtc) }
+    val timePolicy=runCatching { WilliamsEntryTimePolicy(timeMode,startUtc,endUtc) }.getOrNull()
     var selectedSymbol by remember { mutableStateOf("BTCUSDT") }
     var symbolsExpanded by remember { mutableStateOf(false) }
     val payload = runCatching {
         FuturesLeverageSettings(
             parseFuturesLeverage(defaultText),
             overrides.filterValues { it.isNotBlank() }.mapValues { parseFuturesLeverage(it.value) }
-        ).toJson().put("strategy_profile",williamsUnifiedProfile)
+        ).toJson().put("strategy_profile",williamsUnifiedProfile).put("entry_time_policy",requireNotNull(timePolicy).toJson())
     }.getOrNull()
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -60,6 +65,17 @@ internal fun FuturesLeverageSettingsCard(status: Status, onSave: (JSONObject) ->
             if(status.strategyProfile!=williamsUnifiedProfile) Text(
                 "Сейчас включён старый профиль. Нажми «Сохранить настройки», чтобы перейти на единую стратегию при безопасном состоянии счёта.",
                 style=MaterialTheme.typography.bodySmall)
+            Text("Время новых входов",style=MaterialTheme.typography.titleSmall)
+            androidx.compose.foundation.layout.Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.FilterChip(selected=timeMode=="ALWAYS",onClick={ timeMode="ALWAYS" },label={ Text("Круглосуточно") })
+                androidx.compose.material3.FilterChip(selected=timeMode=="UTC_WINDOW",onClick={ timeMode="UTC_WINDOW" },label={ Text("Окно UTC") })
+            }
+            if(timeMode=="UTC_WINDOW") {
+                OutlinedTextField(value=startUtc,onValueChange={ startUtc=it },label={ Text("Начало UTC · HH:MM") },singleLine=true,modifier=Modifier.fillMaxWidth())
+                OutlinedTextField(value=endUtc,onValueChange={ endUtc=it },label={ Text("Конец UTC · HH:MM") },singleLine=true,modifier=Modifier.fillMaxWidth())
+                if(timePolicy==null) Text("Укажи разные времена в формате HH:MM",color=MaterialTheme.colorScheme.error)
+            }
+            Text("Окно ограничивает только новые входы и добавления. Защита, выходы и сверка работают круглосуточно. Ожидающие входы вне выбранного окна отменяются с подтверждением Binance.",style=MaterialTheme.typography.bodySmall)
             OutlinedTextField(
                 value = defaultText, onValueChange = { defaultText = it },
                 label = { Text("Общее плечо, 1–125×") }, singleLine = true,

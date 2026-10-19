@@ -1,0 +1,457 @@
+{
+  "time_cases": [
+    {
+      "policy": {
+        "mode": "ALWAYS",
+        "start_utc": "08:00",
+        "end_utc": "20:00"
+      },
+      "now": 1792368000000,
+      "allowed": true
+    },
+    {
+      "policy": {
+        "mode": "ALWAYS",
+        "start_utc": "08:00",
+        "end_utc": "20:00"
+      },
+      "now": 1792396799999,
+      "allowed": true
+    },
+    {
+      "policy": {
+        "mode": "ALWAYS",
+        "start_utc": "08:00",
+        "end_utc": "20:00"
+      },
+      "now": 1792440000000,
+      "allowed": true
+    },
+    {
+      "policy": {
+        "mode": "ALWAYS",
+        "start_utc": "08:00",
+        "end_utc": "20:00"
+      },
+      "now": 1792454399000,
+      "allowed": true
+    },
+    {
+      "policy": {
+        "mode": "UTC_WINDOW",
+        "start_utc": "08:00",
+        "end_utc": "20:00"
+      },
+      "now": 1792396799999,
+      "allowed": false
+    },
+    {
+      "policy": {
+        "mode": "UTC_WINDOW",
+        "start_utc": "08:00",
+        "end_utc": "20:00"
+      },
+      "now": 1792396800000,
+      "allowed": true
+    },
+    {
+      "policy": {
+        "mode": "UTC_WINDOW",
+        "start_utc": "08:00",
+        "end_utc": "20:00"
+      },
+      "now": 1792439999999,
+      "allowed": true
+    },
+    {
+      "policy": {
+        "mode": "UTC_WINDOW",
+        "start_utc": "08:00",
+        "end_utc": "20:00"
+      },
+      "now": 1792440000000,
+      "allowed": false
+    },
+    {
+      "policy": {
+        "mode": "UTC_WINDOW",
+        "start_utc": "22:30",
+        "end_utc": "04:15"
+      },
+      "now": 1792448999999,
+      "allowed": false
+    },
+    {
+      "policy": {
+        "mode": "UTC_WINDOW",
+        "start_utc": "22:30",
+        "end_utc": "04:15"
+      },
+      "now": 1792449000000,
+      "allowed": true
+    },
+    {
+      "policy": {
+        "mode": "UTC_WINDOW",
+        "start_utc": "22:30",
+        "end_utc": "04:15"
+      },
+      "now": 1792454399000,
+      "allowed": true
+    },
+    {
+      "policy": {
+        "mode": "UTC_WINDOW",
+        "start_utc": "22:30",
+        "end_utc": "04:15"
+      },
+      "now": 1792368000000,
+      "allowed": true
+    },
+    {
+      "policy": {
+        "mode": "UTC_WINDOW",
+        "start_utc": "22:30",
+        "end_utc": "04:15"
+      },
+      "now": 1792383299999,
+      "allowed": true
+    },
+    {
+      "policy": {
+        "mode": "UTC_WINDOW",
+        "start_utc": "22:30",
+        "end_utc": "04:15"
+      },
+      "now": 1792383300000,
+      "allowed": false
+    }
+  ],
+  "lifecycle_cases": [
+    {
+      "name": "detected_before_close",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": null,
+      "now": 1792411199999,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "DETECTED"
+    },
+    {
+      "name": "confirmed",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": null,
+      "now": 1792411200000,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "VALID"
+    },
+    {
+      "name": "absent_next_scan",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": null,
+      "now": 1792411201000,
+      "snapshot_at_ms": 1792411200000,
+      "current": false,
+      "state": "INVALIDATED"
+    },
+    {
+      "name": "stale_scan",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": null,
+      "now": 1792411320001,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "DETECTED"
+    },
+    {
+      "name": "expired",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": null,
+      "now": 1792425600000,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "EXPIRED"
+    },
+    {
+      "name": "NEW",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "order_status": "NEW",
+        "campaign_status": "ENTRY_PENDING",
+        "last_reconciled_ms": 1792411200000
+      },
+      "now": 1792411200000,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "BINANCE_PENDING"
+    },
+    {
+      "name": "ACCEPTED",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "order_status": "ACCEPTED",
+        "campaign_status": "ENTRY_PENDING",
+        "last_reconciled_ms": 1792411200000
+      },
+      "now": 1792411200000,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "BINANCE_PENDING"
+    },
+    {
+      "name": "CANCELED",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "order_status": "CANCELED",
+        "campaign_status": "ENTRY_PENDING",
+        "last_reconciled_ms": 1792411200000
+      },
+      "now": 1792411200000,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "CANCELLED"
+    },
+    {
+      "name": "EXPIRED",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "order_status": "EXPIRED",
+        "campaign_status": "ENTRY_PENDING",
+        "last_reconciled_ms": 1792411200000
+      },
+      "now": 1792411200000,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "EXPIRED"
+    },
+    {
+      "name": "FILLED",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "order_status": "FILLED",
+        "campaign_status": "ENTRY_PENDING",
+        "last_reconciled_ms": 1792411200000
+      },
+      "now": 1792411200000,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "FILLED"
+    },
+    {
+      "name": "PARTIALLY_FILLED",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "order_status": "PARTIALLY_FILLED",
+        "campaign_status": "ENTRY_PENDING",
+        "last_reconciled_ms": 1792411200000
+      },
+      "now": 1792411200000,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "PARTIAL_FILL"
+    },
+    {
+      "name": "SUBMISSION_UNKNOWN",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "order_status": "SUBMISSION_UNKNOWN",
+        "campaign_status": "ENTRY_PENDING",
+        "last_reconciled_ms": 1792411200000
+      },
+      "now": 1792411200000,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "PENDING_UNVERIFIED"
+    },
+    {
+      "name": "stale_exchange",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101.0,
+        "protective_stop": 95.0,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": {
+        "order_status": "NEW",
+        "campaign_status": "ENTRY_PENDING",
+        "last_reconciled_ms": 1792411079999
+      },
+      "now": 1792411200000,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "PENDING_UNVERIFIED"
+    }
+  ]
+}

@@ -40,6 +40,7 @@ from williams_signals import (
     extract_short_signal_specs,
 )
 from williams_decision_trace import build_decision_trace
+from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed
 from williams_course_campaign import course_active_context,course_next_stage,TARGETS as COURSE_TARGETS
 from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,unified_direction_conflict,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan,opposing_close_event_triggered
@@ -470,6 +471,10 @@ class FuturesWilliamsScanner:
             return float(ind[col].iloc[-1]) if col else float("nan")
         self.decision_traces[symbol]=build_decision_trace(symbol,profile,trace_bars,int(time.time()*1000),
             {name:last_value(name) for name in ("ao","ac","jaw","teeth","lips")},raw_signals,hierarchy.to_dict())
+        observer=getattr(self,"signal_observer",None)
+        if observer:
+            try:observer(symbol,signal_facts(raw_signals,trace_bars,FRAME_MS[self.interval]))
+            except Exception:pass  # Diagnostics cannot alter trading decisions.
         self.last_signal_profile_error = None
         long_htf, short_htf = self._htf(symbol)
         # Rank only existing, valid Williams triggers. Divergence/wave count
@@ -674,6 +679,8 @@ class FuturesWilliamsRuntime:
             interval=self.interval,
             htf_interval=self.htf_interval,
         )
+        self.scanner.signal_observer=lambda symbol,facts: SignalJournal(self.db).observe(symbol,facts,
+            int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)),self.config.entry_time_policy)
         self.auto_scan_symbols = []
         self.symbols = list(self.config.symbols)
         self.max_open_positions = self.config.max_open_positions
@@ -1193,6 +1200,11 @@ class FuturesWilliamsRuntime:
             fees=0.0,
         )
 
+    def _require_entry_time(self):
+        now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+        if not self.config.entry_time_policy.allows(now):
+            raise RuntimeError("ENTRY_TIME_POLICY_BLOCKED: "+str(self.config.entry_time_policy.to_dict()))
+
     def _require_new_risk_controls(self):
         for flag in ("kill_switch_latched", "entry_admission_paused"):
             if str(self.db.state_get(flag, "false")).strip().lower() not in {"false", "0", ""}:
@@ -1215,6 +1227,7 @@ class FuturesWilliamsRuntime:
             raise RuntimeError(f"{intent.symbol}: order/campaign direction mismatch")
 
         purpose = intent.purpose.upper()
+        if purpose in {"CAMPAIGN_ENTRY","CAMPAIGN_ADD_ON"}:self._require_entry_time()
         if purpose == "CAMPAIGN_CANCEL_ENTRY":
             if campaign.tags.get("pending_order_client_id") != intent.client_order_id:
                 raise RuntimeError("Entry cancellation lacks durable campaign ownership")
@@ -1434,6 +1447,16 @@ class FuturesWilliamsRuntime:
         self.db.save_campaign(campaign)
         return not reason
 
+    def decision_trace_snapshot(self):
+        now=int(time.time()*1000)
+        out={}
+        for symbol in self.config.symbols:
+            trace=dict(getattr(self.scanner,"decision_traces",{}).get(symbol,{"symbol":symbol,"state":"NOT_ANALYSED"}))
+            try:trace["signal_history"]=SignalJournal(self.db).view(symbol,now)
+            except Exception:trace["signal_history"]={"state":"HISTORY_UNAVAILABLE","can_place_orders":False}
+            out[symbol]=trace
+        return out
+
     def _record_execution_decision(self,stage,args,result,failure):
         if stage not in {"_arm_entry","_arm_add_on","_trail","_exit_market"} or not args:return
         try:
@@ -1446,6 +1469,10 @@ class FuturesWilliamsRuntime:
             if event["blocker"]:
                 event["blocker"]=re.sub(r"(?i)(api[_-]?key|api[_-]?secret|signature|X-MBX-APIKEY)([\s=:]+)[^&\s]+",r"\1\2[REDACTED]",event["blocker"])
             self.db.log_event("WARNING" if failure else "INFO","decision_trace_execution",stage,{"symbol":symbol,"decision":event})
+            signal=getattr(args[0],"signal",None) if stage=="_arm_entry" else args[1] if stage=="_arm_add_on" and len(args)>1 else None
+            if signal is not None:
+                admitted=not failure and isinstance(result,dict) and bool(result.get("client_order_id"))
+                SignalJournal(self.db).decision(symbol,stage,event["blocker"] or str(result),event["observed_at_ms"],signal.signal_id,admitted)
         except Exception:
             pass  # Observation failure never turns a financial mutation into a retry.
 
@@ -1494,6 +1521,7 @@ class FuturesWilliamsRuntime:
     @serialized_campaign_operation
     def _arm_entry(self, candidate: FuturesCandidate):
         self._require_new_risk_controls()
+        self._require_entry_time()
         if self.dry_run:
             self.db.log_event("INFO", "futures_dry_run_entry_blocked", "DRY_RUN=true; conditional entry not submitted", {"symbol": candidate.symbol})
             return {"state": "DRY_RUN_BLOCKED", "symbol": candidate.symbol}
@@ -1685,6 +1713,8 @@ class FuturesWilliamsRuntime:
                     campaign_id=campaign.campaign_id,
                 )
             )
+            try:SignalJournal(self.db).order(symbol,signal.signal_id,result,int(time.time()*1000))
+            except Exception:pass
             pending_signal.order_id = str(result.get("orderId", ""))
             pending_signal.client_order_id = cid
             pending_signal.transition(SignalState.ARMED)
@@ -1699,6 +1729,7 @@ class FuturesWilliamsRuntime:
     @serialized_campaign_operation
     def _arm_add_on(self, campaign, signal):
         self._require_new_risk_controls()
+        self._require_entry_time()
         if signal.symbol!=campaign.symbol or signal.timeframe!=campaign.execution_timeframe:
             raise RuntimeError("Add-on symbol/timeframe does not match the campaign")
         admitted_key=f"campaign_signal_admitted:{campaign.campaign_id}:{signal.signal_id}"
@@ -2522,10 +2553,13 @@ class FuturesWilliamsRuntime:
                 expires_at_ms = int(
                     (signal_payload or {}).get("expires_at_ms", 0) or 0
                 )
+                try:SignalJournal(self.db).order(symbol,(signal_payload or {}).get("signal_id",campaign.current_signal_id),order,int(time.time()*1000))
+                except Exception:pass
                 signal_at_ms=int((signal_payload or {}).get("signal_bar_time_ms",0) or 0)
                 if signal_at_ms>0:
                     cap=signal_at_ms+5*3_600_000
                     expires_at_ms=min(expires_at_ms,cap) if expires_at_ms>0 else cap
+                outside_entry_time=not self.config.entry_time_policy.allows(int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
                 invalid_correction=False
                 invalid_edition=False
                 profile=campaign.tags.get("strategy_profile",TC2)
@@ -2547,8 +2581,9 @@ class FuturesWilliamsRuntime:
                 if (
                     status in {"NEW", "PENDING_NEW"}
                     and executed <= 0
-                    and (invalid_correction or invalid_edition or expires_at_ms>0 and int(time.time()*1000)>=expires_at_ms)
+                    and (outside_entry_time or invalid_correction or invalid_edition or expires_at_ms>0 and int(time.time()*1000)>=expires_at_ms)
                 ):
+                    cancel_reason="ENTRY_TIME_POLICY_BLOCKED" if outside_entry_time else "CORRECTION_CONTEXT_INVALIDATED" if invalid_correction else "FORMATION_INVALIDATED" if invalid_edition else "SIGNAL_EXPIRED"
                     order_id = order.get("orderId")
                     if order_id is None:
                         self._set_pending_signal_state(campaign, SignalState.RECONCILE_REQUIRED)
@@ -2563,6 +2598,8 @@ class FuturesWilliamsRuntime:
                         executed = float(order.get("executedQty", 0) or 0)
                         if status not in {"CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "FILLED"}:
                             raise RuntimeError("expired entry cancellation has no terminal exchange confirmation")
+                        try:SignalJournal(self.db).order(symbol,(signal_payload or {}).get("signal_id",campaign.current_signal_id),order,int(time.time()*1000),cancel_reason)
+                        except Exception:pass
                     except Exception as exc:
                         self._set_pending_signal_state(campaign, SignalState.RECONCILE_REQUIRED)
                         self._set_state(symbol, "RECONCILE_REQUIRED")
@@ -2589,7 +2626,7 @@ class FuturesWilliamsRuntime:
                             "symbol": symbol,
                             "campaign_id": campaign.campaign_id,
                             "state": campaign.state.value,
-                            "reason": "SIGNAL_EXPIRED",
+                            "reason": cancel_reason,
                             "order_status": "CANCELLED",
                         })
                         continue
@@ -3254,6 +3291,10 @@ class FuturesWilliamsRuntime:
                     self.db.state_set(key,encoded)
                     self.db.state_set(revision_key,json.dumps((history+[summary])[-32:]))
         scan_status = getattr(self.scanner, "last_scan_status", {})
+        try:
+            scan_status["entry_time_policy"]=self.config.entry_time_policy.to_dict()
+            scan_status["decision_traces"]=self.decision_trace_snapshot()
+        except Exception:pass
         if scan_status.get("state") != "COMPLETE":
             self.db.log_event(
                 "ERROR",
@@ -3335,6 +3376,14 @@ class FuturesWilliamsRuntime:
             self.db.log_event("WARNING","williams_unified_direction_conflict",
                 "Both LONG and SHORT entries present; no exposure admitted",{"symbol":symbol})
         for candidate in candidates:
+            skip_reason=("OPPOSING_ENTRIES_BEFORE_CONTEXT" if candidate.symbol in conflicts else
+                "SYMBOL_RESERVED_BY_POSITION" if candidate.symbol in active_symbols else
+                "POSITION_LIMIT" if len(self.open_positions())>=self.max_open_positions else
+                "SYMBOL_RESERVED_BY_PENDING_ORDER" if candidate.symbol in pending_symbols or candidate.symbol in self._locks else
+                "EXCHANGE_RECONCILIATION_REQUIRED" if self.unresolved_symbols() else "")
+            if skip_reason:
+                try:SignalJournal(self.db).decision(candidate.symbol,"PAIR_GATE",skip_reason,int(time.time()*1000),candidate.signal.signal_id)
+                except Exception:pass
             if candidate.symbol in conflicts:
                 continue
             if candidate.symbol in active_symbols:

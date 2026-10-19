@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Mapping, Sequence
+from entry_time_policy import EntryTimePolicy
 from futures_leverage import parse_leverage, parse_symbol_leverages
 
 
@@ -82,6 +83,7 @@ class TradingConfig:
     futures_symbol_leverages: tuple[tuple[str, int], ...] = ()
     futures_margin_type: str = "ISOLATED"
     futures_force_one_way: bool = True
+    entry_time_policy: EntryTimePolicy = EntryTimePolicy()
 
     allow_long: bool = True
     allow_short: bool = True
@@ -200,6 +202,7 @@ class TradingConfig:
             structural_timeframes=structural_timeframes,
             execution_timeframe=execution_timeframe,
             market=market,
+            entry_time_policy=EntryTimePolicy.from_env(source),
             futures_leverage=futures_leverage,
             futures_symbol_leverages=futures_symbol_leverages,
             futures_margin_type=futures_margin_type,

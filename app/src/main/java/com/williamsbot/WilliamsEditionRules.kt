@@ -233,7 +233,7 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
     }?.let { f ->
         val stop=if(sign==1) bars.subList(f.groupStart,f.center+1).minOf { it.l }-tick
             else bars.subList(f.groupStart,f.center+1).maxOf { it.h }+tick
-        out+=WilliamsEditionSetup("FRACTAL",side,f.confirmation,f.price+sign*tick,stop,role="ENTRY")
+        out+=WilliamsEditionSetup("FRACTAL",side,f.confirmation,f.price+sign*tick,stop,role="ENTRY",context=JSONObject().put("formation_index",f.center))
     }
     val a=ao.map { sign*it }; val c=ac.map { sign*it };val i=n-1
     if (a.takeLast(3).all { it.isFinite() }) {

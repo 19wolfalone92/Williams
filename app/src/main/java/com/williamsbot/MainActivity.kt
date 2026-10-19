@@ -279,6 +279,7 @@ data class Status(
     val futuresLeverage: Int = 0,
     val futuresLeverageSettingsJson: String = "",
     val strategyProfile:String=williamsUnifiedProfile,
+    val entryTimePolicyJson:String="",
     val decisionTracesJson:String="",
     val futuresMarginType: String = "UNKNOWN",
     val futuresForceOneWay: Boolean = false,
@@ -2548,8 +2549,8 @@ private fun MarketChartPanel(
                 InfoRow("Risk/reward", if (candidate.riskReward > 0.0) fmt(candidate.riskReward, 2) else "—")
                 InfoRow("Спред / ATR", fmt(candidate.spreadPct * 100.0, 3) + "% / " + fmt(candidate.atrPct * 100.0, 3) + "%")
                 }
-                InfoRow("Триггер условного STOP", fmt(candidate.entryTriggerPrice))
-                InfoRow("Структурный стоп", fmt(candidate.entryProtectivePrice))
+                InfoRow("Обнаруженный уровень формации", fmt(candidate.entryTriggerPrice))
+                InfoRow("Защита формации до допуска", fmt(candidate.entryProtectivePrice))
                 if (candidate.shadowReason.isNotBlank()) Text("Теневая оценка: " + candidate.shadowReason,
                     style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
                 if (candidate.xaiTopFactor.isNotBlank()) Text("Главный фактор: " + candidate.xaiTopFactor,
@@ -3553,6 +3554,7 @@ private fun TradingChart(
 
     val visible =
         candles.subList(start, start + visibleCount)
+    val pendingTrigger=williamsChartTrigger(status.decisionTracesJson,status.symbol,System.currentTimeMillis(),status.price)
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -3568,6 +3570,9 @@ private fun TradingChart(
             }
         }
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text("Заявка Binance: "+williamsTriggerStateLabel(pendingTrigger.state)+
+                (pendingTrigger.trigger?.let { " · "+fmt(it) } ?: ""),
+                color=AppColors.amber,style=MaterialTheme.typography.labelSmall)
             Text("Alligator: Jaw 13/8 • Teeth 8/5 • Lips 5/3  |  Fractals подтверждаются после двух правых закрытых баров",
                 color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
             Text(
@@ -3595,7 +3600,6 @@ private fun TradingChart(
         ) {
             val levels = listOfNotNull(
                 status.tp, status.entry, status.sl, status.price,
-                candidate?.entryTriggerPrice, candidate?.entryProtectivePrice,
                 position?.entry, position?.stop, historicalTrade?.entry, historicalTrade?.exit, historicalTrade?.stopPrice
             ) + visible.flatMap { listOfNotNull(if (showJaw) it.jaw else null, if (showTeeth) it.teeth else null, if (showLips) it.lips else null) }
             val minPrice = min(
@@ -3737,8 +3741,8 @@ private fun TradingChart(
             level(position?.entry ?: status.entry, AppColors.primary, "ENTRY")
             level(position?.take ?: status.tp, AppColors.green, "TP")
             level(position?.stop ?: status.sl, AppColors.red, "SL")
-            level(candidate?.entryTriggerPrice, AppColors.amber, "H1 TRIGGER")
-            level(candidate?.entryProtectivePrice, AppColors.red.copy(alpha = 0.9f), "H1 STRUCTURAL STOP")
+            pendingTrigger.trigger?.takeIf { it in minPrice..maxPrice }?.let { level(it,AppColors.amber,"BINANCE PENDING") }
+            pendingTrigger.stop?.takeIf { it in minPrice..maxPrice }?.let { level(it,AppColors.red,"PENDING PROTECTION") }
         }
         Text(cockpitTime(visible.first().time) + "  —  " + cockpitTime(visible.last().time), modifier = Modifier.padding(horizontal = 8.dp), color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
         if (selectedBar in visible.indices) {
@@ -4100,6 +4104,7 @@ internal fun parseStatus(json: JSONObject): Status {
         futuresLeverage =
             json.optInt("futures_leverage", 0),
         strategyProfile=json.optString("strategy_profile",williamsUnifiedProfile),
+        entryTimePolicyJson=json.optJSONObject("entry_time_policy")?.toString().orEmpty(),
         decisionTracesJson=json.optJSONObject("decision_traces")?.toString().orEmpty(),
         futuresLeverageSettingsJson =
             json.optJSONObject("futures_leverage_settings")?.toString().orEmpty(),

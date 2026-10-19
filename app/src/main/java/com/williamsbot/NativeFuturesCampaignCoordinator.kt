@@ -278,20 +278,6 @@ internal data class RecoveredStructuralStop(
     val riskPct: Double
 )
 
-/** Keeps exchange order completion separate from campaign lifecycle. */
-/**
- * Strategy entry-session overlay in UTC. This gate applies to new entry orders only;
- * existing positions must still be protected, trailed, reconciled, and closable 24/7.
- */
-internal fun isWithinWilliamsEntrySessionUtc(epochMs: Long): Boolean {
-    if (epochMs <= 0L) return false
-    val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
-        timeInMillis = epochMs
-    }
-    val hour = utc.get(Calendar.HOUR_OF_DAY)
-    return hour in 8 until 20
-}
-
 internal fun campaignLifecycleStatus(intent: JSONObject): String {
     val explicit = intent.optString("campaign_status").uppercase(Locale.US)
     if (explicit.isNotBlank()) return explicit
@@ -689,7 +675,8 @@ internal class NativeFuturesCampaignCoordinator(
         val executionSemantics: String = "STOP_ENTRY",
         val referenceClose: Double = 0.0,
         val setupContext: String = "",
-        val reentryOwnerId:String=""
+        val reentryOwnerId:String="",
+        val signalId:String=""
     )
 
     @Volatile var state: State = State.UNINITIALIZED
@@ -707,6 +694,10 @@ internal class NativeFuturesCampaignCoordinator(
     fun setEditionSelectionProvider(provider:()->String)=synchronized(lock) {
         check(state==State.UNINITIALIZED) { "Edition selection must be bound before reconciliation" }
         editionSelectionProvider=provider
+    }
+    @Volatile private var entryTimePolicyProvider:()->WilliamsEntryTimePolicy={ WilliamsEntryTimePolicy() }
+    fun setEntryTimePolicyProvider(provider:()->WilliamsEntryTimePolicy)=synchronized(lock) {
+        check(state==State.UNINITIALIZED);entryTimePolicyProvider=provider
     }
     fun configureWhenFlat(save:()->Unit)=synchronized(lock) {
         check(state==State.READY && reservedFuturesPositionSymbols(emptyList(),intents()).isEmpty()) {
@@ -2116,13 +2107,19 @@ internal class NativeFuturesCampaignCoordinator(
     private fun recordEntryDecision(plan:EntryPlan,result:JSONObject) {
         val trace=JSONObject().put("stage","EXECUTION_COORDINATOR").put("observed_at_ms",clock())
             .put("signal_bar_time_ms",plan.signalBarTimeMs).put("client_id",plan.clientId).put("direction",plan.direction.name)
-            .put("strategy_profile",plan.strategyProfile).put("signal_type",plan.signalType)
+            .put("strategy_profile",plan.strategyProfile)
+            .put("entry_time_policy",entryTimePolicyProvider().toJson()).put("signal_type",plan.signalType)
             .put("quantity",plan.quantity).put("entry_price",plan.entryPrice).put("protective_stop",plan.protectiveStop)
             .put("risk_pct",plan.riskPct).put("outcome",result)
         executionStore.writeState("decision_execution_"+plan.symbol,trace.toString())
+        WilliamsSignalJournal(executionStore).decision(plan.symbol,"EXECUTION_COORDINATOR",
+            result.optString("blocker").ifBlank { result.optString("state","EXCHANGE_RESULT_RECORDED") }+" "+result.optString("error"),
+            clock(),plan.signalId,result.optBoolean("accepted",false))
     }
     private fun submitPendingEntryLocked(plan: EntryPlan): JSONObject = synchronized(lock) {
         val currentIntents = intents()
+        if(!entryTimePolicyProvider().allows(clock()))
+            return@synchronized safePreflightRejection("ENTRY_TIME_POLICY_BLOCKED: "+entryTimePolicyProvider().toJson())
         val selected=editionSelectionProvider?.invoke()
         if(selected!=null && plan.signalType!="OPERATOR_FORCED_DIRECTION" &&
             !williamsProfileAllowsSource(selected,plan.strategyProfile))
@@ -2311,7 +2308,8 @@ internal class NativeFuturesCampaignCoordinator(
             .put("initial_protective_stop", plan.protectiveStop)
             .put("risk_pct", plan.riskPct)
             .put("requested_leverage", plan.leverage)
-            .put("signal_type", plan.signalType)
+            .put("signal_type", plan.signalType).put("signal_id",plan.signalId)
+            .put("entry_time_policy",entryTimePolicyProvider().toJson())
             .put("signal_bar_time_ms", plan.signalBarTimeMs)
             .put("signal_expires_at_ms", if (plan.signalBarTimeMs>0) plan.signalBarTimeMs+18_000_000L else 0L)
             .put("signal_reason", safeDiagnosticText(plan.signalReason))
@@ -2364,11 +2362,12 @@ internal class NativeFuturesCampaignCoordinator(
             intent.put("confirmed_leverage", leverageConfirmation.getInt("leverage"))
                 .put("leverage_confirmed_at_ms", clock())
             saveIntents(currentIntents)
+            check(entryTimePolicyProvider().allows(clock())) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_SUBMISSION" }
+            if(plan.kind==EntryKind.MARKET) check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
+                plan.referenceClose,adapter.markPrice(plan.symbol))==null) { "NTD close-event expired or moved before mutation" }
             orderSubmissionAttempted = true
             val result = when (plan.kind) {
                 EntryKind.MARKET -> {
-                    check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
-                        plan.referenceClose,adapter.markPrice(plan.symbol))==null) { "NTD close-event expired or moved before mutation" }
                     adapter.newOrder(plan.symbol,if (plan.direction==Direction.LONG) "BUY" else "SELL",plan.quantity,false,plan.clientId)
                 }
                 EntryKind.LIMIT -> adapter.placeLimitOrder(

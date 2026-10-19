@@ -41,6 +41,8 @@ class NativeFuturesCoordinatorLifecycleTest {
         var badConfirmation = false
         var loseCloseReply = false
         var loseAdditionReply = false
+        var loseCancelReply = false
+        var afterLeverage:(()->Unit)?=null
         var additionFraction = 1.0
         var closeFraction = 1.0
         var closeStatus = "FILLED"
@@ -68,6 +70,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 "/fapi/v1/marginType" -> JSONObject().put("code", 200)
                 "/fapi/v1/leverage" -> {
                     leverage = p.getValue("leverage").toInt()
+                    afterLeverage?.invoke()
                     JSONObject().put("symbol", "BTCUSDT").put("leverage", if (badConfirmation) 1 else leverage)
                         .put("maxNotionalValue", "1000000")
                 }
@@ -87,7 +90,8 @@ class NativeFuturesCoordinatorLifecycleTest {
                         val row = algos.values.singleOrNull { it.optString("algoId") == p["algoId"] ||
                             it.optString("clientAlgoId") == p["clientAlgoId"] }
                         if (row == null) { code = 400; JSONObject().put("code", -2013).put("msg", "Order does not exist.") }
-                        else { if (request.method == "DELETE") row.put("algoStatus", "CANCELED"); row }
+                        else { if (request.method == "DELETE") row.put("algoStatus", "CANCELED")
+                            if(request.method=="DELETE" && loseCancelReply) { code=503;JSONObject().put("code",-1000).put("msg","lost cancellation reply") } else row }
                     }
                 }
                 "/fapi/v1/order" -> if (request.method == "POST" && p["reduceOnly"]!="true") {
@@ -190,6 +194,60 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertTrue(reconciled.toString(), reconciled.getBoolean("ok"))
         assertEquals("OPEN_PROTECTED", coordinator.state.name)
         return coordinator to exchange
+    }
+
+    @Test fun defaultPolicyAdmitsAtNightWhileCustomPolicyRejectsBeforeAnyOrder() {
+        for(hour in listOf(1,21)) {
+            val now=java.time.Instant.parse("2026-10-19T00:00:00Z").toEpochMilli()+hour*3_600_000L
+            val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+            var policy=WilliamsEntryTimePolicy()
+            val coordinator=NativeFuturesCampaignCoordinator(Journal(),clock={now}) { exchange.adapter() }
+            coordinator.setEntryTimePolicyProvider { policy };assertTrue(coordinator.reconcile().getBoolean("ok"))
+            policy=WilliamsEntryTimePolicy("UTC_WINDOW","08:00","20:00")
+            val rejected=coordinator.submitPendingEntry(plan(NativeFuturesCampaignCoordinator.Direction.LONG))
+            assertFalse(rejected.getBoolean("accepted"));assertTrue(rejected.getString("blocker").contains("ENTRY_TIME_POLICY_BLOCKED"))
+            assertEquals(0,exchange.posts("/fapi/v1/algoOrder"));assertEquals(0,exchange.posts("/fapi/v1/leverage"))
+            policy=WilliamsEntryTimePolicy()
+            assertTrue(coordinator.submitPendingEntry(plan(NativeFuturesCampaignCoordinator.Direction.LONG)).getBoolean("accepted"))
+            assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+    @Test fun finalPolicyChangeDuringAccountConfigurationCannotSubmitAPhantomOrder() {
+        val now=java.time.Instant.parse("2026-10-19T21:00:00Z").toEpochMilli()
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG);var policy=WilliamsEntryTimePolicy()
+        val coordinator=NativeFuturesCampaignCoordinator(Journal(),clock={now}) { exchange.adapter() }
+        coordinator.setEntryTimePolicyProvider { policy };coordinator.reconcile()
+        exchange.afterLeverage={ policy=WilliamsEntryTimePolicy("UTC_WINDOW","08:00","20:00") }
+        val rejected=coordinator.submitPendingEntry(plan(NativeFuturesCampaignCoordinator.Direction.LONG))
+        assertFalse(rejected.getBoolean("accepted"));assertFalse(rejected.getBoolean("order_mutation_attempted"))
+        assertTrue(rejected.getString("error").contains("ENTRY_TIME_POLICY_BLOCKED_BEFORE_SUBMISSION"))
+        assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals("REJECTED",coordinator.intentsSnapshot().getJSONObject(0).getString("order_status"))
+    }
+    @Test fun closedPolicyStillAllowsCancellationRecoveryAndFillProtection() {
+        for(filled in listOf(false,true)) {
+            val now=java.time.Instant.parse("2026-10-19T21:00:00Z").toEpochMilli()
+            val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG);var policy=WilliamsEntryTimePolicy()
+            val coordinator=NativeFuturesCampaignCoordinator(Journal(),clock={now}) { exchange.adapter() }
+            coordinator.setEntryTimePolicyProvider { policy };coordinator.reconcile()
+            assertTrue(coordinator.submitPendingEntry(plan(NativeFuturesCampaignCoordinator.Direction.LONG)).getBoolean("accepted"))
+            policy=WilliamsEntryTimePolicy("UTC_WINDOW","08:00","20:00")
+            if(filled) {
+                exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
+                assertEquals("OPEN_PROTECTED",coordinator.state.name)
+                assertTrue(exchange.algos.values.any { it.optString("closePosition")=="true" && it.optString("algoStatus")=="NEW" })
+            } else {
+                exchange.loseCancelReply=true
+                assertFalse(coordinator.cancelPendingEntries("OUTSIDE_CONFIGURED_ENTRY_TIME").getBoolean("ok"))
+                assertEquals("CANCEL_SUBMISSION_UNKNOWN",coordinator.intentsSnapshot().getJSONObject(0).getString("order_status"))
+                val deletes=exchange.requests.count { it.method=="DELETE" }
+                exchange.loseCancelReply=false
+                assertTrue(coordinator.cancelPendingEntries("OUTSIDE_CONFIGURED_ENTRY_TIME").getBoolean("ok"))
+                assertEquals(deletes,exchange.requests.count { it.method=="DELETE" })
+                assertEquals("CANCELED",coordinator.intentsSnapshot().getJSONObject(0).getString("order_status"))
+                assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+            }
+        }
     }
 
     @Test fun diagnosticPersistenceFailureDoesNotRetryAnAcceptedOrder() {
