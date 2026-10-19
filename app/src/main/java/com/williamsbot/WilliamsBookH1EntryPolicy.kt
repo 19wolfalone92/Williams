@@ -92,3 +92,22 @@ internal fun williamsBookFractalTeethBlocker(
         else -> "H1_FRACTAL_DIRECTION_INVALID"
     }
 }
+
+/** Do not re-submit a late H1 entry if its original breakout happened after
+ * the signal was known, even if the mark later retraced behind the trigger.
+ * Accept open H1 bars only for this historical-consumption veto, never for
+ * computing a NEW entry signal.
+ */
+internal fun williamsBookH1TriggerConsumed(
+    direction:String,signalAtMs:Long,trigger:Double,
+    observedAtMs:Long,bars:List<WilliamsWaveBar>
+):Boolean {
+    if(direction !in setOf("LONG","SHORT") || signalAtMs<=0L ||
+        !trigger.isFinite() || trigger<=0 || observedAtMs<signalAtMs+WILLIAMS_H1_MS)
+        return true
+    if(bars.isEmpty() || bars.any { it.t<0 || it.t>observedAtMs ||
+            !it.h.isFinite() || !it.l.isFinite() || it.l<=0 || it.h<it.l } ||
+        bars.zipWithNext().any { (a,b) -> b.t-a.t!=WILLIAMS_H1_MS }) return true
+    return bars.any { b -> b.t>=signalAtMs+WILLIAMS_H1_MS &&
+        (if(direction=="LONG") b.h>=trigger else b.l<=trigger) }
+}
