@@ -2107,7 +2107,9 @@ internal class NativeFuturesCampaignCoordinator(
     private fun recordEntryDecision(plan:EntryPlan,result:JSONObject) {
         val trace=JSONObject().put("stage","EXECUTION_COORDINATOR").put("observed_at_ms",clock())
             .put("signal_bar_time_ms",plan.signalBarTimeMs).put("client_id",plan.clientId).put("direction",plan.direction.name)
-            .put("strategy_profile",plan.strategyProfile)
+            .put("strategy_profile",plan.strategyProfile).put("signal_id",plan.signalId)
+            .put("signal_reason",safeDiagnosticText(plan.signalReason))
+            .put("setup_context",runCatching { JSONObject(plan.setupContext) }.getOrDefault(JSONObject()))
             .put("entry_time_policy",entryTimePolicyProvider().toJson()).put("signal_type",plan.signalType)
             .put("quantity",plan.quantity).put("entry_price",plan.entryPrice).put("protective_stop",plan.protectiveStop)
             .put("risk_pct",plan.riskPct).put("outcome",result)
