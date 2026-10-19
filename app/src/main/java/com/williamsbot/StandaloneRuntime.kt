@@ -5323,6 +5323,57 @@ private class NativeEngine(
                 if(manageM15PendingEntry(pending)) return false
                 continue // H1-only re-anchoring must never replace a junior-confirmed order.
             }
+            // A book-H1 conditional entry is rechecked while waiting, because
+            // Binance executes conditional stops asynchronously. In particular,
+            // the WM3 fractal must still break on the correct side of Teeth.
+            if(pending.optString("intent_role","ENTRY")=="ENTRY" && exchangeRowsValid &&
+                pending.optString("client_id").startsWith("W2H_") &&
+                pending.optString("signal_type")!="OPERATOR_FORCED_DIRECTION") {
+                if(exchangeOrderStatus(pending) in setOf("TRIGGERING","TRIGGERED")) continue
+                val bookInvalidation=runCatching {
+                    val now=futuresMarketData.exchangeNowMs()
+                    val tick=symbolFilters(symbol).tick
+                    val setup=runCatching { JSONObject(pending.optString("setup_context")) }.getOrDefault(JSONObject())
+                    val parentId=pending.optString("signal_id")
+                    val price=pending.optString("entry_price").toDoubleOrNull() ?: Double.NaN
+                    val stop=pending.optString("protective_stop").toDoubleOrNull() ?: Double.NaN
+                    val proofError=williamsBookH1ProofBlocker(setup.toString(),
+                        pending.optString("direction"),parentId,pending.optString("signal_type"),
+                        pending.optString("strategy_profile",williamsTc2Profile),price,stop,now)
+                    if(proofError!=null) proofError
+                    else {
+                        val h1=fetchCandles(symbol,"1h",220)
+                        val valid=h1ContextCampaignSignals(symbol,h1,tick).any {
+                            it.signalId==parentId && it.type==pending.optString("signal_type") &&
+                            it.strategyProfile==profile
+                        }
+                        if(!valid) h1ParentRejectionReason(symbol,parentId,"H1_BOOK_PARENT_INVALIDATED")
+                        else {
+                            val closed=h1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+                            val teeth=williamsAlligatorLine(closed,8,5).lastOrNull() ?: Double.NaN
+                            williamsBookFractalTeethBlocker(pending.optString("signal_type"),
+                                pending.optString("direction"),price,teeth)
+                        }
+                    }
+                }.getOrElse { failure ->
+                    lastError="H1_BOOK_PENDING_REVALIDATION_UNAVAILABLE: "+symbol+": "+(failure.message ?: failure.javaClass.simpleName)
+                    null // Never cancel an order on an uncertain network/market snapshot.
+                }
+                if(bookInvalidation!=null) {
+                    val result=withCampaignMutation(symbol,"H1_BOOK_PENDING_INVALIDATED_CANCEL",allowPaused=true) {
+                        try { futuresCampaignCoordinator.cancelPendingEntries(bookInvalidation,symbol) }
+                        finally {
+                            reconcileRequired=true
+                            check(persistSafetyFlag("reconcile_required",true)) {
+                                "H1_BOOK_CANCEL_RECONCILIATION_FENCE_FAILED"
+                            }
+                        }
+                    }
+                    if(!result.optBoolean("ok",false))
+                        lastError="H1_BOOK_PENDING_CANCEL_UNRESOLVED: "+symbol+": "+result.optString("blocker")
+                    return false // Reconcile fills and position ownership before further entry.
+                }
+            }
             if (profile==williamsTc2Profile && pending.optString("intent_role","ENTRY")=="ENTRY" &&
                 exchangeRowsValid) {
                 // If H1 refresh fails, do not interrupt the protective-stop
