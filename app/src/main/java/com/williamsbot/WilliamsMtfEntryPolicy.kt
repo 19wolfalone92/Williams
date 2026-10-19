@@ -125,15 +125,21 @@ internal fun selectWilliamsH1M15Entry(
 }
 
 /** A filled parent cannot start another initial campaign; confirmed zero-fill cancellations can retry. */
-internal fun williamsH1ParentAlreadyFilled(intents:JSONArray,parentId:String):Boolean =
-    (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
-        it.optString("intent_role","ENTRY")=="ENTRY" && it.optString("signal_id")==parentId &&
+internal fun williamsH1ParentAlreadyFilled(intents:JSONArray,parentId:String,
+    signalType:String="",signalBarTimeMs:Long=0L):Boolean {
+    // Before 4.37 SHORT fractals used confirmation time in their identity;
+    // preserve their filled-parent fence when upgrading to pivot identities.
+    val legacy=if(signalType=="SHORT_FRACTAL" && signalBarTimeMs>0 && parentId.contains(":SHORT_FRACTAL:"))
+        parentId.substringBeforeLast(":")+":"+signalBarTimeMs else parentId
+    return (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
+        it.optString("intent_role","ENTRY")=="ENTRY" && it.optString("signal_id") in setOf(parentId,legacy) &&
             (it.optLong("position_open_observed_at_ms")>0 ||
                 (it.optString("confirmed_position_qty").toDoubleOrNull() ?: 0.0)>0 ||
                 (it.optString("executed_qty").toDoubleOrNull() ?: 0.0)>0 ||
                 (it.optString("actual_entry_executed_qty").toDoubleOrNull() ?: 0.0)>0 ||
                 (it.optString("net_result_source")=="BINANCE_USER_TRADES" && it.optInt("net_result_fill_count")>=2))
     }
+}
 
 /** Last-door schema/price/time check; fresh indicator and parent recomputation happens in Runtime. */
 internal fun williamsMtfProofBlocker(setup:String,direction:String,parentId:String,entry:Double,stop:Double,now:Long):String? {

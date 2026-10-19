@@ -5853,7 +5853,7 @@ private class NativeEngine(
                 (it.executionSemantics=="STOP_ENTRY" || profitReentry(it) && it.executionSemantics=="MARKET_ON_CLOSE" &&
                     williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,contextNow,it.triggerPrice,futuresMarketData.markPrice(symbol))==null) &&
                 isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L) &&
-                !williamsH1ParentAlreadyFilled(existing,it.signalId)
+                !williamsH1ParentAlreadyFilled(existing,it.signalId,it.type,it.signalBarTimeMs)
         }
         if (freshSignals.isEmpty()) {
             lastError = "WILLIAMS_SIGNAL_EXPIRED: no fresh confirmed H1 hypothesis for $symbol"
@@ -5991,7 +5991,7 @@ private class NativeEngine(
         // The selected book source and closed H1 bars authorize the entry.
         // No M15 candle, fractal or M15 re-anchor is required.
         val entries = futuresCampaignCoordinator.intentsSnapshot()
-        if(williamsH1ParentAlreadyFilled(entries,signal.signalId))
+        if(williamsH1ParentAlreadyFilled(entries,signal.signalId,signal.type,signal.signalBarTimeMs))
             return rejectDecision(symbol,"H1_PARENT_ALREADY_FILLED: no repeated initial entry")
         val clientId = williamsBookH1ClientId(symbol,signal.signalId)
         if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId })

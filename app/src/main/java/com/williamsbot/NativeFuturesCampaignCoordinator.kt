@@ -2221,7 +2221,7 @@ internal class NativeFuturesCampaignCoordinator(
             val proof=williamsMtfProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
                 plan.entryPrice.toDoubleOrNull() ?: Double.NaN,plan.protectiveStop.toDoubleOrNull() ?: Double.NaN,clock())
             if(proof!=null) return@synchronized safePreflightRejection(proof)
-            if(williamsH1ParentAlreadyFilled(currentIntents,plan.signalId))
+            if(williamsH1ParentAlreadyFilled(currentIntents,plan.signalId,plan.signalType,plan.signalBarTimeMs))
                 return@synchronized safePreflightRejection("H1_PARENT_ALREADY_FILLED: no second initial campaign")
         }
         if(requireBookH1ProofForAutomatedEntries && plan.entryClientId.isBlank() &&
@@ -2231,7 +2231,7 @@ internal class NativeFuturesCampaignCoordinator(
                 plan.entryPrice.toDoubleOrNull() ?: Double.NaN,
                 plan.protectiveStop.toDoubleOrNull() ?: Double.NaN,clock())
             if(bookProof!=null) return@synchronized safePreflightRejection(bookProof)
-            if(williamsH1ParentAlreadyFilled(currentIntents,plan.signalId))
+            if(williamsH1ParentAlreadyFilled(currentIntents,plan.signalId,plan.signalType,plan.signalBarTimeMs))
                 return@synchronized safePreflightRejection("H1_PARENT_ALREADY_FILLED")
         }
         if(!entryTimePolicyProvider().allows(clock()))
