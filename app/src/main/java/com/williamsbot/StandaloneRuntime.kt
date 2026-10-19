@@ -5236,26 +5236,35 @@ private class NativeEngine(
             // Re-anchor a still-unfilled conditional TC2 entry only after a newer
             // eligible WM3 was confirmed on closed H1 bars. Never reprice an order
             // directly on Binance; cancel its exact client id first.
+            val exchangeRowsValid = (0 until positions.length()).all { index ->
+                val row=positions.optJSONObject(index) ?: return@all false
+                val qty=row.optString("positionAmt").toDoubleOrNull()
+                qty!=null && qty.isFinite() && (row.optString("symbol")!=symbol || qty==0.0)
+            }
             if (profile==williamsTc2Profile && pending.optString("intent_role","ENTRY")=="ENTRY" &&
-                CockpitDiagnostics.rows(positions).none { row -> row.optString("symbol")==symbol &&
-                    (row.optString("positionAmt").toDoubleOrNull() ?: Double.NaN) != 0.0 }) {
-                val now=futuresMarketData.exchangeNowMs()
-                val tick=symbolFilters(symbol).tick
-                val bars=fetchCandles(symbol,"1h",220)
-                    .filter { it.t>0L && it.t+3_600_000L<=now }
-                val newFractals=editionCampaignSignals(symbol,bars,"1h",tick,williamsTc2Profile)
-                val next=confirmedBetterFractal(pending,JSONArray().apply {
-                    newFractals.forEach { signal ->
-                        put(JSONObject().put("signal_id",signal.signalId).put("type",signal.type)
-                            .put("role",signal.role).put("strategy_profile",signal.strategyProfile)
-                            .put("execution_semantics",signal.executionSemantics)
-                            .put("signal_bar_time_ms",signal.signalBarTimeMs)
-                            .put("formation_at_ms",signal.formationAtMs)
-                            .put("trigger_price",signal.triggerPrice)
-                            .put("protective_price",signal.protectivePrice))
-                    }
-                },futuresMarketData.markPrice(symbol),tick,now)
+                exchangeRowsValid) {
+                // If H1 refresh fails, do not interrupt the protective-stop
+                // management of other already-open Futures positions.
+                val next=runCatching {
+                    val now=futuresMarketData.exchangeNowMs()
+                    val tick=symbolFilters(symbol).tick
+                    val bars=fetchCandles(symbol,"1h",220)
+                        .filter { it.t>0L && it.t+3_600_000L<=now }
+                    val newFractals=editionCampaignSignals(symbol,bars,"1h",tick,williamsTc2Profile)
+                    confirmedBetterFractal(pending,JSONArray().apply {
+                        newFractals.forEach { signal ->
+                            put(JSONObject().put("signal_id",signal.signalId).put("type",signal.type)
+                                .put("role",signal.role).put("strategy_profile",signal.strategyProfile)
+                                .put("execution_semantics",signal.executionSemantics)
+                                .put("signal_bar_time_ms",signal.signalBarTimeMs)
+                                .put("formation_at_ms",signal.formationAtMs)
+                                .put("trigger_price",signal.triggerPrice)
+                                .put("protective_price",signal.protectivePrice))
+                        }
+                    },futuresMarketData.markPrice(symbol),tick,now)
+                }.getOrNull()
                 if(next!=null) {
+                    val now=futuresMarketData.exchangeNowMs()
                     val oldClientId=pending.optString("client_id")
                     val cancel=withCampaignMutation(symbol,"TC2_FRACTAL_REANCHOR_CANCEL",allowPaused=true) {
                         futuresCampaignCoordinator.cancelPendingEntries("NEWER_CONFIRMED_TC2_FRACTAL",symbol)
