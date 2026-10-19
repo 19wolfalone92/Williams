@@ -1162,8 +1162,10 @@ private class NativeEngine(
                     check(RuntimeServiceState.active) { "Runtime service is not active before Futures exposure mutation" }
                 })
         }.also { coordinator ->
-            coordinator.requireM15FractalForAutomatedEntries = true
-            coordinator.m15EntryVerifier = { plan -> verifyMtfPlanBeforeSubmit(plan) }
+            coordinator.requireM15FractalForAutomatedEntries = false
+            coordinator.m15EntryVerifier = null
+            coordinator.requireBookH1ProofForAutomatedEntries = true
+            coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }
             coordinator.setEditionSelectionProvider { williamsProfile }
             coordinator.setEntryTimePolicyProvider { entryTimePolicy }
             coordinator.setObservationSink { snapshot ->
@@ -5427,7 +5429,10 @@ private class NativeEngine(
         val now=futuresMarketData.exchangeNowMs()
         val setup=runCatching { JSONObject(pending.optString("setup_context")) }.getOrDefault(JSONObject())
         val old=setup.optJSONObject("mtf_entry")?.let { williamsM15EntryFromJson(it) }
-        var reason=if(old==null) "M15_CONFIRMATION_REQUIRED_FOR_LEGACY_PENDING" else ""
+        // A 4.35 M15 order is not a valid 4.36 book-native entry. Cancel only
+        // a proven ZERO-FILL pending order, then reconcile before new admission.
+        // TRIGGERING/TRIGGERED/fills are handled by the ordinary recovery path.
+        var reason="LEGACY_M15_ENTRY_POLICY_MIGRATED_TO_BOOK_H1"
         var replacement:WilliamsM15Entry?=null
         if(old!=null) {
             reason=williamsMtfProofBlocker(setup.toString(),pending.optString("direction"),pending.optString("signal_id"),
@@ -5891,10 +5896,9 @@ private class NativeEngine(
         if(reanchorLock!=null && selectableSignals.isEmpty()) {
             return rejectDecision(symbol,"FRACTAL_REANCHOR_TARGET_NOT_CURRENTLY_VALID: no fallback to old level")
         }
-        val mtfReanchorGuard=executionStore.readState("mtf_reanchor_"+symbol)
-            ?.let { runCatching { JSONObject(it) }.getOrNull() }?.takeIf { it.optLong("expires_at_ms")>contextNow }
-        val mtfSelectable=selectableSignals.filter { williamsMtfReanchorBlocker(mtfReanchorGuard,it.signalId,contextNow)==null }
-        val baseline = mtfSelectable.minWithOrNull(
+        // Retired M15 cancel fences must not veto H1 book entries. The
+        // separate TC2 H1 re-anchor fence still protects replacement orders.
+        val baseline = selectableSignals.minWithOrNull(
             compareBy<CampaignSignalN> { it.signalBarTimeMs }
                 .thenByDescending { contextRank(it) }.thenByDescending { nativeRank(it.type) }
         ) ?: run {
@@ -5907,7 +5911,7 @@ private class NativeEngine(
         val currentMark=futuresMarketData.markPrice(symbol)
         val nearestFractal = if(reanchorLock==null && baseline.strategyProfile==williamsTc2Profile) {
             val side=campaignSignalDirection(baseline.type)
-            mtfSelectable.filter { alt ->
+            selectableSignals.filter { alt ->
                 alt.strategyProfile==williamsTc2Profile &&
                     alt.type==(if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL") &&
                     alt.role=="ENTRY" && alt.signalBarTimeMs>baseline.signalBarTimeMs &&
@@ -5933,33 +5937,23 @@ private class NativeEngine(
             }
         }
 
-        // H1 authorizes the scenario; a closed, confirmed M15 fractal refines execution.
-        // No automatic initial entry may fall back to an unconfirmed H1-only trigger.
-        val m15BarMs = frameSeconds("15m") * 1000L
-        val m15 = fetchCandles(symbol, "15m", 220)
-            .filter { it.t > 0L && it.t + m15BarMs <= contextNow }
-        if (m15.size < 45) {
-            lastError = "M15_EXECUTION_BLOCKED: insufficient closed M15 history for $symbol"
-            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
-        }
-        val lastClosedM15At = m15.last().t + m15BarMs
-        if (contextNow - lastClosedM15At > 30L * 60L * 1000L) {
-            lastError = "M15_EXECUTION_BLOCKED: latest closed M15 candle is stale for $symbol"
-            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
-        }
-
+        // The selected book source and closed H1 bars authorize the entry.
+        // No M15 candle, fractal or M15 re-anchor is required.
         val entries = futuresCampaignCoordinator.intentsSnapshot()
-        val mtfParent = h1EntryParent(signal)
-        val mtfDecision = m15EntryDecision(symbol,mtfParent,m15,symbolFilters(symbol).tick,contextNow)
-        val junior = mtfDecision.entry ?: return rejectDecision(symbol,mtfDecision.reason)
-        if(williamsH1ParentAlreadyFilled(futuresCampaignCoordinator.intentsSnapshot(),signal.signalId))
+        if(williamsH1ParentAlreadyFilled(entries,signal.signalId))
             return rejectDecision(symbol,"H1_PARENT_ALREADY_FILLED: no repeated initial entry")
-        val guard=mtfReanchorGuard
-        williamsMtfReanchorBlocker(guard,signal.signalId,contextNow,junior.pivotAt)?.let {
-            return rejectDecision(symbol,it+": no fallback to canceled level")
+        val clientId = williamsBookH1ClientId(symbol,signal.signalId)
+        if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId })
+            return rejectDecision(symbol,"FORMATION_ALREADY_ADMITTED: "+clientId)
+        val currentH1=fetchCandles(symbol,"1h",220)
+        if(williamsBookH1TriggerConsumed(direction.name,signal.signalBarTimeMs,signal.triggerPrice,
+                contextNow,currentH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }))
+            return rejectDecision(symbol,"H1_BOOK_TRIGGER_ALREADY_CONSUMED: no late return to old breakout")
+        val closedH1=currentH1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=contextNow }
+        val h1Teeth=williamsAlligatorLine(closedH1,8,5).lastOrNull() ?: Double.NaN
+        williamsBookFractalTeethBlocker(signal.type,direction.name,signal.triggerPrice,h1Teeth)?.let {
+            return rejectDecision(symbol,it)
         }
-        val clientId = junior.clientId(symbol)
-        if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId }) return rejectDecision(symbol,"FORMATION_ALREADY_ADMITTED: "+clientId)
 
         val exchangePositions = futuresCampaignCoordinator.positionsSnapshot()
         val openPositions = (0 until exchangePositions.length()).map { index ->
@@ -6003,18 +5997,19 @@ private class NativeEngine(
         if (!futuresAccountFundedForEntry(available, equity)) return rejectDecision(symbol,"ACCOUNT_FUNDS_NOT_PROVEN")
         val mark = futuresMarketData.markPrice(symbol)
         val rules = symbolFilters(symbol)
-        // The selected H1 setup authorizes direction; only the M15 fractal supplies execution.
+        // TC2 WM1 / WM2 / WM3 and NTD / Course preserve their H1 book
+        // signal bar trigger, independent of any junior execution fractal.
         val marketReentry=false
-        val reference=junior.trigger
+        val reference=signal.triggerPrice
         val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
             normalizeTriggerPrice(reference, rules.tick) else normalizePrice(reference, rules.tick)
         var stop = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
-            normalizePrice(junior.stop, rules.tick) else normalizeTriggerPrice(junior.stop, rules.tick)
+            normalizePrice(signal.protectivePrice, rules.tick) else normalizeTriggerPrice(signal.protectivePrice, rules.tick)
         if(signal.strategyProfile==williamsCourseProfile) {
             val higher=closedWilliamsWaveBars(fetchCandles(symbol,"6h",100).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },"6h",contextNow)
             val airbag=williamsCourseAirbagStop(direction.name,higher,rules.tick) ?: return rejectDecision(symbol,"REQUIRED_ENTRY_EVIDENCE_UNAVAILABLE")
-            // The higher Course Air Bag remains an emergency boundary. Never widen the
-            // junior structural stop beyond it in this explicitly selected MTF mode.
+            // The Course higher Air Bag may tighten protection, not increase
+            // the original H1 book signal's initial risk.
             stop=if(direction.name=="LONG") normalizePrice(maxOf(stop,airbag),rules.tick)
                 else normalizeTriggerPrice(minOf(stop,airbag),rules.tick)
         }
@@ -6062,14 +6057,16 @@ private class NativeEngine(
             referenceClose=if(marketReentry) signal.triggerPrice else 0.0,
             leverage = entryLeverage,
             signalBarTimeMs = signal.signalBarTimeMs,
-            signalReason = "H1 "+signal.reason+"; M15 confirmed "+direction.name+
-                " fractal; pivot="+junior.pivotAt+"; confirmation="+junior.confirmedAt+"; waiting for breakout",
+            signalReason = "BOOK H1 "+signal.reason+"; "+direction.name+
+                " stop-entry at H1 signal trigger (no M15 confirmation)",
             tradeMode = if (correction.allowed) "CORRECTION" else "TREND",
             waveContext = if (correction.allowed) correction.toJson().toString() else "",
             strategyProfile=signal.strategyProfile,executionSemantics="STOP_ENTRY",
             setupContext=(runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject()).apply {
                 put("parent_execution_semantics",signal.executionSemantics)
-                put("mtf_entry",junior.copy(stop=stop).toJson())
+                put("book_h1_entry",williamsBookH1Proof(signal.signalId,direction.name,
+                    signal.type,signal.strategyProfile,signal.signalBarTimeMs,
+                    trigger,stop,rules.tick))
                 if(signal.strategyProfile==williamsCourseProfile) {
                     williamsCourseActiveContext(hierarchy,direction.name)?.let { context ->
                         put("course_origin_at",context.getLong("origin_at")).put("course_initial_stage",context.getString("phase"))
@@ -6112,14 +6109,17 @@ private class NativeEngine(
             check(verifiedParents.any { it.signalId==signal.signalId && it.type==signal.type &&
                 abs(it.triggerPrice-signal.triggerPrice)<=rules.tick*.1 &&
                 abs(it.protectivePrice-signal.protectivePrice)<=rules.tick*.1 }) {
-                "H1_PARENT_NO_LONGER_VALID: no M15 order submitted"
+                "H1_BOOK_SIGNAL_NO_LONGER_VALID: no Futures order submitted"
             }
-            val submitM15=fetchCandles(symbol,"15m",220).filter { it.t>0 && it.t+WILLIAMS_M15_MS<=submitNow }
-            val verifiedJunior=m15EntryDecision(symbol,mtfParent,submitM15,rules.tick,submitNow).entry
-            check(verifiedJunior!=null && verifiedJunior.pivotAt==junior.pivotAt &&
-                verifiedJunior.confirmedAt==junior.confirmedAt && abs(verifiedJunior.trigger-trigger)<=rules.tick*.1 &&
-                abs(verifiedJunior.stop-junior.stop)<=rules.tick*.1) {
-                "M15_FRACTAL_REVALIDATION_FAILED: changed, consumed or invalidated junior formation"
+            val submitH1=fetchCandles(symbol,"1h",220)
+            check(!williamsBookH1TriggerConsumed(direction.name,signal.signalBarTimeMs,trigger,
+                submitNow,submitH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })) {
+                "H1_BOOK_BREAKOUT_ALREADY_CONSUMED_BEFORE_SUBMISSION"
+            }
+            val submitH1Closed=submitH1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=submitNow }
+            val submitTeeth=williamsAlligatorLine(submitH1Closed,8,5).lastOrNull() ?: Double.NaN
+            check(williamsBookFractalTeethBlocker(signal.type,direction.name,trigger,submitTeeth)==null) {
+                "H1_FRACTAL_TEETH_INVALID_BEFORE_SUBMISSION"
             }
             if (correction.allowed) {
                 val currentCorrection = williamsCorrectionEntryContext(waveHierarchyFor(symbol,refresh=true),
@@ -6141,10 +6141,11 @@ private class NativeEngine(
                 else if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
                 else submitMark > trigger
             ) {
-                "M15_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
+                "H1_BOOK_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
             }
-            check(williamsMtfProofBlocker(plan.setupContext,direction.name,signal.signalId,trigger,stop,submitNow)==null) {
-                "M15_FRACTAL_PROOF_INVALID_BEFORE_SUBMISSION"
+            check(williamsBookH1ProofBlocker(plan.setupContext,direction.name,signal.signalId,
+                signal.type,signal.strategyProfile,trigger,stop,submitNow)==null) {
+                "H1_BOOK_PROOF_INVALID_BEFORE_SUBMISSION"
             }
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
@@ -6160,7 +6161,7 @@ private class NativeEngine(
                 stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures submission unresolved")
             }
         } else {
-            check(executionStore.writeState("mtf_reanchor_"+symbol,"")) { "Cannot retire consumed M15 replacement guard" }
+            check(executionStore.writeState("mtf_reanchor_"+symbol,"")) { "Cannot retire migrated legacy M15 fence" }
             // A successfully persisted new Futures intent supersedes the
             // one-shot re-anchor hint; its own client id remains authoritative.
             if(reanchorLock!=null && signal.signalId==reanchorLock.optString("signal_id")) {
@@ -9667,9 +9668,10 @@ private class NativeEngine(
             .put("version", BuildConfig.VERSION_NAME)
             .put("campaign_engine", campaignEngineEnabled)
             .put("campaign_execution_timeframe", campaignExecutionTimeframe)
-            .put("campaign_entry_mode", WILLIAMS_MTF_ENTRY_MODE)
+            .put("campaign_entry_mode", WILLIAMS_BOOK_H1_ENTRY_MODE)
             .put("campaign_context_timeframe", "1h")
-            .put("campaign_trigger_timeframe", "15m")
+            .put("campaign_trigger_timeframe", "1h")
+            .put("campaign_m15_confirmation_required", false)
             .put("campaign_fixed_take_profit", false)
             .put("campaign_entry_execution", "USD_M_FUTURES_TESTNET_COORDINATOR")
             .put("campaign_risk_limit_pct", campaignRiskLimitPct)
