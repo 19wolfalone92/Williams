@@ -8867,7 +8867,7 @@ private class NativeEngine(
             .put("name", "Происхождение сигналов TC2 / NTD / Course")
             .put("severity", when {
                 badSourceEvidence > 0 -> "FAIL"
-                fullSourceEvidence -> "PASS"
+                fullSourceEvidence && unifiedEvidence.optInt("observed_signal_count") > 0 -> "PASS"
                 else -> "NOT_VERIFIED"
             }).put("detail", "Режим=${unifiedEvidence.optString("mode")}; " +
                 "статус=${unifiedEvidence.optString("status")}; " +
