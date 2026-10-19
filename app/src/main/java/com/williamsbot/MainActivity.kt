@@ -2513,7 +2513,8 @@ private fun MarketChartPanel(
                     Text(selectedSymbol, style = MaterialTheme.typography.titleLarge)
                     Text("USDⓈ-M Futures Demo • выбранная пара", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
                 }
-                Text((livePrice ?: candles.lastOrNull()?.close)?.let { fmt(it) } ?: if (loading) "Загрузка…" else "—",
+                // Never display a closed candle's close as the current traded price.
+                Text(livePrice?.let { fmt(it) } ?: "—",
                     color = AppColors.primary, fontWeight = FontWeight.Bold)
             }
             Text("Бот независимо сканирует все 10 контрактов. Здесь показан только выбранный рынок.",
@@ -2535,7 +2536,8 @@ private fun MarketChartPanel(
             Text("Решение: H1 • контекст: H4 / D1 • смена графика не меняет торговлю", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
             Text((if (historicalTrade != null) "Исторические свечи" else "Котировка: " + (livePrice?.let { fmt(it) } ?: "нет")) + " • источник: " + quoteSource +
                 (if (quoteUpdatedAtMs > 0L) " • " + ((System.currentTimeMillis() - quoteUpdatedAtMs).coerceAtLeast(0L) / 1000L) + "с назад" else ""),
-                color = if (livePrice != null && CockpitDiagnostics.fresh(quoteUpdatedAtMs, System.currentTimeMillis(), 60_000L)) AppColors.green else AppColors.amber,
+                color = if (livePrice != null && quoteSource !in setOf("STALE", "UNAVAILABLE") &&
+                    CockpitDiagnostics.fresh(quoteUpdatedAtMs, System.currentTimeMillis(), 15_000L)) AppColors.green else AppColors.amber,
                 style = MaterialTheme.typography.labelSmall)
             TextButton(onClick = { details = !details }) { Text(if (details) "Скрыть данные индикаторов" else "Что видит бот • данные индикаторов") }
             if (details) Text(indicatorSummary, color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
