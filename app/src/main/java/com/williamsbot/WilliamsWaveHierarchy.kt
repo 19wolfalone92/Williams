@@ -415,11 +415,7 @@ internal fun williamsCorrectionBoundsValid(context: JSONObject): Boolean {
 
 internal fun williamsOpposingLevelTriggered(
     side: String, trigger: Double, signalClosedAt: Long, openedAt: Long, mark: Double,
-    subsequent: List<WilliamsWaveBar>, now: Long, expiresAt: Long
-): Boolean {
-    if (side !in listOf("LONG","SHORT") || !trigger.isFinite() || trigger <= 0 ||
-        !mark.isFinite() || mark <= 0 || openedAt <= 0 || signalClosedAt <= openedAt ||
-        signalClosedAt > now || now >= expiresAt) return false
-    return if (side == "LONG") mark >= trigger || subsequent.any { it.t >= signalClosedAt && it.h >= trigger }
-    else mark <= trigger || subsequent.any { it.t >= signalClosedAt && it.l <= trigger }
-}
+    subsequent: List<WilliamsWaveBar>, now: Long, expiresAt: Long,
+    frameMs:Long=3_600_000L,invalidation:Double?=null
+): Boolean = evaluateWilliamsLevelEvent(side,trigger,signalClosedAt,openedAt,mark,subsequent,
+    now,expiresAt,frameMs,invalidation).state=="TRIGGERED"

@@ -274,6 +274,9 @@ def test_teeth_close_exit_uses_only_closed_bars_for_long(monkeypatch):
     runtime._exit_market = lambda campaign, reason: exits.append(reason) or {
         "state": "EXIT_SIGNALLED", "reason": reason
     }
+    # The final candle is forming at this deterministic exchange time.
+    monkeypatch.setattr("futures_williams_runtime.time.time",
+        lambda: (int(frame.iloc[-1]["open_time_ms"])+1_800_000)/1000)
     monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *args, **kwargs: frame)
     campaign = type("C", (), {
         "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 80.0,
@@ -316,6 +319,9 @@ def test_teeth_close_exit_uses_only_closed_bars_for_short(monkeypatch):
     runtime._exit_market = lambda campaign, reason: exits.append(reason) or {
         "state": "EXIT_SIGNALLED", "reason": reason
     }
+    # The final candle is forming at this deterministic exchange time.
+    monkeypatch.setattr("futures_williams_runtime.time.time",
+        lambda: (int(frame.iloc[-1]["open_time_ms"])+1_800_000)/1000)
     monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *args, **kwargs: frame)
     campaign = type("C", (), {
         "symbol": "BTCUSDT", "side": "SELL", "current_stop_price": 220.0,
@@ -354,6 +360,9 @@ def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypa
     runtime._exit_market = lambda campaign, reason: (_ for _ in ()).throw(
         AssertionError("rising closes must not trigger a Teeth exit")
     )
+    # The final candle is forming at this deterministic exchange time.
+    monkeypatch.setattr("futures_williams_runtime.time.time",
+        lambda: (int(frame.iloc[-1]["open_time_ms"])+1_800_000)/1000)
     monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *args, **kwargs: frame)
     campaign = type("C", (), {
         "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 100.0,

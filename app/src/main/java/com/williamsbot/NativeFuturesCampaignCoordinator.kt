@@ -11,11 +11,18 @@ import java.util.TimeZone
 
 private val ENTRY_ORDER_ACTIVE_STATUSES = setOf(
     "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN",
-    "ACCEPTED", "TRIGGERED", "CANCEL_SUBMISSION_UNKNOWN"
+    "ACCEPTED", "TRIGGERING", "TRIGGERED", "CANCEL_SUBMISSION_UNKNOWN"
 )
 internal val ENTRY_ORDER_TERMINAL_STATUSES = setOf(
     "FILLED", "FINISHED", "EXPIRED", "EXPIRED_IN_MATCH", "CANCELED", "CANCELLED", "REJECTED"
 )
+internal fun hasUnresolvedTriggeringEntry(rows:JSONArray):Boolean =
+    (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.any {
+        it.optString("intent_role","ENTRY") in setOf("ENTRY","ADD_ON") &&
+            campaignLifecycleStatus(it)!="CLOSED_OR_STOPPED" &&
+            exchangeOrderStatus(it) in setOf("TRIGGERING","TRIGGERED") &&
+            campaignLifecycleStatus(it)!="OPEN_PROTECTED"
+    }
 private val ACTIVE_CAMPAIGN_STATUSES = setOf(
     "ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "POSITION_OPEN", "OPEN_PROTECTED", "EXIT_PENDING"
 )
@@ -242,6 +249,69 @@ internal fun assessActualFuturesPositionRisk(
         )
     }
     return result
+}
+
+/**
+ * Read-only evidence for continuing ONLY risk-reducing management when confirmed
+ * live stop+execution costs breach the portfolio cap. This is not reconciliation
+ * success and MUST NOT authorize any entry or add-on.
+ */
+internal fun verifiedProtectedRiskCapManagement(
+    blocker: String?,
+    positions: JSONArray,
+    intents: JSONArray,
+    nowMs: Long
+): Boolean {
+    if (blocker?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:") != true ||
+        nowMs <= 0L || positions.length() == 0) return false
+    val open = linkedMapOf<String, String>()
+    for (i in 0 until positions.length()) {
+        val row = positions.optJSONObject(i) ?: return false
+        val symbol = row.optString("symbol").trim().uppercase(Locale.US)
+        val qty = row.optString("positionAmt").toDoubleOrNull() ?: return false
+        if (symbol.isBlank() || !qty.isFinite()) return false
+        if (qty == 0.0) continue
+        if (open.put(symbol, if (qty > 0.0) "LONG" else "SHORT") != null) return false
+    }
+    if (open.isEmpty()) return false
+    val rows = (0 until intents.length()).map { intents.optJSONObject(it) ?: return false }
+    // Ambiguous entries, exits and additions may race a protection replacement.
+    if (rows.any {
+        val lifecycle = campaignLifecycleStatus(it)
+        (it.optString("intent_role", "ENTRY") == "ENTRY" &&
+            lifecycle in setOf("ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "POSITION_OPEN", "EXIT_PENDING")) ||
+        (it.optString("intent_role") == "EXIT" &&
+            it.optString("exchange_status").uppercase(Locale.US) in ENTRY_ORDER_ACTIVE_STATUSES) ||
+        (it.optString("intent_role") == "ADD_ON" &&
+            exchangeOrderStatus(it) in ENTRY_ORDER_ACTIVE_STATUSES)
+    }) return false
+    val active = rows.filter {
+        it.optString("intent_role", "ENTRY") == "ENTRY" &&
+            campaignLifecycleStatus(it) == "OPEN_PROTECTED"
+    }
+    if (active.size != open.size || active.map { it.optString("symbol").uppercase(Locale.US) }.toSet() != open.keys)
+        return false
+    for (entry in active) {
+        val symbol = entry.optString("symbol").uppercase(Locale.US)
+        if (open[symbol] != entry.optString("direction") ||
+            !entry.optBoolean("strategy_ownership_verified", false) ||
+            entry.optString("protection_status") != "PROTECTED" ||
+            entry.optString("protection_client_id").isBlank() ||
+            entry.optString("previous_protection_client_id").isNotBlank() ||
+            entry.optString("liquidation_guard_status") != "PASS") return false
+        val stop = entry.optString("protective_stop").toDoubleOrNull()
+        val risk = entry.optDouble("actual_all_in_risk_pct", Double.NaN)
+        val auditedAt = entry.optLong("actual_risk_audited_at_ms", 0L)
+        val status = entry.optString("actual_risk_audit_status")
+        if (stop == null || !stop.isFinite() || stop <= 0.0 ||
+            !risk.isFinite() || risk <= 0.0 ||
+            auditedAt <= 0L || auditedAt > nowMs || nowMs - auditedAt > 30_000L ||
+            status !in setOf("PASS", "PASS_RESERVATION_ADJUSTED", "BLOCKED")) return false
+        if (status == "BLOCKED" &&
+            !entry.optString("actual_risk_audit_blocker")
+                .startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:")) return false
+    }
+    return true
 }
 
 /** Sum each admitted entry exactly once while its primary campaign remains active. */
@@ -648,6 +718,8 @@ internal class NativeFuturesCampaignCoordinator(
     private val clock:()->Long=System::currentTimeMillis,
     private val adapterFactory: () -> BinanceUsdMFuturesTestnetAdapter
 ) {
+    var requireM15FractalForAutomatedEntries:Boolean = false
+    var m15EntryVerifier:((EntryPlan)->Unit)? = null
     enum class Direction { LONG, SHORT }
     enum class EntryKind { STOP, TAKE_PROFIT, LIMIT, MARKET }
     enum class State {
@@ -686,6 +758,7 @@ internal class NativeFuturesCampaignCoordinator(
     @Volatile private var reconciliationRunning = false
     @Volatile private var reconciliationStartedAtMs = 0L
     @Volatile private var reconciliationFinishedAtMs = 0L
+    @Volatile private var verifiedRiskCapManagementAtMs = 0L
 
     private val lock = Any()
     @Volatile private var observationSink: ((JSONArray) -> Unit)? = null
@@ -826,6 +899,7 @@ internal class NativeFuturesCampaignCoordinator(
     fun reconcile(): JSONObject = synchronized(lock) {
         reconciliationRunning = true
         reconciliationStartedAtMs = clock()
+        verifiedRiskCapManagementAtMs = 0L
         state = State.RECONCILE_REQUIRED
         lastBlocker = "exchange_reconciliation_in_progress"
         try {
@@ -934,11 +1008,20 @@ internal class NativeFuturesCampaignCoordinator(
                 } else {
                     val parent = conditionalOrderOrNull(adapter, symbol, cid)
                     val actualId = parent?.optString("actualOrderId").orEmpty()
+                    if(parent!=null) owner.put("conditional_parent_status",parent.optString("algoStatus"))
+                        .put("conditional_actual_order_id",actualId)
                     if (actualId.isNotBlank() && actualId != "0") {
                         check(parent != null && parent.optString("symbol") == symbol && parent.optString("clientAlgoId") == cid) {
                             "Conditional entry parent identity mismatch"
                         }
-                        adapter.orderById(symbol, actualId)
+                        try { adapter.orderById(symbol, actualId) }
+                        catch(failure:Exception) {
+                            // Algo Service can publish a child id before the matching engine
+                            // makes it queryable. Keep the reservation and audit other stops;
+                            // never turn this into a fill, cancellation or retry submission.
+                            if(parent.optString("algoStatus") in setOf("TRIGGERING","TRIGGERED") &&
+                                isDefinitiveBinanceOrderNotFound(failure)) null else throw failure
+                        }
                     } else null
                 }
                 if (execution != null) {
@@ -960,6 +1043,7 @@ internal class NativeFuturesCampaignCoordinator(
                         "One exchange fill cannot belong to two entry intents"
                     }
                     owner.put("actual_entry_order_id", actualId)
+                        .put("actual_entry_executed_qty",executed.toPlainString())
                     entryExecutions[cid] = execution
                 }
             }
@@ -2006,6 +2090,14 @@ internal class NativeFuturesCampaignCoordinator(
                     symbol !in openBySymbol &&
                     campaignLifecycleStatus(intent) in setOf("ENTRY_PENDING", "FILL_CONFIRMATION_PENDING")
             }
+            // A strictly verified over-cap portfolio may continue risk-REDUCING
+            // management. Failed reconciliation remains failed and entries stay locked.
+            val verifiedOverCap = !anyUnprotected && !hasPendingExit && !hasPendingAddition &&
+                !hasPendingEntry && requiredSafetyExits.length() == 0 &&
+                actualRiskAuditBlocked && verifiedProtectedRiskCapManagement(
+                    actualRiskAuditBlocker, exchangePositions, persisted, clock()
+                )
+            verifiedRiskCapManagementAtMs = if (verifiedOverCap) clock() else 0L
             state = when {
                 anyUnprotected -> State.POSITION_UNPROTECTED
                 actualRiskAuditBlocked -> State.RECONCILE_REQUIRED
@@ -2026,6 +2118,7 @@ internal class NativeFuturesCampaignCoordinator(
             JSONObject()
                 .put("ok", !anyUnprotected && !actualRiskAuditBlocked && !hasPendingExit)
                 .put("actual_risk_audit_blocked", actualRiskAuditBlocked)
+                .put("protected_over_cap_management_allowed", verifiedOverCap)
                 .put("actual_risk_audit_blocker", actualRiskAuditBlocker ?: JSONObject.NULL)
                 .put("required_safety_exits", requiredSafetyExits)
                 .put("engine", "USD_M_FUTURES_TESTNET")
@@ -2118,6 +2211,16 @@ internal class NativeFuturesCampaignCoordinator(
     }
     private fun submitPendingEntryLocked(plan: EntryPlan): JSONObject = synchronized(lock) {
         val currentIntents = intents()
+        if(hasUnresolvedTriggeringEntry(currentIntents))
+            return@synchronized safePreflightRejection("CONDITIONAL_TRIGGER_IN_PROGRESS: reconcile child order and position before new exposure")
+        if(requireM15FractalForAutomatedEntries && plan.entryClientId.isBlank() &&
+            plan.signalType!="OPERATOR_FORCED_DIRECTION") {
+            val proof=williamsMtfProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
+                plan.entryPrice.toDoubleOrNull() ?: Double.NaN,plan.protectiveStop.toDoubleOrNull() ?: Double.NaN,clock())
+            if(proof!=null) return@synchronized safePreflightRejection(proof)
+            if(williamsH1ParentAlreadyFilled(currentIntents,plan.signalId))
+                return@synchronized safePreflightRejection("H1_PARENT_ALREADY_FILLED: no second initial campaign")
+        }
         if(!entryTimePolicyProvider().allows(clock()))
             return@synchronized safePreflightRejection("ENTRY_TIME_POLICY_BLOCKED: "+entryTimePolicyProvider().toJson())
         val selected=editionSelectionProvider?.invoke()
@@ -2348,6 +2451,7 @@ internal class NativeFuturesCampaignCoordinator(
 
         val adapter = adapterFactory()
         var orderSubmissionAttempted = false
+        var finalContextCheckStarted = false
         try {
             adapter.serverTime()
             adapter.requireOneWayMode()
@@ -2362,7 +2466,16 @@ internal class NativeFuturesCampaignCoordinator(
             intent.put("confirmed_leverage", leverageConfirmation.getInt("leverage"))
                 .put("leverage_confirmed_at_ms", clock())
             saveIntents(currentIntents)
+            finalContextCheckStarted = true
             check(entryTimePolicyProvider().allows(clock())) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_SUBMISSION" }
+            if(requireM15FractalForAutomatedEntries && !isAddition && plan.signalType!="OPERATOR_FORCED_DIRECTION") {
+                check(williamsMtfProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
+                    plan.entryPrice.toDouble(),plan.protectiveStop.toDouble(),clock())==null) {
+                    "M15_FRACTAL_PROOF_EXPIRED_BEFORE_SUBMISSION"
+                }
+                val verifier=m15EntryVerifier ?: error("M15_FINAL_VERIFIER_REQUIRED")
+                verifier(plan)
+            }
             if(plan.kind==EntryKind.MARKET) check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
                 plan.referenceClose,adapter.markPrice(plan.symbol))==null) { "NTD close-event expired or moved before mutation" }
             orderSubmissionAttempted = true
@@ -2425,7 +2538,8 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("error", failure.message ?: failure.javaClass.simpleName)
                 saveIntents(currentIntents)
                 state = State.RECONCILE_REQUIRED
-                lastBlocker = "futures_account_configuration_failed_before_order"
+                lastBlocker = if(finalContextCheckStarted) "FUTURES_ENTRY_CONTEXT_REJECTED: "+safeDiagnosticText(intent.optString("error"))
+                    else "futures_account_configuration_failed_before_order"
                 return@synchronized JSONObject().put("accepted", false)
                     .put("safe_rejection", true).put("mutation_attempted", true)
                     .put("order_mutation_attempted", false).put("state", state.name)
@@ -2629,7 +2743,11 @@ internal class NativeFuturesCampaignCoordinator(
         newStopPrice: String,
         clientAlgoId: String
     ): JSONObject = synchronized(lock) {
-        check(state == State.OPEN_PROTECTED || state == State.ENTRY_PENDING) {
+        val cappedRiskOnly = state == State.RECONCILE_REQUIRED &&
+            lastBlocker?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:") == true &&
+            verifiedRiskCapManagementAtMs > 0L && clock() >= verifiedRiskCapManagementAtMs &&
+            clock() - verifiedRiskCapManagementAtMs <= 30_000L
+        check(state == State.OPEN_PROTECTED || state == State.ENTRY_PENDING || cappedRiskOnly) {
             "Stop trail blocked while Futures state is $state"
         }
         require(symbol in allowedSymbols)
@@ -3174,7 +3292,7 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("risk_reservation_adjustment_reason", item.opt("risk_reservation_adjustment_reason") ?: JSONObject.NULL)
             )
         }
-        val readyForNewEntry = !reconciliationActive && (observedState == State.READY || observedState == State.OPEN_PROTECTED ||
+        val readyForNewEntry = !reconciliationActive && !hasUnresolvedTriggeringEntry(persisted) && (observedState == State.READY || observedState == State.OPEN_PROTECTED ||
             (observedState == State.ENTRY_PENDING &&
                 confirmedPendingEntriesAllowConcurrentAdmission(persisted)))
         return JSONObject()

@@ -3112,7 +3112,7 @@ private fun SettingsScreen(
 
                     InfoRow("Execution authority", "Автономный телефон • Binance напрямую")
                     InfoRow("Scanner universe", "USDⓈ-M Futures • 10 USDT contracts")
-                    InfoRow("MTF", "D1/H4 context • H1 decisions • M15 monitoring")
+                    InfoRow("MTF", "D1/H4 контекст • H1 сценарий • вход по фракталу M15")
                 }
             }
         }

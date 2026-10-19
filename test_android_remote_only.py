@@ -378,7 +378,7 @@ def test_android_execution_gate_requires_coordinator_and_stream_reconciliation()
     assert "if (shouldReconnectFuturesUserStream(event))" in user_stream
 
 
-def test_android_h1_is_the_only_directional_decision_and_m15_is_execution_readiness_only():
+def test_android_h1_context_requires_m15_fractal_execution_without_an_independent_direction():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     entry = runtime.split("private fun submitNativeFuturesCampaignEntry(", 1)[1].split(
         "private fun performCampaignScan(", 1
@@ -389,11 +389,14 @@ def test_android_h1_is_the_only_directional_decision_and_m15_is_execution_readin
     assert "submitM15Bear" not in entry
     assert "m15Confirmed" not in entry
     assert "M15_CONFIRMATION_BLOCKED" not in entry
-    # H1 signals still pass through D1 macro veto and H4 context, then the
-    # exchange-side conditional entry uses the H1 trigger/structural stop.
-    assert "signal.triggerPrice" in entry
-    assert "signal.protectivePrice" in entry
-    assert "H1_TRIGGER_ALREADY_CROSSED" in entry
+    # H1 supplies the approved directional parent. The exchange trigger and
+    # structural stop must come from a confirmed M15 fractal and be revalidated.
+    assert "val mtfParent = h1EntryParent(signal)" in entry
+    assert "val reference=junior.trigger" in entry
+    assert "normalizePrice(junior.stop" in entry
+    assert "M15_FRACTAL_REVALIDATION_FAILED" in entry
+    assert "M15_TRIGGER_ALREADY_CROSSED" in entry
+    assert "williamsMtfProofBlocker(plan.setupContext" in entry
     assert "val submitMark = futuresMarketData.markPrice(symbol)" in entry
     assert "futuresCampaignCoordinator.submitPendingEntry(plan)" in entry
 

@@ -1162,6 +1162,8 @@ private class NativeEngine(
                     check(RuntimeServiceState.active) { "Runtime service is not active before Futures exposure mutation" }
                 })
         }.also { coordinator ->
+            coordinator.requireM15FractalForAutomatedEntries = true
+            coordinator.m15EntryVerifier = { plan -> verifyMtfPlanBeforeSubmit(plan) }
             coordinator.setEditionSelectionProvider { williamsProfile }
             coordinator.setEntryTimePolicyProvider { entryTimePolicy }
             coordinator.setObservationSink { snapshot ->
@@ -1263,6 +1265,7 @@ private class NativeEngine(
     @Volatile private var lastScanDailyRiskCheckAtMs = 0L
     @Volatile private var lastScanDailyRiskCheckAllowed = false
     @Volatile private var lastNativeManagementAttemptMs = 0L
+    @Volatile private var lastProtectedRiskCapManagementAtMs = 0L
     private val deepWatchTopN = 10
     private val scannerUniverseLabel = "USD_M_FUTURES_TESTNET_10"
 
@@ -5184,6 +5187,33 @@ private class NativeEngine(
             reconcileRequired = true
             persistSafetyFlag("reconcile_required", true)
             stateMachine.force(TradingState.RECONCILE_REQUIRED, scannerError ?: "Futures reconciliation failed")
+            val riskManagementNowMs = System.currentTimeMillis()
+            val riskManagementLastMs = lastProtectedRiskCapManagementAtMs
+            if (reconciliation.optBoolean("protected_over_cap_management_allowed", false) &&
+                (riskManagementLastMs <= 0L || riskManagementNowMs - riskManagementLastMs >= 30_000L)
+            ) {
+                // Limit repeated signed Futures requests while a hard risk cap
+                // is exceeded; preserve 24/7 exits and confirmed stop protection.
+                lastProtectedRiskCapManagementAtMs = riskManagementNowMs
+                // A failed risk-cap reconciliation is NOT a trading authorization.
+                // Retain the durable latch and permit only confirmed risk-reducing
+                // exits / stop improvements. New entries and add-ons remain forbidden.
+                val riskManagement = runCatching {
+                    manageVerifiedNativePositions(
+                        futuresCampaignCoordinator.positionsSnapshot(),
+                        futuresCampaignCoordinator.intentsSnapshot(),
+                        riskOnly = true
+                    )
+                }
+                riskManagement.onFailure { failure ->
+                    lastError = "PROTECTED_RISK_CAP_MANAGEMENT_FAILED: " +
+                        (failure.message ?: failure.javaClass.simpleName)
+                    runCatching { auditStore.recordCockpitEvent(
+                        "RISK_CAP_MANAGEMENT", state = "BLOCKED",
+                        detail = lastError.orEmpty()
+                    ) }
+                }
+            }
             if (scannerError?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:")==true) {
                 val candidate=runCatching {
                     proposePendingRiskRemediation(
@@ -5285,6 +5315,12 @@ private class NativeEngine(
                 val qty=row.optString("positionAmt").toDoubleOrNull()
                 qty!=null && qty.isFinite() && (row.optString("symbol")!=symbol || qty==0.0)
             }
+            if(pending.optString("intent_role","ENTRY")=="ENTRY" && exchangeRowsValid &&
+                pending.optString("client_id").startsWith("W2E_") && pending.optString("signal_type")!="OPERATOR_FORCED_DIRECTION") {
+                if(exchangeOrderStatus(pending) in setOf("TRIGGERING","TRIGGERED")) continue
+                if(manageM15PendingEntry(pending)) return false
+                continue // H1-only re-anchoring must never replace a junior-confirmed order.
+            }
             if (profile==williamsTc2Profile && pending.optString("intent_role","ENTRY")=="ENTRY" &&
                 exchangeRowsValid) {
                 // If H1 refresh fails, do not interrupt the protective-stop
@@ -5381,6 +5417,78 @@ private class NativeEngine(
                 return false // force a fresh position/intent snapshot after a possible racing fill
             }
         }
+        manageVerifiedNativePositions(positions, intents, riskOnly = false)
+        return true
+    }
+
+    /** Cancel first; a replacement is sized only after a fresh complete exchange reconciliation. */
+    private fun manageM15PendingEntry(pending:JSONObject):Boolean {
+        val symbol=pending.getString("symbol")
+        val now=futuresMarketData.exchangeNowMs()
+        val setup=runCatching { JSONObject(pending.optString("setup_context")) }.getOrDefault(JSONObject())
+        val old=setup.optJSONObject("mtf_entry")?.let { williamsM15EntryFromJson(it) }
+        var reason=if(old==null) "M15_CONFIRMATION_REQUIRED_FOR_LEGACY_PENDING" else ""
+        var replacement:WilliamsM15Entry?=null
+        if(old!=null) {
+            reason=williamsMtfProofBlocker(setup.toString(),pending.optString("direction"),pending.optString("signal_id"),
+                pending.optString("entry_price").toDoubleOrNull() ?: Double.NaN,
+                pending.optString("protective_stop").toDoubleOrNull() ?: Double.NaN,now).orEmpty()
+        }
+        if(old!=null && reason.isEmpty()) {
+            // A history/network failure must not prevent management of other protected symbols.
+            val assessment=runCatching {
+                val h1=fetchCandles(symbol,"1h",220)
+                val parents=h1ContextCampaignSignals(symbol,h1,symbolFilters(symbol).tick)
+                val m15=fetchCandles(symbol,"15m",220).filter { it.t>0 && it.t+WILLIAMS_M15_MS<=now }
+                val bars=m15.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                val teeth=williamsAlligatorLine(m15,8,5).map { it ?: Double.NaN }
+                val mark=futuresMarketData.markPrice(symbol)
+                val invalid=if(parents.none { it.signalId==old.parent.signalId })
+                    h1ParentRejectionReason(symbol,old.parent.signalId,"H1_PARENT_NO_LONGER_VALID")
+                    else williamsPendingM15Invalidation(old,bars,teeth,mark,now).orEmpty()
+                val next=selectWilliamsH1M15Entry(old.parent,bars,teeth,old.tick,mark,now).entry
+                val closer=next!=null && next.pivotAt>old.pivotAt &&
+                    (if(old.parent.direction=="LONG") next.trigger<old.trigger-old.tick*.1 else next.trigger>old.trigger+old.tick*.1)
+                Triple(invalid,if(closer) next else null,closer)
+            }.getOrElse { failure ->
+                rejectDecision(symbol,"M15_PENDING_REVALIDATION_UNAVAILABLE: "+failure.javaClass.simpleName)
+                return false
+            }
+            reason=assessment.first
+            replacement=assessment.second
+            if(reason.isEmpty() && replacement==null) return false
+            if(reason.isEmpty()) reason="NEWER_CLOSER_M15_FRACTAL"
+        }
+        val oldId=pending.getString("client_id")
+        // Persist the replacement fence before canceling. Crash/retry cannot return to the old level.
+        val fence=JSONObject().put("parent_id",old?.parent?.signalId ?: pending.optString("signal_id"))
+            .put("pivot_at_ms",replacement?.pivotAt ?: -1L)
+            .put("expires_at_ms",old?.parent?.expiresAt ?: now+5*WILLIAMS_H1_MS)
+            .put("reason",reason).put("old_client_id",oldId)
+        if(old!=null) check(executionStore.writeState("mtf_reanchor_"+symbol,fence.toString())) { "M15_CANCEL_FENCE_NOT_DURABLE" }
+        val result=withCampaignMutation(symbol,"M15_PENDING_ENTRY_CANCEL",allowPaused=true) {
+            try { futuresCampaignCoordinator.cancelPendingEntries(reason,symbol) }
+            finally {
+                reconcileRequired=true
+                check(persistSafetyFlag("reconcile_required",true)) { "M15_CANCEL_RECONCILIATION_FENCE_FAILED" }
+            }
+        }
+        val after=futuresCampaignCoordinator.intentsSnapshot()
+        val prior=(0 until after.length()).mapNotNull { after.optJSONObject(it) }.singleOrNull { it.optString("client_id")==oldId }
+        check(result.optBoolean("ok") && prior!=null && campaignLifecycleStatus(prior)=="CLOSED_OR_STOPPED" &&
+            exchangeOrderStatus(prior) in ENTRY_ORDER_TERMINAL_STATUSES) { "M15_CANCEL_UNRESOLVED: replacement forbidden" }
+        // Invalid/expired parent has no replacement. Retain a finite fence against rearming it;
+        // a different/newer parent is allowed after the old one has expired/invalidated.
+        if(replacement==null) check(executionStore.writeState("mtf_reanchor_"+symbol,"")) { "Cannot retire invalid M15 target" }
+        auditStore.recordCockpitEvent("M15_ENTRY_CANCEL",symbol,pending.optString("direction"),"CANCEL_CONFIRMED",reason)
+        return true
+    }
+
+    private fun manageVerifiedNativePositions(
+        positions: JSONArray,
+        intents: JSONArray,
+        riskOnly: Boolean
+    ) {
         for (i in 0 until positions.length()) {
             val row = positions.optJSONObject(i)
                 ?: throw IllegalStateException("Malformed Binance Futures position row during structural exit evaluation")
@@ -5459,7 +5567,7 @@ private class NativeEngine(
                             management.put("course_pending_stage",stage).put("course_pending_target",abs(signedQty)-reduction)
                                 .put("course_pending_client_id",cid)
                             futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
-                            val trimmed=withCampaignMutation(symbol,"COURSE_STAGE_REDUCTION",allowPaused=true) {
+                            val trimmed=withCampaignMutation(symbol,"COURSE_STAGE_REDUCTION",allowPaused=true, allowReconcileRequired=riskOnly) {
                                 futuresCampaignCoordinator.closePosition(symbol,direction,fmtQty(reduction,rules.decimals),cid,"COURSE_STAGE_TRIM",partialReduction=true)
                             }
                             if(!trimmed.optBoolean("ok",false)) throw IllegalStateException(trimmed.optString("blocker","Course reduction requires reconciliation"))
@@ -5483,11 +5591,17 @@ private class NativeEngine(
                 val correction = if (opposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
                     if (dir == "LONG") "SHORT" else "LONG",opposing.signalBarTimeMs,opposing.type) else WilliamsCorrectionContext()
                 val exitReason = if(editionExit.isNotEmpty()) editionExit else if (boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
-                    else if (correction.allowed) "HIGHER_WAVE_IMPULSE_COMPLETION_CONFIRMED"
+                    else if (correction.allowed) "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
                     else "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                management.put("exit_evidence",JSONObject().put("reason",exitReason)
+                    .put("observed_at_ms",futuresMarketData.exchangeNowMs()).put("edition_exit",editionExit)
+                    .put("correction_boundary_broken",boundaryExit).put("higher_correction",correction.toJson())
+                    .put("opposition_check",if(opposing!=null) JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) else JSONObject.NULL))
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
                 val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"),rules)
                 val clientId = ("W2O_"+symbol.take(8)+"_"+System.nanoTime().toString(16).takeLast(12)).take(36)
-                val result = withCampaignMutation(symbol,"TRIGGERED_WILLIAMS_EXIT",allowPaused=true) {
+                val result = withCampaignMutation(symbol,"TRIGGERED_WILLIAMS_EXIT",allowPaused=true, allowReconcileRequired=riskOnly) {
                     futuresCampaignCoordinator.closePosition(symbol,direction,closeQty,clientId,exitReason)
                 }
                 if (!result.optBoolean("ok",false)) throw IllegalStateException(result.optString("blocker",result.optString("error")))
@@ -5519,7 +5633,7 @@ private class NativeEngine(
                 val result = withCampaignMutation(
                     symbol = symbol,
                     purpose = "WILLIAMS_STRUCTURAL_STOP_TRAIL",
-                    allowPaused = true
+                    allowPaused = true, allowReconcileRequired = riskOnly
                 ) {
                     futuresCampaignCoordinator.trailProtectiveStop(
                         symbol, direction, fmtPrice(plan.stop, rules.tick), clientId
@@ -5537,7 +5651,6 @@ private class NativeEngine(
                 }
             }
         }
-        return true
     }
 
     private fun submitNativeFuturesAddition(candidate:BaseAnalysis,owner:JSONObject) {
@@ -5683,15 +5796,15 @@ private class NativeEngine(
             williamsProfileAllowsSource(williamsProfile,it.strategyProfile) && (it.role=="ENTRY" || profitReentry(it)) &&
                 (it.executionSemantics=="STOP_ENTRY" || profitReentry(it) && it.executionSemantics=="MARKET_ON_CLOSE" &&
                     williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,contextNow,it.triggerPrice,futuresMarketData.markPrice(symbol))==null) &&
-                isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)
+                isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L) &&
+                !williamsH1ParentAlreadyFilled(existing,it.signalId)
         }
         if (freshSignals.isEmpty()) {
             lastError = "WILLIAMS_SIGNAL_EXPIRED: no fresh confirmed H1 hypothesis for $symbol"
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 
-        // Macro D1 is an airbag; H4 supplies context; H1 is the only decision TF.
-        // M15 is execution/fill monitoring only; M5 remains diagnostics/replay only.
+        // D1/H4 gate the H1 scenario. M15 must independently confirm its execution fractal.
         val d1BarMs = frameSeconds("1d") * 1000L
         val h4BarMs = frameSeconds("4h") * 1000L
         val d1 = fetchCandles(symbol, "1d", 90)
@@ -5778,7 +5891,10 @@ private class NativeEngine(
         if(reanchorLock!=null && selectableSignals.isEmpty()) {
             return rejectDecision(symbol,"FRACTAL_REANCHOR_TARGET_NOT_CURRENTLY_VALID: no fallback to old level")
         }
-        val baseline = selectableSignals.minWithOrNull(
+        val mtfReanchorGuard=executionStore.readState("mtf_reanchor_"+symbol)
+            ?.let { runCatching { JSONObject(it) }.getOrNull() }?.takeIf { it.optLong("expires_at_ms")>contextNow }
+        val mtfSelectable=selectableSignals.filter { williamsMtfReanchorBlocker(mtfReanchorGuard,it.signalId,contextNow)==null }
+        val baseline = mtfSelectable.minWithOrNull(
             compareBy<CampaignSignalN> { it.signalBarTimeMs }
                 .thenByDescending { contextRank(it) }.thenByDescending { nativeRank(it.type) }
         ) ?: run {
@@ -5791,7 +5907,7 @@ private class NativeEngine(
         val currentMark=futuresMarketData.markPrice(symbol)
         val nearestFractal = if(reanchorLock==null && baseline.strategyProfile==williamsTc2Profile) {
             val side=campaignSignalDirection(baseline.type)
-            selectableSignals.filter { alt ->
+            mtfSelectable.filter { alt ->
                 alt.strategyProfile==williamsTc2Profile &&
                     alt.type==(if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL") &&
                     alt.role=="ENTRY" && alt.signalBarTimeMs>baseline.signalBarTimeMs &&
@@ -5817,11 +5933,10 @@ private class NativeEngine(
             }
         }
 
-        // M15 is execution/fill monitoring only. It must not invent a second
-        // directional signal or veto a causally valid H1 Williams decision.
-        // Closed/fresh M15 data is still required for execution monitoring.
+        // H1 authorizes the scenario; a closed, confirmed M15 fractal refines execution.
+        // No automatic initial entry may fall back to an unconfirmed H1-only trigger.
         val m15BarMs = frameSeconds("15m") * 1000L
-        val m15 = fetchCandles(symbol, "15m", 120)
+        val m15 = fetchCandles(symbol, "15m", 220)
             .filter { it.t > 0L && it.t + m15BarMs <= contextNow }
         if (m15.size < 45) {
             lastError = "M15_EXECUTION_BLOCKED: insufficient closed M15 history for $symbol"
@@ -5834,7 +5949,16 @@ private class NativeEngine(
         }
 
         val entries = futuresCampaignCoordinator.intentsSnapshot()
-        val clientId = ("W2E_" + symbol.take(7) + "_" + signal.type.take(4) + "_" + signal.signalBarTimeMs.toString(36)).take(36)
+        val mtfParent = h1EntryParent(signal)
+        val mtfDecision = m15EntryDecision(symbol,mtfParent,m15,symbolFilters(symbol).tick,contextNow)
+        val junior = mtfDecision.entry ?: return rejectDecision(symbol,mtfDecision.reason)
+        if(williamsH1ParentAlreadyFilled(futuresCampaignCoordinator.intentsSnapshot(),signal.signalId))
+            return rejectDecision(symbol,"H1_PARENT_ALREADY_FILLED: no repeated initial entry")
+        val guard=mtfReanchorGuard
+        williamsMtfReanchorBlocker(guard,signal.signalId,contextNow,junior.pivotAt)?.let {
+            return rejectDecision(symbol,it+": no fallback to canceled level")
+        }
+        val clientId = junior.clientId(symbol)
         if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId }) return rejectDecision(symbol,"FORMATION_ALREADY_ADMITTED: "+clientId)
 
         val exchangePositions = futuresCampaignCoordinator.positionsSnapshot()
@@ -5879,17 +6003,20 @@ private class NativeEngine(
         if (!futuresAccountFundedForEntry(available, equity)) return rejectDecision(symbol,"ACCOUNT_FUNDS_NOT_PROVEN")
         val mark = futuresMarketData.markPrice(symbol)
         val rules = symbolFilters(symbol)
-        val marketReentry=profitReentry(signal) && signal.executionSemantics=="MARKET_ON_CLOSE"
-        val reference=if(marketReentry) mark else signal.triggerPrice
+        // The selected H1 setup authorizes direction; only the M15 fractal supplies execution.
+        val marketReentry=false
+        val reference=junior.trigger
         val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
             normalizeTriggerPrice(reference, rules.tick) else normalizePrice(reference, rules.tick)
         var stop = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
-            normalizePrice(signal.protectivePrice, rules.tick) else normalizeTriggerPrice(signal.protectivePrice, rules.tick)
+            normalizePrice(junior.stop, rules.tick) else normalizeTriggerPrice(junior.stop, rules.tick)
         if(signal.strategyProfile==williamsCourseProfile) {
             val higher=closedWilliamsWaveBars(fetchCandles(symbol,"6h",100).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },"6h",contextNow)
             val airbag=williamsCourseAirbagStop(direction.name,higher,rules.tick) ?: return rejectDecision(symbol,"REQUIRED_ENTRY_EVIDENCE_UNAVAILABLE")
-            stop=if(direction.name=="LONG") normalizePrice(minOf(stop,airbag),rules.tick)
-                else normalizeTriggerPrice(maxOf(stop,airbag),rules.tick)
+            // The higher Course Air Bag remains an emergency boundary. Never widen the
+            // junior structural stop beyond it in this explicitly selected MTF mode.
+            stop=if(direction.name=="LONG") normalizePrice(maxOf(stop,airbag),rules.tick)
+                else normalizeTriggerPrice(minOf(stop,airbag),rules.tick)
         }
         if (trigger <= 0.0 || stop <= 0.0) return rejectDecision(symbol,"INVALID_TRIGGER_OR_STOP")
         if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
@@ -5935,11 +6062,14 @@ private class NativeEngine(
             referenceClose=if(marketReentry) signal.triggerPrice else 0.0,
             leverage = entryLeverage,
             signalBarTimeMs = signal.signalBarTimeMs,
-            signalReason = signal.reason,
+            signalReason = "H1 "+signal.reason+"; M15 confirmed "+direction.name+
+                " fractal; pivot="+junior.pivotAt+"; confirmation="+junior.confirmedAt+"; waiting for breakout",
             tradeMode = if (correction.allowed) "CORRECTION" else "TREND",
             waveContext = if (correction.allowed) correction.toJson().toString() else "",
-            strategyProfile=signal.strategyProfile,executionSemantics=signal.executionSemantics,
+            strategyProfile=signal.strategyProfile,executionSemantics="STOP_ENTRY",
             setupContext=(runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject()).apply {
+                put("parent_execution_semantics",signal.executionSemantics)
+                put("mtf_entry",junior.copy(stop=stop).toJson())
                 if(signal.strategyProfile==williamsCourseProfile) {
                     williamsCourseActiveContext(hierarchy,direction.name)?.let { context ->
                         put("course_origin_at",context.getLong("origin_at")).put("course_initial_stage",context.getString("phase"))
@@ -5978,29 +6108,18 @@ private class NativeEngine(
             require(isSignalFresh(signal.signalBarTimeMs, submitNow, 5L * 60L * 60L * 1000L)) {
                 "STALE_H1_SCENARIO: signal expired before Futures submission"
             }
-            if (reanchorLock!=null) {
-                // Re-evaluate from the exchange CLOSED H1 series after waiting
-                // for the durable Mutation Door. Cached scanner evidence is
-                // never sufficient authority to resurrect a consumed fractal.
-                val verified=editionCampaignSignals(symbol,
-                    fetchCandles(symbol,"1h",220).filter {
-                        it.t>0L && it.t+3_600_000L<=submitNow
-                    },"1h",rules.tick,williamsTc2Profile)
-                require(verified.any { it.signalId==signal.signalId &&
-                    it.type==signal.type &&
-                    kotlin.math.abs(it.triggerPrice-signal.triggerPrice)<=rules.tick*0.1 &&
-                    kotlin.math.abs(it.protectivePrice-signal.protectivePrice)<=rules.tick*0.1 }) {
-                    "FRACTAL_REANCHOR_SIGNAL_REVALIDATION_FAILED: closed H1 formation changed"
-                }
+            val verifiedParents=h1ContextCampaignSignals(symbol,fetchCandles(symbol,"1h",220),rules.tick)
+            check(verifiedParents.any { it.signalId==signal.signalId && it.type==signal.type &&
+                abs(it.triggerPrice-signal.triggerPrice)<=rules.tick*.1 &&
+                abs(it.protectivePrice-signal.protectivePrice)<=rules.tick*.1 }) {
+                "H1_PARENT_NO_LONGER_VALID: no M15 order submitted"
             }
-            val submitM15 = fetchCandles(symbol, "15m", 120)
-                .filter { it.t > 0L && it.t + m15BarMs <= submitNow }
-            require(submitM15.size >= 45) {
-                "M15_EXECUTION_BLOCKED: closed M15 history unavailable at submission"
-            }
-            val submitM15Last = submitM15.last()
-            require(submitNow - (submitM15Last.t + m15BarMs) <= 30L * 60L * 1000L) {
-                "M15_EXECUTION_BLOCKED: latest closed M15 candle is stale at submission"
+            val submitM15=fetchCandles(symbol,"15m",220).filter { it.t>0 && it.t+WILLIAMS_M15_MS<=submitNow }
+            val verifiedJunior=m15EntryDecision(symbol,mtfParent,submitM15,rules.tick,submitNow).entry
+            check(verifiedJunior!=null && verifiedJunior.pivotAt==junior.pivotAt &&
+                verifiedJunior.confirmedAt==junior.confirmedAt && abs(verifiedJunior.trigger-trigger)<=rules.tick*.1 &&
+                abs(verifiedJunior.stop-junior.stop)<=rules.tick*.1) {
+                "M15_FRACTAL_REVALIDATION_FAILED: changed, consumed or invalidated junior formation"
             }
             if (correction.allowed) {
                 val currentCorrection = williamsCorrectionEntryContext(waveHierarchyFor(symbol,refresh=true),
@@ -6022,9 +6141,11 @@ private class NativeEngine(
                 else if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
                 else submitMark > trigger
             ) {
-                "H1_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
+                "M15_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
             }
-            // M15 contributes only execution readiness, never a new direction.
+            check(williamsMtfProofBlocker(plan.setupContext,direction.name,signal.signalId,trigger,stop,submitNow)==null) {
+                "M15_FRACTAL_PROOF_INVALID_BEFORE_SUBMISSION"
+            }
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
         if(!result.optBoolean("accepted",false)) rejectDecision(symbol,result.optString("blocker","EXECUTION_DOOR_REJECTED"))
@@ -6039,6 +6160,7 @@ private class NativeEngine(
                 stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures submission unresolved")
             }
         } else {
+            check(executionStore.writeState("mtf_reanchor_"+symbol,"")) { "Cannot retire consumed M15 replacement guard" }
             // A successfully persisted new Futures intent supersedes the
             // one-shot re-anchor hint; its own client id remains authoritative.
             if(reanchorLock!=null && signal.signalId==reanchorLock.optString("signal_id")) {
@@ -7414,9 +7536,89 @@ private class NativeEngine(
                 triggerPrice = trigger,
                 protectivePrice = stop,
                 invalidationPrice = stop,
-                reason = "Bearish mirror of confirmed Williams setup: " + signal.reason
+                reason = signal.reason.replace("bullish","bearish").replace("above signal-bar high","below signal-bar low")
+                    .replace("rising AO","falling AO").replace("above price bar","below price bar")
             )
         }.distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
+    }
+
+    private fun h1EntryParent(signal:CampaignSignalN)=WilliamsH1Parent(signal.signalId,
+        campaignSignalDirection(signal.type).orEmpty(),signal.signalBarTimeMs,signal.triggerPrice,signal.protectivePrice)
+
+    /** Reconstruct causal H1 prefixes so crossing the old H1 trigger does not erase the parent
+     * while it waits for M15. Structural invalidation and the original five-hour expiry remain. */
+    private fun h1ContextCampaignSignals(symbol:String,input:List<CandleN>,tick:Double):List<CampaignSignalN> {
+        val now=futuresMarketData.exchangeNowMs()
+        val bars=input.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+        if(bars.size<45) return emptyList()
+        val mark=futuresMarketData.markPrice(symbol)
+        val out=mutableListOf<CampaignSignalN>()
+        for(omitted in 0..minOf(4,bars.size-45)) {
+            val prefix=bars.take(bars.size-omitted)
+            val signals=editionCampaignSignals(symbol,prefix,"1h",tick)
+            out+=signals.filter { signal ->
+                if(signal.role!="ENTRY") omitted==0
+                else isSignalFresh(signal.signalBarTimeMs,now,5*WILLIAMS_H1_MS) &&
+                    williamsH1ParentInvalidation(h1EntryParent(signal),
+                        bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },mark,now)==null
+            }
+        }
+        val oppositeCandidates=h1OppositionCandidates(symbol,bars,tick,williamsProfile)
+        val sourceEvidence=oppositeCandidates.map { scenarioSignal(it) }
+        val waveBars=bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        val lifecycle=JSONArray()
+        val valid=out.distinctBy { it.signalId }.filter { signal ->
+            if(signal.role!="ENTRY") return@filter true
+            val parent=h1EntryParent(signal)
+            val assessment=assessWilliamsScenarioOpposition(parent.direction,parent.knownAt,sourceEvidence,waveBars,mark,now)
+            lifecycle.put(JSONObject().put("parent_id",parent.signalId).put("direction",parent.direction)
+                .put("state",if(assessment.blocker==null) "VALID_CONTEXT" else if(assessment.opposition!=null) "REVOKED" else "UNVERIFIED")
+                .put("reason",assessment.blocker ?: "NO_LATER_TRIGGERED_OPPOSITION")
+                .put("opposition",assessment.opposition?.toJson() ?: JSONObject.NULL)
+                .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })))
+            assessment.blocker==null
+        }.sortedBy { it.signalBarTimeMs }
+        check(executionStore.writeState("decision_h1_parent_lifecycle_"+symbol,JSONObject()
+            .put("observed_at_ms",now).put("parents",lifecycle).toString())) { "H1_LIFECYCLE_PROOF_NOT_DURABLE" }
+        return valid
+    }
+
+    private fun verifyMtfPlanBeforeSubmit(plan:NativeFuturesCampaignCoordinator.EntryPlan) {
+        check(!forceTestnetMode) { "OPERATOR_DIRECTION_MODE_ACTIVE_BEFORE_SUBMISSION" }
+        val now=futuresMarketData.exchangeNowMs()
+        val evidence=williamsM15EntryFromJson(JSONObject(plan.setupContext).getJSONObject("mtf_entry"))
+            ?: error("M15_ENTRY_PROOF_UNREADABLE")
+        val parents=h1ContextCampaignSignals(plan.symbol,fetchCandles(plan.symbol,"1h",220),evidence.tick)
+        check(parents.any { it.signalId==plan.signalId && campaignSignalDirection(it.type)==plan.direction.name }) {
+            h1ParentRejectionReason(plan.symbol,plan.signalId,"H1_PARENT_INVALIDATED_BEFORE_SUBMISSION")
+        }
+        val candles=fetchCandles(plan.symbol,"15m",220).filter { it.t>0 && it.t+WILLIAMS_M15_MS<=now }
+        val fresh=m15EntryDecision(plan.symbol,evidence.parent,candles,evidence.tick,now).entry
+            ?: error("M15_ENTRY_NO_LONGER_VALID_BEFORE_SUBMISSION")
+        check(fresh.pivotAt==evidence.pivotAt && fresh.confirmedAt==evidence.confirmedAt &&
+            abs(fresh.trigger-plan.entryPrice.toDouble())<=evidence.tick*.1 &&
+            (if(plan.direction.name=="LONG") plan.protectiveStop.toDouble()>=fresh.stop
+                else plan.protectiveStop.toDouble()<=fresh.stop)) { "M15_ENTRY_CHANGED_BEFORE_SUBMISSION" }
+    }
+
+    private fun h1ParentRejectionReason(symbol:String,parentId:String,fallback:String):String {
+        val rows=runCatching { JSONObject(executionStore.readState("decision_h1_parent_lifecycle_"+symbol).orEmpty())
+            .getJSONArray("parents") }.getOrNull() ?: return fallback
+        return (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.firstOrNull {
+            it.optString("parent_id")==parentId && it.optString("state")!="VALID_CONTEXT"
+        }?.optString("reason")?.takeIf { it.isNotBlank() } ?: fallback
+    }
+
+    private fun m15EntryDecision(symbol:String,parent:WilliamsH1Parent,candles:List<CandleN>,tick:Double,now:Long):WilliamsM15Decision {
+        val bars=candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        val teeth=williamsAlligatorLine(candles,8,5).map { it ?: Double.NaN }
+        val result=selectWilliamsH1M15Entry(parent,bars,teeth,tick,futuresMarketData.markPrice(symbol),now)
+        check(executionStore.writeState("decision_m15_entry_"+symbol,JSONObject()
+            .put("mode",WILLIAMS_MTF_ENTRY_MODE).put("observed_at_ms",now).put("parent",parent.toJson())
+            .put("reason",result.reason).put("entry",result.entry?.toJson() ?: JSONObject.NULL)
+            .put("candles",JSONArray(candles.takeLast(160).map { listOf(it.t,it.o,it.h,it.l,it.c,it.v) }))
+            .toString())) { "M15_DECISION_PROOF_NOT_DURABLE" }
+        return result
     }
 
     private fun analyseBase(
@@ -7469,7 +7671,7 @@ private class NativeEngine(
             // Build both directional hypotheses from the same exchange-confirmed
             // closed H1 series. Candidates reach execution only through the native
             // Futures coordinator after context, risk, and reconciliation gates pass.
-            editionCampaignSignals(symbol,workCandles,campaignExecutionTimeframe,campaignTick)
+            h1ContextCampaignSignals(symbol,workCandles,campaignTick)
         } else {
             emptyList()
         }
@@ -7657,28 +7859,36 @@ private class NativeEngine(
         symbol: String, direction: NativeFuturesCampaignCoordinator.Direction,
         candles: List<CandleN>, tick: Double, mark: Double, openedAt: Long, profile:String=williamsTc2Profile
     ): CampaignSignalN? {
-        if (openedAt <= 0L) return null
+        if(openedAt<=0L) return null
         val now = futuresMarketData.exchangeNowMs()
-        val opposingSide = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) "SHORT" else "LONG"
+        val closed=candles.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+        val candidates=h1OppositionCandidates(symbol,closed,tick,profile)
+        val assessment=assessWilliamsScenarioOpposition(direction.name,openedAt,candidates.map { scenarioSignal(it) },
+            closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },mark,now)
+        val evidence=assessment.opposition
+        check(executionStore.writeState("decision_h1_opposition_"+symbol,JSONObject()
+            .put("observed_at_ms",now).put("scope_started_at_ms",openedAt).put("direction",direction.name)
+            .put("opposition",evidence?.toJson() ?: JSONObject.NULL)
+            .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })).toString())) { "H1_EXIT_PROOF_NOT_DURABLE" }
+        return candidates.firstOrNull { it.signalId==evidence?.signal?.id }
+    }
+
+    private fun scenarioSignal(signal:CampaignSignalN)=WilliamsScenarioSignal(signal.signalId,
+        campaignSignalDirection(signal.type).orEmpty(),signal.strategyProfile,signal.executionSemantics,
+        signal.signalBarTimeMs,signal.triggerPrice,signal.invalidationPrice.takeIf { it.isFinite() && it>0 },
+        signal.signalBarTimeMs+5*WILLIAMS_H1_MS)
+
+    private fun h1OppositionCandidates(symbol:String,candles:List<CandleN>,tick:Double,profile:String):List<CampaignSignalN> {
+        if(candles.size<45) return emptyList()
+        val out=mutableListOf<CampaignSignalN>()
         // Reconstruct only causal prefixes. This also catches a valid level
         // crossed in a completed H1 bar while the app/scanner was offline.
         for (omitted in 0..minOf(5,candles.size-45)) {
             val prefix = candles.take(candles.size-omitted)
-            val signals=editionCampaignSignals(symbol,prefix,"1h",tick,profile,exitMode=true)
-                .filter { campaignSignalDirection(it.type)==opposingSide }
-            for (signal in signals.filter { it.strategyProfile==williamsNtdProfile || it.role == "ENTRY" }) {
-                if(signal.strategyProfile==williamsNtdProfile && signal.executionSemantics=="MARKET_ON_CLOSE") {
-                    if(williamsOpposingCloseEventTriggered(signal.signalBarTimeMs,3_600_000L,openedAt,now)) return signal
-                    continue
-                }
-                if(signal.executionSemantics!="STOP_ENTRY") continue
-                if (williamsOpposingLevelTriggered(opposingSide,signal.triggerPrice,
-                    signal.signalBarTimeMs+3_600_000L,openedAt,mark,
-                    candles.drop(prefix.size).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
-                    now,signal.signalBarTimeMs+18_000_000L)) return signal
-            }
+            out+=editionCampaignSignals(symbol,prefix,"1h",tick,profile,exitMode=true)
+                .filter { it.strategyProfile==williamsNtdProfile || it.role=="ENTRY" }
         }
-        return null
+        return out.distinctBy { it.signalId }
     }
 
     private fun enrichWithMtf(baseCandidate: BaseAnalysis): BaseAnalysis {
@@ -7748,6 +7958,12 @@ private class NativeEngine(
             trace.put("order_chain_state",if(journal.isSuccess) "JOURNAL_SNAPSHOT" else "UNAVAILABLE_RECONCILE_REQUIRED")
             runCatching { JSONObject(executionStore.readState("decision_context_"+symbol).orEmpty()) }.getOrNull()
                 ?.let { trace.put("admission_context",it) }
+            runCatching { JSONObject(executionStore.readState("decision_m15_entry_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("mtf_entry",it) }
+            runCatching { JSONObject(executionStore.readState("decision_h1_parent_lifecycle_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("parent_lifecycle",it) }
+            runCatching { JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("opposition_check",it) }
             trace.put("order_chain",williamsExecutionChain(intents,symbol))
             trace.put("signal_history",runCatching {
                 WilliamsSignalJournal(executionStore).view(symbol,intents,System.currentTimeMillis()).apply {
@@ -9451,7 +9667,9 @@ private class NativeEngine(
             .put("version", BuildConfig.VERSION_NAME)
             .put("campaign_engine", campaignEngineEnabled)
             .put("campaign_execution_timeframe", campaignExecutionTimeframe)
-            .put("campaign_entry_mode", "CONDITIONAL_STOP")
+            .put("campaign_entry_mode", WILLIAMS_MTF_ENTRY_MODE)
+            .put("campaign_context_timeframe", "1h")
+            .put("campaign_trigger_timeframe", "15m")
             .put("campaign_fixed_take_profit", false)
             .put("campaign_entry_execution", "USD_M_FUTURES_TESTNET_COORDINATOR")
             .put("campaign_risk_limit_pct", campaignRiskLimitPct)

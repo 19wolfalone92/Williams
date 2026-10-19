@@ -153,7 +153,7 @@ class WilliamsWaveHierarchyTest {
         assertFalse(williamsOpposingLevelTriggered("LONG",110.0,20,25,111.0,emptyList(),30,50))
         assertFalse(williamsOpposingLevelTriggered("LONG",110.0,20,10,111.0,emptyList(),50,50))
         assertTrue(williamsOpposingLevelTriggered("LONG",110.0,20,10,105.0,
-            listOf(WilliamsWaveBar(20,100.0,111.0,99.0,105.0)),30,50))
+            listOf(WilliamsWaveBar(20,100.0,111.0,99.0,105.0)),30,50,frameMs=10))
     }
     @Test fun tc2WindowTrailsBeforeOneRWithoutNewFractalAndWithoutOriginalR() {
         val long=listOf(95.0,96.0,97.0,98.0,99.0).mapIndexed { i,l -> FuturesTrailBar(i*hour,l+2,l) }
