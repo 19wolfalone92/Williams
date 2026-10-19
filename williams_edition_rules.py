@@ -237,11 +237,17 @@ def course_rhythm(bars):
         return sum(v[-n:])/n
     fast,medium,slow=mean(5),mean(13),mean(34)
     twr="UP" if fast>max(medium,slow) else "DOWN" if fast<min(medium,slow) else "NEUTRAL"
-    momentum="UNKNOWN"
-    if len(bars)>=35:
-        delta=(fast-slow)-(mean(5,-1)-mean(34,-1))
-        momentum="UP" if delta>0 else "DOWN" if delta<0 else "NEUTRAL"
-    return {"twr":twr,"momentum":momentum}
+    # Course Level II p14/PDF45: trading side is 5/34 versus its SMA(5).
+    # The direction of the latest AO bar is a different rhythm observation.
+    momentum="UNKNOWN";signal=None;oscillator=fast-slow
+    if len(bars)>=38:
+        recent=[]
+        for end in range(len(bars)-5,len(bars)):
+            recent.append(sum(mids[end-4:end+1])/5-sum(mids[end-33:end+1])/34)
+        signal=sum(recent)/5
+        momentum="UP" if oscillator>signal else "DOWN" if oscillator<signal else "NEUTRAL"
+    return {"twr":twr,"momentum":momentum,"momentum_basis":"OSCILLATOR_VS_SIGNAL_SMA5",
+            "oscillator":oscillator,"signal":signal}
 
 
 def opposing_close_event_triggered(signal_at,frame_ms,opened_at,now):

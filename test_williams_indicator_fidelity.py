@@ -122,14 +122,16 @@ def test_wm3_consumers_use_actual_confirmation_and_whole_plateau_stop():
     assert trigger_base == 12.0
     assert protective == 8.0  # minimum low of five closed bars through confirmation (TC2)
 
-    # The middle bar itself must qualify against Teeth when the fractal forms;
-    # checking only the later confirmation/current Teeth is insufficient.
+    # NTD PDF52: an inside formation can qualify later as Teeth moves.
+    # Keep the true pivot/confirmation instead of permanently rejecting it.
     rejected = ind.copy()
     rejected.loc[4, "teeth_shifted"] = 12.1
     assert _latest_confirmed_fractal(
         rejected, side="LONG", current_teeth=10.5,
         current_close=9.0, tick_size=0.1
-    ) is None
+    ) is not None
+    assert _latest_confirmed_fractal(rejected, side="LONG", current_teeth=12.05,
+        current_close=9.0, tick_size=0.1) is None
 
     specs = extract_ntd_fractal_signal_specs(
         "BTCUSDT", ind, side="LONG", timeframe="1h", tick_size=0.1

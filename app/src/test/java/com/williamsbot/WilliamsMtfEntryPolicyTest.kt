@@ -111,4 +111,14 @@ class WilliamsMtfEntryPolicyTest {
         assertNotNull(williamsPendingM15Invalidation(e,b,List(b.size) {95.0},95.0,start+48*WILLIAMS_M15_MS))
         assertEquals(e,williamsM15EntryFromJson(e.toJson()))
     }
+    @Test fun legacyShortFractalFillCannotBeRearmedAfterIdentityUpgrade() {
+        val old="BTCUSDT:1h:SHORT_FRACTAL:43200000"
+        val current="BTCUSDT:1h:SHORT_FRACTAL:36000000"
+        val row=JSONObject().put("intent_role","ENTRY").put("signal_id",old)
+            .put("actual_entry_executed_qty","0.1")
+        assertTrue(williamsH1ParentAlreadyFilled(JSONArray().put(row),current,"SHORT_FRACTAL",43200000L))
+        assertFalse(williamsH1ParentAlreadyFilled(JSONArray().put(row),current,"SHORT_FRACTAL",46800000L))
+        row.put("actual_entry_executed_qty","0")
+        assertFalse(williamsH1ParentAlreadyFilled(JSONArray().put(row),current,"SHORT_FRACTAL",43200000L))
+    }
 }

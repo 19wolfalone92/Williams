@@ -1544,6 +1544,8 @@ class FuturesWilliamsRuntime:
             raise RuntimeError("Signal does not belong to NTD")
         if signal.strategy_profile==NTD and signal.signal_type!=SignalType.FRACTAL and not reentry:
             raise RuntimeError("NTD must initiate with its first external fractal")
+        if signal.strategy_profile==NTD and not reentry and not signal.setup_context.get("ntd_initial",{}).get("eligible",False):
+            raise RuntimeError("NTD_SLEEP_OR_FIRST_BREAKOUT_NOT_PROVEN")
         if signal.strategy_profile==COURSE and signal.signal_type not in {SignalType.COURSE_HUMP,SignalType.COURSE_THUMB,SignalType.COURSE_SQUAT}:
             raise RuntimeError("Course requires a Course initiating formation")
         symbol = signal.symbol
@@ -3210,8 +3212,8 @@ class FuturesWilliamsRuntime:
         closed=closed_strategy_frame(closed,interval,now)
         opposite = "LONG" if campaign.side=="SELL" else "SHORT"
         profile=getattr(campaign,"tags",{}).get("strategy_profile",TC2)
-        unified=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()==UNIFIED
-        exit_profile=UNIFIED if unified else profile
+        # The source pinned at entry owns management even in unified scan mode.
+        exit_profile=profile
         extract = extract_long_signal_specs if opposite=="LONG" else extract_short_signal_specs
         candidates={}
         for omitted in range(min(5,len(closed)-45)+1):
@@ -3220,8 +3222,8 @@ class FuturesWilliamsRuntime:
             signals=(extract(campaign.symbol,ind,timeframe=interval,tick_size=tick) if exit_profile==TC2 else
                 extract_profile_signals(campaign.symbol,ind,profile=exit_profile,side=opposite,timeframe=interval,tick_size=tick,exit_mode=True))
             for signal in signals:
-                if signal.strategy_profile!=NTD and signal.role != SignalRole.ENTRY:
-                    continue
+                if signal.role != SignalRole.ENTRY or (signal.strategy_profile==NTD and signal.signal_type!=SignalType.FRACTAL):
+                    continue  # NTD dimensions add; exits use management or a real external opposite fractal.
                 candidates[signal.signal_id]=signal
         evidence=scenario_opposition("SHORT" if campaign.side=="SELL" else "LONG",opened,
             [ScenarioSignal(s.signal_id,"LONG" if s.side=="BUY" else "SHORT",s.strategy_profile,
@@ -3249,27 +3251,6 @@ class FuturesWilliamsRuntime:
                 self._trail(campaign)
             except Exception as exc:
                 self.db.log_event("ERROR","futures_independent_management_failed",str(exc),{"symbol":campaign.symbol})
-
-    def _opposite_triggered(self, campaign, candidates):
-        opposite = "SELL" if campaign.side == "BUY" else "BUY"
-        current = float(self.client.ticker_price(campaign.symbol).get("price", 0) or 0)
-        for candidate in candidates:
-            signals = list(getattr(candidate, "all_signals", ()) or ())
-            if not signals:
-                signals = [candidate.signal]
-            for signal in signals:
-                if signal.strategy_profile!=campaign.tags.get("strategy_profile",TC2) and os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()!=UNIFIED:continue
-                if signal.role == SignalRole.ADD_ON:
-                    continue
-                if signal.symbol != campaign.symbol or signal.side != opposite:
-                    continue
-                if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
-                    continue
-                if opposite == "BUY" and current >= signal.trigger_price:
-                    return True
-                if opposite == "SELL" and current <= signal.trigger_price:
-                    return True
-        return False
 
     def process(self):
         if self.preflight_report is None:
@@ -3331,12 +3312,8 @@ class FuturesWilliamsRuntime:
                 continue
             symbol = campaign.symbol
             symbol_candidates = by_symbol.get(symbol, [])
-            if self._opposite_triggered(campaign, symbol_candidates):
-                try:
-                    self._exit_market(campaign, "OPPOSITE_WISE_MAN")
-                except Exception:
-                    self._set_state(symbol, "RECONCILE_REQUIRED")
-                continue
+            # manage_open_positions() evaluates causal, source-owned opposition.
+            # A scanner candidate or a current quote alone is not an exit event.
 
             eligible = []
             # TC2 campaign management admits later valid same-direction Wise-Men

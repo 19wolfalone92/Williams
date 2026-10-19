@@ -27,6 +27,27 @@ def candles(rows):
     )
 
 
+@pytest.mark.parametrize("short",[False,True])
+@pytest.mark.parametrize("crossed",[False,True])
+def test_opposite_formation_must_trigger_on_a_later_bar_under_the_owned_source(short,crossed):
+    from dataclasses import replace
+    frame=candles([(100,100.5,99.5,100),(100.2,101.5,100.1,101.2),
+        (101.2,102.5,101,102),(102,104,101.8,103.5),
+        (103.5,105,100.6 if crossed else 101.7,101 if crossed else 104.8)])
+    if short:
+        frame=pd.DataFrame({"open":220-frame.open,"high":220-frame.low,
+                            "low":220-frame.high,"close":220-frame.close},index=frame.index)
+    initial=signal("SELL" if short else "BUY",trigger=119 if short else 101,stop=122 if short else 98)
+    opposite=signal("BUY" if short else "SELL",trigger=119.3 if short else 100.7,stop=110,ts=2)
+    _,trades,_=run_williams_paper_replay(frame,{0:[initial],2:[opposite]})
+    assert len(trades)==1
+    assert trades.iloc[0].exit_reason==("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED" if crossed else "END_OF_DATA")
+    assert trades.iloc[0].exit_time==frame.index[-1]
+    other=replace(opposite,strategy_profile="NTD_FIVE_DIMENSIONS")
+    _,trades,_=run_williams_paper_replay(frame,{0:[initial],2:[other]})
+    assert trades.iloc[0].exit_reason=="END_OF_DATA"
+
+
 def test_long_paper_campaign_uses_conditional_entry_structural_stop_and_real_costs():
     frame = candles([
         (100.0, 100.5, 99.5, 100.0),

@@ -18,7 +18,7 @@ def frame(prices,start=1_700_000_000_000):
 
 
 @pytest.mark.parametrize("short",[False,True])
-def test_ntd_opposite_zone_close_exits_an_older_owned_position_without_authorizing_reverse_entry(monkeypatch,short):
+def test_ntd_opposite_zone_is_not_a_book_exit_from_an_owned_position(monkeypatch,short):
     prices=[100+i for i in range(75)]+[176,175,174,173,172]
     if short:prices=[400-p for p in prices]
     candles=frame(prices)
@@ -35,9 +35,7 @@ def test_ntd_opposite_zone_close_exits_an_older_owned_position_without_authorizi
     assert not any(s.signal_type==SignalType.ZONE_ADD_ON for s in
         extract_profile_signals("BTCUSDT",ind,profile=NTD,side=side,timeframe="1h",tick_size=.1))
     event=runtime._triggered_opposite_from_history(campaign,candles,.1,prices[-1])
-    assert event is not None and event.signal_type==SignalType.ZONE_ADD_ON
-    assert event.execution_semantics=="MARKET_ON_CLOSE"
-    assert event.side==("BUY" if short else "SELL")
+    assert event is None  # NTD ch10: Teeth/Lips, zone stop, or external opposite fractal.
     campaign.tags["position_open_observed_at_ms"]=now
     assert runtime._triggered_opposite_from_history(campaign,candles,.1,prices[-1]) is None
 

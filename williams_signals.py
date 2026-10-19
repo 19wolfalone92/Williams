@@ -98,65 +98,18 @@ def _row_time_ms(row: pd.Series) -> int:
 
 
 def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5, side: str | None = None) -> tuple[float, bool]:
-    """Approximate increasing separation of price from the Alligator Jaw."""
-    if index < 1 or not ({"jaw_current", "jaw_shifted"} & set(ind.columns)):
+    """TC2 mouth-anchored edge geometry; window retained for API compatibility."""
+    from williams_market_geometry import angulation_evidence
+    from williams_wave_hierarchy import wave_bars_from_dataframe
+    if index < 2 or index >= len(ind) or side not in {"LONG", "SHORT"}:
         return 0.0, False
-
-    start = max(0, index - max(3, int(window)) + 1)
-    rows = ind.iloc[start:index + 1].copy()
-    if len(rows) < 3 or rows.get("jaw_current", rows.get("jaw_shifted")).isna().all():
-        return 0.0, False
-
-    jaw = pd.to_numeric(rows.get("jaw_current", rows.get("jaw_shifted")), errors="coerce")
-    low = pd.to_numeric(rows["low"], errors="coerce")
-    high = pd.to_numeric(rows["high"], errors="coerce")
-    close = pd.to_numeric(rows["close"], errors="coerce")
-
-    if low.isna().any() or high.isna().any() or jaw.isna().any():
-        return 0.0, False
-
-    bullish_distance = (jaw - low).clip(lower=0.0)
-    bearish_distance = (high - jaw).clip(lower=0.0)
-
-    # A reversal has to be outside the mouth and the separation must increase.
-    bull_delta = float(bullish_distance.iloc[-1] - bullish_distance.iloc[0])
-    bear_delta = float(bearish_distance.iloc[-1] - bearish_distance.iloc[0])
-
-    base = max(
-        abs(float(close.iloc[-1])),
-        abs(float(jaw.iloc[-1])),
-        1e-9,
-    )
-    directional_delta = (
-        bull_delta if str(side or "").upper() == "LONG"
-        else bear_delta if str(side or "").upper() == "SHORT"
-        else max(bull_delta, bear_delta)
-    )
-    score = max(directional_delta, 0.0) / base * 100.0
-
-    # Also require positive regression slope on the separation itself.
-    k = len(rows)
-    x = list(range(k))
-
-    def slope(values: pd.Series) -> float:
-        y = values.to_list()
-        xm = sum(x) / k
-        ym = sum(y) / k
-        denom = sum((v - xm) ** 2 for v in x)
-        return 0.0 if denom <= 0 else sum((x[i] - xm) * (y[i] - ym) for i in range(k)) / denom
-
-    bull_slope = slope(bullish_distance)
-    bear_slope = slope(bearish_distance)
-    if str(side or "").upper() == "LONG":
-        valid = bull_delta > 0 and bull_slope > 0
-    elif str(side or "").upper() == "SHORT":
-        valid = bear_delta > 0 and bear_slope > 0
-    else:
-        valid = (
-            (bull_delta > 0 and bull_slope > 0)
-            or (bear_delta > 0 and bear_slope > 0)
-        )
-    return float(max(score, 0.0)), bool(valid)
+    prefix = ind.iloc[:index+1]
+    def line(name):
+        # The displaced line is the one visible beside this candle.
+        col = next((c for c in (name+"_current",name+"_shifted") if c in prefix), None)
+        return [float(v) for v in prefix[col]] if col else [float("nan")]*len(prefix)
+    proof = angulation_evidence(side,wave_bars_from_dataframe(prefix),line("jaw"),line("teeth"),line("lips"))
+    return proof["score"], proof["valid"]
 
 
 def _latest_reversal(
@@ -275,6 +228,9 @@ def _latest_confirmed_fractal(
     direction = str(side or "").upper()
     if direction not in {"LONG", "SHORT"}:
         return None
+    if ((current_teeth is not None and (not math.isfinite(current_teeth) or current_teeth <= 0)) or
+            (current_close is not None and (not math.isfinite(current_close) or current_close <= 0))):
+        return None
     level_col = "confirmed_up_level" if direction == "LONG" else "confirmed_down_level"
     fractal_col = "fractal_up" if direction == "LONG" else "fractal_down"
     if level_col not in ind.columns or fractal_col not in ind.columns:
@@ -299,24 +255,9 @@ def _latest_confirmed_fractal(
         if center_i < 0 or center_i >= len(ind) or not bool(ind.iloc[center_i].get(fractal_col, False)):
             continue
         center = ind.iloc[center_i]
-        # New Trading Dimensions: the fractal's middle-bar extreme must be
-        # outside the Teeth (red Balance Line) when the pattern is formed.
-        # This is distinct from the second, live check below that the pending
-        # stop-entry trigger remains beyond the current Teeth after confirmation.
-        center_teeth_raw = center.get(
-            "teeth_current", center.get("teeth_shifted", float("nan"))
-        )
-        try:
-            center_teeth = float(center_teeth_raw)
-        except (TypeError, ValueError):
-            continue
-        if not math.isfinite(center_teeth):
-            continue
-        if direction == "LONG" and float(center["high"]) <= center_teeth:
-            continue
-        if direction == "SHORT" and float(center["low"]) >= center_teeth:
-            continue
-
+        # NTD ch4 PDF52: an inside-mouth fractal may become valid later.
+        # Eligibility belongs to the unbroken EXTREME versus current Teeth,
+        # not Teeth at the pivot. Keep the original confirmation timestamp.
         group_start_value = row.get(group_start_col)
         group_start_i = (
             int(group_start_value)
@@ -339,9 +280,9 @@ def _latest_confirmed_fractal(
         teeth = float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0)
 
         if current_teeth is not None:
-            if direction == "LONG" and trigger <= float(current_teeth):
+            if direction == "LONG" and trigger_base <= float(current_teeth):
                 continue
-            if direction == "SHORT" and trigger >= float(current_teeth):
+            if direction == "SHORT" and trigger_base >= float(current_teeth):
                 continue
         # A confirmed fractal can only be acted on after its two right-hand
         # bars close. If any bar from confirmation onward already touched the
@@ -1008,7 +949,7 @@ def extract_long_signal_specs(
         # Formation can be anywhere; trigger validity belongs to current
         # price/Teeth.  At arm time the trigger must still be above Teeth.
         trigger = trigger_base + tick
-        current_trigger_valid = trigger > max(current_teeth, 0.0)
+        current_trigger_valid = trigger_base > max(current_teeth, 0.0)
         if current_close < trigger and current_trigger_valid:
             row = ind.iloc[center_i]
             confirmation_time = _row_time_ms(ind.iloc[confirmation_i])
@@ -1174,7 +1115,7 @@ def extract_short_signal_specs(
     if fractal is not None:
         confirmation_i, center_i, trigger_base, protective, teeth = fractal
         trigger = trigger_base - tick
-        current_trigger_valid = current_teeth > 0 and trigger < current_teeth
+        current_trigger_valid = current_teeth > 0 and trigger_base < current_teeth
         if current_close > trigger and current_trigger_valid:
             row = ind.iloc[center_i]
             confirmation_time = _row_time_ms(ind.iloc[confirmation_i])

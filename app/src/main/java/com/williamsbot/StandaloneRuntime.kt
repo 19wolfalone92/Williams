@@ -5345,14 +5345,14 @@ private class NativeEngine(
                         val h1=fetchCandles(symbol,"1h",220)
                         val valid=h1ContextCampaignSignals(symbol,h1,tick).any {
                             it.signalId==parentId && it.type==pending.optString("signal_type") &&
-                            it.strategyProfile==profile
+                            it.strategyProfile==profile && it.role=="ENTRY"
                         }
                         if(!valid) h1ParentRejectionReason(symbol,parentId,"H1_BOOK_PARENT_INVALIDATED")
                         else {
                             val closed=h1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
                             val teeth=williamsAlligatorLine(closed,8,5).lastOrNull() ?: Double.NaN
                             williamsBookFractalTeethBlocker(pending.optString("signal_type"),
-                                pending.optString("direction"),price,teeth)
+                                pending.optString("direction"),price,teeth,tick)
                         }
                     }
                 }.getOrElse { failure ->
@@ -5642,7 +5642,7 @@ private class NativeEngine(
                 editionStop=if(dir=="LONG") candidates.maxOrNull() else candidates.minOrNull()
             }
             val opposing = triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,
-                if(williamsProfile==williamsUnifiedProfile) williamsUnifiedProfile else profile)
+                profile)
             if (opposing != null || boundaryExit || editionExit.isNotEmpty()) {
                 val correction = if (opposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
                     if (dir == "LONG") "SHORT" else "LONG",opposing.signalBarTimeMs,opposing.type) else WilliamsCorrectionContext()
@@ -5853,14 +5853,14 @@ private class NativeEngine(
                 (it.executionSemantics=="STOP_ENTRY" || profitReentry(it) && it.executionSemantics=="MARKET_ON_CLOSE" &&
                     williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,contextNow,it.triggerPrice,futuresMarketData.markPrice(symbol))==null) &&
                 isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L) &&
-                !williamsH1ParentAlreadyFilled(existing,it.signalId)
+                !williamsH1ParentAlreadyFilled(existing,it.signalId,it.type,it.signalBarTimeMs)
         }
         if (freshSignals.isEmpty()) {
             lastError = "WILLIAMS_SIGNAL_EXPIRED: no fresh confirmed H1 hypothesis for $symbol"
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 
-        // D1/H4 gate the H1 scenario. M15 must independently confirm its execution fractal.
+        // Project D1/H4 risk/context policy; execution uses the native H1 book trigger.
         val d1BarMs = frameSeconds("1d") * 1000L
         val h4BarMs = frameSeconds("4h") * 1000L
         val d1 = fetchCandles(symbol, "1d", 90)
@@ -5991,7 +5991,7 @@ private class NativeEngine(
         // The selected book source and closed H1 bars authorize the entry.
         // No M15 candle, fractal or M15 re-anchor is required.
         val entries = futuresCampaignCoordinator.intentsSnapshot()
-        if(williamsH1ParentAlreadyFilled(entries,signal.signalId))
+        if(williamsH1ParentAlreadyFilled(entries,signal.signalId,signal.type,signal.signalBarTimeMs))
             return rejectDecision(symbol,"H1_PARENT_ALREADY_FILLED: no repeated initial entry")
         val clientId = williamsBookH1ClientId(symbol,signal.signalId)
         if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId })
@@ -6002,7 +6002,7 @@ private class NativeEngine(
             return rejectDecision(symbol,"H1_BOOK_TRIGGER_ALREADY_CONSUMED: no late return to old breakout")
         val closedH1=currentH1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=contextNow }
         val h1Teeth=williamsAlligatorLine(closedH1,8,5).lastOrNull() ?: Double.NaN
-        williamsBookFractalTeethBlocker(signal.type,direction.name,signal.triggerPrice,h1Teeth)?.let {
+        williamsBookFractalTeethBlocker(signal.type,direction.name,signal.triggerPrice,h1Teeth,symbolFilters(symbol).tick)?.let {
             return rejectDecision(symbol,it)
         }
 
@@ -6169,7 +6169,7 @@ private class NativeEngine(
             }
             val submitH1Closed=submitH1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=submitNow }
             val submitTeeth=williamsAlligatorLine(submitH1Closed,8,5).lastOrNull() ?: Double.NaN
-            check(williamsBookFractalTeethBlocker(signal.type,direction.name,trigger,submitTeeth)==null) {
+            check(williamsBookFractalTeethBlocker(signal.type,direction.name,trigger,submitTeeth,rules.tick)==null) {
                 "H1_FRACTAL_TEETH_INVALID_BEFORE_SUBMISSION"
             }
             if (correction.allowed) {
@@ -7450,10 +7450,8 @@ private class NativeEngine(
                 candles[i].c > lipsS[i]
 
         val waveBars = candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
-        fun angulationScore(i: Int): Double {
-            val start = maxOf(0,i-4)
-            return williamsIncreasingJawDistanceScore("LONG",waveBars.subList(start,i+1),jawS.subList(start,i+1))
-        }
+        fun angulationProof(i:Int)=williamsAngulation("LONG",waveBars.take(i+1),
+            jawS.take(i+1),teethS.take(i+1),lipsS.take(i+1))
 
         val current = candles.lastIndex
         val out = mutableListOf<CampaignSignalN>()
@@ -7473,9 +7471,9 @@ private class NativeEngine(
         // for a break above its high. Countertrend WM1 is intentionally allowed.
         val reversalStart = max(2, candles.lastIndex - 20)
         for (i in candles.lastIndex downTo reversalStart) {
-            val priorLow = min(candles[i - 1].l, candles[i - 2].l)
+            val priorLow = candles[i - 1].l
             if (validWilliamsReversalBar("LONG",waveBars[i],priorLow,
-                listOf(jawS[i],teethS[i],lipsS[i]),angulationScore(i))) {
+                listOf(jawS[i],teethS[i],lipsS[i]),angulationProof(i).score)) {
                 val trigger = candles[i].h + tick
                 if (triggerStillPending(i, trigger)) {
                     out += CampaignSignalN(
@@ -7487,7 +7485,8 @@ private class NativeEngine(
                         protectivePrice = candles[i].l - tick,
                         teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
                         invalidationPrice = candles[i].l - tick,
-                        reason = "WM1 bullish reversal; waiting above signal-bar high"
+                        reason = "WM1 bullish reversal with mouth-anchored angulation; waiting above signal-bar high",
+                        setupContext = JSONObject().put("angulation",angulationProof(i).toJson()).toString()
                     )
                 }
                 break
@@ -7582,11 +7581,18 @@ private class NativeEngine(
             ) return@mapNotNull null
             signal.copy(
                 signalId = campaignSignalId(
-                    symbol, frame, "SHORT_" + signal.type, signal.signalBarTimeMs
+                    symbol, frame, "SHORT_" + signal.type, signal.formationAtMs
                 ),
                 type = "SHORT_" + signal.type,
                 triggerPrice = trigger,
                 protectivePrice = stop,
+                teethAtDetection = reflection-signal.teethAtDetection,
+                setupContext = JSONObject(signal.setupContext).apply {
+                    optJSONObject("angulation")?.let { proof ->
+                        for(key in listOf("price_slope","jaw_slope","teeth_slope"))
+                            if(!proof.isNull(key) && proof.has(key)) proof.put(key,-proof.getDouble(key))
+                    }
+                }.toString(),
                 invalidationPrice = stop,
                 reason = signal.reason.replace("bullish","bearish").replace("above signal-bar high","below signal-bar low")
                     .replace("rising AO","falling AO").replace("above price bar","below price bar")
@@ -7651,7 +7657,7 @@ private class NativeEngine(
         val candles=fetchCandles(plan.symbol,"1h",220)
         val signals=h1ContextCampaignSignals(plan.symbol,candles,tick)
         val actual=signals.singleOrNull { it.signalId==plan.signalId &&
-            it.type==plan.signalType && it.strategyProfile==plan.strategyProfile &&
+            it.type==plan.signalType && it.strategyProfile==plan.strategyProfile && it.role=="ENTRY" &&
             campaignSignalDirection(it.type)==plan.direction.name }
             ?: error(h1ParentRejectionReason(plan.symbol,plan.signalId,"H1_BOOK_PARENT_NO_LONGER_VALID"))
         val expected=if(plan.direction.name=="LONG")
@@ -7669,7 +7675,7 @@ private class NativeEngine(
         }
         val closed=candles.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
         val teeth=williamsAlligatorLine(closed,8,5).lastOrNull() ?: Double.NaN
-        check(williamsBookFractalTeethBlocker(plan.signalType,plan.direction.name,target,teeth)==null) {
+        check(williamsBookFractalTeethBlocker(plan.signalType,plan.direction.name,target,teeth,tick)==null) {
             "H1_BOOK_FRACTAL_NO_LONGER_OUTSIDE_TEETH"
         }
         val mark=futuresMarketData.markPrice(plan.symbol)
@@ -7981,7 +7987,8 @@ private class NativeEngine(
         for (omitted in 0..minOf(5,candles.size-45)) {
             val prefix = candles.take(candles.size-omitted)
             out+=editionCampaignSignals(symbol,prefix,"1h",tick,profile,exitMode=true)
-                .filter { it.strategyProfile==williamsNtdProfile || it.role=="ENTRY" }
+                .filter { it.role=="ENTRY" && (it.strategyProfile!=williamsNtdProfile ||
+                    it.type.removePrefix("SHORT_")=="FRACTAL") }
         }
         return out.distinctBy { it.signalId }
     }

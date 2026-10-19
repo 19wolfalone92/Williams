@@ -57,6 +57,7 @@ internal fun buildWilliamsDecisionTrace(symbol:String,profile:String,input:List<
         .put("wave_state",if(active.size==1) "PROVISIONAL" else if(active.isEmpty()) "UNRESOLVED" else "ALTERNATIVES")
         .put("wave_hypotheses",JSONArray(active)).put("books",books).put("signals",signals)
         .put("market_phase",williamsMarketPhaseContext(hierarchy))
+        .put("market_reading",williamsMarketReading(bars,williamsMarketPhaseContext(hierarchy)))
         .put("candles",JSONArray(bars.takeLast(150).map { JSONArray(listOf(it.t,it.o,it.h,it.l,it.c,it.v)) }))
         .put("decision",JSONObject().put("stage","CLOSED_BAR_ANALYSIS")
             .put("state",if(reasons.any { it!="OPPOSING_ENTRIES_BEFORE_CONTEXT" }) "BLOCKED" else if(reasons.isNotEmpty()) "CONTEXT_REQUIRED" else "CANDIDATE_REQUIRES_PREFLIGHT")
