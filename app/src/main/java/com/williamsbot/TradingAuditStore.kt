@@ -33,13 +33,17 @@ class TradingAuditStore(context: Context) :
                 healthyReconciliationMessagesCoalesced++
                 return
             }
+        }
+        recordCockpitEvent("RECONCILIATION", state = state,
+            detail = "${purpose.take(80)}; ok=$ok; ${blocker.take(240)}")
+        // Record the heartbeat time only AFTER durable Cockpit event insertion:
+        // a transient SQLite failure must not silence the next observation.
+        if (ok) {
             if (lastHealthyReconciliationByPurpose.size >= 32) lastHealthyReconciliationByPurpose.clear()
             lastHealthyReconciliationByPurpose[fingerprint] = now
         } else {
             lastHealthyReconciliationByPurpose.clear()
         }
-        recordCockpitEvent("RECONCILIATION", state = state,
-            detail = "${purpose.take(80)}; ok=$ok; ${blocker.take(240)}")
     }
 
     @Synchronized
