@@ -5268,7 +5268,17 @@ private class NativeEngine(
                     val (replacement,now)=next
                     val oldClientId=pending.optString("client_id")
                     val cancel=withCampaignMutation(symbol,"TC2_FRACTAL_REANCHOR_CANCEL",allowPaused=true) {
-                        futuresCampaignCoordinator.cancelPendingEntries("NEWER_CONFIRMED_TC2_FRACTAL",symbol)
+                        // Fence concurrent scanners BEFORE releasing the durable
+                        // Mutation Door. A freshly canceled old order must not
+                        // be immediately resubmitted between DELETE and journaling.
+                        try {
+                            futuresCampaignCoordinator.cancelPendingEntries("NEWER_CONFIRMED_TC2_FRACTAL",symbol)
+                        } finally {
+                            reconcileRequired=true
+                            check(persistSafetyFlag("reconcile_required",true)) {
+                                "Cannot persist reconciliation fence for fractal cancel"
+                            }
+                        }
                     }
                     // Require an exact terminal old order, fresh flat exchange
                     // position, and no unresolved cancellation or partial fill.
