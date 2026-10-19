@@ -244,6 +244,69 @@ internal fun assessActualFuturesPositionRisk(
     return result
 }
 
+/**
+ * Read-only evidence for continuing ONLY risk-reducing management when confirmed
+ * live stop+execution costs breach the portfolio cap. This is not reconciliation
+ * success and MUST NOT authorize any entry or add-on.
+ */
+internal fun verifiedProtectedRiskCapManagement(
+    blocker: String?,
+    positions: JSONArray,
+    intents: JSONArray,
+    nowMs: Long
+): Boolean {
+    if (blocker?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:") != true ||
+        nowMs <= 0L || positions.length() == 0) return false
+    val open = linkedMapOf<String, String>()
+    for (i in 0 until positions.length()) {
+        val row = positions.optJSONObject(i) ?: return false
+        val symbol = row.optString("symbol").trim().uppercase(Locale.US)
+        val qty = row.optString("positionAmt").toDoubleOrNull() ?: return false
+        if (symbol.isBlank() || !qty.isFinite()) return false
+        if (qty == 0.0) continue
+        if (open.put(symbol, if (qty > 0.0) "LONG" else "SHORT") != null) return false
+    }
+    if (open.isEmpty()) return false
+    val rows = (0 until intents.length()).map { intents.optJSONObject(it) ?: return false }
+    // Ambiguous entries, exits and additions may race a protection replacement.
+    if (rows.any {
+        val lifecycle = campaignLifecycleStatus(it)
+        (it.optString("intent_role", "ENTRY") == "ENTRY" &&
+            lifecycle in setOf("ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "POSITION_OPEN", "EXIT_PENDING")) ||
+        (it.optString("intent_role") == "EXIT" &&
+            it.optString("exchange_status").uppercase(Locale.US) in ENTRY_ORDER_ACTIVE_STATUSES) ||
+        (it.optString("intent_role") == "ADD_ON" &&
+            exchangeOrderStatus(it) in ENTRY_ORDER_ACTIVE_STATUSES)
+    }) return false
+    val active = rows.filter {
+        it.optString("intent_role", "ENTRY") == "ENTRY" &&
+            campaignLifecycleStatus(it) == "OPEN_PROTECTED"
+    }
+    if (active.size != open.size || active.map { it.optString("symbol").uppercase(Locale.US) }.toSet() != open.keys)
+        return false
+    for (entry in active) {
+        val symbol = entry.optString("symbol").uppercase(Locale.US)
+        if (open[symbol] != entry.optString("direction") ||
+            !entry.optBoolean("strategy_ownership_verified", false) ||
+            entry.optString("protection_status") != "PROTECTED" ||
+            entry.optString("protection_client_id").isBlank() ||
+            entry.optString("previous_protection_client_id").isNotBlank() ||
+            entry.optString("liquidation_guard_status") != "PASS") return false
+        val stop = entry.optString("protective_stop").toDoubleOrNull()
+        val risk = entry.optDouble("actual_all_in_risk_pct", Double.NaN)
+        val auditedAt = entry.optLong("actual_risk_audited_at_ms", 0L)
+        val status = entry.optString("actual_risk_audit_status")
+        if (stop == null || !stop.isFinite() || stop <= 0.0 ||
+            !risk.isFinite() || risk <= 0.0 ||
+            auditedAt <= 0L || auditedAt > nowMs || nowMs - auditedAt > 30_000L ||
+            status !in setOf("PASS", "PASS_RESERVATION_ADJUSTED", "BLOCKED")) return false
+        if (status == "BLOCKED" &&
+            !entry.optString("actual_risk_audit_blocker")
+                .startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:")) return false
+    }
+    return true
+}
+
 /** Sum each admitted entry exactly once while its primary campaign remains active. */
 internal fun futuresCampaignRiskComponents(owner:JSONObject,all:JSONArray):List<Double> {
     if(!isEntryCampaignReserved(owner)) return emptyList()
@@ -686,6 +749,7 @@ internal class NativeFuturesCampaignCoordinator(
     @Volatile private var reconciliationRunning = false
     @Volatile private var reconciliationStartedAtMs = 0L
     @Volatile private var reconciliationFinishedAtMs = 0L
+    @Volatile private var verifiedRiskCapManagementAtMs = 0L
 
     private val lock = Any()
     @Volatile private var observationSink: ((JSONArray) -> Unit)? = null
@@ -826,6 +890,7 @@ internal class NativeFuturesCampaignCoordinator(
     fun reconcile(): JSONObject = synchronized(lock) {
         reconciliationRunning = true
         reconciliationStartedAtMs = clock()
+        verifiedRiskCapManagementAtMs = 0L
         state = State.RECONCILE_REQUIRED
         lastBlocker = "exchange_reconciliation_in_progress"
         try {
@@ -2006,6 +2071,14 @@ internal class NativeFuturesCampaignCoordinator(
                     symbol !in openBySymbol &&
                     campaignLifecycleStatus(intent) in setOf("ENTRY_PENDING", "FILL_CONFIRMATION_PENDING")
             }
+            // A strictly verified over-cap portfolio may continue risk-REDUCING
+            // management. Failed reconciliation remains failed and entries stay locked.
+            val verifiedOverCap = !anyUnprotected && !hasPendingExit && !hasPendingAddition &&
+                !hasPendingEntry && requiredSafetyExits.length() == 0 &&
+                actualRiskAuditBlocked && verifiedProtectedRiskCapManagement(
+                    actualRiskAuditBlocker, exchangePositions, persisted, clock()
+                )
+            verifiedRiskCapManagementAtMs = if (verifiedOverCap) clock() else 0L
             state = when {
                 anyUnprotected -> State.POSITION_UNPROTECTED
                 actualRiskAuditBlocked -> State.RECONCILE_REQUIRED
@@ -2026,6 +2099,7 @@ internal class NativeFuturesCampaignCoordinator(
             JSONObject()
                 .put("ok", !anyUnprotected && !actualRiskAuditBlocked && !hasPendingExit)
                 .put("actual_risk_audit_blocked", actualRiskAuditBlocked)
+                .put("protected_over_cap_management_allowed", verifiedOverCap)
                 .put("actual_risk_audit_blocker", actualRiskAuditBlocker ?: JSONObject.NULL)
                 .put("required_safety_exits", requiredSafetyExits)
                 .put("engine", "USD_M_FUTURES_TESTNET")
@@ -2629,7 +2703,11 @@ internal class NativeFuturesCampaignCoordinator(
         newStopPrice: String,
         clientAlgoId: String
     ): JSONObject = synchronized(lock) {
-        check(state == State.OPEN_PROTECTED || state == State.ENTRY_PENDING) {
+        val cappedRiskOnly = state == State.RECONCILE_REQUIRED &&
+            lastBlocker?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:") == true &&
+            verifiedRiskCapManagementAtMs > 0L && clock() >= verifiedRiskCapManagementAtMs &&
+            clock() - verifiedRiskCapManagementAtMs <= 30_000L
+        check(state == State.OPEN_PROTECTED || state == State.ENTRY_PENDING || cappedRiskOnly) {
             "Stop trail blocked while Futures state is $state"
         }
         require(symbol in allowedSymbols)
