@@ -718,8 +718,11 @@ internal class NativeFuturesCampaignCoordinator(
     private val clock:()->Long=System::currentTimeMillis,
     private val adapterFactory: () -> BinanceUsdMFuturesTestnetAdapter
 ) {
+    // Migration-compatible verifier flags. Only book-H1 is enabled in 4.36.
     var requireM15FractalForAutomatedEntries:Boolean = false
     var m15EntryVerifier:((EntryPlan)->Unit)? = null
+    var requireBookH1ProofForAutomatedEntries:Boolean = false
+    var bookH1EntryVerifier:((EntryPlan)->Unit)? = null
     enum class Direction { LONG, SHORT }
     enum class EntryKind { STOP, TAKE_PROFIT, LIMIT, MARKET }
     enum class State {
@@ -2221,6 +2224,16 @@ internal class NativeFuturesCampaignCoordinator(
             if(williamsH1ParentAlreadyFilled(currentIntents,plan.signalId))
                 return@synchronized safePreflightRejection("H1_PARENT_ALREADY_FILLED: no second initial campaign")
         }
+        if(requireBookH1ProofForAutomatedEntries && plan.entryClientId.isBlank() &&
+            plan.signalType!="OPERATOR_FORCED_DIRECTION") {
+            val bookProof=williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,
+                plan.signalId,plan.signalType,plan.strategyProfile,
+                plan.entryPrice.toDoubleOrNull() ?: Double.NaN,
+                plan.protectiveStop.toDoubleOrNull() ?: Double.NaN,clock())
+            if(bookProof!=null) return@synchronized safePreflightRejection(bookProof)
+            if(williamsH1ParentAlreadyFilled(currentIntents,plan.signalId))
+                return@synchronized safePreflightRejection("H1_PARENT_ALREADY_FILLED")
+        }
         if(!entryTimePolicyProvider().allows(clock()))
             return@synchronized safePreflightRejection("ENTRY_TIME_POLICY_BLOCKED: "+entryTimePolicyProvider().toJson())
         val selected=editionSelectionProvider?.invoke()
@@ -2474,6 +2487,15 @@ internal class NativeFuturesCampaignCoordinator(
                     "M15_FRACTAL_PROOF_EXPIRED_BEFORE_SUBMISSION"
                 }
                 val verifier=m15EntryVerifier ?: error("M15_FINAL_VERIFIER_REQUIRED")
+                verifier(plan)
+            }
+            if(requireBookH1ProofForAutomatedEntries && !isAddition && plan.signalType!="OPERATOR_FORCED_DIRECTION") {
+                check(williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
+                    plan.signalType,plan.strategyProfile,plan.entryPrice.toDouble(),
+                    plan.protectiveStop.toDouble(),clock())==null) {
+                    "H1_BOOK_PROOF_EXPIRED_BEFORE_SUBMISSION"
+                }
+                val verifier=bookH1EntryVerifier ?: error("H1_BOOK_FINAL_VERIFIER_REQUIRED")
                 verifier(plan)
             }
             if(plan.kind==EntryKind.MARKET) check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
