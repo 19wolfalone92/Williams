@@ -42,4 +42,9 @@ class WilliamsMarketGeometryTest {
         val short=selectWilliamsPendingFractal("SHORT",mirror(b),t.map { 250-it },.1)!!
         assertEquals(250-f.trigger,short.trigger,1e-8)
     }
+    @Test fun courseSignalLineSideIsIndependentOfLastAoColour() {
+        val b=bars((0 until 47).map { 101+it*.2+5*kotlin.math.sin(it*.4) })
+        assertEquals("DOWN",williamsCourseRhythm(b).second)
+        assertEquals("UP",williamsCourseRhythm(mirror(b)).second)
+    }
 }

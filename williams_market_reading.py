@@ -49,7 +49,7 @@ def market_reading(bars,phase_context):
                        jaw=jaw[-1],teeth=teeth[-1],lips=lips[-1]),
         ao=current,ac=ac,ao_direction=momentum,ac_direction=acceleration,
         profitunity_macd=dict(fast=5,slow=34,signal_period=5,oscillator=current,signal=signal(len(bars)-1),histogram=ac,
-            shares_ao_and_ac=True),
+            shares_ao_and_ac=True,momentum_direction="UP" if ac>0 else "DOWN" if ac<0 else "NEUTRAL"),
         twr=dict(fast_5=fast,medium_13=medium,slow_34=slow,direction=direction),
         rhythm_condition=rhythm,wave_phase=wave,wave_state=h1.get("state","UNRESOLVED"),
         exhaustion_warning=h1.get("exhaustion_warning",False),

@@ -179,8 +179,13 @@ internal fun williamsCourseRhythm(bars:List<WilliamsWaveBar>):Pair<String,String
     fun mean(n:Int,previous:Boolean=false)=(if (previous) mids.dropLast(1) else mids).takeLast(n).average()
     val fast=mean(5);val medium=mean(13);val slow=mean(34)
     val twr=if (fast>maxOf(medium,slow)) "UP" else if (fast<minOf(medium,slow)) "DOWN" else "NEUTRAL"
-    val delta=if (bars.size>=35) (fast-slow)-(mean(5,true)-mean(34,true)) else Double.NaN
-    val momentum=if (!delta.isFinite()) "UNKNOWN" else if (delta>0) "UP" else if (delta<0) "DOWN" else "NEUTRAL"
+    // Course Level II p14/PDF45: compare oscillator with its signal SMA(5),
+    // independently of whether the latest AO bar grew or declined.
+    val oscillator=fast-slow
+    val signal=if(bars.size>=38) (bars.size-5 until bars.size).map { end ->
+        mids.subList(end-4,end+1).average()-mids.subList(end-33,end+1).average()
+    }.average() else Double.NaN
+    val momentum=if(!signal.isFinite()) "UNKNOWN" else if(oscillator>signal) "UP" else if(oscillator<signal) "DOWN" else "NEUTRAL"
     return twr to momentum
 }
 

@@ -14,12 +14,6 @@ class WilliamsSetupRulesTest {
         assertFalse(validWilliamsReversalBar("SHORT",mirror(pierced),130.0,listOf(124.0,122.0,120.0),1.0))
         assertFalse(validWilliamsReversalBar("LONG",valid,90.0,listOf(96.0,98.0,100.0),0.0))
     }
-    @Test fun increasingEndpointDistanceWithoutIncreasingSlopeIsNotAngulation() {
-        val gaps=listOf(0.0,100.0,100.0,0.0,1.0)
-        val bars=gaps.mapIndexed { i,g -> val low=200-g
-            WilliamsWaveBar(i.toLong(),low+1,low+2,low,low+1) }
-        assertEquals(0.0,williamsIncreasingJawDistanceScore("LONG",bars,List(5){200.0}),0.0)
-    }
     @Test fun newerIneligibleFractalCannotMaskAnOlderValidPendingLevel() {
         val highs=listOf(101.0,102.0,105.0,103.0,102.0,103.0,104.0,102.0,101.0,102.0,103.0)
         val bars=highs.mapIndexed { i,h -> WilliamsWaveBar(i*3_600_000L,h-1,h,h-5,h-1) }

@@ -115,3 +115,14 @@ def test_chart_reading_preserves_unknown_wave_and_correlated_oscillator_identity
     assert p["profitunity_macd"]["histogram"]==p["ac"]
     assert p["profitunity_macd"]["shares_ao_and_ac"]
     assert market_reading(series[:40]+series[41:],{})["state"]=="HISTORY_UNVERIFIED"
+
+
+@pytest.mark.parametrize("short",[False,True])
+def test_course_momentum_uses_signal_line_even_when_ao_colour_disagrees(short):
+    from math import sin
+    from williams_edition_rules import course_rhythm
+    series=bars([101+i*.2+5*sin(i*.4) for i in range(47)])
+    if short:series=mirror(series)
+    proof=course_rhythm(series)
+    assert proof["momentum"]==("UP" if short else "DOWN")
+    assert proof["momentum_basis"]=="OSCILLATOR_VS_SIGNAL_SMA5"
