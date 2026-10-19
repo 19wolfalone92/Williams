@@ -20,9 +20,10 @@ class NativeFuturesCoordinatorLifecycleTest {
     private class Journal : FuturesCampaignStateStore {
         private val values = mutableMapOf<String, String>()
         var rejectWrites = false
+        var rejectDecisionWrites = false
         @Synchronized override fun readState(key: String): String? = values[key]
         @Synchronized override fun writeState(key: String, value: String): Boolean {
-            if (rejectWrites) return false
+            if (rejectWrites || rejectDecisionWrites && key.startsWith("decision_execution_")) return false
             values[key] = value
             return true
         }
@@ -174,16 +175,47 @@ class NativeFuturesCoordinatorLifecycleTest {
     private fun open(direction: NativeFuturesCampaignCoordinator.Direction, leverage: Int = 5, prefix: String = "W2E_"):
         Pair<NativeFuturesCampaignCoordinator, Exchange> {
         val exchange = Exchange(direction)
-        val coordinator = NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+        val journal=Journal()
+        val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
         assertTrue(coordinator.reconcile().toString(), coordinator.status().optBoolean("ready_for_new_entry"))
         val accepted = coordinator.submitPendingEntry(plan(direction, leverage, prefix))
         assertTrue(accepted.toString(), accepted.getBoolean("accepted"))
+        val trace=JSONObject(requireNotNull(journal.readState("decision_execution_BTCUSDT")))
+        assertEquals("EXECUTION_COORDINATOR",trace.getString("stage"))
+        assertTrue(trace.getJSONObject("outcome").getBoolean("accepted"))
+        assertEquals(plan(direction,leverage,prefix).clientId,trace.getString("client_id"))
         assertEquals(leverage, exchange.leverage)
         exchange.fill()
         val reconciled = coordinator.reconcile()
         assertTrue(reconciled.toString(), reconciled.getBoolean("ok"))
         assertEquals("OPEN_PROTECTED", coordinator.state.name)
         return coordinator to exchange
+    }
+
+    @Test fun diagnosticPersistenceFailureDoesNotRetryAnAcceptedOrder() {
+        val journal=Journal();val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+        journal.rejectDecisionWrites=true
+        val accepted=coordinator.submitPendingEntry(plan(NativeFuturesCampaignCoordinator.Direction.LONG))
+        assertTrue(accepted.toString(),accepted.getBoolean("accepted"))
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        assertNull(journal.readState("decision_execution_BTCUSDT"))
+        exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
+        assertEquals("OPEN_PROTECTED",coordinator.state.name)
+    }
+
+    @Test fun rejectedPlansHaveTheirOwnDecisionProofAndCannotReachTheExchange() {
+        val journal=Journal();val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+        val invalid=plan(NativeFuturesCampaignCoordinator.Direction.LONG).copy(riskPct=.5)
+        val result=coordinator.submitPendingEntry(invalid)
+        assertFalse(result.getBoolean("accepted"))
+        val trace=JSONObject(requireNotNull(journal.readState("decision_execution_BTCUSDT")))
+        assertFalse(trace.getJSONObject("outcome").getBoolean("mutation_attempted"))
+        assertTrue(trace.getJSONObject("outcome").getString("blocker").contains("risk"))
+        assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
     }
 
     @Test fun profileSelectionAndEntryAdmissionShareOneAuthorityAndPendingCampaignPreventsSwitching() {

@@ -279,6 +279,7 @@ data class Status(
     val futuresLeverage: Int = 0,
     val futuresLeverageSettingsJson: String = "",
     val strategyProfile:String=williamsUnifiedProfile,
+    val decisionTracesJson:String="",
     val futuresMarginType: String = "UNKNOWN",
     val futuresForceOneWay: Boolean = false,
     val scanDurationMs: Long = 0L,
@@ -2517,6 +2518,7 @@ private fun MarketChartPanel(
             }
             if (historicalTrade == null) {
             Divider(color = AppColors.surface2)
+            WilliamsDecisionTraceCard(status.decisionTracesJson,selectedSymbol)
             Text("ЧТО ДУМАЕТ БОТ • H4 → H1 → СИГНАЛ → РИСК", style = MaterialTheme.typography.titleMedium)
             Text("Показан последний результат сканера, а не команда немедленной покупки/продажи. Ордер требует отдельного H1-триггера, проверки риска и биржевой сверки.",
                 color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
@@ -2535,8 +2537,8 @@ private fun MarketChartPanel(
                 if (details) {
                 InfoRow("Согласование направления", candidate.wiseManCount.toString() + "/3 (диагностика, не счётчик Three Wise Men)")
                 InfoRow("Волновая фаза", "W" + candidate.wavePosition + " • " + candidate.wavePhase)
-                InfoRow("Волновая уверенность / истощение", fmt(candidate.waveConfidence, 2) + " / " + fmt(candidate.waveExhaustionRisk, 1) + "%")
-                InfoRow("Вероятности W3 / W5", fmt(candidate.wave3Probability, 2) + " / " + fmt(candidate.wave5Probability, 2))
+                InfoRow("Волновые оценки (эвристика) / истощение", fmt(candidate.waveConfidence, 2) + " / " + fmt(candidate.waveExhaustionRisk, 1) + "%")
+                InfoRow("Оценки W3 / W5 (некалиброваны)", fmt(candidate.wave3Probability, 2) + " / " + fmt(candidate.wave5Probability, 2))
                 InfoRow("Режим рынка", candidate.regime + " • score " + fmt(candidate.regimeScore, 2))
                 InfoRow("OBI стакана", fmt(candidate.obi, 3))
                 InfoRow("Дисбаланс потока сделок", fmt(candidate.tradeFlowImbalance, 3))
@@ -4098,6 +4100,7 @@ internal fun parseStatus(json: JSONObject): Status {
         futuresLeverage =
             json.optInt("futures_leverage", 0),
         strategyProfile=json.optString("strategy_profile",williamsUnifiedProfile),
+        decisionTracesJson=json.optJSONObject("decision_traces")?.toString().orEmpty(),
         futuresLeverageSettingsJson =
             json.optJSONObject("futures_leverage_settings")?.toString().orEmpty(),
         futuresMarginType =

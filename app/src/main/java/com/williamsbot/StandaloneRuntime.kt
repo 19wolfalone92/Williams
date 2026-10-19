@@ -2828,6 +2828,7 @@ private class NativeEngine(
             ) { "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED at final preflight; no market-order substitution" }
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
+        if(!result.optBoolean("accepted",false)) rejectDecision(symbol,result.optString("blocker","EXECUTION_DOOR_REJECTED"))
         runCatching { auditStore.recordCockpitEvent("ORDER_RESPONSE", symbol, direction.name,
             if (result.optBoolean("accepted")) "ACCEPTED" else "UNCONFIRMED_OR_REJECTED", detail = result.optString("blocker", result.optString("error"))) }
         lastOrder = result
@@ -5489,20 +5490,27 @@ private class NativeEngine(
     }
 
     private fun submitNativeFuturesCampaignEntry(candidate: BaseAnalysis) {
+        try { submitNativeFuturesCampaignEntryChecked(candidate) } catch(failure:Exception) {
+            rejectDecision(candidate.symbol,failure.message ?: failure.javaClass.simpleName)
+            throw failure
+        }
+    }
+    private fun submitNativeFuturesCampaignEntryChecked(candidate: BaseAnalysis) {
+        val symbol=candidate.symbol
         // The operator-directed mode suppresses automatic direction selection even
         // when this scan began before the mode was armed.
-        if (forceTestnetMode) return
+        if (forceTestnetMode) return rejectDecision(symbol,"OPERATOR_DIRECTION_MODE_ACTIVE")
         // Entry-session overlay is UTC 08:00 inclusive to 20:00 exclusive.
         // Position protection/management and explicit exits remain active 24/7.
-        if (!executionReady() || !candidate.campaignReady) return
+        if (!executionReady() || !candidate.campaignReady) return rejectDecision(symbol,"RUNTIME_OR_CAMPAIGN_NOT_READY: running=$running; paused=$paused; reconcile=$reconcileRequired; "+candidate.reason)
         val sessionClockMs = runCatching { futuresMarketData.exchangeNowMs() }.getOrElse { failure ->
             lastError = "FUTURES_SESSION_CLOCK_UNAVAILABLE: " +
                 (failure.message ?: failure.javaClass.simpleName)
-            return
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
         if (!isWithinWilliamsEntrySessionUtc(sessionClockMs)) {
             lastError = "WILLIAMS_ENTRY_SESSION_CLOSED: new entries allowed only from 08:00 to 20:00 UTC; position management remains active"
-            return
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 
         // Re-check daily equity immediately before the exchange mutation. If the account
@@ -5514,19 +5522,18 @@ private class NativeEngine(
                 (failure.message ?: failure.javaClass.simpleName)
             false
         }
-        if (!dailyLossAllowsEntry) return
-        if (!executionReady() || !candidate.campaignReady) return
-        if (candidate.spreadPct !in 0.0..maxSpreadPct) return
-        val symbol = candidate.symbol
+        if (!dailyLossAllowsEntry) return rejectDecision(symbol,"DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED: "+lastError)
+        if (!executionReady() || !candidate.campaignReady) return rejectDecision(symbol,"RUNTIME_OR_CAMPAIGN_NOT_READY: running=$running; paused=$paused; reconcile=$reconcileRequired; "+candidate.reason)
+        if (candidate.spreadPct !in 0.0..maxSpreadPct) return rejectDecision(symbol,"SPREAD_LIMIT: ${candidate.spreadPct} > $maxSpreadPct")
         val topOfBook = runCatching { futuresMarketData.topOfBook(symbol) }.getOrElse { failure ->
             lastError = "FUTURES_ENTRY_TOP_OF_BOOK_FAILED: $symbol: " +
                 (failure.message ?: failure.javaClass.simpleName)
-            return
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
         val currentSpreadPct = (topOfBook.second - topOfBook.first) / topOfBook.first
         if (!currentSpreadPct.isFinite() || currentSpreadPct !in 0.0..maxSpreadPct) {
             lastError = "FUTURES_ENTRY_SPREAD_BLOCKED: $symbol live spread=" + currentSpreadPct
-            return
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
         val existing=futuresCampaignCoordinator.intentsSnapshot()
         val owned=latestEntryIntentIndex(existing,symbol)?.let { existing.optJSONObject(it) }
@@ -5548,7 +5555,7 @@ private class NativeEngine(
         }
         if (freshSignals.isEmpty()) {
             lastError = "WILLIAMS_SIGNAL_EXPIRED: no fresh confirmed H1 hypothesis for $symbol"
-            return
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 
         // Macro D1 is an airbag; H4 supplies context; H1 is the only decision TF.
@@ -5559,7 +5566,7 @@ private class NativeEngine(
             .filter { it.t > 0L && it.t + d1BarMs <= contextNow }
         val h4 = fetchCandles(symbol, "4h", 120)
             .filter { it.t > 0L && it.t + h4BarMs <= contextNow }
-        if (d1.size < 45 || h4.size < 45) return
+        if (d1.size < 45 || h4.size < 45) return rejectDecision(symbol,"HTF_HISTORY_INSUFFICIENT: D1=${d1.size}; H4=${h4.size}")
         val d1Line = alligator(d1, d1.lastIndex)
         val h4Line = alligator(h4, h4.lastIndex)
         val d1Bull = d1Line.lips > d1Line.teeth && d1Line.teeth > d1Line.jaw &&
@@ -5570,6 +5577,14 @@ private class NativeEngine(
             h4.last().c > h4Line.lips && ao(h4, h4.lastIndex) > 0.0
         val h4Bear = h4Line.lips < h4Line.teeth && h4Line.teeth < h4Line.jaw &&
             h4.last().c < h4Line.lips && ao(h4, h4.lastIndex) < 0.0
+        runCatching {
+            fun contextBar(frame:String,bars:List<CandleN>,jaw:Double,teeth:Double,lips:Double):JSONObject = JSONObject()
+                .put("frame",frame).put("bar_time_ms",bars.last().t).put("close",bars.last().c)
+                .put("ao",ao(bars,bars.lastIndex)).put("jaw",jaw).put("teeth",teeth).put("lips",lips)
+            executionStore.writeState("decision_context_"+symbol,JSONObject().put("observed_at_ms",contextNow)
+                .put("d1",contextBar("1d",d1,d1Line.jaw,d1Line.teeth,d1Line.lips)).put("h4",contextBar("4h",h4,h4Line.jaw,h4Line.teeth,h4Line.lips))
+                .put("d1_bull",d1Bull).put("d1_bear",d1Bear).put("h4_bull",h4Bull).put("h4_bear",h4Bear).toString())
+        }
         // Apply D1/H4 context before choosing between fresh confirmed H1 hypotheses.
         // H4-aligned context ranks before a reversal; signal recency breaks ties.
         val lastH1Index = candidate.candles.lastIndex
@@ -5601,14 +5616,14 @@ private class NativeEngine(
                 allowedSignals.mapNotNull { campaignSignalDirection(it.type) })) {
             lastError="WILLIAMS_UNIFIED_DIRECTION_CONFLICT: fresh LONG and SHORT H1 entries disagree for $symbol; no order armed"
             runCatching { auditStore.recordCockpitEvent("SIGNAL_CONFLICT",symbol,detail=lastError.orEmpty()) }
-            return
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
         val signal = allowedSignals.minWithOrNull(
             compareBy<CampaignSignalN> { it.signalBarTimeMs }
                 .thenByDescending { contextRank(it) }.thenByDescending { nativeRank(it.type) }
         ) ?: run {
             lastError = "WILLIAMS_DIRECTIONAL_CONTEXT_BLOCKED: neither LONG nor SHORT is allowed by D1/H4 for $symbol"
-            return
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
         val correction = corrections[signal.signalId] ?: WilliamsCorrectionContext()
         val direction = when (campaignSignalDirection(signal.type)) {
@@ -5628,17 +5643,17 @@ private class NativeEngine(
             .filter { it.t > 0L && it.t + m15BarMs <= contextNow }
         if (m15.size < 45) {
             lastError = "M15_EXECUTION_BLOCKED: insufficient closed M15 history for $symbol"
-            return
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
         val lastClosedM15At = m15.last().t + m15BarMs
         if (contextNow - lastClosedM15At > 30L * 60L * 1000L) {
             lastError = "M15_EXECUTION_BLOCKED: latest closed M15 candle is stale for $symbol"
-            return
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 
         val entries = futuresCampaignCoordinator.intentsSnapshot()
         val clientId = ("W2E_" + symbol.take(7) + "_" + signal.type.take(4) + "_" + signal.signalBarTimeMs.toString(36)).take(36)
-        if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId }) return
+        if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId }) return rejectDecision(symbol,"FORMATION_ALREADY_ADMITTED: "+clientId)
 
         val exchangePositions = futuresCampaignCoordinator.positionsSnapshot()
         val openPositions = (0 until exchangePositions.length()).map { index ->
@@ -5656,7 +5671,7 @@ private class NativeEngine(
         )
         if (slotBlocker != null) {
             lastError = slotBlocker
-            return
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 
         val riskUsed = (0 until entries.length()).mapNotNull { entries.optJSONObject(it) }.sumOf { intent ->
@@ -5670,16 +5685,16 @@ private class NativeEngine(
             } else 0.0
         }.coerceAtMost(maxTotalRiskPct)
         val riskPct = min(campaignInitialRiskPct, min(maxRiskPerTradePct, maxTotalRiskPct - riskUsed))
-        if (riskPct <= 0.0) return
+        if (riskPct <= 0.0) return rejectDecision(symbol,"PORTFOLIO_RISK_EXHAUSTED: used=$riskUsed; limit=$maxTotalRiskPct")
         val account = futuresCampaignCoordinator.accountSnapshot()
         val parsedAccount = parseFuturesAccountSnapshot(account) ?: run {
             updateCachedFuturesAccount(account)
             lastError = restAccountLastError ?: "Futures account snapshot is invalid"
-            return
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
         val equity = parsedAccount.equityUsdt
         val available = parsedAccount.availableUsdt
-        if (!futuresAccountFundedForEntry(available, equity)) return
+        if (!futuresAccountFundedForEntry(available, equity)) return rejectDecision(symbol,"ACCOUNT_FUNDS_NOT_PROVEN")
         val mark = futuresMarketData.markPrice(symbol)
         val rules = symbolFilters(symbol)
         val marketReentry=profitReentry(signal) && signal.executionSemantics=="MARKET_ON_CLOSE"
@@ -5690,18 +5705,18 @@ private class NativeEngine(
             normalizePrice(signal.protectivePrice, rules.tick) else normalizeTriggerPrice(signal.protectivePrice, rules.tick)
         if(signal.strategyProfile==williamsCourseProfile) {
             val higher=closedWilliamsWaveBars(fetchCandles(symbol,"6h",100).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },"6h",contextNow)
-            val airbag=williamsCourseAirbagStop(direction.name,higher,rules.tick) ?: return
+            val airbag=williamsCourseAirbagStop(direction.name,higher,rules.tick) ?: return rejectDecision(symbol,"REQUIRED_ENTRY_EVIDENCE_UNAVAILABLE")
             stop=if(direction.name=="LONG") normalizePrice(minOf(stop,airbag),rules.tick)
                 else normalizeTriggerPrice(maxOf(stop,airbag),rules.tick)
         }
-        if (trigger <= 0.0 || stop <= 0.0) return
+        if (trigger <= 0.0 || stop <= 0.0) return rejectDecision(symbol,"INVALID_TRIGGER_OR_STOP")
         if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-            if (!marketReentry && trigger <= mark || stop >= trigger) return
+            if (!marketReentry && trigger <= mark || stop >= trigger) return rejectDecision(symbol,"LONG_TRIGGER_CONSUMED_OR_STOP_INVALID: mark=$mark; trigger=$trigger; stop=$stop")
         } else {
-            if (!marketReentry && trigger >= mark || stop <= trigger) return
+            if (!marketReentry && trigger >= mark || stop <= trigger) return rejectDecision(symbol,"SHORT_TRIGGER_CONSUMED_OR_STOP_INVALID: mark=$mark; trigger=$trigger; stop=$stop")
         }
         val stopFraction = kotlin.math.abs(trigger - stop) / trigger
-        if (!stopFraction.isFinite() || stopFraction <= 0.0) return
+        if (!stopFraction.isFinite() || stopFraction <= 0.0) return rejectDecision(symbol,"INVALID_STRUCTURAL_RISK_DISTANCE")
         val effectiveLoss = stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct
         val maxRiskQuote = equity * riskPct
         val entryLeverage = futuresLeverageSettings.forSymbol(symbol)
@@ -5720,7 +5735,7 @@ private class NativeEngine(
             (marketLotEnabled && !ExecutionMath.isMultiple(qty, rules.marketStep)) ||
             qty * trigger < rules.minNotional || qty * trigger > rules.maxNotional) {
             lastError = "FUTURES_QUANTITY_FILTER_BLOCKED: $symbol quantity does not satisfy LOT_SIZE and MARKET_LOT_SIZE"
-            return
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 
         val plan = NativeFuturesCampaignCoordinator.EntryPlan(
@@ -5814,6 +5829,7 @@ private class NativeEngine(
             // M15 contributes only execution readiness, never a new direction.
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
+        if(!result.optBoolean("accepted",false)) rejectDecision(symbol,result.optString("blocker","EXECUTION_DOOR_REJECTED"))
         runCatching { auditStore.recordCockpitEvent("ORDER_RESPONSE", symbol, direction.name,
             if (result.optBoolean("accepted")) "ACCEPTED" else "UNCONFIRMED_OR_REJECTED", detail = result.optString("blocker", result.optString("error"))) }
         lastOrder = result
@@ -5994,9 +6010,9 @@ private class NativeEngine(
             scannerError = "TESTNET_FORCE_MODE_ACTIVE: automatic entries suspended; select an explicit LONG/SHORT H1 entry in Cockpit"
             return
         }
-        if (executionBlocker != null) return
-        if (!completeScan) return
-        if (!restAccountReady || !marketDataFresh()) return
+        if (executionBlocker != null) { coreSymbols.forEach { rejectDecision(it,executionBlocker) };return }
+        if (!completeScan) { coreSymbols.forEach { rejectDecision(it,"SCAN_INCOMPLETE: "+missing.joinToString(",")) };return }
+        if (!restAccountReady || !marketDataFresh()) { coreSymbols.forEach { rejectDecision(it,"ACCOUNT_OR_MARKET_DATA_NOT_READY") };return }
         if (futuresCampaignCoordinator.state !in setOf(
                 NativeFuturesCampaignCoordinator.State.READY,
                 NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED,
@@ -7510,6 +7526,29 @@ private class NativeEngine(
             campaignReady=campaignEngineEnabled && finalSignal,waveHierarchy=hierarchy)
     }
 
+    private fun decisionTraceSnapshot():JSONObject {
+        val journal=runCatching { futuresCampaignCoordinator.intentsSnapshot() }
+        val intents=journal.getOrDefault(JSONArray())
+        return JSONObject().apply { BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.forEach { symbol ->
+            val trace=runCatching { JSONObject(executionStore.readState("decision_trace_"+symbol).orEmpty()) }
+                .getOrDefault(JSONObject().put("symbol",symbol).put("state","NOT_ANALYSED"))
+            val execution=runCatching { JSONObject(executionStore.readState("decision_execution_"+symbol).orEmpty()) }.getOrNull()
+            execution?.let { trace.put("execution",it) }
+            runCatching { JSONObject(executionStore.readState("decision_runtime_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("runtime_preflight",it) }
+            trace.put("order_chain_state",if(journal.isSuccess) "JOURNAL_SNAPSHOT" else "UNAVAILABLE_RECONCILE_REQUIRED")
+            runCatching { JSONObject(executionStore.readState("decision_context_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("admission_context",it) }
+            trace.put("order_chain",williamsExecutionChain(intents,symbol))
+            put(symbol,trace)
+        } }
+    }
+    private fun rejectDecision(symbol:String,reason:String) {
+        runCatching { executionStore.writeState("decision_runtime_"+symbol,JSONObject()
+            .put("stage","RUNTIME_PREFLIGHT").put("observed_at_ms",System.currentTimeMillis())
+            .put("outcome",JSONObject().put("accepted",false).put("mutation_attempted",false).put("blocker",safeDiagnosticText(reason))).toString()) }
+    }
+
     private fun toJson(candidate: BaseAnalysis): JSONObject {
         val wave = candidate.wave
         // Match the exact signal selected by execution, rather than displaying
@@ -7597,7 +7636,22 @@ private class NativeEngine(
             .put("calibration", "ENGINEERING_HEURISTIC_UNCALIBRATED")
             .put("can_place_orders", false)
 
+        val traceSignals=JSONArray(candidate.campaignSignals.map { signal -> JSONObject()
+            .put("signal_id",signal.signalId).put("family",signal.type.removePrefix("SHORT_").removePrefix("LONG_")).put("type",signal.type)
+            .put("direction",campaignSignalDirection(signal.type)).put("role",signal.role)
+            .put("signal_bar_time_ms",signal.signalBarTimeMs).put("known_at_ms",signal.signalBarTimeMs+3_600_000L)
+            .put("trigger",signal.triggerPrice).put("protective_stop",signal.protectivePrice)
+            .put("strategy_profile",signal.strategyProfile).put("execution_semantics",signal.executionSemantics)
+            .put("setup_context",runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject())) })
+        val line=alligator(candidate.candles,candidate.candles.lastIndex)
+        val indicators=JSONObject().apply { mapOf("ao" to h1Ao,"ac" to h1Ac,"jaw" to line.jaw,"teeth" to line.teeth,"lips" to line.lips)
+            .forEach { (name,value) -> put(name,if(value.isFinite()) value else JSONObject.NULL) } }
+        val trace=buildWilliamsDecisionTrace(candidate.symbol,williamsProfile,
+            candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },futuresMarketData.exchangeNowMs(),
+            indicators,traceSignals,candidate.waveHierarchy?.toJson() ?: JSONObject())
+        runCatching { executionStore.writeState("decision_trace_"+candidate.symbol,trace.toString()) }
         return JSONObject()
+            .put("decision_trace",trace)
             .put("directional_context_native", directionTrace)
             .put("wave4_zero_line_diagnostic", wave4Trace)
             .put("ntd_balance_line_diagnostics", ntdTrace)
@@ -8190,6 +8244,7 @@ private class NativeEngine(
             .put("last_reconciliation_completed_at_ms", lastReconciliationCompletedAtMs)
             .put("last_reconciliation_result", lastReconciliationResult)
             .put("strategy_profile",williamsProfile)
+            .put("decision_traces",decisionTraceSnapshot())
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
@@ -9125,6 +9180,7 @@ private class NativeEngine(
     fun settings(): JSONObject =
         JSONObject()
             .put("strategy_profile",williamsProfile)
+            .put("decision_traces",decisionTraceSnapshot())
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
