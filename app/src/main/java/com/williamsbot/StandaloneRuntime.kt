@@ -5482,9 +5482,9 @@ private class NativeEngine(
             referenceClose=if(market) signal.triggerPrice else 0.0,setupContext=setup.toString(),signalId=signal.signalId)
         lastOrder=withCampaignMutation(symbol,"WILLIAMS_CAMPAIGN_ADDITION") {
             val submitNow=futuresMarketData.exchangeNowMs()
-            check(williamsProfileAllowsSource(williamsProfile,profile) && entryTimePolicy.allows(submitNow) && checkFuturesDailyLoss()) {
-                "Addition profile/session/daily risk changed before mutation"
-            }
+            check(williamsProfileAllowsSource(williamsProfile,profile)) { "ADDITION_SOURCE_PROFILE_CHANGED_BEFORE_SUBMISSION" }
+            check(entryTimePolicy.allows(submitNow)) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_ADDITION" }
+            check(checkFuturesDailyLoss()) { "DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED_BEFORE_ADDITION: "+lastError }
             val fresh=editionCampaignSignals(symbol,fetchCandles(symbol,"1h",220),"1h",rules.tick,profile)
             check(fresh.any { it.signalId==signal.signalId && it.triggerPrice==signal.triggerPrice }) { "Addition formation no longer valid" }
             if(!market) {

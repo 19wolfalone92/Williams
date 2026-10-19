@@ -12,8 +12,9 @@ def safe_reason(reason):
 
 def reason_category(reason):
     text=reason.upper()
+    if text.startswith(('RUNTIME_OR_CAMPAIGN_NOT_READY','ADDITION PROFILE/SESSION/DAILY RISK')):return 'RUNTIME_GATE'
     for category,words in (
-        ('ENTRY_TIME',('ENTRY_TIME','SESSION','OUTSIDE_CONFIGURED_ENTRY_TIME')),
+        ('ENTRY_TIME',('ENTRY_TIME','OUTSIDE_CONFIGURED_ENTRY_TIME')),
         ('HTF_CONTEXT',('H4','D1','HTF','DIRECTIONAL_CONTEXT')),
         ('RISK',('RISK','EQUITY','FUNDS','MARGIN','LOSS')),
         ('H1_STRUCTURE',('STRUCTUR','H1','FORMATION','CORRECTION')),

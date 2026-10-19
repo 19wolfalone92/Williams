@@ -3,7 +3,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal fun williamsReasonCategory(reason:String):String = when {
-    listOf("ENTRY_TIME","SESSION").any { reason.contains(it,true) } -> "ENTRY_TIME"
+    reason.startsWith("RUNTIME_OR_CAMPAIGN_NOT_READY",true) || reason.startsWith("Addition profile/session/daily risk",true) -> "RUNTIME_GATE"
+    listOf("ENTRY_TIME").any { reason.contains(it,true) } -> "ENTRY_TIME"
     listOf("H4","D1","HTF","DIRECTIONAL_CONTEXT").any { reason.contains(it,true) } -> "HTF_CONTEXT"
     listOf("RISK","EQUITY","FUNDS","MARGIN","LOSS").any { reason.contains(it,true) } -> "RISK"
     listOf("STRUCTUR","H1","FORMATION","CORRECTION").any { reason.contains(it,true) } -> "H1_STRUCTURE"

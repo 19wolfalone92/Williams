@@ -27,6 +27,12 @@ class WilliamsEntryLifecycleTest {
             try { WilliamsEntryTimePolicy.fromJson(p);fail("Invalid policy accepted: $p") } catch(expected:IllegalArgumentException) { }
         }
     }
+    @Test fun ambiguousGateMessagesDoNotInventAnEntryTimeBlock() {
+        assertEquals("RUNTIME_GATE",williamsReasonCategory("Addition profile/session/daily risk changed before mutation"))
+        assertEquals("RUNTIME_GATE",williamsReasonCategory("RUNTIME_OR_CAMPAIGN_NOT_READY: H1_STRUCTURE_NOT_READY"))
+        assertEquals("ENTRY_TIME",williamsReasonCategory("ENTRY_TIME_POLICY_BLOCKED_BEFORE_ADDITION"))
+        assertEquals("RISK",williamsReasonCategory("DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED_BEFORE_ADDITION"))
+    }
     @Test fun sharedLifecycleDistinguishesFormationAndExchangeState() {
         val cases=contract().getJSONArray("lifecycle_cases")
         for(i in 0 until cases.length()) {
