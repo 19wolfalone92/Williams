@@ -17,6 +17,38 @@ class TradingAuditStore(context: Context) :
     SQLiteOpenHelper(context, "williams_trading_audit.db", null, 3) {
 
     private val lastCampaignObservations = mutableMapOf<String, String>()
+    // Reduce repeating successful reconciliation messages in a bounded UI
+    // event window. Failures and recovery transitions are NEVER compacted.
+    // All exchange/order/position snapshots remain durable in their own stores.
+    private val lastHealthyReconciliationByPurpose = mutableMapOf<String, Long>()
+    private var healthyReconciliationMessagesCoalesced = 0L
+
+    @Synchronized
+    fun recordReconciliationObservation(purpose: String, state: String, ok: Boolean, blocker: String) {
+        val now = System.currentTimeMillis()
+        val fingerprint = "${purpose.take(80)}|${state.take(40)}"
+        if (ok) {
+            val recordedAt = lastHealthyReconciliationByPurpose[fingerprint] ?: 0L
+            if (recordedAt > 0L && now >= recordedAt && now - recordedAt < 15L * 60L * 1000L) {
+                healthyReconciliationMessagesCoalesced++
+                return
+            }
+            if (lastHealthyReconciliationByPurpose.size >= 32) lastHealthyReconciliationByPurpose.clear()
+            lastHealthyReconciliationByPurpose[fingerprint] = now
+        } else {
+            lastHealthyReconciliationByPurpose.clear()
+        }
+        recordCockpitEvent("RECONCILIATION", state = state,
+            detail = "${purpose.take(80)}; ok=$ok; ${blocker.take(240)}")
+    }
+
+    @Synchronized
+    fun cockpitReconciliationCompaction(): JSONObject =
+        JSONObject().put("healthy_messages_coalesced_since_process_start",
+            healthyReconciliationMessagesCoalesced)
+            .put("maximum_success_heartbeat_gap_minutes", 15)
+            .put("failure_messages_coalesced", 0)
+            .put("disclaimer", "UI Cockpit events only; no financial order or exchange reconciliation data discarded")
 
     @Synchronized
     fun recordCockpitEvent(stage: String, symbol: String = "", direction: String = "", state: String = "", detail: String = "") {
