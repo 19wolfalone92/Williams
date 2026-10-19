@@ -62,6 +62,36 @@ class DiagnosticConsistencyTest {
         assertTrue(findings.single().startsWith("RISK_BASELINE_UNKNOWN:"))
     }
     @Test
+    fun staleExchangeTimeMustNotBeMisclassifiedAsMissingBaselineProvenance() {
+        val findings = diagnosticConsistencyFindings(
+            coordinatorState = "READY",
+            coordinatorReady = true,
+            coordinatorBlocker = "",
+            runtimeState = "READY_FLAT",
+            runtimeReconcileRequired = false,
+            executionEnabled = false,
+            dailyRiskBaselineSource = "UNKNOWN",
+            reconciliationRunning = false,
+            exchangeClockFresh = false
+        )
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().startsWith("EXCHANGE_CLOCK_STALE:"))
+        assertFalse(findings.any { it.startsWith("RISK_BASELINE_UNKNOWN:") })
+        val unsafe = diagnosticConsistencyFindings(
+            coordinatorState = "READY",
+            coordinatorReady = true,
+            coordinatorBlocker = "",
+            runtimeState = "READY_FLAT",
+            runtimeReconcileRequired = false,
+            executionEnabled = true,
+            dailyRiskBaselineSource = "UNKNOWN",
+            reconciliationRunning = false,
+            exchangeClockFresh = false
+        )
+        assertTrue(unsafe.any { it.startsWith("CLOCK_UNSAFE_EXECUTION:") })
+    }
+
+    @Test
     fun detectsTopLevelAndExecutionContractStateConflict() {
         val findings = diagnosticConsistencyFindings(
             coordinatorState = "RECONCILE_REQUIRED",
