@@ -5179,9 +5179,49 @@ private class NativeEngine(
         )
         if (!reconciliation.optBoolean("ok", false)) {
             scannerError = reconciliation.optString("blocker", "Futures reconciliation failed")
+            // Fence all new entries BEFORE deciding whether a zero-fill pending
+            // order can be canceled to restore the exact 0.60% portfolio ceiling.
             reconcileRequired = true
             persistSafetyFlag("reconcile_required", true)
             stateMachine.force(TradingState.RECONCILE_REQUIRED, scannerError ?: "Futures reconciliation failed")
+            if (scannerError?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:")==true) {
+                val candidate=runCatching {
+                    proposePendingRiskRemediation(
+                        scannerError.orEmpty(),
+                        futuresCampaignCoordinator.positionsSnapshot(),
+                        futuresCampaignCoordinator.intentsSnapshot()
+                    )
+                }.getOrNull()
+                if(candidate!=null) {
+                    val cancel=runCatching {
+                        withCampaignMutation(
+                            symbol=candidate.symbol,
+                            purpose="ACTUAL_RISK_OVER_CAP_CANCEL_UNFILLED_PENDING",
+                            allowPaused=true, allowStopped=true, allowKillLatched=true,
+                            allowReconcileRequired=true
+                        ) {
+                            // The coordinator verifies the exact exchange order status,
+                            // refreshes positions after cancellation and persists the
+                            // terminal status. UNKNOWN or partial fills stay latched.
+                            futuresCampaignCoordinator.cancelPendingEntries(
+                                "ACTUAL_RISK_PORTFOLIO_CAP_RECOVERY",candidate.symbol)
+                        }
+                    }.getOrNull()
+                    if(cancel?.optBoolean("ok")==true &&
+                        !cancel.optBoolean("positions_require_reconciliation",true)) {
+                        runCatching { auditStore.recordCockpitEvent("RISK_REMEDIATION",
+                            candidate.symbol,state="PENDING_CANCEL_CONFIRMED",
+                            detail="actual open risk=${candidate.measuredOpenRiskPct}; " +
+                                "risk including pending=${candidate.totalWithPendingRiskPct}; " +
+                                "Binance reconciliation still required; no new order") }
+                    } else {
+                        lastError="RISK_REMEDIATION_UNRESOLVED: pending entry cancellation " +
+                            "not exchange-confirmed; do not bypass reconciliation"
+                    }
+                    // Even successful cancellation MUST NOT enable new entries
+                    // until the next authoritative full Binance reconciliation.
+                }
+            }
             return false
         }
         // Never reopen entries if SQLite cannot confirm that the reconciliation
