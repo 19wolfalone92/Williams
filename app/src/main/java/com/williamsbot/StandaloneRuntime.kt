@@ -5251,7 +5251,7 @@ private class NativeEngine(
                     val bars=fetchCandles(symbol,"1h",220)
                         .filter { it.t>0L && it.t+3_600_000L<=now }
                     val newFractals=editionCampaignSignals(symbol,bars,"1h",tick,williamsTc2Profile)
-                    confirmedBetterFractal(pending,JSONArray().apply {
+                    val proposal=confirmedBetterFractal(pending,JSONArray().apply {
                         newFractals.forEach { signal ->
                             put(JSONObject().put("signal_id",signal.signalId).put("type",signal.type)
                                 .put("role",signal.role).put("strategy_profile",signal.strategyProfile)
@@ -5262,9 +5262,10 @@ private class NativeEngine(
                                 .put("protective_price",signal.protectivePrice))
                         }
                     },futuresMarketData.markPrice(symbol),tick,now)
+                    proposal?.let { it to now }
                 }.getOrNull()
                 if(next!=null) {
-                    val now=futuresMarketData.exchangeNowMs()
+                    val (replacement,now)=next
                     val oldClientId=pending.optString("client_id")
                     val cancel=withCampaignMutation(symbol,"TC2_FRACTAL_REANCHOR_CANCEL",allowPaused=true) {
                         futuresCampaignCoordinator.cancelPendingEntries("NEWER_CONFIRMED_TC2_FRACTAL",symbol)
@@ -5287,7 +5288,7 @@ private class NativeEngine(
                         lastError="FRACTAL_REANCHOR_CANCEL_UNRESOLVED: $symbol/$oldClientId"
                         return false
                     }
-                    val lock=JSONObject(next.toString()).put("symbol",symbol)
+                    val lock=JSONObject(replacement.toString()).put("symbol",symbol)
                         .put("direction",pending.optString("direction"))
                         .put("recorded_at_ms",now).put("old_client_id",oldClientId)
                     check(executionStore.writeState("tc2_fractal_reanchor_$symbol",lock.toString())) {
@@ -5295,9 +5296,9 @@ private class NativeEngine(
                     }
                     runCatching { auditStore.recordCockpitEvent("FRACTAL_REANCHOR",symbol,
                         pending.optString("direction"),"CANCEL_CONFIRMED",
-                        "old=$oldClientId; new_signal="+next.optString("signal_id")+
+                        "old=$oldClientId; new_signal="+replacement.optString("signal_id")+
                             "; from="+pending.optString("entry_price")+
-                            "; to="+next.optDouble("trigger_price")+
+                            "; to="+replacement.optDouble("trigger_price")+
                             "; fresh full risk sizing after next exchange reconciliation") }
                     return false // No second mutation before fresh position reconciliation.
                 }
