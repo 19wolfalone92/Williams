@@ -20,8 +20,8 @@ private val ACTIVE_CAMPAIGN_STATUSES = setOf(
     "ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "POSITION_OPEN", "OPEN_PROTECTED", "EXIT_PENDING"
 )
 private val TERMINAL_CAMPAIGN_STATUSES = setOf("CLOSED_OR_STOPPED")
-private const val FUTURES_MAX_ENTRY_RISK_PCT = 0.0025
-private const val FUTURES_MAX_PORTFOLIO_RISK_PCT = 0.006
+internal const val FUTURES_MAX_ENTRY_RISK_PCT = 0.0025
+internal const val FUTURES_MAX_PORTFOLIO_RISK_PCT = 0.006
 
 /** Missing/unknown algo status is never proof of an active exchange-side stop. */
 internal fun isActiveFuturesProtectionStatus(status: String): Boolean =
