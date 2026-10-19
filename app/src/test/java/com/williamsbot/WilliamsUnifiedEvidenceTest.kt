@@ -51,6 +51,14 @@ class WilliamsUnifiedEvidenceTest {
         }
     }
 
+    @Test fun completedButRiskBlockedScanIsValidBookEvidenceNotExecutionApproval() {
+        val snapshot=scanner().put("scanner_state","READY_BLOCKED")
+        val result=buildWilliamsUnifiedEvidence(snapshot,status(),now)
+        assertEquals("COMPLETE_OBSERVATION_ONLY",result.getString("status"))
+        assertFalse(result.getBoolean("is_execution_decision"))
+        assertEquals(10,result.getInt("observed_symbols"))
+    }
+
     @Test fun partialScanDoesNotPretendEvidenceIsFinal() {
         val result = buildWilliamsUnifiedEvidence(scanner(false), status(), now)
         assertEquals("SCAN_IN_PROGRESS", result.getString("status"))
