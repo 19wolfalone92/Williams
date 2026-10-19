@@ -14,7 +14,7 @@ import org.json.JSONArray
  * Binance told the bot, without relying on RAM or SharedPreferences.
  */
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 3) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 4) {
 
     private val lastCampaignObservations = mutableMapOf<String, String>()
     // Reduce repeating successful reconciliation messages in a bounded UI
@@ -104,13 +104,59 @@ class TradingAuditStore(context: Context) :
         return result
     }
 
+    /**
+     * Durable, append-only record of a planned/returned Futures entry decision.
+     * Unlike the bounded Cockpit event feed, passport history is never compacted.
+     */
+    @Synchronized
+    fun recordEntryPassportEvent(event: JSONObject): Boolean = runCatching {
+        require(event.optString("schema") == "WILLIAMS_ENTRY_PASSPORT_EVENT_V1")
+        require(event.optString("symbol").isNotBlank() && event.optString("client_id").isNotBlank())
+        val row = ContentValues().apply {
+            put("symbol", event.getString("symbol"))
+            put("client_id", event.getString("client_id"))
+            put("direction", event.optString("direction"))
+            put("phase", event.optString("phase"))
+            put("observed_at_ms", event.optLong("observed_at_ms"))
+            put("raw_json", event.toString())
+        }
+        writableDatabase.insertOrThrow("entry_passport_events", null, row) > 0L
+    }.getOrDefault(false)
+
+    @Synchronized
+    fun recentEntryPassportEvents(symbol: String, limit: Int = 100): JSONArray {
+        val result = JSONArray()
+        readableDatabase.query("entry_passport_events", arrayOf("raw_json"),
+            "symbol = ?", arrayOf(symbol), null, null, "id DESC",
+            limit.coerceIn(1, 500).toString()).use { cursor ->
+            while (cursor.moveToNext()) result.put(JSONObject(cursor.getString(0)))
+        }
+        return result
+    }
+
     @Synchronized
     fun lastCockpitIncident(): JSONObject? = readableDatabase.query("events", arrayOf("raw_json"),
         "event_type = ?", arrayOf("COCKPIT_INCIDENT"), null, null, "id DESC", "1").use {
         if (it.moveToFirst()) JSONObject(it.getString(0)) else null
     }
 
+    private fun createEntryPassportTable(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS entry_passport_events(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                client_id TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                observed_at_ms INTEGER NOT NULL,
+                raw_json TEXT NOT NULL
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS ix_entry_passport_symbol_id ON entry_passport_events(symbol, id)")
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
+        createEntryPassportTable(db)
         db.execSQL("""
             CREATE TABLE orders(
                 client_order_id TEXT PRIMARY KEY,
@@ -259,6 +305,7 @@ class TradingAuditStore(context: Context) :
         } catch (_: Exception) {
         }
 
+        createEntryPassportTable(db)
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS rest_calls(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
