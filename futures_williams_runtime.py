@@ -43,7 +43,7 @@ from williams_decision_trace import build_decision_trace
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed
 from williams_course_campaign import course_active_context,course_next_stage,TARGETS as COURSE_TARGETS
-from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,unified_direction_conflict,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan,opposing_close_event_triggered
+from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,unified_direction_conflict,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan
 from campaign_engine import CampaignEngine
 from equity_breaker import EquityCircuitBreaker
 from campaign_model import (
@@ -65,10 +65,11 @@ from wave_engine import MultiTimeframeWaveEngine
 from williams_directional_context import evaluate_direction
 from williams_wave_hierarchy import (
     FRAME_MS, REQUIRED_FRAMES, WaveHierarchy, build_wave_hierarchy,
-    correction_entry_context, correction_price_allowed, correction_bounds_valid, wave_bars_from_dataframe, opposing_level_triggered,
+    correction_entry_context, correction_price_allowed, correction_bounds_valid, wave_bars_from_dataframe,
     suggested_analytical_frames,
 )
 from williams_exit_policy import zone_trailing_activation, plan_williams_stop
+from williams_scenario_lifecycle import ScenarioSignal, scenario_opposition
 
 
 def closed_strategy_frame(frame, interval, now_ms):
@@ -77,6 +78,9 @@ def closed_strategy_frame(frame, interval, now_ms):
     if "close_time" in frame.columns:
         stamps = pd.to_datetime(frame["close_time"], utc=True, errors="coerce")
         return frame.loc[stamps <= pd.Timestamp(now_ms,unit="ms",tz="UTC")].copy()
+    if "open_time_ms" in frame.columns and interval in FRAME_MS:
+        stamps=pd.to_numeric(frame["open_time_ms"],errors="coerce")
+        return frame.loc[stamps.notna() & (stamps>0) & (stamps+FRAME_MS[interval]<=now_ms)].copy()
     if isinstance(frame.index,pd.DatetimeIndex) and interval in FRAME_MS:
         closed = frame.index.asi8 // 1_000_000 + FRAME_MS[interval] <= now_ms
         return frame.loc[closed].copy()
@@ -3154,7 +3158,7 @@ class FuturesWilliamsRuntime:
                         report = self.scanner.wave_hierarchy(symbol)
                         ctx = correction_entry_context(report,opposing.side,opposing.signal_bar_time_ms,opposing.signal_type.value)
                         if ctx["allowed"]:
-                            reason = "HIGHER_WAVE_IMPULSE_COMPLETION_CONFIRMED"
+                            reason = "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
                     return self._exit_market(campaign,reason)
                 proposal = plan_williams_stop(campaign.side,campaign.current_stop_price,
                     float(getattr(campaign,"average_entry_price",0) or 0),
@@ -3203,11 +3207,13 @@ class FuturesWilliamsRuntime:
         if opened <= 0 or interval not in FRAME_MS or len(closed)<45:
             return None
         now = int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+        closed=closed_strategy_frame(closed,interval,now)
         opposite = "LONG" if campaign.side=="SELL" else "SHORT"
         profile=getattr(campaign,"tags",{}).get("strategy_profile",TC2)
         unified=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()==UNIFIED
         exit_profile=UNIFIED if unified else profile
         extract = extract_long_signal_specs if opposite=="LONG" else extract_short_signal_specs
+        candidates={}
         for omitted in range(min(5,len(closed)-45)+1):
             prefix = closed if omitted==0 else closed.iloc[:-omitted]
             ind = calculate_indicators(prefix,canonical_indicator_config_from_env())
@@ -3216,16 +3222,18 @@ class FuturesWilliamsRuntime:
             for signal in signals:
                 if signal.strategy_profile!=NTD and signal.role != SignalRole.ENTRY:
                     continue
-                if signal.execution_semantics=="MARKET_ON_CLOSE" and signal.strategy_profile==NTD:
-                    if opposing_close_event_triggered(signal.signal_bar_time_ms,FRAME_MS[interval],opened,now):return signal
-                    continue
-                if signal.execution_semantics!="STOP_ENTRY":continue
-                subsequent = wave_bars_from_dataframe(closed.iloc[len(prefix):])
-                if opposing_level_triggered(opposite,signal.trigger_price,
-                    signal.signal_bar_time_ms+FRAME_MS[interval],opened,mark,subsequent,
-                    now,signal.expires_at_ms):
-                    return signal
-        return None
+                candidates[signal.signal_id]=signal
+        evidence=scenario_opposition("SHORT" if campaign.side=="SELL" else "LONG",opened,
+            [ScenarioSignal(s.signal_id,"LONG" if s.side=="BUY" else "SHORT",s.strategy_profile,
+                s.execution_semantics,s.signal_bar_time_ms,s.trigger_price,
+                s.invalidation_price if s.invalidation_price>0 else None,s.expires_at_ms)
+                for s in candidates.values()],wave_bars_from_dataframe(closed),mark,now,FRAME_MS[interval])
+        if evidence is None:
+            return None
+        source,event=evidence
+        campaign.tags["last_opposition_evidence"]={"signal_id":source.id,"direction":source.direction,
+            "strategy_profile":source.profile,"event":event.to_dict()}
+        return candidates[source.id]
 
     def manage_open_positions(self):
         """Protection and triggered exits keep running independently of scanner admission."""

@@ -6,6 +6,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsMtfEntryPolicyTest {
+    @Test fun cancelledParentCannotResurrectButDoesNotFreezeANewH1Scenario() {
+        val fence=JSONObject().put("parent_id","old").put("pivot_at_ms",-1L).put("expires_at_ms",500L)
+        assertEquals("M15_PARENT_REVOKED_AFTER_CANCEL",williamsMtfReanchorBlocker(fence,"old",100))
+        assertNull(williamsMtfReanchorBlocker(fence,"new",100))
+        fence.put("pivot_at_ms",200L)
+        assertNull(williamsMtfReanchorBlocker(fence,"old",100,200))
+        assertEquals("M15_REANCHOR_TARGET_NOT_VALID",williamsMtfReanchorBlocker(fence,"old",100,150))
+        assertNull(williamsMtfReanchorBlocker(fence,"new",100,150))
+        assertNull(williamsMtfReanchorBlocker(fence,"old",500,150))
+    }
     private val start=java.time.Instant.parse("2026-10-19T00:00:00Z").toEpochMilli()
     private fun bars(short:Boolean=false):List<WilliamsWaveBar> = (0..47).map { i ->
         val high=when(i) { 42->102.0;43->103.0;44->105.0;45->104.0;46->103.0;47->102.0;else->100.0 }

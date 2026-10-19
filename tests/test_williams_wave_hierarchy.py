@@ -179,7 +179,7 @@ def test_opposite_signal_is_not_an_exit_until_the_level_is_triggered(side,level,
 
 def test_a_trigger_crossed_during_scanner_downtime_remains_observable():
     closed = [WaveBar(20,100,111,99,105)]
-    assert opposing_level_triggered("LONG",110,20,10,105,closed,30,50)
+    assert opposing_level_triggered("LONG",110,20,10,105,closed,30,50,frame_ms=10)
 
 
 @pytest.mark.parametrize("side", ["LONG","SHORT"])

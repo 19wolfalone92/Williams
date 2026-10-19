@@ -58,6 +58,43 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                 rows(trace.optJSONArray("wave_hypotheses")).take(3).forEach { hypothesis ->
                     Text("${hypothesis.optString("frame")} · ${hypothesis.optString("active_label")} · ${hypothesis.optString("active_direction")} · ${hypothesis.optString("scenario_id")}",style=MaterialTheme.typography.bodySmall)
                 }
+                trace.optJSONObject("market_phase")?.let { phase ->
+                    Text("Фаза по масштабам · гипотезы",style=MaterialTheme.typography.titleSmall)
+                    rows(phase.optJSONArray("frames")).forEach { frame ->
+                        val hypotheses=rows(frame.optJSONArray("hypotheses"))
+                        val state=when(frame.optString("state")) {
+                            "UNAVAILABLE" -> "история недоступна"
+                            "UNRESOLVED" -> "фаза не определена"
+                            "ALTERNATIVES" -> "несколько разметок"
+                            else -> "предварительная фаза"
+                        }
+                        val labels=hypotheses.map { it.optString("active_label")+" "+it.optString("active_direction") }.distinct()
+                        Text(frame.optString("frame")+" · "+state+if(labels.isEmpty()) "" else " · "+labels.joinToString(" / "),style=MaterialTheme.typography.bodySmall)
+                        if(expanded) hypotheses.take(3).forEach { h ->
+                            val signs=h.optJSONArray("signs") ?: JSONArray()
+                            val names=(0 until signs.length()).map { i -> when(signs.optString(i)) {
+                                "AO_DIVERGENCE" -> "дивергенция AO"
+                                "MOMENTUM_SHIFT" -> "ослабление импульса"
+                                "TERMINAL_FRACTAL" -> "конечный фрактал"
+                                "TARGET_ZONE" -> "целевая область"
+                                "SQUAT_VOLUME_PROXY" -> "Squat по биржевому объёму"
+                                else -> signs.optString(i)
+                            } }
+                            Text("${h.optString("scenario_id")} · признаки: "+names.joinToString().ifBlank { "не наблюдаются" }+
+                                "\nAO W4: ${h.optString("w4_zero")} · масштаб ${h.optString("scale_frame")} / ${h.optInt("scale_bars")} свечей",style=MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    Text(when(phase.optString("warning_scope")) {
+                        "M15_ONLY_WARNING" -> "Признаки истощения на M15. Завершение H1 этим не подтверждено."
+                        "H1_WARNING" -> "Признаки истощения на H1; требуется проверка основания выхода."
+                        "SENIOR_WARNING" -> "Признаки истощения на старшем масштабе; требуется проверка основания выхода."
+                        else -> "Подтверждённого основания выхода из волновой оценки нет."
+                    },style=MaterialTheme.typography.bodySmall)
+                }
+                rows(trace.optJSONObject("parent_lifecycle")?.optJSONArray("parents")).filter { it.optString("state")!="VALID_CONTEXT" }.takeLast(3).forEach { parent ->
+                    Text(if(parent.optString("state")=="REVOKED") "Сценарий ${parent.optString("direction")} отменён: сработал более поздний противоположный H1-сигнал."
+                        else "Актуальность H1-сценария не подтверждена: порядок событий или история требуют проверки.",style=MaterialTheme.typography.bodySmall)
+                }
                 val indicators=trace.optJSONObject("indicators") ?: JSONObject()
                 Text("AO: ${value(indicators,"ao")} · AC: ${value(indicators,"ac")}",style=MaterialTheme.typography.bodySmall)
                 rows(trace.optJSONArray("books")).forEach { book ->

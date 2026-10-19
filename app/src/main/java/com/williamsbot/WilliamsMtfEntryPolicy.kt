@@ -8,6 +8,17 @@ internal const val WILLIAMS_H1_MS = 3_600_000L
 internal const val WILLIAMS_M15_MS = 900_000L
 internal const val WILLIAMS_MTF_ENTRY_MODE = "H1_CONTEXT_M15_FRACTAL"
 
+/** A cancellation fences its own H1 parent, not every later independent setup. */
+internal fun williamsMtfReanchorBlocker(fence:JSONObject?,parentId:String,now:Long,pivotAt:Long?=null):String? {
+    if(fence==null || fence.optLong("expires_at_ms")<=now) return null
+    val fencedParent=fence.optString("parent_id")
+    if(fencedParent.isBlank() || !fence.has("pivot_at_ms")) return "M15_REANCHOR_FENCE_UNVERIFIED"
+    if(fencedParent!=parentId) return null
+    val target=fence.optLong("pivot_at_ms",-1L)
+    if(target<0) return "M15_PARENT_REVOKED_AFTER_CANCEL"
+    return if(pivotAt!=null && pivotAt!=target) "M15_REANCHOR_TARGET_NOT_VALID" else null
+}
+
 /** User-selected execution refinement, not an additional canonical Williams entry family. */
 internal data class WilliamsH1Parent(
     val signalId: String, val direction: String, val signalAt: Long,

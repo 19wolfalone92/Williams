@@ -305,6 +305,38 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
         }
     }
+
+    @Test fun aNewOpposingH1EventDuringLeverageRevokesM15BeforeAnyEntryPost() {
+        val now=java.time.Instant.parse("2026-10-19T12:00:00Z").toEpochMilli()
+        for(side in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val short=side==NativeFuturesCampaignCoordinator.Direction.SHORT
+            val exchange=Exchange(side)
+            val coordinator=NativeFuturesCampaignCoordinator(Journal(),clock={now}) { exchange.adapter() }
+            coordinator.requireM15FractalForAutomatedEntries=true
+            val base=plan(side)
+            val parent=WilliamsH1Parent("parent:"+side.name,side.name,now-3*WILLIAMS_H1_MS,
+                if(short) 92.0 else 108.0,if(short) 110.0 else 90.0)
+            val child=WilliamsM15Entry(parent,now-3*WILLIAMS_M15_MS,now,
+                base.entryPrice.toDouble(),base.protectiveStop.toDouble(),if(short) 106.0 else 94.0,.1)
+            var opposingAvailable=false
+            exchange.afterLeverage={opposingAvailable=true}
+            coordinator.m15EntryVerifier={
+                val source=WilliamsScenarioSignal("later",if(short) "LONG" else "SHORT",williamsTc2Profile,
+                    "STOP_ENTRY",now-WILLIAMS_H1_MS,if(short) 99.0 else 101.0,
+                    if(short) 90.0 else 110.0,now+4*WILLIAMS_H1_MS)
+                val assessment=assessWilliamsScenarioOpposition(side.name,parent.knownAt,
+                    if(opposingAvailable) listOf(source) else emptyList(),emptyList(),100.0,now)
+                check(assessment.blocker==null) { assessment.blocker.orEmpty() }
+            }
+            coordinator.reconcile()
+            val rejected=coordinator.submitPendingEntry(base.copy(signalId=parent.signalId,signalBarTimeMs=parent.signalAt,
+                setupContext=JSONObject().put("mtf_entry",child.toJson()).toString()))
+            assertTrue(opposingAvailable)
+            assertFalse(rejected.toString(),rejected.getBoolean("accepted"))
+            assertTrue(rejected.toString(),rejected.getString("blocker").contains("H1_PARENT_OPPOSITE_TRIGGERED"))
+            assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
     @Test fun finalPolicyChangeDuringAccountConfigurationCannotSubmitAPhantomOrder() {
         val now=java.time.Instant.parse("2026-10-19T21:00:00Z").toEpochMilli()
         val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG);var policy=WilliamsEntryTimePolicy()

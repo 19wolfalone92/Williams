@@ -5443,7 +5443,8 @@ private class NativeEngine(
                 val bars=m15.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
                 val teeth=williamsAlligatorLine(m15,8,5).map { it ?: Double.NaN }
                 val mark=futuresMarketData.markPrice(symbol)
-                val invalid=if(parents.none { it.signalId==old.parent.signalId }) "H1_PARENT_NO_LONGER_VALID"
+                val invalid=if(parents.none { it.signalId==old.parent.signalId })
+                    h1ParentRejectionReason(symbol,old.parent.signalId,"H1_PARENT_NO_LONGER_VALID")
                     else williamsPendingM15Invalidation(old,bars,teeth,mark,now).orEmpty()
                 val next=selectWilliamsH1M15Entry(old.parent,bars,teeth,old.tick,mark,now).entry
                 val closer=next!=null && next.pivotAt>old.pivotAt &&
@@ -5590,8 +5591,14 @@ private class NativeEngine(
                 val correction = if (opposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
                     if (dir == "LONG") "SHORT" else "LONG",opposing.signalBarTimeMs,opposing.type) else WilliamsCorrectionContext()
                 val exitReason = if(editionExit.isNotEmpty()) editionExit else if (boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
-                    else if (correction.allowed) "HIGHER_WAVE_IMPULSE_COMPLETION_CONFIRMED"
+                    else if (correction.allowed) "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
                     else "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                management.put("exit_evidence",JSONObject().put("reason",exitReason)
+                    .put("observed_at_ms",futuresMarketData.exchangeNowMs()).put("edition_exit",editionExit)
+                    .put("correction_boundary_broken",boundaryExit).put("higher_correction",correction.toJson())
+                    .put("opposition_check",if(opposing!=null) JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) else JSONObject.NULL))
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
                 val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"),rules)
                 val clientId = ("W2O_"+symbol.take(8)+"_"+System.nanoTime().toString(16).takeLast(12)).take(36)
                 val result = withCampaignMutation(symbol,"TRIGGERED_WILLIAMS_EXIT",allowPaused=true, allowReconcileRequired=riskOnly) {
@@ -5886,7 +5893,7 @@ private class NativeEngine(
         }
         val mtfReanchorGuard=executionStore.readState("mtf_reanchor_"+symbol)
             ?.let { runCatching { JSONObject(it) }.getOrNull() }?.takeIf { it.optLong("expires_at_ms")>contextNow }
-        val mtfSelectable=selectableSignals.filter { mtfReanchorGuard==null || it.signalId==mtfReanchorGuard.optString("parent_id") }
+        val mtfSelectable=selectableSignals.filter { williamsMtfReanchorBlocker(mtfReanchorGuard,it.signalId,contextNow)==null }
         val baseline = mtfSelectable.minWithOrNull(
             compareBy<CampaignSignalN> { it.signalBarTimeMs }
                 .thenByDescending { contextRank(it) }.thenByDescending { nativeRank(it.type) }
@@ -5948,9 +5955,9 @@ private class NativeEngine(
         if(williamsH1ParentAlreadyFilled(futuresCampaignCoordinator.intentsSnapshot(),signal.signalId))
             return rejectDecision(symbol,"H1_PARENT_ALREADY_FILLED: no repeated initial entry")
         val guard=mtfReanchorGuard
-        if(guard!=null && guard.optLong("expires_at_ms")>contextNow &&
-            (guard.optString("parent_id")!=signal.signalId || guard.optLong("pivot_at_ms")!=junior.pivotAt))
-            return rejectDecision(symbol,"M15_REANCHOR_TARGET_NOT_VALID: no fallback to canceled level")
+        williamsMtfReanchorBlocker(guard,signal.signalId,contextNow,junior.pivotAt)?.let {
+            return rejectDecision(symbol,it+": no fallback to canceled level")
+        }
         val clientId = junior.clientId(symbol)
         if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId }) return rejectDecision(symbol,"FORMATION_ALREADY_ADMITTED: "+clientId)
 
@@ -7556,7 +7563,24 @@ private class NativeEngine(
                         bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },mark,now)==null
             }
         }
-        return out.distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
+        val oppositeCandidates=h1OppositionCandidates(symbol,bars,tick,williamsProfile)
+        val sourceEvidence=oppositeCandidates.map { scenarioSignal(it) }
+        val waveBars=bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        val lifecycle=JSONArray()
+        val valid=out.distinctBy { it.signalId }.filter { signal ->
+            if(signal.role!="ENTRY") return@filter true
+            val parent=h1EntryParent(signal)
+            val assessment=assessWilliamsScenarioOpposition(parent.direction,parent.knownAt,sourceEvidence,waveBars,mark,now)
+            lifecycle.put(JSONObject().put("parent_id",parent.signalId).put("direction",parent.direction)
+                .put("state",if(assessment.blocker==null) "VALID_CONTEXT" else if(assessment.opposition!=null) "REVOKED" else "UNVERIFIED")
+                .put("reason",assessment.blocker ?: "NO_LATER_TRIGGERED_OPPOSITION")
+                .put("opposition",assessment.opposition?.toJson() ?: JSONObject.NULL)
+                .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })))
+            assessment.blocker==null
+        }.sortedBy { it.signalBarTimeMs }
+        check(executionStore.writeState("decision_h1_parent_lifecycle_"+symbol,JSONObject()
+            .put("observed_at_ms",now).put("parents",lifecycle).toString())) { "H1_LIFECYCLE_PROOF_NOT_DURABLE" }
+        return valid
     }
 
     private fun verifyMtfPlanBeforeSubmit(plan:NativeFuturesCampaignCoordinator.EntryPlan) {
@@ -7566,7 +7590,7 @@ private class NativeEngine(
             ?: error("M15_ENTRY_PROOF_UNREADABLE")
         val parents=h1ContextCampaignSignals(plan.symbol,fetchCandles(plan.symbol,"1h",220),evidence.tick)
         check(parents.any { it.signalId==plan.signalId && campaignSignalDirection(it.type)==plan.direction.name }) {
-            "H1_PARENT_INVALIDATED_BEFORE_SUBMISSION"
+            h1ParentRejectionReason(plan.symbol,plan.signalId,"H1_PARENT_INVALIDATED_BEFORE_SUBMISSION")
         }
         val candles=fetchCandles(plan.symbol,"15m",220).filter { it.t>0 && it.t+WILLIAMS_M15_MS<=now }
         val fresh=m15EntryDecision(plan.symbol,evidence.parent,candles,evidence.tick,now).entry
@@ -7575,6 +7599,14 @@ private class NativeEngine(
             abs(fresh.trigger-plan.entryPrice.toDouble())<=evidence.tick*.1 &&
             (if(plan.direction.name=="LONG") plan.protectiveStop.toDouble()>=fresh.stop
                 else plan.protectiveStop.toDouble()<=fresh.stop)) { "M15_ENTRY_CHANGED_BEFORE_SUBMISSION" }
+    }
+
+    private fun h1ParentRejectionReason(symbol:String,parentId:String,fallback:String):String {
+        val rows=runCatching { JSONObject(executionStore.readState("decision_h1_parent_lifecycle_"+symbol).orEmpty())
+            .getJSONArray("parents") }.getOrNull() ?: return fallback
+        return (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.firstOrNull {
+            it.optString("parent_id")==parentId && it.optString("state")!="VALID_CONTEXT"
+        }?.optString("reason")?.takeIf { it.isNotBlank() } ?: fallback
     }
 
     private fun m15EntryDecision(symbol:String,parent:WilliamsH1Parent,candles:List<CandleN>,tick:Double,now:Long):WilliamsM15Decision {
@@ -7827,28 +7859,36 @@ private class NativeEngine(
         symbol: String, direction: NativeFuturesCampaignCoordinator.Direction,
         candles: List<CandleN>, tick: Double, mark: Double, openedAt: Long, profile:String=williamsTc2Profile
     ): CampaignSignalN? {
-        if (openedAt <= 0L) return null
+        if(openedAt<=0L) return null
         val now = futuresMarketData.exchangeNowMs()
-        val opposingSide = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) "SHORT" else "LONG"
+        val closed=candles.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+        val candidates=h1OppositionCandidates(symbol,closed,tick,profile)
+        val assessment=assessWilliamsScenarioOpposition(direction.name,openedAt,candidates.map { scenarioSignal(it) },
+            closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },mark,now)
+        val evidence=assessment.opposition
+        check(executionStore.writeState("decision_h1_opposition_"+symbol,JSONObject()
+            .put("observed_at_ms",now).put("scope_started_at_ms",openedAt).put("direction",direction.name)
+            .put("opposition",evidence?.toJson() ?: JSONObject.NULL)
+            .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })).toString())) { "H1_EXIT_PROOF_NOT_DURABLE" }
+        return candidates.firstOrNull { it.signalId==evidence?.signal?.id }
+    }
+
+    private fun scenarioSignal(signal:CampaignSignalN)=WilliamsScenarioSignal(signal.signalId,
+        campaignSignalDirection(signal.type).orEmpty(),signal.strategyProfile,signal.executionSemantics,
+        signal.signalBarTimeMs,signal.triggerPrice,signal.invalidationPrice.takeIf { it.isFinite() && it>0 },
+        signal.signalBarTimeMs+5*WILLIAMS_H1_MS)
+
+    private fun h1OppositionCandidates(symbol:String,candles:List<CandleN>,tick:Double,profile:String):List<CampaignSignalN> {
+        if(candles.size<45) return emptyList()
+        val out=mutableListOf<CampaignSignalN>()
         // Reconstruct only causal prefixes. This also catches a valid level
         // crossed in a completed H1 bar while the app/scanner was offline.
         for (omitted in 0..minOf(5,candles.size-45)) {
             val prefix = candles.take(candles.size-omitted)
-            val signals=editionCampaignSignals(symbol,prefix,"1h",tick,profile,exitMode=true)
-                .filter { campaignSignalDirection(it.type)==opposingSide }
-            for (signal in signals.filter { it.strategyProfile==williamsNtdProfile || it.role == "ENTRY" }) {
-                if(signal.strategyProfile==williamsNtdProfile && signal.executionSemantics=="MARKET_ON_CLOSE") {
-                    if(williamsOpposingCloseEventTriggered(signal.signalBarTimeMs,3_600_000L,openedAt,now)) return signal
-                    continue
-                }
-                if(signal.executionSemantics!="STOP_ENTRY") continue
-                if (williamsOpposingLevelTriggered(opposingSide,signal.triggerPrice,
-                    signal.signalBarTimeMs+3_600_000L,openedAt,mark,
-                    candles.drop(prefix.size).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
-                    now,signal.signalBarTimeMs+18_000_000L)) return signal
-            }
+            out+=editionCampaignSignals(symbol,prefix,"1h",tick,profile,exitMode=true)
+                .filter { it.strategyProfile==williamsNtdProfile || it.role=="ENTRY" }
         }
-        return null
+        return out.distinctBy { it.signalId }
     }
 
     private fun enrichWithMtf(baseCandidate: BaseAnalysis): BaseAnalysis {
@@ -7920,6 +7960,10 @@ private class NativeEngine(
                 ?.let { trace.put("admission_context",it) }
             runCatching { JSONObject(executionStore.readState("decision_m15_entry_"+symbol).orEmpty()) }.getOrNull()
                 ?.let { trace.put("mtf_entry",it) }
+            runCatching { JSONObject(executionStore.readState("decision_h1_parent_lifecycle_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("parent_lifecycle",it) }
+            runCatching { JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("opposition_check",it) }
             trace.put("order_chain",williamsExecutionChain(intents,symbol))
             trace.put("signal_history",runCatching {
                 WilliamsSignalJournal(executionStore).view(symbol,intents,System.currentTimeMillis()).apply {

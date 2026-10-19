@@ -2451,6 +2451,7 @@ internal class NativeFuturesCampaignCoordinator(
 
         val adapter = adapterFactory()
         var orderSubmissionAttempted = false
+        var finalContextCheckStarted = false
         try {
             adapter.serverTime()
             adapter.requireOneWayMode()
@@ -2465,6 +2466,7 @@ internal class NativeFuturesCampaignCoordinator(
             intent.put("confirmed_leverage", leverageConfirmation.getInt("leverage"))
                 .put("leverage_confirmed_at_ms", clock())
             saveIntents(currentIntents)
+            finalContextCheckStarted = true
             check(entryTimePolicyProvider().allows(clock())) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_SUBMISSION" }
             if(requireM15FractalForAutomatedEntries && !isAddition && plan.signalType!="OPERATOR_FORCED_DIRECTION") {
                 check(williamsMtfProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
@@ -2536,7 +2538,8 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("error", failure.message ?: failure.javaClass.simpleName)
                 saveIntents(currentIntents)
                 state = State.RECONCILE_REQUIRED
-                lastBlocker = "futures_account_configuration_failed_before_order"
+                lastBlocker = if(finalContextCheckStarted) "FUTURES_ENTRY_CONTEXT_REJECTED: "+safeDiagnosticText(intent.optString("error"))
+                    else "futures_account_configuration_failed_before_order"
                 return@synchronized JSONObject().put("accepted", false)
                     .put("safe_rejection", true).put("mutation_attempted", true)
                     .put("order_mutation_attempted", false).put("state", state.name)
