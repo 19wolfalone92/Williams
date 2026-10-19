@@ -12,24 +12,24 @@ class WilliamsEntryPassportTest {
 
     @Test fun h1DirectionLongM15HighNeedsBothClosedRightCandles() {
         val bars = (0..8).map { bar(it, if (it == 4) 130.0 else 110.0) }
-        val before = williamsM15FractalEvidence(bars, "LONG", 7 * interval - 1)
+        val before = williamsM15FractalEvidence(bars, "LONG", 8 * interval - 1)
         assertEquals("NO_CONFIRMED_FRACTAL", before.getString("state"))
         assertTrue(before.isNull("fractal_price"))
-        val confirmed = williamsM15FractalEvidence(bars, "LONG", 7 * interval)
+        val confirmed = williamsM15FractalEvidence(bars, "LONG", 8 * interval)
         assertEquals("CONFIRMED_PIVOT_OBSERVED", confirmed.getString("state"))
         assertEquals(130.0, confirmed.getDouble("fractal_price"), 0.001)
         assertEquals(5 * interval, confirmed.getLong("fractal_formed_at_ms"))
-        assertEquals(7 * interval, confirmed.getLong("fractal_confirmed_at_ms"))
+        assertEquals(8 * interval, confirmed.getLong("fractal_confirmed_at_ms"))
         assertFalse(confirmed.getBoolean("trade_authority"))
         // A future candle is unavailable at the exact snapshot time.
         val withFuture = bars + bar(100, 99999.0)
         assertEquals(confirmed.toString(),
-            williamsM15FractalEvidence(withFuture, "LONG", 7 * interval).toString())
+            williamsM15FractalEvidence(withFuture, "LONG", 8 * interval).toString())
     }
 
     @Test fun shortUsesLowFractalAndDoesNotAssumeAnyH1Trigger() {
         val bars = (0..8).map { bar(it, low = if (it == 4) 70.0 else 90.0) }
-        val observed = williamsM15FractalEvidence(bars, "SHORT", 7 * interval)
+        val observed = williamsM15FractalEvidence(bars, "SHORT", 8 * interval)
         assertEquals("LOW", observed.getString("fractal_kind"))
         assertEquals(70.0, observed.getDouble("fractal_price"), 0.001)
         assertEquals("OBSERVATION_ONLY", observed.getString("role"))
@@ -38,7 +38,7 @@ class WilliamsEntryPassportTest {
     @Test fun missingGappedAndStaleM15MustNotFakeAFractal() {
         val bars = (0..8).map { bar(it, if (it == 4) 130.0 else 110.0) }
         assertEquals("CLOSED_HISTORY_UNAVAILABLE",
-            williamsM15FractalEvidence(bars.take(4), "LONG", 7 * interval).getString("state"))
+            williamsM15FractalEvidence(bars.take(4), "LONG", 8 * interval).getString("state"))
         assertEquals("CLOSED_HISTORY_GAP",
             williamsM15FractalEvidence(bars.filter { it.t != 3 * interval }, "LONG", 9 * interval).getString("state"))
         assertEquals("CLOSED_HISTORY_STALE",
