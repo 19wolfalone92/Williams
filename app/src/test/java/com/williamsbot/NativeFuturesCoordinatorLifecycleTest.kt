@@ -196,6 +196,99 @@ class NativeFuturesCoordinatorLifecycleTest {
         return coordinator to exchange
     }
 
+    @Test fun triggeringAndTriggeredAreReconciledWithoutDuplicateOrdersAndRecoveredFillsAreProtected() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) for(status in listOf("TRIGGERING","TRIGGERED")) {
+            val exchange=Exchange(direction);val journal=Journal()
+            val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.algos.values.single().put("algoStatus",status).put("actualOrderId","42")
+            // The signed parent may expose its child id before GET /order can see it.
+            val observed=coordinator.reconcile()
+            assertTrue(observed.toString(),observed.getBoolean("ok"))
+            assertEquals("ENTRY_PENDING",coordinator.state.name)
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+            assertEquals(status,coordinator.intentsSnapshot().getJSONObject(0).getString("order_status"))
+            val recovered=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(recovered.reconcile().getBoolean("ok"))
+            assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+            exchange.fill(childClientId="exchange-child-42")
+            assertTrue(recovered.reconcile().getBoolean("ok"))
+            assertEquals("OPEN_PROTECTED",recovered.state.name)
+            assertEquals("PROTECTED",recovered.intentsSnapshot().getJSONObject(0).getString("protection_status"))
+            assertEquals(2,exchange.posts("/fapi/v1/algoOrder")) // exactly one entry and one protective stop
+        }
+    }
+
+    @Test fun unsupportedAlgoStatusStillFailsClosed() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+        coordinator.reconcile();assertTrue(coordinator.submitPendingEntry(plan(NativeFuturesCampaignCoordinator.Direction.LONG)).getBoolean("accepted"))
+        exchange.algos.values.single().put("algoStatus","UNKNOWN_FUTURE_STATUS")
+        assertFalse(coordinator.reconcile().getBoolean("ok"))
+        assertEquals("RECONCILE_REQUIRED",coordinator.state.name)
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+    }
+
+    @Test fun triggeringOnAnotherSymbolStillRefreshesAndTrailsTheExistingPositionProtection() {
+        val side=NativeFuturesCampaignCoordinator.Direction.LONG
+        var now=System.currentTimeMillis()
+        val exchange=Exchange(side);val journal=Journal()
+        val coordinator=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+        coordinator.reconcile();assertTrue(coordinator.submitPendingEntry(plan(side)).getBoolean("accepted"))
+        exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
+        val before=coordinator.intentsSnapshot().getJSONObject(0).getLong("last_reconciled_ms")
+        val pending=JSONObject().put("intent_role","ENTRY").put("symbol","ETHUSDT")
+            .put("direction","SHORT").put("kind","STOP").put("client_id","W2E_ETH_TEST_TRIGGERING")
+            .put("quantity","0.1").put("entry_price","99").put("protective_stop","105")
+            .put("initial_protective_stop","105").put("requested_leverage",5).put("risk_pct",.001)
+            .put("order_status","NEW").put("exchange_status","NEW").put("campaign_status","ENTRY_PENDING")
+            .put("strategy_profile",williamsTc2Profile).put("strategy_ownership_verified",true).put("created_at_ms",now)
+        val rows=coordinator.intentsSnapshot().put(pending)
+        journal.writeState("futures_campaign_intents_v2",rows.toString())
+        exchange.algos["eth-trigger"]=JSONObject().put("symbol","ETHUSDT").put("algoId","eth-trigger")
+            .put("clientAlgoId","W2E_ETH_TEST_TRIGGERING").put("side","SELL").put("algoStatus","TRIGGERING")
+            .put("orderType","STOP_MARKET").put("triggerPrice","99").put("quantity","0.1").put("actualOrderId","")
+        now+=10_000
+        val result=coordinator.reconcile();assertTrue(result.toString(),result.getBoolean("ok"))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        val owner=coordinator.intentsSnapshot().getJSONObject(0)
+        assertTrue(owner.getLong("last_reconciled_ms")>before)
+        assertEquals("PROTECTED",owner.getString("protection_status"))
+        val trail=coordinator.trailProtectiveStop("BTCUSDT",side,"96","W2PS_MTF_OTHER_SYMBOL")
+        assertTrue(trail.toString(),trail.getBoolean("ok"))
+    }
+
+    @Test fun productionMtfGateRejectsH1OnlyPlansBeforeAccountOrOrderMutations() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+        coordinator.requireM15FractalForAutomatedEntries=true;coordinator.reconcile()
+        val rejected=coordinator.submitPendingEntry(plan(NativeFuturesCampaignCoordinator.Direction.LONG))
+        assertFalse(rejected.getBoolean("accepted"))
+        assertTrue(rejected.getString("blocker").contains("M15_FRACTAL_PROOF_REQUIRED"))
+        assertEquals(0,exchange.posts("/fapi/v1/algoOrder"));assertEquals(0,exchange.posts("/fapi/v1/leverage"))
+    }
+
+    @Test fun finalM15VerifierRunsAfterLeverageAndCanRejectWithoutPlacingAnEntry() {
+        val now=java.time.Instant.parse("2026-10-19T12:00:00Z").toEpochMilli()
+        val side=NativeFuturesCampaignCoordinator.Direction.LONG
+        val exchange=Exchange(side);val journal=Journal()
+        val coordinator=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+        coordinator.requireM15FractalForAutomatedEntries=true
+        val parent=WilliamsH1Parent("BTCUSDT:1h:REVERSAL:parent","LONG",now-3*WILLIAMS_H1_MS,108.0,90.0)
+        val child=WilliamsM15Entry(parent,now-3*WILLIAMS_M15_MS,now,101.0,95.0,94.0,.1)
+        var configured=false;var verified=false
+        exchange.afterLeverage={configured=true}
+        coordinator.m15EntryVerifier={assertTrue(configured);verified=true;error("M15_CONTEXT_CHANGED_DURING_LEVERAGE")}
+        coordinator.reconcile()
+        val rejected=coordinator.submitPendingEntry(plan(side).copy(signalId=parent.signalId,signalBarTimeMs=parent.signalAt,
+            setupContext=JSONObject().put("mtf_entry",child.toJson()).toString()))
+        assertTrue(verified);assertFalse(rejected.getBoolean("accepted"))
+        assertFalse(rejected.getBoolean("order_mutation_attempted"))
+        assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals("REJECTED",coordinator.intentsSnapshot().getJSONObject(0).getString("order_status"))
+    }
+
     @Test fun defaultPolicyAdmitsAtNightWhileCustomPolicyRejectsBeforeAnyOrder() {
         for(hour in listOf(1,21)) {
             val now=java.time.Instant.parse("2026-10-19T00:00:00Z").toEpochMilli()+hour*3_600_000L

@@ -11,11 +11,18 @@ import java.util.TimeZone
 
 private val ENTRY_ORDER_ACTIVE_STATUSES = setOf(
     "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN",
-    "ACCEPTED", "TRIGGERED", "CANCEL_SUBMISSION_UNKNOWN"
+    "ACCEPTED", "TRIGGERING", "TRIGGERED", "CANCEL_SUBMISSION_UNKNOWN"
 )
 internal val ENTRY_ORDER_TERMINAL_STATUSES = setOf(
     "FILLED", "FINISHED", "EXPIRED", "EXPIRED_IN_MATCH", "CANCELED", "CANCELLED", "REJECTED"
 )
+internal fun hasUnresolvedTriggeringEntry(rows:JSONArray):Boolean =
+    (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.any {
+        it.optString("intent_role","ENTRY") in setOf("ENTRY","ADD_ON") &&
+            campaignLifecycleStatus(it)!="CLOSED_OR_STOPPED" &&
+            exchangeOrderStatus(it) in setOf("TRIGGERING","TRIGGERED") &&
+            campaignLifecycleStatus(it)!="OPEN_PROTECTED"
+    }
 private val ACTIVE_CAMPAIGN_STATUSES = setOf(
     "ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "POSITION_OPEN", "OPEN_PROTECTED", "EXIT_PENDING"
 )
@@ -711,6 +718,8 @@ internal class NativeFuturesCampaignCoordinator(
     private val clock:()->Long=System::currentTimeMillis,
     private val adapterFactory: () -> BinanceUsdMFuturesTestnetAdapter
 ) {
+    var requireM15FractalForAutomatedEntries:Boolean = false
+    var m15EntryVerifier:((EntryPlan)->Unit)? = null
     enum class Direction { LONG, SHORT }
     enum class EntryKind { STOP, TAKE_PROFIT, LIMIT, MARKET }
     enum class State {
@@ -999,11 +1008,20 @@ internal class NativeFuturesCampaignCoordinator(
                 } else {
                     val parent = conditionalOrderOrNull(adapter, symbol, cid)
                     val actualId = parent?.optString("actualOrderId").orEmpty()
+                    if(parent!=null) owner.put("conditional_parent_status",parent.optString("algoStatus"))
+                        .put("conditional_actual_order_id",actualId)
                     if (actualId.isNotBlank() && actualId != "0") {
                         check(parent != null && parent.optString("symbol") == symbol && parent.optString("clientAlgoId") == cid) {
                             "Conditional entry parent identity mismatch"
                         }
-                        adapter.orderById(symbol, actualId)
+                        try { adapter.orderById(symbol, actualId) }
+                        catch(failure:Exception) {
+                            // Algo Service can publish a child id before the matching engine
+                            // makes it queryable. Keep the reservation and audit other stops;
+                            // never turn this into a fill, cancellation or retry submission.
+                            if(parent.optString("algoStatus") in setOf("TRIGGERING","TRIGGERED") &&
+                                isDefinitiveBinanceOrderNotFound(failure)) null else throw failure
+                        }
                     } else null
                 }
                 if (execution != null) {
@@ -2192,6 +2210,16 @@ internal class NativeFuturesCampaignCoordinator(
     }
     private fun submitPendingEntryLocked(plan: EntryPlan): JSONObject = synchronized(lock) {
         val currentIntents = intents()
+        if(hasUnresolvedTriggeringEntry(currentIntents))
+            return@synchronized safePreflightRejection("CONDITIONAL_TRIGGER_IN_PROGRESS: reconcile child order and position before new exposure")
+        if(requireM15FractalForAutomatedEntries && plan.entryClientId.isBlank() &&
+            plan.signalType!="OPERATOR_FORCED_DIRECTION") {
+            val proof=williamsMtfProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
+                plan.entryPrice.toDoubleOrNull() ?: Double.NaN,plan.protectiveStop.toDoubleOrNull() ?: Double.NaN,clock())
+            if(proof!=null) return@synchronized safePreflightRejection(proof)
+            if(williamsH1ParentAlreadyFilled(currentIntents,plan.signalId))
+                return@synchronized safePreflightRejection("H1_PARENT_ALREADY_FILLED: no second initial campaign")
+        }
         if(!entryTimePolicyProvider().allows(clock()))
             return@synchronized safePreflightRejection("ENTRY_TIME_POLICY_BLOCKED: "+entryTimePolicyProvider().toJson())
         val selected=editionSelectionProvider?.invoke()
@@ -2437,6 +2465,14 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("leverage_confirmed_at_ms", clock())
             saveIntents(currentIntents)
             check(entryTimePolicyProvider().allows(clock())) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_SUBMISSION" }
+            if(requireM15FractalForAutomatedEntries && !isAddition && plan.signalType!="OPERATOR_FORCED_DIRECTION") {
+                check(williamsMtfProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
+                    plan.entryPrice.toDouble(),plan.protectiveStop.toDouble(),clock())==null) {
+                    "M15_FRACTAL_PROOF_EXPIRED_BEFORE_SUBMISSION"
+                }
+                val verifier=m15EntryVerifier ?: error("M15_FINAL_VERIFIER_REQUIRED")
+                verifier(plan)
+            }
             if(plan.kind==EntryKind.MARKET) check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
                 plan.referenceClose,adapter.markPrice(plan.symbol))==null) { "NTD close-event expired or moved before mutation" }
             orderSubmissionAttempted = true
@@ -3252,7 +3288,7 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("risk_reservation_adjustment_reason", item.opt("risk_reservation_adjustment_reason") ?: JSONObject.NULL)
             )
         }
-        val readyForNewEntry = !reconciliationActive && (observedState == State.READY || observedState == State.OPEN_PROTECTED ||
+        val readyForNewEntry = !reconciliationActive && !hasUnresolvedTriggeringEntry(persisted) && (observedState == State.READY || observedState == State.OPEN_PROTECTED ||
             (observedState == State.ENTRY_PENDING &&
                 confirmedPendingEntriesAllowConcurrentAdmission(persisted)))
         return JSONObject()
