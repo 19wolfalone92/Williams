@@ -77,6 +77,7 @@ class WilliamsMtfEntryPolicyTest {
         assertNotNull(check(e.toJson(),"SHORT"))
         assertNotNull(check(e.toJson(),price=106.0))
         assertNotNull(check(e.toJson().put("confirmed_at_ms",start+49*WILLIAMS_M15_MS)))
+        assertNotNull(check(e.toJson().put("pivot_at_ms",e.pivotAt-WILLIAMS_M15_MS)))
         assertNotNull(check(e.toJson().put("trigger","unknown")))
         assertNotNull(williamsMtfProofBlocker("{}","LONG",e.parent.signalId,e.trigger,e.stop,start+48*WILLIAMS_M15_MS))
     }
@@ -84,6 +85,11 @@ class WilliamsMtfEntryPolicyTest {
         val id=parent().signalId
         val row=JSONObject().put("signal_id",id).put("intent_role","ENTRY").put("campaign_status","CLOSED_OR_STOPPED").put("executed_qty","0")
         assertFalse(williamsH1ParentAlreadyFilled(JSONArray().put(row),id))
+        row.put("actual_entry_order_id","42").put("actual_entry_executed_qty","0")
+        assertFalse(williamsH1ParentAlreadyFilled(JSONArray().put(row),id))
+        row.put("actual_entry_executed_qty","0.1")
+        assertTrue(williamsH1ParentAlreadyFilled(JSONArray().put(row),id))
+        row.put("actual_entry_executed_qty","0")
         row.put("position_open_observed_at_ms",start)
         assertTrue(williamsH1ParentAlreadyFilled(JSONArray().put(row),id))
         assertFalse(williamsH1ParentAlreadyFilled(JSONArray().put(row),"different"))

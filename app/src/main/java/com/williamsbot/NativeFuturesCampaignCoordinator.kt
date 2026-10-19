@@ -1043,6 +1043,7 @@ internal class NativeFuturesCampaignCoordinator(
                         "One exchange fill cannot belong to two entry intents"
                     }
                     owner.put("actual_entry_order_id", actualId)
+                        .put("actual_entry_executed_qty",executed.toPlainString())
                     entryExecutions[cid] = execution
                 }
             }

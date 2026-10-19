@@ -120,7 +120,8 @@ internal fun williamsH1ParentAlreadyFilled(intents:JSONArray,parentId:String):Bo
             (it.optLong("position_open_observed_at_ms")>0 ||
                 (it.optString("confirmed_position_qty").toDoubleOrNull() ?: 0.0)>0 ||
                 (it.optString("executed_qty").toDoubleOrNull() ?: 0.0)>0 ||
-                it.optString("actual_entry_order_id").toLongOrNull()?.let { id -> id>0 }==true)
+                (it.optString("actual_entry_executed_qty").toDoubleOrNull() ?: 0.0)>0 ||
+                (it.optString("net_result_source")=="BINANCE_USER_TRADES" && it.optInt("net_result_fill_count")>=2))
     }
 
 /** Last-door schema/price/time check; fresh indicator and parent recomputation happens in Runtime. */
@@ -139,7 +140,7 @@ internal fun williamsMtfProofBlocker(setup:String,direction:String,parentId:Stri
         proof.optString("direction")!=direction || !tick.isFinite() || tick<=0 ||
         !entry.isFinite() || !stop.isFinite() || entry<=0 || stop<=0 ||
         confirmed<=parent.knownAt || confirmed>now || pivot<parent.signalAt ||
-        confirmed-pivot<3*WILLIAMS_M15_MS || pivot%WILLIAMS_M15_MS!=0L ||
+        confirmed-pivot!=3*WILLIAMS_M15_MS || pivot%WILLIAMS_M15_MS!=0L ||
         confirmed%WILLIAMS_M15_MS!=0L ||
         kotlin.math.abs(proof.optDouble("trigger",Double.NaN)-entry)>tick*.1 ||
         kotlin.math.abs(proof.optDouble("protective_stop",Double.NaN)-stop)>tick*.1 ||

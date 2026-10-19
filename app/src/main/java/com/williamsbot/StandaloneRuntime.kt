@@ -5430,6 +5430,11 @@ private class NativeEngine(
         var reason=if(old==null) "M15_CONFIRMATION_REQUIRED_FOR_LEGACY_PENDING" else ""
         var replacement:WilliamsM15Entry?=null
         if(old!=null) {
+            reason=williamsMtfProofBlocker(setup.toString(),pending.optString("direction"),pending.optString("signal_id"),
+                pending.optString("entry_price").toDoubleOrNull() ?: Double.NaN,
+                pending.optString("protective_stop").toDoubleOrNull() ?: Double.NaN,now).orEmpty()
+        }
+        if(old!=null && reason.isEmpty()) {
             // A history/network failure must not prevent management of other protected symbols.
             val assessment=runCatching {
                 val h1=fetchCandles(symbol,"1h",220)
