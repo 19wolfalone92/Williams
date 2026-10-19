@@ -9079,7 +9079,18 @@ private class NativeEngine(
         return JSONArray().apply {
             for (symbol in coreSymbols) {
                 val key = "$symbol:1h"
-                val source = candleCache[key]?.second ?: if (symbol == primarySymbol && interval == "1h") primaryCandles else emptyList()
+                // Scanner fetches are cached under symbol:frame:limit, while
+                // WebSocket snapshots use symbol:frame. Looking up only the
+                // latter falsely reported 0/10 audited candles despite 6010
+                // SQLite H1 candles per symbol in the attached diagnostics.
+                // Diagnostics are read-only; prefer the durable closed history.
+                val persisted = runCatching {
+                    historyStore.loadRecent(symbol, "1h", 180)
+                }.getOrDefault(emptyList())
+                val source = if (persisted.size >= 40) persisted.map {
+                    CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+                } else candleCache[key]?.second
+                    ?: if (symbol == primarySymbol && interval == "1h") primaryCandles else emptyList()
                 val candles = if (clockFresh) closedNativeStrategyCandles(source) { futuresMarketData.isKlineOpenTimeClosed(it.t, "1h", now) } else emptyList()
                 val observed = JSONObject()
                 if (candles.size >= 40) {
