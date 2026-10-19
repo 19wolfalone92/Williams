@@ -4389,8 +4389,9 @@ private class NativeEngine(
                 lastReconciliationResult = "BLOCKED: " +
                     result.optString("blocker", result.optString("error", "unknown"))
             }
-            runCatching { auditStore.recordCockpitEvent("RECONCILIATION", state = result.optString("state"),
-                detail = "$purpose; ok=" + result.optBoolean("ok") + "; " + result.optString("blocker")) }
+            runCatching { auditStore.recordReconciliationObservation(
+                purpose, result.optString("state"), result.optBoolean("ok"),
+                result.optString("blocker")) }
             return result
         } finally {
             lastReconciliationCompletedAtMs = System.currentTimeMillis()
@@ -8856,8 +8857,29 @@ private class NativeEngine(
         val coordinatorSnapshot = statusSnapshot.optJSONObject("futures_runtime") ?: JSONObject()
         val tests = diagnosticSelfTests(statusSnapshot, coordinatorSnapshot)
         val observedAtMs = System.currentTimeMillis()
-        val cockpitTests = CockpitDiagnostics.checks(statusSnapshot, coordinatorSnapshot, scannerSnapshot(), observedAtMs)
+        val scannerEvidenceSnapshot = scannerSnapshot()
+        val unifiedEvidence = buildWilliamsUnifiedEvidence(scannerEvidenceSnapshot, statusSnapshot, observedAtMs)
+        val cockpitTests = CockpitDiagnostics.checks(statusSnapshot, coordinatorSnapshot, scannerEvidenceSnapshot, observedAtMs)
         for (item in CockpitDiagnostics.rows(cockpitTests)) tests.put(item)
+        val badSourceEvidence = unifiedEvidence.optJSONArray("source_contract_errors")?.length() ?: 0
+        val fullSourceEvidence = unifiedEvidence.optString("status") == "COMPLETE_OBSERVATION_ONLY"
+        tests.put(JSONObject().put("id", "STR-07").put("domain", "strategy")
+            .put("name", "Происхождение сигналов TC2 / NTD / Course")
+            .put("severity", when {
+                badSourceEvidence > 0 -> "FAIL"
+                fullSourceEvidence && unifiedEvidence.optInt("observed_signal_count") > 0 -> "PASS"
+                else -> "NOT_VERIFIED"
+            }).put("detail", "Режим=${unifiedEvidence.optString("mode")}; " +
+                "статус=${unifiedEvidence.optString("status")}; " +
+                "достоверных источников=3; необработанных ошибок=$badSourceEvidence; " +
+                "сигналов=${unifiedEvidence.optInt("observed_signal_count")}. " +
+                "PASS подтверждает только происхождение сигналов в полном снимке сканера, не корректность книг."))
+        tests.put(JSONObject().put("id", "STR-08").put("domain", "strategy")
+            .put("name", "Причинные отказы входа на всех этапах")
+            .put("severity", "NOT_VERIFIED")
+            .put("detail", "Снимок сканера не хранит причины отклонения каждого несформированного " +
+                "сигнала и окончательное решение D1/H4, риска и Binance. " +
+                "Разбивка по книгам — наблюдаемость кандидатов, не доказательство допуска ордеров."))
         for (item in CockpitDiagnostics.rows(tests)) {
             if (item.optString("severity") == "WARN") item.put("severity", "WARNING")
         }
@@ -8889,8 +8911,10 @@ private class NativeEngine(
             .put("created_at", java.time.Instant.ofEpochMilli(observedAtMs).toString())
             .put("cockpit_readiness", cockpitReadiness)
             .put("event_timeline", auditStore.recentCockpitEvents(150))
+            .put("event_compaction", auditStore.cockpitReconciliationCompaction())
             .put("last_incident", auditStore.lastCockpitIncident() ?: JSONObject.NULL)
             .put("sqlite_health", sqliteHealth)
+            .put("unified_strategy_evidence", unifiedEvidence)
             .put("device_local_api", "in-process://williams-runtime")
             .put("binance_testnet", true)
             .put("exchange_market", "USDⓈ-M_FUTURES_REQUIRED")

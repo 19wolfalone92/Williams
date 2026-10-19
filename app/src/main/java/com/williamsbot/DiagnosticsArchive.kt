@@ -80,6 +80,10 @@ object DiagnosticsArchive {
             add(zip, "last_incident.json", report.optJSONObject("last_incident")?.toString(2) ?: "{}")
             add(zip, "sqlite_health.json", report.optJSONObject("sqlite_health")?.toString(2) ?: "{}")
             add(zip, "strategy.log", renderTests(report, "strategy"))
+            add(zip, "williams_sources.json",
+                report.optJSONObject("unified_strategy_evidence")?.toString(2) ?: "{}")
+            add(zip, "event_compaction.json",
+                report.optJSONObject("event_compaction")?.toString(2) ?: "{}")
         }
         java.nio.file.Files.move(temporary.toPath(), output.toPath(),
             java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
@@ -130,6 +134,25 @@ object DiagnosticsArchive {
             out.append(event.optLong("E")).append(" | ").append(type).append(" | ")
                 .append(event.optString("symbol")).append(" | ").append(event.optString("state"))
                 .append(" | ").append(safeDiagnosticText(event.optString("detail"))).append('\n')
+        }
+
+        if (domain == "strategy") {
+            val evidence = report.optJSONObject("unified_strategy_evidence")
+            if (evidence != null) {
+                out.append("SOURCE SNAPSHOT | ")
+                    .append(evidence.optString("status"))
+                    .append(" | observed=").append(evidence.optInt("observed_signal_count"))
+                    .append(" | opposite-before-context=")
+                    .append(evidence.optInt("pre_context_opposing_symbol_count")).append('\n')
+                for (source in williamsSourceProfiles) {
+                    val row = evidence.optJSONObject("by_source")?.optJSONObject(source) ?: continue
+                    out.append(source).append(" | all=").append(row.optInt("total"))
+                        .append(" entry=").append(row.optInt("entry"))
+                        .append(" add=").append(row.optInt("add_on"))
+                        .append(" LONG=").append(row.optInt("long"))
+                        .append(" SHORT=").append(row.optInt("short")).append('\n')
+                }
+            }
         }
         if (count == 0) out.append("NOT_VERIFIED | No observations recorded for this domain.\n")
         return out.toString()
