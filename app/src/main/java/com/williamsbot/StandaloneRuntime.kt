@@ -5833,6 +5833,11 @@ private class NativeEngine(
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 
+        // Display-only M15 pivot evidence. H1 remains the sole signal authority.
+        val initialM15Evidence = williamsM15FractalEvidence(
+            m15.map { WilliamsWaveBar(it.t, it.o, it.h, it.l, it.c, it.v) },
+            direction.name, contextNow
+        )
         val entries = futuresCampaignCoordinator.intentsSnapshot()
         val clientId = ("W2E_" + symbol.take(7) + "_" + signal.type.take(4) + "_" + signal.signalBarTimeMs.toString(36)).take(36)
         if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId }) return rejectDecision(symbol,"FORMATION_ALREADY_ADMITTED: "+clientId)
@@ -5940,6 +5945,7 @@ private class NativeEngine(
             waveContext = if (correction.allowed) correction.toJson().toString() else "",
             strategyProfile=signal.strategyProfile,executionSemantics=signal.executionSemantics,
             setupContext=(runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject()).apply {
+                put("m15_evidence", initialM15Evidence)
                 if(signal.strategyProfile==williamsCourseProfile) {
                     williamsCourseActiveContext(hierarchy,direction.name)?.let { context ->
                         put("course_origin_at",context.getLong("origin_at")).put("course_initial_stage",context.getString("phase"))
@@ -5949,7 +5955,13 @@ private class NativeEngine(
         )
         runCatching { auditStore.recordCockpitEvent("SIGNAL_RISK", symbol, direction.name, signal.type,
             "${signal.reason}; H1 bar=${signal.signalBarTimeMs}; trigger=$trigger; stop=$stop; qty=$qty; reserved_risk=$riskPct") }
-        val result = withCampaignMutation(
+        // No Futures order is attempted if the immutable planned decision
+        // cannot be appended to the on-device audit database.
+        if (!auditStore.recordEntryPassportEvent(
+                williamsEntryPassportEvent(plan, "PREPARED", contextNow)
+            )) return rejectDecision(symbol, "ENTRY_PASSPORT_AUDIT_UNAVAILABLE: order not attempted")
+        var submittedPlan = plan
+        val result = try { withCampaignMutation(
             symbol = symbol,
             purpose = "WILLIAMS_PENDING_ENTRY"
         ) {
@@ -6024,8 +6036,25 @@ private class NativeEngine(
             ) {
                 "H1_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
             }
-            // M15 contributes only execution readiness, never a new direction.
-            futuresCampaignCoordinator.submitPendingEntry(plan)
+            // Capture what was CLOSED when the actual coordinator decision was
+            // made, not merely what was available before waiting for the door.
+            submittedPlan = plan.copy(setupContext = JSONObject(plan.setupContext)
+                .put("m15_evidence", williamsM15FractalEvidence(
+                    submitM15.map { WilliamsWaveBar(it.t, it.o, it.h, it.l, it.c, it.v) },
+                    direction.name, submitNow
+                )).toString())
+            // M15 is evidence only; it cannot authorize a different order.
+            futuresCampaignCoordinator.submitPendingEntry(submittedPlan)
+        } } catch (failure: Exception) {
+            auditStore.recordEntryPassportEvent(williamsEntryPassportEvent(submittedPlan,
+                "EXECUTION_EXCEPTION_UNVERIFIED", futuresMarketData.exchangeNowMs(),
+                JSONObject().put("error", safeDiagnosticText(failure.message.orEmpty()))))
+            throw failure
+        }
+        if (!auditStore.recordEntryPassportEvent(williamsEntryPassportEvent(submittedPlan,
+                "COORDINATOR_RETURNED", futuresMarketData.exchangeNowMs(), result))) {
+            runCatching { auditStore.recordCockpitEvent("AUDIT_FAILURE", symbol, direction.name,
+                "ENTRY_PASSPORT_OUTCOME_UNAVAILABLE", "Execution may have occurred; reconcile with Binance") }
         }
         if(!result.optBoolean("accepted",false)) rejectDecision(symbol,result.optString("blocker","EXECUTION_DOOR_REJECTED"))
         runCatching { auditStore.recordCockpitEvent("ORDER_RESPONSE", symbol, direction.name,
@@ -7748,7 +7777,12 @@ private class NativeEngine(
             trace.put("order_chain_state",if(journal.isSuccess) "JOURNAL_SNAPSHOT" else "UNAVAILABLE_RECONCILE_REQUIRED")
             runCatching { JSONObject(executionStore.readState("decision_context_"+symbol).orEmpty()) }.getOrNull()
                 ?.let { trace.put("admission_context",it) }
-            trace.put("order_chain",williamsExecutionChain(intents,symbol))
+            val chain = williamsExecutionChain(intents,symbol)
+            trace.put("order_chain",chain)
+            trace.put("entry_passport",williamsEntryPassport(symbol,execution,chain))
+            if(fullHistory) trace.put("entry_passport_events",runCatching {
+                auditStore.recentEntryPassportEvents(symbol,500)
+            }.getOrElse { JSONArray() })
             trace.put("signal_history",runCatching {
                 WilliamsSignalJournal(executionStore).view(symbol,intents,System.currentTimeMillis()).apply {
                     if(!fullHistory) {
