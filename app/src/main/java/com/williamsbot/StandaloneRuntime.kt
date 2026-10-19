@@ -258,7 +258,8 @@ internal fun diagnosticConsistencyFindings(
     executionEnabled: Boolean,
     dailyRiskBaselineSource: String,
     reconciliationRunning: Boolean,
-    topLevelRuntimeState: String = runtimeState
+    topLevelRuntimeState: String = runtimeState,
+    exchangeClockFresh: Boolean = true
 ): List<String> = buildList {
     // Only an exchange reconciliation currently holding the coordinator in
     // RECONCILE_REQUIRED/in-progress can legitimately outrun the local FSM.
@@ -286,7 +287,10 @@ internal fun diagnosticConsistencyFindings(
     if (runtimeReconcileRequired && executionEnabled) {
         add("SAFETY_CONTRADICTION: execution enabled while reconcile_required is latched")
     }
-    if (dailyRiskBaselineSource.isBlank() ||
+    if (!exchangeClockFresh) {
+        add("EXCHANGE_CLOCK_STALE: cached exchange time is too old to verify the UTC-day risk baseline")
+        if (executionEnabled) add("CLOCK_UNSAFE_EXECUTION: new entries enabled despite stale Binance time")
+    } else if (dailyRiskBaselineSource.isBlank() ||
         dailyRiskBaselineSource.equals("UNKNOWN", ignoreCase = true) ||
         dailyRiskBaselineSource.equals("null", ignoreCase = true)) {
         add("RISK_BASELINE_UNKNOWN: UTC daily-risk baseline source is not established")
@@ -8225,6 +8229,11 @@ private class NativeEngine(
             var lastAccountProbe = 0L
             while (restProbeRunning) {
                 val started = System.currentTimeMillis()
+                // Keep authoritative exchange time fresh independently from
+                // scanning, account reconciliation and operator UI requests.
+                // This is read-only /fapi/v1/time. If the request fails, the
+                // existing 30-second execution clock gate remains fail-closed.
+                runCatching { futuresMarketData.exchangeNowMs() }
                 // Market and account health are independent. An account schema/auth
                 // error must not erase a successful public ticker snapshot.
                 try {
@@ -8878,14 +8887,16 @@ private class NativeEngine(
             coordinatorState, coordinatorReady, coordinatorBlocker, runtimeState,
             statusSnapshot.optBoolean("reconcile_required", false),
             statusSnapshot.optBoolean("execution_enabled", false),
-            dailyBaselineSource, reconciliationRunning
+            dailyBaselineSource, reconciliationRunning,
+            exchangeClockFresh = statusSnapshot.optJSONObject("exchange_clock")?.optBoolean("fresh") == true
         )
         test(
             "diagnostic_consistency", "diagnostics", consistencyFindings.isEmpty(),
             "FAIL", if (consistencyFindings.isEmpty()) "Runtime/coordinator readiness claims are consistent"
             else consistencyFindings.joinToString(" | ")
         )
-        val baselineKnown = dailyBaselineSource.isNotBlank() &&
+        val exchangeClockFresh = statusSnapshot.optJSONObject("exchange_clock")?.optBoolean("fresh") == true
+        val baselineKnown = exchangeClockFresh && dailyBaselineSource.isNotBlank() &&
             !dailyBaselineSource.equals("UNKNOWN", ignoreCase = true) &&
             !dailyBaselineSource.equals("null", ignoreCase = true)
         val baselineValue = if (!baselineKnown) null else runCatching {
@@ -8904,7 +8915,8 @@ private class NativeEngine(
         test(
             "daily_risk_baseline", "risk", baselineKnown && baselineValueValid,
             "FAIL",
-            "source=" + dailyBaselineSource +
+            "exchange_clock_fresh=" + exchangeClockFresh +
+                "; source=" + dailyBaselineSource +
                 "; baseline_value_valid=" + baselineValueValid +
                 "; execution_enabled=" + statusSnapshot.optBoolean("execution_enabled", false) +
                 "; unknown source or missing/invalid UTC-day baseline is a BLOCKING failure"
@@ -9067,7 +9079,18 @@ private class NativeEngine(
         return JSONArray().apply {
             for (symbol in coreSymbols) {
                 val key = "$symbol:1h"
-                val source = candleCache[key]?.second ?: if (symbol == primarySymbol && interval == "1h") primaryCandles else emptyList()
+                // Scanner fetches are cached under symbol:frame:limit, while
+                // WebSocket snapshots use symbol:frame. Looking up only the
+                // latter falsely reported 0/10 audited candles despite 6010
+                // SQLite H1 candles per symbol in the attached diagnostics.
+                // Diagnostics are read-only; prefer the durable closed history.
+                val persisted = runCatching {
+                    historyStore.loadRecent(symbol, "1h", 180)
+                }.getOrDefault(emptyList())
+                val source = if (persisted.size >= 40) persisted.map {
+                    CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+                } else candleCache[key]?.second
+                    ?: if (symbol == primarySymbol && interval == "1h") primaryCandles else emptyList()
                 val candles = if (clockFresh) closedNativeStrategyCandles(source) { futuresMarketData.isKlineOpenTimeClosed(it.t, "1h", now) } else emptyList()
                 val observed = JSONObject()
                 if (candles.size >= 40) {
@@ -9080,10 +9103,19 @@ private class NativeEngine(
                         .put("fractal_up_index", latestConfirmedUpFractal(candles, index) ?: JSONObject.NULL)
                         .put("fractal_down_index", candles.indices.lastOrNull { isDownFractal(candles, it) } ?: JSONObject.NULL)
                 }
+                val checks = if (!clockFresh) JSONObject().apply {
+                    for (id in listOf("STR-01","STR-02","STR-03","STR-04")) {
+                        put(id, JSONObject().put("severity","NOT_VERIFIED").put("detail",
+                            "EXCHANGE_CLOCK_STALE: ${source.size} cached H1 candles exist but their closed-bar timestamps cannot be independently verified"))
+                    }
+                } else auditWilliamsIndicatorObservation(candles.map { (it.h + it.l) / 2.0 }, observed)
                 put(JSONObject().put("symbol", symbol).put("interval", "1h")
-                    .put("candle_count", candles.size).put("last_bar_time_ms", candles.lastOrNull()?.t ?: 0L)
+                    .put("candle_count", candles.size)
+                    .put("cached_candle_count", source.size)
+                    .put("exchange_clock_fresh", clockFresh)
+                    .put("last_bar_time_ms", candles.lastOrNull()?.t ?: 0L)
                     .put("observed", observed)
-                    .put("checks", auditWilliamsIndicatorObservation(candles.map { (it.h + it.l) / 2.0 }, observed)))
+                    .put("checks", checks))
             }
         }
     }
@@ -9135,7 +9167,8 @@ private class NativeEngine(
             dailyRiskBaselineSource = statusSnapshot.optString("daily_risk_baseline_source", "UNKNOWN"),
             reconciliationRunning = statusSnapshot.optBoolean("futures_reconciliation_in_progress", false) ||
                 statusSnapshot.optBoolean("user_stream_reconcile_running", false),
-            topLevelRuntimeState = statusSnapshot.optString("state", "UNKNOWN")
+            topLevelRuntimeState = statusSnapshot.optString("state", "UNKNOWN"),
+            exchangeClockFresh = statusSnapshot.optJSONObject("exchange_clock")?.optBoolean("fresh") == true
         )
         val sqliteHealth = executionStore.healthSnapshot()
         tests.put(JSONObject().put("id", "DB-01").put("name", "SQLite execution journal quick_check")
