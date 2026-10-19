@@ -52,6 +52,47 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                 Text("Закрытие H1: ${time(trace.optLong("as_of_close_ms"))} · свечей: ${trace.optInt("closed_bar_count")}",style=MaterialTheme.typography.bodySmall)
                 val close=trace.optLong("as_of_close_ms")
                 if(close<=0L || System.currentTimeMillis()-close>3_600_000L) Text("Снимок устарел. Текущая ситуация не подтверждена.",color=MaterialTheme.colorScheme.error)
+                val passport=trace.optJSONObject("entry_passport")
+                passport?.let { p ->
+                    Text("Паспорт входа H1 / M15",style=MaterialTheme.typography.titleSmall)
+                    val stateLabel=when(p.optString("state")) {
+                        "INTENT_JOURNALED" -> "Намерение сохранено; статус биржи см. ниже"
+                        "ACCEPTED_UNVERIFIED" -> "Ответ координатора получен; биржевая сверка не подтверждена"
+                        "REJECTED_OR_UNCONFIRMED" -> "Вход отклонён или результат не подтверждён"
+                        else -> "Решение о размещении заявки не записано"
+                    }
+                    Text(stateLabel,style=MaterialTheme.typography.bodySmall)
+                    if(p.optString("client_id").isNotBlank()) {
+                        Text("Сигнал H1: ${p.optString("direction")} · ${p.optString("signal_type")} · ${time(p.optLong("h1_signal_at_ms"))}",
+                            style=MaterialTheme.typography.bodySmall)
+                        Text("Основание: ${p.optString("h1_signal_reason","нет данных")}",
+                            style=MaterialTheme.typography.bodySmall)
+                        Text("Вход: ${value(p,"entry_price")} · стоп: ${value(p,"protective_stop")} · риск: ${value(p,"risk_pct")}",
+                            style=MaterialTheme.typography.bodySmall)
+                        val m15=p.optJSONObject("m15_evidence") ?: JSONObject()
+                        val m15Label=when(m15.optString("state")) {
+                            "CONFIRMED_PIVOT_OBSERVED" -> "подтверждённый фрактал наблюдался"
+                            "NO_CONFIRMED_FRACTAL" -> "подтверждённого фрактала нет"
+                            "CLOSED_HISTORY_GAP" -> "пропуски закрытых свечей"
+                            "CLOSED_HISTORY_STALE" -> "данные устарели"
+                            "CLOSED_HISTORY_UNAVAILABLE" -> "недостаточно корректных свечей"
+                            else -> "нет данных"
+                        }
+                        Text("M15: $m15Label · последняя свеча ${time(m15.optLong("last_closed_at_ms"))}",
+                            style=MaterialTheme.typography.bodySmall)
+                        if(m15.optString("state")=="CONFIRMED_PIVOT_OBSERVED") {
+                            Text("Фрактал ${m15.optString("fractal_kind")} · ${value(m15,"fractal_price")} · подтверждён ${time(m15.optLong("fractal_confirmed_at_ms"))}",
+                                style=MaterialTheme.typography.bodySmall)
+                        }
+                        Text("M15 — наблюдение, не отдельное разрешение на вход. Исполнение остаётся по H1.",
+                            style=MaterialTheme.typography.bodySmall)
+                        Text("Ордер Binance: ${value(p,"order_status")} · защита: ${value(p,"protection_status")} · сверка: ${time(p.optLong("exchange_observed_at_ms"))}",
+                            style=MaterialTheme.typography.bodySmall)
+                        val blocker=p.optJSONObject("execution_outcome")?.optString("blocker").orEmpty()
+                        if(blocker.isNotBlank() && blocker!="нет данных") Text("Причина ожидания / отказа: $blocker",
+                            style=MaterialTheme.typography.bodySmall)
+                    }
+                }
                 val reasons=decision.optJSONArray("reasons")
                 if(reasons!=null && reasons.length()>0) Text("Причины: "+(0 until reasons.length()).joinToString("; ") { reasons.optString(it) },style=MaterialTheme.typography.bodySmall)
                 Text("Волны: "+when(trace.optString("wave_state")) { "PROVISIONAL" -> "предварительная гипотеза";"ALTERNATIVES" -> "несколько допустимых гипотез";else -> "структура не определена" })
