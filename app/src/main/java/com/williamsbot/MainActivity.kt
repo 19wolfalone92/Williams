@@ -564,7 +564,9 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    // Read-only market view; the Runtime scanner independently evaluates all ten contracts.
+    // The chart is read-only, including while Futures execution is RECONCILE_REQUIRED.
+    // Candle/indicator history can be expensive (up to 6000 bars), so do not serialize
+    // live price updates behind that work. These two UI tasks have separate lifecycles.
     LaunchedEffect(tab, selectedChartSymbol, selectedChartInterval, historicalTrade?.id) {
         if (tab != 1) return@LaunchedEffect
         chartCandles = emptyList()
@@ -574,44 +576,83 @@ fun WilliamsApp(context: Context) {
         chartIndicatorSummary = "Загрузка индикаторов…"
         chartError = null
         chartLoading = true
-        var lastCandleRefreshMs = 0L
         while (isActive) {
             val requestSymbol = selectedChartSymbol
             val requestInterval = selectedChartInterval
             try {
-                val refreshCandles = chartCandles.isEmpty() || System.currentTimeMillis() - lastCandleRefreshMs >= 30_000L
-                val raw = withContext(Dispatchers.IO) {
-                    if (refreshCandles) api.get("/api/v1/market/klines?symbol=" + requestSymbol + "&interval=" + requestInterval + "&bars=6000" +
-                        (historicalTrade?.let { "&until=" + ((it.closedAtMs.takeIf { t -> t > 0L } ?: it.openedAtMs) + 14_400_000L) } ?: ""))
-                    else api.get("/api/v1/market/quote?symbol=" + requestSymbol)
-                }
-                val payload = JSONObject(raw)
-                payload.optString("error").takeIf { it.isNotBlank() && it != "null" }?.let {
-                    throw IllegalStateException(it)
-                }
-                require(payload.optString("symbol") == requestSymbol) { "Runtime вернул график другой пары" }
-                require(!refreshCandles || payload.optString("interval") == requestInterval) { "Runtime вернул другой таймфрейм; молчаливая подмена запрещена" }
-                val loaded = if (refreshCandles) parseCandles(payload.optJSONArray("candles") ?: JSONArray()) else chartCandles
-                chartLivePrice = if (historicalTrade == null) payload.optDouble("live_price").takeIf { it.isFinite() && it > 0.0 } else null
-                chartQuoteSource = payload.optString("live_price_source", "UNAVAILABLE")
-                chartQuoteUpdatedAtMs = payload.optLong("live_price_at_ms", 0L)
-                if (refreshCandles) {
-                    chartIndicatorSummary = chartIndicatorSummary(payload.optJSONObject("indicator_snapshot"))
-                    lastCandleRefreshMs = System.currentTimeMillis()
+                // Parsing thousands of candles and their indicators on the Compose main
+                // thread could freeze the displayed quote even when market WS was fresh.
+                val (loaded, summary) = withContext(Dispatchers.IO) {
+                    val raw = api.get("/api/v1/market/klines?symbol=" + requestSymbol +
+                        "&interval=" + requestInterval + "&bars=6000" +
+                        (historicalTrade?.let {
+                            "&until=" + ((it.closedAtMs.takeIf { t -> t > 0L } ?: it.openedAtMs) + 14_400_000L)
+                        } ?: ""))
+                    val payload = JSONObject(raw)
+                    payload.optString("error").takeIf { it.isNotBlank() && it != "null" }?.let {
+                        throw IllegalStateException(it)
+                    }
+                    require(payload.optString("symbol") == requestSymbol) {
+                        "Runtime вернул график другой пары"
+                    }
+                    require(payload.optString("interval") == requestInterval) {
+                        "Runtime вернул другой таймфрейм; молчаливая подмена запрещена"
+                    }
+                    parseCandles(payload.optJSONArray("candles") ?: JSONArray()) to
+                        chartIndicatorSummary(payload.optJSONObject("indicator_snapshot"))
                 }
                 if (loaded.isEmpty()) {
                     chartError = "$requestSymbol $requestInterval: закрытые свечи не получены"
                 } else {
                     chartCandles = loaded
+                    chartIndicatorSummary = summary
                     chartError = null
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
+                // The last good chart remains visible during a transient history failure.
                 chartError = failure.message ?: failure.javaClass.simpleName
             }
             chartLoading = false
-            delay(if (historicalTrade == null) 2_000L else 30_000L)
+            delay(30_000L)
+        }
+    }
+
+    // Independent, read-only quote polling must continue while trading is blocked,
+    // while H1 candles load, and while Binance account reconciliation retries.
+    LaunchedEffect(tab, selectedChartSymbol, historicalTrade?.id) {
+        if (tab != 1 || historicalTrade != null) return@LaunchedEffect
+        while (isActive) {
+            val requestSymbol = selectedChartSymbol
+            try {
+                val payload = withContext(Dispatchers.IO) {
+                    JSONObject(api.get("/api/v1/market/quote?symbol=" + requestSymbol))
+                }
+                payload.optString("error").takeIf { it.isNotBlank() && it != "null" }?.let {
+                    throw IllegalStateException(it)
+                }
+                require(payload.optString("symbol") == requestSymbol) {
+                    "Runtime вернул котировку другой пары"
+                }
+                val price = payload.optDouble("live_price", Double.NaN)
+                    .takeIf { it.isFinite() && it > 0.0 }
+                val quoteAt = payload.optLong("live_price_at_ms", 0L)
+                if (price != null && quoteAt > 0L) {
+                    chartLivePrice = price
+                    chartQuoteSource = payload.optString("live_price_source", "UNAVAILABLE")
+                    chartQuoteUpdatedAtMs = quoteAt
+                } else {
+                    // Never present an old value as live when all quote sources fail.
+                    chartQuoteSource = "UNAVAILABLE"
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Keep the last good value/timestamp for display, explicitly marked stale.
+                chartQuoteSource = "STALE"
+            }
+            delay(2_000L)
         }
     }
 
@@ -2472,7 +2513,8 @@ private fun MarketChartPanel(
                     Text(selectedSymbol, style = MaterialTheme.typography.titleLarge)
                     Text("USDⓈ-M Futures Demo • выбранная пара", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
                 }
-                Text((livePrice ?: candles.lastOrNull()?.close)?.let { fmt(it) } ?: if (loading) "Загрузка…" else "—",
+                // Never display a closed candle's close as the current traded price.
+                Text(livePrice?.let { fmt(it) } ?: "—",
                     color = AppColors.primary, fontWeight = FontWeight.Bold)
             }
             Text("Бот независимо сканирует все 10 контрактов. Здесь показан только выбранный рынок.",
@@ -2494,7 +2536,8 @@ private fun MarketChartPanel(
             Text("Решение: H1 • контекст: H4 / D1 • смена графика не меняет торговлю", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
             Text((if (historicalTrade != null) "Исторические свечи" else "Котировка: " + (livePrice?.let { fmt(it) } ?: "нет")) + " • источник: " + quoteSource +
                 (if (quoteUpdatedAtMs > 0L) " • " + ((System.currentTimeMillis() - quoteUpdatedAtMs).coerceAtLeast(0L) / 1000L) + "с назад" else ""),
-                color = if (livePrice != null && CockpitDiagnostics.fresh(quoteUpdatedAtMs, System.currentTimeMillis(), 60_000L)) AppColors.green else AppColors.amber,
+                color = if (livePrice != null && quoteSource !in setOf("STALE", "UNAVAILABLE") &&
+                    CockpitDiagnostics.fresh(quoteUpdatedAtMs, System.currentTimeMillis(), 15_000L)) AppColors.green else AppColors.amber,
                 style = MaterialTheme.typography.labelSmall)
             TextButton(onClick = { details = !details }) { Text(if (details) "Скрыть данные индикаторов" else "Что видит бот • данные индикаторов") }
             if (details) Text(indicatorSummary, color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
