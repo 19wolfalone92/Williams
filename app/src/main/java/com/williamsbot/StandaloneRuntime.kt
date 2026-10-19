@@ -1263,6 +1263,7 @@ private class NativeEngine(
     @Volatile private var lastScanDailyRiskCheckAtMs = 0L
     @Volatile private var lastScanDailyRiskCheckAllowed = false
     @Volatile private var lastNativeManagementAttemptMs = 0L
+    @Volatile private var lastProtectedRiskCapManagementAtMs = 0L
     private val deepWatchTopN = 10
     private val scannerUniverseLabel = "USD_M_FUTURES_TESTNET_10"
 
@@ -5184,7 +5185,14 @@ private class NativeEngine(
             reconcileRequired = true
             persistSafetyFlag("reconcile_required", true)
             stateMachine.force(TradingState.RECONCILE_REQUIRED, scannerError ?: "Futures reconciliation failed")
-            if (reconciliation.optBoolean("protected_over_cap_management_allowed", false)) {
+            val riskManagementNowMs = System.currentTimeMillis()
+            val riskManagementLastMs = lastProtectedRiskCapManagementAtMs
+            if (reconciliation.optBoolean("protected_over_cap_management_allowed", false) &&
+                (riskManagementLastMs <= 0L || riskManagementNowMs - riskManagementLastMs >= 30_000L)
+            ) {
+                // Limit repeated signed Futures requests while a hard risk cap
+                // is exceeded; preserve 24/7 exits and confirmed stop protection.
+                lastProtectedRiskCapManagementAtMs = riskManagementNowMs
                 // A failed risk-cap reconciliation is NOT a trading authorization.
                 // Retain the durable latch and permit only confirmed risk-reducing
                 // exits / stop improvements. New entries and add-ons remain forbidden.
