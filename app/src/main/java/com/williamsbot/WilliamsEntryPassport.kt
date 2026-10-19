@@ -66,8 +66,8 @@ internal fun williamsEntryPassport(
             it.optString("direction") == direction && it.optString("symbol", symbol) == symbol }
     val plan = execution.optJSONObject("setup_context")
     val outcome = execution.optJSONObject("outcome") ?: JSONObject()
-    passport.put("state", if (matched != null) "INTENT_JOURNALED" else
-        if (outcome.optBoolean("accepted", false)) "ACCEPTED_UNVERIFIED" else "REJECTED_OR_UNCONFIRMED")
+    passport.put("state", if (!outcome.optBoolean("accepted", false)) "REJECTED_OR_UNCONFIRMED"
+        else if (matched != null) "INTENT_JOURNALED" else "ACCEPTED_UNVERIFIED")
         .put("observed_at_ms", execution.optLong("observed_at_ms"))
         .put("client_id", clientId).put("direction", direction)
         .put("signal_id", execution.optString("signal_id"))
