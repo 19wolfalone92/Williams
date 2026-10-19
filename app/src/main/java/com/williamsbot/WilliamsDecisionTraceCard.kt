@@ -33,6 +33,13 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                 Text("Проверка Runtime: "+time(check.optLong("observed_at_ms")),style=MaterialTheme.typography.bodySmall)
                 Text(check.optJSONObject("outcome")?.optString("blocker").orEmpty(),style=MaterialTheme.typography.bodySmall)
             }
+            val history=trace?.optJSONObject("signal_history")
+            val historySignals=rows(history?.optJSONArray("signals"))
+            if(history?.optString("state")=="HISTORY_UNAVAILABLE") Text("История сигналов недоступна",color=MaterialTheme.colorScheme.error)
+            historySignals.takeLast(5).forEach { item ->
+                Text("${item.optString("direction")} ${item.optString("family")} · ${williamsTriggerStateLabel(item.optString("state"))}",style=MaterialTheme.typography.bodySmall)
+                Text("Формирование: ${time(item.optLong("formation_at_ms"))} · подтверждение: ${time(item.optLong("known_at_ms"))}\nТриггер ${item.opt("trigger")} · впервые записан: ${time(item.optLong("first_seen_at_ms"))}",style=MaterialTheme.typography.bodySmall)
+            }
             if(trace==null || !trace.has("decision")) {
                 Text("Анализ закрытых H1-свечей ещё не получен. Вывод о направлении не сделан.")
             } else {
@@ -68,6 +75,11 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                 }
                 TextButton(onClick={ expanded=!expanded }) { Text(if(expanded) "Свернуть доказательства" else "Свечи, дивергенции и цепочка ордеров") }
                 if(expanded) {
+                    Text("История решений · последние 20 событий",style=MaterialTheme.typography.bodySmall)
+                    rows(history?.optJSONArray("events")).takeLast(20).reversed().forEach { e ->
+                        Text("${time(e.optLong("observed_at_ms"))} · ${e.optString("reason_category")} · ${williamsTriggerStateLabel(e.optString("state"))}\n${e.optString("direction")} ${e.optString("family")} @ ${e.opt("trigger")} · ${e.optString("reason")}"+
+                            if(e.optString("attribution")=="PAIR_GATE") "\nОграничение пары; индивидуальный допуск не выполнялся." else "",style=MaterialTheme.typography.bodySmall)
+                    }
                     Text("Alligator: Jaw=${value(indicators,"jaw")} · Teeth=${value(indicators,"teeth")} · Lips=${value(indicators,"lips")}",style=MaterialTheme.typography.bodySmall)
                     val context=trace.optJSONObject("admission_context")
                     if(context!=null) {

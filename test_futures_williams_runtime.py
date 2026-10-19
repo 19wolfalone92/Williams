@@ -540,7 +540,9 @@ def test_futures_pre_submit_blocks_entry_when_position_appears_after_signal():
         "state": CampaignState.ENTRY_PENDING,
     })()
     runtime.engine = type("E", (), {"load_campaign": lambda self, cid: campaign})()
-    runtime.config = type("Cfg", (), {"allow_long": True, "allow_short": True})()
+    from entry_time_policy import EntryTimePolicy
+    runtime.client = SimpleNamespace(time_offset_ms=0)
+    runtime.config = type("Cfg", (), {"allow_long": True, "allow_short": True,"entry_time_policy":EntryTimePolicy()})()
     runtime._position = lambda symbol: {"positionAmt": "0.25"}
     runtime._signed_position_qty = lambda position: float(position["positionAmt"])
     intent = type("I", (), {

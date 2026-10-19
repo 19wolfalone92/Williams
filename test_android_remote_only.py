@@ -502,18 +502,21 @@ def test_android_exit_keeps_account_state_open_protected_when_other_positions_re
     assert "findProtectiveStop(otherAlgos, otherDirection, ownerStopId, ownerStop)" in close
 
 
-def test_android_utc_entry_session_blocks_new_orders_and_cancels_resting_entries_after_close():
+def test_android_configurable_entry_policy_blocks_new_exposure_and_cancels_resting_entries():
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
-    assert "internal fun isWithinWilliamsEntrySessionUtc(epochMs: Long): Boolean" in coordinator
-    assert "return hour in 8 until 20" in coordinator
+    policy = _read(ANDROID / "java/com/williamsbot/WilliamsEntryTimePolicy.kt")
+    assert 'val mode:String="ALWAYS"' in policy
+    assert 'NEW_EXPOSURE_ONLY' in policy
+    assert 'entryTimePolicyProvider().allows(clock())' in coordinator
+    assert 'ENTRY_TIME_POLICY_BLOCKED_BEFORE_SUBMISSION' in coordinator
     submit = runtime.split("private fun submitNativeFuturesCampaignEntry(", 1)[1].split(
         "private fun scanDailyRiskAllowsEntry(", 1
     )[0]
-    assert "!isWithinWilliamsEntrySessionUtc(sessionClockMs)" in submit
-    assert "!isWithinWilliamsEntrySessionUtc(submitNow)" in submit
+    assert "!entryTimePolicy.allows(sessionClockMs)" in submit
+    assert "!entryTimePolicy.allows(submitNow)" in submit
     assert "private fun cancelPendingEntriesOutsideWilliamsSession()" in runtime
-    assert '"OUTSIDE_WILLIAMS_ENTRY_SESSION"' in runtime
+    assert '"OUTSIDE_CONFIGURED_ENTRY_TIME"' in runtime
     assert '"OUT_OF_SESSION_CANCEL_PENDING_ENTRIES"' in runtime
     # Signed REST management runs asynchronously so a slow reconciliation cannot
     # delay scanning every approved symbol.

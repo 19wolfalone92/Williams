@@ -25,7 +25,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
-VERSION = '4.25.0'
+VERSION = '4.33.0'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
@@ -1067,6 +1067,8 @@ def status():
         'version': VERSION,
         'symbol': t.symbol,
         'interval': t.interval,
+        'entry_time_policy': t.config.entry_time_policy.to_dict(),
+        'decision_traces': t.decision_trace_snapshot(),
         'testnet': t.client.testnet,
         'running': state.running,
         'paused': state.paused,

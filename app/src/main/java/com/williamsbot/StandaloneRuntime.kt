@@ -874,7 +874,8 @@ private data class CampaignSignalN(
     val reason: String,
     val strategyProfile:String=williamsTc2Profile,
     val executionSemantics:String="STOP_ENTRY",
-    val setupContext:String=""
+    val setupContext:String="",
+    val formationAtMs:Long=signalBarTimeMs
 )
 
 private data class BaseAnalysis(
@@ -1144,6 +1145,9 @@ private class NativeEngine(
     @Volatile private var futuresLeverageSettings = prefs.getString("futures_leverage_settings_v1", null)?.let {
         FuturesLeverageSettings.fromJson(JSONObject(it))
     } ?: FuturesLeverageSettings()
+    @Volatile private var entryTimePolicy=prefs.getString("entry_time_policy_v1",null)?.let {
+        WilliamsEntryTimePolicy.fromJson(JSONObject(it))
+    } ?: WilliamsEntryTimePolicy()
     @Volatile private var williamsProfile=prefs.getString("williams_strategy_profile_v1",williamsUnifiedProfile) ?: williamsUnifiedProfile
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
@@ -1155,7 +1159,11 @@ private class NativeEngine(
                 })
         }.also { coordinator ->
             coordinator.setEditionSelectionProvider { williamsProfile }
-            coordinator.setObservationSink { auditStore.recordCampaignSnapshot(it) }
+            coordinator.setEntryTimePolicyProvider { entryTimePolicy }
+            coordinator.setObservationSink { snapshot ->
+                auditStore.recordCampaignSnapshot(snapshot)
+                runCatching { WilliamsSignalJournal(executionStore).orders(snapshot,System.currentTimeMillis()) }
+            }
             coordinator.setStructuralStopRecoveryProvider { symbol, direction, mark, quantity, entry ->
                 recoverMissingStructuralStop(symbol, direction, mark, quantity, entry)
             }
@@ -2720,8 +2728,8 @@ private class NativeEngine(
             "FUTURES_ENTRY_SPREAD_BLOCKED: $symbol live spread=$liveSpreadPct"
         }
         val nowMs = futuresMarketData.exchangeNowMs()
-        require(isWithinWilliamsEntrySessionUtc(nowMs)) {
-            "Williams/Testnet entry window is closed; conditional entries are permitted only 08:00–20:00 UTC"
+        require(entryTimePolicy.allows(nowMs)) {
+            "ENTRY_TIME_POLICY_BLOCKED: выбранное окно UTC закрыто"
         }
         val h1BarMs = frameSeconds("1h") * 1000L
         val h1 = fetchCandles(symbol, "1h", 180)
@@ -5471,10 +5479,10 @@ private class NativeEngine(
             fmtQty(quantity,rules.decimals),fmtPrice(price,rules.tick),owner.getString("protective_stop"),clientId,risk,
             signalType=signal.type,signalBarTimeMs=signal.signalBarTimeMs,signalReason=signal.reason,leverage=leverage,
             strategyProfile=profile,entryClientId=parentId,executionSemantics=signal.executionSemantics,
-            referenceClose=if(market) signal.triggerPrice else 0.0,setupContext=setup.toString())
+            referenceClose=if(market) signal.triggerPrice else 0.0,setupContext=setup.toString(),signalId=signal.signalId)
         lastOrder=withCampaignMutation(symbol,"WILLIAMS_CAMPAIGN_ADDITION") {
             val submitNow=futuresMarketData.exchangeNowMs()
-            check(williamsProfileAllowsSource(williamsProfile,profile) && isWithinWilliamsEntrySessionUtc(submitNow) && checkFuturesDailyLoss()) {
+            check(williamsProfileAllowsSource(williamsProfile,profile) && entryTimePolicy.allows(submitNow) && checkFuturesDailyLoss()) {
                 "Addition profile/session/daily risk changed before mutation"
             }
             val fresh=editionCampaignSignals(symbol,fetchCandles(symbol,"1h",220),"1h",rules.tick,profile)
@@ -5500,7 +5508,7 @@ private class NativeEngine(
         // The operator-directed mode suppresses automatic direction selection even
         // when this scan began before the mode was armed.
         if (forceTestnetMode) return rejectDecision(symbol,"OPERATOR_DIRECTION_MODE_ACTIVE")
-        // Entry-session overlay is UTC 08:00 inclusive to 20:00 exclusive.
+        // Explicit user policy gates new exposure only; ALWAYS is the default.
         // Position protection/management and explicit exits remain active 24/7.
         if (!executionReady() || !candidate.campaignReady) return rejectDecision(symbol,"RUNTIME_OR_CAMPAIGN_NOT_READY: running=$running; paused=$paused; reconcile=$reconcileRequired; "+candidate.reason)
         val sessionClockMs = runCatching { futuresMarketData.exchangeNowMs() }.getOrElse { failure ->
@@ -5508,8 +5516,8 @@ private class NativeEngine(
                 (failure.message ?: failure.javaClass.simpleName)
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
-        if (!isWithinWilliamsEntrySessionUtc(sessionClockMs)) {
-            lastError = "WILLIAMS_ENTRY_SESSION_CLOSED: new entries allowed only from 08:00 to 20:00 UTC; position management remains active"
+        if (!entryTimePolicy.allows(sessionClockMs)) {
+            lastError = "ENTRY_TIME_POLICY_BLOCKED: "+entryTimePolicy.toJson()+"; protection and exits remain active"
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 
@@ -5748,6 +5756,7 @@ private class NativeEngine(
             clientId = clientId,
             riskPct = riskPct,
             signalType = signal.type,
+            signalId = signal.signalId,
             reentryOwnerId=if(profitReentry(signal)) owned!!.getString("client_id") else "",
             referenceClose=if(marketReentry) signal.triggerPrice else 0.0,
             leverage = entryLeverage,
@@ -5785,12 +5794,12 @@ private class NativeEngine(
                 "Williams source is no longer enabled after analysis"
             }
             val submitNow = futuresMarketData.exchangeNowMs()
-            if (!isWithinWilliamsEntrySessionUtc(submitNow)) {
+            if (!entryTimePolicy.allows(submitNow)) {
                 return@withCampaignMutation JSONObject()
                     .put("accepted", false)
                     .put("safe_rejection", true)
                     .put("mutation_attempted", false)
-                    .put("blocker", "WILLIAMS_ENTRY_SESSION_CLOSED: 08:00–20:00 UTC")
+                    .put("blocker", "ENTRY_TIME_POLICY_BLOCKED: "+entryTimePolicy.toJson()+"")
             }
             require(isSignalFresh(signal.signalBarTimeMs, submitNow, 5L * 60L * 60L * 1000L)) {
                 "STALE_H1_SCENARIO: signal expired before Futures submission"
@@ -6049,6 +6058,7 @@ private class NativeEngine(
             val reservedSymbol = intent.optString("symbol").uppercase(Locale.US)
             if (reservedSymbol in coreSymbols) openSymbols.add(reservedSymbol)
         }
+        ranked.filter { it.symbol in openSymbols }.forEach { rejectDecision(it.symbol,"SYMBOL_RESERVED_BY_POSITION_OR_PENDING_ORDER") }
         for (candidate in ranked
             .filter { it.campaignReady && it.symbol !in openSymbols }
             .sortedWith(compareByDescending<BaseAnalysis> { it.score }.thenBy { it.wave.exhaustionRisk })
@@ -6072,7 +6082,7 @@ private class NativeEngine(
                 (failure.message ?: failure.javaClass.simpleName)
             return
         }
-        if (isWithinWilliamsEntrySessionUtc(exchangeNow)) return
+        if (entryTimePolicy.allows(exchangeNow)) return
 
         val intents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrElse { failure ->
             lastError = "FUTURES_PENDING_ENTRY_SNAPSHOT_FAILED: " +
@@ -6085,7 +6095,7 @@ private class NativeEngine(
         )
         val hasPendingEntry = (0 until intents.length()).any { i ->
             val intent = intents.optJSONObject(i) ?: return@any true
-            intent.optString("intent_role", "ENTRY") == "ENTRY" &&
+            intent.optString("intent_role", "ENTRY") in setOf("ENTRY","ADD_ON") &&
                 campaignLifecycleStatus(intent) == "ENTRY_PENDING" &&
                 exchangeOrderStatus(intent).uppercase(Locale.US) in pendingStatuses
         }
@@ -6101,7 +6111,7 @@ private class NativeEngine(
                 allowReconcileRequired = true,
                 waitForDoorMs = 50_000L
             ) {
-                futuresCampaignCoordinator.cancelPendingEntries("OUTSIDE_WILLIAMS_ENTRY_SESSION")
+                futuresCampaignCoordinator.cancelPendingEntries("OUTSIDE_CONFIGURED_ENTRY_TIME")
             }
         }.getOrElse { failure ->
             JSONObject().put("ok", false).put("error", failure.message ?: failure.javaClass.simpleName)
@@ -7041,7 +7051,9 @@ private class NativeEngine(
                 val id=if(setup.kind=="BALANCE_LINE") "$profile:$symbol:$frame:$side:BALANCE_LINE:${setup.context.getString("formation_key")}" else profile+":"+campaignSignalId(symbol,frame,type,whenMs)
                 CampaignSignalN(id,type,setup.role,whenMs,
                     setup.trigger,setup.stop,teeth.last(),setup.invalidation,profile+": "+setup.kind,
-                    profile,setup.executionSemantics,setup.context.toString())
+                    profile,setup.executionSemantics,setup.context.toString(),
+                    setup.context.optInt("formation_index",setup.context.optInt("base_index",setup.context.optInt("start_index",setup.context.optInt("thumb_index",setup.knownIndex))))
+                        .takeIf { it in bars.indices }?.let { bars[it].t } ?: whenMs)
             }
         }.distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
     }
@@ -7152,7 +7164,8 @@ private class NativeEngine(
                 type="FRACTAL",role="ENTRY",signalBarTimeMs=candles[fractal.confirmation].t,
                 triggerPrice=fractal.trigger,protectivePrice=fractal.protective,
                 teethAtDetection=fractal.currentTeeth,invalidationPrice=fractal.protective,
-                reason="WM3 eligible confirmed fractal outside Teeth; waiting for actual trigger")
+                reason="WM3 eligible confirmed fractal outside Teeth; waiting for actual trigger",
+                formationAtMs=candles[fractal.center].t)
         }
 
         // Keep at most one signal per family, ordered by formation time. The
@@ -7526,7 +7539,7 @@ private class NativeEngine(
             campaignReady=campaignEngineEnabled && finalSignal,waveHierarchy=hierarchy)
     }
 
-    private fun decisionTraceSnapshot():JSONObject {
+    private fun decisionTraceSnapshot(fullHistory:Boolean=false):JSONObject {
         val journal=runCatching { futuresCampaignCoordinator.intentsSnapshot() }
         val intents=journal.getOrDefault(JSONArray())
         return JSONObject().apply { BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.forEach { symbol ->
@@ -7540,10 +7553,22 @@ private class NativeEngine(
             runCatching { JSONObject(executionStore.readState("decision_context_"+symbol).orEmpty()) }.getOrNull()
                 ?.let { trace.put("admission_context",it) }
             trace.put("order_chain",williamsExecutionChain(intents,symbol))
+            trace.put("signal_history",runCatching {
+                WilliamsSignalJournal(executionStore).view(symbol,intents,System.currentTimeMillis()).apply {
+                    if(!fullHistory) {
+                        val facts=getJSONArray("signals");val events=getJSONArray("events")
+                        val all=(0 until facts.length()).map { facts.getJSONObject(it) }
+                        put("signals",JSONArray((all.takeLast(24)+all.filter { it.optString("state") in setOf("BINANCE_PENDING","PENDING_UNVERIFIED","PARTIAL_FILL") }).distinctBy { it.optString("signal_id") }))
+                        put("events",JSONArray((maxOf(0,events.length()-32) until events.length()).map { events.getJSONObject(it) }))
+                        put("display_events_limit",32)
+                    }
+                }
+            }.getOrElse { JSONObject().put("state","HISTORY_UNAVAILABLE").put("can_place_orders",false) })
             put(symbol,trace)
         } }
     }
     private fun rejectDecision(symbol:String,reason:String) {
+        runCatching { WilliamsSignalJournal(executionStore).decision(symbol,"RUNTIME_PREFLIGHT",reason,System.currentTimeMillis()) }
         runCatching { executionStore.writeState("decision_runtime_"+symbol,JSONObject()
             .put("stage","RUNTIME_PREFLIGHT").put("observed_at_ms",System.currentTimeMillis())
             .put("outcome",JSONObject().put("accepted",false).put("mutation_attempted",false).put("blocker",safeDiagnosticText(reason))).toString()) }
@@ -7640,6 +7665,8 @@ private class NativeEngine(
             .put("signal_id",signal.signalId).put("family",signal.type.removePrefix("SHORT_").removePrefix("LONG_")).put("type",signal.type)
             .put("direction",campaignSignalDirection(signal.type)).put("role",signal.role)
             .put("signal_bar_time_ms",signal.signalBarTimeMs).put("known_at_ms",signal.signalBarTimeMs+3_600_000L)
+            .put("formation_at_ms",signal.formationAtMs).put("formation_time_basis",if(signal.formationAtMs==signal.signalBarTimeMs) "SIGNAL_BAR" else "SOURCE_PIVOT_OR_BASE")
+            .put("expires_at_ms",signal.signalBarTimeMs+18_000_000L)
             .put("trigger",signal.triggerPrice).put("protective_stop",signal.protectivePrice)
             .put("strategy_profile",signal.strategyProfile).put("execution_semantics",signal.executionSemantics)
             .put("setup_context",runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject())) })
@@ -7649,6 +7676,8 @@ private class NativeEngine(
         val trace=buildWilliamsDecisionTrace(candidate.symbol,williamsProfile,
             candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },futuresMarketData.exchangeNowMs(),
             indicators,traceSignals,candidate.waveHierarchy?.toJson() ?: JSONObject())
+        runCatching { WilliamsSignalJournal(executionStore).observe(candidate.symbol,traceSignals,futuresMarketData.exchangeNowMs(),entryTimePolicy) }
+        if(!candidate.campaignReady) rejectDecision(candidate.symbol,"H1_STRUCTURE_NOT_READY: "+candidate.reason)
         runCatching { executionStore.writeState("decision_trace_"+candidate.symbol,trace.toString()) }
         return JSONObject()
             .put("decision_trace",trace)
@@ -8244,6 +8273,7 @@ private class NativeEngine(
             .put("last_reconciliation_completed_at_ms", lastReconciliationCompletedAtMs)
             .put("last_reconciliation_result", lastReconciliationResult)
             .put("strategy_profile",williamsProfile)
+            .put("entry_time_policy",entryTimePolicy.toJson())
             .put("decision_traces",decisionTraceSnapshot())
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
@@ -8970,6 +9000,7 @@ private class NativeEngine(
             .put("last_incident", auditStore.lastCockpitIncident() ?: JSONObject.NULL)
             .put("sqlite_health", sqliteHealth)
             .put("unified_strategy_evidence", unifiedEvidence)
+            .put("signal_decision_history",decisionTraceSnapshot(fullHistory=true))
             .put("device_local_api", "in-process://williams-runtime")
             .put("binance_testnet", true)
             .put("exchange_market", "USDⓈ-M_FUTURES_REQUIRED")
@@ -9162,14 +9193,16 @@ private class NativeEngine(
     fun configureFuturesLeverage(payload: JSONObject): JSONObject {
         val next = FuturesLeverageSettings.fromJson(payload)
         val profile=payload.optString("strategy_profile",williamsProfile)
+        val nextTime=payload.optJSONObject("entry_time_policy")?.let { WilliamsEntryTimePolicy.fromJson(it) } ?: entryTimePolicy
         require(profile in williamsEditionProfiles) { "Неизвестный профиль Вильямса" }
         fun persist() {
-            check(prefs.edit().putString("williams_strategy_profile_v1",profile)
+            check(prefs.edit().putString("entry_time_policy_v1",nextTime.toJson().toString()).putString("williams_strategy_profile_v1",profile)
                 .putString("futures_leverage_settings_v1", next.toJson().toString()).commit()) {
                 "Не удалось сохранить настройки стратегии"
             }
             futuresLeverageSettings=next
             williamsProfile=profile
+            entryTimePolicy=nextTime
         }
         if(profile!=williamsProfile) futuresCampaignCoordinator.configureWhenFlat { persist() } else persist()
         runCatching { auditStore.recordCockpitEvent("LEVERAGE_SETTINGS", detail = next.toJson().toString()) }
@@ -9180,6 +9213,7 @@ private class NativeEngine(
     fun settings(): JSONObject =
         JSONObject()
             .put("strategy_profile",williamsProfile)
+            .put("entry_time_policy",entryTimePolicy.toJson())
             .put("decision_traces",decisionTraceSnapshot())
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
