@@ -229,11 +229,14 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
     val fractalKind=if (sign==1) "HIGH" else "LOW"
     confirmedWilliamsEditionFractals(bars).asReversed().firstOrNull { f ->
         f.kind==fractalKind && bars.last().t-bars[f.confirmation].t<18_000_000L &&
-            (exitMode || sign*(f.price-teeth.last())>0) && pending(f.confirmation,f.price+sign*tick)
+            sign*(f.price-teeth.last())>0 && pending(f.confirmation,f.price+sign*tick)
     }?.let { f ->
         val stop=if(sign==1) bars.subList(f.groupStart,f.center+1).minOf { it.l }-tick
             else bars.subList(f.groupStart,f.center+1).maxOf { it.h }+tick
-        out+=WilliamsEditionSetup("FRACTAL",side,f.confirmation,f.price+sign*tick,stop,role="ENTRY",context=JSONObject().put("formation_index",f.center))
+        val initial=williamsNtdInitialContext(bars,jaw,teeth,lips,f.center,tick)
+        out+=WilliamsEditionSetup("FRACTAL",side,f.confirmation,f.price+sign*tick,stop,
+            role=if(exitMode || initial.optBoolean("eligible")) "ENTRY" else "ADD_ON",
+            context=JSONObject().put("formation_index",f.center).put("ntd_initial",initial))
     }
     val a=ao.map { sign*it }; val c=ac.map { sign*it };val i=n-1
     if (a.takeLast(3).all { it.isFinite() }) {

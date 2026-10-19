@@ -23,7 +23,7 @@ class WilliamsSetupRulesTest {
     @Test fun newerIneligibleFractalCannotMaskAnOlderValidPendingLevel() {
         val highs=listOf(101.0,102.0,105.0,103.0,102.0,103.0,104.0,102.0,101.0,102.0,103.0)
         val bars=highs.mapIndexed { i,h -> WilliamsWaveBar(i*3_600_000L,h-1,h,h-5,h-1) }
-        val teeth=List(highs.size){ if (it==6) 106.0 else 104.0 }
+        val teeth=List(highs.size){ if (it==6) 106.0 else 104.5 }
         val long=selectWilliamsPendingFractal("LONG",bars,teeth,.1)!!
         assertEquals(2,long.center)
         assertEquals(4,long.confirmation)

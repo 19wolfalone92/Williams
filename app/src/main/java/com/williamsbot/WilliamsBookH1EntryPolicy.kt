@@ -81,14 +81,15 @@ internal fun williamsBookH1ProofBlocker(
  * The original book rule concerns the line at activation.
  */
 internal fun williamsBookFractalTeethBlocker(
-    signalType:String,direction:String,entry:Double,teeth:Double
+    signalType:String,direction:String,entry:Double,teeth:Double,tick:Double=0.0
 ):String? {
     if(signalType.removePrefix("SHORT_").removePrefix("LONG_")!="FRACTAL") return null
-    if(!entry.isFinite() || entry<=0 || !teeth.isFinite() || teeth<=0)
+    if(!entry.isFinite() || entry<=0 || !teeth.isFinite() || teeth<=0 || !tick.isFinite() || tick<0)
         return "H1_FRACTAL_TEETH_UNVERIFIED"
+    val extreme=if(direction=="LONG") entry-tick else entry+tick
     return when(direction) {
-        "LONG" -> if(entry>teeth) null else "H1_FRACTAL_NOT_ABOVE_TEETH"
-        "SHORT" -> if(entry<teeth) null else "H1_FRACTAL_NOT_BELOW_TEETH"
+        "LONG" -> if(extreme>teeth) null else "H1_FRACTAL_NOT_ABOVE_TEETH"
+        "SHORT" -> if(extreme<teeth) null else "H1_FRACTAL_NOT_BELOW_TEETH"
         else -> "H1_FRACTAL_DIRECTION_INVALID"
     }
 }

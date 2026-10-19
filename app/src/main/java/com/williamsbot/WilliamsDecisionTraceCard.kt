@@ -58,6 +58,26 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                 rows(trace.optJSONArray("wave_hypotheses")).take(3).forEach { hypothesis ->
                     Text("${hypothesis.optString("frame")} · ${hypothesis.optString("active_label")} · ${hypothesis.optString("active_direction")} · ${hypothesis.optString("scenario_id")}",style=MaterialTheme.typography.bodySmall)
                 }
+                trace.optJSONObject("market_reading")?.takeIf { it.optString("state")=="OBSERVED" }?.let { reading ->
+                    val alligator=when(reading.optJSONObject("alligator")?.optString("state")) {
+                        "SLEEPING" -> "сон: линии переплетены"
+                        "AWAKENING" -> "пробуждение"
+                        "EATING" -> "развитие тренда"
+                        "SATIATED" -> "затухание движения"
+                        else -> "не определён"
+                    }
+                    Text("Аллигатор H1: $alligator",style=MaterialTheme.typography.bodySmall)
+                    Text("Ритм: AO ${reading.optString("ao_direction")} · AC ${reading.optString("ac_direction")} · TWR ${reading.optJSONObject("twr")?.optString("direction")}",style=MaterialTheme.typography.bodySmall)
+                    Text(when(reading.optString("wave_phase")) {
+                        "START_CANDIDATE" -> "Гипотеза: начало движения"
+                        "CORRECTION_CANDIDATE" -> "Гипотеза: коррекция"
+                        "CONTINUATION_CANDIDATE" -> "Гипотеза: продолжение импульса"
+                        "LATE_IMPULSE_CANDIDATE" -> "Гипотеза: поздняя стадия импульса; следим за истощением"
+                        "ALTERNATIVES" -> "Волновая фаза: несколько разметок"
+                        else -> "Волновая фаза не определена"
+                    },style=MaterialTheme.typography.bodySmall)
+                    if(expanded) Text("Profitunity MACD 5/34/5 использует компоненты AO/AC. Совпадение индикаторов не подтверждает номер волны.",style=MaterialTheme.typography.bodySmall)
+                }
                 trace.optJSONObject("market_phase")?.let { phase ->
                     Text("Фаза по масштабам · гипотезы",style=MaterialTheme.typography.titleSmall)
                     rows(phase.optJSONArray("frames")).forEach { frame ->

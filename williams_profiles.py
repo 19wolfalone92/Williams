@@ -56,11 +56,6 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
             # detector consumes the REAL long/short_fractal_outside field
             # from strategy.py. Missing or false evidence fails closed,
             # independently of exchange campaign ownership and risk checks.
-            if exit_mode and detector==extract_ntd_fractal_signal_specs:
-                work=ind.copy()
-                # An opposing exit signal is allowed on the position's side of
-                # the mouth. It cannot authorize a reverse/new position.
-                work["teeth_current"]=1e-12 if side=="LONG" else float(ind.high.max())*100
             specs.extend(detector(symbol,work,**kwargs,**({"exit_mode":exit_mode} if detector==extract_ntd_zone_add_on_specs else {})))
         def line(name):
             col=next((c for c in (name+"_current",name+"_shifted",name) if c in ind),None)
@@ -69,6 +64,18 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
             setup=ntd_balance_line_setup(side,bars,line("jaw"),line("teeth"),line("lips"),
                 [float(v) for v in ind.ao],[float(v) for v in ind.ac],tick_size,require_mouth=not exit_mode)
             if setup:setups.append(setup)
+        # The sleep/first-breakout rule concerns a NEW NTD cycle only.
+        # Keep later fractals visible as additions; never gate TC2 on sleep.
+        if not exit_mode:
+            from williams_market_geometry import ntd_initial_context
+            updated=[]
+            for signal in specs:
+                if signal.signal_type==SignalType.FRACTAL:
+                    proof=ntd_initial_context(bars,line("jaw"),line("teeth"),line("lips"),signal.source_candle_index,tick_size)
+                    signal=replace(signal,role=SignalRole.ENTRY if proof["eligible"] else SignalRole.ADD_ON,
+                        setup_context=signal.setup_context | {"ntd_initial":proof})
+                updated.append(signal)
+            specs=updated
         # NTD additional dimensions cannot initiate before the first fractal.
         # They also must point out of the current mouth, rather than feed it.
         mouth=[line(n)[-1] for n in ("jaw","teeth","lips")]

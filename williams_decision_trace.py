@@ -2,6 +2,7 @@
 from math import isfinite
 from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,edition_fractals,valid_edition_bars
 from williams_market_phase import market_phase_context
+from williams_market_reading import market_reading
 def unified_initial_conflict(signals):
     entries=[s for s in signals if s.role.value=="ENTRY"]
     latest=max((s.signal_bar_time_ms for s in entries),default=0)
@@ -45,6 +46,7 @@ def build_decision_trace(symbol,profile,input_bars,now,indicators,signals,hierar
         "divergences":divergences,"wave_state":"PROVISIONAL" if len(active)==1 else "ALTERNATIVES" if active else "UNRESOLVED",
         "wave_hypotheses":active,"books":books,"signals":[s.to_dict() for s in signals],
         "market_phase":market_phase_context(hierarchy),
+        "market_reading":market_reading(bars,market_phase_context(hierarchy)),
         "candles":[[b.t,b.o,b.h,b.l,b.c,b.v] for b in bars[-150:]],
         "decision":{"stage":"CLOSED_BAR_ANALYSIS","state":"BLOCKED" if any(r!="OPPOSING_ENTRIES_BEFORE_CONTEXT" for r in reasons) else "CONTEXT_REQUIRED" if reasons else "CANDIDATE_REQUIRES_PREFLIGHT",
             "reasons":reasons,"can_place_orders":False}}

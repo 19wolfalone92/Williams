@@ -35,7 +35,8 @@ internal fun selectWilliamsPendingFractal(
     direction:String,bars:List<WilliamsWaveBar>,teeth:List<Double>,tick:Double
 ):WilliamsPendingFractal? {
     if (direction !in listOf("LONG","SHORT") || bars.size<5 || teeth.size!=bars.size ||
-        !tick.isFinite() || tick<=0 || !teeth.last().isFinite()) return null
+        !tick.isFinite() || tick<=0 || !teeth.last().isFinite() || teeth.last()<=0 ||
+        !validWilliamsEditionBars(bars)) return null
     val long=direction=="LONG"
     fun extreme(i:Int)=if (long) bars[i].h else bars[i].l
     for (i in bars.lastIndex-2 downTo 2) {
@@ -51,11 +52,12 @@ internal fun selectWilliamsPendingFractal(
             else break
             j--
         }
-        if (count<2 || !teeth[i].isFinite() ||
-            !(i+1..i+2).all { if (long) extreme(it)<p else extreme(it)>p }) continue
+        if (count<2 || !(i+1..i+2).all { if (long) extreme(it)<p else extreme(it)>p }) continue
         val trigger=if (long) p+tick else p-tick
-        if (trigger<=0 || (if (long) p<=teeth[i] || trigger<=teeth.last() || bars.last().c>=trigger
-                else p>=teeth[i] || trigger>=teeth.last() || bars.last().c<=trigger)) continue
+        // Eligibility may change after formation; compare the unbuffered
+        // fractal extreme with the current displaced Teeth (NTD PDF52).
+        if (trigger<=0 || (if (long) p<=teeth.last() || bars.last().c>=trigger
+                else p>=teeth.last() || bars.last().c<=trigger)) continue
         if ((i+2..bars.lastIndex).any { if (long) bars[it].h>=trigger else bars[it].l<=trigger }) continue
         val stopStart=minOf(start,maxOf(0,i+2-4))
         val protective=if (long) (stopStart..i+2).minOf { bars[it].l }-tick
