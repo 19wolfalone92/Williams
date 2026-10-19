@@ -5690,8 +5690,10 @@ private class NativeEngine(
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 
-        // Macro D1 is an airbag; H4 supplies context; H1 is the only decision TF.
-        // M15 is execution/fill monitoring only; M5 remains diagnostics/replay only.
+        // Macro D1 is an airbag; H4 supplies context; H1 is the signal authority.
+        // WM1 reversals lacking H4 alignment additionally need causally confirmed
+        // directional M15 structure before an H1 stop-entry may be armed.
+        // M5 remains diagnostics/replay only.
         val d1BarMs = frameSeconds("1d") * 1000L
         val h4BarMs = frameSeconds("4h") * 1000L
         val d1 = fetchCandles(symbol, "1d", 90)
@@ -5817,9 +5819,10 @@ private class NativeEngine(
             }
         }
 
-        // M15 is execution/fill monitoring only. It must not invent a second
-        // directional signal or veto a causally valid H1 Williams decision.
-        // Closed/fresh M15 data is still required for execution monitoring.
+        // H1 supplies the entry level; for early WM1 with unaligned H4, M15
+        // supplies independent directional confirmation. It never invents an
+        // entry level or overrules the daily airbag / exchange safety gates.
+        // Fresh M15 execution data is required for every other family too.
         val m15BarMs = frameSeconds("15m") * 1000L
         val m15 = fetchCandles(symbol, "15m", 120)
             .filter { it.t > 0L && it.t + m15BarMs <= contextNow }
@@ -5830,6 +5833,23 @@ private class NativeEngine(
         val lastClosedM15At = m15.last().t + m15BarMs
         if (contextNow - lastClosedM15At > 30L * 60L * 1000L) {
             lastError = "M15_EXECUTION_BLOCKED: latest closed M15 candle is stale for $symbol"
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
+        }
+        val m15ProofRequired = williamsRequiresM15ReversalProof(signal.type,h4Bull,h4Bear)
+        val m15Proof = if (m15ProofRequired) williamsM15ReversalEvidence(
+            direction.name,signal.signalBarTimeMs+3_600_000L,contextNow,symbolFilters(symbol).tick,
+            m15.map { WilliamsM15Bar(it.t,it.h,it.l,it.c) }
+        ) else WilliamsM15EntryEvidence("NOT_REQUIRED_H4_ALIGNED_OR_NON_WM1")
+        runCatching { executionStore.writeState("m15_entry_evidence_"+symbol,JSONObject()
+            .put("signal_id",signal.signalId).put("direction",direction.name)
+            .put("h1_signal_at_ms",signal.signalBarTimeMs).put("required",m15ProofRequired)
+            .put("state",m15Proof.state).put("pivot_at_ms",m15Proof.pivotOpenMs ?: JSONObject.NULL)
+            .put("confirmed_at_ms",m15Proof.confirmedAtMs ?: JSONObject.NULL)
+            .put("breakout_at_ms",m15Proof.breakoutAtMs ?: JSONObject.NULL)
+            .put("observed_at_ms",contextNow)
+            .put("policy","ENGINEERING_WM1_UNALIGNED_H4_M15_CONFIRMATION").toString()) }
+        if (m15ProofRequired && !m15Proof.confirmed) {
+            lastError="M15_WM1_DIRECTIONAL_PROOF_PENDING: "+symbol+"/"+signal.signalId+": "+m15Proof.state
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 
@@ -6002,6 +6022,14 @@ private class NativeEngine(
             require(submitNow - (submitM15Last.t + m15BarMs) <= 30L * 60L * 1000L) {
                 "M15_EXECUTION_BLOCKED: latest closed M15 candle is stale at submission"
             }
+            if (m15ProofRequired) {
+                val freshM15Proof = williamsM15ReversalEvidence(
+                    direction.name,signal.signalBarTimeMs+3_600_000L,submitNow,rules.tick,
+                    submitM15.map { WilliamsM15Bar(it.t,it.h,it.l,it.c) })
+                require(freshM15Proof.confirmed) {
+                    "M15_WM1_PROOF_INVALIDATED_AT_SUBMISSION: "+symbol+": "+freshM15Proof.state
+                }
+            }
             if (correction.allowed) {
                 val currentCorrection = williamsCorrectionEntryContext(waveHierarchyFor(symbol,refresh=true),
                     direction.name,signal.signalBarTimeMs,signal.type)
@@ -6024,7 +6052,7 @@ private class NativeEngine(
             ) {
                 "H1_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
             }
-            // M15 contributes only execution readiness, never a new direction.
+            // M15 confirms only eligible early WM1: H1 remains the stop-entry authority.
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
         if(!result.optBoolean("accepted",false)) rejectDecision(symbol,result.optString("blocker","EXECUTION_DOOR_REJECTED"))
@@ -7414,7 +7442,12 @@ private class NativeEngine(
                 triggerPrice = trigger,
                 protectivePrice = stop,
                 invalidationPrice = stop,
-                reason = "Bearish mirror of confirmed Williams setup: " + signal.reason
+                reason = when(signal.type) {
+                    "REVERSAL" -> "WM1 bearish reversal; waiting below signal-bar low"
+                    "SUPER_AO" -> "WM2 Super AO: third falling AO bar; conditional trigger below price bar"
+                    "FRACTAL" -> "WM3 confirmed sell fractal outside Teeth; waiting for actual trigger"
+                    else -> "Bearish mirror of confirmed Williams setup: " + signal.reason
+                }
             )
         }.distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
     }
@@ -9452,6 +9485,9 @@ private class NativeEngine(
             .put("campaign_engine", campaignEngineEnabled)
             .put("campaign_execution_timeframe", campaignExecutionTimeframe)
             .put("campaign_entry_mode", "CONDITIONAL_STOP")
+            .put("campaign_signal_timeframe", "1h")
+            .put("campaign_m15_confirmation_policy", "WM1_NO_H4_ALIGNMENT_REQUIRES_M15_CONFIRMED_DIRECTIONAL_FRACTAL_BREAK")
+            .put("campaign_m15_confirmation_timeframe", "15m")
             .put("campaign_fixed_take_profit", false)
             .put("campaign_entry_execution", "USD_M_FUTURES_TESTNET_COORDINATOR")
             .put("campaign_risk_limit_pct", campaignRiskLimitPct)
