@@ -7584,6 +7584,49 @@ private class NativeEngine(
         return valid
     }
 
+    /** Final non-M15 book-rule check executed by the coordinator AFTER
+     * exchange leverage confirmation and immediately BEFORE Binance POST.
+     * Historic M15 entry verifier stays available only for recovery.
+     */
+    private fun verifyBookH1PlanBeforeSubmit(plan:NativeFuturesCampaignCoordinator.EntryPlan) {
+        check(!forceTestnetMode) { "OPERATOR_DIRECTION_MODE_ACTIVE_BEFORE_SUBMISSION" }
+        val now=futuresMarketData.exchangeNowMs()
+        val tick=symbolFilters(plan.symbol).tick
+        val target=plan.entryPrice.toDouble()
+        val stop=plan.protectiveStop.toDouble()
+        check(williamsProfileAllowsSource(williamsProfile,plan.strategyProfile)) { "H1_BOOK_EDITION_CHANGED" }
+        check(williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
+            plan.signalType,plan.strategyProfile,target,stop,now)==null) { "H1_BOOK_PROOF_UNVERIFIED" }
+        val candles=fetchCandles(plan.symbol,"1h",220)
+        val signals=h1ContextCampaignSignals(plan.symbol,candles,tick)
+        val actual=signals.singleOrNull { it.signalId==plan.signalId &&
+            it.type==plan.signalType && it.strategyProfile==plan.strategyProfile &&
+            campaignSignalDirection(it.type)==plan.direction.name }
+            ?: error(h1ParentRejectionReason(plan.symbol,plan.signalId,"H1_BOOK_PARENT_NO_LONGER_VALID"))
+        val expected=if(plan.direction.name=="LONG")
+            normalizeTriggerPrice(actual.triggerPrice,tick)
+            else normalizePrice(actual.triggerPrice,tick)
+        check(abs(expected-target)<=tick*.11) { "H1_BOOK_ENTRY_PRICE_CHANGED" }
+        val expectedStop=if(plan.direction.name=="LONG")
+            normalizePrice(actual.protectivePrice,tick)
+            else normalizeTriggerPrice(actual.protectivePrice,tick)
+        check(if(plan.direction.name=="LONG") stop>=expectedStop-tick*.11
+              else stop<=expectedStop+tick*.11) { "H1_BOOK_PROTECTIVE_STOP_WIDENED" }
+        check(!williamsBookH1TriggerConsumed(plan.direction.name,plan.signalBarTimeMs,target,now,
+            candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })) {
+            "H1_BOOK_BREAKOUT_WAS_ALREADY_CONSUMED"
+        }
+        val closed=candles.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+        val teeth=williamsAlligatorLine(closed,8,5).lastOrNull() ?: Double.NaN
+        check(williamsBookFractalTeethBlocker(plan.signalType,plan.direction.name,target,teeth)==null) {
+            "H1_BOOK_FRACTAL_NO_LONGER_OUTSIDE_TEETH"
+        }
+        val mark=futuresMarketData.markPrice(plan.symbol)
+        check(if(plan.direction.name=="LONG") mark<target else mark>target) {
+            "H1_BOOK_PENDING_BREAKOUT_ALREADY_CROSSED"
+        }
+    }
+
     private fun verifyMtfPlanBeforeSubmit(plan:NativeFuturesCampaignCoordinator.EntryPlan) {
         check(!forceTestnetMode) { "OPERATOR_DIRECTION_MODE_ACTIVE_BEFORE_SUBMISSION" }
         val now=futuresMarketData.exchangeNowMs()
