@@ -5184,6 +5184,26 @@ private class NativeEngine(
             reconcileRequired = true
             persistSafetyFlag("reconcile_required", true)
             stateMachine.force(TradingState.RECONCILE_REQUIRED, scannerError ?: "Futures reconciliation failed")
+            if (reconciliation.optBoolean("protected_over_cap_management_allowed", false)) {
+                // A failed risk-cap reconciliation is NOT a trading authorization.
+                // Retain the durable latch and permit only confirmed risk-reducing
+                // exits / stop improvements. New entries and add-ons remain forbidden.
+                val riskManagement = runCatching {
+                    manageVerifiedNativePositions(
+                        futuresCampaignCoordinator.positionsSnapshot(),
+                        futuresCampaignCoordinator.intentsSnapshot(),
+                        riskOnly = true
+                    )
+                }
+                riskManagement.onFailure { failure ->
+                    lastError = "PROTECTED_RISK_CAP_MANAGEMENT_FAILED: " +
+                        (failure.message ?: failure.javaClass.simpleName)
+                    runCatching { auditStore.recordCockpitEvent(
+                        "RISK_CAP_MANAGEMENT", state = "BLOCKED",
+                        detail = lastError.orEmpty()
+                    ) }
+                }
+            }
             if (scannerError?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:")==true) {
                 val candidate=runCatching {
                     proposePendingRiskRemediation(
@@ -5381,6 +5401,17 @@ private class NativeEngine(
                 return false // force a fresh position/intent snapshot after a possible racing fill
             }
         }
+        manageVerifiedNativePositions(positions, intents, riskOnly = false)
+        return true
+    }
+
+    private fun submitNativeFuturesAddition
+
+    private fun manageVerifiedNativePositions(
+        positions: JSONArray,
+        intents: JSONArray,
+        riskOnly: Boolean
+    ) {
         for (i in 0 until positions.length()) {
             val row = positions.optJSONObject(i)
                 ?: throw IllegalStateException("Malformed Binance Futures position row during structural exit evaluation")
@@ -5459,7 +5490,7 @@ private class NativeEngine(
                             management.put("course_pending_stage",stage).put("course_pending_target",abs(signedQty)-reduction)
                                 .put("course_pending_client_id",cid)
                             futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
-                            val trimmed=withCampaignMutation(symbol,"COURSE_STAGE_REDUCTION",allowPaused=true) {
+                            val trimmed=withCampaignMutation(symbol,"COURSE_STAGE_REDUCTION",allowPaused=true, allowReconcileRequired=riskOnly) {
                                 futuresCampaignCoordinator.closePosition(symbol,direction,fmtQty(reduction,rules.decimals),cid,"COURSE_STAGE_TRIM",partialReduction=true)
                             }
                             if(!trimmed.optBoolean("ok",false)) throw IllegalStateException(trimmed.optString("blocker","Course reduction requires reconciliation"))
@@ -5487,7 +5518,7 @@ private class NativeEngine(
                     else "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
                 val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"),rules)
                 val clientId = ("W2O_"+symbol.take(8)+"_"+System.nanoTime().toString(16).takeLast(12)).take(36)
-                val result = withCampaignMutation(symbol,"TRIGGERED_WILLIAMS_EXIT",allowPaused=true) {
+                val result = withCampaignMutation(symbol,"TRIGGERED_WILLIAMS_EXIT",allowPaused=true, allowReconcileRequired=riskOnly) {
                     futuresCampaignCoordinator.closePosition(symbol,direction,closeQty,clientId,exitReason)
                 }
                 if (!result.optBoolean("ok",false)) throw IllegalStateException(result.optString("blocker",result.optString("error")))
@@ -5519,7 +5550,7 @@ private class NativeEngine(
                 val result = withCampaignMutation(
                     symbol = symbol,
                     purpose = "WILLIAMS_STRUCTURAL_STOP_TRAIL",
-                    allowPaused = true
+                    allowPaused = true, allowReconcileRequired = riskOnly
                 ) {
                     futuresCampaignCoordinator.trailProtectiveStop(
                         symbol, direction, fmtPrice(plan.stop, rules.tick), clientId
@@ -5537,7 +5568,6 @@ private class NativeEngine(
                 }
             }
         }
-        return true
     }
 
     private fun submitNativeFuturesAddition(candidate:BaseAnalysis,owner:JSONObject) {
