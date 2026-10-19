@@ -4389,8 +4389,9 @@ private class NativeEngine(
                 lastReconciliationResult = "BLOCKED: " +
                     result.optString("blocker", result.optString("error", "unknown"))
             }
-            runCatching { auditStore.recordCockpitEvent("RECONCILIATION", state = result.optString("state"),
-                detail = "$purpose; ok=" + result.optBoolean("ok") + "; " + result.optString("blocker")) }
+            runCatching { auditStore.recordReconciliationObservation(
+                purpose, result.optString("state"), result.optBoolean("ok"),
+                result.optString("blocker")) }
             return result
         } finally {
             lastReconciliationCompletedAtMs = System.currentTimeMillis()
@@ -8910,6 +8911,7 @@ private class NativeEngine(
             .put("created_at", java.time.Instant.ofEpochMilli(observedAtMs).toString())
             .put("cockpit_readiness", cockpitReadiness)
             .put("event_timeline", auditStore.recentCockpitEvents(150))
+            .put("event_compaction", auditStore.cockpitReconciliationCompaction())
             .put("last_incident", auditStore.lastCockpitIncident() ?: JSONObject.NULL)
             .put("sqlite_health", sqliteHealth)
             .put("unified_strategy_evidence", unifiedEvidence)
