@@ -80,3 +80,10 @@ def test_signal_fact_keeps_pivot_ohlc_separate_from_confirmation():
     assert fact['known_at_ms']==bars[3].t+3_600_000 and fact['formation_at_ms']==bars[1].t
     assert fact['teeth_at_detection'] is None
     json.dumps(fact,allow_nan=False)
+
+
+def test_ambiguous_gate_messages_do_not_invent_an_entry_time_block():
+    assert reason_category('Addition profile/session/daily risk changed before mutation')=='RUNTIME_GATE'
+    assert reason_category('RUNTIME_OR_CAMPAIGN_NOT_READY: H1_STRUCTURE_NOT_READY')=='RUNTIME_GATE'
+    assert reason_category('ENTRY_TIME_POLICY_BLOCKED_BEFORE_ADDITION')=='ENTRY_TIME'
+    assert reason_category('DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED_BEFORE_ADDITION')=='RISK'
