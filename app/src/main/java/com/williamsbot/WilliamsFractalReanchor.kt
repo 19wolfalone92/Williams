@@ -13,6 +13,11 @@ internal fun confirmedBetterFractal(pending:JSONObject, signals:JSONArray, mark:
     if(side!="LONG" && side!="SHORT") return null
     if(pending.optString("signal_type").removePrefix("SHORT_") !in setOf("REVERSAL","SUPER_AO","FRACTAL")) return null
     val oldTime=pending.optLong("signal_bar_time_ms")
+    // TC2 WM3 becomes known on the second RIGHT bar. Compare pivot
+    // centers, not just confirmation timestamps, to avoid moving backward
+    // to an older pivot that happened to be confirmed later.
+    val oldPivot=if(pending.optString("signal_type").removePrefix("SHORT_")=="FRACTAL")
+        oldTime-7_200_000L else oldTime
     val oldPrice=pending.optString("entry_price").toDoubleOrNull() ?: return null
     if(oldTime<=0 || !oldPrice.isFinite() || oldPrice<=0) return null
     val type=if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL"
@@ -22,7 +27,7 @@ internal fun confirmedBetterFractal(pending:JSONObject, signals:JSONArray, mark:
         it.optString("signal_id").isNotBlank() &&
         it.optString("signal_id")!=pending.optString("signal_id") &&
         it.optLong("signal_bar_time_ms")>oldTime &&
-        it.optLong("formation_at_ms") in 1L until it.optLong("signal_bar_time_ms") &&
+        it.optLong("formation_at_ms") in (oldPivot+1L) until it.optLong("signal_bar_time_ms") &&
         now>=it.optLong("signal_bar_time_ms")+3_600_000L &&
         now-it.optLong("signal_bar_time_ms")<=18_000_000L &&
         it.optDouble("trigger_price",Double.NaN).isFinite() &&
