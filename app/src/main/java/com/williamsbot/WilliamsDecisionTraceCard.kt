@@ -54,7 +54,7 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                 if(close<=0L || System.currentTimeMillis()-close>3_600_000L) Text("Снимок устарел. Текущая ситуация не подтверждена.",color=MaterialTheme.colorScheme.error)
                 val passport=trace.optJSONObject("entry_passport")
                 passport?.let { p ->
-                    Text("Паспорт входа H1 / M15",style=MaterialTheme.typography.titleSmall)
+                    Text("Паспорт последнего решения H1 / M15 · ${time(p.optLong("observed_at_ms"))}",style=MaterialTheme.typography.titleSmall)
                     val stateLabel=when(p.optString("state")) {
                         "INTENT_JOURNALED" -> "Намерение сохранено; статус биржи см. ниже"
                         "ACCEPTED_UNVERIFIED" -> "Ответ координатора получен; биржевая сверка не подтверждена"
@@ -86,7 +86,7 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                         }
                         Text("M15 — наблюдение, не отдельное разрешение на вход. Исполнение остаётся по H1.",
                             style=MaterialTheme.typography.bodySmall)
-                        Text("Ордер Binance: ${value(p,"order_status")} · защита: ${value(p,"protection_status")} · сверка: ${time(p.optLong("exchange_observed_at_ms"))}",
+                        Text("Биржевой журнал: ${value(p,"order_status")} · запись защиты: ${value(p,"protection_status")} · последняя сверка: ${time(p.optLong("exchange_observed_at_ms"))}",
                             style=MaterialTheme.typography.bodySmall)
                         val blocker=p.optJSONObject("execution_outcome")?.optString("blocker").orEmpty()
                         if(blocker.isNotBlank() && blocker!="нет данных") Text("Причина ожидания / отказа: $blocker",
