@@ -13,7 +13,7 @@ class ProtectedRiskCapManagementTest {
     private fun position(symbol: String, qty: String) = JSONObject()
         .put("symbol", symbol).put("positionAmt", qty)
 
-    private fun protected(symbol: String, direction: String) = JSONObject()
+    private fun protectedEntry(symbol: String, direction: String) = JSONObject()
         .put("symbol", symbol).put("direction", direction)
         .put("intent_role", "ENTRY").put("campaign_status", "OPEN_PROTECTED")
         .put("protection_status", "PROTECTED")
@@ -30,9 +30,9 @@ class ProtectedRiskCapManagementTest {
         .put(position("SOLUSDT", "-11.49"))
         .put(position("XRPUSDT", "-801.1"))
 
-    private fun intents() = JSONArray().put(protected("ETHUSDT", "SHORT"))
-        .put(protected("SOLUSDT", "SHORT"))
-        .put(protected("XRPUSDT", "SHORT"))
+    private fun intents() = JSONArray().put(protectedEntry("ETHUSDT", "SHORT"))
+        .put(protectedEntry("SOLUSDT", "SHORT"))
+        .put(protectedEntry("XRPUSDT", "SHORT"))
 
     @Test fun riskCapBlockDoesNotDisableVerifiedRiskReducingManagement() {
         assertTrue(verifiedProtectedRiskCapManagement(overCap, positions(), intents(), now))
@@ -40,13 +40,13 @@ class ProtectedRiskCapManagementTest {
 
     @Test fun unknownRiskOrMissingStopIsNotAProtectionProof() {
         assertFalse(verifiedProtectedRiskCapManagement(overCap, positions(),
-            intents().put(0, protected("ETHUSDT", "SHORT")
+            intents().put(0, protectedEntry("ETHUSDT", "SHORT")
                 .put("actual_risk_audit_status", "UNKNOWN_ACCOUNT")), now))
         assertFalse(verifiedProtectedRiskCapManagement(overCap, positions(),
-            intents().put(0, protected("ETHUSDT", "SHORT")
+            intents().put(0, protectedEntry("ETHUSDT", "SHORT")
                 .put("protection_status", "SUBMISSION_UNKNOWN")), now))
         assertFalse(verifiedProtectedRiskCapManagement(overCap, positions(),
-            intents().put(0, protected("ETHUSDT", "SHORT")
+            intents().put(0, protectedEntry("ETHUSDT", "SHORT")
                 .put("previous_protection_client_id", "unknown-algo")), now))
     }
 
@@ -54,7 +54,7 @@ class ProtectedRiskCapManagementTest {
         assertFalse(verifiedProtectedRiskCapManagement("UNKNOWN_POSITIONS",positions(),intents(),now))
         assertFalse(verifiedProtectedRiskCapManagement(overCap,positions(),intents(),now + 31_000L))
         assertFalse(verifiedProtectedRiskCapManagement(overCap,positions(),
-            intents().put(0, protected("ETHUSDT", "SHORT")
+            intents().put(0, protectedEntry("ETHUSDT", "SHORT")
                 .put("actual_risk_audit_blocker", "ADDITION_FILL_RISK: unknown")), now))
     }
 
@@ -68,6 +68,6 @@ class ProtectedRiskCapManagementTest {
         assertFalse(verifiedProtectedRiskCapManagement(overCap,
             positions().put(position("BTCUSDT", "1.0")),intents(),now))
         assertFalse(verifiedProtectedRiskCapManagement(overCap,positions(),
-            intents().put(2, protected("XRPUSDT", "LONG")), now))
+            intents().put(2, protectedEntry("XRPUSDT", "LONG")), now))
     }
 }
