@@ -47,6 +47,13 @@ class WilliamsFractalReanchorTest {
         val expired=signal("LONG",101.0,96.0).put("signal_bar_time_ms",now-20_000_000L)
         assertNull(find(pending("LONG",105.0),expired,98.0))
     }
+    @Test fun aLaterConfirmationOfAnOlderPivotCannotReplaceTheEntry() {
+        val earlierPivot=signal("LONG",101.0,96.0)
+            .put("formation_at_ms",now-17_000_000L)
+        assertNull(find(pending("LONG",105.0),earlierPivot,98.0))
+        assertNull(find(pending("LONG",105.0).put("signal_type","REVERSAL"),
+            signal("LONG",101.0,96.0),98.0))
+    }
     @Test fun missingConfirmationOrWrongSourceOrSideNeverPasses() {
         assertNull(find(pending("LONG",105.0),signal("LONG",101.0,96.0).put("strategy_profile",williamsNtdProfile),98.0))
         assertNull(find(pending("LONG",105.0),signal("SHORT",101.0,110.0),98.0))
