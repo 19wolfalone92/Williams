@@ -308,6 +308,50 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
             Text("Проверено ${cockpitTime(report?.optLong("created_at_ms") ?: 0L)}", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
         }
         item {
+            val evidence = report?.optJSONObject("unified_strategy_evidence")
+            var showPairs by remember(report?.optLong("created_at_ms", 0L)) { mutableStateOf(false) }
+            CockpitCard("Единая стратегия · книги и сигналы") {
+                if (evidence == null) {
+                    Text("Сначала запусти диагностику: данные TC2, NTD и Course ещё не получены.",
+                        style = MaterialTheme.typography.bodySmall)
+                } else {
+                    val snapshotStatus = evidence.optString("status")
+                    Text("Снимок: $snapshotStatus • сигналов ${evidence.optInt("observed_signal_count")}",
+                        color = if (snapshotStatus == "COMPLETE_OBSERVATION_ONLY") AppColors.green else AppColors.amber,
+                        style = MaterialTheme.typography.bodySmall)
+                    val labels = listOf(williamsTc2Profile to "Trading Chaos 2",
+                        williamsNtdProfile to "New Trading Dimensions",
+                        williamsCourseProfile to "Trading Chaos Course")
+                    for ((id, title) in labels) {
+                        val row = evidence.optJSONObject("by_source")?.optJSONObject(id)
+                        CockpitField(title,
+                            "Σ${row?.optInt("total") ?: 0} · вход ${row?.optInt("entry") ?: 0}" +
+                            " · LONG ${row?.optInt("long") ?: 0}/SHORT ${row?.optInt("short") ?: 0}")
+                    }
+                    Text("Встречных сигналов до фильтра D1/H4: " +
+                        evidence.optInt("pre_context_opposing_symbol_count") + " пар.",
+                        style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+                    Text("Это сигналы из последнего снимка сканера, НЕ разрешённые ордера. " +
+                        "Причины, по которым детектор не создал сигнал, и полный путь допуска Binance здесь пока не доказаны.",
+                        style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+                    TextButton(onClick = { showPairs = !showPairs }) {
+                        Text(if (showPairs) "Скрыть 10 пар" else "Подробнее по 10 парам")
+                    }
+                    if (showPairs) {
+                        for (row in CockpitDiagnostics.rows(evidence.optJSONArray("by_symbol"))) {
+                            val counts = row.optJSONObject("source_counts")
+                            val brief = listOf("TC2 ${counts?.optInt(williamsTc2Profile) ?: 0}",
+                                "NTD ${counts?.optInt(williamsNtdProfile) ?: 0}",
+                                "Course ${counts?.optInt(williamsCourseProfile) ?: 0}").joinToString(" · ")
+                            Text(row.optString("symbol") + " · " + brief +
+                                (if (row.optBoolean("fresh_opposing_entries_before_context")) " · ⚠️ LONG/SHORT" else ""),
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
+        item {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("Все", "FAIL", "WARNING", "NOT_VERIFIED", "PASS").forEach { label ->
                     FilterChip(filter == label, { filter = label }, label = { Text(label.replace('_', ' ')) })
