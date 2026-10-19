@@ -29,6 +29,10 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(7.dp)) {
             Text("DecisionTrace · $symbol",style=MaterialTheme.typography.titleMedium)
+            trace?.optJSONObject("runtime_preflight")?.let { check ->
+                Text("Проверка Runtime: "+time(check.optLong("observed_at_ms")),style=MaterialTheme.typography.bodySmall)
+                Text(check.optJSONObject("outcome")?.optString("blocker").orEmpty(),style=MaterialTheme.typography.bodySmall)
+            }
             if(trace==null || !trace.has("decision")) {
                 Text("Анализ закрытых H1-свечей ещё не получен. Вывод о направлении не сделан.")
             } else {
@@ -82,7 +86,7 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                         Text("Опоры ${h.optString("scenario_id")}: "+h.optJSONArray("anchors").toString(),style=MaterialTheme.typography.bodySmall)
                     }
                     val chain=rows(trace.optJSONArray("order_chain"))
-                    Text(if(chain.isEmpty()) "Ордеров этой пары в журнале нет." else "Цепочка из журнала исполнения:",style=MaterialTheme.typography.bodySmall)
+                    Text(if(trace.optString("order_chain_state")=="UNAVAILABLE_RECONCILE_REQUIRED") "Журнал недоступен; нужна сверка исполнения и защиты." else if(chain.isEmpty()) "Ордеров этой пары в журнале нет." else "Цепочка из журнала исполнения:",style=MaterialTheme.typography.bodySmall)
                     chain.forEach { item -> Text("${item.optString("client_id")} · ${item.optString("order_status")} · ${item.optString("campaign_status")}\nЗащита: ${item.optString("protection_status")} @ ${item.optString("protective_stop")}",style=MaterialTheme.typography.bodySmall) }
                     val candles=trace.optJSONArray("candles") ?: JSONArray()
                     Text("Последние свечи H1 · время, O/H/L/C/V",style=MaterialTheme.typography.bodySmall)

@@ -7527,12 +7527,16 @@ private class NativeEngine(
     }
 
     private fun decisionTraceSnapshot():JSONObject {
-        val intents=futuresCampaignCoordinator.intentsSnapshot()
+        val journal=runCatching { futuresCampaignCoordinator.intentsSnapshot() }
+        val intents=journal.getOrDefault(JSONArray())
         return JSONObject().apply { BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.forEach { symbol ->
             val trace=runCatching { JSONObject(executionStore.readState("decision_trace_"+symbol).orEmpty()) }
                 .getOrDefault(JSONObject().put("symbol",symbol).put("state","NOT_ANALYSED"))
             val execution=runCatching { JSONObject(executionStore.readState("decision_execution_"+symbol).orEmpty()) }.getOrNull()
             execution?.let { trace.put("execution",it) }
+            runCatching { JSONObject(executionStore.readState("decision_runtime_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("runtime_preflight",it) }
+            trace.put("order_chain_state",if(journal.isSuccess) "JOURNAL_SNAPSHOT" else "UNAVAILABLE_RECONCILE_REQUIRED")
             runCatching { JSONObject(executionStore.readState("decision_context_"+symbol).orEmpty()) }.getOrNull()
                 ?.let { trace.put("admission_context",it) }
             trace.put("order_chain",williamsExecutionChain(intents,symbol))
@@ -7540,7 +7544,7 @@ private class NativeEngine(
         } }
     }
     private fun rejectDecision(symbol:String,reason:String) {
-        runCatching { executionStore.writeState("decision_execution_"+symbol,JSONObject()
+        runCatching { executionStore.writeState("decision_runtime_"+symbol,JSONObject()
             .put("stage","RUNTIME_PREFLIGHT").put("observed_at_ms",System.currentTimeMillis())
             .put("outcome",JSONObject().put("accepted",false).put("mutation_attempted",false).put("blocker",safeDiagnosticText(reason))).toString()) }
     }
