@@ -5405,8 +5405,6 @@ private class NativeEngine(
         return true
     }
 
-    private fun submitNativeFuturesAddition
-
     private fun manageVerifiedNativePositions(
         positions: JSONArray,
         intents: JSONArray,
