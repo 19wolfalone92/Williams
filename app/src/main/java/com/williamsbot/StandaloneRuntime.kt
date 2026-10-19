@@ -5680,8 +5680,24 @@ private class NativeEngine(
         // Only a causally contained, validated correction mode may override the
         // project's D1/H4 trend filter. H1 remains the only signal authority.
         val allowedSignals = freshSignals.filter { contextRank(it)>0 }
-        val reanchorLock = executionStore.readState("tc2_fractal_reanchor_$symbol")
+        // A pending re-anchor must never hide a contradictory confirmed
+        // hypothesis from another enabled Williams edition.
+        if(williamsProfile==williamsUnifiedProfile && williamsUnifiedDirectionsConflict(
+                allowedSignals.mapNotNull { campaignSignalDirection(it.type) })) {
+            lastError="WILLIAMS_UNIFIED_DIRECTION_CONFLICT: fresh LONG and SHORT H1 entries disagree for $symbol; no order armed"
+            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
+        }
+        val storedReanchor = executionStore.readState("tc2_fractal_reanchor_$symbol")
             ?.let { runCatching { JSONObject(it) }.getOrNull() }
+        val reanchorLock = if(storedReanchor!=null &&
+            contextNow - storedReanchor.optLong("recorded_at_ms")>18_000_000L) {
+            // Historical levels have already expired after five hours; do not
+            // permanently freeze this symbol once that guard has elapsed.
+            check(executionStore.writeState("tc2_fractal_reanchor_$symbol","")) {
+                "Failed to expire durable TC2 re-anchor guard"
+            }
+            null
+        } else storedReanchor
         // A previously confirmed cancellation pins the next attempt to its
         // exact new fractal. It must never fall back to a stale higher WM1/WM2.
         val selectableSignals = if (reanchorLock!=null) {
@@ -5698,19 +5714,35 @@ private class NativeEngine(
         if(reanchorLock!=null && selectableSignals.isEmpty()) {
             return rejectDecision(symbol,"FRACTAL_REANCHOR_TARGET_NOT_CURRENTLY_VALID: no fallback to old level")
         }
-        if(williamsProfile==williamsUnifiedProfile && williamsUnifiedDirectionsConflict(
-                selectableSignals.mapNotNull { campaignSignalDirection(it.type) })) {
-            lastError="WILLIAMS_UNIFIED_DIRECTION_CONFLICT: fresh LONG and SHORT H1 entries disagree for $symbol; no order armed"
-            runCatching { auditStore.recordCockpitEvent("SIGNAL_CONFLICT",symbol,detail=lastError.orEmpty()) }
-            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
-        }
-        val signal = selectableSignals.minWithOrNull(
+        val baseline = selectableSignals.minWithOrNull(
             compareBy<CampaignSignalN> { it.signalBarTimeMs }
                 .thenByDescending { contextRank(it) }.thenByDescending { nativeRank(it.type) }
         ) ?: run {
             lastError = "WILLIAMS_DIRECTIONAL_CONTEXT_BLOCKED: neither LONG nor SHORT is allowed by D1/H4 for $symbol"
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
+        // Even with no old Binance order, prefer a newer confirmed WM3 level
+        // when it has moved TOWARD current price. Do not blindly select the
+        // oldest surviving Wise-Man hypothesis high above market.
+        val currentMark=futuresMarketData.markPrice(symbol)
+        val nearestFractal = if(reanchorLock==null && baseline.strategyProfile==williamsTc2Profile) {
+            val side=campaignSignalDirection(baseline.type)
+            selectableSignals.filter { alt ->
+                alt.strategyProfile==williamsTc2Profile &&
+                    alt.type==(if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL") &&
+                    alt.role=="ENTRY" && alt.signalBarTimeMs>baseline.signalBarTimeMs &&
+                    alt.protectivePrice>0 && alt.triggerPrice.isFinite() &&
+                    (if(side=="LONG") alt.triggerPrice>currentMark &&
+                        alt.triggerPrice<baseline.triggerPrice && alt.protectivePrice<alt.triggerPrice
+                     else alt.triggerPrice<currentMark &&
+                        alt.triggerPrice>baseline.triggerPrice && alt.protectivePrice>alt.triggerPrice)
+            }.maxByOrNull { it.signalBarTimeMs }
+        } else null
+        val signal = nearestFractal ?: baseline
+        if(nearestFractal!=null) runCatching { auditStore.recordCockpitEvent(
+            "FRACTAL_REANCHOR",symbol,campaignSignalDirection(signal.type).orEmpty(),"NO_EXISTING_ORDER",
+            "old="+baseline.signalId+" @"+baseline.triggerPrice+
+                "; newest confirmed WM3="+signal.signalId+" @"+signal.triggerPrice) }
         val correction = corrections[signal.signalId] ?: WilliamsCorrectionContext()
         val direction = when (campaignSignalDirection(signal.type)) {
             "LONG" -> NativeFuturesCampaignCoordinator.Direction.LONG
@@ -5881,6 +5913,21 @@ private class NativeEngine(
             }
             require(isSignalFresh(signal.signalBarTimeMs, submitNow, 5L * 60L * 60L * 1000L)) {
                 "STALE_H1_SCENARIO: signal expired before Futures submission"
+            }
+            if (reanchorLock!=null) {
+                // Re-evaluate from the exchange CLOSED H1 series after waiting
+                // for the durable Mutation Door. Cached scanner evidence is
+                // never sufficient authority to resurrect a consumed fractal.
+                val verified=editionCampaignSignals(symbol,
+                    fetchCandles(symbol,"1h",220).filter {
+                        it.t>0L && it.t+3_600_000L<=submitNow
+                    },"1h",rules.tick,williamsTc2Profile)
+                require(verified.any { it.signalId==signal.signalId &&
+                    it.type==signal.type &&
+                    kotlin.math.abs(it.triggerPrice-signal.triggerPrice)<=rules.tick*0.1 &&
+                    kotlin.math.abs(it.protectivePrice-signal.protectivePrice)<=rules.tick*0.1 }) {
+                    "FRACTAL_REANCHOR_SIGNAL_REVALIDATION_FAILED: closed H1 formation changed"
+                }
             }
             val submitM15 = fetchCandles(symbol, "15m", 120)
                 .filter { it.t > 0L && it.t + m15BarMs <= submitNow }
