@@ -16,7 +16,11 @@ internal fun buildWilliamsUnifiedEvidence(
     val scanning = scanner.optBoolean("scanning", true)
     val at = scanner.optLong("last_scan_at", 0L)
     val recent = CockpitDiagnostics.fresh(at, nowMs, 120_000L)
-    val complete = !scanning && scanner.optString("scanner_state") == "READY" && recent &&
+    // READY_BLOCKED means all ten H1 analyses finished, but execution is
+    // intentionally blocked (e.g., a confirmed Futures risk breach).
+    // It is a complete observation, NOT a ready-to-trade authorization.
+    val complete = !scanning &&
+        scanner.optString("scanner_state") in setOf("READY","READY_BLOCKED") && recent &&
         scanner.optInt("symbols_scanned", -1) == 10
     val candidates = CockpitDiagnostics.rows(scanner.optJSONArray("candidates"))
     val sourceSummary = JSONObject()
