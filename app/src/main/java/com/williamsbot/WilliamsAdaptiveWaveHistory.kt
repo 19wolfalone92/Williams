@@ -155,6 +155,8 @@ internal fun buildAdaptiveHistoricalWaveReport(
                 .put("label",s.label).put("active_label",s.activeLabel)
                 .put("direction",s.direction).put("hypothesis_status",s.status)
                 .put("known_at_ms",s.anchors.maxOf { it.knownAt })
+                .put("wave_start_ms",s.anchors.first().extremeAt)
+                .put("wave_end_ms",minOf(asOf,end))
                 .put("scale",choice.toJson()).put("w4_ao",fourth))
         }
     }
