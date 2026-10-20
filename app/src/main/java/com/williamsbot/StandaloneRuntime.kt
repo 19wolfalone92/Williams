@@ -522,6 +522,23 @@ internal fun streamNeedsReconnect(
  * account refresh is temporarily unknown. A confirmed risk breach that latches
  * PAUSE/KILL must stop scanning for entries and invoke position management.
  */
+/**
+ * Recovery may release only the pause produced by temporary UTC baseline
+ * uncertainty. An operator pause, kill, disabled runtime or outstanding
+ * exchange reconciliation remains authoritative.
+ */
+internal fun canReleaseVerifiedUtcRiskPause(
+    baselineAndPnlVerified:Boolean,
+    wasRiskAutoPaused:Boolean,
+    runtimeRunning:Boolean,
+    operatorPaused:Boolean,
+    killLatched:Boolean,
+    reconcileRequired:Boolean,
+    testnetOverrideActive:Boolean
+):Boolean = baselineAndPnlVerified && wasRiskAutoPaused &&
+    runtimeRunning && !operatorPaused && !killLatched &&
+    !reconcileRequired && !testnetOverrideActive
+
 internal fun dailyRiskBlocksScanner(
     accountFunded: Boolean,
     dailyRiskAllowed: Boolean,
@@ -4874,9 +4891,15 @@ private class NativeEngine(
         // exchange account have all passed this exact verification.
         val recoverablePause = prefs.getBoolean("risk_daily_baseline_auto_paused", false) ||
             (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true)
-        if (recoverablePause && !killLatched && !reconcileRequired &&
-            !prefs.getBoolean("operator_entries_paused", false) &&
-            !forceTestnetMode && running) {
+        if (canReleaseVerifiedUtcRiskPause(
+                baselineAndPnlVerified=true,
+                wasRiskAutoPaused=recoverablePause,
+                runtimeRunning=running,
+                operatorPaused=prefs.getBoolean("operator_entries_paused", false),
+                killLatched=killLatched,
+                reconcileRequired=reconcileRequired,
+                testnetOverrideActive=forceTestnetMode
+            )) {
             // Other gates (coordinator, pending orders, WSS, fresh market, FSM)
             // remain authoritative; removing this PAUSE is not an entry permit.
             if (prefs.edit().putBoolean("risk_daily_baseline_auto_paused", false).commit()) {
