@@ -45,7 +45,7 @@ class ScannerReadinessTest {
     @Test fun read_only_scanner_continues_when_execution_is_paused_or_reconciling() {
         assertEquals("RUNNABLE", scannerDataReadinessState(true, true, true))
         assertEquals("WAITING_FOR_HISTORY", scannerDataReadinessState(true, false, true))
-        assertEquals("WAITING_FOR_MARKET_DATA", scannerDataReadinessState(true, true, false))
+        assertEquals("RUNNABLE", scannerDataReadinessState(true, true, false))
     }
 
     @Test fun completed_scan_never_hides_execution_blockers() {
@@ -65,6 +65,37 @@ class ScannerReadinessTest {
             paused = false, reconcileRequired = false, killLatched = false,
             accountReady = true, marketDataFresh = true, coordinatorState = "OPEN_PROTECTED"
         ))
+    }
+
+    @Test fun pending_entry_is_safe_for_a_second_pair_only_when_reconciled() {
+        assertEquals(null,scannerExecutionBlocker(
+            paused=false,reconcileRequired=false,killLatched=false,
+            accountReady=true,marketDataFresh=true,coordinatorState="ENTRY_PENDING",
+            coordinatorReadyForEntry=true
+        ))
+        assertEquals("BLOCKED_FUTURES_RECONCILIATION",scannerExecutionBlocker(
+            paused=false,reconcileRequired=false,killLatched=false,
+            accountReady=true,marketDataFresh=true,coordinatorState="ENTRY_PENDING",
+            coordinatorReadyForEntry=false
+        ))
+        assertEquals("BLOCKED_FUTURES_RECONCILIATION",scannerExecutionBlocker(
+            paused=false,reconcileRequired=true,killLatched=false,
+            accountReady=true,marketDataFresh=true,coordinatorState="ENTRY_PENDING",
+            coordinatorReadyForEntry=true
+        ))
+        assertEquals("WAITING_FOR_MARKET_DATA",scannerExecutionBlocker(
+            paused=false,reconcileRequired=false,killLatched=false,
+            accountReady=true,marketDataFresh=false,coordinatorState="ENTRY_PENDING",
+            coordinatorReadyForEntry=true
+        ))
+    }
+
+    @Test fun scan_worker_does_not_refetch_every_second_but_recovers_after_30_seconds() {
+        assertEquals(true,shouldScheduleReadOnlyScan(100_000L,0L))
+        assertEquals(false,shouldScheduleReadOnlyScan(100_999L,100_000L))
+        assertEquals(false,shouldScheduleReadOnlyScan(129_999L,100_000L))
+        assertEquals(true,shouldScheduleReadOnlyScan(130_000L,100_000L))
+        assertEquals(false,shouldScheduleReadOnlyScan(99_999L,100_000L))
     }
 
     @Test fun empty_demo_wallet_does_not_suppress_read_only_scanning() {
