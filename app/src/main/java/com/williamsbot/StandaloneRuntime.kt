@@ -1321,6 +1321,11 @@ private class NativeEngine(
     // never on the scan/Execution Door thread.
     private val adaptiveWaveContextCache =
         java.util.concurrent.ConcurrentHashMap<String, Pair<Long, JSONObject>>()
+    // One rate-limited research download queue. Never occupy scanner warmup
+    // or existing-position reconciliation executors with deep child history.
+    private val adaptiveWaveFetchExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable,"williams-adaptive-child-wave").apply { isDaemon=true }
+    }
     private val adaptiveWaveFetchAttemptMs =
         java.util.concurrent.ConcurrentHashMap<String, Long>()
     @Volatile private var adaptiveWaveFetchLastError: String? = null
@@ -8170,11 +8175,12 @@ private class NativeEngine(
     private fun requestMissingAdaptiveWaveFrames(
         symbol: String, report: JSONObject, cutoff: Long
     ) {
+        if(!running) return
         val rows=report.optJSONArray("hypotheses") ?: return
         val allowed=setOf("30m","15m","5m","3m","1m")
         var queued=0
         for(i in rows.length()-1 downTo 0) {
-            if(queued>=2) break
+            if(queued>=1) break
             val evidence=rows.optJSONObject(i) ?: continue
             val scale=evidence.optJSONObject("scale") ?: continue
             if(scale.optString("status")=="BOOK_WINDOW_OBSERVED") continue
@@ -8191,7 +8197,7 @@ private class NativeEngine(
             if(last>0L && now-last<15L*60L*1000L) continue
             adaptiveWaveFetchAttemptMs[key]=now
             queued++
-            historyBackfillExecutor.execute {
+            adaptiveWaveFetchExecutor.execute {
                 runCatching {
                     val free=runCatching {
                         android.os.StatFs(context.filesDir.path).availableBytes
