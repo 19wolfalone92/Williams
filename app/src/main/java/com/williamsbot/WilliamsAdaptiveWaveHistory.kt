@@ -75,13 +75,11 @@ internal fun chooseAdaptiveWaveResolution(
         // For too few bars use equal/finer real candles. For excessive
         // counts use equal/coarser resolution where available.
         if((target<100 && ms>baseMs) || (target>140 && ms<baseMs)) continue
-        val series=consecutiveClosedWaveSuffix(history[frame].orEmpty(),frame,asOf)
-        val first=series.indexOfFirst { it.t>=startMs }
-        val last=series.indexOfLast { it.t<endMs }
-        // AO(5,34) needs real preceding candles, never zero padding.
-        if(first<34 || last<first || series[first].t>=startMs+ms ||
-            series[last].t+ms<endMs) continue
-        matches+=Candidate(frame,last-first+1)
+        val window=verifiedAdaptiveWaveWindow(
+            history[frame].orEmpty(),frame,startMs,endMs,asOf)
+        if(window.isEmpty()) continue
+        // The first 34 bars in this verified slice are AO warm-up.
+        matches+=Candidate(frame,window.size-34)
     }
     val best=matches.filter { it.count in 100..140 }
         .minWithOrNull(compareBy<Candidate> { abs(it.count-120) }
@@ -118,7 +116,11 @@ internal fun adaptiveWave4AoEvidence(
     if(!(p[2].extremeAt<p[3].extremeAt && p[3].extremeAt<p[4].extremeAt))
         return out.put("reason","INVALID_CONFIRMED_SWING_ORDER")
     val frame=resolution.frame
-    val rows=consecutiveClosedWaveSuffix(historical[frame].orEmpty(),frame,asOf)
+    val ms=williamsWaveFrames.getValue(frame)
+    val rows=verifiedAdaptiveWaveWindow(
+        historical[frame].orEmpty(),frame,p.first().extremeAt,
+        p[4].extremeAt+ms,asOf)
+    if(rows.isEmpty()) return out.put("reason","W4_REAL_CHILD_WINDOW_HAS_GAPS")
     val mids=rows.map { (it.h+it.l)/2.0 }
     val ao=rows.indices.map { i -> if(i<33) Double.NaN else
         (i-4..i).sumOf { mids[it] }/5.0 -
@@ -162,15 +164,19 @@ internal fun buildAdaptiveHistoricalWaveReport(
 ):JSONObject {
     val verified=linkedMapOf<String,List<WilliamsWaveBar>>()
     for((frame,rows) in history) if(frame in williamsWaveFrames) {
-        val closed=consecutiveClosedWaveSuffix(rows,frame,asOf)
-        if(closed.size>=40) verified[frame]=closed.takeLast(1800)
+        // Keep older targeted child windows even when the remaining recent
+        // child candles are not yet present. Each chosen window independently
+        // verifies 34 warm-up bars, continuity and actual candle closure.
+        if(rows.size>=40) verified[frame]=rows.takeLast(1800)
     }
     val scenarios=mutableListOf<WilliamsWaveScenario>()
     val records=JSONArray()
     // The execution hierarchy is unchanged. H4 is included explicitly here
     // so W3/H1 within a provisional W5/H4 can be observed next to D1 context.
     for(frame in listOf("1w","1d","12h","8h","6h","4h","2h","1h","30m","15m")) {
-        val rows=verified[frame]?:continue
+        val stored=verified[frame]?:continue
+        val rows=consecutiveClosedWaveSuffix(stored,frame,asOf)
+        if(rows.size<40) continue
         val pivots=confirmedWilliamsWaveAnchors(rows,williamsWaveFrames.getValue(frame))
         val current=williamsHypothesesFromAnchors(frame,rows,pivots)
             .filter { it.status in setOf("PROVISIONAL","ALTERNATIVE","UNRESOLVED") }
