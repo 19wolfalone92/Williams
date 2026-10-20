@@ -5936,11 +5936,14 @@ private class NativeEngine(
         val hierarchy = waveHierarchyFor(symbol)
         val corrections = freshSignals.associate { it.signalId to williamsCorrectionEntryContext(
             hierarchy,campaignSignalDirection(it.type).orEmpty(),it.signalBarTimeMs,it.type) }
-        fun contextRank(signal: CampaignSignalN): Int = maxOf(
-            directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear),
-            if (corrections[signal.signalId]?.allowed == true) 2 else 0)
-        // Only a causally contained, validated correction mode may override the
-        // project's D1/H4 trend filter. H1 remains the only signal authority.
+        // TC2 chapter 12 explicitly accepts any of WM1, WM2, WM3 as the
+        // first presenting H1 entry. Older D1/H4 blanket trend veto wrongly
+        // blocked initial H1 Super AO/fractal when a higher timeframe had not
+        // yet turned. Keep D1/H4 as context/ranking evidence, not mandatory
+        // confirmation. Final H1 proof, ownership, stop and risk gates remain.
+        fun contextRank(signal: CampaignSignalN): Int = williamsBookInitialContextRank(
+            signal.strategyProfile,signal.type,d1Bull,d1Bear,h4Bull,h4Bear,
+            corrections[signal.signalId]?.allowed == true)
         val allowedSignals = freshSignals.filter { contextRank(it)>0 }
         // A pending re-anchor must never hide a contradictory confirmed
         // hypothesis from another enabled Williams edition.
