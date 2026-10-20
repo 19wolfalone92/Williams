@@ -96,7 +96,7 @@ internal fun CockpitReadiness(status: Status) {
             r.optBoolean("position_management_ready") -> "Готово"
             else -> "Требуется сверка"
         })
-        Text(r.optString("new_entries_reason", "Ожидание первого снимка"), style = MaterialTheme.typography.bodySmall)
+        Text(russianExecutionBlocker(r.optString("new_entries_reason", "Ожидание первого снимка")), style = MaterialTheme.typography.bodySmall)
         Text(r.optString("utc_loss_reset_explanation", "Суточные ограничения уточняются по времени Binance UTC."),
             style = MaterialTheme.typography.bodySmall, color = AppColors.amber)
         if (!r.optBoolean("daily_risk_baseline_known", false)) {
@@ -208,7 +208,7 @@ internal fun CockpitAnalysis(padding: PaddingValues, status: Status, candidates:
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(symbol.removeSuffix("USDT"), Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                        Text(active?.optString("campaign_status") ?: when {
+                        Text(active?.optString("campaign_status")?.let(::russianStatus) ?: when {
                             c == null -> "Нет результата"
                             c.campaignReady -> "Проверка $direction"
                             c.signal -> "Сигнал $direction"
@@ -220,8 +220,8 @@ internal fun CockpitAnalysis(padding: PaddingValues, status: Status, candidates:
                         CockpitField("H1: семейство сигнала", c?.entrySignalType?.ifBlank { "Нет" } ?: "Не проверено")
                         CockpitField("Триггер / стоп", cockpitNumber(c?.entryTriggerPrice, 4) + " / " + cockpitNumber(c?.entryProtectivePrice, 4))
                         CockpitField("Оценка сканера", c?.let { "Риск ${cockpitNumber(it.riskPct)}% • R/R ${cockpitNumber(it.riskReward)}" } ?: "Нет данных")
-                        Text(c?.reason ?: "Нет фактического результата; направление не предполагается.", style = MaterialTheme.typography.bodySmall)
-                        Text(status.cockpitReadiness.optString("new_entries_reason"), color = AppColors.amber, style = MaterialTheme.typography.bodySmall)
+                        Text(russianExecutionBlocker(c?.reason ?: "Нет фактического результата; направление не предполагается."), style = MaterialTheme.typography.bodySmall)
+                        Text(russianExecutionBlocker(status.cockpitReadiness.optString("new_entries_reason")), color = AppColors.amber, style = MaterialTheme.typography.bodySmall)
                         TextButton(onClick = { onMarket(symbol) }) { Text("Открыть график") }
                     }
                 }
@@ -332,7 +332,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
                         val row = evidence.optJSONObject("by_source")?.optJSONObject(id)
                         CockpitField(title,
                             "Σ${row?.optInt("total") ?: 0} · вход ${row?.optInt("entry") ?: 0}" +
-                            " · LONG ${row?.optInt("long") ?: 0}/SHORT ${row?.optInt("short") ?: 0}")
+                            " · покупка LONG ${row?.optInt("long") ?: 0}/продажа SHORT ${row?.optInt("short") ?: 0}")
                     }
                     Text("Встречных сигналов до фильтра D1/H4: " +
                         evidence.optInt("pre_context_opposing_symbol_count") + " пар.",
@@ -371,7 +371,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
             Card(Modifier.fillMaxWidth().clickable { expanded = !expanded }, colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(check.optString("id").ifBlank { check.optString("domain") } + " • " + russianStatus(severity), color = color, style = MaterialTheme.typography.labelSmall)
-                    Text(check.optString("name"), style = MaterialTheme.typography.bodyMedium)
+                    Text(russianExecutionBlocker(check.optString("name")), style = MaterialTheme.typography.bodyMedium)
                     if (expanded || severity == "FAIL" || severity == "WARNING") Text(russianExecutionBlocker(check.optString("detail")), style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
                 }
             }
