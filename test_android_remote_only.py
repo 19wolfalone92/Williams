@@ -45,7 +45,7 @@ def test_android_boot_recovery_is_opt_in_and_keeps_reconciliation_gate():
 def test_android_exposes_battery_policy_diagnostic():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     assert "isIgnoringBatteryOptimizations" in main
-    assert "Doze exemption" in main
+    assert "Разрешение на работу в режиме сна" in main
     assert "isLowPowerStandbyEnabled" in main
     assert "isExemptFromLowPowerStandby" in main
     assert "ACTION_APPLICATION_DETAILS_SETTINGS" in main
@@ -535,7 +535,12 @@ def test_android_configurable_entry_policy_blocks_new_exposure_and_cancels_resti
     manager = runtime.split("private fun scheduleNativePositionManagement()", 1)[1].split(
         "private fun performCampaignScan()", 1
     )[0]
-    assert "scheduleNativePositionManagement()" in scan
+    # Do not start full signed reconciliation inside the 10-symbol scanner:
+    # that put the coordinator into RECONCILE_REQUIRED before its own
+    # entry admission check and blocked every scan.
+    assert "scheduleNativePositionManagement()" not in scan
+    assert "shouldScheduleIndependentFuturesMonitor(" in runtime
+    assert "scheduleNativePositionManagement()" in runtime
     assert "manageNativeFuturesPositions()" in manager
     assert "cancelPendingEntriesOutsideWilliamsSession()" in manager
 
@@ -660,7 +665,11 @@ def test_android_super_ao_uses_the_third_rising_bar_and_not_the_oldest_of_three(
     assert "streak == 3" not in wm2
     assert "val structuralStop = williamsTc2SuperAoInitialStop(" in wm2
     assert '.put("initial_stop_window",5)' in wm2
-    assert 'put("risk_stop_at_price",reflection-getDouble("risk_stop_at_price"))' in runtime
+    # SHORT context reflection was centralized to reject malformed proofs and
+    # allow only the explicitly documented legacy-empty WM3 source context.
+    assert "reflectedTc2SetupContext(signal.type, signal.setupContext, reflection)" in runtime
+    assert 'context.put("risk_stop_at_price", reflection - originalStop)' in runtime
+    assert 'check(signalType == "FRACTAL")' in runtime
 
 
 def test_android_williams_stop_entries_reject_any_intervening_trigger_cross():
@@ -798,9 +807,9 @@ def test_position_chart_only_draws_levels_from_the_selected_contract():
 def test_android_candidate_state_never_labels_short_as_confirmed_long():
     ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     assert 'candidate.entrySignalType.startsWith("SHORT_", ignoreCase = true) -> "SHORT"' in ui
-    assert '"H1 SETUP • SHORT"' in ui
-    assert '"H1 SETUP • LONG"' in ui
-    assert '"H1 SETUP • DIRECTION UNKNOWN"' in ui
+    assert '"СИГНАЛ H1 • ШОРТ"' in ui
+    assert '"СИГНАЛ H1 • ЛОНГ"' in ui
+    assert '"СИГНАЛ H1 • НАПРАВЛЕНИЕ НЕ ОПРЕДЕЛЕНО"' in ui
     assert '"CONFIRMED LONG"' not in ui
     assert '"CONFIRMED SHORT"' not in ui
     assert "candidateDirection(candidate) == \"SHORT\" -> \"SHORT\"" in ui

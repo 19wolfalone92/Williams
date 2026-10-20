@@ -28,10 +28,10 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
     fun value(obj:JSONObject,key:String)=if(obj.isNull(key) || !obj.has(key)) "нет данных" else obj.opt(key).toString()
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(7.dp)) {
-            Text("DecisionTrace · $symbol",style=MaterialTheme.typography.titleMedium)
+            Text("История решений · $symbol",style=MaterialTheme.typography.titleMedium)
             trace?.optJSONObject("runtime_preflight")?.let { check ->
                 Text("Проверка Runtime: "+time(check.optLong("observed_at_ms")),style=MaterialTheme.typography.bodySmall)
-                Text(check.optJSONObject("outcome")?.optString("blocker").orEmpty(),style=MaterialTheme.typography.bodySmall)
+                Text(russianExecutionBlocker(check.optJSONObject("outcome")?.optString("blocker").orEmpty()),style=MaterialTheme.typography.bodySmall)
             }
             val history=trace?.optJSONObject("signal_history")
             val historySignals=rows(history?.optJSONArray("signals"))
@@ -133,7 +133,7 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                 if(execution!=null) {
                     val outcome=execution.optJSONObject("outcome") ?: JSONObject()
                     Text("Последняя проверка допуска: "+time(execution.optLong("observed_at_ms")),style=MaterialTheme.typography.bodySmall)
-                    Text(outcome.optString("blocker").ifBlank { outcome.optString("state").ifBlank { "Результат сохранён в диагностике" } },style=MaterialTheme.typography.bodySmall)
+                    Text(russianExecutionBlocker(outcome.optString("blocker").ifBlank { outcome.optString("state").ifBlank { "Результат сохранён в диагностике" } }),style=MaterialTheme.typography.bodySmall)
                 }
                 TextButton(onClick={ expanded=!expanded }) { Text(if(expanded) "Свернуть доказательства" else "Свечи, дивергенции и цепочка ордеров") }
                 if(expanded) {
@@ -142,7 +142,7 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                         Text("${time(e.optLong("observed_at_ms"))} · ${e.optString("reason_category")} · ${williamsTriggerStateLabel(e.optString("state"))}\n${e.optString("direction")} ${e.optString("family")} @ ${e.opt("trigger")} · ${e.optString("reason")}"+
                             if(e.optString("attribution")=="PAIR_GATE") "\nОграничение пары; индивидуальный допуск не выполнялся." else "",style=MaterialTheme.typography.bodySmall)
                     }
-                    Text("Alligator: Jaw=${value(indicators,"jaw")} · Teeth=${value(indicators,"teeth")} · Lips=${value(indicators,"lips")}",style=MaterialTheme.typography.bodySmall)
+                    Text("Аллигатор: челюсти=${value(indicators,"jaw")} · зубы=${value(indicators,"teeth")} · губы=${value(indicators,"lips")}",style=MaterialTheme.typography.bodySmall)
                     val context=trace.optJSONObject("admission_context")
                     if(context!=null) {
                         Text("Контекст последней проверки: "+time(context.optLong("observed_at_ms")),style=MaterialTheme.typography.bodySmall)

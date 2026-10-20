@@ -515,6 +515,10 @@ class MarketHistoryStore(context: Context) :
         val values=ContentValues().apply {
             put("status",status);put("last_error",error);put("updated_at",System.currentTimeMillis())
         }
+        val initial=ContentValues().apply {
+            put("symbol",symbol);put("model",deviceWaveReplayModel)
+        }
+        writableDatabase.insertWithOnConflict("wave_replay_state",null,initial,SQLiteDatabase.CONFLICT_IGNORE)
         writableDatabase.update("wave_replay_state",values,"symbol=? AND dirty_from_ms=0",arrayOf(symbol))
     }
 

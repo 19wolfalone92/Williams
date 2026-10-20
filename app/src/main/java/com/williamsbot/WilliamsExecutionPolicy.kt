@@ -40,8 +40,11 @@ internal fun williamsClosedH1HistoryBlocker(bars:List<WilliamsWaveBar>,now:Long)
  * not a claim that every edition of Williams bans discretionary exits.
  * NTD/Course continue their independently pinned exit systems.
  */
+internal fun williamsStrategyCanMarketClose(ownerProfile:String):Boolean =
+    ownerProfile==williamsNtdProfile || ownerProfile==williamsCourseProfile
+
 internal fun williamsOpposingSignalCanMarketClose(ownerProfile:String):Boolean =
-    ownerProfile in williamsSourceProfiles && ownerProfile!=williamsTc2Profile
+    williamsStrategyCanMarketClose(ownerProfile)
 
 
 /** TC2 ch10/12: WM2 and WM3 may add on the H1 signal *before* daily/H4

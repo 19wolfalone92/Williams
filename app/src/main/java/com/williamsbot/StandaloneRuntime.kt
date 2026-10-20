@@ -428,6 +428,28 @@ internal fun shouldRetryDailyRiskBaseline(
  * kill switch, or unresolved exchange position must not stop H1 diagnostics;
  * the independent Execution Gate still blocks every new order mutation.
  */
+/**
+ * A live runtime with verified history and a failed H1 scan is a functional
+ * failure, not a yellow warning. An incomplete startup is still a warning.
+ */
+internal fun scannerFailureSeverity(
+    running: Boolean, historyReady: Boolean,
+    scanning: Boolean, scannerState: String
+): String = if (running && historyReady && !scanning && scannerState == "FAILED") {
+    "FAIL"
+} else {
+    "WARN"
+}
+
+/** Source location is necessary to distinguish failed H1 fetch from TC2 rule bugs. */
+internal fun h1ScannerExceptionDetail(stage: String, failure: Throwable): String {
+    val root = generateSequence(failure) { it.cause }.last()
+    val source = root.stackTrace.firstOrNull { it.className.startsWith("com.williamsbot.") }
+    val at = source?.let { "${it.fileName}:${it.lineNumber}" } ?: "SOURCE_NOT_CAPTURED"
+    val detail = safeDiagnosticText(root.message.orEmpty()).take(220)
+    return "$stage: ${root.javaClass.simpleName} @ $at: $detail"
+}
+
 internal fun scannerDataReadinessState(
     running: Boolean,
     historyReady: Boolean,
@@ -444,6 +466,35 @@ internal fun scannerDataReadinessState(
  * H1 REST scan must not be repeated every single second. Market WebSockets
  * and stop/position reconciliation remain independently scheduled.
  */
+/**
+ * Periodic signed Futures reconciliation must not be started by an H1 scan.
+ * On a verified flat account, the private user stream handles exchange events,
+ * with a 45-second independent REST fallback. Open exposure is monitored
+ * frequently. A running scan or another reconciliation wins the I/O slot.
+ */
+internal fun shouldScheduleIndependentFuturesMonitor(
+    nowMs: Long,
+    lastSuccessfulMs: Long,
+    lastAttemptMs: Long,
+    coordinatorState: String,
+    scanning: Boolean,
+    reconciliationActive: Boolean,
+    safetyLatchUnresolved: Boolean = false
+): Boolean {
+    if (nowMs <= 0L || scanning || reconciliationActive) return false
+    val interval = if (safetyLatchUnresolved) 2_500L else when (coordinatorState) {
+        "READY" -> 45_000L
+        "OPEN_PROTECTED" -> 3_000L
+        "ENTRY_PENDING" -> 2_500L
+        "EXIT_PENDING" -> 1_500L
+        else -> 5_000L
+    }
+    if (lastAttemptMs > 0L && nowMs >= lastAttemptMs &&
+        nowMs - lastAttemptMs < maxOf(2_000L, interval)) return false
+    return lastSuccessfulMs <= 0L || nowMs < lastSuccessfulMs ||
+        nowMs - lastSuccessfulMs >= interval
+}
+
 internal fun shouldScheduleReadOnlyScan(nowMs:Long,lastCompletedMs:Long,minimumMs:Long=30_000L):Boolean =
     nowMs>0 && minimumMs>0 &&
         (lastCompletedMs==0L ||
@@ -522,6 +573,34 @@ internal fun streamNeedsReconnect(
  * account refresh is temporarily unknown. A confirmed risk breach that latches
  * PAUSE/KILL must stop scanning for entries and invoke position management.
  */
+/**
+ * Recovery may release only the pause produced by temporary UTC baseline
+ * uncertainty. An operator pause, kill, disabled runtime or outstanding
+ * exchange reconciliation remains authoritative.
+ */
+/**
+ * An expired conditional H1 entry does not become immortal just because
+ * Binance reports TRIGGERING/TRIGGERED. Request a cancel but never assume
+ * terminal state until exact exchange order and position proof are reconciled.
+ */
+internal fun expiredTriggeringEntryNeedsExchangeCancel(
+    expired:Boolean, orderStatus:String, accountPositionKnownFlat:Boolean,
+    explicitOperatorOrder:Boolean
+):Boolean = expired && accountPositionKnownFlat && !explicitOperatorOrder &&
+    orderStatus.uppercase(Locale.US) in setOf("TRIGGERING","TRIGGERED")
+
+internal fun canReleaseVerifiedUtcRiskPause(
+    baselineAndPnlVerified:Boolean,
+    wasRiskAutoPaused:Boolean,
+    runtimeRunning:Boolean,
+    operatorPaused:Boolean,
+    killLatched:Boolean,
+    reconcileRequired:Boolean,
+    testnetOverrideActive:Boolean
+):Boolean = baselineAndPnlVerified && wasRiskAutoPaused &&
+    runtimeRunning && !operatorPaused && !killLatched &&
+    !reconcileRequired && !testnetOverrideActive
+
 internal fun dailyRiskBlocksScanner(
     accountFunded: Boolean,
     dailyRiskAllowed: Boolean,
@@ -901,6 +980,40 @@ private data class TradeFlowSample(
     val quoteVolume: Double,
     val aggressiveBuy: Boolean
 )
+
+/**
+ * SHORT TC2 signals mirror LONG geometry. Older WM3 signals contain an
+ * empty setup context; blindly calling JSONObject("") crashed ALL ten H1
+ * scanner workers whenever a confirmed SHORT fractal was discovered.
+ *
+ * A documented legacy WM3 omission may be represented explicitly, whereas
+ * absent WM1/WM2 evidence or malformed nonempty JSON must remain fail-closed.
+ */
+internal fun reflectedTc2SetupContext(
+    signalType: String,
+    originalContext: String,
+    reflection: Double
+): String {
+    require(reflection.isFinite() && reflection > 0.0) { "TC2_SHORT_REFLECTION_INVALID" }
+    val context = if (originalContext.isBlank()) {
+        check(signalType == "FRACTAL") { "TC2_SOURCE_CONTEXT_MISSING:$signalType" }
+        JSONObject().put("wise_man", "WM3")
+            .put("legacy_source_context_missing", true)
+    } else {
+        JSONObject(originalContext)
+    }
+    context.optJSONObject("angulation")?.let { proof ->
+        for (key in listOf("price_slope", "jaw_slope", "teeth_slope")) {
+            if (!proof.isNull(key) && proof.has(key)) proof.put(key, -proof.getDouble(key))
+        }
+    }
+    if (context.has("risk_stop_at_price") && !context.isNull("risk_stop_at_price")) {
+        val originalStop = context.getDouble("risk_stop_at_price")
+        require(originalStop.isFinite()) { "TC2_SHORT_CONTEXT_STOP_INVALID" }
+        context.put("risk_stop_at_price", reflection - originalStop)
+    }
+    return context.toString()
+}
 
 private data class CampaignSignalN(
     val signalId: String,
@@ -1454,7 +1567,11 @@ private class NativeEngine(
     @Volatile private var workerRecoveryAttemptsInWindow = 0
 
     @Volatile private var scannerState = "NOT_RUN"
+    // Re-evaluate confirmed H1 candidates immediately after a coincident
+    // exchange reconciliation, without waiting for another 30-second scan.
+    @Volatile private var scanRetryAfterReconciliation = false
     @Volatile private var scannerError: String? = null
+    @Volatile private var lastScannerSymbolErrors = JSONObject()
     @Volatile private var scanRunId = ""
     @Volatile private var scanStartedAt = 0L
     @Volatile private var scanLastProgressAt = 0L
@@ -2279,6 +2396,7 @@ private class NativeEngine(
         scannerState = "WAITING_FOR_HISTORY"
         scannerError = null
         scanRunId = ""
+        scanRetryAfterReconciliation = false
         scanProgressSymbols = 0
         warmCoreHistoryAsync(generation)
 
@@ -2311,31 +2429,6 @@ private class NativeEngine(
                             scheduleDailyRiskBaselinePreflight()
                         }
 
-                        // Keep managing existing exposure while entry prerequisites are
-                        // degraded. manageNativeFuturesPositions reconciles with the exchange;
-                        // it does not weaken the new-entry Execution Gate.
-                        val campaignState = futuresCampaignCoordinator.state
-                        val campaignNeedsMonitoring = campaignState in setOf(
-                            NativeFuturesCampaignCoordinator.State.ENTRY_PENDING,
-                            NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED,
-                            NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
-                            NativeFuturesCampaignCoordinator.State.EXIT_PENDING,
-                            NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED
-                        )
-                        val prerequisitesDegraded =
-                            !historyReady || reconcileRequired || !restAccountReady ||
-                                !marketDataFresh() || !marketWebSocketFresh() ||
-                                !publicWebSocketFresh() || !userStreamConnected ||
-                                userStreamSyncRequired
-                        if (campaignNeedsMonitoring && (prerequisitesDegraded || killLatched || paused)) {
-                            // Do not run a second account-wide reconciliation on the scanner
-                            // worker. Route every monitor request through the single-flight
-                            // scheduler; overlapping REST reconciliation used to leave the
-                            // coordinator observable in RECONCILE_REQUIRED/in-progress and
-                            // starve scans while another reconcile held the Execution Door.
-                            scheduleNativePositionManagement()
-                        }
-
                         if (!historyReady && !historyWarmupRunning &&
                             System.currentTimeMillis()-historyWarmupLastStartedMs >= historyWarmupRetryIntervalMs) {
                             warmCoreHistoryAsync(generation)
@@ -2351,6 +2444,21 @@ private class NativeEngine(
                             scannerState = "WAITING_FOR_HISTORY"
                             scannerError = historyLastError ?: "Waiting for the first closed H1 working set"
                         }
+                        // Never initiate account-wide reconciliation INSIDE an H1 scan:
+                        // the old scanner raced its own signed safety audit and finished
+                        // READY_BLOCKED on every pass. Manage exposure independently,
+                        // after read-only discovery gets priority. User-stream event
+                        // reconciliation remains independent and immediate.
+                        if (!nativeManagementRunning &&
+                            shouldScheduleIndependentFuturesMonitor(
+                                nowMs = System.currentTimeMillis(),
+                                lastSuccessfulMs = lastRestReconcileMs,
+                                lastAttemptMs = lastNativeManagementAttemptMs,
+                                coordinatorState = futuresCampaignCoordinator.state.name,
+                                scanning = scanning,
+                                reconciliationActive = futuresReconciliationRunning || futuresStreamReconcileRunning,
+                                safetyLatchUnresolved = reconcileRequired
+                            )) scheduleNativePositionManagement()
                     } catch (x: Exception) {
                         lastError = x.javaClass.simpleName + ": " + (x.message ?: "")
                     }
@@ -4296,7 +4404,12 @@ private class NativeEngine(
         }
 
         synchronized(this) {
-            if (scanning || !shouldScheduleReadOnlyScan(System.currentTimeMillis(),lastScanAt)) return
+            val retryAfterVerifiedReconciliation = scanRetryAfterReconciliation &&
+                !futuresReconciliationRunning &&
+                futuresCampaignCoordinator.state != NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED
+            if (scanning || (!retryAfterVerifiedReconciliation &&
+                !shouldScheduleReadOnlyScan(System.currentTimeMillis(),lastScanAt))) return
+            scanRetryAfterReconciliation = false
             scanning = true
             scannerError = null
             scanRunId = "scan-" + System.currentTimeMillis()
@@ -4504,14 +4617,30 @@ private class NativeEngine(
         // Bound lock acquisition so a stalled account-wide reconciliation cannot strand
         // queued private-stream work indefinitely. Unknown exchange state remains blocked.
         val waitStartedAtMs = System.currentTimeMillis()
+        // Periodic management is a best-effort maintenance tick. If another
+        // authoritative reconciliation already owns the account lock, coalesce
+        // the tick rather than queue for 50s and falsely persist a fatal latch.
+        // Kill, startup, user-stream, and explicit recovery remain strict.
+        val maintenanceTick = purpose == "POSITION_MANAGEMENT_RECONCILIATION"
         val lockAcquired = try {
-            futuresReconciliationLock.tryLock(waitForDoorMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+            futuresReconciliationLock.tryLock(
+                if (maintenanceTick) 0L else waitForDoorMs.coerceAtLeast(0L),
+                TimeUnit.MILLISECONDS
+            )
         } catch (interrupted: InterruptedException) {
             Thread.currentThread().interrupt()
             lastReconciliationLockWaitFailure = "Interrupted while waiting for the account-wide reconciliation lock"
             false
         }
         lastReconciliationLockWaitMs = (System.currentTimeMillis() - waitStartedAtMs).coerceAtLeast(0L)
+        if (!lockAcquired && maintenanceTick &&
+            !Thread.currentThread().isInterrupted && futuresReconciliationRunning) {
+            // The owner continues to hold the Execution Door. No new entry is
+            // enabled here; the periodic monitor rechecks on the next tick.
+            return JSONObject().put("ok", false)
+                .put("deferred_to_active_reconciliation", true)
+                .put("blocker", "exchange_reconciliation_in_progress")
+        }
         if (!lockAcquired) {
             val baseReason = if (Thread.currentThread().isInterrupted) {
                 "Futures reconciliation ($purpose) was interrupted while waiting for the account-wide reconciliation lock"
@@ -4741,7 +4870,11 @@ private class NativeEngine(
             }
             val baselineResult = baselineAttempt.getOrElse { failure ->
                 paused = true
-                prefs.edit().putBoolean("auto_run", false).commit()
+                // Distinguish an automatic, recoverable daily-baseline pause
+                // from the operator's explicit pause. Never erase either risk
+                // evidence or the original 3% daily loss limit.
+                prefs.edit().putBoolean("auto_run", false)
+                    .putBoolean("risk_daily_baseline_auto_paused", true).commit()
                 lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: unable to reconstruct UTC-day equity safely: " +
                     (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 3% and entries stay blocked"
                 return false
@@ -4896,6 +5029,29 @@ private class NativeEngine(
             return false
         }
         if(lastError?.startsWith("FUTURES_DAILY_LOSS_LIMIT:")==true) lastError=null
+        // UTC midnight clears the *loss streak*, not financial drawdown or
+        // unresolved orders. A previously automatic UNKNOWN-baseline pause may
+        // be released ONLY once the current UTC baseline, daily PnL and
+        // exchange account have all passed this exact verification.
+        val recoverablePause = prefs.getBoolean("risk_daily_baseline_auto_paused", false) ||
+            (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true)
+        if (canReleaseVerifiedUtcRiskPause(
+                baselineAndPnlVerified=true,
+                wasRiskAutoPaused=recoverablePause,
+                runtimeRunning=running,
+                operatorPaused=prefs.getBoolean("operator_entries_paused", false),
+                killLatched=killLatched,
+                reconcileRequired=reconcileRequired,
+                testnetOverrideActive=forceTestnetMode
+            )) {
+            // Other gates (coordinator, pending orders, WSS, fresh market, FSM)
+            // remain authoritative; removing this PAUSE is not an entry permit.
+            if (prefs.edit().putBoolean("risk_daily_baseline_auto_paused", false).commit()) {
+                paused = false
+                if (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true)
+                    lastError = null
+            }
+        }
         return true
     }
 
@@ -5374,6 +5530,12 @@ private class NativeEngine(
             allowStopped = true,
             allowKillLatched = true
         )
+        if (reconciliation.optBoolean("deferred_to_active_reconciliation", false)) {
+            // Coalesced behind an authoritative in-flight signed reconciliation:
+            // do NOT create a false 50-second lock timeout or latch. The owner
+            // still fences all new entries until its exchange proof is complete.
+            return true
+        }
         if (!reconciliation.optBoolean("ok", false)) {
             scannerError = reconciliation.optString("blocker", "Futures reconciliation failed")
             // Fence all new entries BEFORE deciding whether a zero-fill pending
@@ -5508,6 +5670,35 @@ private class NativeEngine(
                 val row=positions.optJSONObject(index) ?: return@all false
                 val qty=row.optString("positionAmt").toDoubleOrNull()
                 qty!=null && qty.isFinite() && (row.optString("symbol")!=symbol || qty==0.0)
+            }
+            if (expiredTriggeringEntryNeedsExchangeCancel(
+                    expired=expired,
+                    orderStatus=exchangeOrderStatus(pending),
+                    accountPositionKnownFlat=exchangeRowsValid,
+                    explicitOperatorOrder=pending.optString("signal_type")=="OPERATOR_FORCED_DIRECTION"
+                )) {
+                // Earlier book/M15 branches did 'continue' on TRIGGERING,
+                // leaving day-old expired orders blocking every new entry.
+                // This is an informed exchange cancellation attempt, never a
+                // local pretend reset of entry/fill or of the UTC risk baseline.
+                val result=withCampaignMutation(
+                    symbol,"EXPIRED_H1_TRIGGERING_CANCEL_RECONCILE",
+                    allowPaused=true
+                ) {
+                    try {
+                        futuresCampaignCoordinator.cancelPendingEntries(
+                            "H1_SIGNAL_EXPIRED",symbol)
+                    } finally {
+                        reconcileRequired=true
+                        check(persistSafetyFlag("reconcile_required",true)) {
+                            "EXPIRED_H1_TRIGGERING_CANCEL_RECONCILIATION_FENCE_FAILED"
+                        }
+                    }
+                }
+                if (!result.optBoolean("ok",false))
+                    lastError="EXPIRED_H1_TRIGGERING_CANCEL_NOT_CONFIRMED: "+
+                        symbol+": "+result.optString("blocker")
+                return false // Force fresh exchange position/fill/stop reconciliation.
             }
             if(pending.optString("intent_role","ENTRY")=="ENTRY" && exchangeRowsValid &&
                 pending.optString("client_id").startsWith("W2E_") && pending.optString("signal_type")!="OPERATOR_FORCED_DIRECTION") {
@@ -5838,7 +6029,8 @@ private class NativeEngine(
             // were explicitly recorded as opposite-signal market exits.
             // Detect/log the hypothesis independently while preserving stop
             // protection and monotone trailing. Legacy NTD/Course keep their
-            // source-specific exits; correction safety boundaries remain active.
+            // source-specific exits. A TC2 correction-boundary observation
+            // also remains advisory: structural protection owns its exit.
             val opposing = if(profile==williamsTc2Profile) {
                 runCatching { triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile) }
                     .onFailure { lastError="TC2_OPPOSITION_ADVISORY_UNAVAILABLE: $symbol: "+
@@ -5854,8 +6046,17 @@ private class NativeEngine(
                     .put("tc2_opposing_signal_advisory",advisory)
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
             }
+            if(profile==williamsTc2Profile && boundaryExit) {
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                    .put("tc2_correction_boundary_advisory",JSONObject()
+                        .put("policy","TC2_PROTECTIVE_STOP_ONLY")
+                        .put("observed_at_ms",futuresMarketData.exchangeNowMs())
+                        .put("mark_price",mark).put("market_close_authorized",false))
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+            }
             val actionableOpposing = opposing?.takeIf { williamsOpposingSignalCanMarketClose(profile) }
-            if (actionableOpposing != null || boundaryExit || editionExit.isNotEmpty()) {
+            if (williamsStrategyCanMarketClose(profile) &&
+                (actionableOpposing != null || boundaryExit || editionExit.isNotEmpty())) {
                 val correction = if (actionableOpposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
                     if (dir == "LONG") "SHORT" else "LONG",actionableOpposing.signalBarTimeMs,actionableOpposing.type) else WilliamsCorrectionContext()
                 val exitReason = if(editionExit.isNotEmpty()) editionExit else if (boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
@@ -6536,11 +6737,9 @@ private class NativeEngine(
             return
         }
 
-        // Market discovery must not be serialized behind account income, position
-        // management, or entry-risk checks. Those checks still run immediately before
-        // every order mutation through Execution Door; scanning remains read-only.
-        scheduleNativePositionManagement()
-
+        // Read-only H1 discovery NEVER starts a signed account-wide reconciliation.
+        // Scheduling management here put the coordinator into RECONCILE_REQUIRED
+        // during every scan and suppressed all ten otherwise-valid TC2 entries.
         val universe = loadUniverse()
         scanSymbols = universe.first.toMutableList()
         val volumes = universe.second
@@ -6548,19 +6747,22 @@ private class NativeEngine(
         val coarseMetadataMissing=coreSymbols.filter { symbol ->
             (volumes[symbol] ?: 0.0)<=0.0 || spreads[symbol]==null
         }
+        val symbolErrors = java.util.concurrent.ConcurrentHashMap<String, String>()
         val futures = scanSymbols.map { symbol ->
             scanExecutor.submit(Callable {
+                var stage = "FETCH_H1_CLOSED_CANDLES"
                 try {
                     // The validated H1 startup history has 150 closed bars.
                     // Do not trigger extra REST traffic just to demand 180.
                     val candles = fetchCandles(symbol, "1h", 150)
                     if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
+                    stage = "ANALYSE_TC2_NTD_COURSE_H1"
                     val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
                     markScanProgress()
                     result
                 } catch (x: Exception) {
                     markScanProgress()
-                    scannerError = symbol + ": " + (x.message ?: x.javaClass.simpleName)
+                    symbolErrors[symbol] = h1ScannerExceptionDetail(stage, x)
                     null
                 }
             })
@@ -6592,6 +6794,9 @@ private class NativeEngine(
                 .take(20).forEach { put(toJson(it)) }
         }
         lastSymbolsScanned = ranked.size
+        lastScannerSymbolErrors = JSONObject().apply {
+            symbolErrors.toSortedMap().forEach { (symbol,reason) -> put(symbol,reason) }
+        }
         lastScanAt = System.currentTimeMillis()
         scanRunId = "futures-" + lastScanAt
         runCatching { PositionsWidgetProvider.refresh(context) }
@@ -6617,6 +6822,13 @@ private class NativeEngine(
             coordinatorReadyForEntry = campaignCoordinatorReadyForEntry()
         )
         val missing = coreSymbols - ranked.map { it.symbol }.toSet()
+        // A valid read-only scan can overlap an unrelated Binance recovery
+        // and be temporarily blocked by the coordinator's in-flight marker.
+        // Preserve the entry fence, but recheck promptly after it finishes.
+        if (completeScan && executionBlocker == "BLOCKED_FUTURES_RECONCILIATION" &&
+            futuresReconciliationRunning && !reconcileRequired) {
+            scanRetryAfterReconciliation = true
+        }
         scannerState = when {
             !completeScan && ranked.isEmpty() -> "FAILED"
             !completeScan && executionBlocker != null -> "PARTIAL_BLOCKED"
@@ -6625,6 +6837,13 @@ private class NativeEngine(
             else -> "READY"
         }
         scannerError = when {
+            !completeScan && symbolErrors.isNotEmpty() ->
+                "Не удалось завершить H1-анализ: " + symbolErrors.entries
+                    .sortedBy { it.key }.take(3)
+                    .joinToString("; ") { it.key + ": " + it.value } +
+                    (if (symbolErrors.size>3) "; и ещё " + (symbolErrors.size-3) + " пар" else "")
+            !completeScan && ranked.isEmpty() ->
+                "Сканер не завершил анализ ни одной пары: " + missing.joinToString(",")
             executionBlocker != null -> {
                 when (executionBlocker) {
                     "BLOCKED_KILL" -> "Kill switch is latched; read-only market scan completed, new entries remain disabled"
@@ -7808,6 +8027,12 @@ private class NativeEngine(
                 triggerPrice=fractal.trigger,protectivePrice=fractal.protective,
                 teethAtDetection=fractal.currentTeeth,invalidationPrice=fractal.protective,
                 reason="WM3 eligible confirmed fractal outside Teeth; waiting for actual trigger",
+                setupContext=JSONObject()
+                    .put("wise_man","WM3")
+                    .put("signal_family","CONFIRMED_FRACTAL")
+                    .put("fractal_center_time_ms",candles[fractal.center].t)
+                    .put("fractal_confirmation_time_ms",candles[fractal.confirmation].t)
+                    .put("teeth_filter_verified",true).toString(),
                 formationAtMs=candles[fractal.center].t)
         }
 
@@ -7861,19 +8086,7 @@ private class NativeEngine(
                 triggerPrice = trigger,
                 protectivePrice = stop,
                 teethAtDetection = reflection-signal.teethAtDetection,
-                setupContext = JSONObject(signal.setupContext).apply {
-                    optJSONObject("angulation")?.let { proof ->
-                        for(key in listOf("price_slope","jaw_slope","teeth_slope"))
-                            if(!proof.isNull(key) && proof.has(key)) proof.put(key,-proof.getDouble(key))
-                    }
-                    // WM2 is detected on price-reflected candles for SHORT.
-                    // Translate its recorded protective stop back, too:
-                    // otherwise diagnostic provenance contradicts the real
-                    // Binance Futures plan even when the order itself is right.
-                    if(has("risk_stop_at_price") && !isNull("risk_stop_at_price")) {
-                        put("risk_stop_at_price",reflection-getDouble("risk_stop_at_price"))
-                    }
-                }.toString(),
+                setupContext = reflectedTc2SetupContext(signal.type, signal.setupContext, reflection),
                 invalidationPrice = stop,
                 reason = signal.reason.replace("bullish","bearish").replace("above signal-bar high","below signal-bar low")
                     .replace("rising AO","falling AO").replace("above price bar","below price bar")
@@ -8282,6 +8495,10 @@ private class NativeEngine(
         fun active()=running && generation==runtimeGeneration && !Thread.currentThread().isInterrupted
         deviceWaveReplayTask=deviceWaveReplayExecutor.scheduleWithFixedDelay({
             if(!active()) return@scheduleWithFixedDelay
+            if(nativeManagementRunning || futuresReconciliationRunning || futuresStreamReconcileRunning) {
+                deviceWaveReplayState="WAITING_RUNTIME_PRIORITY"
+                return@scheduleWithFixedDelay
+            }
             val symbol=coreSymbols[deviceWaveReplayNextPair]
             deviceWaveReplayNextPair=(deviceWaveReplayNextPair+1)%coreSymbols.size
             runCatching {
@@ -8307,6 +8524,10 @@ private class NativeEngine(
                 val started=System.nanoTime()
                 for(asOf in closes) {
                     if(!active() || System.nanoTime()-started>350_000_000L) break
+                    if(nativeManagementRunning || futuresReconciliationRunning || futuresStreamReconcileRunning) {
+                        deviceWaveReplayState="WAITING_RUNTIME_PRIORITY"
+                        break
+                    }
                     val revision=historyStore.waveSourceRevision(symbol)
                     val history=linkedMapOf<String,List<WilliamsWaveBar>>()
                     for(frame in williamsWaveFrames.keys) {
@@ -9188,6 +9409,7 @@ private class NativeEngine(
             .put("scanning", scanning)
             .put("scanner_state", scannerState)
             .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("scanner_symbol_errors",lastScannerSymbolErrors)
             .put("market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
             .put("h1_scanner_history_ready",readOnlyH1Ready)
             .put("h1_ready_symbol_count",h1HistoryReadyCount)
@@ -9494,6 +9716,7 @@ private class NativeEngine(
             .put("scanner_scanning", scanning)
             .put("scanner_state", scannerState)
             .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("scanner_symbol_errors", lastScannerSymbolErrors)
             .put("scanner_market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
             .put("scanner_run_id", scanRunId)
             .put("scanner_symbols", lastSymbolsScanned)
@@ -9945,7 +10168,8 @@ private class NativeEngine(
             scanProgressSymbols in 0..coreSymbols.size &&
             (scannerProgressAgeMs <= 60_000L || (scanProgressSymbols == 0 && scannerStartupGrace))
         test(
-            "scanner_state", "scanner", scannerComplete || scannerActivelyProgressing, "WARN",
+            "scanner_state", "scanner", scannerComplete || scannerActivelyProgressing,
+            scannerFailureSeverity(running, historyReady, scanning, scannerState),
             "state=" + scannerState + "; complete=" + scannerComplete +
                 "; universe_matches=" + scannerUniverseMatches + "; run_id=" + scanRunId +
                 "; progress=" + scanProgressSymbols + "/" + scanSymbols.size +
