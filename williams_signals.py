@@ -213,7 +213,7 @@ def _latest_confirmed_fractal(
     ind: pd.DataFrame,
     *,
     side: str,
-    max_age_bars: int = 80,
+    max_age_bars: int | None = None,
     current_teeth: float | None = None,
     current_close: float | None = None,
     tick_size: float = 0.0,
@@ -236,7 +236,7 @@ def _latest_confirmed_fractal(
     if level_col not in ind.columns or fractal_col not in ind.columns:
         return None
 
-    start = max(0, len(ind) - max(3, int(max_age_bars)))
+    start = 0 if max_age_bars is None else max(0, len(ind) - max(3, int(max_age_bars)))
     tick = max(float(tick_size), 0.0)
     center_col = "confirmed_up_center_index" if direction == "LONG" else "confirmed_down_center_index"
     group_start_col = "confirmed_up_group_start_index" if direction == "LONG" else "confirmed_down_group_start_index"
@@ -976,7 +976,9 @@ def extract_long_signal_specs(
                     context_versions=versions,
                     reason="WM3 buy fractal; trigger only while price/trigger remains above Teeth",
                     source_candle_index=center_i,
-                    expires_at_ms=_expiry(confirmation_time, timeframe, 80),
+                    expires_at_ms=0,  # TC2 ch11 PDF149: trigger or valid replacement, no age expiry.
+                    setup_context={"validity_policy":"UNBROKEN_UNSUPERSEDED_FRACTAL",
+                        "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe)},
                 )
             )
 
@@ -1142,7 +1144,9 @@ def extract_short_signal_specs(
                     context_versions=versions,
                     reason="WM3 sell fractal; trigger only while price/trigger remains below Teeth",
                     source_candle_index=center_i,
-                    expires_at_ms=_expiry(confirmation_time, timeframe, 80),
+                    expires_at_ms=0,  # TC2 ch11 PDF149: trigger or valid replacement, no age expiry.
+                    setup_context={"validity_policy":"UNBROKEN_UNSUPERSEDED_FRACTAL",
+                        "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe)},
                 )
             )
 

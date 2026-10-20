@@ -1127,7 +1127,7 @@ internal class NativeFuturesCampaignCoordinator(
                     val ageExpired = intent.optLong("signal_expires_at_ms",0L).let { it>0 && clock()>=it }
                     // Cancel a partially executed remainder, an expired formation, or
                     // any orphan addition before a completed campaign can be retired.
-                    if (executed.signum()>0 || !parentIsOpen || ageExpired) {
+                    if (executed.signum()>0 || !parentIsOpen || ageExpired || williamsNewExposureBlocker(intent.optString("strategy_profile",williamsTc2Profile))!=null) {
                         if (conditional != null && conditionalStatus !in ENTRY_ORDER_TERMINAL_STATUSES) {
                             intent.put("order_status","CANCEL_SUBMISSION_UNKNOWN"); saveIntents(persisted)
                             adapter.cancelAlgoOrder(symbol,clientId)
@@ -2427,7 +2427,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("signal_type", plan.signalType).put("signal_id",plan.signalId)
             .put("entry_time_policy",entryTimePolicyProvider().toJson())
             .put("signal_bar_time_ms", plan.signalBarTimeMs)
-            .put("signal_expires_at_ms", if (plan.signalBarTimeMs>0) plan.signalBarTimeMs+18_000_000L else 0L)
+            .put("signal_expires_at_ms", if (plan.signalBarTimeMs>0) williamsH1SignalExpiry(plan.signalBarTimeMs,plan.signalType,plan.strategyProfile) else 0L)
             .put("signal_reason", safeDiagnosticText(plan.signalReason))
             .put("trade_mode", plan.tradeMode)
             .put("wave_context_at_entry", plan.waveContext)
@@ -3341,6 +3341,7 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     private fun validatePlan(plan: EntryPlan) {
+        require(williamsNewExposureBlocker(plan.strategyProfile)==null) { "WILLIAMS_SOURCE_OBSERVATION_ONLY" }
         require(plan.symbol.uppercase(Locale.US) in allowedSymbols) {
             "Symbol is outside the approved Futures universe"
         }

@@ -12,7 +12,7 @@ internal fun buildWilliamsDecisionTrace(symbol:String,profile:String,input:List<
     if(bars.size<45 || !validWilliamsEditionBars(bars) || !contiguous) reasons+="CLOSED_H1_HISTORY_NOT_PROVEN"
     if(bars.isEmpty() || now-(bars.lastOrNull()?.t ?: 0L)>7_200_000L) reasons+="H1_SNAPSHOT_STALE"
     val rows=(0 until signals.length()).mapNotNull { signals.optJSONObject(it) }
-    val entries=rows.filter { it.optString("role")=="ENTRY" }
+    val entries=rows.filter { it.optString("role")=="ENTRY" && (profile==williamsUnifiedProfile || it.optString("strategy_profile")==profile) }
     val latest=entries.maxOfOrNull { it.optLong("signal_bar_time_ms") }
     if(profile==williamsUnifiedProfile && entries.filter { it.optLong("signal_bar_time_ms")==latest }
         .map { it.optString("direction") }.distinct().size>1) reasons+="OPPOSING_ENTRIES_BEFORE_CONTEXT"
@@ -45,12 +45,14 @@ internal fun buildWilliamsDecisionTrace(symbol:String,profile:String,input:List<
             else if(row.optString("strategy_profile")==source) listOf(JSONObject(row.toString())) else emptyList()
         }
         JSONObject().put("profile",source).put("state",if(evidence.isEmpty()) "NO_VALID_FORMATION" else "FORMATION_OBSERVED")
+            .put("execution_role",if(source==williamsExecutionProfile) "LIVE" else "OBSERVE").put("can_place_orders",false)
             .put("evidence",JSONArray(evidence))
     })
     val scenarios=hierarchy.optJSONArray("scenarios") ?: JSONArray()
     val active=(0 until scenarios.length()).mapNotNull { scenarios.optJSONObject(it) }.filter {
         it.optString("frame")=="1h" && it.optString("status")=="PROVISIONAL" }
     return JSONObject().put("schema","WILLIAMS_DECISION_TRACE_V1").put("engine","ANDROID").put("symbol",symbol)
+        .put("execution_policy",williamsExecutionPolicySnapshot())
         .put("strategy_profile",profile).put("frame","1h").put("observed_at_ms",now)
         .put("as_of_close_ms",bars.lastOrNull()?.t?.plus(3_600_000L) ?: 0L).put("closed_bar_count",bars.size)
         .put("history_contiguous",contiguous).put("indicators",indicators).put("divergences",divergences)

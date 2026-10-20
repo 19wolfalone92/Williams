@@ -905,7 +905,7 @@ def test_tc2_fractal_signal_time_is_confirmation_time_not_pivot_time():
     assert len(fractals) == 1
     assert fractals[0].source_candle_index == 4
     assert fractals[0].signal_bar_time_ms == times[6]
-    assert fractals[0].expires_at_ms == times[6] + 80 * 300_000
+    assert fractals[0].expires_at_ms == 0  # Structural validity; confirmation time remains unchanged.
 
 
 def test_ntd_external_fractal_is_initial_entry_and_requires_untriggered_breakout():

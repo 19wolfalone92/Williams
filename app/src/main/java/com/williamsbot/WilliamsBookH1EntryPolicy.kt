@@ -32,7 +32,8 @@ internal fun williamsBookH1Proof(
     .put("signal_type",signalType).put("source",source)
     .put("signal_bar_time_ms",signalAtMs)
     .put("known_at_ms",signalAtMs+WILLIAMS_H1_MS)
-    .put("expires_at_ms",signalAtMs+5*WILLIAMS_H1_MS)
+    .put("expires_at_ms",williamsH1SignalExpiry(signalAtMs,signalType,source))
+    .put("validity_policy",if(williamsStructuralFractal(signalType,source)) "UNBROKEN_UNSUPERSEDED_FRACTAL" else "PROJECT_AGE_WINDOW")
     .put("book_trigger",bookTrigger).put("book_stop",bookStop)
     .put("tick",tick)
 
@@ -61,8 +62,9 @@ internal fun williamsBookH1ProofBlocker(
         type!=signalType || type.isBlank() ||
         proofSource!=source || source !in williamsSourceProfiles ||
         start<=0 || start%WILLIAMS_H1_MS!=0L ||
-        known!=start+WILLIAMS_H1_MS || expires!=start+5*WILLIAMS_H1_MS ||
-        known>now || now>=expires ||
+        known!=start+WILLIAMS_H1_MS || expires!=williamsH1SignalExpiry(start,type,source) ||
+        proof.optString("validity_policy")!=(if(williamsStructuralFractal(type,source)) "UNBROKEN_UNSUPERSEDED_FRACTAL" else "PROJECT_AGE_WINDOW") ||
+        !williamsH1SignalTimeEligible(start,type,source,now) ||
         !tick.isFinite() || tick<=0 ||
         listOf(bookTrigger,bookStop,entry,stop).any { !it.isFinite() || it<=0 } ||
         abs(bookTrigger-entry)>tick*.11 ||
