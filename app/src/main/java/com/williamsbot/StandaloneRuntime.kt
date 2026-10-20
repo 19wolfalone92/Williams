@@ -7630,6 +7630,13 @@ private class NativeEngine(
                         for(key in listOf("price_slope","jaw_slope","teeth_slope"))
                             if(!proof.isNull(key) && proof.has(key)) proof.put(key,-proof.getDouble(key))
                     }
+                    // WM2 is detected on price-reflected candles for SHORT.
+                    // Translate its recorded protective stop back, too:
+                    // otherwise diagnostic provenance contradicts the real
+                    // Binance Futures plan even when the order itself is right.
+                    if(has("risk_stop_at_price") && !isNull("risk_stop_at_price")) {
+                        put("risk_stop_at_price",reflection-getDouble("risk_stop_at_price"))
+                    }
                 }.toString(),
                 invalidationPrice = stop,
                 reason = signal.reason.replace("bullish","bearish").replace("above signal-bar high","below signal-bar low")
