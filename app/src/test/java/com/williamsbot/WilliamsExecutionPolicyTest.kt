@@ -111,4 +111,11 @@ class WilliamsExecutionPolicyTest {
             false,false,false,false))
     }
 
+    @Test fun tc2InitialEntryDoesNotRequire45D1OrH4Bars() {
+        assertFalse(williamsInitialHigherFrameHistoryRequired(williamsTc2Profile))
+        assertTrue(williamsInitialHigherFrameHistoryRequired(williamsNtdProfile))
+        assertTrue(williamsInitialHigherFrameHistoryRequired(williamsCourseProfile))
+        assertTrue(williamsInitialHigherFrameHistoryRequired(williamsUnifiedProfile))
+    }
+
 }
