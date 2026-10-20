@@ -18,6 +18,7 @@ internal fun buildWilliamsUnifiedEvidence(
     // every correct 4.38 TC2-live scan WRONG_PROFILE.
     val coordinator = status.optJSONObject("futures_runtime")
         ?: status.optJSONObject("futures_campaign_coordinator") ?: JSONObject()
+    val ownershipSnapshotPresent=coordinator.has("pending_intent_details")
     val activeIntents = CockpitDiagnostics.rows(coordinator.optJSONArray("pending_intent_details"))
     val scanning = scanner.optBoolean("scanning", true)
     val at = scanner.optLong("last_scan_at", 0L)
@@ -59,7 +60,7 @@ internal fun buildWilliamsUnifiedEvidence(
             it.optString("campaign_status") !in setOf("CLOSED_OR_STOPPED","CLOSED") }
         if(pairOwners.size>1) errors.put("MULTIPLE_ACTIVE_CAMPAIGN_OWNERS:$symbol")
         val owner=pairOwners.singleOrNull()
-        val ownerSource=owner?.optString("strategy_profile","UNKNOWN") ?: "NONE"
+        val ownerSource=owner?.optString("strategy_profile","UNKNOWN") ?: if(ownershipSnapshotPresent) "NONE" else "UNKNOWN"
         if(owner!=null) {
             activeCampaigns++
             if(ownerSource !in williamsSourceProfiles)
@@ -123,7 +124,15 @@ internal fun buildWilliamsUnifiedEvidence(
             .put("owner_direction",owner?.optString("direction") ?: JSONObject.NULL)
             .put("owner_signal_id",owner?.optString("signal_id") ?: JSONObject.NULL)
             .put("owner_campaign_state",owner?.optString("campaign_status") ?: JSONObject.NULL)
-            .put("owner_exchange_verified",owner?.optBoolean("strategy_ownership_verified") ?: false)
+            .put("owner_strategy_binding_verified",owner?.optBoolean("strategy_ownership_verified") ?: false)
+            .put("owner_protection_status",owner?.optString("protection_status") ?: JSONObject.NULL)
+            .put("owner_last_reconciled_ms",owner?.optLong("last_reconciled_ms") ?: JSONObject.NULL)
+            .put("owner_snapshot_state",when {
+                !ownershipSnapshotPresent -> "UNAVAILABLE"
+                pairOwners.size>1 -> "MULTIPLE_NONTERMINAL_ENTRIES"
+                owner==null -> "NO_NONTERMINAL_ENTRY_INTENT"
+                else -> "PINNED_SOURCE_OBSERVED_NOT_LIVE_EXCHANGE_PROOF"
+            })
             .put("other_strategies_can_trade_this_pair",false)
             .put("live_tc2_opposing_entries_before_context",liveConflict)
             .put("observed", candidate != null)
@@ -152,8 +161,7 @@ internal fun buildWilliamsUnifiedEvidence(
         .put("mode", selected)
         .put("execution_policy",williamsExecutionPolicySnapshot())
         .put("active_campaigns_in_snapshot",activeCampaigns)
-        .put("coordinator_snapshot_present",status.has("futures_runtime") ||
-            status.has("futures_campaign_coordinator"))
+        .put("coordinator_snapshot_present",ownershipSnapshotPresent)
         .put("status", snapshot)
         .put("provenance", "CACHED_CLOSED_H1_SCANNER")
         .put("checked_at_ms", nowMs)
