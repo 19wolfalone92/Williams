@@ -1113,7 +1113,7 @@ fun WilliamsApp(context: Context) {
         val reconciliationBlocked =
             status.reconcileRequired ||
                 status.executionContractReconcileRequired ||
-                status.state == "RECONCILE_REQUIRED"
+                status.state == "ТРЕБУЕТСЯ СВЕРКА С BINANCE"
 
         // Reconciliation is a trading safety barrier, not a UI/navigation barrier.
         // The user must be able to inspect Wave Map, Positions, Incidents and Config
@@ -1202,7 +1202,7 @@ fun WilliamsApp(context: Context) {
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
                                 message =
-                                    e.message ?: "SELL error"
+                                    e.message ?: "Ошибка закрытия позиции"
                             }
                         }
                     }
@@ -1377,7 +1377,7 @@ private fun TestnetForceTradingCard(
             ) {
                 Text("Принудительная торговля", style = MaterialTheme.typography.titleMedium)
                 ModeChip(
-                    if (status.forceTestnetMode) "ARMED • DEMO" else "DEMO ONLY",
+                    if (status.forceTestnetMode) "ГОТОВ • ДЕМО" else "ТОЛЬКО ДЕМО",
                     if (status.forceTestnetMode) AppColors.amber else AppColors.primary
                 )
             }
@@ -1514,7 +1514,7 @@ private fun SystemHealthBar(status: Status) {
                 }
             )
             Spacer(Modifier.weight(1f))
-            Text("RISK BUDGET • ${status.maxOpenPositions} POS", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
+            Text("БЮДЖЕТ РИСКА • позиций: ${status.maxOpenPositions}", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -1535,7 +1535,7 @@ private fun PortfolioScreen(
     ) {
         item {
             Text(
-                "Portfolio",
+                "Портфель",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold
             )
@@ -1566,7 +1566,7 @@ private fun PortfolioCard(
             ) {
                 Text("Портфель", style = MaterialTheme.typography.titleMedium)
                 ModeChip(
-                    if (portfolio.configured) "LIVE VIEW • TESTNET" else "ОЖИДАЕТ КЛЮЧИ",
+                    if (portfolio.configured) "ДАННЫЕ BINANCE • ДЕМО" else "ОЖИДАЕТ КЛЮЧИ",
                     if (portfolio.configured) AppColors.green else AppColors.amber
                 )
             }
@@ -1576,15 +1576,15 @@ private fun PortfolioCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 MiniMetric(
-                    "EQUITY",
+                    "Капитал",
                     fmt(portfolio.totalEquityUsdt, 2)
                 )
                 MiniMetric(
-                    "FREE",
+                    "Доступно",
                     fmt(portfolio.freeEquityUsdt, 2)
                 )
                 MiniMetric(
-                    "LOCKED",
+                    "Занято",
                     fmt(portfolio.lockedEquityUsdt, 2)
                 )
             }
@@ -1594,15 +1594,15 @@ private fun PortfolioCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 MiniMetric(
-                    "REALIZED",
+                    "Результат",
                     fmt(portfolio.realizedPnlUsdt, 2)
                 )
                 MiniMetric(
-                    "OPEN PnL",
+                    "Текущий PnL",
                     fmt(portfolio.unrealizedPnlUsdt, 2)
                 )
                 MiniMetric(
-                    "RISK",
+                    "Риск",
                     fmt(status.reservedRiskPct * 100.0, 2) + "%"
                 )
             }
@@ -1666,16 +1666,16 @@ private fun DiagnosticsScreen(
         contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp)
     ) {
         item {
-            Text("Diagnostics", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text("Диагностика", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         }
-        item { DiagnosticRow("REST price", if (status.price != null) "PASS • " + fmt(status.price, 6) else "FAIL • no price") }
-        item { DiagnosticRow("USDT balance", if (status.balance != null) "PASS • " + fmt(status.balance, 4) else "WAIT • no account data") }
-        item { DiagnosticRow("History", if (status.historyReady) "PASS" else "BLOCK • " + status.scannerState) }
-        item { DiagnosticRow("Market WS", if (status.marketWsConnected) "CONNECTED" else "DEGRADED • REST fallback") }
-        item { DiagnosticRow("User WS", if (status.userWsConnected && !status.userStreamSyncRequired) "CONNECTED" else "DEGRADED • REST reconciliation") }
+        item { DiagnosticRow("Цена Binance REST", if (status.price != null) "PASS • " + fmt(status.price, 6) else "ОШИБКА • нет цены") }
+        item { DiagnosticRow("Баланс USDT", if (status.balance != null) "PASS • " + fmt(status.balance, 4) else "ОЖИДАНИЕ • нет данных счёта") }
+        item { DiagnosticRow("История свечей", if (status.historyReady) "УСПЕХ" else "BLOCK • " + status.scannerState) }
+        item { DiagnosticRow("Рыночный WebSocket", if (status.marketWsConnected) "СОЕДИНЕНО" else "DEGRADED • REST fallback") }
+        item { DiagnosticRow("Личный WebSocket", if (status.userWsConnected && !status.userStreamSyncRequired) "СОЕДИНЕНО" else "DEGRADED • REST reconciliation") }
         item {
             DiagnosticRow(
-                "Scanner",
+                "Сканер",
                 status.scannerState + " • " + status.scannerSymbols + "/" +
                     status.scannerConfiguredSymbols + " pairs • LONG " +
                     status.scannerLongCandidates + " / SHORT " +
@@ -1684,34 +1684,34 @@ private fun DiagnosticsScreen(
         }
         item {
             DiagnosticRow(
-                "Approved Futures universe",
+                "Разрешённые фьючерсные пары",
                 status.scannerUniverse.joinToString(", ").ifBlank { "not available" }
             )
         }
         item {
             DiagnosticRow(
-                "Directions",
-                "LONG ${if (status.allowLong) "ENABLED" else "BLOCKED"} • SHORT " +
-                    "${if (status.allowShort) "ENABLED" else "BLOCKED"}"
+                "Направления",
+                "LONG ${if (status.allowLong) "РАЗРЕШЕНО" else "ЗАБЛОКИРОВАНО"} • SHORT " +
+                    "${if (status.allowShort) "РАЗРЕШЕНО" else "ЗАБЛОКИРОВАНО"}"
             )
         }
         item {
             DiagnosticRow(
-                "Futures mode",
+                "Режим фьючерсов",
                 "${status.futuresLeverage}x • ${status.futuresMarginType} • ONE-WAY " +
-                    if (status.futuresForceOneWay) "REQUIRED" else "INVALID"
+                    if (status.futuresForceOneWay) "ОБЯЗАТЕЛЬНО" else "НЕПРАВИЛЬНО"
             )
         }
-        item { DiagnosticRow("Execution", if (status.p0GatePassed) "READY" else "BLOCKED • " + status.p0GateReason) }
-        status.error?.let { item { DiagnosticRow("Last error", it) } }
+        item { DiagnosticRow("Исполнение", if (status.p0GatePassed) "READY" else "BLOCKED • " + status.p0GateReason) }
+        status.error?.let { item { DiagnosticRow("Последняя ошибка", russianExecutionBlocker(it)) } }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onRun) { Text("RUN DIAGNOSTICS") }
+                Button(onClick = onRun) { Text("ЗАПУСТИТЬ ДИАГНОСТИКУ") }
                 OutlinedButton(
                     onClick = onSelfHeal,
                     enabled = !status.executionKillLatched && !status.reconcileRequired
-                ) { Text("SELF-HEAL") }
-                OutlinedButton(onClick = onExport) { Text("EXPORT SNAPSHOT") }
+                ) { Text("ВОССТАНОВИТЬ СВЯЗЬ") }
+                OutlinedButton(onClick = onExport) { Text("ЭКСПОРТ СНИМКА") }
             }
         }
         if (message.isNotBlank()) item {
@@ -1746,26 +1746,26 @@ private fun ReconcileBarrierScreen(
         Modifier.fillMaxSize().padding(padding).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Text("RECONCILE_REQUIRED", style = MaterialTheme.typography.headlineMedium, color = AppColors.red, fontWeight = FontWeight.Bold)
+        Text("ТРЕБУЕТСЯ СВЕРКА С BINANCE", style = MaterialTheme.typography.headlineMedium, color = AppColors.red, fontWeight = FontWeight.Bold)
         Text("Торговый цикл заблокирован. Android не принимает торговое решение и не снимает этот барьер локально.", color = AppColors.textMuted)
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                InfoRow("Execution State", status.state)
-                InfoRow("P0 Gate", if (status.p0GatePassed) "PASS" else status.p0GateReason)
-                InfoRow("WSS", if (status.marketWsConnected) "CONNECTED" else "OFFLINE")
-                InfoRow("Binance", if (status.binanceConfigured) "CONFIGURED" else "NOT CONFIGURED")
-                InfoRow("Positions", status.openPositions.toString() + " / " + status.maxOpenPositions)
+                InfoRow("Состояние исполнения", status.state)
+                InfoRow("Защитный шлюз P0", if (status.p0GatePassed) "УСПЕХ" else status.p0GateReason)
+                InfoRow("WSS", if (status.marketWsConnected) "СОЕДИНЕНО" else "OFFLINE")
+                InfoRow("Binance", if (status.binanceConfigured) "CONFIGURED" else "НЕ НАСТРОЕНО")
+                InfoRow("Позиции", status.openPositions.toString() + " / " + status.maxOpenPositions)
                 status.unresolvedSymbols.takeIf { it.isNotEmpty() }?.let {
-                    InfoRow("Unresolved", it.joinToString(", "))
+                    InfoRow("Не разрешено", it.joinToString(", "))
                 }
                 status.pendingEntrySymbols.takeIf { it.isNotEmpty() }?.let {
-                    InfoRow("Pending entry", it.joinToString(", "))
+                    InfoRow("Ожидающая заявка", it.joinToString(", "))
                 }
                 status.error?.takeIf { it.isNotBlank() }?.let { Text(it, color = AppColors.red) }
             }
         }
         Button(onClick = onRecover, modifier = Modifier.fillMaxWidth()) {
-            Text("RECONCILE / RECOVER")
+            Text("СВЕРИТЬ С BINANCE И ВОССТАНОВИТЬ")
         }
     }
 }
@@ -1805,7 +1805,7 @@ private fun DashboardScreen(
 
         if (status.reconcileRequired ||
             status.executionContractReconcileRequired ||
-            status.state == "RECONCILE_REQUIRED") {
+            status.state == "ТРЕБУЕТСЯ СВЕРКА С BINANCE") {
             item {
                 Card(
                     Modifier.fillMaxWidth(),
@@ -1815,13 +1815,13 @@ private fun DashboardScreen(
                         Modifier.padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("TRADING BLOCKED • RECOVER REQUIRED", color = AppColors.red, fontWeight = FontWeight.Bold)
-                        Text(status.error ?: "Exchange state is not reconciled.", color = AppColors.textMuted)
+                        Text("ТОРГОВЛЯ ЗАБЛОКИРОВАНА • НУЖНА СВЕРКА", color = AppColors.red, fontWeight = FontWeight.Bold)
+                        Text(russianExecutionBlocker(status.error) .ifBlank { "Состояние заявок и позиций Binance ещё не сверено." }, color = AppColors.textMuted)
                         OutlinedButton(
                             onClick = onRecoverDashboard,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("RECONCILE / RECOVER")
+                            Text("СВЕРИТЬ С BINANCE И ВОССТАНОВИТЬ")
                         }
                     }
                 }
@@ -1858,7 +1858,7 @@ private fun DashboardScreen(
                 )
                 MetricCard(
                     modifier = Modifier.weight(1f),
-                    title = "USDT free",
+                    title = "Доступные USDT",
                     value = fmt(status.balance, 2),
                     suffix = " USDT",
                     icon = Icons.Filled.AccountBalanceWallet,
@@ -1951,7 +1951,7 @@ private fun HeroCard(status: Status, best: Candidate?) {
                     ModeChip("TESTNET", AppColors.green)
                     Spacer(Modifier.width(8.dp))
                     ModeChip(
-                        if (status.binanceConfigured) "BINANCE OK" else "НЕТ КЛЮЧЕЙ",
+                        if (status.binanceConfigured) "BINANCE НА СВЯЗИ" else "НЕТ КЛЮЧЕЙ",
                         if (status.binanceConfigured) AppColors.green else AppColors.amber
                     )
                 }
@@ -2011,7 +2011,7 @@ private fun ScanSummaryCard(
             Spacer(Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text("Market Scanner", style = MaterialTheme.typography.titleMedium)
+                Text("Сканер рынка", style = MaterialTheme.typography.titleMedium)
                 Text(
                     when (status.scannerState) {
                         "RUNNING" -> "Сканирование рынка…"
@@ -2038,7 +2038,7 @@ private fun ScanSummaryCard(
                         "BLOCKED_DAILY_LOSS" -> "Достигнут дневной лимит потерь: новые входы запрещены"
                         "PAUSED" -> "Runtime на паузе"
                         "STOPPED" -> "Runtime остановлен; нажми START для запуска"
-                        "BLOCKED" -> "Сканирование заблокировано: " +
+                        "ЗАБЛОКИРОВАНО" -> "Сканирование заблокировано: " +
                             (status.scannerError ?: "проверка конфигурации не пройдена")
                         "ERROR", "FAILED" -> "Ошибка сканера: " +
                             (status.scannerError ?: "неизвестная ошибка")
@@ -2115,7 +2115,7 @@ private fun BestCandidateCard(best: Candidate?) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MiniMetric("RR", fmt(best.riskReward, 2))
                     MiniMetric("ATR", fmt(best.atrPct * 100.0, 2) + "%")
-                    MiniMetric("HTF", if (best.htfConfirmed) "OK" else "WAIT")
+                    MiniMetric("HTF", if (best.htfConfirmed) "OK" else "ОЖИДАНИЕ")
                     MiniMetric("W", waveText(best))
                 }
 
@@ -2254,20 +2254,20 @@ private fun ControlCard(
 
             Text(
                 if (status.running)
-                    "AUTONOMOUS ENGINE RUNNING • BUY requires market/user WSS + P0 + risk/filter checks."
+                    "АВТОНОМНЫЙ ДВИЖОК РАБОТАЕТ • новый вход разрешён только при подтверждении биржевых данных, риска и защитных условий."
                  else if (status.reconcileRequired)
-                    "TRADING BLOCKED • press RECONCILE / RECOVER."
+                    "НОВЫЕ ВХОДЫ ЗАБЛОКИРОВАНЫ • выполните сверку с Binance."
                  else if (!status.binanceConfigured)
-                    "Configure Binance Testnet API Key + Secret first."
+                    "Сначала настройте API-ключ и секрет Binance Futures Demo."
                  else
-                    "READY TO START • Williams will scan the market and make trading decisions autonomously.",
+                    "ГОТОВ К ЗАПУСКУ • Williams начнёт самостоятельно изучать рынок.",
                 style = MaterialTheme.typography.bodySmall,
                 color = AppColors.amber
             )
 
             ActionButton(
                 modifier = Modifier.fillMaxWidth(),
-                text = "KILL SWITCH — STOP + CLOSE",
+                text = "АВАРИЙНАЯ ОСТАНОВКА — ЗАПРЕТ ВХОДОВ И ЗАКРЫТИЕ",
                 icon = Icons.Filled.Warning,
                 enabled = status.running || status.openPositions > 0,
                 accent = AppColors.red,
@@ -2289,9 +2289,9 @@ private fun ConnectionHealthCard(status: Status) {
         ) {
             Text("Связь Binance", style = MaterialTheme.typography.titleMedium)
 
-            HealthRow("Market WebSocket", status.marketWsConnected)
+            HealthRow("Рыночный поток Binance", status.marketWsConnected)
             HealthRow(
-                "User Data Stream",
+                "Личный поток Binance",
                 status.userWsConnected && !status.userStreamSyncRequired
             )
             HealthRow("История готова", status.historyReady)
@@ -2314,7 +2314,7 @@ private fun HealthRow(label: String, ok: Boolean) {
     ) {
         Text(label, style = MaterialTheme.typography.bodyMedium)
         Text(
-            if (ok) "OK" else "WAIT",
+            if (ok) "OK" else "ОЖИДАНИЕ",
             color = if (ok) AppColors.green else AppColors.amber,
             fontWeight = FontWeight.SemiBold
         )
@@ -2396,7 +2396,7 @@ private fun ScannerScreen(
                             "RUNNING" -> "Сканирование выполняется • " +
                                 status.scannerProgressSymbols + "/" + status.scannerProgressTotal
                             "ERROR", "FAILED" -> "Ошибка сканера"
-                            "BLOCKED", "BLOCKED_ACCOUNT", "BLOCKED_RECONCILE",
+                            "ЗАБЛОКИРОВАНО", "BLOCKED_ACCOUNT", "BLOCKED_RECONCILE",
                             "BLOCKED_KILL", "BLOCKED_DAILY_LOSS",
                             "BLOCKED_FUTURES_RECONCILIATION" -> "Сканирование заблокировано"
                             "PARTIAL", "PARTIAL_BLOCKED" ->
@@ -2654,7 +2654,7 @@ private fun CandidateCardModern(candidate: Candidate) {
                 MiniMetric("WAVE", waveText(candidate))
                 MiniMetric("W-SCORE", fmt(candidate.waveScore, 0))
                 MiniMetric("EXHAUST", fmt(candidate.waveExhaustionRisk, 0) + "%")
-                MiniMetric("HTF", if (candidate.htfConfirmed) "OK" else "WAIT")
+                MiniMetric("HTF", if (candidate.htfConfirmed) "OK" else "ОЖИДАНИЕ")
             }
 
             Row(
@@ -2773,7 +2773,7 @@ private fun PositionScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            if (status.positionsSnapshotOk && CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L)) "FLAT" else "NOT VERIFIED",
+                            if (status.positionsSnapshotOk && CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L)) "FLAT" else "НЕ ПОДТВЕРЖДЕНО",
                             style = MaterialTheme.typography.headlineMedium
                         )
                         Text(
@@ -2817,7 +2817,7 @@ private fun PositionScreen(
                                     Alignment.CenterVertically
                             ) {
                                 ModeChip(
-                                    "RISK " +
+                                    "РИСК " +
                                         fmt(
                                             p.riskPct * 100,
                                             2
@@ -2848,7 +2848,7 @@ private fun PositionScreen(
                             fmt(p.currentPrice)
                         )
                         InfoRow(
-                            "Position value",
+                            "Стоимость позиции",
                             fmt(p.positionValueUsdt, 2) + " USDT"
                         )
                         InfoRow(
@@ -2941,7 +2941,7 @@ private fun HistoryScreen(
                     InfoRow("Всего", trades.size.toString())
                     InfoRow("Закрытых", closed.toString())
                     InfoRow("Полная статистика", complete.size.toString() + " • неполная " + incomplete)
-                    InfoRow("Win rate", if (complete.isNotEmpty()) "%.1f%%".format(Locale.US, wins * 100.0 / complete.size) else "—")
+                    InfoRow("Доля прибыльных", if (complete.isNotEmpty()) "%.1f%%".format(Locale.US, wins * 100.0 / complete.size) else "—")
                     InfoRow("Побед / убытков", wins.toString() + " / " + losses)
                     InfoRow("PnL (только полные данные)", fmt(pnl, 2) + " USDT")
                 }
@@ -2976,13 +2976,13 @@ private fun HistoryScreen(
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    Text("Entry " + fmt(it.entry) + " → Exit " + fmt(it.exit), color = AppColors.textMuted)
+                    Text("Вход " + fmt(it.entry) + " → выход " + fmt(it.exit), color = AppColors.textMuted)
                     if (it.initialRiskUsdt != null) {
-                        Text("Initial risk " + fmt(it.initialRiskUsdt, 2) + " USDT")
+                        Text("Первоначальный риск " + fmt(it.initialRiskUsdt, 2) + " USDT")
                     }
                     if (it.feeUsdt != null) {
                         Text(
-                            "Commission " + fmt(it.feeUsdt, 4) + " USDT" +
+                            "Комиссия " + fmt(it.feeUsdt, 4) + " USDT" +
                                 if (it.feeKnown) "" else " • fee conversion incomplete",
                             color = if (it.feeKnown) AppColors.textMuted else AppColors.amber,
                             style = MaterialTheme.typography.bodySmall
@@ -2990,7 +2990,7 @@ private fun HistoryScreen(
                     }
                     if (it.entrySlippagePct != null) {
                         Text(
-                            "Entry slippage (adverse +) " +
+                            "Проскальзывание входа (невыгодное +) " +
                                 fmt(it.entrySlippagePct * 100.0, 4) + "%",
                             color = AppColors.textMuted,
                             style = MaterialTheme.typography.bodySmall
@@ -2998,18 +2998,18 @@ private fun HistoryScreen(
                     }
                     if (!it.pnlComplete) {
                         Text(
-                            "Net PnL excluded from aggregate: exchange commission currency could not be converted exactly",
+                            "Чистый результат не включён в общий итог: комиссия Binance не пересчитана точно.",
                             color = AppColors.amber,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
                     Text(
-                        "Wave W" + it.wavePosition + " • " + it.wavePhase +
-                            " • Score " + fmt(it.score, 1) +
+                        "Волна W" + it.wavePosition + " • " + it.wavePhase +
+                            " • Оценка " + fmt(it.score, 1) +
                             " • R " + fmt(it.rMultiple, 2)
                     )
                     Text(
-                        "MFE " + fmt(it.mfeR, 2) + "R • MAE " + fmt(it.maeR, 2) + "R",
+                        "Лучший ход " + fmt(it.mfeR, 2) + "R • Худший ход " + fmt(it.maeR, 2) + "R",
                         color = AppColors.textMuted
                     )
                     if (it.reason.isNotBlank()) {
@@ -3106,7 +3106,7 @@ private fun SettingsScreen(
                             tint = AppColors.green
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("Williams Runtime", style = MaterialTheme.typography.titleMedium)
+                        Text("Движок Williams", style = MaterialTheme.typography.titleMedium)
                     }
 
                     Text(
@@ -3115,8 +3115,8 @@ private fun SettingsScreen(
                         color = AppColors.textMuted
                     )
 
-                    InfoRow("Execution authority", "Автономный телефон • Binance напрямую")
-                    InfoRow("Scanner universe", "USDⓈ-M Futures • 10 USDT contracts")
+                    InfoRow("Управление исполнением", "Автономный телефон • Binance напрямую")
+                    InfoRow("Торговые пары сканера", "USDⓈ-M Futures • 10 контрактов USDT")
                     InfoRow("MTF", "D1/H4 контекст • H1 сценарий • вход по фракталу M15")
                 }
             }
@@ -3133,11 +3133,11 @@ private fun SettingsScreen(
                 ) {
                     Text("Фоновая работа Android", style = MaterialTheme.typography.titleMedium)
                     InfoRow(
-                        "Doze exemption",
+                        "Разрешение на работу в режиме сна",
                         if (batteryExemptionGranted) "Разрешено" else "Не подтверждено системой"
                     )
                     InfoRow(
-                        "Low Power Standby",
+                        "Энергосбережение Android",
                         when {
                             Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU -> "Недоступен"
                             !lowPowerStandbyEnabled -> "Выключен"
@@ -3185,13 +3185,13 @@ private fun SettingsScreen(
                             tint = AppColors.primary
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("Binance Testnet • secret never returned", style = MaterialTheme.typography.titleMedium)
+                        Text("Binance Futures Demo • секретный ключ не выводится", style = MaterialTheme.typography.titleMedium)
                     }
 
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = onApiKey,
-                        label = { Text("API Key") },
+                        label = { Text("API-ключ") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -3199,7 +3199,7 @@ private fun SettingsScreen(
                     OutlinedTextField(
                         value = apiSecret,
                         onValueChange = onApiSecret,
-                        label = { Text("API Secret") },
+                        label = { Text("Секрет API") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth()
@@ -3254,12 +3254,12 @@ private fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text("Правила защиты", style = MaterialTheme.typography.titleMedium)
-                    InfoRow("Risk / trade", fmt(status.riskPerTrade * 100, 1) + "%")
-                    InfoRow("Daily loss", fmt(status.maxDailyLoss * 100, 1) + "%")
-                    InfoRow("Trade limit", "динамический")
-                    InfoRow("Loss guard", "2 подряд → пауза")
-                    InfoRow("Scanner cadence", "10 sec")
-                    InfoRow("Wave top N", "8")
+                    InfoRow("Риск на сделку", fmt(status.riskPerTrade * 100, 1) + "%")
+                    InfoRow("Дневной лимит убытка", fmt(status.maxDailyLoss * 100, 1) + "%")
+                    InfoRow("Ограничение количества сделок", "динамический")
+                    InfoRow("Ограничение после убытков", "2 подряд → пауза")
+                    InfoRow("Интервал сканирования", "10 секунд")
+                    InfoRow("Число волновых кандидатов", "8")
                 }
             }
         }
@@ -3511,7 +3511,7 @@ private fun StatusDot(label: String, color: Color) {
 @Composable
 private fun ScorePill(score: Double) {
     ModeChip(
-        text = "SCORE " + fmt(score, 0),
+        text = "ОЦЕНКА " + fmt(score, 0),
         color = when {
             score >= 80 -> AppColors.green
             score >= 60 -> AppColors.primary
@@ -3789,8 +3789,8 @@ private fun TradingChart(
             level(position?.entry ?: status.entry, AppColors.primary, "ENTRY")
             level(position?.take ?: status.tp, AppColors.green, "TP")
             level(position?.stop ?: status.sl, AppColors.red, "SL")
-            pendingTrigger.trigger?.takeIf { it in minPrice..maxPrice }?.let { level(it,AppColors.amber,"BINANCE PENDING") }
-            pendingTrigger.stop?.takeIf { it in minPrice..maxPrice }?.let { level(it,AppColors.red,"PENDING PROTECTION") }
+            pendingTrigger.trigger?.takeIf { it in minPrice..maxPrice }?.let { level(it,AppColors.amber,"ОЖИДАНИЕ BINANCE") }
+            pendingTrigger.stop?.takeIf { it in minPrice..maxPrice }?.let { level(it,AppColors.red,"СТОП НЕ ПОДТВЕРЖДЁН") }
         }
         Text(cockpitTime(visible.first().time) + "  —  " + cockpitTime(visible.last().time), modifier = Modifier.padding(horizontal = 8.dp), color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
         if (selectedBar in visible.indices) {
@@ -4198,7 +4198,7 @@ internal fun parseStatus(json: JSONObject): Status {
         p0GateReason = json.optString(
             "p0_gate_reason",
             if (executionContract?.optBoolean("reconciliation_required", true) == true) {
-                "RECONCILE_REQUIRED"
+                "ТРЕБУЕТСЯ СВЕРКА С BINANCE"
             } else {
                 "NOT_READY"
             }
@@ -4403,13 +4403,13 @@ private fun candidateDirection(candidate: Candidate): String? =
 private fun candidateState(candidate: Candidate): String =
     when {
         candidate.signal -> when (candidateDirection(candidate)) {
-            "LONG" -> "H1 SETUP • LONG"
-            "SHORT" -> "H1 SETUP • SHORT"
-            else -> "H1 SETUP • DIRECTION UNKNOWN"
+            "LONG" -> "СИГНАЛ H1 • ЛОНГ"
+            "SHORT" -> "СИГНАЛ H1 • ШОРТ"
+            else -> "СИГНАЛ H1 • НАПРАВЛЕНИЕ НЕ ОПРЕДЕЛЕНО"
         }
-        candidate.nestedW3ParentW5 -> "NESTED W3"
-        candidate.wavePosition == 5 -> "W5 • EXHAUSTION WATCH"
-        candidate.wavePosition == 3 -> "W3 • PRIORITY"
+        candidate.nestedW3ParentW5 -> "ВЛОЖЕННАЯ W3"
+        candidate.wavePosition == 5 -> "W5 • РИСК ИСТОЩЕНИЯ"
+        candidate.wavePosition == 3 -> "W3 • ПРИОРИТЕТ"
         else -> "WATCHING"
     }
 
