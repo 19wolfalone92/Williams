@@ -5760,10 +5760,17 @@ private class NativeEngine(
         val price=if(market) mark else signal.triggerPrice
         val stop=owner.getString("protective_stop").toDouble()
         if((if(direction=="LONG") stop>=price || !market && price<=mark else stop<=price || !market && price>=mark)) return
-        val d1=waveInfo(fetchCandles(symbol,"1d",90),"1d")
-        val h4=waveInfo(fetchCandles(symbol,"4h",120),"4h")
-        if(direction=="LONG" && (d1.alligatorBearish || h4.alligatorBearish) ||
-            direction=="SHORT" && (d1.alligatorBullish || h4.alligatorBullish)) return
+        // TC2 ch10/12 explicitly permits a countertrend WM1 followed by
+        // H1 Super AO and H1 fractal add-ons before the D1/H4 Alligators turn.
+        // A blanket D1/H4 veto here was silently suppressing a valid textbook
+        // addition to an already owned/protected TC2 campaign. NTD/Course
+        // legacy campaigns retain their existing separate higher-TF policy.
+        if (williamsAdditionRequiresHigherFrameTrendVeto(profile)) {
+            val d1=waveInfo(fetchCandles(symbol,"1d",90),"1d")
+            val h4=waveInfo(fetchCandles(symbol,"4h",120),"4h")
+            if(direction=="LONG" && (d1.alligatorBearish || h4.alligatorBearish) ||
+                direction=="SHORT" && (d1.alligatorBullish || h4.alligatorBullish)) return
+        }
         val reserved=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.filter {
             it.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(it)
         }.sumOf { futuresCampaignReservedRisk(it,all) }
