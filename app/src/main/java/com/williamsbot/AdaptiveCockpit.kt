@@ -21,7 +21,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -104,8 +104,8 @@ internal fun AdaptiveCockpitScaffold(
     refreshing: Boolean, onTab: (Int) -> Unit, onRefresh: () -> Unit,
     content: @Composable (PaddingValues) -> Unit
 ) {
-    val configuration = LocalConfiguration.current
-    val landscape = configuration.screenWidthDp > configuration.screenHeightDp
+    val window = LocalWindowInfo.current.containerSize
+    val landscape = window.width > window.height
     fun selected(target: Int) = if (target == 6) tab in listOf(3, 4, 5, 6) else tab == target
     Scaffold(
         containerColor = AppColors.background,
@@ -122,7 +122,7 @@ internal fun AdaptiveCockpitScaffold(
                     Column(Modifier.weight(1f)) {
                         Text("WILLIAMS BOT 2.1", style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold)
-                        if (!landscape) Text("Futures Demo · 10 пар · LONG / SHORT",
+                        Text(if (landscape) "Futures Demo · H1" else "Futures Demo · 10 пар · LONG / SHORT",
                             style = MaterialTheme.typography.labelSmall, color = AppColors.textMuted)
                     }
                     CockpitOrientationMenu()

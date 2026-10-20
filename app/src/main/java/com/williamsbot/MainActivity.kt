@@ -29,7 +29,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.runtime.rememberUpdatedState
 import kotlin.math.abs
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -3586,9 +3586,10 @@ private fun TradingChart(
         with(density) { 10.dp.toPx() }
     val currentAxisWidth by rememberUpdatedState(axisWidthPx)
     val currentVisible by rememberUpdatedState(visible)
-    val configuration = LocalConfiguration.current
-    val landscape = configuration.screenWidthDp>configuration.screenHeightDp
-    val chartHeight = if(landscape) (configuration.screenHeightDp*.67f).coerceIn(180f,420f).dp else 360.dp
+    val window = LocalWindowInfo.current.containerSize
+    val landscape = window.width>window.height
+    val windowHeight = with(density) { window.height.toDp().value }
+    val chartHeight = if(landscape) (windowHeight*.60f).coerceIn(180f,420f).dp else 360.dp
     fun zoom(factor:Float) { requestedBars=(requestedBars/factor).coerceIn(min(20,series.size).toFloat(),series.size.toFloat()) }
 
     Column(Modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(4.dp)) {
@@ -3611,10 +3612,12 @@ private fun TradingChart(
         Text("Заявка Binance: "+williamsTriggerStateLabel(pendingTrigger.state)+
             (pendingTrigger.trigger?.let {" · "+formatChartPrice(it)} ?: ""),
             color=AppColors.amber,style=MaterialTheme.typography.labelSmall)
-        Text("Аллигатор 13/8 · 8/5 · 5/3. Фрактал известен после двух закрытых свечей справа.",
-            color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
-        Text("График "+chartIntervalLabel(interval)+" · решение H1. Нажми свечу для деталей; двигай горизонтально и меняй масштаб.",
-            color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
+        if(!landscape || layerControls) {
+            Text("Аллигатор 13/8 · 8/5 · 5/3. Фрактал известен после двух закрытых свечей справа.",
+                color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
+            Text("График "+chartIntervalLabel(interval)+" · решение H1. Нажми свечу для деталей; двигай горизонтально и меняй масштаб.",
+                color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
+        }
         Canvas(Modifier.fillMaxWidth().height(chartHeight)
             .pointerInput(status.symbol,interval,series.size) {
                 detectTapGestures { tap ->
