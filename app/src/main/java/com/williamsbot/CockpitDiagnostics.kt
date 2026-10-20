@@ -26,7 +26,11 @@ internal object CockpitDiagnostics {
         val coordinatorReady = coordinator.optBoolean("ready_for_new_entry")
         val scannerReady = status.optString("scanner_state") == "READY" &&
             fresh(status.optLong("scanner_last_scan_at"), now, 120_000L)
-        val entries = technical && snapshotFresh && coordinatorReady && scannerReady &&
+        // The 15s cached positions envelope belongs to UI display ONLY.
+        // Execution_enabled is decided independently by the native coordinator,
+        // durable Entry Door and fresh signed account/exchange risk checks.
+        // An asynchronous UI refresh must not create a fictitious order ban.
+        val entries = technical && coordinatorReady && scannerReady &&
             status.optBoolean("execution_enabled") && !status.optBoolean("paused") &&
             !status.optBoolean("reconcile_required", true) && !status.optBoolean("kill_switch_latched")
         val positions = rows(status.optJSONArray("futures_positions"))
@@ -51,11 +55,14 @@ internal object CockpitDiagnostics {
             status.optBoolean("kill_switch_latched") -> "Аварийная блокировка новых операций"
             dailyBaselineMissing -> "Не подтверждена суточная база риска Binance. " + resetExplanation
             status.optBoolean("paused") -> "Новые входы приостановлены; сопровождение продолжается"
-            !snapshotFresh -> "Снимок позиций Binance обновляется или устарел"
+            !coordinatorReady && coordinator.optString("blocker") == "exchange_reconciliation_in_progress" ->
+                "Binance: выполняется текущая сверка позиций и заявок; новые входы временно ожидают проверки"
             !coordinatorReady -> russianExecutionBlocker(coordinator.optString("blocker"))
             !scannerReady -> "Сканер: " + russianStatus(status.optString("scanner_state", "NOT_RUN"))
             !technical -> "Ожидание связи, истории или синхронизации"
             !entries -> "Торговый шлюз ограничивает новые входы"
+            !snapshotFresh ->
+                "Новые входы разрешены шлюзом; снимок позиций для экрана пока обновляется"
             else -> "Новые входы разрешены при подтверждённом сигнале и проверке риска"
         }
         return JSONObject().put("observed_at_ms", now)

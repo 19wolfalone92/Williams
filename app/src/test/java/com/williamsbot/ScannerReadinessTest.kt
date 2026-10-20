@@ -1,6 +1,8 @@
 package com.williamsbot
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class ScannerReadinessTest {
@@ -289,4 +291,34 @@ class ScannerReadinessTest {
         assertEquals(false, streamNeedsReconnect(true, 40_000L, 10_000L, 55_000L, 45_000L))
         assertEquals(false, streamNeedsReconnect(false, 1_000L, 1_000L, 100_000L, 45_000L))
     }
+
+    @Test fun signedAccountMonitorIsNeverInitiatedInsideH1Scan() {
+        val now = 1_800_000_000_000L
+        assertFalse(shouldScheduleIndependentFuturesMonitor(now, now - 60_000, now - 60_000,
+            "READY", scanning = true, reconciliationActive = false))
+        assertFalse(shouldScheduleIndependentFuturesMonitor(now, now - 60_000, now - 60_000,
+            "READY", scanning = false, reconciliationActive = true))
+        assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 46_000, now - 46_000,
+            "READY", scanning = false, reconciliationActive = false))
+        assertFalse(shouldScheduleIndependentFuturesMonitor(now, now - 20_000, now - 20_000,
+            "READY", scanning = false, reconciliationActive = false))
+    }
+
+    @Test fun protectedPositionAndPendingEntryStillReceiveFastIndependentMonitoring() {
+        val now = 1_800_000_000_000L
+        assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 4_000, now - 4_000,
+            "OPEN_PROTECTED", scanning = false, reconciliationActive = false))
+        assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 3_000, now - 3_000,
+            "ENTRY_PENDING", scanning = false, reconciliationActive = false))
+        assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 3_000, now - 3_000,
+            "EXIT_PENDING", scanning = false, reconciliationActive = false))
+        assertFalse(shouldScheduleIndependentFuturesMonitor(now, now - 1_000, now - 1_000,
+            "OPEN_PROTECTED", scanning = false, reconciliationActive = false))
+        // Previous exchange lock timeout must be retried and verified promptly;
+        // do not wait 45 seconds merely because the coordinator is now flat.
+        assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 4_000, now - 4_000,
+            "READY", scanning = false, reconciliationActive = false,
+            safetyLatchUnresolved = true))
+    }
+
 }

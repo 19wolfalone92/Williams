@@ -535,7 +535,12 @@ def test_android_configurable_entry_policy_blocks_new_exposure_and_cancels_resti
     manager = runtime.split("private fun scheduleNativePositionManagement()", 1)[1].split(
         "private fun performCampaignScan()", 1
     )[0]
-    assert "scheduleNativePositionManagement()" in scan
+    # Do not start full signed reconciliation inside the 10-symbol scanner:
+    # that put the coordinator into RECONCILE_REQUIRED before its own
+    # entry admission check and blocked every scan.
+    assert "scheduleNativePositionManagement()" not in scan
+    assert "shouldScheduleIndependentFuturesMonitor(" in runtime
+    assert "scheduleNativePositionManagement()" in runtime
     assert "manageNativeFuturesPositions()" in manager
     assert "cancelPendingEntriesOutsideWilliamsSession()" in manager
 
