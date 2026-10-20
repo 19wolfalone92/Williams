@@ -4002,146 +4002,106 @@ private class NativeEngine(
             .takeLast(limit)
     }
 
+    /**
+     * Persist an exchange-history slice. Backwards sync always starts BEFORE
+     * SQLite's oldest saved bar, so restarts never download the same six pages.
+     * Once the exchange beginning was reached, only fetch missing new bars.
+     *
+     * Return only the small working set, never all historical rows in RAM.
+     */
     private fun fetchFullHistory(
         symbol: String,
         frame: String = "1h",
-        maxPages: Int = 6
+        maxPages: Int = 4
     ): List<CandleN> {
-        val normalizedSymbol = symbol.uppercase()
-
-        if (!historyStore.isComplete(normalizedSymbol, frame)) {
-            var endTime = futuresMarketData.exchangeNowMs()
-            var page = 0
-            var reachedHistoryBeginning = false
-            val pageLimit = maxPages.coerceIn(1, 100)
-            try {
-                while (page++ < pageLimit) {
-                    val body = futuresMarketData.klines(
-                        normalizedSymbol,
-                        frame,
-                        1000,
-                        endTime = endTime
-                    ).toString()
-                    val array = JSONArray(body)
+        val normalizedSymbol = symbol.uppercase(Locale.US)
+        val pageLimit = maxPages.coerceIn(1, 8)
+        try {
+            if (!historyStore.isComplete(normalizedSymbol, frame)) {
+                val previousOldest = historyStore.oldest(normalizedSymbol, frame)
+                var endTime = if (previousOldest > 0L) previousOldest - 1L
+                    else futuresMarketData.exchangeNowMs()
+                for (page in 0 until pageLimit) {
+                    if (!running || Thread.currentThread().isInterrupted) break
+                    val array = futuresMarketData.klines(
+                        normalizedSymbol, frame, 1000, endTime = endTime
+                    )
                     if (array.length() == 0) {
-                        reachedHistoryBeginning = true
+                        // No known candles means unavailable history, not a verified
+                        // exchange beginning. Do not mark an empty database complete.
+                        if (historyStore.count(normalizedSymbol, frame) > 0L)
+                            historyStore.markComplete(normalizedSymbol, frame)
                         break
                     }
                     val exchangeNowMs = futuresMarketData.exchangeNowMs()
-
-                    val batch = ArrayList<MarketHistoryStore.Candle>(
-                        array.length()
-                    )
-                    var oldest = Long.MAX_VALUE
-
+                    val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
+                    var oldestPageTime = Long.MAX_VALUE
                     for (i in 0 until array.length()) {
                         val row = array.getJSONArray(i)
                         val openTime = row.getLong(0)
                         val closeTime = row.getLong(6)
-                        oldest = min(oldest, openTime)
-
-                        if (!futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)) {
-                            continue
+                        if (openTime <= 0L || openTime > endTime) {
+                            throw IllegalStateException("Historical USD-M Futures pagination did not move backwards")
                         }
-
+                        oldestPageTime = minOf(oldestPageTime, openTime)
+                        if (!futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)) continue
                         batch += MarketHistoryStore.Candle(
-                            openTime = openTime,
-                            closeTime = closeTime,
-                            open = row.getString(1).toDouble(),
-                            high = row.getString(2).toDouble(),
-                            low = row.getString(3).toDouble(),
-                            close = row.getString(4).toDouble(),
-                            volume = row.getString(5).toDouble()
+                            openTime, row.getString(1).toDouble(), row.getString(2).toDouble(),
+                            row.getString(3).toDouble(), row.getString(4).toDouble(),
+                            row.getString(5).toDouble(), closeTime
                         )
                     }
-
                     if (batch.isNotEmpty()) {
-                        historyStore.upsertBatch(
-                            normalizedSymbol,
-                            frame,
-                            batch
-                        )
+                        historyStore.upsertBatch(normalizedSymbol, frame, batch)
                     }
-
-                    if (
-                        oldest == Long.MAX_VALUE ||
-                        oldest <= 0L ||
-                        array.length() < 1000
-                    ) {
-                        reachedHistoryBeginning = true
+                    if (oldestPageTime <= 0L || oldestPageTime >= endTime) {
+                        throw IllegalStateException("Historical pagination failed to advance")
+                    }
+                    if (array.length() < 1000) {
+                        historyStore.markComplete(normalizedSymbol, frame)
                         break
                     }
-
-                    endTime = oldest - 1L
+                    endTime = oldestPageTime - 1L
                 }
-
-                if (reachedHistoryBeginning) {
-                    historyStore.markComplete(
-                        normalizedSymbol,
-                        frame
+            } else {
+                // Catch up any number of closed bars missed while the phone was
+                // offline. A three-bar tail request missed gaps longer than 3 bars.
+                var newest = historyStore.newest(normalizedSymbol, frame)
+                if (newest <= 0L) throw IllegalStateException("Complete history has no persisted candles")
+                for (page in 0 until pageLimit) {
+                    if (!running || Thread.currentThread().isInterrupted) break
+                    val array = futuresMarketData.klines(
+                        normalizedSymbol, frame, 1000, startTime = newest + 1L
                     )
+                    if (array.length() == 0) break
+                    val now = futuresMarketData.exchangeNowMs()
+                    val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
+                    for (i in 0 until array.length()) {
+                        val row = array.getJSONArray(i)
+                        val opened = row.getLong(0)
+                        val closed = row.getLong(6)
+                        if (opened <= newest) continue
+                        if (!futuresMarketData.isCandleClosed(closed, now)) break
+                        batch += MarketHistoryStore.Candle(
+                            opened, row.getString(1).toDouble(), row.getString(2).toDouble(),
+                            row.getString(3).toDouble(), row.getString(4).toDouble(),
+                            row.getString(5).toDouble(), closed
+                        )
+                    }
+                    if (batch.isEmpty()) break
+                    historyStore.upsertBatch(normalizedSymbol, frame, batch)
+                    val next = batch.last().openTime
+                    if (next <= newest) throw IllegalStateException("History incremental cursor stalled")
+                    newest = next
+                    if (array.length() < 1000) break
                 }
-            } catch (x: Exception) {
-                historyStore.setError(
-                    normalizedSymbol,
-                    frame,
-                    x.message ?: x.javaClass.simpleName
-                )
-                throw x
             }
-        } else {
-            // After the initial full download, only refresh the recent tail.
-            val newest = historyStore.newest(
-                normalizedSymbol,
-                frame
-            )
-            val body = futuresMarketData.klines(
-                normalizedSymbol,
-                frame,
-                3,
-                startTime = newest.coerceAtLeast(0L)
-            ).toString()
-            val array = JSONArray(body)
-            val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
-            val exchangeNowMs = futuresMarketData.exchangeNowMs()
-
-            for (i in 0 until array.length()) {
-                val row = array.getJSONArray(i)
-                val closeTime = row.getLong(6)
-                if (!futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)) continue
-                batch += MarketHistoryStore.Candle(
-                    openTime = row.getLong(0),
-                    closeTime = closeTime,
-                    open = row.getString(1).toDouble(),
-                    high = row.getString(2).toDouble(),
-                    low = row.getString(3).toDouble(),
-                    close = row.getString(4).toDouble(),
-                    volume = row.getString(5).toDouble()
-                )
-            }
-
-            historyStore.upsertBatch(
-                normalizedSymbol,
-                frame,
-                batch,
-                complete = true
-            )
+        } catch (failure: Exception) {
+            historyStore.setError(normalizedSymbol, frame, failure.message ?: failure.javaClass.simpleName)
+            throw failure
         }
-
-        // Only a bounded working set enters RAM.
-        return historyStore.loadRecent(
-            normalizedSymbol,
-            frame,
-            5000
-        ).map {
-            CandleN(
-                it.openTime,
-                it.open,
-                it.high,
-                it.low,
-                it.close,
-                it.volume
-            )
+        return historyStore.loadRecent(normalizedSymbol, frame, 150).map {
+            CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
         }
     }
 
