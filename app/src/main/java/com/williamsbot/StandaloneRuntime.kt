@@ -4104,25 +4104,40 @@ private class NativeEngine(
             return Triple(cached.first.toList(), HashMap(cached.second), HashMap(cached.third))
         }
 
+        // Volume and public bid/ask are OPTIONAL read-only ranking context.
+        // Previously one missing contract or a short-lived 24h ticker outage
+        // threw here and cancelled analysis of ALL TEN H1 charts. Unknown
+        // spreads remain -1 (never executable) and final live top-of-book,
+        // account and spread preflights must still pass independently.
         val volumes = HashMap<String, Double>()
-        val volumeRows = futuresMarketData.ticker24h()
-        for (i in 0 until volumeRows.length()) {
-            val item = volumeRows.optJSONObject(i) ?: continue
-            val symbol = item.optString("symbol").uppercase(Locale.US)
-            if (symbol in coreSymbols) volumes[symbol] = item.optString("quoteVolume").toDoubleOrNull() ?: 0.0
+        val volumeError=runCatching { futuresMarketData.ticker24h() }
+        val volumeRows=volumeError.getOrNull()
+        if(volumeRows!=null) for(i in 0 until volumeRows.length()) {
+            val item=volumeRows.optJSONObject(i) ?: continue
+            val symbol=item.optString("symbol").uppercase(Locale.US)
+            val volume=item.optString("quoteVolume").toDoubleOrNull()
+            if(symbol in coreSymbols && volume!=null && volume.isFinite() && volume>0)
+                volumes[symbol]=volume
         }
         val spreads = HashMap<String, Double>()
-        val bookRows = futuresMarketData.bookTickers()
-        for (i in 0 until bookRows.length()) {
-            val item = bookRows.optJSONObject(i) ?: continue
-            val symbol = item.optString("symbol").uppercase(Locale.US)
-            if (symbol !in coreSymbols) continue
-            val bid = item.optString("bidPrice").toDoubleOrNull() ?: 0.0
-            val ask = item.optString("askPrice").toDoubleOrNull() ?: 0.0
-            if (bid > 0.0 && ask >= bid) spreads[symbol] = (ask - bid) / bid
+        val bookError=runCatching { futuresMarketData.bookTickers() }
+        val bookRows=bookError.getOrNull()
+        if(bookRows!=null) for(i in 0 until bookRows.length()) {
+            val item=bookRows.optJSONObject(i) ?: continue
+            val symbol=item.optString("symbol").uppercase(Locale.US)
+            if(symbol !in coreSymbols) continue
+            val bid=item.optString("bidPrice").toDoubleOrNull()
+            val ask=item.optString("askPrice").toDoubleOrNull()
+            if(bid!=null && ask!=null && bid.isFinite() && ask.isFinite() &&
+                bid>0 && ask>=bid) spreads[symbol]=(ask-bid)/bid
         }
-        val missing = coreSymbols.filter { (volumes[it] ?: 0.0) <= 0.0 || spreads[it] == null }
-        require(missing.isEmpty()) { "Futures market data missing approved contracts: " + missing.joinToString(",") }
+        val missingSpreads=coreSymbols.filter { spreads[it]==null }
+        val missingVolumes=coreSymbols.filter { volumes[it]==null }
+        scannerMarketMetadataWarning=if(missingSpreads.isEmpty() && missingVolumes.isEmpty()) null else
+            "READ_ONLY_MARKET_METADATA_PARTIAL: unknown_spread=" + missingSpreads.joinToString(",") +
+            "; unknown_volume=" + missingVolumes.joinToString(",") +
+            "; volume_error=" + (volumeError.exceptionOrNull()?.javaClass?.simpleName ?: "none") +
+            "; book_error=" + (bookError.exceptionOrNull()?.javaClass?.simpleName ?: "none")
         val snapshot = Triple(coreSymbols.toList(), volumes.toMap(), spreads.toMap())
         cachedScanUniverse = snapshot
         scanUniverseCacheAtMs = nowMs
@@ -8795,6 +8810,11 @@ private class NativeEngine(
             .put("scanning", scanning)
             .put("scanner_state", scannerState)
             .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
+            .put("h1_scanner_history_ready",readOnlyH1Ready)
+            .put("h1_ready_symbol_count",h1HistoryReadyCount)
+            .put("h1_all_ten_ready",historyReady)
+            .put("optional_context_history_ready",optionalContextHistoryReady)
             .put("run_id", scanRunId)
             .put("progress_symbols", scanProgressSymbols)
             .put("progress_total", coreSymbols.size)
@@ -9058,6 +9078,9 @@ private class NativeEngine(
             .put("user_stream_reconcile_duration_ms", if (userStreamReconcileStartedAtMs > 0L) ((if (futuresStreamReconcileRunning) System.currentTimeMillis() else userStreamReconcileFinishedAtMs) - userStreamReconcileStartedAtMs).coerceAtLeast(0L) else JSONObject.NULL)
             .put("user_stream_reconcile_failure", userStreamReconcileFailure ?: JSONObject.NULL)
             .put("history_ready", historyReady)
+            .put("h1_scanner_history_ready",readOnlyH1Ready)
+            .put("h1_ready_symbol_count",h1HistoryReadyCount)
+            .put("optional_context_history_ready",optionalContextHistoryReady)
             .put("history_state", historyState)
             .put("history_last_error", historyLastError ?: JSONObject.NULL)
             .put("fsm_state", stateMachine.state.name)
@@ -9070,6 +9093,7 @@ private class NativeEngine(
             .put("scanner_scanning", scanning)
             .put("scanner_state", scannerState)
             .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("scanner_market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
             .put("scanner_run_id", scanRunId)
             .put("scanner_symbols", lastSymbolsScanned)
             .put("scanner_progress_symbols", scanProgressSymbols)
