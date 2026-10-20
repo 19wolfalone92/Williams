@@ -685,6 +685,13 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             if (!response.isSuccessful || (exchangeCode != null && exchangeCode < 0)) {
                 throw FuturesHttpException(response.code, exchangeCode, text.take(500))
             }
+            // A 200 response with no body is not a valid market-history snapshot.
+            // Surface it as a retryable *read-only* transport failure instead of
+            // letting JSONArray/JSONObject throw an unhelpful "End of input".
+            // No POST/DELETE is retried on this path.
+            if (method == "GET" && text.isBlank()) {
+                throw IOException("Empty USD-M Futures GET response: $path")
+            }
             return text
         }
     }
