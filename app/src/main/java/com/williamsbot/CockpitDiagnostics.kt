@@ -36,8 +36,8 @@ internal object CockpitDiagnostics {
         }
         val monitoring = status.optBoolean("running") && snapshotFresh &&
             status.optBoolean("user_ws_connected") && !status.optBoolean("user_stream_sync_required", true)
-        val dailyBaselineMissing=status.optString("daily_risk_baseline_source","UNKNOWN")
-            in setOf("","UNKNOWN","null")
+        val dailyBaselineMissing = status.optString("daily_risk_baseline_source", "UNKNOWN") in
+            setOf("", "UNKNOWN", "null")
         val pendingCount=intents.count { it.optString("campaign_status") in
             setOf("ENTRY_PENDING","FILL_CONFIRMATION_PENDING","EXIT_PENDING") }
         val resetExplanation=russianLossResetExplanation(
