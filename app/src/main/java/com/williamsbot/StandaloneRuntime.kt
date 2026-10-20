@@ -413,11 +413,12 @@ internal fun scannerReadinessState(
 internal fun scannerDataReadinessState(
     running: Boolean,
     historyReady: Boolean,
-    marketDataFresh: Boolean
+    @Suppress("UNUSED_PARAMETER") marketDataFresh: Boolean
 ): String = when {
     !running -> "STOPPED"
     !historyReady -> "WAITING_FOR_HISTORY"
-    !marketDataFresh -> "WAITING_FOR_MARKET_DATA"
+    // A stale/absent ticker quote may NEVER prevent read-only H1 analysis.
+    // Quote/market freshness is still an independent new-entry execution gate.
     else -> "RUNNABLE"
 }
 
@@ -1205,7 +1206,9 @@ private class NativeEngine(
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
     // Startup only needs the frames that directly participate in execution.
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
-    private val startupFrames = listOf("1d", "6h", "4h", "1h", "15m")
+    // Prime H1 for all ten symbols before optional context/chart frames.
+    // Missing H4/D1/H6/M15 never turns off read-only H1 market analysis.
+    private val startupFrames = listOf("1h", "4h", "1d", "6h", "15m")
     // The H1 decision engine needs the full 150-candle working set. Higher-timeframe
     // context has explicit lower minimums in the entry contract; requiring 150 D1
     // candles during startup can deadlock scanning on a fresh Futures Demo market.
@@ -1252,7 +1255,13 @@ private class NativeEngine(
     @Volatile private var publicSocketStartedMs = 0L
     @Volatile private var publicReconnectRequested = false
     @Volatile private var historyWarmupRunning = false
-    @Volatile private var historyReady = false
+    @Volatile private var historyReady = false // All ten H1 decision sets ready.
+    @Volatile private var readOnlyH1Ready = false // At least one valid H1 working set.
+    @Volatile private var h1HistoryReadyCount = 0
+    @Volatile private var optionalContextHistoryReady = false
+    @Volatile private var historyWarmupLastStartedMs = 0L
+    private val historyWarmupRetryIntervalMs = 60_000L
+    @Volatile private var scannerMarketMetadataWarning:String? = null
     private val activeHistoryTasks = java.util.concurrent.ConcurrentHashMap.newKeySet<java.util.concurrent.Future<Boolean>>()
     @Volatile private var historyState = "IDLE"
     @Volatile private var historyLastError: String? = null
@@ -2182,6 +2191,9 @@ private class NativeEngine(
         userStreamSyncRequired = true
         userStream.start()
         historyReady = false
+        readOnlyH1Ready = false
+        h1HistoryReadyCount = 0
+        optionalContextHistoryReady = false
         historyState = "LOADING"
         historyLastError = null
         scannerState = "WAITING_FOR_HISTORY"
@@ -2236,12 +2248,19 @@ private class NativeEngine(
                             scheduleNativePositionManagement()
                         }
 
-                        if (!historyReady) {
-                            scannerState = "WAITING_FOR_HISTORY"
-                            scannerError = historyLastError
-                            if (!historyWarmupRunning) warmCoreHistoryAsync(generation)
-                        } else {
+                        if (!historyReady && !historyWarmupRunning &&
+                            System.currentTimeMillis()-historyWarmupLastStartedMs >= historyWarmupRetryIntervalMs) {
+                            warmCoreHistoryAsync(generation)
+                        }
+                        // The H1 read-only scanner works as soon as ONE
+                        // decision frame is ready. Trading additionally
+                        // requires all ten H1 series + independent safety
+                        // admission; partial chart data is never an entry pass.
+                        if(readOnlyH1Ready) {
                             requestScan()
+                        } else {
+                            scannerState = "WAITING_FOR_HISTORY"
+                            scannerError = historyLastError ?: "Waiting for the first closed H1 working set"
                         }
                     } catch (x: Exception) {
                         lastError = x.javaClass.simpleName + ": " + (x.message ?: "")
@@ -2377,6 +2396,9 @@ private class NativeEngine(
         scannerState = "STOPPED"
         scannerError = null
         historyReady = false
+        readOnlyH1Ready = false
+        h1HistoryReadyCount = 0
+        optionalContextHistoryReady = false
         historyState = "STOPPED"
         historyLastError = null
         activeHistoryTasks.forEach { it.cancel(true) }
@@ -3526,16 +3548,20 @@ private class NativeEngine(
 
     private fun warmCoreHistoryAsync(generation: Long = runtimeGeneration) {
         if (historyWarmupRunning || !running || generation != runtimeGeneration) return
+        if(historyWarmupLastStartedMs>0 &&
+            System.currentTimeMillis()-historyWarmupLastStartedMs<historyWarmupRetryIntervalMs) return
+        historyWarmupLastStartedMs=System.currentTimeMillis()
         historyWarmupRunning = true
-        historyReady = false
-        historyState = "LOADING"
+        // A retry for optional D1/H4/M15 frames must not revoke a previously
+        // verified H1 readiness signal or terminate working read-only charts.
+        historyState = if(historyReady) "H1_READY_CONTEXT_LOADING" else "LOADING"
         historyLastError = null
 
         Thread {
             val tasks = mutableListOf<Pair<String, java.util.concurrent.Future<Boolean>>>()
             try {
-                for (symbol in coreSymbols) {
-                    for (frame in startupFrames) {
+                for (frame in startupFrames) {
+                    for (symbol in coreSymbols) {
                         if (!running || generation != runtimeGeneration) return@Thread
                         val label = symbol + ":" + frame
                         val future = historyBackfillExecutor.submit(Callable {
@@ -3593,6 +3619,7 @@ private class NativeEngine(
                 }
 
                 var allReady = true
+                var h1ReadyNow = 0
                 val deadline = System.currentTimeMillis() + 90_000L
                 tasks.forEach { (label, future) ->
                     val ok = runCatching {
@@ -3605,6 +3632,15 @@ private class NativeEngine(
                         false
                     }
                     activeHistoryTasks.remove(future)
+                    if(label.endsWith(":1h")) {
+                        if(ok) h1ReadyNow++
+                        h1HistoryReadyCount=h1ReadyNow
+                        if(h1ReadyNow>0) readOnlyH1Ready=true
+                        if(h1ReadyNow==coreSymbols.size) {
+                            historyReady=true
+                            historyState="H1_READY_CONTEXT_LOADING"
+                        }
+                    } else if (!ok) allReady = false
                     if (!ok) allReady = false
                 }
                 if (System.currentTimeMillis() >= deadline && !allReady) {
@@ -3613,8 +3649,14 @@ private class NativeEngine(
 
                 if (generation != runtimeGeneration || !running) return@Thread
 
-                historyReady = allReady
-                historyState = if (historyReady) "READY" else "WAITING_RETRY"
+                historyReady = h1ReadyNow==coreSymbols.size
+                optionalContextHistoryReady=allReady
+                historyState = when {
+                    allReady && historyReady -> "READY"
+                    historyReady -> "H1_READY_CONTEXT_PARTIAL"
+                    readOnlyH1Ready -> "PARTIAL_H1_SCANNING_AVAILABLE"
+                    else -> "WAITING_RETRY"
+                }
                 if (historyReady) {
                     // Deep history is bounded and sequential on mobile. It is
                     // a cache warmer, never a prerequisite for first scan.
@@ -4102,7 +4144,7 @@ private class NativeEngine(
         // coordinator; otherwise a manual scan can appear RUNNING during reconciliation.
         val gateState = scannerDataReadinessState(
             running = running,
-            historyReady = historyReady,
+            historyReady = readOnlyH1Ready,
             marketDataFresh = marketDataFresh()
         )
         if (gateState != "RUNNABLE") {
