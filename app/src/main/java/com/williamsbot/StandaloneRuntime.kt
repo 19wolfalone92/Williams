@@ -8257,6 +8257,9 @@ private class NativeEngine(
         // to reach the approximate 100-140-bar analysis resolution.
         // Never allow a history/cache failure to alter the execution hierarchy.
         val adaptive = runCatching {
+            val hourlyCutoff=cutoff/3_600_000L*3_600_000L
+            adaptiveWaveContextCache[symbol]
+                ?.takeIf { it.first==hourlyCutoff }?.second?.let { return@runCatching JSONObject(it.toString()) }
             val historicalFrames = listOf(
                 "1w","1d","12h","8h","6h","4h","2h","1h",
                 "30m","15m","5m","3m","1m"
@@ -8264,15 +8267,12 @@ private class NativeEngine(
             val history = historicalFrames.associateWith { frame ->
                 // Deep history remains fully durable in SQLite; the current
                 // wave engine examines 1800 recent closed bars per degree.
-                // Reading 6000*13 rows for all 10 contracts each scan
-                // blocked the scanner on underpowered phones.
+                // Scanning 6000*13 rows per symbol would risk stalling
+                // the read-only scanner on resource-constrained devices.
                 historyStore.loadRecent(symbol,frame,1800).map {
                     WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
                 }
             }
-            val hourlyCutoff=cutoff/3_600_000L*3_600_000L
-            adaptiveWaveContextCache[symbol]
-                ?.takeIf { it.first==hourlyCutoff }?.second?.let { return@runCatching JSONObject(it.toString()) }
             val contextReport=buildAdaptiveHistoricalWaveReport(history,cutoff)
             adaptiveWaveContextCache[symbol]=hourlyCutoff to JSONObject(contextReport.toString())
             requestMissingAdaptiveWaveFrames(symbol,contextReport,cutoff)
