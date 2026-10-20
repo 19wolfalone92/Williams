@@ -1560,10 +1560,15 @@ private class NativeEngine(
         stateMachine.executionAllowed() ||
             (stateMachine.state == TradingState.ENTRY_PENDING && campaignCoordinatorReadyForEntry())
 
+    // The loss-streak UTC day must follow Binance Futures server time, not
+    // the Android timezone or an ahead-of-server handset clock (-1021).
+    // A stale clock fails closed for NEW entries, without stopping H1 analysis.
     private fun futuresLossStreakGuard(): FuturesLossStreakDecision =
-        evaluateFuturesLossStreak(
+        if(!futuresMarketData.clockSnapshot().optBoolean("fresh",false)) {
+            FuturesLossStreakDecision(false,0,false,null,"FUTURES_LOSS_STREAK_UTC_CLOCK_UNVERIFIED")
+        } else evaluateFuturesLossStreak(
             tradeRows = TradeJournal.trades(prefs),
-            nowMs = System.currentTimeMillis()
+            nowMs = futuresMarketData.cachedExchangeNowMs()
         )
 
     /** Read-only SQLite/clock check: never perform signed REST I/O on the Android UI. */
@@ -9055,6 +9060,11 @@ private class NativeEngine(
             .put("consecutive_losses_available", futuresLossStreakGuard().available)
             .put("consecutive_loss_blocker", futuresLossStreakGuard().reason ?: JSONObject.NULL)
             .put("consecutive_loss_cooldown_until_ms", futuresLossStreakGuard().cooldownUntilMs ?: JSONObject.NULL)
+            .put("consecutive_loss_utc_day_start_ms",
+                if(futuresMarketData.clockSnapshot().optBoolean("fresh",false))
+                    futuresUtcDayStartMs(futuresMarketData.cachedExchangeNowMs())
+                else JSONObject.NULL)
+            .put("consecutive_loss_reset_policy","UTC_00_00_AUTOMATIC_IF_EXCHANGE_CLOCK_VERIFIED")
             .put("trading_mode", when {
                 killLatched -> "KILL_SWITCH_LATCHED"
                 reconcileRequired -> "RECONCILE_REQUIRED"
