@@ -312,6 +312,11 @@ class ScannerReadinessTest {
             "EXIT_PENDING", scanning = false, reconciliationActive = false))
         assertFalse(shouldScheduleIndependentFuturesMonitor(now, now - 1_000, now - 1_000,
             "OPEN_PROTECTED", scanning = false, reconciliationActive = false))
+        // Previous exchange lock timeout must be retried and verified promptly;
+        // do not wait 45 seconds merely because the coordinator is now flat.
+        assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 4_000, now - 4_000,
+            "READY", scanning = false, reconciliationActive = false,
+            safetyLatchUnresolved = true))
     }
 
 }
