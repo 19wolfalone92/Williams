@@ -40,7 +40,7 @@ class WilliamsSetupRulesTest {
     }
     @Test fun superAoThirdBarUsesFiveBarStructureInsteadOfOnlyItsOwnLow() {
         val h=3_600_000L
-        val lows=listOf(100.0,97.0,94.0,99.0,98.0,101.0,102.0)
+        val lows=listOf(100.0,94.0,97.0,99.0,98.0,101.0,102.0)
         val bars=lows.mapIndexed { i,low ->
             WilliamsWaveBar((i+1)*h,low+1.0,low+4.0,low,low+2.0,10.0)
         }
@@ -49,11 +49,11 @@ class WilliamsSetupRulesTest {
         val proposed=williamsTc2SuperAoInitialStop("LONG",bars,4,.1)
         assertEquals(93.9,proposed!!,1e-9)
         assertTrue(proposed<bars[4].l-.1)
-        assertEquals(97.9,williamsTc2SuperAoInitialStop("LONG",bars,4,.1,3)!!,1e-9)
+        assertEquals(96.9,williamsTc2SuperAoInitialStop("LONG",bars,4,.1,3)!!,1e-9)
     }
 
     @Test fun bearishSuperAoInitialStopIsTheMirroredHighestOfFiveH1Bars() {
-        val highs=listOf(105.0,107.0,114.0,109.0,108.0,106.0,104.0)
+        val highs=listOf(105.0,114.0,107.0,109.0,108.0,106.0,104.0)
         val bars=highs.mapIndexed { i,high ->
             WilliamsWaveBar((i+1)*3_600_000L,high-2,high,high-4,high-1,10.0)
         }
