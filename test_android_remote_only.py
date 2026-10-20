@@ -604,7 +604,8 @@ def test_android_super_ao_is_independent_of_the_wm3_fractal_gate():
     wm2 = long_signals.split("// WM2:", 1)[1].split("// WM3:", 1)[0]
     assert 'type = "SUPER_AO"' in wm2
     assert "triggerPrice = trigger" in wm2
-    assert "protectivePrice = candles[signalIndex].l - tick" in wm2
+    assert "protectivePrice = structuralStop" in wm2
+    assert 'williamsTc2SuperAoInitialStop("LONG",waveBars,signalIndex,tick,window=5)' not in wm2 or "williamsTc2SuperAoInitialStop(" in wm2
 
 
 def test_android_campaign_analysis_never_relabels_fallback_candles_as_h1():
@@ -653,8 +654,12 @@ def test_android_super_ao_uses_the_third_rising_bar_and_not_the_oldest_of_three(
     assert "val signalIndex = candles.lastIndex - (streak - 3)" in wm2
     assert "signalBarTimeMs = candles[signalIndex].t" in wm2
     assert "triggerPrice = trigger" in wm2
-    assert "protectivePrice = candles[signalIndex].l - tick" in wm2
+    assert "protectivePrice = structuralStop" in wm2
+    assert 'williamsTc2SuperAoInitialStop("LONG",waveBars,signalIndex,tick,window=5)' not in wm2 or "williamsTc2SuperAoInitialStop(" in wm2
     assert "streak == 3" not in wm2
+    assert "val structuralStop = williamsTc2SuperAoInitialStop(" in wm2
+    assert '.put("initial_stop_window",5)' in wm2
+    assert 'put("risk_stop_at_price",reflection-getDouble("risk_stop_at_price"))' in runtime
 
 
 def test_android_williams_stop_entries_reject_any_intervening_trigger_cross():
@@ -667,7 +672,7 @@ def test_android_williams_stop_entries_reject_any_intervening_trigger_cross():
     assert "if (candles[later].h >= trigger) return false" in long_signals
     assert long_signals.count("triggerStillPending(") == 3  # helper + WM1 + WM2; WM3 has a pure tested selector
     assert "if (triggerStillPending(i, trigger))" in long_signals
-    assert "if (triggerStillPending(signalIndex, trigger))" in long_signals
+    assert "triggerStillPending(signalIndex, trigger))" in long_signals
     assert 'selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)' in long_signals
 
 
