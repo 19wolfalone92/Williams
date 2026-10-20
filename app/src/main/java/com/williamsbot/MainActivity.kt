@@ -1968,7 +1968,7 @@ private fun HeroCard(status: Status, best: Candidate?) {
                         best.wavePosition == 3 ->
                             "Рабочая структура близка к W3 — приоритет повышен."
                         else ->
-                            "Williams Profitunity Conservative: Alligator + AO + Fractals + MTF."
+                            "Консервативный подход Вильямса: Аллигатор, AO, фракталы и старшие таймфреймы."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = AppColors.textMuted
@@ -2113,16 +2113,16 @@ private fun BestCandidateCard(best: Candidate?) {
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MiniMetric("RR", fmt(best.riskReward, 2))
-                    MiniMetric("ATR", fmt(best.atrPct * 100.0, 2) + "%")
-                    MiniMetric("HTF", if (best.htfConfirmed) "OK" else "ОЖИДАНИЕ")
-                    MiniMetric("W", waveText(best))
+                    MiniMetric("ПРИБЫЛЬ/РИСК", fmt(best.riskReward, 2))
+                    MiniMetric("ATR (волат.)", fmt(best.atrPct * 100.0, 2) + "%")
+                    MiniMetric("СТАРШИЙ ТФ", if (best.htfConfirmed) "ДА" else "ОЖИДАНИЕ")
+                    MiniMetric("ВОЛНА", waveText(best))
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MiniMetric("REGIME", best.regime)
-                    MiniMetric("OBI", fmt(best.obi, 2))
-                    MiniMetric("SHADOW", best.shadowDirection + " " + fmt(best.shadowConfidence, 2))
+                    MiniMetric("РЕЖИМ", russianStatus(best.regime))
+                    MiniMetric("ДИСБАЛАНС СТАКАНА", fmt(best.obi, 2))
+                    MiniMetric("ТЕНЕВОЙ ПРОГНОЗ", russianStatus(best.shadowDirection) + " " + fmt(best.shadowConfidence, 2))
                 }
 
                 if (best.xaiTopFactor.isNotBlank()) {
@@ -2588,7 +2588,7 @@ private fun MarketChartPanel(
                 InfoRow("Волновая фаза", "W" + candidate.wavePosition + " • " + candidate.wavePhase)
                 InfoRow("Волновые оценки (эвристика) / истощение", fmt(candidate.waveConfidence, 2) + " / " + fmt(candidate.waveExhaustionRisk, 1) + "%")
                 InfoRow("Оценки W3 / W5 (некалиброваны)", fmt(candidate.wave3Probability, 2) + " / " + fmt(candidate.wave5Probability, 2))
-                InfoRow("Режим рынка", candidate.regime + " • score " + fmt(candidate.regimeScore, 2))
+                InfoRow("Режим рынка", russianStatus(candidate.regime) + " • оценка " + fmt(candidate.regimeScore, 2))
                 InfoRow("OBI стакана", fmt(candidate.obi, 3))
                 InfoRow("Дисбаланс потока сделок", fmt(candidate.tradeFlowImbalance, 3))
                 InfoRow("Теневая оценка", candidate.shadowDirection + " • " + fmt(candidate.shadowConfidence, 2))
@@ -2651,19 +2651,19 @@ private fun CandidateCardModern(candidate: Candidate) {
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                MiniMetric("WAVE", waveText(candidate))
-                MiniMetric("W-SCORE", fmt(candidate.waveScore, 0))
-                MiniMetric("EXHAUST", fmt(candidate.waveExhaustionRisk, 0) + "%")
-                MiniMetric("HTF", if (candidate.htfConfirmed) "OK" else "ОЖИДАНИЕ")
+                MiniMetric("ВОЛНА", waveText(candidate))
+                MiniMetric("ОЦЕНКА ВОЛНЫ", fmt(candidate.waveScore, 0))
+                MiniMetric("ИСТОЩЕНИЕ", fmt(candidate.waveExhaustionRisk, 0) + "%")
+                MiniMetric("СТАРШИЙ ТФ", if (candidate.htfConfirmed) "ДА" else "ОЖИДАНИЕ")
             }
 
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                MiniMetric("REGIME", candidate.regime)
-                MiniMetric("OBI", fmt(candidate.obi, 2))
-                MiniMetric("SHADOW", candidate.shadowDirection + " " + fmt(candidate.shadowConfidence, 2))
+                MiniMetric("РЕЖИМ", russianStatus(candidate.regime))
+                MiniMetric("ДИСБАЛАНС СТАКАНА", fmt(candidate.obi, 2))
+                MiniMetric("ТЕНЕВОЙ ПРОГНОЗ", russianStatus(candidate.shadowDirection) + " " + fmt(candidate.shadowConfidence, 2))
             }
 
             if (candidate.xaiTopFactor.isNotBlank()) {
@@ -2680,10 +2680,10 @@ private fun CandidateCardModern(candidate: Candidate) {
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                MiniMetric("RR", fmt(candidate.riskReward, 2))
-                MiniMetric("ATR", fmt(candidate.atrPct * 100, 2) + "%")
-                MiniMetric("SPREAD", fmt(candidate.spreadPct * 100, 3) + "%")
-                MiniMetric("Align", candidate.wiseManCount.toString() + "/3")
+                MiniMetric("ПРИБЫЛЬ/РИСК", fmt(candidate.riskReward, 2))
+                MiniMetric("ATR (волат.)", fmt(candidate.atrPct * 100, 2) + "%")
+                MiniMetric("СПРЕД", fmt(candidate.spreadPct * 100, 3) + "%")
+                MiniMetric("СОВПАДЕНИЕ", candidate.wiseManCount.toString() + "/3")
             }
 
             if (candidate.nestedW3ParentW5) {
@@ -3621,7 +3621,7 @@ private fun TradingChart(
             Text("Заявка Binance: "+williamsTriggerStateLabel(pendingTrigger.state)+
                 (pendingTrigger.trigger?.let { " · "+fmt(it) } ?: ""),
                 color=AppColors.amber,style=MaterialTheme.typography.labelSmall)
-            Text("Alligator: Jaw 13/8 • Teeth 8/5 • Lips 5/3  |  Fractals подтверждаются после двух правых закрытых баров",
+            Text("Аллигатор: челюсти 13/8 • зубы 8/5 • губы 5/3  |  фракталы подтверждаются после двух закрытых свечей справа",
                 color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
             Text(
                 "График • " + chartIntervalLabel(interval) +
@@ -3798,7 +3798,7 @@ private fun TradingChart(
             Text("${cockpitTime(c.time)} • O ${fmt(c.open)} • H ${fmt(c.high)} • L ${fmt(c.low)} • C ${fmt(c.close)}\nAO ${fmt(c.ao, 5)} • AC ${fmt(c.ac, 5)} • ${c.signalTypes.joinToString()}", modifier = Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
         }
         if (showAo) {
-        Text("Awesome Oscillator (AO) • зелёный: столбец растёт, красный: столбец снижается",
+        Text("Чудесный осциллятор (AO) • зелёный: столбец растёт, красный: снижается",
             color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 8.dp))
         Canvas(modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 8.dp, vertical = 4.dp)) {
@@ -3822,7 +3822,7 @@ private fun TradingChart(
         }
         }
         if (showAc) {
-        Text("Accelerator Oscillator (AC = AO − SMA5(AO)) • зелёный: растёт, красный: снижается; не самостоятельный вход",
+        Text("Осциллятор ускорения (AC = AO − SMA5(AO)) • зелёный: растёт, красный: снижается; сам по себе не разрешает вход",
             color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 8.dp))
         Canvas(modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 8.dp, vertical = 4.dp)) {
@@ -3846,7 +3846,7 @@ private fun TradingChart(
         }
         }
         if (showMfi) {
-        Text("Williams MFI proxy = (High − Low) / Volume • это диагностический прокси потока, не классический MFI 0–100",
+        Text("Показатель потока Вильямса = (максимум − минимум) / объём • диагностический показатель, не классический MFI 0–100",
             color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 8.dp))
         Canvas(modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 8.dp, vertical = 4.dp)) {
