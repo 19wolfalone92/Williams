@@ -1424,7 +1424,7 @@ private fun TestnetForceTradingCard(
                         !status.reconcileRequired && !status.executionKillLatched,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("ВКЛЮЧИТЬ ПРИНУДИТЕЛЬНУЮ ТОРГОВЛЮ")
+                    Text("ВКЛЮЧИТЬ РУЧНОЙ ТЕСТОВЫЙ ВХОД")
                 }
                 Text(
                     when {
@@ -1472,7 +1472,7 @@ private fun TestnetForceTradingCard(
                 Button(onClick = {
                     confirmEntry = false
                     onSubmitEntry(symbol, direction)
-                }) { Text("ПОДТВЕРДИТЬ DEMO-ОРДЕР") }
+                }) { Text("ПОДТВЕРДИТЬ ДЕМО-ЗАЯВКУ") }
             },
             dismissButton = {
                 TextButton(onClick = { confirmEntry = false }) { Text("ОТМЕНА") }
@@ -1514,7 +1514,7 @@ private fun SystemHealthBar(status: Status) {
                 }
             )
             Spacer(Modifier.weight(1f))
-            Text("RISK BUDGET • ${status.maxOpenPositions} POS", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
+            Text("ЛИМИТ РИСКА • ${status.maxOpenPositions} ПОЗИЦИЙ", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -1666,7 +1666,7 @@ private fun DiagnosticsScreen(
         contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp)
     ) {
         item {
-            Text("Diagnostics", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text("Диагностика", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         }
         item { DiagnosticRow("REST price", if (status.price != null) "PASS • " + fmt(status.price, 6) else "FAIL • no price") }
         item { DiagnosticRow("USDT balance", if (status.balance != null) "PASS • " + fmt(status.balance, 4) else "WAIT • no account data") }
@@ -1706,12 +1706,12 @@ private fun DiagnosticsScreen(
         status.error?.let { item { DiagnosticRow("Last error", it) } }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onRun) { Text("RUN DIAGNOSTICS") }
+                Button(onClick = onRun) { Text("ЗАПУСТИТЬ ДИАГНОСТИКУ") }
                 OutlinedButton(
                     onClick = onSelfHeal,
                     enabled = !status.executionKillLatched && !status.reconcileRequired
-                ) { Text("SELF-HEAL") }
-                OutlinedButton(onClick = onExport) { Text("EXPORT SNAPSHOT") }
+                ) { Text("СВЕРКА И ВОССТАНОВЛЕНИЕ") }
+                OutlinedButton(onClick = onExport) { Text("ЭКСПОРТИРОВАТЬ ДИАГНОСТИКУ") }
             }
         }
         if (message.isNotBlank()) item {
@@ -1746,7 +1746,7 @@ private fun ReconcileBarrierScreen(
         Modifier.fillMaxSize().padding(padding).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Text("RECONCILE_REQUIRED", style = MaterialTheme.typography.headlineMedium, color = AppColors.red, fontWeight = FontWeight.Bold)
+        Text("ТРЕБУЕТСЯ СВЕРКА С BINANCE", style = MaterialTheme.typography.headlineMedium, color = AppColors.red, fontWeight = FontWeight.Bold)
         Text("Торговый цикл заблокирован. Android не принимает торговое решение и не снимает этот барьер локально.", color = AppColors.textMuted)
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1765,7 +1765,7 @@ private fun ReconcileBarrierScreen(
             }
         }
         Button(onClick = onRecover, modifier = Modifier.fillMaxWidth()) {
-            Text("RECONCILE / RECOVER")
+            Text("СВЕРИТЬ И ВОССТАНОВИТЬ")
         }
     }
 }
@@ -1815,13 +1815,13 @@ private fun DashboardScreen(
                         Modifier.padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("TRADING BLOCKED • RECOVER REQUIRED", color = AppColors.red, fontWeight = FontWeight.Bold)
-                        Text(status.error ?: "Exchange state is not reconciled.", color = AppColors.textMuted)
+                        Text("ВХОДЫ ЗАБЛОКИРОВАНЫ • НУЖНА СВЕРКА", color = AppColors.red, fontWeight = FontWeight.Bold)
+                        Text(status.error ?: "Состояние Binance ещё не сверено.", color = AppColors.textMuted)
                         OutlinedButton(
                             onClick = onRecoverDashboard,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("RECONCILE / RECOVER")
+                            Text("СВЕРИТЬ И ВОССТАНОВИТЬ")
                         }
                     }
                 }
@@ -1858,7 +1858,7 @@ private fun DashboardScreen(
                 )
                 MetricCard(
                     modifier = Modifier.weight(1f),
-                    title = "USDT free",
+                    title = "Свободно USDT",
                     value = fmt(status.balance, 2),
                     suffix = " USDT",
                     icon = Icons.Filled.AccountBalanceWallet,
@@ -2011,7 +2011,7 @@ private fun ScanSummaryCard(
             Spacer(Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text("Market Scanner", style = MaterialTheme.typography.titleMedium)
+                Text("Сканер рынка", style = MaterialTheme.typography.titleMedium)
                 Text(
                     when (status.scannerState) {
                         "RUNNING" -> "Сканирование рынка…"
@@ -2120,9 +2120,9 @@ private fun BestCandidateCard(best: Candidate?) {
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MiniMetric("REGIME", best.regime)
+                    MiniMetric("РЕЖИМ", best.regime)
                     MiniMetric("OBI", fmt(best.obi, 2))
-                    MiniMetric("SHADOW", best.shadowDirection + " " + fmt(best.shadowConfidence, 2))
+                    MiniMetric("ТЕНЕВАЯ ОЦЕНКА", best.shadowDirection + " " + fmt(best.shadowConfidence, 2))
                 }
 
                 if (best.xaiTopFactor.isNotBlank()) {
@@ -2174,7 +2174,7 @@ private fun RiskCard(status: Status) {
                         "/" + status.maxOpenPositions
                 )
                 MiniMetric("Сегодня", status.tradesToday.toString())
-                MiniMetric("Loss", status.consecutiveLosses.toString())
+                MiniMetric("Убытки подряд", status.consecutiveLosses.toString())
             }
             Text(
                 status.tradingMode + " • торговый PnL сегодня " + fmt(status.dailyPnlUsdt, 2) + " USDT",
@@ -2224,7 +2224,7 @@ private fun ControlCard(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ActionButton(
                     modifier = Modifier.weight(1f),
-                    text = "START",
+                    text = "ЗАПУСТИТЬ",
                     icon = Icons.Filled.PlayArrow,
                     enabled = runtimeStartButtonEnabled(
                         binanceConfigured = status.binanceConfigured,
@@ -2244,7 +2244,7 @@ private fun ControlCard(
                 )
                 ActionButton(
                     modifier = Modifier.weight(1f),
-                    text = "STOP",
+                    text = "ОСТАНОВИТЬ",
                     icon = Icons.Filled.Stop,
                     enabled = status.running,
                     accent = AppColors.red,
@@ -2267,7 +2267,7 @@ private fun ControlCard(
 
             ActionButton(
                 modifier = Modifier.fillMaxWidth(),
-                text = "KILL SWITCH — STOP + CLOSE",
+                text = "АВАРИЙНАЯ ОСТАНОВКА И ЗАКРЫТИЕ",
                 icon = Icons.Filled.Warning,
                 enabled = status.running || status.openPositions > 0,
                 accent = AppColors.red,
@@ -2651,9 +2651,9 @@ private fun CandidateCardModern(candidate: Candidate) {
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                MiniMetric("WAVE", waveText(candidate))
-                MiniMetric("W-SCORE", fmt(candidate.waveScore, 0))
-                MiniMetric("EXHAUST", fmt(candidate.waveExhaustionRisk, 0) + "%")
+                MiniMetric("ВОЛНА", waveText(candidate))
+                MiniMetric("ОЦЕНКА ВОЛНЫ", fmt(candidate.waveScore, 0))
+                MiniMetric("ИСТОЩЕНИЕ", fmt(candidate.waveExhaustionRisk, 0) + "%")
                 MiniMetric("HTF", if (candidate.htfConfirmed) "OK" else "WAIT")
             }
 
@@ -2661,9 +2661,9 @@ private fun CandidateCardModern(candidate: Candidate) {
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                MiniMetric("REGIME", candidate.regime)
+                MiniMetric("РЕЖИМ", candidate.regime)
                 MiniMetric("OBI", fmt(candidate.obi, 2))
-                MiniMetric("SHADOW", candidate.shadowDirection + " " + fmt(candidate.shadowConfidence, 2))
+                MiniMetric("ТЕНЕВАЯ ОЦЕНКА", candidate.shadowDirection + " " + fmt(candidate.shadowConfidence, 2))
             }
 
             if (candidate.xaiTopFactor.isNotBlank()) {
@@ -2682,8 +2682,8 @@ private fun CandidateCardModern(candidate: Candidate) {
             ) {
                 MiniMetric("RR", fmt(candidate.riskReward, 2))
                 MiniMetric("ATR", fmt(candidate.atrPct * 100, 2) + "%")
-                MiniMetric("SPREAD", fmt(candidate.spreadPct * 100, 3) + "%")
-                MiniMetric("Align", candidate.wiseManCount.toString() + "/3")
+                MiniMetric("СПРЕД", fmt(candidate.spreadPct * 100, 3) + "%")
+                MiniMetric("СОВПАДЕНИЕ", candidate.wiseManCount.toString() + "/3")
             }
 
             if (candidate.nestedW3ParentW5) {
@@ -2976,9 +2976,9 @@ private fun HistoryScreen(
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    Text("Entry " + fmt(it.entry) + " → Exit " + fmt(it.exit), color = AppColors.textMuted)
+                    Text("Вход " + fmt(it.entry) + " → выход " + fmt(it.exit), color = AppColors.textMuted)
                     if (it.initialRiskUsdt != null) {
-                        Text("Initial risk " + fmt(it.initialRiskUsdt, 2) + " USDT")
+                        Text("Начальный риск " + fmt(it.initialRiskUsdt, 2) + " USDT")
                     }
                     if (it.feeUsdt != null) {
                         Text(
@@ -3185,13 +3185,13 @@ private fun SettingsScreen(
                             tint = AppColors.primary
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("Binance Testnet • secret never returned", style = MaterialTheme.typography.titleMedium)
+                        Text("Binance Testnet • секретный ключ не отображается", style = MaterialTheme.typography.titleMedium)
                     }
 
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = onApiKey,
-                        label = { Text("API Key") },
+                        label = { Text("API-ключ") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -3199,7 +3199,7 @@ private fun SettingsScreen(
                     OutlinedTextField(
                         value = apiSecret,
                         onValueChange = onApiSecret,
-                        label = { Text("API Secret") },
+                        label = { Text("Секрет API") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth()
@@ -3292,7 +3292,7 @@ private fun SettingsScreen(
                     OutlinedTextField(
                         value = backupPassword,
                         onValueChange = onBackupPassword,
-                        label = { Text("Пароль backup (10+ символов)") },
+                        label = { Text("Пароль резервной копии (от 10 символов)") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth()
@@ -3511,7 +3511,7 @@ private fun StatusDot(label: String, color: Color) {
 @Composable
 private fun ScorePill(score: Double) {
     ModeChip(
-        text = "SCORE " + fmt(score, 0),
+        text = "ОЦЕНКА " + fmt(score, 0),
         color = when {
             score >= 80 -> AppColors.green
             score >= 60 -> AppColors.primary
@@ -3618,10 +3618,10 @@ private fun TradingChart(
             }
         }
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text("Заявка Binance: "+williamsTriggerStateLabel(pendingTrigger.state)+
+            Text("Заявка Binance: "+williamsRuStatus(williamsTriggerStateLabel(pendingTrigger.state))+
                 (pendingTrigger.trigger?.let { " · "+fmt(it) } ?: ""),
                 color=AppColors.amber,style=MaterialTheme.typography.labelSmall)
-            Text("Alligator: Jaw 13/8 • Teeth 8/5 • Lips 5/3  |  Fractals подтверждаются после двух правых закрытых баров",
+            Text("Аллигатор: челюсти 13/8 • зубы 8/5 • губы 5/3  |  фракталы подтверждаются после двух закрытых свечей справа",
                 color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
             Text(
                 "График • " + chartIntervalLabel(interval) +
@@ -3798,7 +3798,7 @@ private fun TradingChart(
             Text("${cockpitTime(c.time)} • O ${fmt(c.open)} • H ${fmt(c.high)} • L ${fmt(c.low)} • C ${fmt(c.close)}\nAO ${fmt(c.ao, 5)} • AC ${fmt(c.ac, 5)} • ${c.signalTypes.joinToString()}", modifier = Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
         }
         if (showAo) {
-        Text("Awesome Oscillator (AO) • зелёный: столбец растёт, красный: столбец снижается",
+        Text("Чудесный осциллятор (AO) • зелёный: столбец растёт, красный: снижается",
             color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 8.dp))
         Canvas(modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 8.dp, vertical = 4.dp)) {
@@ -3822,7 +3822,7 @@ private fun TradingChart(
         }
         }
         if (showAc) {
-        Text("Accelerator Oscillator (AC = AO − SMA5(AO)) • зелёный: растёт, красный: снижается; не самостоятельный вход",
+        Text("Осциллятор ускорения (AC = AO − SMA5(AO)) • зелёный: растёт, красный: снижается; сам по себе не разрешает вход",
             color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 8.dp))
         Canvas(modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 8.dp, vertical = 4.dp)) {
@@ -3846,7 +3846,7 @@ private fun TradingChart(
         }
         }
         if (showMfi) {
-        Text("Williams MFI proxy = (High − Low) / Volume • это диагностический прокси потока, не классический MFI 0–100",
+        Text("Показатель потока Вильямса = (максимум − минимум) / объём • только диагностика, не классический MFI 0–100",
             color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 8.dp))
         Canvas(modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 8.dp, vertical = 4.dp)) {
