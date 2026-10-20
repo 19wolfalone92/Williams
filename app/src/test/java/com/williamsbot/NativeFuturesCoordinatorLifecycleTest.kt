@@ -408,6 +408,26 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertTrue(journal.writeState("futures_campaign_intents_v2",rows.toString()))
     }
 
+    @Test fun confirmedUnfilledH1CancellationAllowsOneNewAttemptWithANewId() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val parent="BTCUSDT:1h:${direction.name}:FRACTAL"
+            val first=plan(direction).copy(clientId=williamsBookH1ClientId("BTCUSDT",parent),signalId=parent)
+            assertTrue(coordinator.submitPendingEntry(first).getBoolean("accepted"))
+            assertTrue(coordinator.cancelPendingEntries("TEST_TEETH_INVALIDATED","BTCUSDT").getBoolean("ok"))
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val generation=williamsBookH1RetryGeneration(coordinator.intentsSnapshot(),parent)
+            assertEquals(1,generation)
+            val retry=first.copy(clientId=williamsBookH1ClientId("BTCUSDT",parent,requireNotNull(generation)))
+            val admitted=coordinator.submitPendingEntry(retry)
+            assertTrue(admitted.toString(),admitted.getBoolean("accepted"))
+            assertFalse(coordinator.submitPendingEntry(retry).getBoolean("accepted"))
+            assertEquals(2,exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+
     @Test fun profileSelectionAndEntryAdmissionShareOneAuthorityAndPendingCampaignPreventsSwitching() {
         var selected=williamsTc2Profile
         val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)

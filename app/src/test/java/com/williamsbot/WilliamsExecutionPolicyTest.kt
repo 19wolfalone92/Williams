@@ -1,6 +1,7 @@
 package com.williamsbot
 
 import org.json.JSONObject
+import org.json.JSONArray
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -43,5 +44,20 @@ class WilliamsExecutionPolicyTest {
                 assertEquals(input.lastIndex,found.confirmation)
             }
         }
+    }
+    @Test fun newAttemptRequiresConfirmedZeroFillCancellation() {
+        val old=JSONObject().put("signal_id","f").put("intent_role","ENTRY")
+            .put("campaign_status","CLOSED_OR_STOPPED").put("cancel_reconciled_status","CANCELED")
+            .put("cancel_reconciled_at_ms",1000).put("position_observed_after_cancel","0")
+        assertEquals(1,williamsBookH1RetryGeneration(JSONArray().put(old),"f"))
+        assertNotEquals(williamsBookH1ClientId("BTCUSDT","f"),williamsBookH1ClientId("BTCUSDT","f",1))
+        assertTrue(williamsBookH1ClientId("BTCUSDT","f",100).length<=36)
+        for(change in listOf(
+            JSONObject(old.toString()).put("executed_qty","0.01"),
+            JSONObject(old.toString()).put("cancel_reconciled_status","CANCEL_SUBMISSION_UNKNOWN"),
+            JSONObject(old.toString()).put("conditional_actual_order_id","123"),
+            JSONObject(old.toString()).put("position_observed_after_cancel","NaN"),
+            JSONObject(old.toString()).put("fill_observed_at_ms",999)))
+            assertNull(williamsBookH1RetryGeneration(JSONArray().put(change),"f"))
     }
 }
