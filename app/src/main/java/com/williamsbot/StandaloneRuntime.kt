@@ -1242,6 +1242,13 @@ private class NativeEngine(
     // Prime H1 for all ten symbols before optional context/chart frames.
     // Missing H4/D1/H6/M15 never turns off read-only H1 market analysis.
     private val startupFrames = listOf("1h", "4h", "1d", "6h", "15m")
+    // Prioritize analysis horizons. Full exchange history of minute-by-minute
+    // bars for ten pairs can consume gigabytes and is NOT safe to force on mobile.
+    // 1m/3m/5m remain persisted on demand as bounded chart/monitoring history.
+    private val durableBackfillFrames = listOf(
+        "1h", "4h", "6h", "1d", "1w", "1M",
+        "15m", "30m", "2h", "8h", "12h", "3d"
+    )
     // The H1 decision engine needs the full 150-candle working set. Higher-timeframe
     // context has explicit lower minimums in the entry contract; requiring 150 D1
     // candles during startup can deadlock scanning on a fresh Futures Demo market.
@@ -1287,6 +1294,11 @@ private class NativeEngine(
     @Volatile private var publicSocketLastEventMs = 0L
     @Volatile private var publicSocketStartedMs = 0L
     @Volatile private var publicReconnectRequested = false
+    @Volatile private var deepHistoryBackfillRunning = false
+    @Volatile private var deepHistoryPairsComplete = 0
+    @Volatile private var deepHistoryLastError: String? = null
+    @Volatile private var deepHistoryStorageLow = false
+    @Volatile private var deepHistoryLastStartMs = 0L
     @Volatile private var historyWarmupRunning = false
     @Volatile private var historyReady = false // All ten H1 decision sets ready.
     @Volatile private var readOnlyH1Ready = false // At least one valid H1 working set.
@@ -2303,6 +2315,7 @@ private class NativeEngine(
                         // requires all ten H1 series + independent safety
                         // admission; partial chart data is never an entry pass.
                         if(readOnlyH1Ready) {
+                            if (historyReady) schedulePersistentHistoryBackfill(generation)
                             requestScan()
                         } else {
                             scannerState = "WAITING_FOR_HISTORY"
@@ -3711,20 +3724,7 @@ private class NativeEngine(
                     readOnlyH1Ready -> "PARTIAL_H1_SCANNING_AVAILABLE"
                     else -> "WAITING_RETRY"
                 }
-                if (historyReady) {
-                    // Deep history is bounded and sequential on mobile. It is
-                    // a cache warmer, never a prerequisite for first scan.
-                    historyBackfillExecutor.execute {
-                        for (symbol in coreSymbols) {
-                            if (!running || generation != runtimeGeneration) break
-                            runCatching { fetchFullHistory(symbol, "1h", 6) }
-                                .onFailure {
-                                    lastError = "background history " + symbol + ": " +
-                                        (it.message ?: it.javaClass.simpleName)
-                                }
-                        }
-                    }
-                }
+                if (historyReady) schedulePersistentHistoryBackfill(generation)
             } catch (x: Exception) {
                 if (generation == runtimeGeneration) {
                     historyReady = false
@@ -3741,6 +3741,80 @@ private class NativeEngine(
         }.apply {
             isDaemon = true
             name = "williams-recent-history"
+            start()
+        }
+    }
+
+    /**
+     * The phone owns an append-only SQLite kline history. Fetch the exchange's
+     * earliest available bar for the selected Williams analysis frames in
+     * small restartable batches. A network outage cannot erase progress.
+     *
+     * One background worker + inter-pair pauses avoid a 10×15 REST stampede.
+     * Existing H1 read-only scans and protective orders are never delayed on
+     * exhaustive archival downloads.
+     */
+    @Synchronized
+    private fun schedulePersistentHistoryBackfill(generation: Long) {
+        if (!running || !historyReady || deepHistoryBackfillRunning ||
+            generation != runtimeGeneration) return
+        val now = System.currentTimeMillis()
+        if (deepHistoryLastStartMs > 0L && now - deepHistoryLastStartMs < 60_000L) return
+        deepHistoryBackfillRunning = true
+        deepHistoryLastStartMs = now
+        Thread {
+            try {
+                while (running && generation == runtimeGeneration &&
+                    !Thread.currentThread().isInterrupted) {
+                    var incomplete = 0
+                    var successes = 0
+                    deepHistoryLastError = null
+                    for (frame in durableBackfillFrames) {
+                        for (symbol in coreSymbols) {
+                            if (!running || generation != runtimeGeneration ||
+                                Thread.currentThread().isInterrupted) return@Thread
+                            // Leave room for the Futures journal, SQLite WAL and Android.
+                            val freeBytes = runCatching {
+                                android.os.StatFs(context.filesDir.path).availableBytes
+                            }.getOrDefault(0L)
+                            if (freeBytes < 512L * 1024L * 1024L) {
+                                deepHistoryStorageLow = true
+                                deepHistoryLastError = "LOW_DEVICE_STORAGE: historical download paused; existing database preserved"
+                                return@Thread
+                            }
+                            deepHistoryStorageLow = false
+                            val result = runCatching { fetchFullHistory(symbol, frame, 4) }
+                            if (result.isFailure) {
+                                deepHistoryLastError = symbol + ":" + frame + " " +
+                                    (result.exceptionOrNull()?.message ?: "history error")
+                                incomplete++
+                            } else {
+                                successes++
+                                if (!historyStore.isComplete(symbol, frame)) incomplete++
+                            }
+                            // Allow new-order protection, scanning and foreground UI
+                            // to consume exchange-rate and device I/O budgets first.
+                            try { Thread.sleep(200L) } catch (_: InterruptedException) {
+                                Thread.currentThread().interrupt()
+                                return@Thread
+                            }
+                        }
+                    }
+                    deepHistoryPairsComplete = durableBackfillFrames.size * coreSymbols.size - incomplete
+                    // Once all backfill cursors reach the exchange beginning, the
+                    // same job periodically catches up missed newer candles.
+                    val intervalMs = if (incomplete == 0) 3_600_000L else 30_000L
+                    try { Thread.sleep(intervalMs) } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return@Thread
+                    }
+                }
+            } finally {
+                deepHistoryBackfillRunning = false
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-durable-history-sync"
             start()
         }
     }
@@ -4002,146 +4076,106 @@ private class NativeEngine(
             .takeLast(limit)
     }
 
+    /**
+     * Persist an exchange-history slice. Backwards sync always starts BEFORE
+     * SQLite's oldest saved bar, so restarts never download the same six pages.
+     * Once the exchange beginning was reached, only fetch missing new bars.
+     *
+     * Return only the small working set, never all historical rows in RAM.
+     */
     private fun fetchFullHistory(
         symbol: String,
         frame: String = "1h",
-        maxPages: Int = 6
+        maxPages: Int = 4
     ): List<CandleN> {
-        val normalizedSymbol = symbol.uppercase()
-
-        if (!historyStore.isComplete(normalizedSymbol, frame)) {
-            var endTime = futuresMarketData.exchangeNowMs()
-            var page = 0
-            var reachedHistoryBeginning = false
-            val pageLimit = maxPages.coerceIn(1, 100)
-            try {
-                while (page++ < pageLimit) {
-                    val body = futuresMarketData.klines(
-                        normalizedSymbol,
-                        frame,
-                        1000,
-                        endTime = endTime
-                    ).toString()
-                    val array = JSONArray(body)
+        val normalizedSymbol = symbol.uppercase(Locale.US)
+        val pageLimit = maxPages.coerceIn(1, 8)
+        try {
+            if (!historyStore.isComplete(normalizedSymbol, frame)) {
+                val previousOldest = historyStore.oldest(normalizedSymbol, frame)
+                var endTime = if (previousOldest > 0L) previousOldest - 1L
+                    else futuresMarketData.exchangeNowMs()
+                for (page in 0 until pageLimit) {
+                    if (!running || Thread.currentThread().isInterrupted) break
+                    val array = futuresMarketData.klines(
+                        normalizedSymbol, frame, 1000, endTime = endTime
+                    )
                     if (array.length() == 0) {
-                        reachedHistoryBeginning = true
+                        // No known candles means unavailable history, not a verified
+                        // exchange beginning. Do not mark an empty database complete.
+                        if (historyStore.count(normalizedSymbol, frame) > 0L)
+                            historyStore.markComplete(normalizedSymbol, frame)
                         break
                     }
                     val exchangeNowMs = futuresMarketData.exchangeNowMs()
-
-                    val batch = ArrayList<MarketHistoryStore.Candle>(
-                        array.length()
-                    )
-                    var oldest = Long.MAX_VALUE
-
+                    val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
+                    var oldestPageTime = Long.MAX_VALUE
                     for (i in 0 until array.length()) {
                         val row = array.getJSONArray(i)
                         val openTime = row.getLong(0)
                         val closeTime = row.getLong(6)
-                        oldest = min(oldest, openTime)
-
-                        if (!futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)) {
-                            continue
+                        if (openTime <= 0L || openTime > endTime) {
+                            throw IllegalStateException("Historical USD-M Futures pagination did not move backwards")
                         }
-
+                        oldestPageTime = minOf(oldestPageTime, openTime)
+                        if (!futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)) continue
                         batch += MarketHistoryStore.Candle(
-                            openTime = openTime,
-                            closeTime = closeTime,
-                            open = row.getString(1).toDouble(),
-                            high = row.getString(2).toDouble(),
-                            low = row.getString(3).toDouble(),
-                            close = row.getString(4).toDouble(),
-                            volume = row.getString(5).toDouble()
+                            openTime, row.getString(1).toDouble(), row.getString(2).toDouble(),
+                            row.getString(3).toDouble(), row.getString(4).toDouble(),
+                            row.getString(5).toDouble(), closeTime
                         )
                     }
-
                     if (batch.isNotEmpty()) {
-                        historyStore.upsertBatch(
-                            normalizedSymbol,
-                            frame,
-                            batch
-                        )
+                        historyStore.upsertBatch(normalizedSymbol, frame, batch)
                     }
-
-                    if (
-                        oldest == Long.MAX_VALUE ||
-                        oldest <= 0L ||
-                        array.length() < 1000
-                    ) {
-                        reachedHistoryBeginning = true
+                    if (oldestPageTime <= 0L || oldestPageTime >= endTime) {
+                        throw IllegalStateException("Historical pagination failed to advance")
+                    }
+                    if (array.length() < 1000) {
+                        historyStore.markComplete(normalizedSymbol, frame)
                         break
                     }
-
-                    endTime = oldest - 1L
+                    endTime = oldestPageTime - 1L
                 }
-
-                if (reachedHistoryBeginning) {
-                    historyStore.markComplete(
-                        normalizedSymbol,
-                        frame
+            } else {
+                // Catch up any number of closed bars missed while the phone was
+                // offline. A three-bar tail request missed gaps longer than 3 bars.
+                var newest = historyStore.newest(normalizedSymbol, frame)
+                if (newest <= 0L) throw IllegalStateException("Complete history has no persisted candles")
+                for (page in 0 until pageLimit) {
+                    if (!running || Thread.currentThread().isInterrupted) break
+                    val array = futuresMarketData.klines(
+                        normalizedSymbol, frame, 1000, startTime = newest + 1L
                     )
+                    if (array.length() == 0) break
+                    val now = futuresMarketData.exchangeNowMs()
+                    val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
+                    for (i in 0 until array.length()) {
+                        val row = array.getJSONArray(i)
+                        val opened = row.getLong(0)
+                        val closed = row.getLong(6)
+                        if (opened <= newest) continue
+                        if (!futuresMarketData.isCandleClosed(closed, now)) break
+                        batch += MarketHistoryStore.Candle(
+                            opened, row.getString(1).toDouble(), row.getString(2).toDouble(),
+                            row.getString(3).toDouble(), row.getString(4).toDouble(),
+                            row.getString(5).toDouble(), closed
+                        )
+                    }
+                    if (batch.isEmpty()) break
+                    historyStore.upsertBatch(normalizedSymbol, frame, batch)
+                    val next = batch.last().openTime
+                    if (next <= newest) throw IllegalStateException("History incremental cursor stalled")
+                    newest = next
+                    if (array.length() < 1000) break
                 }
-            } catch (x: Exception) {
-                historyStore.setError(
-                    normalizedSymbol,
-                    frame,
-                    x.message ?: x.javaClass.simpleName
-                )
-                throw x
             }
-        } else {
-            // After the initial full download, only refresh the recent tail.
-            val newest = historyStore.newest(
-                normalizedSymbol,
-                frame
-            )
-            val body = futuresMarketData.klines(
-                normalizedSymbol,
-                frame,
-                3,
-                startTime = newest.coerceAtLeast(0L)
-            ).toString()
-            val array = JSONArray(body)
-            val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
-            val exchangeNowMs = futuresMarketData.exchangeNowMs()
-
-            for (i in 0 until array.length()) {
-                val row = array.getJSONArray(i)
-                val closeTime = row.getLong(6)
-                if (!futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)) continue
-                batch += MarketHistoryStore.Candle(
-                    openTime = row.getLong(0),
-                    closeTime = closeTime,
-                    open = row.getString(1).toDouble(),
-                    high = row.getString(2).toDouble(),
-                    low = row.getString(3).toDouble(),
-                    close = row.getString(4).toDouble(),
-                    volume = row.getString(5).toDouble()
-                )
-            }
-
-            historyStore.upsertBatch(
-                normalizedSymbol,
-                frame,
-                batch,
-                complete = true
-            )
+        } catch (failure: Exception) {
+            historyStore.setError(normalizedSymbol, frame, failure.message ?: failure.javaClass.simpleName)
+            throw failure
         }
-
-        // Only a bounded working set enters RAM.
-        return historyStore.loadRecent(
-            normalizedSymbol,
-            frame,
-            5000
-        ).map {
-            CandleN(
-                it.openTime,
-                it.open,
-                it.high,
-                it.low,
-                it.close,
-                it.volume
-            )
+        return historyStore.loadRecent(normalizedSymbol, frame, 150).map {
+            CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
         }
     }
 
@@ -8291,6 +8325,45 @@ private class NativeEngine(
             .put("outcome",JSONObject().put("accepted",false).put("mutation_attempted",false).put("blocker",safeDiagnosticText(reason))).toString()) }
     }
 
+    /**
+     * Long-term market LOCATION (not a wave label or an entry trigger).
+     * All extrema come strictly from persistently stored, CLOSED Binance H1
+     * candles. Unknown/insufficient history is not presented as a strong signal.
+     */
+    private fun persistentH1MarketLocation(symbol: String): JSONObject {
+        val rows = historyStore.loadRecent(symbol, "1h", 6000)
+        val last = rows.lastOrNull()
+        val result = JSONObject().put("source", "DEVICE_SQLITE_CLOSED_H1")
+            .put("used_for_order_entry", false)
+            .put("full_history_backfilled", historyStore.isComplete(symbol, "1h"))
+            .put("loaded_bars", rows.size)
+            .put("first_bar_open_ms", rows.firstOrNull()?.openTime ?: JSONObject.NULL)
+            .put("last_bar_open_ms", last?.openTime ?: JSONObject.NULL)
+        if (last == null) return result.put("status", "NO_HISTORY")
+        val exchangeTime = futuresMarketData.cachedExchangeNowMs()
+        if (!futuresMarketData.isKlineOpenTimeClosed(last.openTime, "1h", exchangeTime)) {
+            return result.put("status", "UNVERIFIED_LAST_H1_CLOSE")
+        }
+        for (period in listOf(150, 720, 2160, 6000)) {
+            if (rows.size < period) {
+                result.put("range_" + period + "_hours", JSONObject().put("status", "INSUFFICIENT_HISTORY"))
+                continue
+            }
+            val sample = rows.takeLast(period)
+            val low = sample.minOf { it.low }
+            val high = sample.maxOf { it.high }
+            val position = if (high > low)
+                ((last.close - low) / (high - low)).coerceIn(0.0, 1.0)
+                else null
+            result.put("range_" + period + "_hours", JSONObject()
+                .put("status", "OBSERVED_NOT_WAVE_CLASSIFICATION")
+                .put("high", high).put("low", low)
+                .put("last_close", last.close)
+                .put("position_from_0_low_to_1_high", position ?: JSONObject.NULL))
+        }
+        return result.put("status", "HISTORICAL_CONTEXT")
+    }
+
     private fun toJson(candidate: BaseAnalysis): JSONObject {
         val wave = candidate.wave
         // Match the exact signal selected by execution, rather than displaying
@@ -8415,6 +8488,12 @@ private class NativeEngine(
         runCatching { executionStore.writeState("decision_trace_"+candidate.symbol,trace.toString()) }
         return JSONObject()
             .put("decision_trace",trace)
+            .put("persistent_h1_market_location", runCatching {
+                persistentH1MarketLocation(candidate.symbol)
+            }.getOrElse {
+                JSONObject().put("status", "HISTORY_READ_FAILED")
+                    .put("used_for_order_entry", false)
+            })
             .put("directional_context_native", directionTrace)
             .put("wave4_zero_line_diagnostic", wave4Trace)
             .put("ntd_balance_line_diagnostics", ntdTrace)
@@ -9155,6 +9234,12 @@ private class NativeEngine(
             .put("optional_context_history_ready",optionalContextHistoryReady)
             .put("history_state", historyState)
             .put("history_last_error", historyLastError ?: JSONObject.NULL)
+            .put("persistent_history_sync_active", deepHistoryBackfillRunning)
+            .put("persistent_history_frames", JSONArray(durableBackfillFrames))
+            .put("persistent_history_complete_pairs", deepHistoryPairsComplete)
+            .put("persistent_history_total_pairs", durableBackfillFrames.size * coreSymbols.size)
+            .put("persistent_history_storage_low", deepHistoryStorageLow)
+            .put("persistent_history_last_error", deepHistoryLastError ?: JSONObject.NULL)
             .put("fsm_state", stateMachine.state.name)
             .put("kill_switch_latched", killLatched)
             .put("live_prices", JSONObject().apply {

@@ -325,7 +325,14 @@ def main() -> None:
     must(market_data_source, "internal fun isLastClosedCandleCurrent", "BinanceUsdMFuturesMarketData.kt")
     must(runtime_source, "futuresMarketData.isLastClosedCandleCurrent(last.t, frame, nowMs)", "StandaloneRuntime.kt interval-aware cache freshness")
     must(runtime_source, "APPROVED_FUTURES_KLINE_INTERVALS", "StandaloneRuntime.kt chart interval contract")
-    must(runtime_source, "var endTime = futuresMarketData.exchangeNowMs()", "StandaloneRuntime.kt")
+    # Old implementation restarted backward pagination at 'now' on every boot,
+    # repeatedly downloading the same pages. Resumable archival data must use
+    # the oldest DURABLY saved candle as a strict backward cursor.
+    must(runtime_source, "val previousOldest = historyStore.oldest(normalizedSymbol, frame)", "StandaloneRuntime.kt resumable history cursor")
+    must(runtime_source, "else futuresMarketData.exchangeNowMs()", "StandaloneRuntime.kt first history fetch")
+    must(runtime_source, "endTime = oldestPageTime - 1L", "StandaloneRuntime.kt backward pagination")
+    must(runtime_source, "startTime = newest + 1L", "StandaloneRuntime.kt forward gap catch-up")
+    must(runtime_source, "private fun schedulePersistentHistoryBackfill", "StandaloneRuntime.kt asynchronous phone archival")
     must_not(
         runtime_source,
         "((it.entry - it.stop) / it.entry).coerceAtLeast(0.0)",

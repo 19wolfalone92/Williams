@@ -17,7 +17,7 @@ if (keystorePropertiesFile.exists()) {
 
 val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 // Local builds must not downgrade an installed CI build (the previous APK was code 3503).
-val resolvedVersionCode = maxOf(44330, ciRunNumber ?: 44330)
+val resolvedVersionCode = maxOf(44400, ciRunNumber ?: 44400)
 val cockpitPreview = providers.gradleProperty("williamsCockpitPreview").orNull == "true"
 
 val debugKeystoreFile = rootProject.file("build/williams-debug.p12")
@@ -42,7 +42,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = resolvedVersionCode
-        versionName = "4.43.3"
+        versionName = "4.44.0"
     }
 
     buildFeatures {

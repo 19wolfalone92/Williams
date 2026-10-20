@@ -64,6 +64,13 @@ internal fun historyReadinessStatus(
 }
 
 /**
+ * A completed historical backfill means the oldest exchange candle was reached.
+ * Adding a recent closed candle cannot make that fact untrue.
+ */
+internal fun historicBackfillComplete(prior: Boolean, update: Boolean?): Boolean =
+    prior || update == true
+
+/**
  * Persistent market-history store.
  *
  * Full history lives only on the device database. Callers load a bounded
@@ -231,22 +238,13 @@ class MarketHistoryStore(context: Context) :
             state.put("oldest_open_time", row[0])
             state.put("newest_open_time", row[1])
             state.put("candle_count", row[2])
-            val completeInt =
-                when (complete) {
-                    true -> 1
-                    false -> 0
-                    null -> writableDatabase.query(
-                        "sync_state",
-                        arrayOf("complete"),
-                        "symbol=? AND interval=?",
-                        arrayOf(symbol, interval),
-                        null,
-                        null,
-                        null
-                    ).use { cursor ->
-                        if (cursor.moveToFirst()) cursor.getInt(0) else 0
-                    }
-                }
+            // "complete" records that the exchange's earliest available candle
+            // was reached. Live increments must NEVER erase that durable marker.
+            val previousComplete = db.query(
+                "sync_state", arrayOf("complete"), "symbol=? AND interval=?",
+                arrayOf(symbol, interval), null, null, null
+            ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) == 1 }
+            val completeInt = if (historicBackfillComplete(previousComplete, complete)) 1 else 0
             state.put("complete", completeInt)
             state.put("updated_at", System.currentTimeMillis())
             db.insertWithOnConflict(
