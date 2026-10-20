@@ -3266,6 +3266,11 @@ internal class NativeFuturesCampaignCoordinator(
                 JSONObject()
                     .put("symbol", item.optString("symbol"))
                     .put("direction", item.optString("direction"))
+                    // The owner was pinned at order admission and must not be
+                    // inferred from whichever observer signal is newest now.
+                    .put("strategy_profile", item.optString("strategy_profile", "UNKNOWN"))
+                    .put("signal_id", item.optString("signal_id"))
+                    .put("entry_client_id_suffix", item.optString("entry_client_id").takeLast(8))
                     .put("role", role)
                     .put("kind", item.optString("kind"))
                     .put("signal_type", item.optString("signal_type"))
