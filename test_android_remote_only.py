@@ -19,7 +19,7 @@ def test_android_starts_native_futures_runtime_from_foreground_service():
     assert "StandaloneRuntime.autostart(applicationContext)" in service
     assert "StandaloneRuntime.stopTrading()" in service
     assert 'android:name=".TradingForegroundService"' in manifest
-    assert "Futures Testnet runtime on this device" in service
+    assert "Фоновое сопровождение Binance Futures Demo на этом устройстве" in service
 
 
 def test_android_boot_recovery_is_opt_in_and_keeps_reconciliation_gate():
@@ -900,9 +900,12 @@ def test_tc2_opposing_h1_signal_is_an_advisory_not_an_automatic_market_exit():
         "private fun submitNativeFuturesAddition(", 1
     )[0]
     assert "val actionableOpposing = opposing?.takeIf { williamsOpposingSignalCanMarketClose(profile) }" in manage
-    assert "if (actionableOpposing != null || boundaryExit || editionExit.isNotEmpty())" in manage
+    assert "if (williamsStrategyCanMarketClose(profile) &&" in manage
+    assert "(actionableOpposing != null || boundaryExit || editionExit.isNotEmpty()))" in manage
+    assert '"tc2_correction_boundary_advisory"' in manage
     assert 'market_close_authorized",false' in manage
     assert "futuresCampaignCoordinator.saveManagementState(" in manage
     assert "planWilliamsCampaignStop(" in manage
-    assert 'ownerProfile!=williamsTc2Profile' in policy
+    assert 'ownerProfile==williamsNtdProfile || ownerProfile==williamsCourseProfile' in policy
+    assert 'williamsStrategyCanMarketClose(ownerProfile)' in policy
     assert "futuresCampaignCoordinator.trailProtectiveStop(" in manage
