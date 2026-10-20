@@ -417,9 +417,18 @@ internal fun scannerDataReadinessState(
 ): String = when {
     !running -> "STOPPED"
     !historyReady -> "WAITING_FOR_HISTORY"
-    !marketDataFresh -> "WAITING_FOR_MARKET_DATA"
+    // Market quotes may be stale while H1 history is still fetchable. Let
+    // discovery run and report missing quotes; order mutations keep their
+    // independent live-market and exchange-state gates.
     else -> "RUNNABLE"
 }
+
+/** A one-second worker heartbeat must not re-fetch 10 H1 charts every second. */
+internal fun shouldScheduleReadOnlyScan(
+    nowMs:Long,lastCompletedAtMs:Long,minIntervalMs:Long=30_000L
+):Boolean = nowMs>0 && minIntervalMs>0 &&
+    (lastCompletedAtMs==0L || (nowMs>=lastCompletedAtMs &&
+        nowMs-lastCompletedAtMs>=minIntervalMs))
 
 /** Execution blockers remain visible after a successful read-only market scan. */
 internal fun scannerExecutionBlocker(
@@ -428,14 +437,17 @@ internal fun scannerExecutionBlocker(
     killLatched: Boolean,
     accountReady: Boolean,
     marketDataFresh: Boolean,
-    coordinatorState: String
+    coordinatorState: String,
+    coordinatorReadyForEntry:Boolean=false
 ): String? = when {
     killLatched -> "BLOCKED_KILL"
     reconcileRequired -> "BLOCKED_FUTURES_RECONCILIATION"
     coordinatorState.uppercase(Locale.US) in setOf(
         "UNINITIALIZED", "RECONCILE_REQUIRED", "POSITION_UNPROTECTED",
-        "ENTRY_PENDING", "EXIT_PENDING"
+        "EXIT_PENDING"
     ) -> "BLOCKED_FUTURES_RECONCILIATION"
+    coordinatorState.uppercase(Locale.US)=="ENTRY_PENDING" && !coordinatorReadyForEntry ->
+        "BLOCKED_FUTURES_RECONCILIATION"
     paused -> "PAUSED"
     !accountReady -> "BLOCKED_ACCOUNT"
     !marketDataFresh -> "WAITING_FOR_MARKET_DATA"
@@ -1259,6 +1271,8 @@ private class NativeEngine(
 
     private val scanCacheTtlMs = 12_000L
     private val scanUniverseCacheTtlMs = 15_000L
+    @Volatile private var scanUniverseMissingQuotes: List<String> = emptyList()
+    @Volatile private var scanUniverseQuoteFailure: String? = null
     @Volatile private var cachedScanUniverse: Triple<List<String>, Map<String, Double>, Map<String, Double>>? = null
     @Volatile private var scanUniverseCacheAtMs = 0L
     private val dailyRiskCheckLock = Any()
@@ -4063,14 +4077,22 @@ private class NativeEngine(
         }
 
         val volumes = HashMap<String, Double>()
-        val volumeRows = futuresMarketData.ticker24h()
+        val volumeRows = runCatching { futuresMarketData.ticker24h() }.getOrElse {
+            scanUniverseQuoteFailure = "Futures 24h volume feed: " +
+                (it.message ?: it.javaClass.simpleName)
+            JSONArray()
+        }
         for (i in 0 until volumeRows.length()) {
             val item = volumeRows.optJSONObject(i) ?: continue
             val symbol = item.optString("symbol").uppercase(Locale.US)
             if (symbol in coreSymbols) volumes[symbol] = item.optString("quoteVolume").toDoubleOrNull() ?: 0.0
         }
         val spreads = HashMap<String, Double>()
-        val bookRows = futuresMarketData.bookTickers()
+        val bookRows = runCatching { futuresMarketData.bookTickers() }.getOrElse {
+            scanUniverseQuoteFailure = (scanUniverseQuoteFailure?.plus("; ") ?: "") +
+                "Futures book ticker feed: " + (it.message ?: it.javaClass.simpleName)
+            JSONArray()
+        }
         for (i in 0 until bookRows.length()) {
             val item = bookRows.optJSONObject(i) ?: continue
             val symbol = item.optString("symbol").uppercase(Locale.US)
@@ -4080,7 +4102,11 @@ private class NativeEngine(
             if (bid > 0.0 && ask >= bid) spreads[symbol] = (ask - bid) / bid
         }
         val missing = coreSymbols.filter { (volumes[it] ?: 0.0) <= 0.0 || spreads[it] == null }
-        require(missing.isEmpty()) { "Futures market data missing approved contracts: " + missing.joinToString(",") }
+        // Do not discard the entire read-only H1 scan when the 24h ticker or
+        // book-ticker REST endpoint is degraded. Exactly the same missing
+        // quote/volume set MUST inhibit all new entries below.
+        scanUniverseMissingQuotes = missing
+        if (missing.isEmpty()) scanUniverseQuoteFailure = null
         val snapshot = Triple(coreSymbols.toList(), volumes.toMap(), spreads.toMap())
         cachedScanUniverse = snapshot
         scanUniverseCacheAtMs = nowMs
@@ -4117,7 +4143,7 @@ private class NativeEngine(
         }
 
         synchronized(this) {
-            if (scanning) return
+            if (scanning || !shouldScheduleReadOnlyScan(System.currentTimeMillis(),lastScanAt)) return
             scanning = true
             scannerError = null
             scanRunId = "scan-" + System.currentTimeMillis()
@@ -6353,6 +6379,7 @@ private class NativeEngine(
 
         val universe = loadUniverse()
         scanSymbols = universe.first.toMutableList()
+        val missingCoarseQuotes=scanUniverseMissingQuotes.toList()
         val volumes = universe.second
         val spreads = universe.third
         val futures = scanSymbols.map { symbol ->
@@ -6414,8 +6441,9 @@ private class NativeEngine(
             reconcileRequired = reconcileRequired,
             killLatched = killLatched,
             accountReady = restAccountReady,
-            marketDataFresh = marketDataFresh(),
-            coordinatorState = coordinatorStateForCompletion
+            marketDataFresh = marketDataFresh() && missingCoarseQuotes.isEmpty(),
+            coordinatorState = coordinatorStateForCompletion,
+            coordinatorReadyForEntry = campaignCoordinatorReadyForEntry()
         )
         val missing = coreSymbols - ranked.map { it.symbol }.toSet()
         scannerState = when {
@@ -6434,7 +6462,12 @@ private class NativeEngine(
                         ?: "Futures positions/orders/protection reconciliation is required"
                     "PAUSED" -> lastError ?: "Runtime is paused; read-only market scan completed"
                     "BLOCKED_ACCOUNT" -> restAccountLastError ?: "Futures account snapshot is not ready; entries remain disabled"
-                    "WAITING_FOR_MARKET_DATA" -> restLastError ?: "Futures market data is stale; entries remain disabled"
+                    "WAITING_FOR_MARKET_DATA" ->
+                        if(missingCoarseQuotes.isNotEmpty())
+                            "H1 analysis completed; new entries blocked by missing Binance quote/volume for: " +
+                                missingCoarseQuotes.joinToString(",") +
+                                (scanUniverseQuoteFailure?.let { "; $it" } ?: "")
+                        else restLastError ?: "Futures market data is stale; entries remain disabled"
                     else -> executionBlocker
                 }
             }
@@ -9035,6 +9068,8 @@ private class NativeEngine(
             .put("scanner_started_at", scanStartedAt)
             .put("scanner_last_progress_at", scanLastProgressAt)
             .put("scanner_duration_ms", lastScanDurationMs)
+            .put("scanner_missing_market_quotes",JSONArray(scanUniverseMissingQuotes))
+            .put("scanner_quote_failure",scanUniverseQuoteFailure ?: JSONObject.NULL)
             .put("rest_market_ready", restMarketReady)
             .put("rest_account_ready", restAccountReady)
             .put("account_snapshot_at_ms", futuresAccountSnapshotUpdatedAtMs)
