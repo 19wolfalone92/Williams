@@ -7538,17 +7538,24 @@ private class NativeEngine(
             val signalIndex = candles.lastIndex - (streak - 3)
             if (signalIndex in 35..candles.lastIndex) {
                 val trigger = candles[signalIndex].h + tick
-                if (triggerStillPending(signalIndex, trigger)) {
+                val structuralStop = williamsTc2SuperAoInitialStop(
+                    "LONG",waveBars,signalIndex,tick,window=5
+                )
+                if (structuralStop != null && structuralStop<trigger &&
+                    triggerStillPending(signalIndex, trigger)) {
                     out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[signalIndex].t),
                         type = "SUPER_AO",
                         role = "ENTRY",
                         signalBarTimeMs = candles[signalIndex].t,
                         triggerPrice = trigger,
-                        protectivePrice = candles[signalIndex].l - tick,
+                        protectivePrice = structuralStop,
                         teethAtDetection = teethS[signalIndex].takeIf { it.isFinite() } ?: 0.0,
-                        invalidationPrice = candles[signalIndex].l - tick,
-                        reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
+                        invalidationPrice = structuralStop,
+                        reason = "WM2 Super AO: third rising AO bar; stop behind previous five closed H1 bars",
+                        setupContext = JSONObject().put("initial_stop_rule","TC2_3_TO_5_CLOSED_PRICE_BARS")
+                            .put("initial_stop_window",5).put("third_ao_bar_at_ms",candles[signalIndex].t)
+                            .put("risk_stop_at_price",structuralStop).toString()
                     )
                 }
             }
