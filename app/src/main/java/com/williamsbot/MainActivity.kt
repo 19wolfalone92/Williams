@@ -257,6 +257,7 @@ data class Status(
     val dailyPnlUsdt: Double = 0.0,
     val dailyLossPct: Double = 0.0,
     val dailyCapitalFlowUsdt: Double = 0.0,
+    val dailyEntryHaltText: String = "",
     val tradingMode: String = "ACTIVE",
     val openPositions: Int = 0,
     val maxOpenPositions: Int = APPROVED_FUTURES_CHART_SYMBOLS.size,
@@ -2199,6 +2200,11 @@ private fun RiskCard(status: Status) {
                 style = MaterialTheme.typography.labelSmall,
                 color = AppColors.textMuted
             )
+            if(status.dailyEntryHaltText.isNotBlank()) Text(
+                status.dailyEntryHaltText,
+                style = MaterialTheme.typography.labelSmall,
+                color = AppColors.textMuted
+            )
         }
     }
 }
@@ -4096,6 +4102,14 @@ internal fun parseStatus(json: JSONObject): Status {
         dailyPnlUsdt = json.optDouble("daily_pnl_usdt", 0.0),
         dailyLossPct = json.optDouble("daily_loss_pct", 0.0).coerceAtLeast(0.0),
         dailyCapitalFlowUsdt = json.optDouble("daily_capital_flow_usdt", 0.0),
+        dailyEntryHaltText = json.optJSONObject("daily_entry_halt")?.let { halt->
+            when {
+                !halt.optBoolean("available",false)->"Срок дневного запрета пока не подтверждён."
+                halt.optBoolean("allow_new_entries",false)->"Дневного запрета нет. Сброс дневных ограничений: 00:00 UTC."
+                else->"Дневной запрет до "+java.text.SimpleDateFormat("dd.MM HH:mm z",Locale.getDefault())
+                    .format(java.util.Date(halt.optLong("until_ms")))+"; граница суток 00:00 UTC."
+            }
+        }.orEmpty(),
         tradingMode = json.optString("trading_mode", "ACTIVE"),
         openPositions =
             json.optInt(

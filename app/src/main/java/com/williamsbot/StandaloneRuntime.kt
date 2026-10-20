@@ -1637,6 +1637,12 @@ private class NativeEngine(
             nowMs = futuresMarketData.cachedExchangeNowMs()
         )
 
+    private fun dailyEntryHalt(
+        nowMs:Long=futuresMarketData.cachedExchangeNowMs(),
+        clockFresh:Boolean=futuresMarketData.clockSnapshot().optBoolean("fresh",false)
+    ):FuturesDailyEntryHaltDecision = evaluateFuturesDailyEntryHalt(
+        executionStore.readState("futures_daily_entry_halt_utc_day_start_ms"),nowMs,clockFresh)
+
     /** Read-only SQLite/clock check: never perform signed REST I/O on the Android UI. */
     private fun dailyRiskBaselineReady(): Boolean {
         if (!futuresMarketData.clockSnapshot().optBoolean("fresh", false)) return false
@@ -1669,6 +1675,7 @@ private class NativeEngine(
             restAccountReady &&
             accountFundedForEntry() &&
             dailyRiskBaselineReady() &&
+            dailyEntryHalt().allowNewEntries &&
             historyReady &&
             futuresFsmAllowsEntry() &&
             futuresLossStreakGuard().allowNewEntries &&
@@ -1695,6 +1702,7 @@ private class NativeEngine(
             if (!restAccountReady) add("rest_account_not_ready")
             else if (!accountFundedForEntry()) add("futures_account_unfunded_or_zero_usdt")
             if (!dailyRiskBaselineReady()) add("futures_daily_risk_baseline_unverified")
+            dailyEntryHalt().reason?.let { add(it) }
             if (!historyReady) add("history_not_ready")
             if (!futuresFsmAllowsEntry()) add("fsm_not_execution_allowed")
             val lossStreak = futuresLossStreakGuard()
@@ -4861,9 +4869,19 @@ private class NativeEngine(
             return false
         }
         if (lossPct >= 0.03) {
-            paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            // A daily entry limit must expire with its UTC session. Do not turn
+            // it into the operator's indefinite pause or disable runtime auto-run.
+            if(!executionStore.writeState("futures_daily_entry_halt_utc_day_start_ms",utcDayStartMs.toString())) {
+                paused=true
+                prefs.edit().putBoolean("auto_run",false).commit()
+                lastError="FUTURES_DAILY_ENTRY_HALT_PERSIST_FAILED: entries paused; SQLite write failed"
+                return false
+            }
+        }
+        val halt=dailyEntryHalt(exchangeNowMs,true)
+        if(!halt.allowNewEntries) {
             lastError = "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"
+            if(!halt.available) lastError=halt.reason
             runCatching {
                 withCampaignMutation(
                     symbol = "FUTURES_ACCOUNT",
@@ -4877,6 +4895,7 @@ private class NativeEngine(
             }
             return false
         }
+        if(lastError?.startsWith("FUTURES_DAILY_LOSS_LIMIT:")==true) lastError=null
         return true
     }
 
@@ -9410,6 +9429,11 @@ private class NativeEngine(
             .put("daily_pnl_usdt", futuresDailyPnl)
             .put("daily_loss_pct", futuresDailyLossPct)
             .put("daily_capital_flow_usdt", futuresDailyCapitalFlow)
+            .put("daily_entry_halt",dailyEntryHalt().let { halt->
+                JSONObject().put("available",halt.available).put("allow_new_entries",halt.allowNewEntries)
+                    .put("until_ms",halt.untilMs?:JSONObject.NULL).put("reason",halt.reason?:JSONObject.NULL)
+                    .put("reset_policy","UTC_00_00_ENTRY_ONLY; OPERATOR_PAUSE_AND_KILL_UNCHANGED")
+            })
             .put("consecutive_losses", futuresLossStreakGuard().consecutiveLosses)
             .put("consecutive_losses_available", futuresLossStreakGuard().available)
             .put("consecutive_loss_blocker", futuresLossStreakGuard().reason ?: JSONObject.NULL)
