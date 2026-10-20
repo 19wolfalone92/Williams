@@ -713,7 +713,9 @@ def test_chart_cockpit_switches_all_approved_futures_symbols_without_changing_sc
 
 def test_chart_viewport_handles_fewer_than_twenty_four_candles():
     ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
-    assert "min(candles.size, max(1, (candles.size / scale).toInt()))" in ui
+    # Numeric edge cases execute in ChartLayoutTest; keep the production wiring gate.
+    assert "val viewport = chartViewport(series.size, requestedBars, barsBack)" in ui
+    assert "series.subList(viewport.start,viewport.start+viewport.count)" in ui
     assert ".coerceIn(24, candles.size)" not in ui
 
 

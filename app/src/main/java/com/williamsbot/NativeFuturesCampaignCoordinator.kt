@@ -2191,7 +2191,8 @@ internal class NativeFuturesCampaignCoordinator(
         val digest = java.security.MessageDigest.getInstance("SHA-256")
             .digest((symbol + ":" + entryClientId).toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }.take(24)
-        closePosition(symbol, direction, amount.abs().toPlainString(), "W2X_LIQ_$digest", "LIQUIDATION_GUARD")
+        closePositionInternal(symbol, direction, amount.abs().toPlainString(), "W2X_LIQ_$digest",
+            "LIQUIDATION_GUARD", partialReduction=false, riskEmergencyVerified=true)
     }
 
     /** Definite pre-order rejection. No exchange mutation was attempted. */
@@ -2975,6 +2976,13 @@ internal class NativeFuturesCampaignCoordinator(
         clientOrderId: String,
         reason: String,
         partialReduction:Boolean=false
+    ): JSONObject = closePositionInternal(symbol,direction,quantity,clientOrderId,reason,
+        partialReduction,riskEmergencyVerified=false)
+
+    /** Only the liquidation-remediation method may pass the private emergency capability. */
+    private fun closePositionInternal(
+        symbol:String,direction:Direction,quantity:String,clientOrderId:String,reason:String,
+        partialReduction:Boolean,riskEmergencyVerified:Boolean
     ): JSONObject = synchronized(lock) {
         require(symbol in allowedSymbols)
         require(quantity.toBigDecimalOrNull()?.signum() == 1)
@@ -2984,7 +2992,8 @@ internal class NativeFuturesCampaignCoordinator(
         // reading Binance, or writing an exit intent. A scanner bug cannot bypass it.
         val ownerIndex = latestEntryIntentIndex(intents, symbol)
         val exitOwner = ownerIndex?.let { intents.optJSONObject(it) }
-        val policyBlocker = williamsMarketExitBlocker(exitOwner?.optString("strategy_profile").orEmpty(), reason)
+        val policyBlocker = if(riskEmergencyVerified) null else
+            williamsMarketExitBlocker(exitOwner?.optString("strategy_profile").orEmpty(), reason)
         if (policyBlocker != null) {
             return@synchronized JSONObject().put("ok",false).put("state",state.name)
                 .put("blocker",policyBlocker).put("safe_rejection",true)
@@ -3135,7 +3144,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("entry_client_id", managedEntry?.optString("client_id") ?: JSONObject.NULL)
             .put("reason", reason).put("partial_reduction",partialReduction)
             .put("strategy_profile",managedEntry?.optString("strategy_profile") ?: JSONObject.NULL)
-            .put("exit_authority",when(reason) {
+            .put("exit_authority",if(riskEmergencyVerified) "VERIFIED_RISK_REDUCTION" else when(reason) {
                 "MANUAL_EXIT" -> "OPERATOR_CONFIRMED"
                 "KILL_SWITCH" -> "EMERGENCY_KILL"
                 else -> "PINNED_EDITION_RULE"

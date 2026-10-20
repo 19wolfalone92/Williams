@@ -7,15 +7,27 @@ from futures_williams_runtime import FuturesWilliamsRuntime
 from williams_edition_rules import TC2, NTD, COURSE
 from williams_execution_policy import market_exit_blocker
 from williams_exit_policy import plan_williams_stop
+from db import Database
+from market_context import ContextCache
+from execution_barrier import ExecutionBarrier
+
+
+@pytest.fixture
+def exit_runtime(tmp_path):
+    runtime=object.__new__(FuturesWilliamsRuntime)
+    runtime.db=Database(str(tmp_path / 'exit-audit.sqlite3'))
+    runtime.execution_barrier=ExecutionBarrier(ContextCache(),runtime.db)
+    yield runtime
+    runtime.db.conn.close()
 
 
 @pytest.mark.parametrize("side", ["BUY", "SELL"])
 @pytest.mark.parametrize("reason", [
     "STRATEGY_EXIT", "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
-    "CORRECTION_PARENT_PRICE_INVALIDATED", "TAKE_PROFIT",
+    "CORRECTION_PARENT_PRICE_INVALIDATED", "TAKE_PROFIT", "LIQUIDATION_GUARD",
 ])
-def test_tc2_direct_exit_is_blocked_before_cancel_or_position_read(side, reason):
-    runtime = object.__new__(FuturesWilliamsRuntime)
+def test_tc2_direct_exit_is_blocked_before_cancel_or_position_read(side, reason, exit_runtime):
+    runtime = exit_runtime
     calls = []
     runtime.cancel_pending_entries = lambda *a: calls.append("cancel")
     runtime._position = lambda *a: calls.append("position")
@@ -35,10 +47,10 @@ def test_tc2_direct_exit_is_blocked_before_cancel_or_position_read(side, reason)
     (NTD, "TEETH_CLOSE_EXIT", False),
     (COURSE, "COURSE_STAGE_TRIM", False),
 ])
-def test_authorized_exit_still_reaches_existing_live_preflight(source, reason, emergency):
+def test_authorized_exit_still_reaches_existing_live_preflight(source, reason, emergency, exit_runtime):
     class ReachedLivePreflight(Exception):
         pass
-    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime = exit_runtime
     def position(_):
         raise ReachedLivePreflight()
     runtime._position = position

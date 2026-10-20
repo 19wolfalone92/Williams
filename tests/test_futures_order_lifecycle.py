@@ -298,7 +298,7 @@ def test_a_terminal_partial_exit_accounts_for_the_fill_and_preserves_the_owned_r
     exchange.close_fraction = 0.4
     exchange.close_status = "EXPIRED_IN_MATCH"
     with pytest.raises(RuntimeError, match="residual|terminal failure"):
-        bot._exit_market(campaign, "MODEL_PARTIAL_EXIT")
+        bot._exit_market(campaign, "MANUAL_EXIT")
     recovered = bot._reconcile_pending_exits()
     assert not any("error" in result for result in recovered), recovered
     remaining = bot.engine.load_campaign(campaign.campaign_id)
@@ -331,7 +331,7 @@ def test_a_campaign_exit_cancels_a_still_armed_add_on_before_closing(armed_runti
 @pytest.mark.parametrize("side", ["BUY", "SELL"])
 @pytest.mark.parametrize("leverage", [1, 2, 5, 10])
 @pytest.mark.parametrize("mode", ["fill", "expire_race", "partial_cancel", "protection_failure"])
-def test_pending_entry_fill_protection_trail_and_exact_close(monkeypatch, tmp_path, side, leverage, mode):
+def test_pending_entry_fill_protection_trail_and_exact_manual_close(monkeypatch, tmp_path, side, leverage, mode):
     monkeypatch.setenv("WILLIAMS_DB_PATH", str(tmp_path / "lifecycle.sqlite3"))
     monkeypatch.setenv("DRY_RUN", "false")
     monkeypatch.setenv("TESTNET", "true")
@@ -381,7 +381,7 @@ def test_pending_entry_fill_protection_trail_and_exact_close(monkeypatch, tmp_pa
         assert bot._replace_protection(campaign, 96 if side == "BUY" else 104)
         assert exchange.algos[2]["algoStatus"] == "CANCELED"
         assert exchange.algos[3]["algoStatus"] == "NEW"
-        result = bot._exit_market(campaign, "TEST_MANUAL_CLOSE")
+        result = bot._exit_market(campaign, "MANUAL_EXIT")
         assert result["state"] == "CLOSED"
         assert exchange.amount == 0 and not bot._pending_entries() and not bot._pending_exits()
         assert all(row["algoStatus"] != "NEW" for row in exchange.algos.values())

@@ -926,7 +926,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             val beforeRequests=exchange.requests.size
             val before=coordinator.intentsSnapshot().getJSONObject(0)
             val stopId=before.getString("protection_client_id")
-            for(reason in listOf("STRATEGY_EXIT","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED","CORRECTION_PARENT_PRICE_INVALIDATED")) {
+            for(reason in listOf("STRATEGY_EXIT","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED","CORRECTION_PARENT_PRICE_INVALIDATED","LIQUIDATION_GUARD")) {
                 val result=coordinator.closePosition("BTCUSDT",direction,"1","W2X_BLOCK_"+direction.name,reason)
                 assertFalse(result.getBoolean("ok"))
                 assertEquals("TC2_PROTECTIVE_STOP_ONLY",result.getString("blocker"))

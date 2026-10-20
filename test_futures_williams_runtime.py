@@ -206,6 +206,12 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
         "high": list(range(100, 180)),
     })
 
+    frame["open_time"]=pd.date_range("2024-01-01",periods=80,freq="h",tz="UTC")
+    frame["close_time"]=frame["open_time"]+pd.Timedelta(hours=1)-pd.Timedelta(milliseconds=1)
+    now=(frame["open_time"].iloc[-1]+pd.Timedelta(minutes=30)).timestamp()
+    monkeypatch.setattr("futures_williams_runtime.time.time",lambda:now)
+    opened=int(frame["open_time"].iloc[0].timestamp()*1000)
+
     class Client:
         def __init__(self, price):
             self.price = price
@@ -225,7 +231,8 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
 
     long_campaign = type("C", (), {
         "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 70.0,
-        "execution_timeframe": "5m", "state": CampaignState.OPEN_INITIAL,
+        "execution_timeframe": "1h", "state": CampaignState.OPEN_INITIAL,
+        "tags":{"strategy_profile":"TC2_THREE_WISE_MEN","position_open_observed_at_ms":opened},
     })()
     runtime.client = Client(160.0)
     runtime._trail(long_campaign)
@@ -235,7 +242,8 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
 
     short_campaign = type("C", (), {
         "symbol": "BTCUSDT", "side": "SELL", "current_stop_price": 190.0,
-        "execution_timeframe": "5m", "state": CampaignState.OPEN_INITIAL,
+        "execution_timeframe": "1h", "state": CampaignState.OPEN_INITIAL,
+        "tags":{"strategy_profile":"TC2_THREE_WISE_MEN","position_open_observed_at_ms":opened},
     })()
     runtime.client = Client(90.0)
     runtime._trail(short_campaign)
@@ -440,6 +448,9 @@ def test_tc2_profile_does_not_apply_ntd_teeth_close_exit(monkeypatch):
         "volume": [1000.0] * n,
     })
 
+    frame['open_time']=pd.date_range('2024-01-01',periods=n,freq='h',tz='UTC')
+    opened=int(frame['open_time'].iloc[0].timestamp()*1000)
+
     class Client:
         def ticker_price(self, symbol):
             return {"price": "91"}
@@ -457,7 +468,7 @@ def test_tc2_profile_does_not_apply_ntd_teeth_close_exit(monkeypatch):
     campaign = type("C", (), {
         "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 80.0,
         "execution_timeframe": "1h", "state": CampaignState.TREND_ACTIVE,
-        "tags": {},
+        "tags": {"strategy_profile":"TC2_THREE_WISE_MEN","position_open_observed_at_ms":opened},
     })()
 
     result = runtime._trail(campaign)
