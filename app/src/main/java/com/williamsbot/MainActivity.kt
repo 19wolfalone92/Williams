@@ -1,3 +1,4 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.williamsbot
 
 import android.Manifest
@@ -1516,10 +1517,7 @@ private fun PortfolioCard(
                 )
             }
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric(
                     "Капитал",
                     fmt(portfolio.totalEquityUsdt, 2)
@@ -1534,10 +1532,7 @@ private fun PortfolioCard(
                 )
             }
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric(
                     "Результат",
                     fmt(portfolio.realizedPnlUsdt, 2)
@@ -2057,14 +2052,14 @@ private fun BestCandidateCard(best: Candidate?) {
                     style = MaterialTheme.typography.bodyMedium
                 )
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     MiniMetric("ПРИБЫЛЬ/РИСК", fmt(best.riskReward, 2))
                     MiniMetric("ATR (волат.)", fmt(best.atrPct * 100.0, 2) + "%")
                     MiniMetric("СТАРШИЙ ТФ", if (best.htfConfirmed) "ДА" else "ОЖИДАНИЕ")
                     MiniMetric("ВОЛНА", waveText(best))
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     MiniMetric("РЕЖИМ", russianStatus(best.regime))
                     MiniMetric("ДИСБАЛАНС СТАКАНА", fmt(best.obi, 2))
                     MiniMetric("ТЕНЕВОЙ ПРОГНОЗ", russianStatus(best.shadowDirection) + " " + fmt(best.shadowConfidence, 2))
@@ -2102,10 +2097,7 @@ private fun RiskCard(status: Status) {
                 Text("Защита", style = MaterialTheme.typography.titleMedium)
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric(
                     "Риск",
                     fmt(status.reservedRiskPct * 100, 2) +
@@ -2614,20 +2606,14 @@ private fun CandidateCardModern(candidate: Candidate) {
                 color = AppColors.textMuted
             )
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric("ВОЛНА", waveText(candidate))
                 MiniMetric("ОЦЕНКА ВОЛНЫ", fmt(candidate.waveScore, 0))
                 MiniMetric("ИСТОЩЕНИЕ", fmt(candidate.waveExhaustionRisk, 0) + "%")
                 MiniMetric("СТАРШИЙ ТФ", if (candidate.htfConfirmed) "ДА" else "ОЖИДАНИЕ")
             }
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric("РЕЖИМ", russianStatus(candidate.regime))
                 MiniMetric("ДИСБАЛАНС СТАКАНА", fmt(candidate.obi, 2))
                 MiniMetric("ТЕНЕВОЙ ПРОГНОЗ", russianStatus(candidate.shadowDirection) + " " + fmt(candidate.shadowConfidence, 2))
@@ -2643,10 +2629,7 @@ private fun CandidateCardModern(candidate: Candidate) {
 
             Divider(color = AppColors.surface2)
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric("ПРИБЫЛЬ/РИСК", fmt(candidate.riskReward, 2))
                 MiniMetric("ATR (волат.)", fmt(candidate.atrPct * 100, 2) + "%")
                 MiniMetric("СПРЕД", fmt(candidate.spreadPct * 100, 3) + "%")
