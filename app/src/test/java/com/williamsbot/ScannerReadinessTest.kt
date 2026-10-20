@@ -67,6 +67,14 @@ class ScannerReadinessTest {
         ))
     }
 
+    @Test fun H1StartupIsIndependentFromUnrelatedHigherTimeframeFailures() {
+        assertEquals("READY",scannerH1WarmupState(10,10))
+        assertEquals("READY_PARTIAL_H1",scannerH1WarmupState(9,10))
+        assertEquals("READY_PARTIAL_H1",scannerH1WarmupState(1,10))
+        assertEquals("WAITING_RETRY",scannerH1WarmupState(0,10))
+        assertEquals("WAITING_RETRY",scannerH1WarmupState(0,0))
+    }
+
     @Test fun pending_entry_is_safe_for_a_second_pair_only_when_reconciled() {
         assertEquals(null,scannerExecutionBlocker(
             paused=false,reconcileRequired=false,killLatched=false,
