@@ -82,9 +82,9 @@ internal fun adaptiveWave4AoEvidence(
         .put("can_place_orders",false).put("can_close_positions",false)
         .put("wave4_completion_confirmed",false)
         .put("resolution",resolution.toJson())
-    if(scenario.anchors.size<5 || resolution.frame==null ||
-        resolution.status!="BOOK_WINDOW_OBSERVED")
+    if(scenario.anchors.size<5 || resolution.frame==null)
         return out.put("reason","FOURTH_WAVE_OR_RESOLUTION_NOT_PROVEN")
+    val scaleVerified=resolution.status=="BOOK_WINDOW_OBSERVED"
     val p=scenario.anchors
     if(p.take(5).any { it.knownAt>asOf })
         return out.put("reason","PIVOTS_NOT_CAUSALLY_KNOWN")
@@ -109,6 +109,9 @@ internal fun adaptiveWave4AoEvidence(
     val near=minimum<=abs(ao[third])*0.05
     val step=williamsWaveFrames.getValue(frame)
     return out.put("status",when {
+        !scaleVerified && crossed!=null->"WRONG_SCALE_CROSS_UNCONFIRMED"
+        !scaleVerified && near->"WRONG_SCALE_TOUCH_NEAR_ZERO_UNCONFIRMED"
+        !scaleVerified->"WRONG_SCALE_NO_ZERO_CROSS"
         crossed!=null->"ZERO_CROSSED_MINIMUM_ONLY"
         near->"TOUCHED_OR_NEAR_ZERO_UNCONFIRMED"
         else->"NO_ZERO_CROSS"
