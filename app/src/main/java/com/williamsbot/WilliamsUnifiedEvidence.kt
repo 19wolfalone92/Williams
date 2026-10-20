@@ -13,6 +13,12 @@ internal fun buildWilliamsUnifiedEvidence(
     scanner: JSONObject, status: JSONObject, nowMs: Long
 ): JSONObject {
     val selected = status.optString("strategy_profile")
+    // This deployment executes TC2 and independently OBSERVES NTD/Course.
+    // The old evidence page required WILLIAMS_UNIFIED, thereby declaring
+    // every correct 4.38 TC2-live scan WRONG_PROFILE.
+    val coordinator = status.optJSONObject("futures_runtime")
+        ?: status.optJSONObject("futures_campaign_coordinator") ?: JSONObject()
+    val activeIntents = CockpitDiagnostics.rows(coordinator.optJSONArray("pending_intent_details"))
     val scanning = scanner.optBoolean("scanning", true)
     val at = scanner.optLong("last_scan_at", 0L)
     val recent = CockpitDiagnostics.fresh(at, nowMs, 120_000L)
@@ -32,6 +38,8 @@ internal fun buildWilliamsUnifiedEvidence(
     val errors = JSONArray()
     var total = 0
     var conflicts = 0
+    var tc2Conflicts = 0
+    var activeCampaigns = 0
     val visited = mutableSetOf<String>()
     val bySymbol = candidates.groupBy { it.optString("symbol") }
     for (symbol in APPROVED_FUTURES_SYMBOLS) {
@@ -44,7 +52,19 @@ internal fun buildWilliamsUnifiedEvidence(
         val sourceCounts = JSONObject()
         for (source in williamsSourceProfiles) sourceCounts.put(source, 0)
         val freshSides = mutableSetOf<String>()
+        val tc2FreshSides = mutableSetOf<String>()
         val unique = mutableSetOf<String>()
+        val pairOwners=activeIntents.filter { it.optString("symbol")==symbol &&
+            it.optString("role")=="ENTRY" &&
+            it.optString("campaign_status") !in setOf("CLOSED_OR_STOPPED","CLOSED") }
+        if(pairOwners.size>1) errors.put("MULTIPLE_ACTIVE_CAMPAIGN_OWNERS:$symbol")
+        val owner=pairOwners.singleOrNull()
+        val ownerSource=owner?.optString("strategy_profile","UNKNOWN") ?: "NONE"
+        if(owner!=null) {
+            activeCampaigns++
+            if(ownerSource !in williamsSourceProfiles)
+                errors.put("UNKNOWN_PINNED_CAMPAIGN_SOURCE:$symbol")
+        }
         for (signal in rawSignals) {
             total++
             val source = signal.optString("strategy_profile")
@@ -61,8 +81,13 @@ internal fun buildWilliamsUnifiedEvidence(
                 trigger.isFinite() && stop.isFinite() && trigger > 0 && stop > 0 &&
                 (if (side == "LONG") stop < trigger else stop > trigger)
             if (!valid) errors.put("INVALID_SOURCE_OR_SIGNAL:$symbol:${id.take(90)}")
-            val fresh = valid && nowMs - stamp <= 5L * 3_600_000L
-            if (fresh && role == "ENTRY" && side != null) freshSides += side
+            // TC2 WM3 H1 fractals persist until a newer valid replacement or
+            // actual breakout; the old five-hour label falsely hid them.
+            val fresh = valid && williamsH1SignalTimeEligible(stamp,family,source,nowMs)
+            if (fresh && role == "ENTRY" && side != null) {
+                freshSides += side
+                if(source==williamsExecutionProfile) tc2FreshSides += side
+            }
             if (source in williamsSourceProfiles) {
                 sourceCounts.put(source, sourceCounts.optInt(source) + 1)
                 val stats = sourceSummary.getJSONObject(source)
@@ -77,15 +102,30 @@ internal fun buildWilliamsUnifiedEvidence(
                 .put("direction", side ?: "UNKNOWN").put("signal_bar_time_ms", stamp)
                 .put("trigger_price", trigger.takeIf { it.isFinite() } ?: JSONObject.NULL)
                 .put("protective_price", stop.takeIf { it.isFinite() } ?: JSONObject.NULL)
-                .put("five_hour_freshness", fresh).put("structure_valid", valid)
+                .put("signal_time_eligible", fresh)
+                .put("validity_policy",if(williamsStructuralFractal(family,source))
+                    "UNBROKEN_UNSUPERSEDED_FRACTAL" else "PROJECT_AGE_WINDOW")
+                .put("execution_role",if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
                 .put("book_origin_known", source in williamsSourceProfiles)
+                .put("structure_valid",valid)
                 .put("reason", signal.optString("reason"))
                 .put("exchange_order_authorized", false)
                 .put("admission_proof", "NOT_EVALUATED_BY_CACHED_SCANNER"))
         }
         val conflict = freshSides.size > 1
+        val liveConflict = tc2FreshSides.size > 1
         if (conflict) conflicts++
+        if (liveConflict) tc2Conflicts++
         perPair.put(JSONObject().put("symbol", symbol)
+            .put("campaign_occupied",pairOwners.isNotEmpty())
+            .put("active_owner_count",pairOwners.size)
+            .put("owner_strategy_profile",ownerSource)
+            .put("owner_direction",owner?.optString("direction") ?: JSONObject.NULL)
+            .put("owner_signal_id",owner?.optString("signal_id") ?: JSONObject.NULL)
+            .put("owner_campaign_state",owner?.optString("campaign_status") ?: JSONObject.NULL)
+            .put("owner_exchange_verified",owner?.optBoolean("strategy_ownership_verified") ?: false)
+            .put("other_strategies_can_trade_this_pair",false)
+            .put("live_tc2_opposing_entries_before_context",liveConflict)
             .put("observed", candidate != null)
             .put("source_counts", sourceCounts)
             .put("observed_signal_count", rawSignals.size)
@@ -100,7 +140,7 @@ internal fun buildWilliamsUnifiedEvidence(
     for (symbol in bySymbol.keys) if (symbol !in APPROVED_FUTURES_SYMBOLS)
         errors.put("UNKNOWN_SYMBOL:${symbol.take(25)}")
     val snapshot = when {
-        selected != williamsUnifiedProfile -> "WRONG_PROFILE"
+        selected != williamsExecutionProfile -> "WRONG_PROFILE"
         !recent -> "STALE_OR_MISSING_SCAN"
         scanning -> "SCAN_IN_PROGRESS"
         !complete || visited.size != 10 -> "INCOMPLETE_SCAN"
@@ -110,6 +150,10 @@ internal fun buildWilliamsUnifiedEvidence(
     return JSONObject()
         .put("schema_version", 1)
         .put("mode", selected)
+        .put("execution_policy",williamsExecutionPolicySnapshot())
+        .put("active_campaigns_in_snapshot",activeCampaigns)
+        .put("coordinator_snapshot_present",status.has("futures_runtime") ||
+            status.has("futures_campaign_coordinator"))
         .put("status", snapshot)
         .put("provenance", "CACHED_CLOSED_H1_SCANNER")
         .put("checked_at_ms", nowMs)
@@ -124,7 +168,8 @@ internal fun buildWilliamsUnifiedEvidence(
         .put("by_symbol", perPair)
         .put("source_contract_errors", errors)
         .put("pre_context_opposing_symbol_count", conflicts)
+        .put("live_tc2_opposing_symbol_count",tc2Conflicts)
         .put("is_execution_decision", false)
-        .put("completeness_warning", "Cached source signals only. No detector rejection causes, D1/H4 admission, M15 fill, position, or live Binance approval inferred.")
+        .put("completeness_warning", "Cached H1 signals only. TC2 can execute after independent D1/H4, risk and Binance checks; NTD/Course OBSERVE only. Source snapshots are not fills, owner evidence, or PnL. No M15 confirmation is required.")
         .put("last_runtime_error_unattributed", status.optString("last_error").take(300))
 }
