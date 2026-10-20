@@ -42,3 +42,12 @@ def test_next_day_hard_pause_is_utc_and_does_not_block_read_only_scan():
     assert 'FUTURES_LOSS_STREAK_UTC_CLOCK_UNVERIFIED' in guard
     assert 'futuresUtcDayStartMs(nowMs)' in JOURNAL
     assert 'UTC_00_00_AUTOMATIC_IF_EXCHANGE_CLOCK_VERIFIED' in RUNTIME
+
+
+def test_scan_uses_the_verified_h1_startup_cache_limit_and_does_not_force_180_bar_rest_reads():
+    # Startup verifies and persists 150 H1 closed bars. Requiring 180 on every
+    # scan misses a valid 150-bar cache and can stall all 10 charts when
+    # Demo REST returns an occasional empty success response.
+    assert 'val candles = fetchCandles(symbol, "1h", 150)' in RUNTIME
+    assert 'runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 150) }' in RUNTIME
+    assert 'val candles = fetchCandles(symbol, "1h", 180)' not in RUNTIME
