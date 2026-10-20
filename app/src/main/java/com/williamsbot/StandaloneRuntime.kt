@@ -478,10 +478,11 @@ internal fun shouldScheduleIndependentFuturesMonitor(
     lastAttemptMs: Long,
     coordinatorState: String,
     scanning: Boolean,
-    reconciliationActive: Boolean
+    reconciliationActive: Boolean,
+    safetyLatchUnresolved: Boolean = false
 ): Boolean {
     if (nowMs <= 0L || scanning || reconciliationActive) return false
-    val interval = when (coordinatorState) {
+    val interval = if (safetyLatchUnresolved) 2_500L else when (coordinatorState) {
         "READY" -> 45_000L
         "OPEN_PROTECTED" -> 3_000L
         "ENTRY_PENDING" -> 2_500L
@@ -2437,7 +2438,8 @@ private class NativeEngine(
                                 lastAttemptMs = lastNativeManagementAttemptMs,
                                 coordinatorState = futuresCampaignCoordinator.state.name,
                                 scanning = scanning,
-                                reconciliationActive = futuresReconciliationRunning || futuresStreamReconcileRunning
+                                reconciliationActive = futuresReconciliationRunning || futuresStreamReconcileRunning,
+                                safetyLatchUnresolved = reconcileRequired
                             )) scheduleNativePositionManagement()
                     } catch (x: Exception) {
                         lastError = x.javaClass.simpleName + ": " + (x.message ?: "")
