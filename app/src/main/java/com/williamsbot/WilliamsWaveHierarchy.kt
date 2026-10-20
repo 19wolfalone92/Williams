@@ -59,7 +59,8 @@ internal data class WilliamsWaveHierarchy(
     val asOf: Long, val scenarios: List<WilliamsWaveScenario>, val links: List<WilliamsWaveLink>,
     val frameErrors: Map<String, String>, val warnings: List<String>,
     val frameCandleCounts:Map<String,Int> = emptyMap(),
-    val complexStructures:List<JSONObject> = emptyList()
+    val complexStructures:List<JSONObject> = emptyList(),
+    val adaptiveHistory:JSONObject? = null
 ) {
     private fun containedChain():Boolean {
         val byId=scenarios.associateBy { it.id }
@@ -75,6 +76,7 @@ internal data class WilliamsWaveHierarchy(
         .put("links", JSONArray(links.map { it.toJson() })).put("frame_errors", JSONObject(frameErrors))
         .put("frame_candle_counts",JSONObject(frameCandleCounts)).put("contained_chain_observed",containedChain())
         .put("full_history",false).put("can_place_orders",false)
+        .put("adaptive_history",adaptiveHistory ?: JSONObject().put("status","NOT_YET_ANALYSED").put("can_place_orders",false))
         .put("complex_wave_patterns", if(complexStructures.isNotEmpty()) JSONArray(complexStructures.take(48)) else JSONArray(scenarios.filter { it.anchors.size >= 6 }
             .flatMap { scenario -> detectWilliamsComplexWave(scenario.anchors,scenario.direction,asOf)
                 .map { it.toJson().put("frame",scenario.frame).put("source_scenario_id",scenario.id) } }.take(48)))
