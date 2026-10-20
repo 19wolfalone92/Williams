@@ -6472,7 +6472,9 @@ private class NativeEngine(
         val futures = scanSymbols.map { symbol ->
             scanExecutor.submit(Callable {
                 try {
-                    val candles = fetchCandles(symbol, "1h", 180)
+                    // The validated H1 startup history has 150 closed bars.
+                    // Do not trigger extra REST traffic just to demand 180.
+                    val candles = fetchCandles(symbol, "1h", 150)
                     if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
                     val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
                     markScanProgress()
@@ -6514,7 +6516,7 @@ private class NativeEngine(
         lastScanAt = System.currentTimeMillis()
         scanRunId = "futures-" + lastScanAt
         runCatching { PositionsWidgetProvider.refresh(context) }
-        runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 180) }
+        runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 150) }
 
         // Never overwrite a safety blocker with READY merely because market data was
         // scanned. Market-analysis success and permission to execute are separate facts.
