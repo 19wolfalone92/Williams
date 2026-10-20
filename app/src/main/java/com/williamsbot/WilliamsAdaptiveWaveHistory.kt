@@ -121,3 +121,53 @@ internal fun adaptiveWave4AoEvidence(
         .put("near_zero_ratio","0.05_ENGINEERING_UNCONFIRMED")
         .put("reason","AO_ZERO_ALONE_DOES_NOT_CONFIRM_WAVE4_END")
 }
+
+/**
+ * Reconstruct independently H1, H4 and D1 competing counts from the phone's
+ * persistent history. Parent-child links prove only observable time/price
+ * containment, NOT an infallible nested Elliott count.
+ */
+internal fun buildAdaptiveHistoricalWaveReport(
+    history:Map<String,List<WilliamsWaveBar>>,asOf:Long
+):JSONObject {
+    val verified=linkedMapOf<String,List<WilliamsWaveBar>>()
+    for((frame,rows) in history) if(frame in williamsWaveFrames) {
+        val closed=consecutiveClosedWaveSuffix(rows,frame,asOf)
+        if(closed.size>=40) verified[frame]=closed.takeLast(1800)
+    }
+    val scenarios=mutableListOf<WilliamsWaveScenario>()
+    val records=JSONArray()
+    // The execution hierarchy is unchanged. H4 is included explicitly here
+    // so W3/H1 within a provisional W5/H4 can be observed next to D1 context.
+    for(frame in listOf("1d","6h","4h","1h","30m","15m")) {
+        val rows=verified[frame]?:continue
+        val pivots=confirmedWilliamsWaveAnchors(rows,williamsWaveFrames.getValue(frame))
+        val current=williamsHypothesesFromAnchors(frame,rows,pivots)
+            .filter { it.status in setOf("PROVISIONAL","ALTERNATIVE","UNRESOLVED") }
+        scenarios+=current
+        for(s in current.takeLast(8)) {
+            val end=if(s.anchors.size>=5)
+                s.anchors[4].extremeAt+williamsWaveFrames.getValue(frame) else asOf
+            val choice=chooseAdaptiveWaveResolution(
+                s.anchors.first().extremeAt,minOf(asOf,end),frame,verified,asOf)
+            val fourth=adaptiveWave4AoEvidence(s,choice,verified,asOf)
+            records.put(JSONObject().put("scenario_id",s.id).put("frame",frame)
+                .put("label",s.label).put("active_label",s.activeLabel)
+                .put("direction",s.direction).put("hypothesis_status",s.status)
+                .put("known_at_ms",s.anchors.maxOf { it.knownAt })
+                .put("scale",choice.toJson()).put("w4_ao",fourth))
+        }
+    }
+    val counts=JSONObject()
+    history.forEach { (frame,rows)->counts.put(frame,rows.size) }
+    return JSONObject().put("schema","ADAPTIVE_WILLIAMS_WAVE_HISTORY_V1")
+        .put("as_of_closed_ms",asOf)
+        .put("source","DEVICE_SQLITE_BINANCE_FUTURES_CLOSED_BARS")
+        .put("historical_frame_counts",counts)
+        .put("wave_resolution_target","APPROXIMATE_100_TO_140_NOT_STRICT")
+        .put("hypotheses",records)
+        .put("observed_parent_child_links",
+            JSONArray(linkWilliamsWaveHypotheses(scenarios).map { it.toJson() }))
+        .put("wave_genealogy_confirmed",false)
+        .put("can_place_orders",false).put("can_close_positions",false)
+}
