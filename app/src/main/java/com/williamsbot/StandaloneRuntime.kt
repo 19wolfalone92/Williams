@@ -1557,6 +1557,9 @@ private class NativeEngine(
     @Volatile private var workerRecoveryAttemptsInWindow = 0
 
     @Volatile private var scannerState = "NOT_RUN"
+    // Re-evaluate confirmed H1 candidates immediately after a coincident
+    // exchange reconciliation, without waiting for another 30-second scan.
+    @Volatile private var scanRetryAfterReconciliation = false
     @Volatile private var scannerError: String? = null
     @Volatile private var lastScannerSymbolErrors = JSONObject()
     @Volatile private var scanRunId = ""
@@ -2374,6 +2377,7 @@ private class NativeEngine(
         scannerState = "WAITING_FOR_HISTORY"
         scannerError = null
         scanRunId = ""
+        scanRetryAfterReconciliation = false
         scanProgressSymbols = 0
         warmCoreHistoryAsync(generation)
 
@@ -4376,7 +4380,12 @@ private class NativeEngine(
         }
 
         synchronized(this) {
-            if (scanning || !shouldScheduleReadOnlyScan(System.currentTimeMillis(),lastScanAt)) return
+            val retryAfterVerifiedReconciliation = scanRetryAfterReconciliation &&
+                !futuresReconciliationRunning &&
+                futuresCampaignCoordinator.state != NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED
+            if (scanning || (!retryAfterVerifiedReconciliation &&
+                !shouldScheduleReadOnlyScan(System.currentTimeMillis(),lastScanAt))) return
+            scanRetryAfterReconciliation = false
             scanning = true
             scannerError = null
             scanRunId = "scan-" + System.currentTimeMillis()
@@ -6746,6 +6755,13 @@ private class NativeEngine(
             coordinatorReadyForEntry = campaignCoordinatorReadyForEntry()
         )
         val missing = coreSymbols - ranked.map { it.symbol }.toSet()
+        // A valid read-only scan can overlap an unrelated Binance recovery
+        // and be temporarily blocked by the coordinator's in-flight marker.
+        // Preserve the entry fence, but recheck promptly after it finishes.
+        if (completeScan && executionBlocker == "BLOCKED_FUTURES_RECONCILIATION" &&
+            futuresReconciliationRunning && !reconcileRequired) {
+            scanRetryAfterReconciliation = true
+        }
         scannerState = when {
             !completeScan && ranked.isEmpty() -> "FAILED"
             !completeScan && executionBlocker != null -> "PARTIAL_BLOCKED"
