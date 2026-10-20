@@ -24,6 +24,21 @@ class UtcResetRussianUiTest {
         assertEquals("Не установлено",russianStatus("UNKNOWN"))
     }
 
+    @Test fun expiredTriggeringH1OrderMustNotStayReservedForever() {
+        assertTrue(expiredTriggeringEntryNeedsExchangeCancel(
+            true,"TRIGGERING",true,false))
+        assertTrue(expiredTriggeringEntryNeedsExchangeCancel(
+            true,"TRIGGERED",true,false))
+        assertFalse(expiredTriggeringEntryNeedsExchangeCancel(
+            false,"TRIGGERING",true,false))
+        assertFalse(expiredTriggeringEntryNeedsExchangeCancel(
+            true,"PARTIALLY_FILLED",true,false))
+        assertFalse(expiredTriggeringEntryNeedsExchangeCancel(
+            true,"TRIGGERING",false,false))
+        assertFalse(expiredTriggeringEntryNeedsExchangeCancel(
+            true,"TRIGGERING",true,true))
+    }
+
     @Test fun riskPauseReleasesOnlyOnFullyVerifiedDayAndNotForOperatorPause() {
         fun allowed(verified:Boolean=true, risk:Boolean=true, running:Boolean=true,
             operator:Boolean=false, kill:Boolean=false, reconcile:Boolean=false,
