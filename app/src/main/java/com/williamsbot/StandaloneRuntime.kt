@@ -406,6 +406,24 @@ internal fun scannerReadinessState(
 }
 
 /**
+ * Recover missing UTC risk evidence even if a previous failed preflight
+ * put new entries on PAUSE. This schedules only the risk/reconciliation check:
+ * it NEVER resumes execution and never clears the operator pause or a safety latch.
+ * The executor remains fail-closed until a durable valid baseline is confirmed.
+ */
+internal fun shouldRetryDailyRiskBaseline(
+    running: Boolean,
+    @Suppress("UNUSED_PARAMETER") paused: Boolean,
+    killLatched: Boolean,
+    reconcileRequired: Boolean,
+    accountReady: Boolean,
+    userStreamConnected: Boolean,
+    userStreamSyncRequired: Boolean,
+    baselineReady: Boolean
+): Boolean = running && !killLatched && !reconcileRequired &&
+    accountReady && userStreamConnected && !userStreamSyncRequired && !baselineReady
+
+/**
  * Read-only discovery has fewer prerequisites than order execution. A pause,
  * kill switch, or unresolved exchange position must not stop H1 diagnostics;
  * the independent Execution Gate still blocks every new order mutation.
@@ -2238,8 +2256,16 @@ private class NativeEngine(
                         // Establish the UTC daily-loss baseline independently of signals.
                         // Never serialize H1 discovery/UI behind signed account/income requests.
                         // Missing provenance blocks new entries, not existing-position management.
-                        if (!paused && !killLatched && !reconcileRequired && restAccountReady &&
-                            userStreamConnected && !userStreamSyncRequired && !dailyRiskBaselineReady()) {
+                        if (shouldRetryDailyRiskBaseline(
+                                running = running,
+                                paused = paused,
+                                killLatched = killLatched,
+                                reconcileRequired = reconcileRequired,
+                                accountReady = restAccountReady,
+                                userStreamConnected = userStreamConnected,
+                                userStreamSyncRequired = userStreamSyncRequired,
+                                baselineReady = dailyRiskBaselineReady()
+                            )) {
                             scheduleDailyRiskBaselinePreflight()
                         }
 
