@@ -408,7 +408,8 @@ def main() -> None:
     must(execution_policy, "WILLIAMS_SOURCE_OBSERVATION_ONLY", "TC2-only new risk policy")
     must(execution_policy, "H1_SNAPSHOT_STALE", "Structural validity still requires fresh H1 data")
 
-    must(runtime_source, "directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear)", "StandaloneRuntime.kt D1/H4 directional selection")
+    must(runtime_source, "williamsBookInitialContextRank(", "StandaloneRuntime.kt TC2 H1 book-native initial-entry selection")
+    must(runtime_source, "H1_CONTEXT_EVIDENCE_NOT_DURABLE", "StandaloneRuntime.kt source-context provenance")
     must(runtime_source, "private fun estimateManagedEquity(): Double =\n        liveFuturesEquity", "StandaloneRuntime.kt")
     equity_test = read("app/src/test/java/com/williamsbot/FuturesAccountEquityTest.kt")
     for needle in (
