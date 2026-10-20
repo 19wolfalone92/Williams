@@ -30,6 +30,33 @@ internal fun consecutiveClosedWaveSuffix(
     return rows.subList(start,rows.size)
 }
 
+/**
+ * Validate an actual older wave segment independently of whether newer bars
+ * for this short child timeframe have already been downloaded. Exactly
+ * 34 genuine preceding bars are required for AO 5/34 warm-up. Reject any
+ * duplicates, missing bars, or still-forming candles INSIDE the segment.
+ */
+internal fun verifiedAdaptiveWaveWindow(
+    input:List<WilliamsWaveBar>,frame:String,
+    startMs:Long,endMs:Long,asOf:Long
+):List<WilliamsWaveBar> {
+    val ms=williamsWaveFrames[frame]?:return emptyList()
+    if(startMs<=0L || endMs<=startMs || asOf<endMs) return emptyList()
+    val rows=input.filter { b->b.t>=0L && b.t+ms<=asOf &&
+        listOf(b.o,b.h,b.l,b.c,b.v).all(Double::isFinite) &&
+        b.l>0.0 && b.h>=maxOf(b.o,b.c,b.l) &&
+        b.l<=minOf(b.o,b.c) && b.v>=0.0
+    }.sortedBy { it.t }
+    val first=rows.indexOfFirst { it.t>=startMs }
+    val last=rows.indexOfLast { it.t<endMs }
+    if(first<34 || last<first || rows[first].t>=startMs+ms ||
+        rows[last].t+ms<endMs) return emptyList()
+    val window=rows.subList(first-34,last+1)
+    if(window.zipWithNext().any { (prev,next)->next.t-prev.t!=ms })
+        return emptyList()
+    return window
+}
+
 /** Pick truthful child resolution when a parent wave has too few bars. */
 internal fun chooseAdaptiveWaveResolution(
     startMs:Long,endMs:Long,preferredFrame:String,
