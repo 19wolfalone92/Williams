@@ -546,6 +546,40 @@ internal fun canInitializeDailyRiskBaseline(
     hasTradingIncome: Boolean
 ): Boolean = !hasOpenPosition && !hasActiveExecution && !hasTradingIncome
 
+/**
+ * A *freshly exchange-reconciled*, explicitly unfilled entry order does not change
+ * account equity at UTC midnight. This is distinct from TRIGGERING/TRIGGERED,
+ * unknown submission, a partial fill or an unresolved exit: all remain blockers.
+ *
+ * The account and position snapshots MUST also prove flatness. This function only
+ * classifies the persisted execution journal; it never proves account flatness.
+ */
+internal fun unfilledPendingIntentsAllowFlatDailyBaseline(
+    intents: JSONArray,
+    exchangeNowMs: Long,
+    maximumReconciliationAgeMs: Long = 30_000L
+): Boolean {
+    if (exchangeNowMs <= 0L || maximumReconciliationAgeMs <= 0L) return false
+    for (i in 0 until intents.length()) {
+        val intent = intents.optJSONObject(i) ?: return false
+        if (!isEntryCampaignReserved(intent)) continue
+        if (intent.optString("intent_role", "ENTRY") != "ENTRY" ||
+            campaignLifecycleStatus(intent) != "ENTRY_PENDING"
+        ) return false
+        if (exchangeOrderStatus(intent) !in setOf("NEW", "PENDING", "WORKING", "ACCEPTED"))
+            return false
+        val confirmedAt = intent.optLong("last_reconciled_ms", 0L)
+        if (confirmedAt <= 0L || confirmedAt > exchangeNowMs ||
+            exchangeNowMs - confirmedAt > maximumReconciliationAgeMs
+        ) return false
+        val quantity = intent.optString("executed_qty").toBigDecimalOrNull() ?: return false
+        val actual = intent.optString("actual_entry_executed_qty", "0").toBigDecimalOrNull()
+            ?: return false
+        if (quantity.signum() != 0 || actual.signum() != 0) return false
+    }
+    return true
+}
+
 /** Read-only validation: entry readiness needs a durable UTC-day risk baseline and provenance. */
 internal fun futuresDailyRiskBaselineEstablished(baselineValue: String?, source: String?): Boolean {
     val baseline = baselineValue?.toDoubleOrNull()
@@ -4681,10 +4715,12 @@ private class NativeEngine(
                     amount == null || !amount.isFinite() || amount != 0.0
                 }
                 val intents = futuresCampaignCoordinator.intentsSnapshot()
-                val hasActiveExecution = (0 until intents.length()).any { index ->
-                    val row = intents.optJSONObject(index) ?: return@any true
-                    isEntryCampaignReserved(row)
-                }
+                // A verified, unfilled resting order is not exchange exposure.
+                // TRIGGERING/TRIGGERED and stale/unknown intents still block the
+                // midnight baseline even if the journal currently says zero filled.
+                val hasActiveExecution = !unfilledPendingIntentsAllowFlatDailyBaseline(
+                    intents, exchangeNowMs
+                )
                 val income = futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
                 incomeRowsForDay = income
                 val incomeSummary = summarizeFuturesDailyIncome(income)
@@ -4718,8 +4754,9 @@ private class NativeEngine(
                 baselineDecision.baselineEquityUsdt to baselineDecision.source
             }
             val baselineResult = baselineAttempt.getOrElse { failure ->
-                paused = true
-                prefs.edit().putBoolean("auto_run", false).commit()
+                // Do not convert an unknown baseline into a persistent operator
+                // pause or disable auto-run. The independent Execution Gate remains
+                // closed, while scanning, protection and the 60s retry continue.
                 lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: unable to reconstruct UTC-day equity safely: " +
                     (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 3% and entries stay blocked"
                 return false
