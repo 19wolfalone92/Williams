@@ -1317,6 +1317,11 @@ private class NativeEngine(
     @Volatile private var scanUniverseCacheAtMs = 0L
     private val dailyRiskCheckLock = Any()
     private val waveHierarchyCache = java.util.concurrent.ConcurrentHashMap<String, WilliamsWaveHierarchy>()
+    // Best-effort finer candles are fetched only to improve local wave context,
+    // never on the scan/Execution Door thread.
+    private val adaptiveWaveFetchAttemptMs =
+        java.util.concurrent.ConcurrentHashMap<String, Long>()
+    @Volatile private var adaptiveWaveFetchLastError: String? = null
     private val dailyRiskPreflightLock = Any()
     @Volatile private var dailyRiskPreflightRunning = false
     @Volatile private var lastDailyRiskPreflightAtMs = 0L
@@ -8186,7 +8191,9 @@ private class NativeEngine(
                     WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
                 }
             }
-            buildAdaptiveHistoricalWaveReport(history,cutoff)
+            val contextReport=buildAdaptiveHistoricalWaveReport(history,cutoff)
+            requestMissingAdaptiveWaveFrames(symbol,contextReport,cutoff)
+            contextReport
         }.getOrElse { error ->
             JSONObject().put("schema","ADAPTIVE_WILLIAMS_WAVE_HISTORY_V1")
                 .put("status","HISTORY_UNVERIFIED")
@@ -9257,6 +9264,8 @@ private class NativeEngine(
             .put("optional_context_history_ready",optionalContextHistoryReady)
             .put("history_state", historyState)
             .put("history_last_error", historyLastError ?: JSONObject.NULL)
+            .put("adaptive_wave_finer_history_last_error",
+                adaptiveWaveFetchLastError ?: JSONObject.NULL)
             .put("persistent_history_sync_active", deepHistoryBackfillRunning)
             .put("persistent_history_frames", JSONArray(durableBackfillFrames))
             .put("persistent_history_complete_pairs", deepHistoryPairsComplete)
