@@ -7,7 +7,7 @@ class UtcResetRussianUiTest {
     @Test fun resetAtUtcMidnightIsNotAResetOfAccountLossOrPendingOrders() {
         val info=russianLossResetExplanation(0,true,false,1)
         assertTrue(info.contains("обнулена"))
-        assertTrue(info.contains("база дневного риска"))
+        assertTrue(info.contains("суточная база риска"))
         assertTrue(info.contains("ожидающая заявка"))
         assertFalse(info.contains("входы разрешены"))
     }
