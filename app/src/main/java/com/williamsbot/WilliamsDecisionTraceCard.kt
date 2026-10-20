@@ -117,10 +117,15 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                 }
                 val indicators=trace.optJSONObject("indicators") ?: JSONObject()
                 Text("AO: ${value(indicators,"ao")} · AC: ${value(indicators,"ac")}",style=MaterialTheme.typography.bodySmall)
+                rows(trace.optJSONArray("edition_observations")).filter { it.optString("state")=="ANALYSIS_FAILED" }.forEach {
+                    Text("${it.optString("profile")}: анализ не выполнен (${it.optString("error_type")}); вывод о сигналах неизвестен.",
+                        color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
+                }
                 rows(trace.optJSONArray("books")).forEach { book ->
                     val label=when(book.optString("profile")) { williamsTc2Profile -> "TC2";williamsNtdProfile -> "NTD";else -> "Course" }
                     val evidence=rows(book.optJSONArray("evidence"))
-                    Text(label+": "+if(evidence.isEmpty()) "нет действующей формации" else evidence.take(3).joinToString("; ") {
+                    val role=if(book.optString("execution_role")=="LIVE") "торговля" else "наблюдение"
+                    Text(label+" · "+role+": "+if(book.optString("state")=="ANALYSIS_FAILED") "анализ недоступен; сигнал неизвестен" else if(evidence.isEmpty()) "нет действующей формации" else evidence.take(3).joinToString("; ") {
                         "${it.optString("direction")} ${it.optString("family",it.optString("type"))} @ ${it.opt("trigger")} · ${time(it.optLong("signal_bar_time_ms"))}"
                     },style=MaterialTheme.typography.bodySmall)
                 }

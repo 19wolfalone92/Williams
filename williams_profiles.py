@@ -22,6 +22,28 @@ def addition_signal_time_allowed(signal,campaign):
     return signal.signal_bar_time_ms>int(campaign.tags.get("last_signal_time_ms",0))
 
 
+def observe_edition_signals(symbol,ind,*,timeframe,tick_size):
+    """Independent closed-bar observations; failure of one source stays local.
+
+    The returned signals are diagnostic evidence, never an execution pool.
+    A no-signal result and an analysis failure have different states.
+    """
+    signals=[]
+    observations=[]
+    for source in SOURCE_PROFILES:
+        try:
+            found=[s for side in ("LONG","SHORT") for s in extract_profile_signals(
+                symbol,ind,profile=source,side=side,timeframe=timeframe,tick_size=tick_size)]
+            signals.extend(found)
+            observations.append({"profile":source,"state":"FORMATION_OBSERVED" if found else "NO_VALID_FORMATION",
+                "signal_count":len(found),"execution_role":"LIVE" if source==TC2 else "OBSERVE",
+                "can_place_orders":False})
+        except Exception as exc:
+            observations.append({"profile":source,"state":"ANALYSIS_FAILED","error_type":type(exc).__name__,
+                "execution_role":"LIVE" if source==TC2 else "OBSERVE","can_place_orders":False})
+    return signals,observations
+
+
 def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_mode=False,**tc2_kwargs):
     if profile not in PROFILES or side not in {"LONG","SHORT"}:
         raise ValueError("Invalid Williams edition or direction")

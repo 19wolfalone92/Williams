@@ -54,9 +54,9 @@ class WilliamsIndicatorParityTest {
         assertEquals("SHORT", campaignSignalDirection("SHORT_FRACTAL"))
         assertNull(campaignSignalDirection("UNCLASSIFIED_SIGNAL"))
 
-        // D1 opposition vetoes both directions symmetrically; aligned H4 ranks first.
-        assertEquals(0, directionalSignalContextRank("REVERSAL", false, true, true, false))
-        assertEquals(0, directionalSignalContextRank("SHORT_REVERSAL", true, false, false, true))
+        // TC2 WM1 is counter-trend; D1 opposition cannot invalidate its H1 rule.
+        assertEquals(1, directionalSignalContextRank("REVERSAL", false, true, true, false))
+        assertEquals(1, directionalSignalContextRank("SHORT_REVERSAL", true, false, false, true))
         assertEquals(2, directionalSignalContextRank("FRACTAL", true, false, true, false))
         assertEquals(2, directionalSignalContextRank("SHORT_FRACTAL", false, true, false, true))
         assertEquals(1, directionalSignalContextRank("SHORT_REVERSAL", false, false, false, false))

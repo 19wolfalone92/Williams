@@ -48,7 +48,7 @@ internal fun FuturesLeverageSettingsCard(status: Status, onSave: (JSONObject) ->
         FuturesLeverageSettings(
             parseFuturesLeverage(defaultText),
             overrides.filterValues { it.isNotBlank() }.mapValues { parseFuturesLeverage(it.value) }
-        ).toJson().put("strategy_profile",williamsUnifiedProfile).put("entry_time_policy",requireNotNull(timePolicy).toJson())
+        ).toJson().put("strategy_profile",williamsExecutionProfile).put("entry_time_policy",requireNotNull(timePolicy).toJson())
     }.getOrNull()
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -57,13 +57,10 @@ internal fun FuturesLeverageSettingsCard(status: Status, onSave: (JSONObject) ->
                 style = MaterialTheme.typography.bodySmall)
             Text("Плечо фиксируется при подготовке входа. Binance подтвердит его перед ордером; лимит биржи, маржа и структурный стоп могут заблокировать вход.",
                 style = MaterialTheme.typography.bodySmall)
-            Text("Единая стратегия Вильямса",style=MaterialTheme.typography.titleSmall)
-            Text("Торговый хаос 1/2: контекст, волны и три мудреца • Новые измерения: фракталы, AO, AC, зона и Balance Line • Course: Hump, Thumb, Squat и Air Bag.",
+            Text("TC2 · торговля по трём Мудрецам",style=MaterialTheme.typography.titleSmall)
+            Text("Новые входы и добавления — TC2. NTD и Course независимо анализируют H1 в режиме наблюдения.",
                 style=MaterialTheme.typography.bodySmall)
-            Text("Система анализирует все источники одновременно, но каждый ордер сохраняет конкретный источник и его защитные правила. Встречные подтверждённые входы блокируются. Активация единого режима — только без позиций и ожидающих заявок, после сверки Binance.",
-                style=MaterialTheme.typography.bodySmall)
-            if(status.strategyProfile!=williamsUnifiedProfile) Text(
-                "Сейчас включён старый профиль. Нажми «Сохранить настройки», чтобы перейти на единую стратегию при безопасном состоянии счёта.",
+            Text("Одна активная кампания на пару. Открытые кампании прежних источников сохраняют своё сопровождение; новые добавления этих источников отключены.",
                 style=MaterialTheme.typography.bodySmall)
             Text("Время новых входов",style=MaterialTheme.typography.titleSmall)
             androidx.compose.foundation.layout.Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {

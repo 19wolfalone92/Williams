@@ -403,7 +403,11 @@ def main() -> None:
     must(runtime_source,'exchangeClosed=k.optBoolean("x",false)',"StandaloneRuntime.kt final WS close proof")
     must(runtime_source,"val closed = closedNativeStrategyCandles(live)","StandaloneRuntime.kt closed-only strategy cache")
     must(runtime_source, "val freshSignals = candidate.campaignSignals.filter", "StandaloneRuntime.kt directional hypotheses")
-    must(runtime_source, "isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)", "StandaloneRuntime.kt H1 signal freshness")
+    must(runtime_source, "williamsH1SignalTimeEligible(it.signalBarTimeMs,it.type,it.strategyProfile,contextNow)", "StandaloneRuntime.kt source-specific H1 validity")
+    execution_policy = read("app/src/main/java/com/williamsbot/WilliamsExecutionPolicy.kt")
+    must(execution_policy, "WILLIAMS_SOURCE_OBSERVATION_ONLY", "TC2-only new risk policy")
+    must(execution_policy, "H1_SNAPSHOT_STALE", "Structural validity still requires fresh H1 data")
+
     must(runtime_source, "directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear)", "StandaloneRuntime.kt D1/H4 directional selection")
     must(runtime_source, "private fun estimateManagedEquity(): Double =\n        liveFuturesEquity", "StandaloneRuntime.kt")
     equity_test = read("app/src/test/java/com/williamsbot/FuturesAccountEquityTest.kt")

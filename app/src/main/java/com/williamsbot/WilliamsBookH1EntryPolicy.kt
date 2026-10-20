@@ -1,6 +1,7 @@
 package com.williamsbot
 
 import org.json.JSONObject
+import org.json.JSONArray
 import java.security.MessageDigest
 import kotlin.math.abs
 
@@ -11,11 +12,34 @@ import kotlin.math.abs
  */
 internal const val WILLIAMS_BOOK_H1_ENTRY_MODE = "BOOK_NATIVE_H1_TRIGGER"
 
-internal fun williamsBookH1ClientId(symbol:String,signalId:String):String {
+internal fun williamsBookH1ClientId(symbol:String,signalId:String,retryGeneration:Int=0):String {
+    require(retryGeneration>=0)
+    val identity="H1_BOOK|"+signalId+(if(retryGeneration==0) "" else "|CANCEL_RETRY|"+retryGeneration)
     val digest=MessageDigest.getInstance("SHA-256")
-        .digest(("H1_BOOK|"+signalId).toByteArray(Charsets.UTF_8))
+        .digest(identity.toByteArray(Charsets.UTF_8))
         .take(11).joinToString("") { "%02x".format(it.toInt() and 255) }
     return "W2H_"+symbol.take(8)+"_"+digest
+}
+
+/** A new id is permitted only after exact terminal cancellation plus a fresh
+ * exchange-flat observation. Unknown replies and any possible fill never retry.
+ * The original signal identity remains pinned across all attempts. */
+internal fun williamsBookH1RetryGeneration(intents:JSONArray,parentId:String):Int? {
+    val previous=(0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.filter {
+        it.optString("intent_role","ENTRY")=="ENTRY" && it.optString("signal_id")==parentId }
+    if(previous.isEmpty()) return 0
+    if(williamsH1ParentAlreadyFilled(intents,parentId)) return null
+    val terminal=setOf("CANCELED","CANCELLED","EXPIRED","EXPIRED_IN_MATCH","REJECTED")
+    if(previous.any { row ->
+        val child=row.optString("conditional_actual_order_id")
+        campaignLifecycleStatus(row)!="CLOSED_OR_STOPPED" ||
+            row.optString("cancel_reconciled_status") !in terminal || row.optLong("cancel_reconciled_at_ms")<=0L ||
+            row.optString("position_observed_after_cancel").toBigDecimalOrNull()?.signum()!=0 ||
+            row.optLong("fill_observed_at_ms")>0L || (child.isNotBlank() && child!="0") ||
+            listOf("executed_qty","actual_entry_executed_qty","confirmed_position_qty").any { key ->
+                row.has(key) && row.optString(key).toBigDecimalOrNull()?.signum()!=0 }
+    }) return null
+    return previous.size
 }
 
 /** Signed by the decision engine, independently checked by the Futures
@@ -32,7 +56,8 @@ internal fun williamsBookH1Proof(
     .put("signal_type",signalType).put("source",source)
     .put("signal_bar_time_ms",signalAtMs)
     .put("known_at_ms",signalAtMs+WILLIAMS_H1_MS)
-    .put("expires_at_ms",signalAtMs+5*WILLIAMS_H1_MS)
+    .put("expires_at_ms",williamsH1SignalExpiry(signalAtMs,signalType,source))
+    .put("validity_policy",if(williamsStructuralFractal(signalType,source)) "UNBROKEN_UNSUPERSEDED_FRACTAL" else "PROJECT_AGE_WINDOW")
     .put("book_trigger",bookTrigger).put("book_stop",bookStop)
     .put("tick",tick)
 
@@ -61,8 +86,9 @@ internal fun williamsBookH1ProofBlocker(
         type!=signalType || type.isBlank() ||
         proofSource!=source || source !in williamsSourceProfiles ||
         start<=0 || start%WILLIAMS_H1_MS!=0L ||
-        known!=start+WILLIAMS_H1_MS || expires!=start+5*WILLIAMS_H1_MS ||
-        known>now || now>=expires ||
+        known!=start+WILLIAMS_H1_MS || expires!=williamsH1SignalExpiry(start,type,source) ||
+        proof.optString("validity_policy")!=(if(williamsStructuralFractal(type,source)) "UNBROKEN_UNSUPERSEDED_FRACTAL" else "PROJECT_AGE_WINDOW") ||
+        !williamsH1SignalTimeEligible(start,type,source,now) ||
         !tick.isFinite() || tick<=0 ||
         listOf(bookTrigger,bookStop,entry,stop).any { !it.isFinite() || it<=0 } ||
         abs(bookTrigger-entry)>tick*.11 ||

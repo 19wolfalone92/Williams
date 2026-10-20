@@ -134,6 +134,9 @@ def test_scanner_ranks_only_real_long_and_short_williams_signals(monkeypatch):
         "close": [99 + (i % 5) for i in range(221)],
         "volume": [1000] * 221,
     })
+    closed_at=int(fwr.time.time()*1000)//3_600_000*3_600_000
+    series["open_time_ms"]=[closed_at-(len(series)-i)*3_600_000 for i in range(len(series))]
+    series["open"]=series["close"]
     monkeypatch.setattr(fwr, "fetch_klines", lambda *a, **k: series)
     monkeypatch.setattr(fwr, "calculate_indicators", lambda df, cfg: df.assign(
         bullish_alligator=True, bearish_alligator=False, ao=3.0, ac=1.0
@@ -174,6 +177,9 @@ def test_scanner_williams_signals_absent_never_creates_orders(monkeypatch):
     scanner = FuturesWilliamsScanner(Client(), interval="1h")
     frame = pd.DataFrame({"high": [102.0]*221, "low": [98.0]*221,
                           "close": [100.0]*221, "volume": [1000]*221})
+    closed_at=int(fwr.time.time()*1000)//3_600_000*3_600_000
+    frame["open_time_ms"]=[closed_at-(len(frame)-i)*3_600_000 for i in range(len(frame))]
+    frame["open"]=frame["close"]
     monkeypatch.setattr(fwr, "fetch_klines", lambda *a, **k: frame)
     monkeypatch.setattr(fwr, "calculate_indicators", lambda df, cfg: df.assign(
         bullish_alligator=True, bearish_alligator=False, ao=3.0, ac=1.0))
