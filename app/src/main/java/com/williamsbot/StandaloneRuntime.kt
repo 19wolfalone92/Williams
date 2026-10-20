@@ -930,6 +930,40 @@ private data class TradeFlowSample(
     val aggressiveBuy: Boolean
 )
 
+/**
+ * SHORT TC2 signals mirror LONG geometry. Older WM3 signals contain an
+ * empty setup context; blindly calling JSONObject("") crashed ALL ten H1
+ * scanner workers whenever a confirmed SHORT fractal was discovered.
+ *
+ * A documented legacy WM3 omission may be represented explicitly, whereas
+ * absent WM1/WM2 evidence or malformed nonempty JSON must remain fail-closed.
+ */
+internal fun reflectedTc2SetupContext(
+    signalType: String,
+    originalContext: String,
+    reflection: Double
+): String {
+    require(reflection.isFinite() && reflection > 0.0) { "TC2_SHORT_REFLECTION_INVALID" }
+    val context = if (originalContext.isBlank()) {
+        check(signalType == "FRACTAL") { "TC2_SOURCE_CONTEXT_MISSING:$signalType" }
+        JSONObject().put("wise_man", "WM3")
+            .put("legacy_source_context_missing", true)
+    } else {
+        JSONObject(originalContext)
+    }
+    context.optJSONObject("angulation")?.let { proof ->
+        for (key in listOf("price_slope", "jaw_slope", "teeth_slope")) {
+            if (!proof.isNull(key) && proof.has(key)) proof.put(key, -proof.getDouble(key))
+        }
+    }
+    if (context.has("risk_stop_at_price") && !context.isNull("risk_stop_at_price")) {
+        val originalStop = context.getDouble("risk_stop_at_price")
+        require(originalStop.isFinite()) { "TC2_SHORT_CONTEXT_STOP_INVALID" }
+        context.put("risk_stop_at_price", reflection - originalStop)
+    }
+    return context.toString()
+}
+
 private data class CampaignSignalN(
     val signalId: String,
     val type: String,
@@ -7872,6 +7906,12 @@ private class NativeEngine(
                 triggerPrice=fractal.trigger,protectivePrice=fractal.protective,
                 teethAtDetection=fractal.currentTeeth,invalidationPrice=fractal.protective,
                 reason="WM3 eligible confirmed fractal outside Teeth; waiting for actual trigger",
+                setupContext=JSONObject()
+                    .put("wise_man","WM3")
+                    .put("signal_family","CONFIRMED_FRACTAL")
+                    .put("fractal_center_time_ms",candles[fractal.center].t)
+                    .put("fractal_confirmation_time_ms",candles[fractal.confirmation].t)
+                    .put("teeth_filter_verified",true).toString(),
                 formationAtMs=candles[fractal.center].t)
         }
 
@@ -7925,19 +7965,7 @@ private class NativeEngine(
                 triggerPrice = trigger,
                 protectivePrice = stop,
                 teethAtDetection = reflection-signal.teethAtDetection,
-                setupContext = JSONObject(signal.setupContext).apply {
-                    optJSONObject("angulation")?.let { proof ->
-                        for(key in listOf("price_slope","jaw_slope","teeth_slope"))
-                            if(!proof.isNull(key) && proof.has(key)) proof.put(key,-proof.getDouble(key))
-                    }
-                    // WM2 is detected on price-reflected candles for SHORT.
-                    // Translate its recorded protective stop back, too:
-                    // otherwise diagnostic provenance contradicts the real
-                    // Binance Futures plan even when the order itself is right.
-                    if(has("risk_stop_at_price") && !isNull("risk_stop_at_price")) {
-                        put("risk_stop_at_price",reflection-getDouble("risk_stop_at_price"))
-                    }
-                }.toString(),
+                setupContext = reflectedTc2SetupContext(signal.type, signal.setupContext, reflection),
                 invalidationPrice = stop,
                 reason = signal.reason.replace("bullish","bearish").replace("above signal-bar high","below signal-bar low")
                     .replace("rising AO","falling AO").replace("above price bar","below price bar")
