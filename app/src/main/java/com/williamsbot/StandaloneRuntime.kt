@@ -1217,7 +1217,9 @@ private class NativeEngine(
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
     // Startup only needs the frames that directly participate in execution.
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
-    private val startupFrames = listOf("1d", "6h", "4h", "1h", "15m")
+    // H1 is the sole trading-signal authority. Warm its ten contracts first;
+    // supplementary D1/H6/H4/M15 are context/observation, not blockers.
+    private val startupFrames = listOf("1h", "1d", "6h", "4h", "15m")
     // The H1 decision engine needs the full 150-candle working set. Higher-timeframe
     // context has explicit lower minimums in the entry contract; requiring 150 D1
     // candles during startup can deadlock scanning on a fresh Futures Demo market.
@@ -3548,8 +3550,8 @@ private class NativeEngine(
         Thread {
             val tasks = mutableListOf<Pair<String, java.util.concurrent.Future<Boolean>>>()
             try {
-                for (symbol in coreSymbols) {
-                    for (frame in startupFrames) {
+                for (frame in startupFrames) {
+                    for (symbol in coreSymbols) {
                         if (!running || generation != runtimeGeneration) return@Thread
                         val label = symbol + ":" + frame
                         val future = historyBackfillExecutor.submit(Callable {
@@ -3606,29 +3608,46 @@ private class NativeEngine(
                     }
                 }
 
-                var allReady = true
                 val deadline = System.currentTimeMillis() + 90_000L
-                tasks.forEach { (label, future) ->
-                    val ok = runCatching {
-                        val remaining = (deadline - System.currentTimeMillis()).coerceAtLeast(1_000L)
-                        future.get(remaining, TimeUnit.MILLISECONDS)
+                fun awaitWarmup(label:String, future:java.util.concurrent.Future<Boolean>):Boolean {
+                    val ok=runCatching {
+                        val remaining=(deadline-System.currentTimeMillis()).coerceAtLeast(1_000L)
+                        future.get(remaining,TimeUnit.MILLISECONDS)
                     }.getOrElse {
                         future.cancel(true)
-                        historyLastError = label + " task timeout/error: " +
+                        historyLastError=label+" task timeout/error: "+
                             (it.message ?: it.javaClass.simpleName)
                         false
                     }
                     activeHistoryTasks.remove(future)
-                    if (!ok) allReady = false
+                    return ok
                 }
-                if (System.currentTimeMillis() >= deadline && !allReady) {
-                    tasks.forEach { (_, future) -> if (!future.isDone) future.cancel(true) }
+                // H1 is the only mandatory analysis series. A failed D1/H6/H4/
+                // M15 warmup must never keep the entire ten-pair H1 scanner
+                // in WAITING_FOR_HISTORY or force permanent reinitialization.
+                val h1Tasks=tasks.filter { it.first.endsWith(":1h") }
+                var h1ReadyCount=0
+                for((label,future) in h1Tasks) {
+                    if(awaitWarmup(label,future)) h1ReadyCount++
+                }
+                if(generation!=runtimeGeneration || !running) return@Thread
+                historyReady=h1ReadyCount>0
+                historyState=when {
+                    h1ReadyCount==coreSymbols.size -> "READY"
+                    h1ReadyCount>0 -> "READY_PARTIAL_H1"
+                    else -> "WAITING_RETRY"
+                }
+                // A partially warmed H1 universe permits read-only progress.
+                // The completeScan=10/10 Futures mutation gate remains intact.
+                // Rechecks of missing symbols occur in every bounded H1 scan.
+                for((label,future) in tasks.filterNot { it.first.endsWith(":1h") }) {
+                    awaitWarmup(label,future)
+                }
+                if(System.currentTimeMillis()>=deadline) {
+                    tasks.forEach { (_,future) -> if(!future.isDone) future.cancel(true) }
                 }
 
-                if (generation != runtimeGeneration || !running) return@Thread
-
-                historyReady = allReady
-                historyState = if (historyReady) "READY" else "WAITING_RETRY"
+                if(generation!=runtimeGeneration || !running) return@Thread
                 if (historyReady) {
                     // Deep history is bounded and sequential on mobile. It is
                     // a cache warmer, never a prerequisite for first scan.
