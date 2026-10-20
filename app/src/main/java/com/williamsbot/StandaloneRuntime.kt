@@ -466,6 +466,34 @@ internal fun scannerDataReadinessState(
  * H1 REST scan must not be repeated every single second. Market WebSockets
  * and stop/position reconciliation remain independently scheduled.
  */
+/**
+ * Periodic signed Futures reconciliation must not be started by an H1 scan.
+ * On a verified flat account, the private user stream handles exchange events,
+ * with a 45-second independent REST fallback. Open exposure is monitored
+ * frequently. A running scan or another reconciliation wins the I/O slot.
+ */
+internal fun shouldScheduleIndependentFuturesMonitor(
+    nowMs: Long,
+    lastSuccessfulMs: Long,
+    lastAttemptMs: Long,
+    coordinatorState: String,
+    scanning: Boolean,
+    reconciliationActive: Boolean
+): Boolean {
+    if (nowMs <= 0L || scanning || reconciliationActive) return false
+    val interval = when (coordinatorState) {
+        "READY" -> 45_000L
+        "OPEN_PROTECTED" -> 3_000L
+        "ENTRY_PENDING" -> 2_500L
+        "EXIT_PENDING" -> 1_500L
+        else -> 5_000L
+    }
+    if (lastAttemptMs > 0L && nowMs >= lastAttemptMs &&
+        nowMs - lastAttemptMs < maxOf(2_000L, interval)) return false
+    return lastSuccessfulMs <= 0L || nowMs < lastSuccessfulMs ||
+        nowMs - lastSuccessfulMs >= interval
+}
+
 internal fun shouldScheduleReadOnlyScan(nowMs:Long,lastCompletedMs:Long,minimumMs:Long=30_000L):Boolean =
     nowMs>0 && minimumMs>0 &&
         (lastCompletedMs==0L ||
@@ -2378,31 +2406,6 @@ private class NativeEngine(
                             scheduleDailyRiskBaselinePreflight()
                         }
 
-                        // Keep managing existing exposure while entry prerequisites are
-                        // degraded. manageNativeFuturesPositions reconciles with the exchange;
-                        // it does not weaken the new-entry Execution Gate.
-                        val campaignState = futuresCampaignCoordinator.state
-                        val campaignNeedsMonitoring = campaignState in setOf(
-                            NativeFuturesCampaignCoordinator.State.ENTRY_PENDING,
-                            NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED,
-                            NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
-                            NativeFuturesCampaignCoordinator.State.EXIT_PENDING,
-                            NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED
-                        )
-                        val prerequisitesDegraded =
-                            !historyReady || reconcileRequired || !restAccountReady ||
-                                !marketDataFresh() || !marketWebSocketFresh() ||
-                                !publicWebSocketFresh() || !userStreamConnected ||
-                                userStreamSyncRequired
-                        if (campaignNeedsMonitoring && (prerequisitesDegraded || killLatched || paused)) {
-                            // Do not run a second account-wide reconciliation on the scanner
-                            // worker. Route every monitor request through the single-flight
-                            // scheduler; overlapping REST reconciliation used to leave the
-                            // coordinator observable in RECONCILE_REQUIRED/in-progress and
-                            // starve scans while another reconcile held the Execution Door.
-                            scheduleNativePositionManagement()
-                        }
-
                         if (!historyReady && !historyWarmupRunning &&
                             System.currentTimeMillis()-historyWarmupLastStartedMs >= historyWarmupRetryIntervalMs) {
                             warmCoreHistoryAsync(generation)
@@ -2418,6 +2421,20 @@ private class NativeEngine(
                             scannerState = "WAITING_FOR_HISTORY"
                             scannerError = historyLastError ?: "Waiting for the first closed H1 working set"
                         }
+                        // Never initiate account-wide reconciliation INSIDE an H1 scan:
+                        // the old scanner raced its own signed safety audit and finished
+                        // READY_BLOCKED on every pass. Manage exposure independently,
+                        // after read-only discovery gets priority. User-stream event
+                        // reconciliation remains independent and immediate.
+                        if (!nativeManagementRunning &&
+                            shouldScheduleIndependentFuturesMonitor(
+                                nowMs = System.currentTimeMillis(),
+                                lastSuccessfulMs = lastRestReconcileMs,
+                                lastAttemptMs = lastNativeManagementAttemptMs,
+                                coordinatorState = futuresCampaignCoordinator.state.name,
+                                scanning = scanning,
+                                reconciliationActive = futuresReconciliationRunning || futuresStreamReconcileRunning
+                            )) scheduleNativePositionManagement()
                     } catch (x: Exception) {
                         lastError = x.javaClass.simpleName + ": " + (x.message ?: "")
                     }
@@ -6644,11 +6661,9 @@ private class NativeEngine(
             return
         }
 
-        // Market discovery must not be serialized behind account income, position
-        // management, or entry-risk checks. Those checks still run immediately before
-        // every order mutation through Execution Door; scanning remains read-only.
-        scheduleNativePositionManagement()
-
+        // Read-only H1 discovery NEVER starts a signed account-wide reconciliation.
+        // Scheduling management here put the coordinator into RECONCILE_REQUIRED
+        // during every scan and suppressed all ten otherwise-valid TC2 entries.
         val universe = loadUniverse()
         scanSymbols = universe.first.toMutableList()
         val volumes = universe.second
