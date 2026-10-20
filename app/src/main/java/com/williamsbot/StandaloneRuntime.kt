@@ -5669,10 +5669,7 @@ private class NativeEngine(
             val direction = if (signedQty > 0.0) NativeFuturesCampaignCoordinator.Direction.LONG
                 else NativeFuturesCampaignCoordinator.Direction.SHORT
             val dir = direction.name
-            // The validated H1 startup working set is 150 closed candles. Requesting
-                    // 180 on every scan bypassed that ready SQLite cache, forced ten
-                    // redundant REST GETs and failed the whole cycle on empty replies.
-                    val candles = fetchCandles(symbol, "1h", 150)
+            val candles = fetchCandles(symbol, "1h", 180)
             if (candles.size < 45) throw IllegalStateException(symbol + " needs at least 45 closed H1 candles")
             val rules = symbolFilters(symbol)
             val mark = futuresMarketData.markPrice(symbol)
@@ -6475,7 +6472,9 @@ private class NativeEngine(
         val futures = scanSymbols.map { symbol ->
             scanExecutor.submit(Callable {
                 try {
-                    val candles = fetchCandles(symbol, "1h", 180)
+                    // The validated H1 startup history has 150 closed bars.
+                    // Do not trigger extra REST traffic just to demand 180.
+                    val candles = fetchCandles(symbol, "1h", 150)
                     if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
                     val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
                     markScanProgress()
