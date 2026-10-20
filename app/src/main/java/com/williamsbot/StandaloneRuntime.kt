@@ -428,6 +428,28 @@ internal fun shouldRetryDailyRiskBaseline(
  * kill switch, or unresolved exchange position must not stop H1 diagnostics;
  * the independent Execution Gate still blocks every new order mutation.
  */
+/**
+ * A live runtime with verified history and a failed H1 scan is a functional
+ * failure, not a yellow warning. An incomplete startup is still a warning.
+ */
+internal fun scannerFailureSeverity(
+    running: Boolean, historyReady: Boolean,
+    scanning: Boolean, scannerState: String
+): String = if (running && historyReady && !scanning && scannerState == "FAILED") {
+    "FAIL"
+} else {
+    "WARN"
+}
+
+/** Source location is necessary to distinguish failed H1 fetch from TC2 rule bugs. */
+internal fun h1ScannerExceptionDetail(stage: String, failure: Throwable): String {
+    val root = generateSequence(failure) { it.cause }.last()
+    val source = root.stackTrace.firstOrNull { it.className.startsWith("com.williamsbot.") }
+    val at = source?.let { "${it.fileName}:${it.lineNumber}" } ?: "SOURCE_NOT_CAPTURED"
+    val detail = safeDiagnosticText(root.message.orEmpty()).take(220)
+    return "$stage: ${root.javaClass.simpleName} @ $at: $detail"
+}
+
 internal fun scannerDataReadinessState(
     running: Boolean,
     historyReady: Boolean,
@@ -929,6 +951,40 @@ private data class TradeFlowSample(
     val quoteVolume: Double,
     val aggressiveBuy: Boolean
 )
+
+/**
+ * SHORT TC2 signals mirror LONG geometry. Older WM3 signals contain an
+ * empty setup context; blindly calling JSONObject("") crashed ALL ten H1
+ * scanner workers whenever a confirmed SHORT fractal was discovered.
+ *
+ * A documented legacy WM3 omission may be represented explicitly, whereas
+ * absent WM1/WM2 evidence or malformed nonempty JSON must remain fail-closed.
+ */
+internal fun reflectedTc2SetupContext(
+    signalType: String,
+    originalContext: String,
+    reflection: Double
+): String {
+    require(reflection.isFinite() && reflection > 0.0) { "TC2_SHORT_REFLECTION_INVALID" }
+    val context = if (originalContext.isBlank()) {
+        check(signalType == "FRACTAL") { "TC2_SOURCE_CONTEXT_MISSING:$signalType" }
+        JSONObject().put("wise_man", "WM3")
+            .put("legacy_source_context_missing", true)
+    } else {
+        JSONObject(originalContext)
+    }
+    context.optJSONObject("angulation")?.let { proof ->
+        for (key in listOf("price_slope", "jaw_slope", "teeth_slope")) {
+            if (!proof.isNull(key) && proof.has(key)) proof.put(key, -proof.getDouble(key))
+        }
+    }
+    if (context.has("risk_stop_at_price") && !context.isNull("risk_stop_at_price")) {
+        val originalStop = context.getDouble("risk_stop_at_price")
+        require(originalStop.isFinite()) { "TC2_SHORT_CONTEXT_STOP_INVALID" }
+        context.put("risk_stop_at_price", reflection - originalStop)
+    }
+    return context.toString()
+}
 
 private data class CampaignSignalN(
     val signalId: String,
@@ -6603,18 +6659,19 @@ private class NativeEngine(
         val symbolErrors = java.util.concurrent.ConcurrentHashMap<String, String>()
         val futures = scanSymbols.map { symbol ->
             scanExecutor.submit(Callable {
+                var stage = "FETCH_H1_CLOSED_CANDLES"
                 try {
                     // The validated H1 startup history has 150 closed bars.
                     // Do not trigger extra REST traffic just to demand 180.
                     val candles = fetchCandles(symbol, "1h", 150)
                     if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
+                    stage = "ANALYSE_TC2_NTD_COURSE_H1"
                     val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
                     markScanProgress()
                     result
                 } catch (x: Exception) {
                     markScanProgress()
-                    symbolErrors[symbol] = x.javaClass.simpleName + ": " +
-                        (x.message ?: "no details")
+                    symbolErrors[symbol] = h1ScannerExceptionDetail(stage, x)
                     null
                 }
             })
@@ -7872,6 +7929,12 @@ private class NativeEngine(
                 triggerPrice=fractal.trigger,protectivePrice=fractal.protective,
                 teethAtDetection=fractal.currentTeeth,invalidationPrice=fractal.protective,
                 reason="WM3 eligible confirmed fractal outside Teeth; waiting for actual trigger",
+                setupContext=JSONObject()
+                    .put("wise_man","WM3")
+                    .put("signal_family","CONFIRMED_FRACTAL")
+                    .put("fractal_center_time_ms",candles[fractal.center].t)
+                    .put("fractal_confirmation_time_ms",candles[fractal.confirmation].t)
+                    .put("teeth_filter_verified",true).toString(),
                 formationAtMs=candles[fractal.center].t)
         }
 
@@ -7925,19 +7988,7 @@ private class NativeEngine(
                 triggerPrice = trigger,
                 protectivePrice = stop,
                 teethAtDetection = reflection-signal.teethAtDetection,
-                setupContext = JSONObject(signal.setupContext).apply {
-                    optJSONObject("angulation")?.let { proof ->
-                        for(key in listOf("price_slope","jaw_slope","teeth_slope"))
-                            if(!proof.isNull(key) && proof.has(key)) proof.put(key,-proof.getDouble(key))
-                    }
-                    // WM2 is detected on price-reflected candles for SHORT.
-                    // Translate its recorded protective stop back, too:
-                    // otherwise diagnostic provenance contradicts the real
-                    // Binance Futures plan even when the order itself is right.
-                    if(has("risk_stop_at_price") && !isNull("risk_stop_at_price")) {
-                        put("risk_stop_at_price",reflection-getDouble("risk_stop_at_price"))
-                    }
-                }.toString(),
+                setupContext = reflectedTc2SetupContext(signal.type, signal.setupContext, reflection),
                 invalidationPrice = stop,
                 reason = signal.reason.replace("bullish","bearish").replace("above signal-bar high","below signal-bar low")
                     .replace("rising AO","falling AO").replace("above price bar","below price bar")
@@ -9469,6 +9520,7 @@ private class NativeEngine(
             .put("scanner_scanning", scanning)
             .put("scanner_state", scannerState)
             .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("scanner_symbol_errors", lastScannerSymbolErrors)
             .put("scanner_market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
             .put("scanner_run_id", scanRunId)
             .put("scanner_symbols", lastSymbolsScanned)
@@ -9920,7 +9972,8 @@ private class NativeEngine(
             scanProgressSymbols in 0..coreSymbols.size &&
             (scannerProgressAgeMs <= 60_000L || (scanProgressSymbols == 0 && scannerStartupGrace))
         test(
-            "scanner_state", "scanner", scannerComplete || scannerActivelyProgressing, "WARN",
+            "scanner_state", "scanner", scannerComplete || scannerActivelyProgressing,
+            scannerFailureSeverity(running, historyReady, scanning, scannerState),
             "state=" + scannerState + "; complete=" + scannerComplete +
                 "; universe_matches=" + scannerUniverseMatches + "; run_id=" + scanRunId +
                 "; progress=" + scanProgressSymbols + "/" + scanSymbols.size +
