@@ -97,6 +97,12 @@ internal fun CockpitReadiness(status: Status) {
             else -> "Требуется сверка"
         })
         Text(r.optString("new_entries_reason", "Ожидание первого снимка"), style = MaterialTheme.typography.bodySmall)
+        Text(r.optString("utc_loss_reset_explanation", "Суточные ограничения уточняются по времени Binance UTC."),
+            style = MaterialTheme.typography.bodySmall, color = AppColors.amber)
+        if (!r.optBoolean("daily_risk_baseline_known", false)) {
+            Text("⚠️ Дневная база риска не подтверждена. 00:00 UTC не снимает этот независимый блок.",
+                style = MaterialTheme.typography.bodySmall, color = AppColors.red)
+        }
         CockpitFreshness(status)
     }
 }
@@ -147,7 +153,7 @@ internal fun CockpitDashboard(
         item { controls() }
         if (status.error != null || message.startsWith("Частичная ошибка")) item {
             CockpitCard("Требует внимания", AppColors.amber) {
-                Text(status.error ?: message, style = MaterialTheme.typography.bodySmall)
+                Text(russianExecutionBlocker(status.error ?: message), style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = onSystem) { Text("Открыть диагностику") }
             }
         }
