@@ -79,6 +79,45 @@ class WilliamsAdaptiveWaveHistoryTest {
         assertFalse(evidence.getBoolean("wave4_completion_confirmed"))
     }
 
+    @Test fun fourthWaveCrossesAoZeroOnlyAfterTheActualThirdPriceLegInBothDirections() {
+        val start=zero+40*h
+        val end=zero+70*h
+        val asOf=zero+74*h
+        for (direction in listOf("UP","DOWN")) {
+            val positive=direction=="UP"
+            val prices=(0 until 296).map { i ->
+                val hours=i/4.0
+                val p=when {
+                    hours<50.0->100.0
+                    hours<=58.0->100.0+7.5*(hours-50.0)
+                    hours<=70.0->160.0-8.0*(hours-58.0)
+                    else->64.0
+                }
+                if(positive) p else 300.0-p
+            }
+            val bars=prices.mapIndexed { i,p ->
+                WilliamsWaveBar(zero+i*q,p,p+1.0,p-1.0,p,10.0)
+            }
+            val types=if(positive) listOf("LOW","HIGH","LOW","HIGH","LOW")
+                else listOf("HIGH","LOW","HIGH","LOW","HIGH")
+            val anchors=listOf(40,45,50,58,70).mapIndexed { i,n ->
+                WilliamsWaveAnchor(types[i],prices[n*4],i,zero+n*h,zero+(n+3)*h)
+            }
+            val scenario=WilliamsWaveScenario(
+                "H1:"+direction,"1h",direction,"W4",anchors,asOf,
+                anchors.last().extremeAt,60.0,240.0,100.0)
+            val choice=chooseAdaptiveWaveResolution(start,end+q,"1h",
+                mapOf("15m" to bars),asOf)
+            assertEquals("BOOK_WINDOW_OBSERVED",choice.status)
+            val out=adaptiveWave4AoEvidence(scenario,choice,
+                mapOf("15m" to bars),asOf)
+            assertEquals("ZERO_CROSSED_MINIMUM_ONLY",out.getString("status"))
+            assertTrue(out.getBoolean("crossed_zero"))
+            assertFalse(out.getBoolean("wave4_completion_confirmed"))
+            assertFalse(out.getBoolean("can_close_positions"))
+        }
+    }
+
     @Test fun missingD1H4OrH1CannotCreateAFabricatedParentChildWaveLineage() {
         val context=buildAdaptiveHistoricalWaveReport(
             mapOf("1h" to series(h,72)),zero+72*h)
