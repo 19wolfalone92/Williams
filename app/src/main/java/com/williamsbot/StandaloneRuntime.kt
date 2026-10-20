@@ -4719,7 +4719,11 @@ private class NativeEngine(
             }
             val baselineResult = baselineAttempt.getOrElse { failure ->
                 paused = true
-                prefs.edit().putBoolean("auto_run", false).commit()
+                // Distinguish an automatic, recoverable daily-baseline pause
+                // from the operator's explicit pause. Never erase either risk
+                // evidence or the original 3% daily loss limit.
+                prefs.edit().putBoolean("auto_run", false)
+                    .putBoolean("risk_daily_baseline_auto_paused", true).commit()
                 lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: unable to reconstruct UTC-day equity safely: " +
                     (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 3% and entries stay blocked"
                 return false
@@ -4862,6 +4866,23 @@ private class NativeEngine(
                 }
             }
             return false
+        }
+        // UTC midnight clears the *loss streak*, not financial drawdown or
+        // unresolved orders. A previously automatic UNKNOWN-baseline pause may
+        // be released ONLY once the current UTC baseline, daily PnL and
+        // exchange account have all passed this exact verification.
+        val recoverablePause = prefs.getBoolean("risk_daily_baseline_auto_paused", false) ||
+            (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true)
+        if (recoverablePause && !killLatched && !reconcileRequired &&
+            !prefs.getBoolean("operator_entries_paused", false) &&
+            !forceTestnetMode && running) {
+            // Other gates (coordinator, pending orders, WSS, fresh market, FSM)
+            // remain authoritative; removing this PAUSE is not an entry permit.
+            if (prefs.edit().putBoolean("risk_daily_baseline_auto_paused", false).commit()) {
+                paused = false
+                if (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true)
+                    lastError = null
+            }
         }
         return true
     }
