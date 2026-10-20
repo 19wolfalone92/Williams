@@ -406,11 +406,6 @@ internal fun scannerReadinessState(
 }
 
 /**
- * Read-only discovery has fewer prerequisites than order execution. A pause,
- * kill switch, or unresolved exchange position must not stop H1 diagnostics;
- * the independent Execution Gate still blocks every new order mutation.
- */
-/**
  * Recover missing UTC risk evidence even if a previous failed preflight
  * put new entries on PAUSE. This schedules only the risk/reconciliation check:
  * it NEVER resumes execution and never clears the operator pause or a safety latch.
@@ -428,6 +423,11 @@ internal fun shouldRetryDailyRiskBaseline(
 ): Boolean = running && !killLatched && !reconcileRequired &&
     accountReady && userStreamConnected && !userStreamSyncRequired && !baselineReady
 
+/**
+ * Read-only discovery has fewer prerequisites than order execution. A pause,
+ * kill switch, or unresolved exchange position must not stop H1 diagnostics;
+ * the independent Execution Gate still blocks every new order mutation.
+ */
 internal fun scannerDataReadinessState(
     running: Boolean,
     historyReady: Boolean,
