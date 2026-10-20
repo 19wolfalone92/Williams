@@ -48,11 +48,26 @@ class CockpitDiagnosticsTest {
         assertFalse(r.getBoolean("new_entries_allowed"))
         assertTrue(r.getString("new_entries_reason").contains("база риска"))
     }
-    @Test fun staleCachedPositionsNeverAllowNewEntriesDespiteGreenExecutionGate() {
+    @Test fun staleDisplayOnlyPositionsDoNotOverrideAuthoritativeFuturesEntryGate() {
         val s = healthy().put("positions_snapshot_ok", false).put("positions_snapshot_at_ms", now - 20_000)
-        assertFalse(CockpitDiagnostics.readiness(s, coordinator(), now).getBoolean("new_entries_allowed"))
+        val readiness = CockpitDiagnostics.readiness(s, coordinator(), now)
+        assertTrue(readiness.getBoolean("new_entries_allowed"))
+        assertFalse(readiness.getBoolean("positions_snapshot_fresh"))
+        assertFalse(readiness.getBoolean("position_management_ready"))
+        assertEquals("NOT_VERIFIED", readiness.getString("protection_state"))
         assertEquals("WARNING", severity("DATA-04", s))
         assertEquals("WARNING", severity("AND-03", s))
+        // Only the live native door can grant a new entry; an old UI snapshot never can.
+        assertFalse(CockpitDiagnostics.readiness(s.put("execution_enabled", false), coordinator(), now)
+            .getBoolean("new_entries_allowed"))
+    }
+
+    @Test fun ongoingBinanceReconciliationExplainsTemporaryEntryFenceInRussian() {
+        val c = coordinator().put("ready_for_new_entry", false)
+            .put("blocker", "exchange_reconciliation_in_progress")
+        val r = CockpitDiagnostics.readiness(healthy().put("execution_enabled", false), c, now)
+        assertFalse(r.getBoolean("new_entries_allowed"))
+        assertTrue(r.getString("new_entries_reason").contains("сверка"))
     }
     @Test fun ageLimitIsEnforcedEvenIfProducerClaimsSnapshotOk() {
         assertFalse(CockpitDiagnostics.positionsFresh(healthy().put("positions_snapshot_at_ms", now - 15_001), now))
