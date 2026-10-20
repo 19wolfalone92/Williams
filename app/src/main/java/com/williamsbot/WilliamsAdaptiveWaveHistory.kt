@@ -139,7 +139,7 @@ internal fun buildAdaptiveHistoricalWaveReport(
     val records=JSONArray()
     // The execution hierarchy is unchanged. H4 is included explicitly here
     // so W3/H1 within a provisional W5/H4 can be observed next to D1 context.
-    for(frame in listOf("1d","6h","4h","1h","30m","15m")) {
+    for(frame in listOf("1w","1d","12h","8h","6h","4h","2h","1h","30m","15m")) {
         val rows=verified[frame]?:continue
         val pivots=confirmedWilliamsWaveAnchors(rows,williamsWaveFrames.getValue(frame))
         val current=williamsHypothesesFromAnchors(frame,rows,pivots)
