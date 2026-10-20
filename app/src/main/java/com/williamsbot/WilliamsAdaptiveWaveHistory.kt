@@ -66,3 +66,58 @@ internal fun chooseAdaptiveWaveResolution(
         "WRONG_SCALE_UNCONFIRMED",ideal)
     else AdaptiveWaveResolution(null,0,"MISSING_CLOSED_CHILD_BARS",ideal)
 }
+
+/**
+ * Wave 4 AO observation: w3 momentum peak is located in the real third
+ * price leg and the correction is checked AFTER the confirmed third price end.
+ * Opposite side of zero is evidence, not independent proof of a completed W4.
+ * Near/touch at 5% W3 amplitude is an explicitly non-book engineering tolerance.
+ */
+internal fun adaptiveWave4AoEvidence(
+    scenario:WilliamsWaveScenario,
+    resolution:AdaptiveWaveResolution,
+    historical:Map<String,List<WilliamsWaveBar>>,asOf:Long
+):JSONObject {
+    val out=JSONObject().put("status","UNVERIFIED")
+        .put("can_place_orders",false).put("can_close_positions",false)
+        .put("wave4_completion_confirmed",false)
+        .put("resolution",resolution.toJson())
+    if(scenario.anchors.size<5 || resolution.frame==null ||
+        resolution.status!="BOOK_WINDOW_OBSERVED")
+        return out.put("reason","FOURTH_WAVE_OR_RESOLUTION_NOT_PROVEN")
+    val p=scenario.anchors
+    if(p.take(5).any { it.knownAt>asOf })
+        return out.put("reason","PIVOTS_NOT_CAUSALLY_KNOWN")
+    if(!(p[2].extremeAt<p[3].extremeAt && p[3].extremeAt<p[4].extremeAt))
+        return out.put("reason","INVALID_CONFIRMED_SWING_ORDER")
+    val frame=resolution.frame
+    val rows=consecutiveClosedWaveSuffix(historical[frame].orEmpty(),frame,asOf)
+    val mids=rows.map { (it.h+it.l)/2.0 }
+    val ao=rows.indices.map { i -> if(i<33) Double.NaN else
+        (i-4..i).sumOf { mids[it] }/5.0 -
+            (i-33..i).sumOf { mids[it] }/34.0 }
+    val sign=if(scenario.direction=="UP") 1.0 else -1.0
+    val third=rows.indices.filter { rows[it].t in p[2].extremeAt..p[3].extremeAt &&
+        ao[it].isFinite() && sign*ao[it]>0.0 }
+        .maxByOrNull { sign*ao[it] }
+        ?:return out.put("reason","THIRD_WAVE_MOMENTUM_NOT_PROVEN")
+    val fourth=rows.indices.filter { rows[it].t>p[3].extremeAt &&
+        rows[it].t<=p[4].extremeAt && ao[it].isFinite() }
+    if(fourth.isEmpty()) return out.put("reason","FOURTH_WAVE_AO_NOT_AVAILABLE")
+    val crossed=fourth.firstOrNull { sign*ao[it]<0.0 }
+    val minimum=fourth.minOf { abs(ao[it]) }
+    val near=minimum<=abs(ao[third])*0.05
+    val step=williamsWaveFrames.getValue(frame)
+    return out.put("status",when {
+        crossed!=null->"ZERO_CROSSED_MINIMUM_ONLY"
+        near->"TOUCHED_OR_NEAR_ZERO_UNCONFIRMED"
+        else->"NO_ZERO_CROSS"
+    }).put("crossed_zero",crossed!=null)
+        .put("touched_or_near_zero",crossed==null && near)
+        .put("w3_ao_peak",ao[third])
+        .put("wave4_min_absolute_ao",minimum)
+        .put("w4_ao_bars",fourth.size)
+        .put("cross_known_at_ms",crossed?.let { rows[it].t+step }?:JSONObject.NULL)
+        .put("near_zero_ratio","0.05_ENGINEERING_UNCONFIRMED")
+        .put("reason","AO_ZERO_ALONE_DOES_NOT_CONFIRM_WAVE4_END")
+}
