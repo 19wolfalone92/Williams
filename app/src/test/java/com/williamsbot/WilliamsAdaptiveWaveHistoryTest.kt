@@ -46,6 +46,22 @@ class WilliamsAdaptiveWaveHistoryTest {
         assertNotEquals("BOOK_WINDOW_OBSERVED",r.status)
     }
 
+    @Test fun olderActualChildWindowWorksWhenTheMoreRecentTailHasNotYetDownloaded() {
+        val start=zero+40*h
+        val end=start+30*h
+        val now=zero+100*h
+        // M15 archive contains the targeted older wave and AO warm-up,
+        // but NOT the later 30 hours of M15 data.
+        val archivedM15=series(q,284)
+        val r=chooseAdaptiveWaveResolution(start,end,"1h",
+            mapOf("15m" to archivedM15),now)
+        assertEquals("15m",r.frame)
+        assertEquals(120,r.observedBars)
+        assertEquals("BOOK_WINDOW_OBSERVED",r.status)
+        val gap=archivedM15.filterIndexed { i,_ -> i!=170 }
+        assertTrue(verifiedAdaptiveWaveWindow(gap,"15m",start,end,now).isEmpty())
+    }
+
     @Test fun futureCandleAppendCannotChangeAsOfWaveResolution() {
         val start=zero+40*h
         val end=start+30*h
