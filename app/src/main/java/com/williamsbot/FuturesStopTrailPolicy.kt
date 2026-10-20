@@ -124,6 +124,10 @@ internal fun planWilliamsCampaignStop(
     markPrice: Double, tickSize: Double, openedObservedAtMs: Long,
     bars: List<FuturesTrailBar>, window: Int = 5, feeAllowance: Double = .0035
 ): FuturesStopTrailProposal? {
+    // Never infer an H1 3/5 bar stop from pre-entry candles when the
+    // exchange-confirmed position opening timestamp is unknown. Reconciliation
+    // must establish ownership/protection first. No fallback to invented time.
+    if (openedObservedAtMs<=0L) return null
     if (direction !in listOf("LONG","SHORT") || window !in listOf(3,5) ||
         listOf(oldStop,markPrice,tickSize).any { !it.isFinite() || it <= 0 } ||
         bars.any { !it.high.isFinite() || !it.low.isFinite() || it.low <= 0 || it.high < it.low } ||
@@ -133,7 +137,7 @@ internal fun planWilliamsCampaignStop(
     val proposals = mutableListOf<FuturesStopTrailProposal>()
     planFuturesStopTrail(direction,oldStop,actualEntry,initialStop ?: Double.NaN,markPrice,tickSize,
         openedObservedAtMs,bars,feeAndSlippageAllowancePct=feeAllowance,breakEvenEnabled=validR)?.let { proposals += it }
-    if (bars.size >= window && (openedObservedAtMs <= 0 || bars.last().openTimeMs+3_600_000L > openedObservedAtMs)) {
+    if (bars.size >= window && bars.last().openTimeMs+3_600_000L > openedObservedAtMs) {
         val price = if (direction == "LONG") {
             floor((bars.takeLast(window).minOf { it.low }-tickSize)/tickSize+1e-12)*tickSize
         } else ceil((bars.takeLast(window).maxOf { it.high }+tickSize)/tickSize-1e-12)*tickSize
