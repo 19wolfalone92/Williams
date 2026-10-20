@@ -49,6 +49,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -2802,15 +2803,15 @@ private fun PositionScreen(
                             }
                         }
                         InfoRow(
-                            "Quantity",
+                            "Объём позиции",
                             fmt(p.qty, 6)
                         )
                         InfoRow(
-                            "Entry",
+                            "Цена входа",
                             fmt(p.entry)
                         )
                         InfoRow(
-                            "Current",
+                            "Текущая цена",
                             fmt(p.currentPrice)
                         )
                         InfoRow(
@@ -2818,20 +2819,20 @@ private fun PositionScreen(
                             fmt(p.positionValueUsdt, 2) + " USDT"
                         )
                         InfoRow(
-                            "Allocation",
+                            "Доля капитала",
                             fmt(p.allocationPct * 100.0, 2) + "%"
                         )
                         InfoRow(
-                            "PnL",
+                            "Прибыль / убыток",
                             fmt(p.pnlUsdt, 2) + " USDT (" +
                                 fmt(p.pnlPct * 100.0, 2) + "%)"
                         )
                         InfoRow(
-                            "SL",
+                            "Защитный стоп",
                             fmt(p.stop)
                         )
                         InfoRow(
-                            "TP",
+                            "Тейк-профит",
                             fmt(p.take)
                         )
                         InfoRow(
@@ -3400,8 +3401,8 @@ private fun MiniMetric(label: String, value: String) {
     ) {
         Column(
             Modifier
-                .padding(horizontal = 9.dp, vertical = 7.dp)
-                .width(64.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .widthIn(min = 112.dp, max = 188.dp)
         ) {
             Text(
                 label,
