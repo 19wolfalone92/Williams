@@ -1242,6 +1242,13 @@ private class NativeEngine(
     // Prime H1 for all ten symbols before optional context/chart frames.
     // Missing H4/D1/H6/M15 never turns off read-only H1 market analysis.
     private val startupFrames = listOf("1h", "4h", "1d", "6h", "15m")
+    // Prioritize analysis horizons. Full exchange history of minute-by-minute
+    // bars for ten pairs can consume gigabytes and is NOT safe to force on mobile.
+    // 1m/3m/5m remain persisted on demand as bounded chart/monitoring history.
+    private val durableBackfillFrames = listOf(
+        "1h", "4h", "6h", "1d", "1w", "1M",
+        "15m", "30m", "2h", "8h", "12h", "3d"
+    )
     // The H1 decision engine needs the full 150-candle working set. Higher-timeframe
     // context has explicit lower minimums in the entry contract; requiring 150 D1
     // candles during startup can deadlock scanning on a fresh Futures Demo market.
@@ -1287,6 +1294,11 @@ private class NativeEngine(
     @Volatile private var publicSocketLastEventMs = 0L
     @Volatile private var publicSocketStartedMs = 0L
     @Volatile private var publicReconnectRequested = false
+    @Volatile private var deepHistoryBackfillRunning = false
+    @Volatile private var deepHistoryPairsComplete = 0
+    @Volatile private var deepHistoryLastError: String? = null
+    @Volatile private var deepHistoryStorageLow = false
+    @Volatile private var deepHistoryLastStartMs = 0L
     @Volatile private var historyWarmupRunning = false
     @Volatile private var historyReady = false // All ten H1 decision sets ready.
     @Volatile private var readOnlyH1Ready = false // At least one valid H1 working set.
@@ -2303,6 +2315,7 @@ private class NativeEngine(
                         // requires all ten H1 series + independent safety
                         // admission; partial chart data is never an entry pass.
                         if(readOnlyH1Ready) {
+                            if (historyReady) schedulePersistentHistoryBackfill(generation)
                             requestScan()
                         } else {
                             scannerState = "WAITING_FOR_HISTORY"
@@ -3711,20 +3724,7 @@ private class NativeEngine(
                     readOnlyH1Ready -> "PARTIAL_H1_SCANNING_AVAILABLE"
                     else -> "WAITING_RETRY"
                 }
-                if (historyReady) {
-                    // Deep history is bounded and sequential on mobile. It is
-                    // a cache warmer, never a prerequisite for first scan.
-                    historyBackfillExecutor.execute {
-                        for (symbol in coreSymbols) {
-                            if (!running || generation != runtimeGeneration) break
-                            runCatching { fetchFullHistory(symbol, "1h", 6) }
-                                .onFailure {
-                                    lastError = "background history " + symbol + ": " +
-                                        (it.message ?: it.javaClass.simpleName)
-                                }
-                        }
-                    }
-                }
+                if (historyReady) schedulePersistentHistoryBackfill(generation)
             } catch (x: Exception) {
                 if (generation == runtimeGeneration) {
                     historyReady = false
@@ -3741,6 +3741,77 @@ private class NativeEngine(
         }.apply {
             isDaemon = true
             name = "williams-recent-history"
+            start()
+        }
+    }
+
+    /**
+     * The phone owns an append-only SQLite kline history. Fetch the exchange's
+     * earliest available bar for the selected Williams analysis frames in
+     * small restartable batches. A network outage cannot erase progress.
+     *
+     * One background worker + inter-pair pauses avoid a 10×15 REST stampede.
+     * Existing H1 read-only scans and protective orders are never delayed on
+     * exhaustive archival downloads.
+     */
+    @Synchronized
+    private fun schedulePersistentHistoryBackfill(generation: Long) {
+        if (!running || !historyReady || deepHistoryBackfillRunning ||
+            generation != runtimeGeneration) return
+        val now = System.currentTimeMillis()
+        if (deepHistoryLastStartMs > 0L && now - deepHistoryLastStartMs < 60_000L) return
+        deepHistoryBackfillRunning = true
+        deepHistoryLastStartMs = now
+        Thread {
+            try {
+                while (running && generation == runtimeGeneration &&
+                    !Thread.currentThread().isInterrupted) {
+                    var incomplete = 0
+                    var successes = 0
+                    deepHistoryLastError = null
+                    for (frame in durableBackfillFrames) {
+                        for (symbol in coreSymbols) {
+                            if (!running || generation != runtimeGeneration ||
+                                Thread.currentThread().isInterrupted) return@Thread
+                            // Leave room for the Futures journal, SQLite WAL and Android.
+                            if (context.filesDir.usableSpace < 512L * 1024L * 1024L) {
+                                deepHistoryStorageLow = true
+                                deepHistoryLastError = "LOW_DEVICE_STORAGE: historical download paused; existing database preserved"
+                                return@Thread
+                            }
+                            deepHistoryStorageLow = false
+                            val result = runCatching { fetchFullHistory(symbol, frame, 4) }
+                            if (result.isFailure) {
+                                deepHistoryLastError = symbol + ":" + frame + " " +
+                                    (result.exceptionOrNull()?.message ?: "history error")
+                                incomplete++
+                            } else {
+                                successes++
+                                if (!historyStore.isComplete(symbol, frame)) incomplete++
+                            }
+                            // Allow new-order protection, scanning and foreground UI
+                            // to consume exchange-rate and device I/O budgets first.
+                            try { Thread.sleep(200L) } catch (_: InterruptedException) {
+                                Thread.currentThread().interrupt()
+                                return@Thread
+                            }
+                        }
+                    }
+                    deepHistoryPairsComplete = durableBackfillFrames.size * coreSymbols.size - incomplete
+                    // Once all backfill cursors reach the exchange beginning, the
+                    // same job periodically catches up missed newer candles.
+                    val intervalMs = if (incomplete == 0) 3_600_000L else 30_000L
+                    try { Thread.sleep(intervalMs) } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return@Thread
+                    }
+                }
+            } finally {
+                deepHistoryBackfillRunning = false
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-durable-history-sync"
             start()
         }
     }
@@ -9115,6 +9186,12 @@ private class NativeEngine(
             .put("optional_context_history_ready",optionalContextHistoryReady)
             .put("history_state", historyState)
             .put("history_last_error", historyLastError ?: JSONObject.NULL)
+            .put("persistent_history_sync_active", deepHistoryBackfillRunning)
+            .put("persistent_history_frames", JSONArray(durableBackfillFrames))
+            .put("persistent_history_complete_pairs", deepHistoryPairsComplete)
+            .put("persistent_history_total_pairs", durableBackfillFrames.size * coreSymbols.size)
+            .put("persistent_history_storage_low", deepHistoryStorageLow)
+            .put("persistent_history_last_error", deepHistoryLastError ?: JSONObject.NULL)
             .put("fsm_state", stateMachine.state.name)
             .put("kill_switch_latched", killLatched)
             .put("live_prices", JSONObject().apply {
