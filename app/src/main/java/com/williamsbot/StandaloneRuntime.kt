@@ -423,6 +423,16 @@ internal fun scannerDataReadinessState(
     else -> "RUNNABLE"
 }
 
+/** Read-only scanning can report partial H1 when just some pairs warmed.
+ * Missing symbols must still block all new Futures exposure at the separate
+ * 10/10 completeness gate; a missing higher TF never blocks H1 discovery.
+ */
+internal fun scannerH1WarmupState(ready:Int,total:Int):String=when {
+    ready<=0 || total<=0 -> "WAITING_RETRY"
+    ready>=total -> "READY"
+    else -> "READY_PARTIAL_H1"
+}
+
 /** A one-second worker heartbeat must not re-fetch 10 H1 charts every second. */
 internal fun shouldScheduleReadOnlyScan(
     nowMs:Long,lastCompletedAtMs:Long,minIntervalMs:Long=30_000L
@@ -3631,12 +3641,8 @@ private class NativeEngine(
                     if(awaitWarmup(label,future)) h1ReadyCount++
                 }
                 if(generation!=runtimeGeneration || !running) return@Thread
-                historyReady=h1ReadyCount>0
-                historyState=when {
-                    h1ReadyCount==coreSymbols.size -> "READY"
-                    h1ReadyCount>0 -> "READY_PARTIAL_H1"
-                    else -> "WAITING_RETRY"
-                }
+                historyState=scannerH1WarmupState(h1ReadyCount,coreSymbols.size)
+                historyReady=historyState!="WAITING_RETRY"
                 // A partially warmed H1 universe permits read-only progress.
                 // The completeScan=10/10 Futures mutation gate remains intact.
                 // Rechecks of missing symbols occur in every bounded H1 scan.
