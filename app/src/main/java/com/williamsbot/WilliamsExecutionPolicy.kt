@@ -75,11 +75,12 @@ internal fun williamsBookInitialContextRank(
     val side=campaignSignalDirection(signalType) ?: return 0
     if(side !in setOf("LONG","SHORT")) return 0
     val type=signalType.removePrefix("SHORT_").removePrefix("LONG_")
-    // TC2 supports three initial entry families. Unknown/obsolete
-    // signal families are not admitted via this book exception.
-    return if(type in setOf("REVERSAL","SUPER_AO","FRACTAL"))
-        maxOf(prior,1,if(validatedCorrection) 2 else 0)
-    else maxOf(prior,if(validatedCorrection) 2 else 0)
+    // TC2 chapter 12 supports exactly these THREE families as initial
+    // presenting Wise Men. AO zero-line/saucer/twin-peaks and AC are
+    // evidence or management in their respective contexts, never a
+    // substitute independent initial TC2 entry.
+    if(type !in setOf("REVERSAL","SUPER_AO","FRACTAL")) return 0
+    return maxOf(prior,1,if(validatedCorrection) 2 else 0)
 }
 
 
