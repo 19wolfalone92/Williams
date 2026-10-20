@@ -60,4 +60,11 @@ class WilliamsExecutionPolicyTest {
             JSONObject(old.toString()).put("fill_observed_at_ms",999)))
             assertNull(williamsBookH1RetryGeneration(JSONArray().put(change),"f"))
     }
+    @Test fun tc2OppositeH1TriggerIsAnAdvisoryNotAMarketExit() {
+        assertFalse(williamsOpposingSignalCanMarketClose(williamsTc2Profile))
+        assertTrue(williamsOpposingSignalCanMarketClose(williamsNtdProfile))
+        assertTrue(williamsOpposingSignalCanMarketClose(williamsCourseProfile))
+        assertFalse(williamsOpposingSignalCanMarketClose("UNKNOWN"))
+    }
+
 }

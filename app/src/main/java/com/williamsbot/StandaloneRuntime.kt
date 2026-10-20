@@ -5643,11 +5643,31 @@ private class NativeEngine(
                 }
                 editionStop=if(dir=="LONG") candidates.maxOrNull() else candidates.minOrNull()
             }
-            val opposing = triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,
-                profile)
-            if (opposing != null || boundaryExit || editionExit.isNotEmpty()) {
-                val correction = if (opposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
-                    if (dir == "LONG") "SHORT" else "LONG",opposing.signalBarTimeMs,opposing.type) else WilliamsCorrectionContext()
+            // A TC2 opposite H1 signal is NOT authorization to market-close
+            // an exchange-protected open campaign. The 19-Oct SOL/XRP losses
+            // were explicitly recorded as opposite-signal market exits.
+            // Detect/log the hypothesis independently while preserving stop
+            // protection and monotone trailing. Legacy NTD/Course keep their
+            // source-specific exits; correction safety boundaries remain active.
+            val opposing = if(profile==williamsTc2Profile) {
+                runCatching { triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile) }
+                    .onFailure { lastError="TC2_OPPOSITION_ADVISORY_UNAVAILABLE: $symbol: "+
+                        (it.message ?: it.javaClass.simpleName) }.getOrNull()
+            } else triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile)
+            if(profile==williamsTc2Profile && opposing!=null) {
+                val advisory=JSONObject().put("policy","TC2_PROTECTIVE_STOP_ONLY")
+                    .put("signal_id",opposing.signalId).put("source",opposing.strategyProfile)
+                    .put("direction",campaignSignalDirection(opposing.type))
+                    .put("observed_at_ms",futuresMarketData.exchangeNowMs())
+                    .put("price_triggered",true).put("market_close_authorized",false)
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                    .put("tc2_opposing_signal_advisory",advisory)
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+            }
+            val actionableOpposing = opposing?.takeIf { williamsOpposingSignalCanMarketClose(profile) }
+            if (actionableOpposing != null || boundaryExit || editionExit.isNotEmpty()) {
+                val correction = if (actionableOpposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
+                    if (dir == "LONG") "SHORT" else "LONG",actionableOpposing.signalBarTimeMs,actionableOpposing.type) else WilliamsCorrectionContext()
                 val exitReason = if(editionExit.isNotEmpty()) editionExit else if (boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
                     else if (correction.allowed) "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
                     else "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
@@ -5655,7 +5675,7 @@ private class NativeEngine(
                 management.put("exit_evidence",JSONObject().put("reason",exitReason)
                     .put("observed_at_ms",futuresMarketData.exchangeNowMs()).put("edition_exit",editionExit)
                     .put("correction_boundary_broken",boundaryExit).put("higher_correction",correction.toJson())
-                    .put("opposition_check",if(opposing!=null) JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) else JSONObject.NULL))
+                    .put("opposition_check",if(actionableOpposing!=null) JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) else JSONObject.NULL))
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
                 val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"),rules)
                 val clientId = ("W2O_"+symbol.take(8)+"_"+System.nanoTime().toString(16).takeLast(12)).take(36)
