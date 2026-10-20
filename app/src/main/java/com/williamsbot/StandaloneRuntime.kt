@@ -8275,7 +8275,8 @@ private class NativeEngine(
                 // wave engine examines 1800 recent closed bars per degree.
                 // Scanning 6000*13 rows per symbol would risk stalling
                 // the read-only scanner on resource-constrained devices.
-                historyStore.loadRecent(symbol,frame,1800).map {
+                historyStore.loadRecent(symbol,frame,1800,
+                    beforeMs=hourlyCutoff-williamsWaveFrames.getValue(frame)).map {
                     WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
                 }
             }
