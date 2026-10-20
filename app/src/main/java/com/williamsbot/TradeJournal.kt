@@ -311,6 +311,14 @@ object TradeJournal {
     }
 }
 
+/** Exact UTC reset boundary for the day-scoped loss streak. A hard pause
+ * does NOT last forever, but other safety gates may continue blocking.
+ * This is explanatory metadata only; it does not bypass the risk policy.
+ */
+internal fun futuresLossStreakNextUtcResetMs(nowMs:Long):Long? =
+    if(nowMs<=0L || nowMs>=Long.MAX_VALUE-86_400_000L) null
+    else (nowMs / 86_400_000L + 1L) * 86_400_000L
+
 /** Result of the entry-only Futures loss-streak circuit breaker. */
 internal data class FuturesLossStreakDecision(
     val available: Boolean,
