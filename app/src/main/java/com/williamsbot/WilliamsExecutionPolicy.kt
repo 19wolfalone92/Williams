@@ -42,3 +42,14 @@ internal fun williamsClosedH1HistoryBlocker(bars:List<WilliamsWaveBar>,now:Long)
  */
 internal fun williamsOpposingSignalCanMarketClose(ownerProfile:String):Boolean =
     ownerProfile in williamsSourceProfiles && ownerProfile!=williamsTc2Profile
+
+
+/** TC2 ch10/12: WM2 and WM3 may add on the H1 signal *before* daily/H4
+ * Alligator trend alignment. WM1 is explicitly countertrend. The older
+ * cross-timeframe veto in the addition door accidentally suppressed these
+ * textbook TC2 adds. Distinct NTD/Course management remains source-specific.
+ * The Futures coordinator's reserved risk, stop protection, ownership and
+ * account/reconciliation checks are ALWAYS mandatory.
+ */
+internal fun williamsAdditionRequiresHigherFrameTrendVeto(ownerProfile:String):Boolean =
+    ownerProfile != williamsTc2Profile
