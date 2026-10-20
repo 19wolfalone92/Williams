@@ -8172,6 +8172,29 @@ private class NativeEngine(
         }
         report = buildWilliamsWaveHierarchy(frames,cutoff)
 
+        // A separate observational pass reads the device's deep SQLite
+        // archive, not only the old 240 recent bars. It explicitly resolves
+        // H1 inside H4 inside D1 and attempts genuinely finer real candles
+        // to reach the approximate 100-140-bar analysis resolution.
+        // Never allow a history/cache failure to alter the execution hierarchy.
+        val adaptive = runCatching {
+            val historicalFrames = listOf(
+                "1d","6h","4h","1h","30m","15m","5m","3m","1m"
+            )
+            val history = historicalFrames.associateWith { frame ->
+                historyStore.loadRecent(symbol,frame,6000).map {
+                    WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+                }
+            }
+            buildAdaptiveHistoricalWaveReport(history,cutoff)
+        }.getOrElse { error ->
+            JSONObject().put("schema","ADAPTIVE_WILLIAMS_WAVE_HISTORY_V1")
+                .put("status","HISTORY_UNVERIFIED")
+                .put("error_type",error.javaClass.simpleName)
+                .put("can_place_orders",false)
+        }
+        report=report.copy(adaptiveHistory=adaptive)
+
         val previous = executionStore.readState("wave_hierarchy_" + symbol)
         val proof = report.toJson().toString()
         if (previous != proof) {
