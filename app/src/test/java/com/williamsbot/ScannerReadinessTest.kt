@@ -49,6 +49,22 @@ class ScannerReadinessTest {
         assertEquals(false, eligible(baselineReady = true))
     }
 
+    @Test fun activeFailedTenPairScannerMustBeReportedAsDiagnosticFailure() {
+        assertEquals("FAIL", scannerFailureSeverity(true, true, false, "FAILED"))
+        assertEquals("WARN", scannerFailureSeverity(false, true, false, "FAILED"))
+        assertEquals("WARN", scannerFailureSeverity(true, false, false, "FAILED"))
+        assertEquals("WARN", scannerFailureSeverity(true, true, true, "RUNNING"))
+        assertEquals("WARN", scannerFailureSeverity(true, true, false, "READY_BLOCKED"))
+    }
+
+    @Test fun jsonFailureReportsAnalysisStageAndKotlinSourceLocation() {
+        val origin = org.json.JSONException("End of input at character 0 of")
+        val desc = h1ScannerExceptionDetail("ANALYSE_TC2_NTD_COURSE_H1", origin)
+        assertEquals(true, desc.contains("ANALYSE_TC2_NTD_COURSE_H1"))
+        assertEquals(true, desc.contains("JSONException"))
+        assertEquals(true, desc.contains("End of input"))
+    }
+
     @Test fun stopped_runtime_is_reported_before_other_gates() {
         assertEquals("STOPPED", state(running = false, historyReady = false))
     }
