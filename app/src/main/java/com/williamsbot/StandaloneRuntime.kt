@@ -8248,6 +8248,10 @@ private class NativeEngine(
             .put("setup_state", setupState)
             .put("reason", candidate.reason)
             .put("campaign_engine", campaignEngineEnabled)
+            // Each source ran independently on this exact closed H1 series.
+            // Preserve absent/failed observer evidence instead of quietly
+            // equating "no signal" with "analyser could not execute".
+            .put("edition_observations",observations)
             .put("campaign_ready", candidate.campaignReady)
             .put(
                 "campaign_signals",
