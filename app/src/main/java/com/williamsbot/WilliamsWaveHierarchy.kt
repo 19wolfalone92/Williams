@@ -11,7 +11,8 @@ internal val williamsWaveFrames = linkedMapOf(
     "1m" to 60_000L,"3m" to 180_000L,"5m" to 300_000L,
     "15m" to 900_000L, "30m" to 1_800_000L, "1h" to 3_600_000L,
     "2h" to 7_200_000L, "4h" to 14_400_000L, "6h" to 21_600_000L,
-    "8h" to 28_800_000L, "12h" to 43_200_000L, "1d" to 86_400_000L
+    "8h" to 28_800_000L, "12h" to 43_200_000L, "1d" to 86_400_000L,
+    "1w" to 604_800_000L
 )
 internal val williamsRequiredWaveFrames = listOf("1d", "6h", "1h", "15m")
 internal data class WilliamsWaveBar(
