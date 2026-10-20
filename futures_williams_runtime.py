@@ -42,7 +42,7 @@ from williams_signals import (
 from williams_decision_trace import build_decision_trace
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
-from williams_execution_policy import EXECUTION_PROFILE,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed
+from williams_execution_policy import EXECUTION_PROFILE,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker
 from williams_course_campaign import course_active_context,course_next_stage,TARGETS as COURSE_TARGETS
 from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,unified_direction_conflict,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan
 from campaign_engine import CampaignEngine
@@ -1194,7 +1194,7 @@ class FuturesWilliamsRuntime:
         try:
             if reason.startswith("LIQUIDATION_GUARD") and self._liquidation_status(campaign, self._position(symbol)) != "UNSAFE":
                 raise RuntimeError("Liquidation breach is no longer confirmed; automatic exit blocked")
-            return self._exit_market(campaign, reason)
+            return self._exit_market(campaign, reason, risk_emergency=True)
         finally:
             # The known position may be flat, but the protection/liquidation fault
             # still requires reconciliation before accepting another entry.
@@ -2117,8 +2117,12 @@ class FuturesWilliamsRuntime:
 
 
     @serialized_campaign_operation
-    def _exit_market(self, campaign, reason, *, partial_quantity=None):
+    def _exit_market(self, campaign, reason, *, partial_quantity=None, risk_emergency=False):
         """Durable reduce-only market exit; protection is cancelled only after flat."""
+        blocker = market_exit_blocker(campaign.tags.get("strategy_profile", TC2), reason,
+                                     risk_emergency=risk_emergency)
+        if blocker:
+            raise RuntimeError(blocker)
         symbol = campaign.symbol
         # An armed addition can reopen exposure after a successful market close.
         # Cancel/reconcile it first; a racing fill changes the quantity we must close.
@@ -2167,6 +2171,10 @@ class FuturesWilliamsRuntime:
         qty = self._full_market_close_qty(symbol, float(partial_quantity) if is_partial else pos_qty)
         if is_partial and not 0<qty<pos_qty:raise RuntimeError("Course reduction must leave positive owned exposure")
         campaign.tags["pending_exit_is_course_reduction"]=is_partial
+        campaign.tags["pending_exit_authority"] = ("VERIFIED_RISK_REDUCTION" if risk_emergency else
+                                                  "OPERATOR_CONFIRMED" if reason == "MANUAL_EXIT" else
+                                                  "EMERGENCY_KILL" if reason == "KILL_SWITCH" else
+                                                  "PINNED_EDITION_RULE")
 
         if campaign.state != CampaignState.EXIT_SIGNALLED:
             campaign.transition(

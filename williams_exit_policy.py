@@ -43,7 +43,7 @@ def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_a
         return None
     if any(not all(isfinite(v) and v > 0 for v in (b.h, b.l)) or b.h < b.l for b in bars):
         return None
-    if any(a.t >= b.t for a,b in zip(bars,bars[1:])):
+    if opened_at <= 0 or any(b.t-a.t != 3_600_000 for a,b in zip(bars,bars[1:])):
         return None
     gap = max(2*tick, mark*.00025)
     proposals = []

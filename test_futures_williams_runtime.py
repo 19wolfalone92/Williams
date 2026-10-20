@@ -501,7 +501,7 @@ def test_liquidation_guard_violation_uses_fail_safe_flatten():
     runtime = object.__new__(FuturesWilliamsRuntime)
     calls = []
     runtime._set_state = lambda symbol, state: calls.append(("state", symbol, state))
-    runtime._exit_market = lambda campaign, reason: calls.append(("exit", reason)) or {
+    runtime._exit_market = lambda campaign, reason, **kwargs: calls.append(("exit", reason)) or {
         "state": "CLOSED", "symbol": campaign.symbol
     }
     campaign = type("C", (), {"symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 95.0})()

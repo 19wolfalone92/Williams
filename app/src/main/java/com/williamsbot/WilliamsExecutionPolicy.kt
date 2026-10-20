@@ -94,3 +94,24 @@ internal fun williamsBookInitialContextRank(
  */
 internal fun williamsInitialHigherFrameHistoryRequired(source:String):Boolean =
     source!=williamsTc2Profile
+
+/** Final market-close door. TC2 strategy observations never authorize flattening.
+ * Actual liquidation remediation uses its separate revalidated safety path.
+ * Operator/kill requests still pass live side/size/ownership checks below. */
+internal fun williamsMarketExitBlocker(owner: String, reason: String): String? {
+    if(reason=="MANUAL_EXIT" || reason=="KILL_SWITCH") return null
+    return when(owner) {
+        williamsTc2Profile -> "TC2_PROTECTIVE_STOP_ONLY"
+        williamsNtdProfile,williamsCourseProfile -> null
+        else -> "EXIT_STRATEGY_OWNER_UNVERIFIED"
+    }
+}
+
+internal fun williamsStopMoveLabel(reason: String): String = when(reason) {
+    "TC2_LAST_5_CLOSED_BARS" -> "TC2: защита за последними 5 закрытыми H1-барами"
+    "TC2_LAST_3_CLOSED_BARS" -> "TC2: защита за последними 3 закрытыми H1-барами"
+    "CONFIRMED_H1_FRACTAL" -> "Подтверждённый H1-фрактал"
+    "COST_BUFFERED_BREAKEVEN_1R" -> "Безубыток после 1R с учётом издержек · дополнительное правило проекта"
+    "UNSPECIFIED_STRUCTURAL_TRAIL","" -> "Основание переноса не записано"
+    else -> reason
+}

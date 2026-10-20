@@ -49,3 +49,16 @@ def strategy_market_close_allowed(source):
     Filled legacy NTD/Course campaigns retain their pinned management rules.
     """
     return source in (NTD, COURSE)
+
+
+def market_exit_blocker(source, reason, *, risk_emergency=False):
+    """Final TC2 close gate, independent of the scanner's current hypothesis.
+
+    A risk emergency is an explicit call from the revalidated safety path; the
+    live ownership/side/quantity checks in _exit_market remain mandatory.
+    """
+    if reason in ("MANUAL_EXIT", "KILL_SWITCH") or risk_emergency:
+        return None
+    if source == TC2:
+        return "TC2_PROTECTIVE_STOP_ONLY"
+    return None if source in (NTD, COURSE) else "EXIT_STRATEGY_OWNER_UNVERIFIED"

@@ -52,7 +52,7 @@ internal fun cockpitTime(at: Long): String = if (at <= 0L) "не подтвер�
 @Composable
 internal fun CockpitCard(title: String, accent: Color = AppColors.primary, content: @Composable ColumnScope.() -> Unit) {
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, color = accent, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             content()
         }
@@ -61,10 +61,7 @@ internal fun CockpitCard(title: String, accent: Color = AppColors.primary, conte
 
 @Composable
 internal fun CockpitField(label: String, value: String, color: Color = AppColors.textMuted) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(label, Modifier.weight(1f), color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
-        Text(value, Modifier.weight(1.15f), color = color, style = MaterialTheme.typography.bodySmall)
-    }
+    ResponsiveCockpitField(label, value, color)
 }
 
 @Composable
@@ -112,7 +109,7 @@ internal fun CockpitDashboard(
     padding: PaddingValues, status: Status, candidates: List<Candidate>, message: String,
     onMarket: (String) -> Unit, onSystem: () -> Unit, controls: @Composable () -> Unit
 ) {
-    LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
+    LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)) {
         item { CockpitReadiness(status) }
         item {
@@ -170,8 +167,9 @@ internal fun CockpitIntentCard(intent: JSONObject, onMarket: (String) -> Unit) {
         CockpitField("Binance", intent.optString("order_status", "не подтверждено"))
         Text(russianExecutionBlocker(intent.optString("signal_reason")).ifBlank { "Причина сигнала для этой кампании не записана" },
             color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
-        CockpitField("Вход / стоп", cockpitNumber(intent.optDouble("entry_price"), 4) + " / " +
-            cockpitNumber(intent.optDouble("persisted_protective_stop"), 4))
+        CockpitField("Вход / стоп", formatChartPrice(intent.optDouble("entry_price")) + " / " +
+            formatChartPrice(intent.optDouble("persisted_protective_stop")))
+        CockpitLastStopMove(intent)
         CockpitField("Защита", when {
             CockpitDiagnostics.protectionProven(intent, System.currentTimeMillis()) -> "Подтверждена Binance"
             intent.optString("campaign_status") == "ENTRY_PENDING" && intent.optString("order_status") != "PARTIALLY_FILLED" -> "Выставляется после исполнения"
@@ -192,7 +190,7 @@ internal fun CockpitIntentCard(intent: JSONObject, onMarket: (String) -> Unit) {
 @Composable
 internal fun CockpitAnalysis(padding: PaddingValues, status: Status, candidates: List<Candidate>, onMarket: (String) -> Unit) {
     var selected by remember { mutableStateOf<String?>(null) }
-    LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
+    LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)) {
         item {
             Text("Анализ Williams", style = MaterialTheme.typography.headlineSmall)
@@ -246,7 +244,7 @@ internal fun CockpitTrades(
         Box(Modifier.weight(1f)) {
             when (selected) {
                 0 -> active()
-                1 -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                1 -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     val pending = status.futuresIntents.filter { it.optString("campaign_status") in setOf("ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "EXIT_PENDING") }
                     if (pending.isEmpty()) item { Text("Ожидающих заявок в последнем снимке нет.", color = AppColors.textMuted) }
                     items(pending) { CockpitIntentCard(it, onMarket) }
@@ -295,7 +293,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
     var filter by remember { mutableStateOf("Все") }
     var engineering by remember { mutableStateOf(false) }
     val tests = CockpitDiagnostics.rows(report?.optJSONArray("tests"))
-    LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
+    LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)) {
         item { Text("Диагностика", style = MaterialTheme.typography.headlineSmall) }
         item { CockpitReadiness(status) }

@@ -2798,7 +2798,8 @@ internal class NativeFuturesCampaignCoordinator(
         symbol: String,
         direction: Direction,
         newStopPrice: String,
-        clientAlgoId: String
+        clientAlgoId: String,
+        reason: String = "UNSPECIFIED_STRUCTURAL_TRAIL"
     ): JSONObject = synchronized(lock) {
         val cappedRiskOnly = state == State.RECONCILE_REQUIRED &&
             lastBlocker?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:") == true &&
@@ -2888,6 +2889,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("protection_client_id", clientAlgoId)
             .put("protection_status", "SUBMISSION_UNKNOWN")
             .put("trail_attempt_at_ms", clock())
+            .put("trail_attempt_reason", safeDiagnosticText(reason).take(240))
         saveIntents(persisted)
 
         try {
@@ -2914,6 +2916,11 @@ internal class NativeFuturesCampaignCoordinator(
             intent.put("protection_status", "PROTECTED")
                 .put("protective_stop", finalStop.optString("triggerPrice", proposed.toPlainString()))
                 .put("trailing_at_ms", clock())
+                .put("last_confirmed_trail", JSONObject()
+                    .put("reason",safeDiagnosticText(reason).take(240))
+                    .put("old_stop",oldStop.toPlainString()).put("new_stop",finalStop.optString("triggerPrice",proposed.toPlainString()))
+                    .put("client_id",clientAlgoId).put("strategy_profile",intent.optString("strategy_profile"))
+                    .put("observed_at_ms",clock()))
             intent.remove("previous_protection_client_id")
             intent.remove("previous_protective_stop")
             saveIntents(persisted)
@@ -2973,6 +2980,17 @@ internal class NativeFuturesCampaignCoordinator(
         require(quantity.toBigDecimalOrNull()?.signum() == 1)
         require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
         val intents = intents()
+        // Enforce the pinned edition's exit policy BEFORE cancelling additions,
+        // reading Binance, or writing an exit intent. A scanner bug cannot bypass it.
+        val ownerIndex = latestEntryIntentIndex(intents, symbol)
+        val exitOwner = ownerIndex?.let { intents.optJSONObject(it) }
+        val policyBlocker = williamsMarketExitBlocker(exitOwner?.optString("strategy_profile").orEmpty(), reason)
+        if (policyBlocker != null) {
+            return@synchronized JSONObject().put("ok",false).put("state",state.name)
+                .put("blocker",policyBlocker).put("safe_rejection",true)
+                .put("mutation_attempted",false).put("symbol",symbol).put("reason",reason)
+                .put("strategy_profile",exitOwner?.optString("strategy_profile") ?: JSONObject.NULL)
+        }
         if ((0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
                 it.optString("intent_role")=="ADD_ON" && it.optString("symbol")==symbol && exchangeOrderStatus(it) in activeStatuses }) {
             val cancelled=cancelPendingEntries("POSITION_EXIT_CANCEL_ADDITIONS",symbol)
@@ -3116,6 +3134,12 @@ internal class NativeFuturesCampaignCoordinator(
             .put("client_id", clientOrderId)
             .put("entry_client_id", managedEntry?.optString("client_id") ?: JSONObject.NULL)
             .put("reason", reason).put("partial_reduction",partialReduction)
+            .put("strategy_profile",managedEntry?.optString("strategy_profile") ?: JSONObject.NULL)
+            .put("exit_authority",when(reason) {
+                "MANUAL_EXIT" -> "OPERATOR_CONFIRMED"
+                "KILL_SWITCH" -> "EMERGENCY_KILL"
+                else -> "PINNED_EDITION_RULE"
+            })
             .put("position_before_qty",positionBefore.toPlainString())
             .put("exchange_status", "SUBMISSION_UNKNOWN")
             .put("created_at_ms", clock())
@@ -3349,6 +3373,9 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("actual_all_in_risk_pct", item.opt("actual_all_in_risk_pct") ?: JSONObject.NULL)
                     .put("actual_risk_audited_at_ms", item.opt("actual_risk_audited_at_ms") ?: JSONObject.NULL)
                     .put("trailing_at_ms", item.optLong("trailing_at_ms"))
+                    .put("last_confirmed_trail",item.optJSONObject("last_confirmed_trail")?.let {
+                        JSONObject(it.toString()).apply { remove("client_id") }
+                    } ?: JSONObject.NULL)
                     .put("previous_protection_unresolved", item.optString("previous_protection_client_id").isNotBlank())
                     .put("risk_reservation_adjusted_at_ms", item.opt("risk_reservation_adjusted_at_ms") ?: JSONObject.NULL)
                     .put("risk_reservation_adjustment_reason", item.opt("risk_reservation_adjustment_reason") ?: JSONObject.NULL)
