@@ -3774,7 +3774,10 @@ private class NativeEngine(
                             if (!running || generation != runtimeGeneration ||
                                 Thread.currentThread().isInterrupted) return@Thread
                             // Leave room for the Futures journal, SQLite WAL and Android.
-                            if (context.filesDir.usableSpace < 512L * 1024L * 1024L) {
+                            val freeBytes = runCatching {
+                                android.os.StatFs(context.filesDir.path).availableBytes
+                            }.getOrDefault(0L)
+                            if (freeBytes < 512L * 1024L * 1024L) {
                                 deepHistoryStorageLow = true
                                 deepHistoryLastError = "LOW_DEVICE_STORAGE: historical download paused; existing database preserved"
                                 return@Thread
