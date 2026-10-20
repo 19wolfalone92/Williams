@@ -18,7 +18,7 @@ FRAME_MS = {"15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
             "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000}
 SOURCES = ("WilliamsComplexWave", "WilliamsWaveSubdivisions", "WilliamsWaveHierarchy",
            "WilliamsWaveRhythm", "WilliamsScenarioLifecycle", "WilliamsAdaptiveWaveHistory",
-           "WilliamsWaveArchiveReplay")
+           "WilliamsWaveArchiveReplay", "WilliamsWaveMomentumEvidence")
 
 
 def aggregate_closed_groups(rows, source_ms, duration):

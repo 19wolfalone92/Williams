@@ -1329,6 +1329,15 @@ private class NativeEngine(
     private val adaptiveWaveFetchAttemptMs =
         java.util.concurrent.ConcurrentHashMap<String, Long>()
     @Volatile private var adaptiveWaveFetchLastError: String? = null
+    private val deviceWaveReplayExecutor=Executors.newSingleThreadScheduledExecutor { task->
+        Thread(task,"williams-historical-wave-replay").apply {
+            isDaemon=true;priority=Thread.NORM_PRIORITY-2
+        }
+    }
+    @Volatile private var deviceWaveReplayTask:java.util.concurrent.ScheduledFuture<*>?=null
+    @Volatile private var deviceWaveReplayState="IDLE"
+    @Volatile private var deviceWaveReplayLastError:String?=null
+    private var deviceWaveReplayNextPair=0
     private val dailyRiskPreflightLock = Any()
     @Volatile private var dailyRiskPreflightRunning = false
     @Volatile private var lastDailyRiskPreflightAtMs = 0L
@@ -2227,6 +2236,7 @@ private class NativeEngine(
         )
         val generation = ++runtimeGeneration
         running = true
+        startDeviceWaveReplay(generation)
         // Independent reconciliation/account gates block entries. Only an explicit
         // kill latch needs to force the pause flag during safe monitoring.
         paused = killLatched || prefs.getBoolean("operator_entries_paused", false)
@@ -2439,6 +2449,8 @@ private class NativeEngine(
         }
         ++runtimeGeneration
         running = false
+        deviceWaveReplayTask?.cancel(false)
+        deviceWaveReplayState="STOPPED"
         paused = false
         runCatching { auditStore.recordCockpitEvent("CONTROL", state = "SHUTDOWN_CONFIRMED", detail = "Pending entries canceled and account flat confirmed after cancellation") }
         marketSocket?.close(1000, "Williams stopped")
@@ -2486,6 +2498,8 @@ private class NativeEngine(
         killLatched = true
         paused = true
         running = false
+        deviceWaveReplayTask?.cancel(false)
+        deviceWaveReplayState="STOPPED"
         val killLatchPersisted = persistSafetyFlag("kill_latched", true)
         if (!killLatchPersisted) {
             reconcileRequired = true
@@ -8240,6 +8254,85 @@ private class NativeEngine(
         }
     }
 
+    /** Bounded lower-priority slices replay the durable H1 decision timeline.
+     * Scanner, Execution Door, reconciliation and stop ownership are not involved.
+     */
+    private fun startDeviceWaveReplay(generation:Long) {
+        deviceWaveReplayTask?.cancel(false)
+        val archiveFrames=listOf("1w","1d","12h","8h","6h","4h","2h","1h","30m","15m")
+        fun active()=running && generation==runtimeGeneration && !Thread.currentThread().isInterrupted
+        deviceWaveReplayTask=deviceWaveReplayExecutor.scheduleWithFixedDelay({
+            if(!active()) return@scheduleWithFixedDelay
+            val symbol=coreSymbols[deviceWaveReplayNextPair]
+            deviceWaveReplayNextPair=(deviceWaveReplayNextPair+1)%coreSymbols.size
+            runCatching {
+                if(!historyStore.waveArchiveReady(symbol,archiveFrames)) {
+                    deviceWaveReplayState="WAITING_FULL_ARCHIVE"
+                    historyStore.waveReplayStatusUpdate(symbol,"WAITING_FULL_ARCHIVE")
+                    return@runCatching
+                }
+                val free=android.os.StatFs(context.filesDir.path).availableBytes
+                if(free<512L*1024*1024) {
+                    deviceWaveReplayState="WAITING_DEVICE_STORAGE"
+                    historyStore.waveReplayStatusUpdate(symbol,"WAITING_DEVICE_STORAGE")
+                    return@runCatching
+                }
+                var cursor=historyStore.prepareWaveReplay(symbol)
+                val through=futuresMarketData.exchangeNowMs()/3_600_000L*3_600_000L
+                val closes=historyStore.waveClockPage(symbol,cursor.lastClosedMs,through)
+                if(closes.isEmpty()) {
+                    deviceWaveReplayState="CAUGHT_UP_AVAILABLE_H1"
+                    historyStore.waveReplayStatusUpdate(symbol,"CAUGHT_UP_AVAILABLE_H1")
+                    return@runCatching
+                }
+                val started=System.nanoTime()
+                for(asOf in closes) {
+                    if(!active() || System.nanoTime()-started>350_000_000L) break
+                    val revision=historyStore.waveSourceRevision(symbol)
+                    val history=linkedMapOf<String,List<WilliamsWaveBar>>()
+                    for(frame in williamsWaveFrames.keys) {
+                        val ms=williamsWaveFrames.getValue(frame)
+                        val rows=historyStore.loadRecent(symbol,frame,deviceWaveReplayLimit,beforeMs=asOf-ms)
+                            .filter { it.closeTime<asOf }.map { WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume) }
+                        if(rows.isNotEmpty()) history[frame]=rows
+                    }
+                    // The bounded tail of a short TF may not reach an older
+                    // parent. Read its exact missing window from SQLite only.
+                    val probe=buildAdaptiveHistoricalWaveReport(history,asOf).getJSONArray("hypotheses")
+                    val loaded=mutableSetOf<String>()
+                    for(i in 0 until probe.length()) {
+                        val row=probe.getJSONObject(i);val scale=row.getJSONObject("scale")
+                        if(scale.optString("status")=="BOOK_WINDOW_OBSERVED") continue
+                        val frame=scale.optString("wanted_frame");val ms=williamsWaveFrames[frame]?:continue
+                        val start=row.getLong("wave_start_ms");val end=row.getLong("wave_end_ms")
+                        val key="$frame:$start:$end"
+                        if(!loaded.add(key) || (end-start)/ms !in 40L..450L ||
+                            verifiedAdaptiveWaveWindow(history[frame].orEmpty(),frame,start,end,asOf,true).isNotEmpty()) continue
+                        val extra=historyStore.waveTargetWindow(symbol,frame,start,end,asOf).map {
+                            WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+                        }
+                        history[frame]=(history[frame].orEmpty()+extra).associateBy { it.t }.values.sortedBy { it.t }
+                    }
+                    if(!active()) break
+                    val step=buildDeviceWaveReplayStep(cursor,history,asOf)
+                    if(!active()) break
+                    if(!historyStore.commitWaveReplay(symbol,cursor,revision,step)) {
+                        deviceWaveReplayState="SOURCE_CHANGED_RETRY"
+                        break
+                    }
+                    cursor=step.cursor
+                    deviceWaveReplayState="REPLAYING_H1_ARCHIVE"
+                    deviceWaveReplayLastError=null
+                }
+            }.onFailure { e->
+                deviceWaveReplayState="ANALYSIS_REPLAY_ERROR"
+                deviceWaveReplayLastError=safeDiagnosticText(e.message?:e.javaClass.simpleName)
+                runCatching { historyStore.waveReplayStatusUpdate(symbol,"ANALYSIS_REPLAY_ERROR",deviceWaveReplayLastError) }
+            }
+            if(!running) deviceWaveReplayState="STOPPED"
+        },1L,1L,java.util.concurrent.TimeUnit.SECONDS)
+    }
+
     private fun waveHierarchyFor(symbol: String, refresh: Boolean = false): WilliamsWaveHierarchy {
         val now = futuresMarketData.exchangeNowMs()
         val cutoff = now / 900_000L * 900_000L
@@ -9356,6 +9449,11 @@ private class NativeEngine(
             .put("history_last_error", historyLastError ?: JSONObject.NULL)
             .put("adaptive_wave_finer_history_last_error",
                 adaptiveWaveFetchLastError ?: JSONObject.NULL)
+            .put("historical_wave_replay",runCatching {
+                historyStore.waveReplayStatus().put("worker_state",deviceWaveReplayState)
+                    .put("worker_last_error",deviceWaveReplayLastError?:JSONObject.NULL)
+            }.getOrElse { JSONObject().put("worker_state","STATUS_UNAVAILABLE")
+                .put("can_place_orders",false).put("can_close_positions",false) })
             .put("persistent_history_sync_active", deepHistoryBackfillRunning)
             .put("persistent_history_frames", JSONArray(durableBackfillFrames))
             .put("persistent_history_complete_pairs", deepHistoryPairsComplete)

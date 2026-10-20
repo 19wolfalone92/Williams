@@ -7,6 +7,10 @@ import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.database.sqlite.transaction
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
 
 internal data class HistoryReadinessStatus(
     val minimumWorkingSetCount: Int,
@@ -77,7 +81,7 @@ internal fun historicBackfillComplete(prior: Boolean, update: Boolean?): Boolean
  * working set for calculations, so the complete history is never retained in RAM.
  */
 class MarketHistoryStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_market_history.db", null, 2) {
+    SQLiteOpenHelper(context, "williams_market_history.db", null, 3) {
 
     data class Candle(
         val openTime: Long,
@@ -127,6 +131,7 @@ class MarketHistoryStore(context: Context) :
             )
             """.trimIndent()
         )
+        deviceWaveReplaySchema.forEach(db::execSQL)
     }
 
     override fun onUpgrade(
@@ -176,6 +181,7 @@ class MarketHistoryStore(context: Context) :
                 )
             }
         }
+        if(oldVersion<3) deviceWaveReplaySchema.forEach(db::execSQL)
     }
 
     @Synchronized
@@ -372,6 +378,162 @@ class MarketHistoryStore(context: Context) :
             }
         }
         return out.asReversed()
+    }
+
+    @Synchronized
+    internal fun waveSourceRevision(symbol:String):Long=readableDatabase.rawQuery(
+        "SELECT revision FROM market_history_revision WHERE symbol=?",arrayOf(symbol)
+    ).use { if(it.moveToFirst()) it.getLong(0) else 0L }
+
+    @Synchronized
+    internal fun waveClockPage(symbol:String,after:Long,through:Long,limit:Int=32):List<Long> {
+        val out=mutableListOf<Long>()
+        readableDatabase.rawQuery(
+            deviceWaveReplayClockSql,
+            arrayOf(symbol,after.toString(),through.toString(),through.toString(),limit.coerceIn(1,64).toString())
+        ).use { c->while(c.moveToNext()) out+=c.getLong(0) }
+        return out
+    }
+
+    @Synchronized
+    internal fun waveTargetWindow(symbol:String,frame:String,start:Long,end:Long,asOf:Long):List<Candle> {
+        val ms=williamsWaveFrames[frame]?:return emptyList()
+        if(start<=0 || end<=start || end>asOf || (end-start)/ms>450) return emptyList()
+        val out=mutableListOf<Candle>()
+        readableDatabase.rawQuery(
+            "SELECT open_time,close_time,open,high,low,close,volume FROM candles "+
+                "WHERE symbol=? AND interval=? AND open_time>=? AND open_time<? AND close_time<? "+
+                "ORDER BY open_time LIMIT 512",
+            arrayOf(symbol,frame,(start-35*ms).coerceAtLeast(0).toString(),end.toString(),asOf.toString())
+        ).use { c->while(c.moveToNext()) out+=Candle(c.getLong(0),c.getDouble(2),c.getDouble(3),
+            c.getDouble(4),c.getDouble(5),c.getDouble(6),c.getLong(1)) }
+        return out
+    }
+
+    @Synchronized
+    internal fun waveArchiveReady(symbol:String,frames:List<String>):Boolean {
+        val ready=mutableSetOf<String>()
+        readableDatabase.rawQuery(
+            "SELECT interval FROM sync_state WHERE symbol=? AND complete=1",arrayOf(symbol)
+        ).use { c->while(c.moveToNext()) ready+=c.getString(0) }
+        return ready.containsAll(frames)
+    }
+
+    private fun packWaveJson(value:JSONObject):ByteArray {
+        val out=ByteArrayOutputStream()
+        GZIPOutputStream(out).use { it.write(value.toString().toByteArray(Charsets.UTF_8)) }
+        return out.toByteArray()
+    }
+
+    private fun unpackWaveJson(value:ByteArray):JSONObject {
+        val out=ByteArrayOutputStream()
+        GZIPInputStream(ByteArrayInputStream(value)).use { input->
+            val buffer=ByteArray(4096)
+            while(true) {
+                val n=input.read(buffer);if(n<0) break
+                require(out.size()+n<=2*1024*1024) { "DEVICE_WAVE_CHECKPOINT_TOO_LARGE" }
+                out.write(buffer,0,n)
+            }
+        }
+        return JSONObject(out.toString("UTF-8"))
+    }
+
+    @Synchronized
+    internal fun prepareWaveReplay(symbol:String):DeviceWaveReplayCursor {
+        val db=writableDatabase
+        return db.transaction {
+            var resetReason="NEW"
+            db.rawQuery("SELECT model,last_closed_ms,processed,chain_sha256,checkpoint,dirty_from_ms "+
+                "FROM wave_replay_state WHERE symbol=?",arrayOf(symbol)).use { c->
+                if(c.moveToFirst()) {
+                    resetReason=when {
+                        c.getString(0)!=deviceWaveReplayModel->"MODEL_CHANGED_RESTARTED"
+                        c.getLong(5)>0->"SOURCE_CHANGED_RESTARTED"
+                        else->"CHECKPOINT_RECOVERED_RESTARTED"
+                    }
+                    if(c.getString(0)==deviceWaveReplayModel && c.getLong(5)==0L) {
+                        if(c.getLong(1)==0L && c.isNull(4)) return@transaction DeviceWaveReplayCursor()
+                        val parsed=runCatching {
+                            val json=unpackWaveJson(c.getBlob(4));val cursor=deviceWaveCursorFromJson(json)
+                            require(cursor.lastClosedMs==c.getLong(1) && cursor.processed==c.getLong(2) &&
+                                cursor.chain==c.getString(3)) { "CHECKPOINT_CURSOR_MISMATCH" }
+                            require(canonicalWaveJson(JSONObject(cursor.records))==
+                                canonicalWaveJson(JSONObject(adaptiveReplayRecords(json.getJSONObject("report")))))
+                            val reportHash=waveEvidenceSha256(canonicalWaveJson(json.getJSONObject("report")))
+                            db.rawQuery("SELECT state_sha256,chain_sha256 FROM wave_replay_journal "+
+                                "WHERE symbol=? AND closed_ms=?",arrayOf(symbol,cursor.lastClosedMs.toString())).use { last->
+                                require(last.moveToFirst() && last.getString(0)==reportHash &&
+                                    last.getString(1)==cursor.chain) { "CHECKPOINT_STATE_HASH_MISMATCH" }
+                            }
+                            cursor
+                        }
+                        parsed.getOrNull()?.let { return@transaction it }
+                    }
+                }
+            }
+            delete("wave_replay_journal","symbol=?",arrayOf(symbol))
+            delete("wave_replay_state","symbol=?",arrayOf(symbol))
+            val state=ContentValues().apply {
+                put("symbol",symbol);put("model",deviceWaveReplayModel)
+                put("status",resetReason);put("updated_at",System.currentTimeMillis())
+            }
+            insertOrThrow("wave_replay_state",null,state)
+            DeviceWaveReplayCursor()
+        }
+    }
+
+    @Synchronized
+    internal fun commitWaveReplay(
+        symbol:String,expected:DeviceWaveReplayCursor,sourceRevision:Long,step:DeviceWaveReplayStep
+    ):Boolean {
+        val payload=packWaveJson(step.journal)
+        val checkpoint=packWaveJson(step.checkpoint)
+        require(step.cursor.lastClosedMs>expected.lastClosedMs && step.cursor.processed==expected.processed+1)
+        return writableDatabase.transaction {
+            val prior=rawQuery(deviceWaveReplayCommitGuardSql,arrayOf(symbol,expected.lastClosedMs.toString(),
+                deviceWaveReplayModel,expected.chain,expected.processed.toString(),sourceRevision.toString()))
+                .use { it.moveToFirst() }
+            if(!prior) return@transaction false
+            val bytes=rawQuery("SELECT COALESCE(SUM(journal_bytes),0) FROM wave_replay_state",null)
+                .use { it.moveToFirst();it.getLong(0) }
+            check(bytes+payload.size<512L*1024*1024) { "DEVICE_WAVE_JOURNAL_STORAGE_BUDGET" }
+            val row=ContentValues().apply {
+                put("symbol",symbol);put("closed_ms",step.cursor.lastClosedMs)
+                put("state_sha256",step.stateHash);put("chain_sha256",step.cursor.chain);put("payload",payload)
+            }
+            insertOrThrow("wave_replay_journal",null,row)
+            execSQL("UPDATE wave_replay_state SET last_closed_ms=?,processed=?,chain_sha256=?,checkpoint=?, "+
+                "journal_bytes=journal_bytes+?,status='REPLAYING',last_error=NULL,updated_at=? WHERE symbol=?",
+                arrayOf(step.cursor.lastClosedMs,step.cursor.processed,step.cursor.chain,checkpoint,
+                    payload.size,System.currentTimeMillis(),symbol))
+            true
+        }
+    }
+
+    @Synchronized
+    internal fun waveReplayStatusUpdate(symbol:String,status:String,error:String?=null) {
+        val values=ContentValues().apply {
+            put("status",status);put("last_error",error);put("updated_at",System.currentTimeMillis())
+        }
+        writableDatabase.update("wave_replay_state",values,"symbol=? AND dirty_from_ms=0",arrayOf(symbol))
+    }
+
+    @Synchronized
+    internal fun waveReplayStatus():JSONObject {
+        val rows=JSONArray()
+        readableDatabase.rawQuery("SELECT symbol,model,last_closed_ms,processed,journal_bytes,status,"+
+            "dirty_from_ms,last_error,updated_at FROM wave_replay_state ORDER BY symbol",null).use { c->
+            while(c.moveToNext()) rows.put(JSONObject().put("symbol",c.getString(0)).put("model",c.getString(1))
+                .put("last_replayed_closed_ms",c.getLong(2)).put("processed_h1_closes",c.getLong(3))
+                .put("journal_compressed_bytes",c.getLong(4)).put("status",c.getString(5))
+                .put("invalidated_from_ms",c.getLong(6)).put("last_error",if(c.isNull(7)) JSONObject.NULL else c.getString(7))
+                .put("updated_at_ms",c.getLong(8)))
+        }
+        return JSONObject().put("schema","DEVICE_H1_WAVE_ARCHIVE_REPLAY_V2")
+            .put("clock_frame","1h").put("analysis_window_limit",deviceWaveReplayLimit)
+            .put("timeline","ALL_STORED_CLOSED_H1_CANDLES")
+            .put("journal_detail","STATE_HASHES_AND_STRUCTURAL_REVISIONS; LATEST_FULL_CHECKPOINT")
+            .put("items",rows).put("can_place_orders",false).put("can_close_positions",false)
     }
 
     @Synchronized

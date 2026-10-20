@@ -29,15 +29,27 @@ object WilliamsWaveArchiveReplayCli {
         check(third==evidence.getLong("w3_actual_extreme_ms"))
         check(fourth==evidence.getLong("w4_actual_extreme_ms"))
         val sign=if(row.getString("direction")=="UP") 1 else -1
-        val peak=bars.indices.filter { it>=33 && bars[it].t in from..third && sign*ao(it)>0 }
+        val thirdIndex=bars.indexOfFirst { it.t==third }
+        val fourthIndex=bars.indexOfFirst { it.t==fourth }
+        val momentum=evidence.getJSONObject("w3_momentum")
+        val observed=momentum.getString("status")=="GLOBAL_PEAK_AND_PRICE_LAG_OBSERVED"
+        val peak=if(observed) momentum.getDouble("global_peak") else bars.indices.filter {
+            it>=33 && bars[it].t>=from && it<=minOf(fourthIndex,thirdIndex+5) && sign*ao(it)>0 }
             .maxOf { sign*ao(it) }*sign
         check(abs(peak-evidence.getDouble("w3_ao_peak"))<=maxOf(1e-7,abs(peak)*1e-8))
-        val correction=bars.indices.filter { it>=33 && bars[it].t>third && bars[it].t<=fourth }
+        val peakAt=evidence.getLong("w3_ao_peak_ms")
+        val correction=bars.indices.filter { it>=33 && bars[it].t>maxOf(third,peakAt) && bars[it].t<=fourth }
         val crossed=correction.firstOrNull { sign*ao(it)<0 }
         check((crossed!=null)==evidence.getBoolean("crossed_zero"))
         check(crossed==null || bars[crossed].t+ms==evidence.getLong("cross_known_at_ms"))
         val nearest=correction.minOf { abs(ao(it)) }
         check(abs(nearest-evidence.getDouble("wave4_min_absolute_ao"))<=maxOf(1e-7,abs(peak)*1e-8))
+        if(observed) {
+            val cycle=actual(0)
+            val global=bars.indices.filter { it>=33 && bars[it].t in cycle..fourth }.maxOf { sign*ao(it) }
+            check(abs(global-sign*peak)<=maxOf(1e-7,abs(peak)*1e-8))
+            check((peakAt-third)/ms in 1L..5L)
+        }
         return true
     }
 

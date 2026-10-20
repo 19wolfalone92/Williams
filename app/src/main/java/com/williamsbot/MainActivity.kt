@@ -288,6 +288,7 @@ data class Status(
     val userWsConnected: Boolean = false,
     val userStreamSyncRequired: Boolean = true,
     val historyReady: Boolean = false,
+    val waveReplaySummary: String = "",
     val fsmState: String = "STOPPED",
     val executionContractVersion: Int = 1,
     val executionState: String = "STOPPED",
@@ -2295,6 +2296,11 @@ private fun ConnectionHealthCard(status: Status) {
                 status.userWsConnected && !status.userStreamSyncRequired
             )
             HealthRow("История готова", status.historyReady)
+            if (status.waveReplaySummary.isNotBlank()) Text(
+                status.waveReplaySummary,
+                style = MaterialTheme.typography.bodySmall,
+                color = AppColors.textMuted
+            )
             Text(
                 "FSM: " + status.fsmState,
                 style = MaterialTheme.typography.bodySmall,
@@ -4173,6 +4179,22 @@ internal fun parseStatus(json: JSONObject): Status {
             json.optBoolean("user_stream_sync_required", true),
         historyReady =
             json.optBoolean("history_ready", false),
+        waveReplaySummary = json.optJSONObject("historical_wave_replay")?.let { replay ->
+            val items = replay.optJSONArray("items")
+            val processed = (0 until (items?.length() ?: 0)).sumOf {
+                items?.optJSONObject(it)?.optLong("processed_h1_closes", 0L) ?: 0L
+            }
+            val state = when (replay.optString("worker_state")) {
+                "WAITING_FULL_ARCHIVE" -> "ожидание загрузки полного архива"
+                "WAITING_DEVICE_STORAGE" -> "ожидание свободного места"
+                "CAUGHT_UP_AVAILABLE_H1" -> "доступная история пары пройдена"
+                "ANALYSIS_REPLAY_ERROR" -> "ошибка анализа; подробности в диагностике"
+                "STOPPED" -> "проход остановлен"
+                "SOURCE_CHANGED_RETRY" -> "обновление исходной истории"
+                else -> "фоновый проход истории"
+            }
+            "Волны: обработано $processed часовых срезов; $state."
+        }.orEmpty(),
         fsmState =
             json.optString("fsm_state", "STOPPED"),
         executionContractVersion =

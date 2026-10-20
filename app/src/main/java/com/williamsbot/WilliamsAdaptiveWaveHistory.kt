@@ -137,6 +137,8 @@ internal fun adaptiveWave4AoEvidence(
         b.t>=anchor.extremeAt && b.t<anchor.extremeAt+parentMs &&
             abs((if(anchor.kind=="HIGH") b.h else b.l)-anchor.price)<=maxOf(1e-9,anchor.price*1e-9)
     }?.t
+    val cycleAt=actualExtreme(p[0])
+        ?:return out.put("reason","CYCLE_ORIGIN_NOT_PRESENT_ON_SELECTED_FRAME")
     val secondAt=actualExtreme(p[2])
         ?:return out.put("reason","W2_EXTREME_NOT_PRESENT_ON_SELECTED_FRAME")
     val thirdAt=actualExtreme(p[3])
@@ -148,11 +150,16 @@ internal fun adaptiveWave4AoEvidence(
         (i-4..i).sumOf { mids[it] }/5.0 -
             (i-33..i).sumOf { mids[it] }/34.0 }
     val sign=if(scenario.direction=="UP") 1.0 else -1.0
-    val third=rows.indices.filter { rows[it].t in secondAt..thirdAt &&
+    val thirdPriceIndex=rows.indexOfFirst { it.t==thirdAt }
+    val fourthPriceIndex=rows.indexOfFirst { it.t==fourthAt }
+    val momentum=evaluateWilliamsThirdMomentum(rows,ao,rows.indexOfFirst { it.t==cycleAt },
+        thirdPriceIndex,fourthPriceIndex,scenario.direction,ms)
+    val third=if(momentum.observed) momentum.peakIndex!! else rows.indices.filter {
+        rows[it].t>=secondAt && it<=minOf(fourthPriceIndex,thirdPriceIndex+5) &&
         ao[it].isFinite() && sign*ao[it]>0.0 }
         .maxByOrNull { sign*ao[it] }
         ?:return out.put("reason","THIRD_WAVE_MOMENTUM_NOT_PROVEN")
-    val fourth=rows.indices.filter { rows[it].t>thirdAt &&
+    val fourth=rows.indices.filter { it>maxOf(thirdPriceIndex,third) &&
         rows[it].t<=fourthAt && ao[it].isFinite() }
     if(fourth.isEmpty()) return out.put("reason","FOURTH_WAVE_AO_NOT_AVAILABLE")
     val crossed=fourth.firstOrNull { sign*ao[it]<0.0 }
@@ -164,6 +171,8 @@ internal fun adaptiveWave4AoEvidence(
         !scaleVerified && crossed!=null->"WRONG_SCALE_CROSS_UNCONFIRMED"
         !scaleVerified && near->"WRONG_SCALE_TOUCH_NEAR_ZERO_UNCONFIRMED"
         !scaleVerified->"WRONG_SCALE_NO_ZERO_CROSS"
+        !momentum.observed && crossed!=null->"W3_DEGREE_UNCONFIRMED_ZERO_CROSS"
+        !momentum.observed->"W3_DEGREE_UNCONFIRMED"
         crossed!=null->"ZERO_CROSSED_MINIMUM_ONLY"
         touched!=null->"ZERO_TOUCHED_MINIMUM_UNCONFIRMED"
         near->"TOUCHED_OR_NEAR_ZERO_UNCONFIRMED"
@@ -172,11 +181,13 @@ internal fun adaptiveWave4AoEvidence(
         .put("touched_or_near_zero",crossed==null && near)
         .put("touched_zero_exactly",touched!=null)
         .put("near_zero_is_engineering_tolerance",true)
-        .put("minimum_condition_observed",scaleVerified && crossed!=null)
+        .put("minimum_condition_observed",scaleVerified && momentum.observed && crossed!=null)
+        .put("w3_momentum",momentum.toJson())
         .put("oscillator","SMA_5_MEDIAN_MINUS_SMA_34_MEDIAN_AO")
         .put("book_reference","TC1_PDF_59_63_5_34_COMPONENT_OF_MACD_5_34_5")
         .put("zero_test_uses_signal_line_spread",false)
         .put("w3_ao_peak",ao[third])
+        .put("w3_ao_peak_ms",rows[third].t)
         .put("w2_actual_extreme_ms",secondAt).put("w3_actual_extreme_ms",thirdAt)
         .put("w4_actual_extreme_ms",fourthAt)
         .put("anchor_time_policy","LAST_MATCHING_REAL_CHILD_EXTREME_IN_PARENT_CANDLE")

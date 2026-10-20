@@ -14,6 +14,9 @@ internal fun canonicalWaveJson(value:Any?):String = when(value) {
         canonicalWaveJson(value.get(it))
     }
     is String->JSONObject.quote(value)
+    // JSONObject serializes 100.0 as 100 and may parse scientific notation as
+    // BigDecimal. Canonical evidence must survive an actual disk round trip.
+    is Number->value.toString().toBigDecimal().stripTrailingZeros().toPlainString()
     else->value.toString()
 }
 
@@ -61,7 +64,7 @@ private class CausalWaveArchiveSeries(input:List<WilliamsWaveBar>,val duration:L
         .put("last_closed_ms",if(count>0) bars[count-1].t+duration else JSONObject.NULL)
 }
 
-private fun adaptiveReplayRecords(report:JSONObject):Map<String,String> {
+internal fun adaptiveReplayRecords(report:JSONObject):Map<String,String> {
     val records=sortedMapOf<String,String>()
     fun add(array:String,key:(JSONObject)->String) {
         val rows=report.getJSONArray(array)
