@@ -422,6 +422,15 @@ internal fun scannerDataReadinessState(
     else -> "RUNNABLE"
 }
 
+/** The runtime worker runs every second for recovery, but a completed 10-pair
+ * H1 REST scan must not be repeated every single second. Market WebSockets
+ * and stop/position reconciliation remain independently scheduled.
+ */
+internal fun shouldScheduleReadOnlyScan(nowMs:Long,lastCompletedMs:Long,minimumMs:Long=30_000L):Boolean =
+    nowMs>0 && minimumMs>0 &&
+        (lastCompletedMs==0L ||
+            nowMs>=lastCompletedMs && nowMs-lastCompletedMs>=minimumMs)
+
 /** Execution blockers remain visible after a successful read-only market scan. */
 internal fun scannerExecutionBlocker(
     paused: Boolean,
@@ -429,14 +438,20 @@ internal fun scannerExecutionBlocker(
     killLatched: Boolean,
     accountReady: Boolean,
     marketDataFresh: Boolean,
-    coordinatorState: String
+    coordinatorState: String,
+    coordinatorReadyForEntry:Boolean=false
 ): String? = when {
     killLatched -> "BLOCKED_KILL"
     reconcileRequired -> "BLOCKED_FUTURES_RECONCILIATION"
     coordinatorState.uppercase(Locale.US) in setOf(
         "UNINITIALIZED", "RECONCILE_REQUIRED", "POSITION_UNPROTECTED",
-        "ENTRY_PENDING", "EXIT_PENDING"
+        "EXIT_PENDING"
     ) -> "BLOCKED_FUTURES_RECONCILIATION"
+    // ENTRY_PENDING is normal for a known, reconciled STOP_ENTRY on a
+    // different pair. The Futures coordinator must explicitly authorize
+    // another symbol; unresolved or partially filled states still block.
+    coordinatorState.uppercase(Locale.US)=="ENTRY_PENDING" && !coordinatorReadyForEntry ->
+        "BLOCKED_FUTURES_RECONCILIATION"
     paused -> "PAUSED"
     !accountReady -> "BLOCKED_ACCOUNT"
     !marketDataFresh -> "WAITING_FOR_MARKET_DATA"
@@ -4187,7 +4202,7 @@ private class NativeEngine(
         }
 
         synchronized(this) {
-            if (scanning) return
+            if (scanning || !shouldScheduleReadOnlyScan(System.currentTimeMillis(),lastScanAt)) return
             scanning = true
             scannerError = null
             scanRunId = "scan-" + System.currentTimeMillis()
@@ -6425,6 +6440,9 @@ private class NativeEngine(
         scanSymbols = universe.first.toMutableList()
         val volumes = universe.second
         val spreads = universe.third
+        val coarseMetadataMissing=coreSymbols.filter { symbol ->
+            (volumes[symbol] ?: 0.0)<=0.0 || spreads[symbol]==null
+        }
         val futures = scanSymbols.map { symbol ->
             scanExecutor.submit(Callable {
                 try {
@@ -6484,8 +6502,12 @@ private class NativeEngine(
             reconcileRequired = reconcileRequired,
             killLatched = killLatched,
             accountReady = restAccountReady,
-            marketDataFresh = marketDataFresh(),
-            coordinatorState = coordinatorStateForCompletion
+            // H1 detection remains independent of coarse volume/spread REST
+            // outages. But NEVER create a Futures order while any approved
+            // symbol has unverified market metadata.
+            marketDataFresh = marketDataFresh() && coarseMetadataMissing.isEmpty(),
+            coordinatorState = coordinatorStateForCompletion,
+            coordinatorReadyForEntry = campaignCoordinatorReadyForEntry()
         )
         val missing = coreSymbols - ranked.map { it.symbol }.toSet()
         scannerState = when {
@@ -6504,7 +6526,11 @@ private class NativeEngine(
                         ?: "Futures positions/orders/protection reconciliation is required"
                     "PAUSED" -> lastError ?: "Runtime is paused; read-only market scan completed"
                     "BLOCKED_ACCOUNT" -> restAccountLastError ?: "Futures account snapshot is not ready; entries remain disabled"
-                    "WAITING_FOR_MARKET_DATA" -> restLastError ?: "Futures market data is stale; entries remain disabled"
+                    "WAITING_FOR_MARKET_DATA" -> if(coarseMetadataMissing.isNotEmpty())
+                        "Read-only H1 analysis completed; new entries blocked by unverified Binance quotes/volume: " +
+                            coarseMetadataMissing.joinToString(",") +
+                            (scannerMarketMetadataWarning?.let { "; $it" } ?: "")
+                        else restLastError ?: "Futures market data is stale; entries remain disabled"
                     else -> executionBlocker
                 }
             }
