@@ -33,3 +33,12 @@ internal fun williamsClosedH1HistoryBlocker(bars:List<WilliamsWaveBar>,now:Long)
     if(bars.zipWithNext().any { (a,b) -> b.t-a.t!=WILLIAMS_H1_MS }) return "H1_HISTORY_GAP"
     return if(now-(bars.last().t+WILLIAMS_H1_MS) in 0 until WILLIAMS_H1_MS) null else "H1_SNAPSHOT_STALE"
 }
+
+/** The active TC2 campaign exits by its exchange-protected stop, including
+ * verified monotone stop trails. A fresh opposing H1 hypothesis is a diagnostic
+ * warning, NOT a market-close instruction. This is an explicit project policy,
+ * not a claim that every edition of Williams bans discretionary exits.
+ * NTD/Course continue their independently pinned exit systems.
+ */
+internal fun williamsOpposingSignalCanMarketClose(ownerProfile:String):Boolean =
+    ownerProfile in williamsSourceProfiles && ownerProfile!=williamsTc2Profile
