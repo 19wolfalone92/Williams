@@ -8255,7 +8255,8 @@ private class NativeEngine(
         // Never allow a history/cache failure to alter the execution hierarchy.
         val adaptive = runCatching {
             val historicalFrames = listOf(
-                "1d","6h","4h","1h","30m","15m","5m","3m","1m"
+                "1w","1d","12h","8h","6h","4h","2h","1h",
+                "30m","15m","5m","3m","1m"
             )
             val history = historicalFrames.associateWith { frame ->
                 historyStore.loadRecent(symbol,frame,6000).map {
