@@ -413,11 +413,12 @@ internal fun scannerReadinessState(
 internal fun scannerDataReadinessState(
     running: Boolean,
     historyReady: Boolean,
-    marketDataFresh: Boolean
+    @Suppress("UNUSED_PARAMETER") marketDataFresh: Boolean
 ): String = when {
     !running -> "STOPPED"
     !historyReady -> "WAITING_FOR_HISTORY"
-    !marketDataFresh -> "WAITING_FOR_MARKET_DATA"
+    // A stale/absent ticker quote may NEVER prevent read-only H1 analysis.
+    // Quote/market freshness is still an independent new-entry execution gate.
     else -> "RUNNABLE"
 }
 
@@ -1205,7 +1206,9 @@ private class NativeEngine(
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
     // Startup only needs the frames that directly participate in execution.
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
-    private val startupFrames = listOf("1d", "6h", "4h", "1h", "15m")
+    // Prime H1 for all ten symbols before optional context/chart frames.
+    // Missing H4/D1/H6/M15 never turns off read-only H1 market analysis.
+    private val startupFrames = listOf("1h", "4h", "1d", "6h", "15m")
     // The H1 decision engine needs the full 150-candle working set. Higher-timeframe
     // context has explicit lower minimums in the entry contract; requiring 150 D1
     // candles during startup can deadlock scanning on a fresh Futures Demo market.
@@ -1252,7 +1255,13 @@ private class NativeEngine(
     @Volatile private var publicSocketStartedMs = 0L
     @Volatile private var publicReconnectRequested = false
     @Volatile private var historyWarmupRunning = false
-    @Volatile private var historyReady = false
+    @Volatile private var historyReady = false // All ten H1 decision sets ready.
+    @Volatile private var readOnlyH1Ready = false // At least one valid H1 working set.
+    @Volatile private var h1HistoryReadyCount = 0
+    @Volatile private var optionalContextHistoryReady = false
+    @Volatile private var historyWarmupLastStartedMs = 0L
+    private val historyWarmupRetryIntervalMs = 60_000L
+    @Volatile private var scannerMarketMetadataWarning:String? = null
     private val activeHistoryTasks = java.util.concurrent.ConcurrentHashMap.newKeySet<java.util.concurrent.Future<Boolean>>()
     @Volatile private var historyState = "IDLE"
     @Volatile private var historyLastError: String? = null
@@ -1551,10 +1560,15 @@ private class NativeEngine(
         stateMachine.executionAllowed() ||
             (stateMachine.state == TradingState.ENTRY_PENDING && campaignCoordinatorReadyForEntry())
 
+    // The loss-streak UTC day must follow Binance Futures server time, not
+    // the Android timezone or an ahead-of-server handset clock (-1021).
+    // A stale clock fails closed for NEW entries, without stopping H1 analysis.
     private fun futuresLossStreakGuard(): FuturesLossStreakDecision =
-        evaluateFuturesLossStreak(
+        if(!futuresMarketData.clockSnapshot().optBoolean("fresh",false)) {
+            FuturesLossStreakDecision(false,0,false,null,"FUTURES_LOSS_STREAK_UTC_CLOCK_UNVERIFIED")
+        } else evaluateFuturesLossStreak(
             tradeRows = TradeJournal.trades(prefs),
-            nowMs = System.currentTimeMillis()
+            nowMs = futuresMarketData.cachedExchangeNowMs()
         )
 
     /** Read-only SQLite/clock check: never perform signed REST I/O on the Android UI. */
@@ -2182,6 +2196,9 @@ private class NativeEngine(
         userStreamSyncRequired = true
         userStream.start()
         historyReady = false
+        readOnlyH1Ready = false
+        h1HistoryReadyCount = 0
+        optionalContextHistoryReady = false
         historyState = "LOADING"
         historyLastError = null
         scannerState = "WAITING_FOR_HISTORY"
@@ -2236,12 +2253,19 @@ private class NativeEngine(
                             scheduleNativePositionManagement()
                         }
 
-                        if (!historyReady) {
-                            scannerState = "WAITING_FOR_HISTORY"
-                            scannerError = historyLastError
-                            if (!historyWarmupRunning) warmCoreHistoryAsync(generation)
-                        } else {
+                        if (!historyReady && !historyWarmupRunning &&
+                            System.currentTimeMillis()-historyWarmupLastStartedMs >= historyWarmupRetryIntervalMs) {
+                            warmCoreHistoryAsync(generation)
+                        }
+                        // The H1 read-only scanner works as soon as ONE
+                        // decision frame is ready. Trading additionally
+                        // requires all ten H1 series + independent safety
+                        // admission; partial chart data is never an entry pass.
+                        if(readOnlyH1Ready) {
                             requestScan()
+                        } else {
+                            scannerState = "WAITING_FOR_HISTORY"
+                            scannerError = historyLastError ?: "Waiting for the first closed H1 working set"
                         }
                     } catch (x: Exception) {
                         lastError = x.javaClass.simpleName + ": " + (x.message ?: "")
@@ -2377,6 +2401,9 @@ private class NativeEngine(
         scannerState = "STOPPED"
         scannerError = null
         historyReady = false
+        readOnlyH1Ready = false
+        h1HistoryReadyCount = 0
+        optionalContextHistoryReady = false
         historyState = "STOPPED"
         historyLastError = null
         activeHistoryTasks.forEach { it.cancel(true) }
@@ -3526,16 +3553,20 @@ private class NativeEngine(
 
     private fun warmCoreHistoryAsync(generation: Long = runtimeGeneration) {
         if (historyWarmupRunning || !running || generation != runtimeGeneration) return
+        if(historyWarmupLastStartedMs>0 &&
+            System.currentTimeMillis()-historyWarmupLastStartedMs<historyWarmupRetryIntervalMs) return
+        historyWarmupLastStartedMs=System.currentTimeMillis()
         historyWarmupRunning = true
-        historyReady = false
-        historyState = "LOADING"
+        // A retry for optional D1/H4/M15 frames must not revoke a previously
+        // verified H1 readiness signal or terminate working read-only charts.
+        historyState = if(historyReady) "H1_READY_CONTEXT_LOADING" else "LOADING"
         historyLastError = null
 
         Thread {
             val tasks = mutableListOf<Pair<String, java.util.concurrent.Future<Boolean>>>()
             try {
-                for (symbol in coreSymbols) {
-                    for (frame in startupFrames) {
+                for (frame in startupFrames) {
+                    for (symbol in coreSymbols) {
                         if (!running || generation != runtimeGeneration) return@Thread
                         val label = symbol + ":" + frame
                         val future = historyBackfillExecutor.submit(Callable {
@@ -3593,6 +3624,8 @@ private class NativeEngine(
                 }
 
                 var allReady = true
+                var h1ReadyNow = 0
+                var h1TasksResolved = 0
                 val deadline = System.currentTimeMillis() + 90_000L
                 tasks.forEach { (label, future) ->
                     val ok = runCatching {
@@ -3605,6 +3638,22 @@ private class NativeEngine(
                         false
                     }
                     activeHistoryTasks.remove(future)
+                    if(label.endsWith(":1h")) {
+                        h1TasksResolved++
+                        if(ok) h1ReadyNow++
+                        h1HistoryReadyCount=h1ReadyNow
+                        // Wait until the whole ten-symbol H1 warmup group
+                        // settles. Starting a ten-way REST scan after the
+                        // FIRST symbol finished caused a thundering herd that
+                        // could starve the remaining H1 startup workers.
+                        if(h1TasksResolved==coreSymbols.size) {
+                            if(h1ReadyNow>0) readOnlyH1Ready=true
+                            if(h1ReadyNow==coreSymbols.size) {
+                                historyReady=true
+                                historyState="H1_READY_CONTEXT_LOADING"
+                            }
+                        }
+                    } else if (!ok) allReady = false
                     if (!ok) allReady = false
                 }
                 if (System.currentTimeMillis() >= deadline && !allReady) {
@@ -3613,8 +3662,14 @@ private class NativeEngine(
 
                 if (generation != runtimeGeneration || !running) return@Thread
 
-                historyReady = allReady
-                historyState = if (historyReady) "READY" else "WAITING_RETRY"
+                historyReady = h1ReadyNow==coreSymbols.size
+                optionalContextHistoryReady=allReady
+                historyState = when {
+                    allReady && historyReady -> "READY"
+                    historyReady -> "H1_READY_CONTEXT_PARTIAL"
+                    readOnlyH1Ready -> "PARTIAL_H1_SCANNING_AVAILABLE"
+                    else -> "WAITING_RETRY"
+                }
                 if (historyReady) {
                     // Deep history is bounded and sequential on mobile. It is
                     // a cache warmer, never a prerequisite for first scan.
@@ -4062,25 +4117,40 @@ private class NativeEngine(
             return Triple(cached.first.toList(), HashMap(cached.second), HashMap(cached.third))
         }
 
+        // Volume and public bid/ask are OPTIONAL read-only ranking context.
+        // Previously one missing contract or a short-lived 24h ticker outage
+        // threw here and cancelled analysis of ALL TEN H1 charts. Unknown
+        // spreads remain -1 (never executable) and final live top-of-book,
+        // account and spread preflights must still pass independently.
         val volumes = HashMap<String, Double>()
-        val volumeRows = futuresMarketData.ticker24h()
-        for (i in 0 until volumeRows.length()) {
-            val item = volumeRows.optJSONObject(i) ?: continue
-            val symbol = item.optString("symbol").uppercase(Locale.US)
-            if (symbol in coreSymbols) volumes[symbol] = item.optString("quoteVolume").toDoubleOrNull() ?: 0.0
+        val volumeError=runCatching { futuresMarketData.ticker24h() }
+        val volumeRows=volumeError.getOrNull()
+        if(volumeRows!=null) for(i in 0 until volumeRows.length()) {
+            val item=volumeRows.optJSONObject(i) ?: continue
+            val symbol=item.optString("symbol").uppercase(Locale.US)
+            val volume=item.optString("quoteVolume").toDoubleOrNull()
+            if(symbol in coreSymbols && volume!=null && volume.isFinite() && volume>0)
+                volumes[symbol]=volume
         }
         val spreads = HashMap<String, Double>()
-        val bookRows = futuresMarketData.bookTickers()
-        for (i in 0 until bookRows.length()) {
-            val item = bookRows.optJSONObject(i) ?: continue
-            val symbol = item.optString("symbol").uppercase(Locale.US)
-            if (symbol !in coreSymbols) continue
-            val bid = item.optString("bidPrice").toDoubleOrNull() ?: 0.0
-            val ask = item.optString("askPrice").toDoubleOrNull() ?: 0.0
-            if (bid > 0.0 && ask >= bid) spreads[symbol] = (ask - bid) / bid
+        val bookError=runCatching { futuresMarketData.bookTickers() }
+        val bookRows=bookError.getOrNull()
+        if(bookRows!=null) for(i in 0 until bookRows.length()) {
+            val item=bookRows.optJSONObject(i) ?: continue
+            val symbol=item.optString("symbol").uppercase(Locale.US)
+            if(symbol !in coreSymbols) continue
+            val bid=item.optString("bidPrice").toDoubleOrNull()
+            val ask=item.optString("askPrice").toDoubleOrNull()
+            if(bid!=null && ask!=null && bid.isFinite() && ask.isFinite() &&
+                bid>0 && ask>=bid) spreads[symbol]=(ask-bid)/bid
         }
-        val missing = coreSymbols.filter { (volumes[it] ?: 0.0) <= 0.0 || spreads[it] == null }
-        require(missing.isEmpty()) { "Futures market data missing approved contracts: " + missing.joinToString(",") }
+        val missingSpreads=coreSymbols.filter { spreads[it]==null }
+        val missingVolumes=coreSymbols.filter { volumes[it]==null }
+        scannerMarketMetadataWarning=if(missingSpreads.isEmpty() && missingVolumes.isEmpty()) null else
+            "READ_ONLY_MARKET_METADATA_PARTIAL: unknown_spread=" + missingSpreads.joinToString(",") +
+            "; unknown_volume=" + missingVolumes.joinToString(",") +
+            "; volume_error=" + (volumeError.exceptionOrNull()?.javaClass?.simpleName ?: "none") +
+            "; book_error=" + (bookError.exceptionOrNull()?.javaClass?.simpleName ?: "none")
         val snapshot = Triple(coreSymbols.toList(), volumes.toMap(), spreads.toMap())
         cachedScanUniverse = snapshot
         scanUniverseCacheAtMs = nowMs
@@ -4102,7 +4172,7 @@ private class NativeEngine(
         // coordinator; otherwise a manual scan can appear RUNNING during reconciliation.
         val gateState = scannerDataReadinessState(
             running = running,
-            historyReady = historyReady,
+            historyReady = readOnlyH1Ready,
             marketDataFresh = marketDataFresh()
         )
         if (gateState != "RUNNABLE") {
@@ -8753,6 +8823,11 @@ private class NativeEngine(
             .put("scanning", scanning)
             .put("scanner_state", scannerState)
             .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
+            .put("h1_scanner_history_ready",readOnlyH1Ready)
+            .put("h1_ready_symbol_count",h1HistoryReadyCount)
+            .put("h1_all_ten_ready",historyReady)
+            .put("optional_context_history_ready",optionalContextHistoryReady)
             .put("run_id", scanRunId)
             .put("progress_symbols", scanProgressSymbols)
             .put("progress_total", coreSymbols.size)
@@ -8778,7 +8853,7 @@ private class NativeEngine(
     }
 
     fun status(fast: Boolean = false): JSONObject {
-        if (!fast && primaryCandles.isEmpty()) {
+        if (!fast && (primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, interval))) {
             runCatching {
                 primaryCandles =
                     fetchCandles(primarySymbol, interval, 150)
@@ -8993,6 +9068,11 @@ private class NativeEngine(
             .put("consecutive_losses_available", futuresLossStreakGuard().available)
             .put("consecutive_loss_blocker", futuresLossStreakGuard().reason ?: JSONObject.NULL)
             .put("consecutive_loss_cooldown_until_ms", futuresLossStreakGuard().cooldownUntilMs ?: JSONObject.NULL)
+            .put("consecutive_loss_utc_day_start_ms",
+                if(futuresMarketData.clockSnapshot().optBoolean("fresh",false))
+                    futuresUtcDayStartMs(futuresMarketData.cachedExchangeNowMs())
+                else JSONObject.NULL)
+            .put("consecutive_loss_reset_policy","UTC_00_00_AUTOMATIC_IF_EXCHANGE_CLOCK_VERIFIED")
             .put("trading_mode", when {
                 killLatched -> "KILL_SWITCH_LATCHED"
                 reconcileRequired -> "RECONCILE_REQUIRED"
@@ -9016,6 +9096,9 @@ private class NativeEngine(
             .put("user_stream_reconcile_duration_ms", if (userStreamReconcileStartedAtMs > 0L) ((if (futuresStreamReconcileRunning) System.currentTimeMillis() else userStreamReconcileFinishedAtMs) - userStreamReconcileStartedAtMs).coerceAtLeast(0L) else JSONObject.NULL)
             .put("user_stream_reconcile_failure", userStreamReconcileFailure ?: JSONObject.NULL)
             .put("history_ready", historyReady)
+            .put("h1_scanner_history_ready",readOnlyH1Ready)
+            .put("h1_ready_symbol_count",h1HistoryReadyCount)
+            .put("optional_context_history_ready",optionalContextHistoryReady)
             .put("history_state", historyState)
             .put("history_last_error", historyLastError ?: JSONObject.NULL)
             .put("fsm_state", stateMachine.state.name)
@@ -9028,6 +9111,7 @@ private class NativeEngine(
             .put("scanner_scanning", scanning)
             .put("scanner_state", scannerState)
             .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("scanner_market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
             .put("scanner_run_id", scanRunId)
             .put("scanner_symbols", lastSymbolsScanned)
             .put("scanner_progress_symbols", scanProgressSymbols)
@@ -9097,7 +9181,8 @@ private class NativeEngine(
             .filter { futuresMarketData.isKlineOpenTimeClosed(it.openTime, selectedInterval, futuresMarketData.exchangeNowMs()) }
             .map { CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume) } else emptyList()
         val sourceCandles = if (historical) stored else if (stored.size >= 150 && candleSeriesCurrent(stored, selectedInterval)) stored else if (symbol == primarySymbol && selectedInterval == interval) {
-            if (primaryCandles.isEmpty()) primaryCandles = fetchCandles(primarySymbol, selectedInterval, 150)
+            if(primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, selectedInterval))
+                primaryCandles=fetchCandles(primarySymbol,selectedInterval,150)
             primaryCandles
         } else {
             fetchCandles(symbol, selectedInterval, 150)
@@ -9172,6 +9257,11 @@ private class NativeEngine(
 
         return marketQuote(symbol).put("interval", selectedInterval)
             .put("indicator_snapshot", indicatorSnapshot).put("candles", output)
+            .put("h1_market_analysis_independent_of_entry_gate",true)
+            .put("candles_fresh",candleSeriesCurrent(sourceCandles,selectedInterval))
+            .put("last_closed_bar_open_ms",sourceCandles.lastOrNull()?.t ?: JSONObject.NULL)
+            .put("scanner_state",scannerState)
+            .put("execution_allowed",executionReady())
     }
 
     fun marketQuote(requestedSymbol: String?): JSONObject {

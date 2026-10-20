@@ -45,7 +45,10 @@ class ScannerReadinessTest {
     @Test fun read_only_scanner_continues_when_execution_is_paused_or_reconciling() {
         assertEquals("RUNNABLE", scannerDataReadinessState(true, true, true))
         assertEquals("WAITING_FOR_HISTORY", scannerDataReadinessState(true, false, true))
-        assertEquals("WAITING_FOR_MARKET_DATA", scannerDataReadinessState(true, true, false))
+        // A stale quote blocks new Futures entries, not read-only H1 scanning.
+        assertEquals("RUNNABLE", scannerDataReadinessState(true, true, false))
+        assertEquals("STOPPED", scannerDataReadinessState(false, true, false))
+        assertEquals("WAITING_FOR_HISTORY",scannerDataReadinessState(true,false,false))
     }
 
     @Test fun completed_scan_never_hides_execution_blockers() {

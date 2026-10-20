@@ -2015,6 +2015,8 @@ private fun ScanSummaryCard(
                 Text(
                     when (status.scannerState) {
                         "RUNNING" -> "Сканирование рынка…"
+                        "READY_BLOCKED" -> status.scannerSymbols.toString() + "/" +
+                            status.scannerConfiguredSymbols + " H1-пар изучено. Новые входы заблокированы; анализ работает."
                         "READY" -> status.scannerSymbols.toString() + "/" +
                             status.scannerConfiguredSymbols + " пар проверено • LONG " +
                             status.scannerLongCandidates + " / SHORT " +
@@ -2404,6 +2406,9 @@ private fun ScannerScreen(
                                 "Ожидание свежих котировок Futures"
                             "PAUSED" -> "Runtime на паузе"
                             "STOPPED" -> "Runtime остановлен"
+                            "READY_BLOCKED" ->
+                                status.scannerSymbols.toString() + "/" +
+                                    status.scannerConfiguredSymbols + " H1-пар изучено • сканирование работает, торговля запрещена"
                             "READY" ->
                                 status.scannerSymbols.toString() + "/" +
                                     status.scannerConfiguredSymbols + " утверждённых пар • LONG " +
