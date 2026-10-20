@@ -527,6 +527,17 @@ internal fun streamNeedsReconnect(
  * uncertainty. An operator pause, kill, disabled runtime or outstanding
  * exchange reconciliation remains authoritative.
  */
+/**
+ * An expired conditional H1 entry does not become immortal just because
+ * Binance reports TRIGGERING/TRIGGERED. Request a cancel but never assume
+ * terminal state until exact exchange order and position proof are reconciled.
+ */
+internal fun expiredTriggeringEntryNeedsExchangeCancel(
+    expired:Boolean, orderStatus:String, accountPositionKnownFlat:Boolean,
+    explicitOperatorOrder:Boolean
+):Boolean = expired && accountPositionKnownFlat && !explicitOperatorOrder &&
+    orderStatus.uppercase(Locale.US) in setOf("TRIGGERING","TRIGGERED")
+
 internal fun canReleaseVerifiedUtcRiskPause(
     baselineAndPnlVerified:Boolean,
     wasRiskAutoPaused:Boolean,
@@ -5520,6 +5531,35 @@ private class NativeEngine(
                 val row=positions.optJSONObject(index) ?: return@all false
                 val qty=row.optString("positionAmt").toDoubleOrNull()
                 qty!=null && qty.isFinite() && (row.optString("symbol")!=symbol || qty==0.0)
+            }
+            if (expiredTriggeringEntryNeedsExchangeCancel(
+                    expired=expired,
+                    orderStatus=exchangeOrderStatus(pending),
+                    accountPositionKnownFlat=exchangeRowsValid,
+                    explicitOperatorOrder=pending.optString("signal_type")=="OPERATOR_FORCED_DIRECTION"
+                )) {
+                // Earlier book/M15 branches did 'continue' on TRIGGERING,
+                // leaving day-old expired orders blocking every new entry.
+                // This is an informed exchange cancellation attempt, never a
+                // local pretend reset of entry/fill or of the UTC risk baseline.
+                val result=withCampaignMutation(
+                    symbol,"EXPIRED_H1_TRIGGERING_CANCEL_RECONCILE",
+                    allowPaused=true
+                ) {
+                    try {
+                        futuresCampaignCoordinator.cancelPendingEntries(
+                            "H1_SIGNAL_EXPIRED",symbol)
+                    } finally {
+                        reconcileRequired=true
+                        check(persistSafetyFlag("reconcile_required",true)) {
+                            "EXPIRED_H1_TRIGGERING_CANCEL_RECONCILIATION_FENCE_FAILED"
+                        }
+                    }
+                }
+                if (!result.optBoolean("ok",false))
+                    lastError="EXPIRED_H1_TRIGGERING_CANCEL_NOT_CONFIRMED: "+
+                        symbol+": "+result.optString("blocker")
+                return false // Force fresh exchange position/fill/stop reconciliation.
             }
             if(pending.optString("intent_role","ENTRY")=="ENTRY" && exchangeRowsValid &&
                 pending.optString("client_id").startsWith("W2E_") && pending.optString("signal_type")!="OPERATOR_FORCED_DIRECTION") {
