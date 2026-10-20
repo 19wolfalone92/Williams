@@ -42,7 +42,7 @@ from williams_signals import (
 from williams_decision_trace import build_decision_trace
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
-from williams_execution_policy import EXECUTION_PROFILE,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker
+from williams_execution_policy import EXECUTION_PROFILE,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed
 from williams_course_campaign import course_active_context,course_next_stage,TARGETS as COURSE_TARGETS
 from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,unified_direction_conflict,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan
 from campaign_engine import CampaignEngine
@@ -3138,8 +3138,8 @@ class FuturesWilliamsRuntime:
 
             # NTD exits must not leak into the TC2 Three Wise Men profile.
             # They are edition-specific rules, not universal Williams filters.
-            # TC2 retains its structural campaign trailing and opposite/exhaustion
-            # handling below.
+            # TC2 keeps structural stop ownership. Opposing hypotheses and
+            # correction boundaries remain diagnostic observations.
             profile = getattr(campaign,"tags",{}).get("strategy_profile",TC2)
             ntd_profile = profile == "NTD_FIVE_DIMENSIONS"
             tags = getattr(campaign,"tags",{})
@@ -3148,9 +3148,13 @@ class FuturesWilliamsRuntime:
                 if not correction_bounds_valid(proof):
                     raise RuntimeError("CORRECTION_PROOF_MISSING; retain exchange protection")
                 if not correction_price_allowed(proof,current_price):
-                    # A wave label disappearing is not an exit. A live price
-                    # crossing the entry's durable structural boundary is.
-                    return self._exit_market(campaign,"CORRECTION_PARENT_PRICE_INVALIDATED")
+                    if strategy_market_close_allowed(profile):
+                        return self._exit_market(campaign,"CORRECTION_PARENT_PRICE_INVALIDATED")
+                    tags["tc2_correction_boundary_advisory"] = {
+                        "policy": "TC2_PROTECTIVE_STOP_ONLY", "mark_price": current_price,
+                        "observed_at_ms": int(time.time()*1000), "market_close_authorized": False}
+                    if hasattr(self, "db"):
+                        self.db.save_campaign(campaign)
             if profile==COURSE:
                 plan=tags.get("course_plan")
                 if plan and hasattr(self,"scanner"):
@@ -3178,8 +3182,21 @@ class FuturesWilliamsRuntime:
                 return {"state":campaign.state.value,"current_stop":campaign.current_stop_price,"proposal":proposed,
                         "action":"COURSE_AIRBAG_AND_TWO_FRACTAL_STOP"}
             if not ntd_profile:
-                opposing = self._triggered_opposite_from_history(campaign,closed,tick,current_price)
-                if opposing is not None:
+                try:
+                    opposing = self._triggered_opposite_from_history(campaign,closed,tick,current_price)
+                except Exception as advisory_error:
+                    if profile != TC2:
+                        raise
+                    opposing = None
+                    tags["tc2_opposition_advisory_error"] = type(advisory_error).__name__
+                if opposing is not None and not strategy_market_close_allowed(profile):
+                    tags["tc2_opposing_signal_advisory"] = {
+                        "policy": "TC2_PROTECTIVE_STOP_ONLY",
+                        "signal_id": str(getattr(opposing, "signal_id", "")),
+                        "observed_at_ms": int(time.time()*1000), "market_close_authorized": False}
+                    if hasattr(self, "db"):
+                        self.db.save_campaign(campaign)
+                if opposing is not None and strategy_market_close_allowed(profile):
                     reason = "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
                     if hasattr(self,"scanner"):
                         report = self.scanner.wave_hierarchy(symbol)

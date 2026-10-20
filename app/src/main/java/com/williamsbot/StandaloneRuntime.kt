@@ -1442,6 +1442,15 @@ private class NativeEngine(
     private val adaptiveWaveFetchAttemptMs =
         java.util.concurrent.ConcurrentHashMap<String, Long>()
     @Volatile private var adaptiveWaveFetchLastError: String? = null
+    private val deviceWaveReplayExecutor=Executors.newSingleThreadScheduledExecutor { task->
+        Thread(task,"williams-historical-wave-replay").apply {
+            isDaemon=true;priority=Thread.NORM_PRIORITY-2
+        }
+    }
+    @Volatile private var deviceWaveReplayTask:java.util.concurrent.ScheduledFuture<*>?=null
+    @Volatile private var deviceWaveReplayState="IDLE"
+    @Volatile private var deviceWaveReplayLastError:String?=null
+    private var deviceWaveReplayNextPair=0
     private val dailyRiskPreflightLock = Any()
     @Volatile private var dailyRiskPreflightRunning = false
     @Volatile private var lastDailyRiskPreflightAtMs = 0L
@@ -1745,6 +1754,12 @@ private class NativeEngine(
             nowMs = futuresMarketData.cachedExchangeNowMs()
         )
 
+    private fun dailyEntryHalt(
+        nowMs:Long=futuresMarketData.cachedExchangeNowMs(),
+        clockFresh:Boolean=futuresMarketData.clockSnapshot().optBoolean("fresh",false)
+    ):FuturesDailyEntryHaltDecision = evaluateFuturesDailyEntryHalt(
+        executionStore.readState("futures_daily_entry_halt_utc_day_start_ms"),nowMs,clockFresh)
+
     /** Read-only SQLite/clock check: never perform signed REST I/O on the Android UI. */
     private fun dailyRiskBaselineReady(): Boolean {
         if (!futuresMarketData.clockSnapshot().optBoolean("fresh", false)) return false
@@ -1777,6 +1792,7 @@ private class NativeEngine(
             restAccountReady &&
             accountFundedForEntry() &&
             dailyRiskBaselineReady() &&
+            dailyEntryHalt().allowNewEntries &&
             historyReady &&
             futuresFsmAllowsEntry() &&
             futuresLossStreakGuard().allowNewEntries &&
@@ -1803,6 +1819,7 @@ private class NativeEngine(
             if (!restAccountReady) add("rest_account_not_ready")
             else if (!accountFundedForEntry()) add("futures_account_unfunded_or_zero_usdt")
             if (!dailyRiskBaselineReady()) add("futures_daily_risk_baseline_unverified")
+            dailyEntryHalt().reason?.let { add(it) }
             if (!historyReady) add("history_not_ready")
             if (!futuresFsmAllowsEntry()) add("fsm_not_execution_allowed")
             val lossStreak = futuresLossStreakGuard()
@@ -2344,6 +2361,7 @@ private class NativeEngine(
         )
         val generation = ++runtimeGeneration
         running = true
+        startDeviceWaveReplay(generation)
         // Independent reconciliation/account gates block entries. Only an explicit
         // kill latch needs to force the pause flag during safe monitoring.
         paused = killLatched || prefs.getBoolean("operator_entries_paused", false)
@@ -2547,6 +2565,8 @@ private class NativeEngine(
         }
         ++runtimeGeneration
         running = false
+        deviceWaveReplayTask?.cancel(false)
+        deviceWaveReplayState="STOPPED"
         paused = false
         runCatching { auditStore.recordCockpitEvent("CONTROL", state = "SHUTDOWN_CONFIRMED", detail = "Pending entries canceled and account flat confirmed after cancellation") }
         marketSocket?.close(1000, "Williams stopped")
@@ -2594,6 +2614,8 @@ private class NativeEngine(
         killLatched = true
         paused = true
         running = false
+        deviceWaveReplayTask?.cancel(false)
+        deviceWaveReplayState="STOPPED"
         val killLatchPersisted = persistSafetyFlag("kill_latched", true)
         if (!killLatchPersisted) {
             reconcileRequired = true
@@ -4980,9 +5002,19 @@ private class NativeEngine(
             return false
         }
         if (lossPct >= 0.03) {
-            paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            // A daily entry limit must expire with its UTC session. Do not turn
+            // it into the operator's indefinite pause or disable runtime auto-run.
+            if(!executionStore.writeState("futures_daily_entry_halt_utc_day_start_ms",utcDayStartMs.toString())) {
+                paused=true
+                prefs.edit().putBoolean("auto_run",false).commit()
+                lastError="FUTURES_DAILY_ENTRY_HALT_PERSIST_FAILED: entries paused; SQLite write failed"
+                return false
+            }
+        }
+        val halt=dailyEntryHalt(exchangeNowMs,true)
+        if(!halt.allowNewEntries) {
             lastError = "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"
+            if(!halt.available) lastError=halt.reason
             runCatching {
                 withCampaignMutation(
                     symbol = "FUTURES_ACCOUNT",
@@ -4996,6 +5028,7 @@ private class NativeEngine(
             }
             return false
         }
+        if(lastError?.startsWith("FUTURES_DAILY_LOSS_LIMIT:")==true) lastError=null
         // UTC midnight clears the *loss streak*, not financial drawdown or
         // unresolved orders. A previously automatic UNKNOWN-baseline pause may
         // be released ONLY once the current UTC baseline, daily PnL and
@@ -5996,7 +6029,8 @@ private class NativeEngine(
             // were explicitly recorded as opposite-signal market exits.
             // Detect/log the hypothesis independently while preserving stop
             // protection and monotone trailing. Legacy NTD/Course keep their
-            // source-specific exits; correction safety boundaries remain active.
+            // source-specific exits. A TC2 correction-boundary observation
+            // also remains advisory: structural protection owns its exit.
             val opposing = if(profile==williamsTc2Profile) {
                 runCatching { triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile) }
                     .onFailure { lastError="TC2_OPPOSITION_ADVISORY_UNAVAILABLE: $symbol: "+
@@ -6012,8 +6046,17 @@ private class NativeEngine(
                     .put("tc2_opposing_signal_advisory",advisory)
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
             }
+            if(profile==williamsTc2Profile && boundaryExit) {
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                    .put("tc2_correction_boundary_advisory",JSONObject()
+                        .put("policy","TC2_PROTECTIVE_STOP_ONLY")
+                        .put("observed_at_ms",futuresMarketData.exchangeNowMs())
+                        .put("mark_price",mark).put("market_close_authorized",false))
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+            }
             val actionableOpposing = opposing?.takeIf { williamsOpposingSignalCanMarketClose(profile) }
-            if (actionableOpposing != null || boundaryExit || editionExit.isNotEmpty()) {
+            if (williamsStrategyCanMarketClose(profile) &&
+                (actionableOpposing != null || boundaryExit || editionExit.isNotEmpty())) {
                 val correction = if (actionableOpposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
                     if (dir == "LONG") "SHORT" else "LONG",actionableOpposing.signalBarTimeMs,actionableOpposing.type) else WilliamsCorrectionContext()
                 val exitReason = if(editionExit.isNotEmpty()) editionExit else if (boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
@@ -8443,6 +8486,93 @@ private class NativeEngine(
         }
     }
 
+    /** Bounded lower-priority slices replay the durable H1 decision timeline.
+     * Scanner, Execution Door, reconciliation and stop ownership are not involved.
+     */
+    private fun startDeviceWaveReplay(generation:Long) {
+        deviceWaveReplayTask?.cancel(false)
+        val archiveFrames=listOf("1w","1d","12h","8h","6h","4h","2h","1h","30m","15m")
+        fun active()=running && generation==runtimeGeneration && !Thread.currentThread().isInterrupted
+        deviceWaveReplayTask=deviceWaveReplayExecutor.scheduleWithFixedDelay({
+            if(!active()) return@scheduleWithFixedDelay
+            if(nativeManagementRunning || futuresReconciliationRunning || futuresStreamReconcileRunning) {
+                deviceWaveReplayState="WAITING_RUNTIME_PRIORITY"
+                return@scheduleWithFixedDelay
+            }
+            val symbol=coreSymbols[deviceWaveReplayNextPair]
+            deviceWaveReplayNextPair=(deviceWaveReplayNextPair+1)%coreSymbols.size
+            runCatching {
+                if(!historyStore.waveArchiveReady(symbol,archiveFrames)) {
+                    deviceWaveReplayState="WAITING_FULL_ARCHIVE"
+                    historyStore.waveReplayStatusUpdate(symbol,"WAITING_FULL_ARCHIVE")
+                    return@runCatching
+                }
+                val free=android.os.StatFs(context.filesDir.path).availableBytes
+                if(free<512L*1024*1024) {
+                    deviceWaveReplayState="WAITING_DEVICE_STORAGE"
+                    historyStore.waveReplayStatusUpdate(symbol,"WAITING_DEVICE_STORAGE")
+                    return@runCatching
+                }
+                var cursor=historyStore.prepareWaveReplay(symbol)
+                val through=futuresMarketData.exchangeNowMs()/3_600_000L*3_600_000L
+                val closes=historyStore.waveClockPage(symbol,cursor.lastClosedMs,through)
+                if(closes.isEmpty()) {
+                    deviceWaveReplayState="CAUGHT_UP_AVAILABLE_H1"
+                    historyStore.waveReplayStatusUpdate(symbol,"CAUGHT_UP_AVAILABLE_H1")
+                    return@runCatching
+                }
+                val started=System.nanoTime()
+                for(asOf in closes) {
+                    if(!active() || System.nanoTime()-started>350_000_000L) break
+                    if(nativeManagementRunning || futuresReconciliationRunning || futuresStreamReconcileRunning) {
+                        deviceWaveReplayState="WAITING_RUNTIME_PRIORITY"
+                        break
+                    }
+                    val revision=historyStore.waveSourceRevision(symbol)
+                    val history=linkedMapOf<String,List<WilliamsWaveBar>>()
+                    for(frame in williamsWaveFrames.keys) {
+                        val ms=williamsWaveFrames.getValue(frame)
+                        val rows=historyStore.loadRecent(symbol,frame,deviceWaveReplayLimit,beforeMs=asOf-ms)
+                            .filter { it.closeTime<asOf }.map { WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume) }
+                        if(rows.isNotEmpty()) history[frame]=rows
+                    }
+                    // The bounded tail of a short TF may not reach an older
+                    // parent. Read its exact missing window from SQLite only.
+                    val probe=buildAdaptiveHistoricalWaveReport(history,asOf).getJSONArray("hypotheses")
+                    val loaded=mutableSetOf<String>()
+                    for(i in 0 until probe.length()) {
+                        val row=probe.getJSONObject(i);val scale=row.getJSONObject("scale")
+                        if(scale.optString("status")=="BOOK_WINDOW_OBSERVED") continue
+                        val frame=scale.optString("wanted_frame");val ms=williamsWaveFrames[frame]?:continue
+                        val start=row.getLong("wave_start_ms");val end=row.getLong("wave_end_ms")
+                        val key="$frame:$start:$end"
+                        if(!loaded.add(key) || (end-start)/ms !in 40L..450L ||
+                            verifiedAdaptiveWaveWindow(history[frame].orEmpty(),frame,start,end,asOf,true).isNotEmpty()) continue
+                        val extra=historyStore.waveTargetWindow(symbol,frame,start,end,asOf).map {
+                            WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+                        }
+                        history[frame]=(history[frame].orEmpty()+extra).associateBy { it.t }.values.sortedBy { it.t }
+                    }
+                    if(!active()) break
+                    val step=buildDeviceWaveReplayStep(cursor,history,asOf)
+                    if(!active()) break
+                    if(!historyStore.commitWaveReplay(symbol,cursor,revision,step)) {
+                        deviceWaveReplayState="SOURCE_CHANGED_RETRY"
+                        break
+                    }
+                    cursor=step.cursor
+                    deviceWaveReplayState="REPLAYING_H1_ARCHIVE"
+                    deviceWaveReplayLastError=null
+                }
+            }.onFailure { e->
+                deviceWaveReplayState="ANALYSIS_REPLAY_ERROR"
+                deviceWaveReplayLastError=safeDiagnosticText(e.message?:e.javaClass.simpleName)
+                runCatching { historyStore.waveReplayStatusUpdate(symbol,"ANALYSIS_REPLAY_ERROR",deviceWaveReplayLastError) }
+            }
+            if(!running) deviceWaveReplayState="STOPPED"
+        },1L,1L,java.util.concurrent.TimeUnit.SECONDS)
+    }
+
     private fun waveHierarchyFor(symbol: String, refresh: Boolean = false): WilliamsWaveHierarchy {
         val now = futuresMarketData.exchangeNowMs()
         val cutoff = now / 900_000L * 900_000L
@@ -8478,7 +8608,8 @@ private class NativeEngine(
                 // wave engine examines 1800 recent closed bars per degree.
                 // Scanning 6000*13 rows per symbol would risk stalling
                 // the read-only scanner on resource-constrained devices.
-                historyStore.loadRecent(symbol,frame,1800).map {
+                historyStore.loadRecent(symbol,frame,1800,
+                    beforeMs=hourlyCutoff-williamsWaveFrames.getValue(frame)).map {
                     WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
                 }
             }
@@ -9520,6 +9651,11 @@ private class NativeEngine(
             .put("daily_pnl_usdt", futuresDailyPnl)
             .put("daily_loss_pct", futuresDailyLossPct)
             .put("daily_capital_flow_usdt", futuresDailyCapitalFlow)
+            .put("daily_entry_halt",dailyEntryHalt().let { halt->
+                JSONObject().put("available",halt.available).put("allow_new_entries",halt.allowNewEntries)
+                    .put("until_ms",halt.untilMs?:JSONObject.NULL).put("reason",halt.reason?:JSONObject.NULL)
+                    .put("reset_policy","UTC_00_00_ENTRY_ONLY; OPERATOR_PAUSE_AND_KILL_UNCHANGED")
+            })
             .put("consecutive_losses", futuresLossStreakGuard().consecutiveLosses)
             .put("consecutive_losses_available", futuresLossStreakGuard().available)
             .put("consecutive_loss_blocker", futuresLossStreakGuard().reason ?: JSONObject.NULL)
@@ -9559,6 +9695,11 @@ private class NativeEngine(
             .put("history_last_error", historyLastError ?: JSONObject.NULL)
             .put("adaptive_wave_finer_history_last_error",
                 adaptiveWaveFetchLastError ?: JSONObject.NULL)
+            .put("historical_wave_replay",runCatching {
+                historyStore.waveReplayStatus().put("worker_state",deviceWaveReplayState)
+                    .put("worker_last_error",deviceWaveReplayLastError?:JSONObject.NULL)
+            }.getOrElse { JSONObject().put("worker_state","STATUS_UNAVAILABLE")
+                .put("can_place_orders",false).put("can_close_positions",false) })
             .put("persistent_history_sync_active", deepHistoryBackfillRunning)
             .put("persistent_history_frames", JSONArray(durableBackfillFrames))
             .put("persistent_history_complete_pairs", deepHistoryPairsComplete)

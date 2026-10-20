@@ -13,6 +13,18 @@ class WilliamsAdaptiveWaveHistoryTest {
             WilliamsWaveBar(t,100.0,101.0,99.0,100.0,10.0)
         }
 
+    @Test fun indexedArchiveWindowMatchesUnsortedPathAndRejectsBadWarmupOrDuplicate() {
+        val rows=series(q,500)
+        val start=zero+40*h;val end=zero+70*h;val now=zero+120*h
+        val expected=verifiedAdaptiveWaveWindow(rows.reversed(),"15m",start,end,now)
+        assertFalse(expected.isEmpty())
+        assertEquals(expected,verifiedAdaptiveWaveWindow(rows,"15m",start,end,now,true))
+        val bad=rows.toMutableList();bad[140]=bad[140].copy(h=Double.NaN)
+        assertTrue(verifiedAdaptiveWaveWindow(bad,"15m",start,end,now,true).isEmpty())
+        val duplicates=(rows+rows[170]).sortedBy { it.t }
+        assertTrue(verifiedAdaptiveWaveWindow(duplicates,"15m",start,end,now,true).isEmpty())
+    }
+
     @Test fun thirtyHourlyBarsActuallyResolveToOneHundredTwentyFifteenMinuteBars() {
         val start=zero+40*h
         val end=start+30*h
@@ -95,7 +107,7 @@ class WilliamsAdaptiveWaveHistoryTest {
         assertFalse(evidence.getBoolean("wave4_completion_confirmed"))
     }
 
-    @Test fun fourthWaveCrossesAoZeroOnlyAfterTheActualThirdPriceLegInBothDirections() {
+    @Test fun fourthAoCrossDoesNotCertifyTheDegreeWhenThirdMomentumHasZeroLag() {
         val start=zero+40*h
         val end=zero+70*h
         val asOf=zero+74*h
@@ -117,7 +129,8 @@ class WilliamsAdaptiveWaveHistoryTest {
             val types=if(positive) listOf("LOW","HIGH","LOW","HIGH","LOW")
                 else listOf("HIGH","LOW","HIGH","LOW","HIGH")
             val anchors=listOf(40,45,50,58,70).mapIndexed { i,n ->
-                WilliamsWaveAnchor(types[i],prices[n*4],i,zero+n*h,zero+(n+3)*h)
+                WilliamsWaveAnchor(types[i],prices[n*4]+if(types[i]=="HIGH") 1.0 else -1.0,
+                    i,zero+n*h,zero+(n+3)*h)
             }
             val scenario=WilliamsWaveScenario(
                 "H1:"+direction,"1h",direction,"W4",anchors,asOf,
@@ -127,8 +140,12 @@ class WilliamsAdaptiveWaveHistoryTest {
             assertEquals("BOOK_WINDOW_OBSERVED",choice.status)
             val out=adaptiveWave4AoEvidence(scenario,choice,
                 mapOf("15m" to bars),asOf)
-            assertEquals("ZERO_CROSSED_MINIMUM_ONLY",out.getString("status"))
+            assertEquals("W3_DEGREE_UNCONFIRMED_ZERO_CROSS",out.getString("status"))
             assertTrue(out.getBoolean("crossed_zero"))
+            assertFalse(out.getBoolean("minimum_condition_observed"))
+            // The hourly low/high repeats throughout the last hourly candle;
+            // use the last matching real M15 extreme, not its H1 open time.
+            assertEquals(zero+70*h+3*q,out.getLong("w4_actual_extreme_ms"))
             assertFalse(out.getBoolean("wave4_completion_confirmed"))
             assertFalse(out.getBoolean("can_close_positions"))
         }

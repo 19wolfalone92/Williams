@@ -10,6 +10,27 @@ class WilliamsHistoricalWaveContractTest {
         val p=rows.getJSONObject(i)
         WilliamsWaveAnchor(p.getString("kind"),p.getDouble("price"),p.getInt("index"),p.getLong("extreme_at"),p.getLong("known_at"))
     }
+    @Test fun actualDailyDiagonalUsesTheResolvedChildDegreeWhenNearestFrameCannotProveIt() {
+        val cases=JSONObject(requireNotNull(javaClass.getResource("/williams_historical_wave_cases.json")).readText()).getJSONArray("cases")
+        val c=(0 until cases.length()).map { cases.getJSONObject(it) }.first {
+            it.getString("frame")=="1d" && it.optString("child_frame")=="6h" &&
+                it.getJSONObject("candidate").getString("pattern")=="ENDING_OR_LEADING_DIAGONAL_CANDIDATE"
+        }
+        val parent=anchors(c.getJSONArray("parent"));val child=anchors(c.getJSONArray("child"))
+        val now=c.getLong("as_of")
+        val pattern=c.getJSONObject("candidate").getString("pattern")
+        val evidence=detectWilliamsComplexWave(parent,c.getJSONObject("candidate").getString("direction"),now)
+            .first { it.pattern==pattern }
+        val result=adaptiveComplexSubdivisionEvidence(evidence,parent,
+            mapOf("12h" to emptyList(),"6h" to child),"1d",now)
+        assertEquals("6h",result.getString("child_frame"))
+        assertEquals("PRICE_SUBDIVISIONS_CONFIRMED",result.getJSONObject("internal_proof").getString("status"))
+        assertFalse(result.getBoolean("recursive_genealogy_proven"))
+        assertEquals(2,result.getJSONArray("child_frame_evidence").length())
+        val future=adaptiveComplexSubdivisionEvidence(evidence,parent,
+            mapOf("6h" to child.map { it.copy(knownAt=now+1) }),"1d",now)
+        assertEquals("UNRESOLVED",future.getJSONObject("internal_proof").getString("status"))
+    }
     @Test fun historicalEndpointsAndFlatCounterexampleMatchPythonInBothDirections() {
         val cases=JSONObject(requireNotNull(javaClass.getResource("/williams_historical_wave_cases.json")).readText()).getJSONArray("cases")
         val duration=mapOf("1d" to 86_400_000L,"6h" to 21_600_000L,"1h" to 3_600_000L,"15m" to 900_000L)

@@ -45,9 +45,9 @@ class TradingForegroundService : Service() {
         val notification =
             Notification.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle("Williams Trader")
+                .setContentTitle("Торговый бот Williams")
                 .setContentText(
-                    "Autonomous USDⓈ-M Futures Testnet runtime on this device"
+                    "Фоновое сопровождение Binance Futures Demo на этом устройстве"
                 )
                 .setOngoing(true)
                 .setCategory(
@@ -123,7 +123,7 @@ class TradingForegroundService : Service() {
             manager.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ID,
-                    "Williams trading",
+                    "Торговый движок Williams",
                     NotificationManager.IMPORTANCE_LOW
                 ).apply {
                     description =

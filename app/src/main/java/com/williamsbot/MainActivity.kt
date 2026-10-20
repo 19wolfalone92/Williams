@@ -288,6 +288,8 @@ data class Status(
     val userWsConnected: Boolean = false,
     val userStreamSyncRequired: Boolean = true,
     val historyReady: Boolean = false,
+    val waveReplaySummary: String = "",
+    val dailyEntryHaltText: String = "",
     val fsmState: String = "STOPPED",
     val executionContractVersion: Int = 1,
     val executionState: String = "STOPPED",
@@ -1668,11 +1670,11 @@ private fun DiagnosticsScreen(
         item {
             Text("Диагностика", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         }
-        item { DiagnosticRow("Цена Binance REST", if (status.price != null) "PASS • " + fmt(status.price, 6) else "ОШИБКА • нет цены") }
-        item { DiagnosticRow("Баланс USDT", if (status.balance != null) "PASS • " + fmt(status.balance, 4) else "ОЖИДАНИЕ • нет данных счёта") }
-        item { DiagnosticRow("История свечей", if (status.historyReady) "УСПЕХ" else "BLOCK • " + status.scannerState) }
-        item { DiagnosticRow("Рыночный WebSocket", if (status.marketWsConnected) "СОЕДИНЕНО" else "DEGRADED • REST fallback") }
-        item { DiagnosticRow("Личный WebSocket", if (status.userWsConnected && !status.userStreamSyncRequired) "СОЕДИНЕНО" else "DEGRADED • REST reconciliation") }
+        item { DiagnosticRow("Цена Binance REST", if (status.price != null) "ГОТОВО • " + fmt(status.price, 6) else "ОШИБКА • нет цены") }
+        item { DiagnosticRow("Баланс USDT", if (status.balance != null) "ГОТОВО • " + fmt(status.balance, 4) else "ОЖИДАНИЕ • нет данных счёта") }
+        item { DiagnosticRow("История свечей", if (status.historyReady) "УСПЕХ" else "ОЖИДАНИЕ • " + russianStatus(status.scannerState)) }
+        item { DiagnosticRow("Рыночный WebSocket", if (status.marketWsConnected) "СОЕДИНЕНО" else "Резервное получение цен через REST") }
+        item { DiagnosticRow("Личный WebSocket", if (status.userWsConnected && !status.userStreamSyncRequired) "СОЕДИНЕНО" else "Резервная сверка счёта через REST") }
         item {
             DiagnosticRow(
                 "Сканер",
@@ -1702,7 +1704,7 @@ private fun DiagnosticsScreen(
                     if (status.futuresForceOneWay) "ОБЯЗАТЕЛЬНО" else "НЕПРАВИЛЬНО"
             )
         }
-        item { DiagnosticRow("Исполнение", if (status.p0GatePassed) "READY" else "BLOCKED • " + status.p0GateReason) }
+        item { DiagnosticRow("Исполнение", if (status.p0GatePassed) "ГОТОВО" else "ВХОДЫ ОГРАНИЧЕНЫ • " + russianExecutionBlocker(status.p0GateReason)) }
         status.error?.let { item { DiagnosticRow("Последняя ошибка", russianExecutionBlocker(it)) } }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1752,8 +1754,8 @@ private fun ReconcileBarrierScreen(
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 InfoRow("Состояние исполнения", status.state)
                 InfoRow("Защитный шлюз P0", if (status.p0GatePassed) "УСПЕХ" else status.p0GateReason)
-                InfoRow("WSS", if (status.marketWsConnected) "СОЕДИНЕНО" else "OFFLINE")
-                InfoRow("Binance", if (status.binanceConfigured) "CONFIGURED" else "НЕ НАСТРОЕНО")
+                InfoRow("WSS", if (status.marketWsConnected) "СОЕДИНЕНО" else "НЕТ СВЯЗИ")
+                InfoRow("Binance", if (status.binanceConfigured) "НАСТРОЕНО" else "НЕ НАСТРОЕНО")
                 InfoRow("Позиции", status.openPositions.toString() + " / " + status.maxOpenPositions)
                 status.unresolvedSymbols.takeIf { it.isNotEmpty() }?.let {
                     InfoRow("Не разрешено", it.joinToString(", "))
@@ -2294,7 +2296,17 @@ private fun ConnectionHealthCard(status: Status) {
                 "Личный поток Binance",
                 status.userWsConnected && !status.userStreamSyncRequired
             )
-            HealthRow("История готова", status.historyReady)
+            HealthRow("История H1 для поиска сигналов", status.historyReady)
+            if(status.waveReplaySummary.isNotBlank()) Text(
+                status.waveReplaySummary,
+                style = MaterialTheme.typography.bodySmall,
+                color = AppColors.textMuted
+            )
+            if(status.dailyEntryHaltText.isNotBlank()) Text(
+                status.dailyEntryHaltText,
+                style = MaterialTheme.typography.bodySmall,
+                color = AppColors.textMuted
+            )
             Text(
                 "Состояние движка: " + russianStatus(status.fsmState),
                 style = MaterialTheme.typography.bodySmall,
@@ -2314,7 +2326,7 @@ private fun HealthRow(label: String, ok: Boolean) {
     ) {
         Text(label, style = MaterialTheme.typography.bodyMedium)
         Text(
-            if (ok) "OK" else "ОЖИДАНИЕ",
+            if (ok) "Готово" else "ОЖИДАНИЕ",
             color = if (ok) AppColors.green else AppColors.amber,
             fontWeight = FontWeight.SemiBold
         )
@@ -2594,7 +2606,7 @@ private fun MarketChartPanel(
                 InfoRow("Теневая оценка", candidate.shadowDirection + " • " + fmt(candidate.shadowConfidence, 2))
                 InfoRow("Количественная оценка", fmt(candidate.quantScore, 2))
                 InfoRow("Оценка риска", if (candidate.riskPct > 0.0) fmt(candidate.riskPct, 2) + "%" else "—")
-                InfoRow("Risk/reward", if (candidate.riskReward > 0.0) fmt(candidate.riskReward, 2) else "—")
+                InfoRow("Прибыль / риск", if (candidate.riskReward > 0.0) fmt(candidate.riskReward, 2) else "—")
                 InfoRow("Спред / ATR", fmt(candidate.spreadPct * 100.0, 3) + "% / " + fmt(candidate.atrPct * 100.0, 3) + "%")
                 }
                 InfoRow("Обнаруженный уровень формации", fmt(candidate.entryTriggerPrice))
@@ -3222,7 +3234,7 @@ private fun SettingsScreen(
                         enabled = apiKey.isNotBlank() && apiSecret.isNotBlank(),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("СОХРАНИТЬ TESTNET КЛЮЧИ")
+                        Text("СОХРАНИТЬ КЛЮЧИ ДЕМО-СЧЁТА")
                     }
 
                     OutlinedButton(
@@ -3292,7 +3304,7 @@ private fun SettingsScreen(
                     OutlinedTextField(
                         value = backupPassword,
                         onValueChange = onBackupPassword,
-                        label = { Text("Пароль backup (10+ символов)") },
+                        label = { Text("Пароль резервной копии (10+ символов)") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth()
@@ -4173,6 +4185,8 @@ internal fun parseStatus(json: JSONObject): Status {
             json.optBoolean("user_stream_sync_required", true),
         historyReady =
             json.optBoolean("history_ready", false),
+        waveReplaySummary = russianWaveArchiveProgress(json.optJSONObject("historical_wave_replay")),
+        dailyEntryHaltText = russianDailyEntryHaltText(json.optJSONObject("daily_entry_halt")),
         fsmState =
             json.optString("fsm_state", "STOPPED"),
         executionContractVersion =

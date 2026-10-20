@@ -40,3 +40,12 @@ def closed_h1_history_blocker(bars, now):
     if any(b.t-a.t!=3_600_000 for a,b in zip(bars,bars[1:])):
         return "H1_HISTORY_GAP"
     return None if 0<=now-(bars[-1].t+3_600_000)<3_600_000 else "H1_SNAPSHOT_STALE"
+
+
+def strategy_market_close_allowed(source):
+    """Project SL-only TC2 policy covers opposition AND correction boundaries.
+
+    Manual closure and exchange/account emergency actions have their own gates.
+    Filled legacy NTD/Course campaigns retain their pinned management rules.
+    """
+    return source in (NTD, COURSE)
