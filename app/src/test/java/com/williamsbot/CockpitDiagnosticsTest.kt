@@ -79,8 +79,8 @@ class CockpitDiagnosticsTest {
     }
 
     @Test fun riskBudgetUnknownIsNotMisreportedAsZeroOrUnlimitedCapacity() {
-        val s=healthy().remove("max_total_risk_pct").let { healthy().put("max_total_risk_pct", Double.NaN) }
-        // org.json rejects NaN; this test deliberately omits the limit instead.
+        // org.json rejects NaN; the incomplete API snapshot omits the limit.
+        val s = healthy()
         s.remove("max_total_risk_pct")
         val readiness = CockpitDiagnostics.readiness(s, coordinator(), now)
         assertFalse(readiness.getBoolean("entry_risk_budget_known"))
