@@ -60,7 +60,7 @@ class TradingAuditStore(context: Context) :
             .put("E", System.currentTimeMillis()).put("symbol", symbol.take(20))
             .put("direction", direction.take(10)).put("state", safeDiagnosticText(state))
             .put("detail", safeDiagnosticText(detail))
-        recordUserEvent(event)
+        recordRawEvent(event, requireDurable = true)
         writableDatabase.execSQL("DELETE FROM events WHERE event_type LIKE 'COCKPIT_%' AND id NOT IN (SELECT id FROM events WHERE event_type LIKE 'COCKPIT_%' ORDER BY id DESC LIMIT 1000)")
     }
 
@@ -453,16 +453,24 @@ class TradingAuditStore(context: Context) :
         writableDatabase.insert("state_transitions", null, values)
     }
 
+    /** Both callers hold this store's monitor. A cockpit append must succeed before dedup. */
+    private fun recordRawEvent(event: JSONObject, requireDurable: Boolean) {
+        val values = ContentValues()
+        values.put("event_type", event.optString("e", "unknown"))
+        values.put("event_time", event.optLong("E", 0L))
+        values.put("received_at", System.currentTimeMillis())
+        values.put("raw_json", event.toString())
+        if (requireDurable) writableDatabase.insertOrThrow("events", null, values)
+        else writableDatabase.insert("events", null, values)
+    }
+
     @Synchronized
     fun recordUserEvent(event: JSONObject) {
         val eventType = event.optString("e", "unknown")
         val eventTime = event.optLong("E", 0L)
-        val values = ContentValues()
-        values.put("event_type", eventType)
-        values.put("event_time", eventTime)
-        values.put("received_at", System.currentTimeMillis())
-        values.put("raw_json", event.toString())
-        writableDatabase.insertOrThrow("events", null, values)
+        // Keep the raw User Stream handler's existing best-effort insert contract.
+        // Strict durability is scoped to campaign observations before caching them.
+        recordRawEvent(event, requireDurable = false)
 
         // Binance USD-M Futures sends ORDER_TRADE_UPDATE with all execution fields
         // nested in "o"; Spot-style executionReport fields live at the root. Normalize
