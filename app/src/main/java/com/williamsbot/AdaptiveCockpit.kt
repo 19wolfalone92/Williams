@@ -3,6 +3,7 @@ package com.williamsbot
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import androidx.core.content.edit
 import android.content.pm.ActivityInfo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.selection.selectable
@@ -34,7 +35,7 @@ import androidx.compose.ui.window.DialogProperties
 internal fun applyCockpitOrientation(activity: Activity, choice: String? = null) {
     val prefs = activity.getSharedPreferences("williams_display", Context.MODE_PRIVATE)
     val selected = choice ?: prefs.getString("orientation", "AUTO") ?: "AUTO"
-    if (choice != null) prefs.edit().putString("orientation", selected).apply()
+    if (choice != null) prefs.edit { putString("orientation", selected) }
     val orientation = when (selected) {
         "LANDSCAPE" -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         "PORTRAIT" -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
