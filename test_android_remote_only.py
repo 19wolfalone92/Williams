@@ -45,7 +45,7 @@ def test_android_boot_recovery_is_opt_in_and_keeps_reconciliation_gate():
 def test_android_exposes_battery_policy_diagnostic():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     assert "isIgnoringBatteryOptimizations" in main
-    assert "Doze exemption" in main
+    assert "Разрешение на работу в режиме сна" in main
     assert "isLowPowerStandbyEnabled" in main
     assert "isExemptFromLowPowerStandby" in main
     assert "ACTION_APPLICATION_DETAILS_SETTINGS" in main
@@ -798,9 +798,9 @@ def test_position_chart_only_draws_levels_from_the_selected_contract():
 def test_android_candidate_state_never_labels_short_as_confirmed_long():
     ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     assert 'candidate.entrySignalType.startsWith("SHORT_", ignoreCase = true) -> "SHORT"' in ui
-    assert '"H1 SETUP • SHORT"' in ui
-    assert '"H1 SETUP • LONG"' in ui
-    assert '"H1 SETUP • DIRECTION UNKNOWN"' in ui
+    assert '"СИГНАЛ H1 • ШОРТ"' in ui
+    assert '"СИГНАЛ H1 • ЛОНГ"' in ui
+    assert '"СИГНАЛ H1 • НАПРАВЛЕНИЕ НЕ ОПРЕДЕЛЕНО"' in ui
     assert '"CONFIRMED LONG"' not in ui
     assert '"CONFIRMED SHORT"' not in ui
     assert "candidateDirection(candidate) == \"SHORT\" -> \"SHORT\"" in ui
