@@ -310,7 +310,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
         item {
             val summary = report?.optJSONObject("diagnostic_summary")
             Text("Результат: " + russianStatus(summary?.optString("overall")), fontWeight = FontWeight.Bold)
-            Text("PASS ${summary?.optInt("passed_test_count") ?: 0} • WARNING ${summary?.optInt("warning_test_count") ?: 0} • FAIL ${summary?.optInt("failed_test_count") ?: 0} • NOT VERIFIED ${summary?.optInt("not_verified_test_count") ?: 0}", style = MaterialTheme.typography.bodySmall)
+            Text("УСПЕШНО ${summary?.optInt("passed_test_count") ?: 0} • ПРЕДУПРЕЖДЕНИЯ ${summary?.optInt("warning_test_count") ?: 0} • ОШИБКИ ${summary?.optInt("failed_test_count") ?: 0} • НЕ ПРОВЕРЕНО ${summary?.optInt("not_verified_test_count") ?: 0}", style = MaterialTheme.typography.bodySmall)
             Text("Проверено ${cockpitTime(report?.optLong("created_at_ms") ?: 0L)}", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
         }
         item {
@@ -349,7 +349,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
                             val brief = listOf("TC2 ${counts?.optInt(williamsTc2Profile) ?: 0}",
                                 "NTD ${counts?.optInt(williamsNtdProfile) ?: 0}",
                                 "Course ${counts?.optInt(williamsCourseProfile) ?: 0}").joinToString(" · ")
-                            Text(row.optString("symbol") + " · " + russianStatus(brief) +
+                            Text(row.optString("symbol") + " · " + brief +
                                 (if (row.optBoolean("fresh_opposing_entries_before_context")) " · ⚠️ LONG/SHORT" else ""),
                                 style = MaterialTheme.typography.bodySmall)
                         }
@@ -360,7 +360,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
         item {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("Все", "FAIL", "WARNING", "NOT_VERIFIED", "PASS").forEach { label ->
-                    FilterChip(filter == label, { filter = label }, label = { Text(label.replace('_', ' ')) })
+                    FilterChip(filter == label, { filter = label }, label = { Text(if(label=="Все") label else russianStatus(label)) })
                 }
             }
         }
