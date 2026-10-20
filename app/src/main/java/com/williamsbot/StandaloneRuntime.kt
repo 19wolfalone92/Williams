@@ -1317,6 +1317,18 @@ private class NativeEngine(
     @Volatile private var scanUniverseCacheAtMs = 0L
     private val dailyRiskCheckLock = Any()
     private val waveHierarchyCache = java.util.concurrent.ConcurrentHashMap<String, WilliamsWaveHierarchy>()
+    // Best-effort finer candles are fetched only to improve local wave context,
+    // never on the scan/Execution Door thread.
+    private val adaptiveWaveContextCache =
+        java.util.concurrent.ConcurrentHashMap<String, Pair<Long, JSONObject>>()
+    // One rate-limited research download queue. Never occupy scanner warmup
+    // or existing-position reconciliation executors with deep child history.
+    private val adaptiveWaveFetchExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable,"williams-adaptive-child-wave").apply { isDaemon=true }
+    }
+    private val adaptiveWaveFetchAttemptMs =
+        java.util.concurrent.ConcurrentHashMap<String, Long>()
+    @Volatile private var adaptiveWaveFetchLastError: String? = null
     private val dailyRiskPreflightLock = Any()
     @Volatile private var dailyRiskPreflightRunning = false
     @Volatile private var lastDailyRiskPreflightAtMs = 0L
@@ -8155,6 +8167,79 @@ private class NativeEngine(
         )
     }
 
+    /**
+     * Demand-load only a bounded REAL Binance child window if the observed
+     * cycle would otherwise have fewer than ~100 bars on the parent frame.
+     * Background-only, rate-limited; never grants entry/exit permission.
+     */
+    private fun requestMissingAdaptiveWaveFrames(
+        symbol: String, report: JSONObject, cutoff: Long
+    ) {
+        if(!running) return
+        val rows=report.optJSONArray("hypotheses") ?: return
+        val allowed=setOf("30m","15m","5m","3m","1m")
+        var queued=0
+        for(i in rows.length()-1 downTo 0) {
+            if(queued>=1) break
+            val evidence=rows.optJSONObject(i) ?: continue
+            val scale=evidence.optJSONObject("scale") ?: continue
+            if(scale.optString("status")=="BOOK_WINDOW_OBSERVED") continue
+            val frame=scale.optString("wanted_frame")
+            val ms=williamsWaveFrames[frame] ?: continue
+            if(frame !in allowed) continue
+            val start=evidence.optLong("wave_start_ms",0L)
+            val end=evidence.optLong("wave_end_ms",0L)
+            if(start<=0L || end<=start || end>cutoff ||
+                (end-start)/ms !in 40L..900L) continue
+            val key=symbol+":"+frame+":"+(start/(15L*60L*1000L))
+            val now=System.currentTimeMillis()
+            val last=adaptiveWaveFetchAttemptMs[key] ?: 0L
+            if(last>0L && now-last<15L*60L*1000L) continue
+            adaptiveWaveFetchAttemptMs[key]=now
+            queued++
+            adaptiveWaveFetchExecutor.execute {
+                runCatching {
+                    val free=runCatching {
+                        android.os.StatFs(context.filesDir.path).availableBytes
+                    }.getOrDefault(0L)
+                    if(free<512L*1024L*1024L)
+                        throw IllegalStateException("WAVE_CHILD_DISK_BUDGET")
+                    val from=(start-40L*ms).coerceAtLeast(0L)
+                    val lastClosed=futuresMarketData.exchangeNowMs()
+                    val until=minOf(lastClosed-ms,end+ms)
+                    if(until<=from) return@runCatching
+                    val array=futuresMarketData.klines(symbol,frame,1000,
+                        startTime=from,endTime=until)
+                    val batch=ArrayList<MarketHistoryStore.Candle>()
+                    var lastOpen=Long.MIN_VALUE
+                    for(j in 0 until array.length()) {
+                        val row=array.getJSONArray(j)
+                        val opened=row.getLong(0);val closed=row.getLong(6)
+                        if(opened<=lastOpen || opened<from ||
+                            opened>until)
+                            throw IllegalStateException("WAVE_CHILD_INVALID_ORDER")
+                        lastOpen=opened
+                        if(!futuresMarketData.isCandleClosed(closed,lastClosed)) continue
+                        batch+=MarketHistoryStore.Candle(opened,
+                            row.getString(1).toDouble(),row.getString(2).toDouble(),
+                            row.getString(3).toDouble(),row.getString(4).toDouble(),
+                            row.getString(5).toDouble(),closed)
+                    }
+                    if(batch.isNotEmpty()) {
+                        historyStore.upsertBatch(symbol,frame,batch)
+                        // Wave report is recalculated at next 15m closure. It
+                        // never sees exchange data not yet closed at that time.
+                        adaptiveWaveContextCache.remove(symbol)
+                        waveHierarchyCache.remove(symbol)
+                    }
+                }.onFailure { e ->
+                    adaptiveWaveFetchLastError=frame+":"+
+                        (e.message ?: e.javaClass.simpleName)
+                }
+            }
+        }
+    }
+
     private fun waveHierarchyFor(symbol: String, refresh: Boolean = false): WilliamsWaveHierarchy {
         val now = futuresMarketData.exchangeNowMs()
         val cutoff = now / 900_000L * 900_000L
@@ -8171,6 +8256,40 @@ private class NativeEngine(
                 .getOrDefault(emptyList()).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
         }
         report = buildWilliamsWaveHierarchy(frames,cutoff)
+
+        // A separate observational pass reads the device's deep SQLite
+        // archive, not only the old 240 recent bars. It explicitly resolves
+        // H1 inside H4 inside D1 and attempts genuinely finer real candles
+        // to reach the approximate 100-140-bar analysis resolution.
+        // Never allow a history/cache failure to alter the execution hierarchy.
+        val adaptive = runCatching {
+            val hourlyCutoff=cutoff/3_600_000L*3_600_000L
+            adaptiveWaveContextCache[symbol]
+                ?.takeIf { it.first==hourlyCutoff }?.second?.let { return@runCatching JSONObject(it.toString()) }
+            val historicalFrames = listOf(
+                "1w","1d","12h","8h","6h","4h","2h","1h",
+                "30m","15m","5m","3m","1m"
+            )
+            val history = historicalFrames.associateWith { frame ->
+                // Deep history remains fully durable in SQLite; the current
+                // wave engine examines 1800 recent closed bars per degree.
+                // Scanning 6000*13 rows per symbol would risk stalling
+                // the read-only scanner on resource-constrained devices.
+                historyStore.loadRecent(symbol,frame,1800).map {
+                    WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+                }
+            }
+            val contextReport=buildAdaptiveHistoricalWaveReport(history,hourlyCutoff)
+            adaptiveWaveContextCache[symbol]=hourlyCutoff to JSONObject(contextReport.toString())
+            requestMissingAdaptiveWaveFrames(symbol,contextReport,hourlyCutoff)
+            contextReport
+        }.getOrElse { error ->
+            JSONObject().put("schema","ADAPTIVE_WILLIAMS_WAVE_HISTORY_V1")
+                .put("status","HISTORY_UNVERIFIED")
+                .put("error_type",error.javaClass.simpleName)
+                .put("can_place_orders",false)
+        }
+        report=report.copy(adaptiveHistory=adaptive)
 
         val previous = executionStore.readState("wave_hierarchy_" + symbol)
         val proof = report.toJson().toString()
@@ -9234,6 +9353,8 @@ private class NativeEngine(
             .put("optional_context_history_ready",optionalContextHistoryReady)
             .put("history_state", historyState)
             .put("history_last_error", historyLastError ?: JSONObject.NULL)
+            .put("adaptive_wave_finer_history_last_error",
+                adaptiveWaveFetchLastError ?: JSONObject.NULL)
             .put("persistent_history_sync_active", deepHistoryBackfillRunning)
             .put("persistent_history_frames", JSONArray(durableBackfillFrames))
             .put("persistent_history_complete_pairs", deepHistoryPairsComplete)
