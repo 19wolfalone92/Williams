@@ -22,6 +22,33 @@ class ScannerReadinessTest {
         marketDataFresh = marketDataFresh
     )
 
+    @Test fun unknown_daily_risk_baseline_retries_while_entries_are_paused_but_never_bypasses_guards() {
+        fun eligible(
+            running: Boolean = true,
+            paused: Boolean = true,
+            killLatched: Boolean = false,
+            reconcileRequired: Boolean = false,
+            accountReady: Boolean = true,
+            userStreamConnected: Boolean = true,
+            userStreamSyncRequired: Boolean = false,
+            baselineReady: Boolean = false
+        ) = shouldRetryDailyRiskBaseline(
+            running, paused, killLatched, reconcileRequired,
+            accountReady, userStreamConnected, userStreamSyncRequired, baselineReady
+        )
+        // The prior successful API resume could immediately be undone by
+        // FUTURES_DAILY_BASELINE_UNKNOWN, with no subsequent background repair.
+        assertEquals(true, eligible(paused = true))
+        assertEquals(true, eligible(paused = false))
+        assertEquals(false, eligible(running = false))
+        assertEquals(false, eligible(killLatched = true))
+        assertEquals(false, eligible(reconcileRequired = true))
+        assertEquals(false, eligible(accountReady = false))
+        assertEquals(false, eligible(userStreamConnected = false))
+        assertEquals(false, eligible(userStreamSyncRequired = true))
+        assertEquals(false, eligible(baselineReady = true))
+    }
+
     @Test fun stopped_runtime_is_reported_before_other_gates() {
         assertEquals("STOPPED", state(running = false, historyReady = false))
     }
