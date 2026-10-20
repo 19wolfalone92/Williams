@@ -78,4 +78,50 @@ class WilliamsExecutionPolicyTest {
         assertNotNull(williamsNewExposureBlocker(williamsNtdProfile))
         assertNotNull(williamsNewExposureBlocker(williamsCourseProfile))
     }
+    @Test fun tc2AllThreeOriginalH1InitialSignalsAreAllowedWithoutD1H4Alignment() {
+        for(signal in listOf("REVERSAL","SUPER_AO","FRACTAL")) {
+            assertEquals(1,williamsBookInitialContextRank(williamsTc2Profile,signal,
+                false,true,false,true))
+            assertEquals(1,williamsBookInitialContextRank(williamsTc2Profile,"SHORT_"+signal,
+                true,false,true,false))
+            assertEquals(1,williamsBookInitialContextRank(williamsTc2Profile,signal,
+                false,false,false,false))
+        }
+    }
+
+    @Test fun alignedContextRanksAboveCountertrendButDoesNotBecomeAuthority() {
+        assertEquals(2,williamsBookInitialContextRank(williamsTc2Profile,"SUPER_AO",
+            true,false,true,false))
+        assertEquals(2,williamsBookInitialContextRank(williamsTc2Profile,"SHORT_FRACTAL",
+            false,true,false,true))
+        assertEquals(1,williamsBookInitialContextRank(williamsTc2Profile,"SHORT_SUPER_AO",
+            true,false,true,false))
+    }
+
+    @Test fun legacyOtherEditionsAreNotGrantedTc2InitialEntryException() {
+        assertEquals(0,williamsBookInitialContextRank(williamsNtdProfile,"FRACTAL",
+            false,true,false,true))
+        assertEquals(0,williamsBookInitialContextRank(williamsCourseProfile,"COURSE_THUMB",
+            false,true,false,true))
+        assertEquals(2,williamsBookInitialContextRank(williamsNtdProfile,"FRACTAL",
+            false,true,false,true,validatedCorrection=true))
+        assertEquals(0,williamsBookInitialContextRank(williamsTc2Profile,"BROKEN_UNKNOWN_SIGNAL",
+            false,false,false,false))
+        assertEquals(0,williamsBookInitialContextRank(williamsTc2Profile,"SHORT_MADE_UP",
+            false,false,false,false))
+        assertEquals(0,williamsBookInitialContextRank(williamsTc2Profile,"AO_SAUCER",
+            true,false,true,false))
+        assertEquals(0,williamsBookInitialContextRank(williamsTc2Profile,"SHORT_AO_ZERO_LINE",
+            false,true,false,true))
+        assertEquals(0,williamsBookInitialContextRank(williamsTc2Profile,"AC_SIGNAL",
+            true,false,true,false,validatedCorrection=true))
+    }
+
+    @Test fun tc2InitialEntryDoesNotRequire45D1OrH4Bars() {
+        assertFalse(williamsInitialHigherFrameHistoryRequired(williamsTc2Profile))
+        assertTrue(williamsInitialHigherFrameHistoryRequired(williamsNtdProfile))
+        assertTrue(williamsInitialHigherFrameHistoryRequired(williamsCourseProfile))
+        assertTrue(williamsInitialHigherFrameHistoryRequired(williamsUnifiedProfile))
+    }
+
 }

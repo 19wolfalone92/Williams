@@ -5892,28 +5892,51 @@ private class NativeEngine(
         // Project D1/H4 risk/context policy; execution uses the native H1 book trigger.
         val d1BarMs = frameSeconds("1d") * 1000L
         val h4BarMs = frameSeconds("4h") * 1000L
-        val d1 = fetchCandles(symbol, "1d", 90)
-            .filter { it.t > 0L && it.t + d1BarMs <= contextNow }
-        val h4 = fetchCandles(symbol, "4h", 120)
-            .filter { it.t > 0L && it.t + h4BarMs <= contextNow }
-        if (d1.size < 45 || h4.size < 45) return rejectDecision(symbol,"HTF_HISTORY_INSUFFICIENT: D1=${d1.size}; H4=${h4.size}")
-        val d1Line = alligator(d1, d1.lastIndex)
-        val h4Line = alligator(h4, h4.lastIndex)
-        val d1Bull = d1Line.lips > d1Line.teeth && d1Line.teeth > d1Line.jaw &&
-            d1.last().c > d1Line.lips && ao(d1, d1.lastIndex) > 0.0
-        val d1Bear = d1Line.lips < d1Line.teeth && d1Line.teeth < d1Line.jaw &&
-            d1.last().c < d1Line.lips && ao(d1, d1.lastIndex) < 0.0
-        val h4Bull = h4Line.lips > h4Line.teeth && h4Line.teeth > h4Line.jaw &&
-            h4.last().c > h4Line.lips && ao(h4, h4.lastIndex) > 0.0
-        val h4Bear = h4Line.lips < h4Line.teeth && h4Line.teeth < h4Line.jaw &&
-            h4.last().c < h4Line.lips && ao(h4, h4.lastIndex) < 0.0
-        runCatching {
-            fun contextBar(frame:String,bars:List<CandleN>,jaw:Double,teeth:Double,lips:Double):JSONObject = JSONObject()
-                .put("frame",frame).put("bar_time_ms",bars.last().t).put("close",bars.last().c)
-                .put("ao",ao(bars,bars.lastIndex)).put("jaw",jaw).put("teeth",teeth).put("lips",lips)
-            executionStore.writeState("decision_context_"+symbol,JSONObject().put("observed_at_ms",contextNow)
-                .put("d1",contextBar("1d",d1,d1Line.jaw,d1Line.teeth,d1Line.lips)).put("h4",contextBar("4h",h4,h4Line.jaw,h4Line.teeth,h4Line.lips))
-                .put("d1_bull",d1Bull).put("d1_bear",d1Bear).put("h4_bull",h4Bull).put("h4_bear",h4Bear).toString())
+        val d1 = runCatching { fetchCandles(symbol,"1d",90) }.getOrDefault(emptyList())
+            .filter { it.t>0L && it.t+d1BarMs<=contextNow }
+        val h4 = runCatching { fetchCandles(symbol,"4h",120) }.getOrDefault(emptyList())
+            .filter { it.t>0L && it.t+h4BarMs<=contextNow }
+        fun htfProven(bars:List<CandleN>,frameMs:Long):Boolean =
+            bars.size>=45 && bars.zipWithNext().all { (a,b) -> b.t-a.t==frameMs } &&
+                contextNow-(bars.last().t+frameMs) in 0 until frameMs
+        val d1Proven=htfProven(d1,d1BarMs)
+        val h4Proven=htfProven(h4,h4BarMs)
+        if((!d1Proven || !h4Proven) && freshSignals.any {
+            williamsInitialHigherFrameHistoryRequired(it.strategyProfile)
+        }) return rejectDecision(symbol,"HTF_HISTORY_UNVERIFIED_FOR_LEGACY_SOURCE: D1=$d1Proven; H4=$h4Proven")
+        // An unverified higher timeframe must NEVER be silently interpreted
+        // as neutral/confirmed market structure. The H1 TC2 source requires
+        // no independent D1/H4 confirmation; mark both observations UNKNOWN.
+        val d1Line=if(d1Proven) alligator(d1,d1.lastIndex) else null
+        val h4Line=if(h4Proven) alligator(h4,h4.lastIndex) else null
+        val d1Bull=d1Line!=null && d1Line.lips>d1Line.teeth && d1Line.teeth>d1Line.jaw &&
+            d1.last().c>d1Line.lips && ao(d1,d1.lastIndex)>0.0
+        val d1Bear=d1Line!=null && d1Line.lips<d1Line.teeth && d1Line.teeth<d1Line.jaw &&
+            d1.last().c<d1Line.lips && ao(d1,d1.lastIndex)<0.0
+        val h4Bull=h4Line!=null && h4Line.lips>h4Line.teeth && h4Line.teeth>h4Line.jaw &&
+            h4.last().c>h4Line.lips && ao(h4,h4.lastIndex)>0.0
+        val h4Bear=h4Line!=null && h4Line.lips<h4Line.teeth && h4Line.teeth<h4Line.jaw &&
+            h4.last().c<h4Line.lips && ao(h4,h4.lastIndex)<0.0
+        fun htfEvidence(frame:String,bars:List<CandleN>,line:TripleValues?,proven:Boolean):JSONObject =
+            JSONObject().put("frame",frame).put("status",if(proven && line!=null) "PROVEN_CONTEXT" else "UNKNOWN")
+                .put("closed_bar_count",bars.size).apply {
+                    if(proven && line!=null) {
+                        put("bar_time_ms",bars.last().t).put("close",bars.last().c)
+                        put("ao",ao(bars,bars.lastIndex)).put("jaw",line.jaw)
+                            .put("teeth",line.teeth).put("lips",line.lips)
+                    } else {
+                        put("reason","MISSING_GAPPED_OR_STALE_HTF_HISTORY")
+                    }
+                }
+        check(executionStore.writeState("decision_context_"+symbol,JSONObject()
+            .put("observed_at_ms",contextNow)
+            .put("d1",htfEvidence("1d",d1,d1Line,d1Proven))
+            .put("h4",htfEvidence("4h",h4,h4Line,h4Proven))
+            .put("d1_bull",if(d1Proven) d1Bull else JSONObject.NULL)
+            .put("d1_bear",if(d1Proven) d1Bear else JSONObject.NULL)
+            .put("h4_bull",if(h4Proven) h4Bull else JSONObject.NULL)
+            .put("h4_bear",if(h4Proven) h4Bear else JSONObject.NULL).toString())) {
+            "H1_CONTEXT_EVIDENCE_NOT_DURABLE"
         }
         // Apply D1/H4 context before choosing between fresh confirmed H1 hypotheses.
         // H4-aligned context ranks before a reversal; signal recency breaks ties.
@@ -5936,11 +5959,14 @@ private class NativeEngine(
         val hierarchy = waveHierarchyFor(symbol)
         val corrections = freshSignals.associate { it.signalId to williamsCorrectionEntryContext(
             hierarchy,campaignSignalDirection(it.type).orEmpty(),it.signalBarTimeMs,it.type) }
-        fun contextRank(signal: CampaignSignalN): Int = maxOf(
-            directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear),
-            if (corrections[signal.signalId]?.allowed == true) 2 else 0)
-        // Only a causally contained, validated correction mode may override the
-        // project's D1/H4 trend filter. H1 remains the only signal authority.
+        // TC2 chapter 12 explicitly accepts any of WM1, WM2, WM3 as the
+        // first presenting H1 entry. Older D1/H4 blanket trend veto wrongly
+        // blocked initial H1 Super AO/fractal when a higher timeframe had not
+        // yet turned. Keep D1/H4 as context/ranking evidence, not mandatory
+        // confirmation. Final H1 proof, ownership, stop and risk gates remain.
+        fun contextRank(signal: CampaignSignalN): Int = williamsBookInitialContextRank(
+            signal.strategyProfile,signal.type,d1Bull,d1Bear,h4Bull,h4Bear,
+            corrections[signal.signalId]?.allowed == true)
         val allowedSignals = freshSignals.filter { contextRank(it)>0 }
         // A pending re-anchor must never hide a contradictory confirmed
         // hypothesis from another enabled Williams edition.
@@ -5982,7 +6008,7 @@ private class NativeEngine(
             compareBy<CampaignSignalN> { it.signalBarTimeMs }
                 .thenByDescending { contextRank(it) }.thenByDescending { nativeRank(it.type) }
         ) ?: run {
-            lastError = "WILLIAMS_DIRECTIONAL_CONTEXT_BLOCKED: neither LONG nor SHORT is allowed by D1/H4 for $symbol"
+            lastError = "WILLIAMS_NO_BOOK_ELIGIBLE_H1_SIGNAL: no TC2 first-Wise-Man signal survived book and risk context on $symbol"
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
         // Even with no old Binance order, prefer a newer confirmed WM3 level
