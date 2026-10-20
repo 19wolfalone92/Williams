@@ -8322,6 +8322,45 @@ private class NativeEngine(
             .put("outcome",JSONObject().put("accepted",false).put("mutation_attempted",false).put("blocker",safeDiagnosticText(reason))).toString()) }
     }
 
+    /**
+     * Long-term market LOCATION (not a wave label or an entry trigger).
+     * All extrema come strictly from persistently stored, CLOSED Binance H1
+     * candles. Unknown/insufficient history is not presented as a strong signal.
+     */
+    private fun persistentH1MarketLocation(symbol: String): JSONObject {
+        val rows = historyStore.loadRecent(symbol, "1h", 6000)
+        val last = rows.lastOrNull()
+        val result = JSONObject().put("source", "DEVICE_SQLITE_CLOSED_H1")
+            .put("used_for_order_entry", false)
+            .put("full_history_backfilled", historyStore.isComplete(symbol, "1h"))
+            .put("loaded_bars", rows.size)
+            .put("first_bar_open_ms", rows.firstOrNull()?.openTime ?: JSONObject.NULL)
+            .put("last_bar_open_ms", last?.openTime ?: JSONObject.NULL)
+        if (last == null) return result.put("status", "NO_HISTORY")
+        val exchangeTime = futuresMarketData.cachedExchangeNowMs()
+        if (!futuresMarketData.isKlineOpenTimeClosed(last.openTime, "1h", exchangeTime)) {
+            return result.put("status", "UNVERIFIED_LAST_H1_CLOSE")
+        }
+        for (period in listOf(150, 720, 2160, 6000)) {
+            if (rows.size < period) {
+                result.put("range_" + period + "_hours", JSONObject().put("status", "INSUFFICIENT_HISTORY"))
+                continue
+            }
+            val sample = rows.takeLast(period)
+            val low = sample.minOf { it.low }
+            val high = sample.maxOf { it.high }
+            val position = if (high > low)
+                ((last.close - low) / (high - low)).coerceIn(0.0, 1.0)
+                else null
+            result.put("range_" + period + "_hours", JSONObject()
+                .put("status", "OBSERVED_NOT_WAVE_CLASSIFICATION")
+                .put("high", high).put("low", low)
+                .put("last_close", last.close)
+                .put("position_from_0_low_to_1_high", position ?: JSONObject.NULL))
+        }
+        return result.put("status", "HISTORICAL_CONTEXT")
+    }
+
     private fun toJson(candidate: BaseAnalysis): JSONObject {
         val wave = candidate.wave
         // Match the exact signal selected by execution, rather than displaying
@@ -8446,6 +8485,12 @@ private class NativeEngine(
         runCatching { executionStore.writeState("decision_trace_"+candidate.symbol,trace.toString()) }
         return JSONObject()
             .put("decision_trace",trace)
+            .put("persistent_h1_market_location", runCatching {
+                persistentH1MarketLocation(candidate.symbol)
+            }.getOrElse {
+                JSONObject().put("status", "HISTORY_READ_FAILED")
+                    .put("used_for_order_entry", false)
+            })
             .put("directional_context_native", directionTrace)
             .put("wave4_zero_line_diagnostic", wave4Trace)
             .put("ntd_balance_line_diagnostics", ntdTrace)
