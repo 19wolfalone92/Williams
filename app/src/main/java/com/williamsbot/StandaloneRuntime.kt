@@ -8273,9 +8273,9 @@ private class NativeEngine(
                     WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
                 }
             }
-            val contextReport=buildAdaptiveHistoricalWaveReport(history,cutoff)
+            val contextReport=buildAdaptiveHistoricalWaveReport(history,hourlyCutoff)
             adaptiveWaveContextCache[symbol]=hourlyCutoff to JSONObject(contextReport.toString())
-            requestMissingAdaptiveWaveFrames(symbol,contextReport,cutoff)
+            requestMissingAdaptiveWaveFrames(symbol,contextReport,hourlyCutoff)
             contextReport
         }.getOrElse { error ->
             JSONObject().put("schema","ADAPTIVE_WILLIAMS_WAVE_HISTORY_V1")
