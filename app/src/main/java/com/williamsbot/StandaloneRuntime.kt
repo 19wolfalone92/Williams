@@ -8840,7 +8840,7 @@ private class NativeEngine(
     }
 
     fun status(fast: Boolean = false): JSONObject {
-        if (!fast && primaryCandles.isEmpty()) {
+        if (!fast && (primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, interval))) {
             runCatching {
                 primaryCandles =
                     fetchCandles(primarySymbol, interval, 150)
@@ -9163,7 +9163,8 @@ private class NativeEngine(
             .filter { futuresMarketData.isKlineOpenTimeClosed(it.openTime, selectedInterval, futuresMarketData.exchangeNowMs()) }
             .map { CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume) } else emptyList()
         val sourceCandles = if (historical) stored else if (stored.size >= 150 && candleSeriesCurrent(stored, selectedInterval)) stored else if (symbol == primarySymbol && selectedInterval == interval) {
-            if (primaryCandles.isEmpty()) primaryCandles = fetchCandles(primarySymbol, selectedInterval, 150)
+            if(primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, selectedInterval))
+                primaryCandles=fetchCandles(primarySymbol,selectedInterval,150)
             primaryCandles
         } else {
             fetchCandles(symbol, selectedInterval, 150)
@@ -9238,6 +9239,11 @@ private class NativeEngine(
 
         return marketQuote(symbol).put("interval", selectedInterval)
             .put("indicator_snapshot", indicatorSnapshot).put("candles", output)
+            .put("h1_market_analysis_independent_of_entry_gate",true)
+            .put("candles_fresh",candleSeriesCurrent(sourceCandles,selectedInterval))
+            .put("last_closed_bar_open_ms",sourceCandles.lastOrNull()?.t ?: JSONObject.NULL)
+            .put("scanner_state",scannerState)
+            .put("execution_allowed",executionReady())
     }
 
     fun marketQuote(requestedSymbol: String?): JSONObject {
