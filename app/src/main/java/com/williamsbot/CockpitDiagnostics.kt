@@ -36,15 +36,24 @@ internal object CockpitDiagnostics {
         }
         val monitoring = status.optBoolean("running") && snapshotFresh &&
             status.optBoolean("user_ws_connected") && !status.optBoolean("user_stream_sync_required", true)
+        val dailyBaselineMissing = status.optString("daily_risk_baseline_source", "UNKNOWN") in
+            setOf("", "UNKNOWN", "null")
+        val pendingCount=intents.count { it.optString("campaign_status") in
+            setOf("ENTRY_PENDING","FILL_CONFIRMATION_PENDING","EXIT_PENDING") }
+        val resetExplanation=russianLossResetExplanation(
+            consecutiveLosses=status.optInt("consecutive_losses",0),
+            utcClockReady=status.optBoolean("consecutive_losses_available",false),
+            baselineReady=!dailyBaselineMissing,
+            pendingEntries=pendingCount
+        )
         val reason = when {
             !status.optBoolean("running") -> "Движок остановлен"
             status.optBoolean("kill_switch_latched") -> "Аварийная блокировка новых операций"
+            dailyBaselineMissing -> "Не подтверждена суточная база риска Binance. " + resetExplanation
             status.optBoolean("paused") -> "Новые входы приостановлены; сопровождение продолжается"
             !snapshotFresh -> "Снимок позиций Binance обновляется или устарел"
-            !coordinatorReady -> blockerText(coordinator.optString("blocker"))
-            !scannerReady -> "Сканер: " + status.optString("scanner_state", "NOT_RUN")
-            status.optString("daily_risk_baseline_source", "UNKNOWN") in setOf("", "UNKNOWN", "null") ->
-                "Не подтверждена суточная база риска Binance; новые входы заблокированы"
+            !coordinatorReady -> russianExecutionBlocker(coordinator.optString("blocker"))
+            !scannerReady -> "Сканер: " + russianStatus(status.optString("scanner_state", "NOT_RUN"))
             !technical -> "Ожидание связи, истории или синхронизации"
             !entries -> "Торговый шлюз ограничивает новые входы"
             else -> "Новые входы разрешены при подтверждённом сигнале и проверке риска"
@@ -57,6 +66,10 @@ internal object CockpitDiagnostics {
             .put("pending_orders", intents.count { it.optString("campaign_status") in
                 setOf("ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "EXIT_PENDING") })
             .put("new_entries_reason", reason)
+            .put("utc_loss_reset_explanation", resetExplanation)
+            .put("utc_day_start_ms",status.optLong("consecutive_loss_utc_day_start_ms",0L))
+            .put("utc_loss_streak_count",status.optInt("consecutive_losses",0))
+            .put("daily_risk_baseline_known",!dailyBaselineMissing)
             .put("protection_state", when {
                 !snapshotFresh -> "NOT_VERIFIED"
                 positions.isEmpty() -> "NO_OPEN_POSITIONS"

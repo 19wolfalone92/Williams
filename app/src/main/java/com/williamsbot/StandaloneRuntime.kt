@@ -522,6 +522,34 @@ internal fun streamNeedsReconnect(
  * account refresh is temporarily unknown. A confirmed risk breach that latches
  * PAUSE/KILL must stop scanning for entries and invoke position management.
  */
+/**
+ * Recovery may release only the pause produced by temporary UTC baseline
+ * uncertainty. An operator pause, kill, disabled runtime or outstanding
+ * exchange reconciliation remains authoritative.
+ */
+/**
+ * An expired conditional H1 entry does not become immortal just because
+ * Binance reports TRIGGERING/TRIGGERED. Request a cancel but never assume
+ * terminal state until exact exchange order and position proof are reconciled.
+ */
+internal fun expiredTriggeringEntryNeedsExchangeCancel(
+    expired:Boolean, orderStatus:String, accountPositionKnownFlat:Boolean,
+    explicitOperatorOrder:Boolean
+):Boolean = expired && accountPositionKnownFlat && !explicitOperatorOrder &&
+    orderStatus.uppercase(Locale.US) in setOf("TRIGGERING","TRIGGERED")
+
+internal fun canReleaseVerifiedUtcRiskPause(
+    baselineAndPnlVerified:Boolean,
+    wasRiskAutoPaused:Boolean,
+    runtimeRunning:Boolean,
+    operatorPaused:Boolean,
+    killLatched:Boolean,
+    reconcileRequired:Boolean,
+    testnetOverrideActive:Boolean
+):Boolean = baselineAndPnlVerified && wasRiskAutoPaused &&
+    runtimeRunning && !operatorPaused && !killLatched &&
+    !reconcileRequired && !testnetOverrideActive
+
 internal fun dailyRiskBlocksScanner(
     accountFunded: Boolean,
     dailyRiskAllowed: Boolean,
@@ -1446,6 +1474,7 @@ private class NativeEngine(
 
     @Volatile private var scannerState = "NOT_RUN"
     @Volatile private var scannerError: String? = null
+    @Volatile private var lastScannerSymbolErrors = JSONObject()
     @Volatile private var scanRunId = ""
     @Volatile private var scanStartedAt = 0L
     @Volatile private var scanLastProgressAt = 0L
@@ -4719,7 +4748,11 @@ private class NativeEngine(
             }
             val baselineResult = baselineAttempt.getOrElse { failure ->
                 paused = true
-                prefs.edit().putBoolean("auto_run", false).commit()
+                // Distinguish an automatic, recoverable daily-baseline pause
+                // from the operator's explicit pause. Never erase either risk
+                // evidence or the original 3% daily loss limit.
+                prefs.edit().putBoolean("auto_run", false)
+                    .putBoolean("risk_daily_baseline_auto_paused", true).commit()
                 lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: unable to reconstruct UTC-day equity safely: " +
                     (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 3% and entries stay blocked"
                 return false
@@ -4862,6 +4895,29 @@ private class NativeEngine(
                 }
             }
             return false
+        }
+        // UTC midnight clears the *loss streak*, not financial drawdown or
+        // unresolved orders. A previously automatic UNKNOWN-baseline pause may
+        // be released ONLY once the current UTC baseline, daily PnL and
+        // exchange account have all passed this exact verification.
+        val recoverablePause = prefs.getBoolean("risk_daily_baseline_auto_paused", false) ||
+            (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true)
+        if (canReleaseVerifiedUtcRiskPause(
+                baselineAndPnlVerified=true,
+                wasRiskAutoPaused=recoverablePause,
+                runtimeRunning=running,
+                operatorPaused=prefs.getBoolean("operator_entries_paused", false),
+                killLatched=killLatched,
+                reconcileRequired=reconcileRequired,
+                testnetOverrideActive=forceTestnetMode
+            )) {
+            // Other gates (coordinator, pending orders, WSS, fresh market, FSM)
+            // remain authoritative; removing this PAUSE is not an entry permit.
+            if (prefs.edit().putBoolean("risk_daily_baseline_auto_paused", false).commit()) {
+                paused = false
+                if (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true)
+                    lastError = null
+            }
         }
         return true
     }
@@ -5475,6 +5531,35 @@ private class NativeEngine(
                 val row=positions.optJSONObject(index) ?: return@all false
                 val qty=row.optString("positionAmt").toDoubleOrNull()
                 qty!=null && qty.isFinite() && (row.optString("symbol")!=symbol || qty==0.0)
+            }
+            if (expiredTriggeringEntryNeedsExchangeCancel(
+                    expired=expired,
+                    orderStatus=exchangeOrderStatus(pending),
+                    accountPositionKnownFlat=exchangeRowsValid,
+                    explicitOperatorOrder=pending.optString("signal_type")=="OPERATOR_FORCED_DIRECTION"
+                )) {
+                // Earlier book/M15 branches did 'continue' on TRIGGERING,
+                // leaving day-old expired orders blocking every new entry.
+                // This is an informed exchange cancellation attempt, never a
+                // local pretend reset of entry/fill or of the UTC risk baseline.
+                val result=withCampaignMutation(
+                    symbol,"EXPIRED_H1_TRIGGERING_CANCEL_RECONCILE",
+                    allowPaused=true
+                ) {
+                    try {
+                        futuresCampaignCoordinator.cancelPendingEntries(
+                            "H1_SIGNAL_EXPIRED",symbol)
+                    } finally {
+                        reconcileRequired=true
+                        check(persistSafetyFlag("reconcile_required",true)) {
+                            "EXPIRED_H1_TRIGGERING_CANCEL_RECONCILIATION_FENCE_FAILED"
+                        }
+                    }
+                }
+                if (!result.optBoolean("ok",false))
+                    lastError="EXPIRED_H1_TRIGGERING_CANCEL_NOT_CONFIRMED: "+
+                        symbol+": "+result.optString("blocker")
+                return false // Force fresh exchange position/fill/stop reconciliation.
             }
             if(pending.optString("intent_role","ENTRY")=="ENTRY" && exchangeRowsValid &&
                 pending.optString("client_id").startsWith("W2E_") && pending.optString("signal_type")!="OPERATOR_FORCED_DIRECTION") {
@@ -6515,6 +6600,7 @@ private class NativeEngine(
         val coarseMetadataMissing=coreSymbols.filter { symbol ->
             (volumes[symbol] ?: 0.0)<=0.0 || spreads[symbol]==null
         }
+        val symbolErrors = java.util.concurrent.ConcurrentHashMap<String, String>()
         val futures = scanSymbols.map { symbol ->
             scanExecutor.submit(Callable {
                 try {
@@ -6527,7 +6613,8 @@ private class NativeEngine(
                     result
                 } catch (x: Exception) {
                     markScanProgress()
-                    scannerError = symbol + ": " + (x.message ?: x.javaClass.simpleName)
+                    symbolErrors[symbol] = x.javaClass.simpleName + ": " +
+                        (x.message ?: "no details")
                     null
                 }
             })
@@ -6559,6 +6646,9 @@ private class NativeEngine(
                 .take(20).forEach { put(toJson(it)) }
         }
         lastSymbolsScanned = ranked.size
+        lastScannerSymbolErrors = JSONObject().apply {
+            symbolErrors.toSortedMap().forEach { (symbol,reason) -> put(symbol,reason) }
+        }
         lastScanAt = System.currentTimeMillis()
         scanRunId = "futures-" + lastScanAt
         runCatching { PositionsWidgetProvider.refresh(context) }
@@ -6592,6 +6682,13 @@ private class NativeEngine(
             else -> "READY"
         }
         scannerError = when {
+            !completeScan && symbolErrors.isNotEmpty() ->
+                "Не удалось завершить H1-анализ: " + symbolErrors.entries
+                    .sortedBy { it.key }.take(3)
+                    .joinToString("; ") { it.key + ": " + it.value } +
+                    (if (symbolErrors.size>3) "; и ещё " + (symbolErrors.size-3) + " пар" else "")
+            !completeScan && ranked.isEmpty() ->
+                "Сканер не завершил анализ ни одной пары: " + missing.joinToString(",")
             executionBlocker != null -> {
                 when (executionBlocker) {
                     "BLOCKED_KILL" -> "Kill switch is latched; read-only market scan completed, new entries remain disabled"
@@ -9075,6 +9172,7 @@ private class NativeEngine(
             .put("scanning", scanning)
             .put("scanner_state", scannerState)
             .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("scanner_symbol_errors",lastScannerSymbolErrors)
             .put("market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
             .put("h1_scanner_history_ready",readOnlyH1Ready)
             .put("h1_ready_symbol_count",h1HistoryReadyCount)
