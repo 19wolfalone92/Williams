@@ -4593,14 +4593,30 @@ private class NativeEngine(
         // Bound lock acquisition so a stalled account-wide reconciliation cannot strand
         // queued private-stream work indefinitely. Unknown exchange state remains blocked.
         val waitStartedAtMs = System.currentTimeMillis()
+        // Periodic management is a best-effort maintenance tick. If another
+        // authoritative reconciliation already owns the account lock, coalesce
+        // the tick rather than queue for 50s and falsely persist a fatal latch.
+        // Kill, startup, user-stream, and explicit recovery remain strict.
+        val maintenanceTick = purpose == "POSITION_MANAGEMENT_RECONCILIATION"
         val lockAcquired = try {
-            futuresReconciliationLock.tryLock(waitForDoorMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+            futuresReconciliationLock.tryLock(
+                if (maintenanceTick) 0L else waitForDoorMs.coerceAtLeast(0L),
+                TimeUnit.MILLISECONDS
+            )
         } catch (interrupted: InterruptedException) {
             Thread.currentThread().interrupt()
             lastReconciliationLockWaitFailure = "Interrupted while waiting for the account-wide reconciliation lock"
             false
         }
         lastReconciliationLockWaitMs = (System.currentTimeMillis() - waitStartedAtMs).coerceAtLeast(0L)
+        if (!lockAcquired && maintenanceTick &&
+            !Thread.currentThread().isInterrupted && futuresReconciliationRunning) {
+            // The owner continues to hold the Execution Door. No new entry is
+            // enabled here; the periodic monitor rechecks on the next tick.
+            return JSONObject().put("ok", false)
+                .put("deferred_to_active_reconciliation", true)
+                .put("blocker", "exchange_reconciliation_in_progress")
+        }
         if (!lockAcquired) {
             val baseReason = if (Thread.currentThread().isInterrupted) {
                 "Futures reconciliation ($purpose) was interrupted while waiting for the account-wide reconciliation lock"
@@ -5479,6 +5495,12 @@ private class NativeEngine(
             allowStopped = true,
             allowKillLatched = true
         )
+        if (reconciliation.optBoolean("deferred_to_active_reconciliation", false)) {
+            // Coalesced behind an authoritative in-flight signed reconciliation:
+            // do NOT create a false 50-second lock timeout or latch. The owner
+            // still fences all new entries until its exchange proof is complete.
+            return true
+        }
         if (!reconciliation.optBoolean("ok", false)) {
             scannerError = reconciliation.optString("blocker", "Futures reconciliation failed")
             // Fence all new entries BEFORE deciding whether a zero-fill pending
