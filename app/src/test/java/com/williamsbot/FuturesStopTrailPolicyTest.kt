@@ -181,11 +181,12 @@ class FuturesStopTrailPolicyTest {
         )
         // This unknown opening observation must not move an exchange stop
         // based on candles which may predate the actual live position.
-        assertNull(planWilliamsCampaignStop("SHORT",110.0,100.0,110.0,94.0,
+        assertNull(planWilliamsCampaignStop("SHORT",120.0,100.0,120.0,94.0,
             0.1,0L,input))
-        val known=planWilliamsCampaignStop("SHORT",110.0,100.0,110.0,94.0,
+        val known=planWilliamsCampaignStop("SHORT",120.0,100.0,120.0,94.0,
             0.1,2*3_600_000L,input)
-        assertTrue(known==null || known.stop<110.0)
+        assertEquals("TC2_LAST_5_CLOSED_BARS",known?.reason)
+        assertEquals(110.1,known!!.stop,1e-7)
     }
 
 }
