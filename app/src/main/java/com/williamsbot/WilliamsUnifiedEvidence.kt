@@ -51,6 +51,7 @@ internal fun buildWilliamsUnifiedEvidence(
         if (candidate != null) visited += symbol
         val rawSignals = CockpitDiagnostics.rows(candidate?.optJSONArray("campaign_signals"))
         val latestObserverRows = CockpitDiagnostics.rows(candidate?.optJSONArray("edition_observations"))
+        val expectedH1Close=candidate?.optLong("closed_h1_as_of_ms",0L) ?: 0L
         // Distinguish an observed empty result from a failed/missing source
         // extraction. No signal is not evidence that all books were evaluated.
         val observerProof = JSONObject()
@@ -61,8 +62,8 @@ internal fun buildWilliamsUnifiedEvidence(
                 candidate==null || report==null || rows.size!=1 -> "UNAVAILABLE"
                 report.optString("execution_role")!=(if(source==williamsExecutionProfile) "LIVE" else "OBSERVE") ->
                     "ROLE_MISMATCH"
-                report.optLong("as_of_close_ms")<=0L ||
-                    report.optLong("as_of_close_ms")>nowMs -> "UNCERTAIN_H1_TIME"
+                expectedH1Close<=0L || expectedH1Close>nowMs ||
+                    report.optLong("as_of_close_ms")!=expectedH1Close -> "H1_SNAPSHOT_MISMATCH"
                 report.optString("state")=="ANALYSIS_FAILED" -> "ANALYSIS_FAILED"
                 report.optString("state") in setOf("NO_VALID_FORMATION","FORMATION_OBSERVED") -> report.optString("state")
                 else -> "UNKNOWN_SOURCE_STATE"
