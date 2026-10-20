@@ -6106,7 +6106,7 @@ private class NativeEngine(
                     allowPaused = true, allowReconcileRequired = riskOnly
                 ) {
                     futuresCampaignCoordinator.trailProtectiveStop(
-                        symbol, direction, fmtPrice(plan.stop, rules.tick), clientId
+                        symbol, direction, fmtPrice(plan.stop, rules.tick), clientId, reason = plan.reason
                     )
                 }
                 if (!result.optBoolean("ok", false)) {

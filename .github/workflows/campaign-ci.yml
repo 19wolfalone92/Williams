@@ -59,6 +59,24 @@ jobs:
         run: chmod +x ./gradlew
       - name: Build debug APK and run unit tests
         run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+      - name: Print lint errors
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree
+          report = Path("app/build/reports/lint-results-debug.xml")
+          if report.exists():
+              errors = [i for i in ElementTree.parse(report).getroot().findall("issue")
+                        if i.get("severity") in ("Error", "Fatal")]
+              print("Lint errors:", len(errors))
+              for issue in errors:
+                  print(issue.get("id"), issue.get("message"))
+                  for location in issue.findall("location"):
+                      print(location.get("file"), "line", location.get("line"))
+          else:
+              print("Lint XML not produced by this build.")
+          PY
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
@@ -66,6 +84,7 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
       - name: Upload lint report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: williams-lint-report

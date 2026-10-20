@@ -83,6 +83,10 @@ internal fun russianExecutionBlocker(value: String?): String {
     val code=value?.trim().orEmpty()
     return when {
         code.isEmpty() -> ""
+        code=="TC2_PROTECTIVE_STOP_ONLY" ->
+            "TC2: обычный выход разрешён только через биржевой защитный SL."
+        code=="EXIT_STRATEGY_OWNER_UNVERIFIED" ->
+            "Владелец стратегии не подтверждён; автоматическое закрытие запрещено."
         russianBlockerPrefixes.entries.firstOrNull { code.startsWith(it.key,ignoreCase=true) }!=null ->
             russianBlockerPrefixes.entries.first { code.startsWith(it.key,ignoreCase=true) }.value
         code.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") ->

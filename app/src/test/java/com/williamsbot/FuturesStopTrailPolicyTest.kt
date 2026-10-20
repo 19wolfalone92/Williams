@@ -2,6 +2,7 @@ package com.williamsbot
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -189,4 +190,15 @@ class FuturesStopTrailPolicyTest {
         assertEquals(110.1,known!!.stop,1e-7)
     }
 
+
+    @Test fun missingH1BarsCannotBecomeAThreeOrFiveBarStop() {
+        val regular=bars(listOf(105.0,106.0,107.0,108.0,109.0),listOf(95.0,96.0,97.0,98.0,99.0))
+        val gapped=regular.mapIndexed {i,b->if(i>=2) b.copy(openTimeMs=b.openTimeMs+3_600_000L) else b}
+        for(direction in listOf("LONG","SHORT")) {
+            val old=if(direction=="LONG") 80.0 else 120.0
+            val mark=if(direction=="LONG") 115.0 else 85.0
+            assertNull(planWilliamsCampaignStop(direction,old,100.0,null,mark,.1,1L,gapped))
+            assertNotNull(planWilliamsCampaignStop(direction,old,100.0,null,mark,.1,1L,regular))
+        }
+    }
 }

@@ -694,7 +694,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 val trailed = coordinator.trailProtectiveStop("BTCUSDT", direction,
                     if (direction.name == "LONG") "96" else "104", "W2PS_TRAIL_${direction.name}_$leverage")
                 assertTrue(trailed.toString(), trailed.getBoolean("ok"))
-                val closed = coordinator.closePosition("BTCUSDT", direction, "1", "W2X_CLOSE_${direction.name}_$leverage", "STRATEGY_EXIT")
+                val closed = coordinator.closePosition("BTCUSDT", direction, "1", "W2X_CLOSE_${direction.name}_$leverage", "MANUAL_EXIT")
                 assertTrue(closed.toString(), closed.getBoolean("ok"))
                 assertEquals(0.0, exchange.quantity, 0.0)
                 assertEquals(1, exchange.posts("/fapi/v1/order"))
@@ -799,10 +799,10 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals(1, exchange.posts("/fapi/v1/order"))
     }
 
-    @Test fun strategyExitCannotCloseAnExternallyIncreasedPosition() {
+    @Test fun emergencyExitCannotCloseAnExternallyIncreasedPosition() {
         val (coordinator, exchange) = open(NativeFuturesCampaignCoordinator.Direction.LONG)
         exchange.quantity = 2.0
-        val result = coordinator.closePosition("BTCUSDT", exchange.direction, "2", "W2X_FOREIGN", "STRATEGY_EXIT")
+        val result = coordinator.closePosition("BTCUSDT", exchange.direction, "2", "W2X_FOREIGN", "KILL_SWITCH")
         assertFalse(result.toString(), result.getBoolean("ok"))
         assertEquals(0, exchange.posts("/fapi/v1/order"))
     }
@@ -822,7 +822,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         val (coordinator, exchange) = open(NativeFuturesCampaignCoordinator.Direction.LONG)
         exchange.closeFraction = 0.4
         exchange.closeStatus = "EXPIRED_IN_MATCH"
-        assertFalse(coordinator.closePosition("BTCUSDT", exchange.direction, "1", "W2X_PARTIAL", "STRATEGY_EXIT").getBoolean("ok"))
+        assertFalse(coordinator.closePosition("BTCUSDT", exchange.direction, "1", "W2X_PARTIAL", "MANUAL_EXIT").getBoolean("ok"))
         val result = coordinator.reconcile()
         assertTrue(result.toString(), result.getBoolean("ok"))
         assertEquals(0.6, exchange.quantity, 1e-12)
@@ -918,5 +918,60 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertFalse(failing.reconcile().getBoolean("ok"))
         assertFalse(failing.status().getBoolean("reconciliation_running"))
         assertEquals("credential store unavailable", failing.status().getString("blocker"))
+    }
+
+    @Test fun tc2StrategyExitIsRejectedBeforeAnyExchangeRequestAndRetainsProtection() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator,exchange)=open(direction)
+            val beforeRequests=exchange.requests.size
+            val before=coordinator.intentsSnapshot().getJSONObject(0)
+            val stopId=before.getString("protection_client_id")
+            for(reason in listOf("STRATEGY_EXIT","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED","CORRECTION_PARENT_PRICE_INVALIDATED","LIQUIDATION_GUARD")) {
+                val result=coordinator.closePosition("BTCUSDT",direction,"1","W2X_BLOCK_"+direction.name,reason)
+                assertFalse(result.getBoolean("ok"))
+                assertEquals("TC2_PROTECTIVE_STOP_ONLY",result.getString("blocker"))
+                assertFalse(result.getBoolean("mutation_attempted"))
+                assertEquals(beforeRequests,exchange.requests.size)
+                assertEquals("OPEN_PROTECTED",coordinator.state.name)
+                assertEquals(stopId,coordinator.intentsSnapshot().getJSONObject(0).getString("protection_client_id"))
+                assertTrue(CockpitDiagnostics.rows(coordinator.intentsSnapshot()).none {it.optString("intent_role")=="EXIT"})
+            }
+        }
+    }
+
+    @Test fun confirmedStopMoveRetainsItsBookReasonAndExactPrices() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator,exchange)=open(direction)
+            val next=if(direction.name=="LONG") "96" else "104"
+            val old=if(direction.name=="LONG") "95" else "105"
+            val cid="W2PS_EXPLAIN_"+direction.name
+            val result=coordinator.trailProtectiveStop("BTCUSDT",direction,next,cid,reason="TC2_LAST_5_CLOSED_BARS")
+            assertTrue(result.toString(),result.getBoolean("ok"))
+            val entry=coordinator.intentsSnapshot().getJSONObject(0)
+            val move=entry.getJSONObject("last_confirmed_trail")
+            assertEquals("TC2_LAST_5_CLOSED_BARS",move.getString("reason"))
+            assertEquals(old,move.getString("old_stop"))
+            assertEquals(next,move.getString("new_stop"))
+            assertEquals(cid,move.getString("client_id"))
+            assertEquals(williamsTc2Profile,move.getString("strategy_profile"))
+            assertTrue(move.getLong("observed_at_ms")>0)
+            assertEquals(1,exchange.algos.values.count {it.optString("clientAlgoId")==cid})
+            val publicMove=coordinator.status().getJSONArray("pending_intent_details").getJSONObject(0)
+                .getJSONObject("last_confirmed_trail")
+            assertFalse(publicMove.has("client_id"))
+            assertEquals(next,publicMove.getString("new_stop"))
+        }
+    }
+
+    @Test fun explicitKillStillClosesAnOwnedTc2Campaign() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator,exchange)=open(direction)
+            val result=coordinator.closePosition("BTCUSDT",direction,"1","W2X_KILL_ALLOWED_"+direction.name,"KILL_SWITCH")
+            assertTrue(result.toString(),result.getBoolean("ok"))
+            assertEquals(0.0,exchange.quantity,0.0)
+            assertEquals("EMERGENCY_KILL",coordinator.intentsSnapshot().let { rows->
+                (0 until rows.length()).map {rows.getJSONObject(it)}.last {it.optString("intent_role")=="EXIT"}
+            }.getString("exit_authority"))
+        }
     }
 }

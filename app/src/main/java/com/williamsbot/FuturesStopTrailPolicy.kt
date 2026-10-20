@@ -47,7 +47,7 @@ internal fun planFuturesStopTrail(
     if (breakEvenEnabled && (!initialStop.isFinite() || initialStop <= 0.0 ||
         direction == "LONG" && initialStop >= actualEntry ||
         direction == "SHORT" && initialStop <= actualEntry)) return null
-    if (bars.zipWithNext().any { (a,b) -> a.openTimeMs >= b.openTimeMs }) return null
+    if (bars.zipWithNext().any { (a,b) -> b.openTimeMs-a.openTimeMs != WILLIAMS_H1_MS }) return null
 
     fun floorTick(price: Double): Double = floor(price / tickSize + 1e-12) * tickSize
     fun ceilTick(price: Double): Double = ceil(price / tickSize - 1e-12) * tickSize
@@ -131,7 +131,7 @@ internal fun planWilliamsCampaignStop(
     if (direction !in listOf("LONG","SHORT") || window !in listOf(3,5) ||
         listOf(oldStop,markPrice,tickSize).any { !it.isFinite() || it <= 0 } ||
         bars.any { !it.high.isFinite() || !it.low.isFinite() || it.low <= 0 || it.high < it.low } ||
-        bars.zipWithNext().any { (a,b) -> a.openTimeMs >= b.openTimeMs }) return null
+        bars.zipWithNext().any { (a,b) -> b.openTimeMs-a.openTimeMs != WILLIAMS_H1_MS }) return null
     val validR = initialStop != null && initialStop.isFinite() && initialStop > 0 &&
         (if (direction == "LONG") initialStop < actualEntry else initialStop > actualEntry)
     val proposals = mutableListOf<FuturesStopTrailProposal>()

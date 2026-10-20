@@ -63,8 +63,14 @@ internal fun WilliamsEntryPassportCard(passport:JSONObject) {
                     "PROTECTION_NOT_CONFIRMED" -> "Защитный стоп кампании пока не подтверждён."
                     else -> "Связанная с заявкой защита не подтверждена."
                 },style=MaterialTheme.typography.bodySmall)
-                if(owner!=null) Text("Сверка защиты: "+cockpitTime(passport.optLong("exchange_observed_at_ms")),
-                    style=MaterialTheme.typography.bodySmall)
+                if(owner!=null) {
+                    Text("Сверка защиты: "+cockpitTime(passport.optLong("exchange_observed_at_ms")),
+                        style=MaterialTheme.typography.bodySmall)
+                    if(owner.optString("strategy_profile")==williamsTc2Profile)
+                        Text("TC2: обычный выход через биржевой SL; ручное закрытие и аварийная защита — отдельные действия.",
+                            style=MaterialTheme.typography.bodySmall)
+                    CockpitLastStopMove(owner)
+                }
                 if(passport.optString("protection_scope")=="SHARED_PARENT_CAMPAIGN")
                     Text("Доливка относится к общему стопу родительской кампании.",
                         style=MaterialTheme.typography.bodySmall)
@@ -86,4 +92,18 @@ internal fun WilliamsEntryPassportCard(passport:JSONObject) {
                 style=MaterialTheme.typography.labelSmall)
         }
     }
+}
+
+@Composable
+internal fun CockpitLastStopMove(owner: JSONObject) {
+    val move=owner.optJSONObject("last_confirmed_trail") ?: return
+    if(move.optString("strategy_profile")!=owner.optString("strategy_profile") ||
+        move.optLong("observed_at_ms")<=0 ||
+        listOf("old_stop","new_stop").any { move.optString(it).toDoubleOrNull()?.let { p->p.isFinite() && p>0 }!=true }) return
+    Text("Последний подтверждённый перенос SL · "+cockpitTime(move.optLong("observed_at_ms")),
+        style=MaterialTheme.typography.labelSmall,color=AppColors.textMuted)
+    Text(formatChartPrice(move.optString("old_stop").toDoubleOrNull())+" → "+
+        formatChartPrice(move.optString("new_stop").toDoubleOrNull()),
+        style=MaterialTheme.typography.bodyMedium)
+    Text(williamsStopMoveLabel(move.optString("reason")),style=MaterialTheme.typography.bodySmall)
 }

@@ -1,3 +1,4 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.williamsbot
 
 import android.Manifest
@@ -27,6 +28,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.runtime.rememberUpdatedState
+import kotlin.math.abs
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -39,6 +50,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -129,6 +141,7 @@ import kotlin.math.min
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        applyCockpitOrientation(this)
         // The phone owns the Futures Testnet runtime. Keep it alive in a foreground
         // service; cockpit commands execute in-process and never send Binance
         // credentials to a remote backend.
@@ -400,7 +413,7 @@ data class Trade(
     val closedAtMs: Long = 0L,
     val stopPrice: Double? = null,
     val exitReason: String = ""
-)
+) : java.io.Serializable
 
 data class MarketPair(
     val symbol: String,
@@ -467,7 +480,7 @@ fun WilliamsApp(context: Context) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var status by remember { mutableStateOf(Status()) }
     var marketPairs by remember { mutableStateOf(emptyList<MarketPair>()) }
-    var selectedPositionSymbol by remember { mutableStateOf<String?>(null) }
+    var selectedPositionSymbol by rememberSaveable { mutableStateOf<String?>(null) }
     var candles by remember { mutableStateOf(emptyList<Candle>()) }
     var selectedChartSymbol by rememberSaveable { mutableStateOf("BTCUSDT") }
     var chartCandles by remember { mutableStateOf(emptyList<Candle>()) }
@@ -477,7 +490,7 @@ fun WilliamsApp(context: Context) {
     var chartQuoteSource by remember { mutableStateOf("UNAVAILABLE") }
     var chartQuoteUpdatedAtMs by remember { mutableLongStateOf(0L) }
     var chartIndicatorSummary by remember { mutableStateOf("Загрузка индикаторов…") }
-    var selectedChartInterval by remember { mutableStateOf("1h") }
+    var selectedChartInterval by rememberSaveable { mutableStateOf("1h") }
     var candidates by remember { mutableStateOf(emptyList<Candidate>()) }
     var trades by remember { mutableStateOf(emptyList<Trade>()) }
     var logs by remember { mutableStateOf(emptyList<String>()) }
@@ -490,7 +503,7 @@ fun WilliamsApp(context: Context) {
     var diagnosticsMessage by remember { mutableStateOf("") }
     var diagnosticReport by remember { mutableStateOf<JSONObject?>(null) }
     var diagnosticsRunning by remember { mutableStateOf(false) }
-    var historicalTrade by remember { mutableStateOf<Trade?>(null) }
+    var historicalTrade by rememberSaveable { mutableStateOf<Trade?>(null) }
     var requestedCloseSymbol by remember { mutableStateOf<String?>(null) }
     var criticalSetting by remember { mutableStateOf("") }
     val loadMutex = remember { Mutex() }
@@ -1039,78 +1052,9 @@ fun WilliamsApp(context: Context) {
         dismissButton = { TextButton(onClick = { criticalSetting = "" }) { Text("Отмена") } }
     )
 
-    Scaffold(
-        containerColor = AppColors.background,
-        topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AppColors.background
-                ),
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = AppColors.primary.copy(alpha = 0.16f),
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    "W",
-                                    color = AppColors.primary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                "WILLIAMS BOT 2.1",
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                            Text(
-                                "USDⓈ-M FUTURES • 10 ПАР • LONG / SHORT",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = AppColors.textMuted
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    ModeChip("TESTNET", AppColors.green)
-                    IconButton(onClick = { refresh(true) }) {
-                        Icon(
-                            Icons.Filled.Refresh,
-                            contentDescription = "Сканировать",
-                            tint = if (refreshing) AppColors.amber
-                            else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-            )
-        },
-        bottomBar = {
-            NavigationBar(
-                modifier = Modifier.navigationBarsPadding(),
-                containerColor = AppColors.surface
-            ) {
-                titles.forEachIndexed { index, title ->
-                    val targetTab = destinations[index]
-                    NavigationBarItem(
-                        selected = if (targetTab == 6) tab in listOf(3, 4, 5, 6) else tab == targetTab,
-                        onClick = { tab = targetTab },
-                        icon = {
-                            Icon(
-                                icons[index],
-                                contentDescription = title
-                            )
-                        },
-                        label = { Text(title) }
-                    )
-                }
-            }
-        }
+    AdaptiveCockpitScaffold(
+        tab = tab, titles = titles, destinations = destinations, icons = icons,
+        refreshing = refreshing, onTab = { tab = it }, onRefresh = { refresh(true) }
     ) { padding ->
         val reconciliationBlocked =
             status.reconcileRequired ||
@@ -1285,7 +1229,7 @@ private fun MoreScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp)
     ) {
@@ -1531,7 +1475,7 @@ private fun PortfolioScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
@@ -1573,10 +1517,7 @@ private fun PortfolioCard(
                 )
             }
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric(
                     "Капитал",
                     fmt(portfolio.totalEquityUsdt, 2)
@@ -1591,10 +1532,7 @@ private fun PortfolioCard(
                 )
             }
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric(
                     "Результат",
                     fmt(portfolio.realizedPnlUsdt, 2)
@@ -1663,7 +1601,7 @@ private fun DiagnosticsScreen(
     message: String
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
+        modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp)
     ) {
@@ -1797,7 +1735,7 @@ private fun DashboardScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
@@ -2114,14 +2052,14 @@ private fun BestCandidateCard(best: Candidate?) {
                     style = MaterialTheme.typography.bodyMedium
                 )
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     MiniMetric("ПРИБЫЛЬ/РИСК", fmt(best.riskReward, 2))
                     MiniMetric("ATR (волат.)", fmt(best.atrPct * 100.0, 2) + "%")
                     MiniMetric("СТАРШИЙ ТФ", if (best.htfConfirmed) "ДА" else "ОЖИДАНИЕ")
                     MiniMetric("ВОЛНА", waveText(best))
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     MiniMetric("РЕЖИМ", russianStatus(best.regime))
                     MiniMetric("ДИСБАЛАНС СТАКАНА", fmt(best.obi, 2))
                     MiniMetric("ТЕНЕВОЙ ПРОГНОЗ", russianStatus(best.shadowDirection) + " " + fmt(best.shadowConfidence, 2))
@@ -2159,10 +2097,7 @@ private fun RiskCard(status: Status) {
                 Text("Защита", style = MaterialTheme.typography.titleMedium)
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric(
                     "Риск",
                     fmt(status.reservedRiskPct * 100, 2) +
@@ -2391,7 +2326,7 @@ private fun ScannerScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 4.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
@@ -2518,9 +2453,10 @@ private fun MarketChartPanel(
         else -> "НЕ ОПРЕДЕЛЕНО"
     }
 
-    var details by remember(selectedSymbol) { mutableStateOf(false) }
+    var details by rememberSaveable(selectedSymbol) { mutableStateOf(false) }
+    var expandedChart by rememberSaveable(selectedSymbol) { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        Column(Modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2531,7 +2467,7 @@ private fun MarketChartPanel(
                     Text("USDⓈ-M Futures Demo • выбранная пара", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
                 }
                 // Never display a closed candle's close as the current traded price.
-                Text(livePrice?.let { fmt(it) } ?: "—",
+                Text(formatChartPrice(livePrice),
                     color = AppColors.primary, fontWeight = FontWeight.Bold)
             }
             Text("Бот независимо сканирует все 10 контрактов. Здесь показан только выбранный рынок.",
@@ -2558,6 +2494,9 @@ private fun MarketChartPanel(
                 style = MaterialTheme.typography.labelSmall)
             TextButton(onClick = { details = !details }) { Text(if (details) "Скрыть данные индикаторов" else "Что видит бот • данные индикаторов") }
             if (details) Text(indicatorSummary, color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
+            if (candles.isNotEmpty()) TextButton(onClick = { expandedChart = true }) {
+                Text("Развернуть график на весь экран")
+            }
             if (candles.isEmpty()) {
                 if (loading) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2623,6 +2562,14 @@ private fun MarketChartPanel(
             }
         }
     }
+    if (expandedChart && candles.isNotEmpty()) {
+        CockpitChartDialog(selectedSymbol + " · " + chartIntervalLabel(interval),
+            onDismiss = { expandedChart = false }) {
+            TradingChart(candles = candles, status = displayStatus, position = selectedPosition,
+                candidate = if (historicalTrade == null) candidate else null, interval = interval,
+                onIntervalChange = onIntervalChange, historicalTrade = historicalTrade)
+        }
+    }
 }
 
 @Composable
@@ -2659,20 +2606,14 @@ private fun CandidateCardModern(candidate: Candidate) {
                 color = AppColors.textMuted
             )
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric("ВОЛНА", waveText(candidate))
                 MiniMetric("ОЦЕНКА ВОЛНЫ", fmt(candidate.waveScore, 0))
                 MiniMetric("ИСТОЩЕНИЕ", fmt(candidate.waveExhaustionRisk, 0) + "%")
                 MiniMetric("СТАРШИЙ ТФ", if (candidate.htfConfirmed) "ДА" else "ОЖИДАНИЕ")
             }
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric("РЕЖИМ", russianStatus(candidate.regime))
                 MiniMetric("ДИСБАЛАНС СТАКАНА", fmt(candidate.obi, 2))
                 MiniMetric("ТЕНЕВОЙ ПРОГНОЗ", russianStatus(candidate.shadowDirection) + " " + fmt(candidate.shadowConfidence, 2))
@@ -2688,10 +2629,7 @@ private fun CandidateCardModern(candidate: Candidate) {
 
             Divider(color = AppColors.surface2)
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric("ПРИБЫЛЬ/РИСК", fmt(candidate.riskReward, 2))
                 MiniMetric("ATR (волат.)", fmt(candidate.atrPct * 100, 2) + "%")
                 MiniMetric("СПРЕД", fmt(candidate.spreadPct * 100, 3) + "%")
@@ -2761,7 +2699,7 @@ private fun PositionScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
@@ -2848,15 +2786,15 @@ private fun PositionScreen(
                             }
                         }
                         InfoRow(
-                            "Quantity",
+                            "Объём позиции",
                             fmt(p.qty, 6)
                         )
                         InfoRow(
-                            "Entry",
+                            "Цена входа",
                             fmt(p.entry)
                         )
                         InfoRow(
-                            "Current",
+                            "Текущая цена",
                             fmt(p.currentPrice)
                         )
                         InfoRow(
@@ -2864,20 +2802,20 @@ private fun PositionScreen(
                             fmt(p.positionValueUsdt, 2) + " USDT"
                         )
                         InfoRow(
-                            "Allocation",
+                            "Доля капитала",
                             fmt(p.allocationPct * 100.0, 2) + "%"
                         )
                         InfoRow(
-                            "PnL",
+                            "Прибыль / убыток",
                             fmt(p.pnlUsdt, 2) + " USDT (" +
                                 fmt(p.pnlPct * 100.0, 2) + "%)"
                         )
                         InfoRow(
-                            "SL",
+                            "Защитный стоп",
                             fmt(p.stop)
                         )
                         InfoRow(
-                            "TP",
+                            "Тейк-профит",
                             fmt(p.take)
                         )
                         InfoRow(
@@ -2927,7 +2865,7 @@ private fun HistoryScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
@@ -3092,7 +3030,7 @@ private fun SettingsScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
@@ -3446,8 +3384,8 @@ private fun MiniMetric(label: String, value: String) {
     ) {
         Column(
             Modifier
-                .padding(horizontal = 9.dp, vertical = 7.dp)
-                .width(64.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .widthIn(min = 112.dp, max = 188.dp)
         ) {
             Text(
                 label,
@@ -3580,6 +3518,7 @@ private fun EmptyState(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TradingChart(
     candles: List<Candle>,
@@ -3590,224 +3529,212 @@ private fun TradingChart(
     onIntervalChange: (String) -> Unit = {},
     historicalTrade: Trade? = null
 ) {
-    if (candles.isEmpty()) { Text("Нет закрытых свечей"); return }
-    var showJaw by remember { mutableStateOf(true) }
-    var showTeeth by remember { mutableStateOf(true) }
-    var showLips by remember { mutableStateOf(true) }
-    var showFractals by remember { mutableStateOf(true) }
-    var showSignals by remember { mutableStateOf(true) }
-    var showLevels by remember { mutableStateOf(true) }
-    var showAo by remember { mutableStateOf(true) }
-    var showAc by remember { mutableStateOf(true) }
-    var showMfi by remember { mutableStateOf(false) }
-    var selectedBar by remember { mutableIntStateOf(-1) }
-    var scale by remember(candles.size) { mutableFloatStateOf(max(1f, candles.size / 100f)) }
-    var pan by remember(candles.size) { mutableFloatStateOf(0f) }
+    val series = remember(candles) { candles.filter { c ->
+        listOf(c.open,c.high,c.low,c.close).all { it.isFinite() && it > 0 } &&
+            c.high >= max(c.open,c.close) && c.low <= min(c.open,c.close)
+    } }
+    if (series.isEmpty()) { Text("Нет корректных свечей для графика"); return }
+    var showJaw by rememberSaveable(status.symbol,interval) { mutableStateOf(true) }
+    var showTeeth by rememberSaveable(status.symbol,interval) { mutableStateOf(true) }
+    var showLips by rememberSaveable(status.symbol,interval) { mutableStateOf(true) }
+    var showFractals by rememberSaveable(status.symbol,interval) { mutableStateOf(true) }
+    var showSignals by rememberSaveable(status.symbol,interval) { mutableStateOf(true) }
+    var showLevels by rememberSaveable(status.symbol,interval) { mutableStateOf(true) }
+    var showAo by rememberSaveable(status.symbol,interval) { mutableStateOf(true) }
+    var showAc by rememberSaveable(status.symbol,interval) { mutableStateOf(true) }
+    var showMfi by rememberSaveable(status.symbol,interval) { mutableStateOf(false) }
+    var layerControls by rememberSaveable { mutableStateOf(false) }
+    var selectedAt by rememberSaveable(status.symbol,interval) { mutableLongStateOf(0L) }
+    var requestedBars by rememberSaveable(status.symbol,interval) { mutableFloatStateOf(100f) }
+    var barsBack by rememberSaveable(status.symbol,interval) { mutableFloatStateOf(0f) }
+    val viewport = chartViewport(series.size, requestedBars, barsBack)
+    val visible = series.subList(viewport.start,viewport.start+viewport.count)
+    val selectedBar = visible.indexOfFirst { it.time == selectedAt }
+    val pendingTrigger = williamsChartTrigger(status.decisionTracesJson,status.symbol,System.currentTimeMillis(),status.price)
+    val levels = (listOfNotNull(status.tp,status.entry,status.sl,status.price,position?.entry,position?.stop,
+        historicalTrade?.entry,historicalTrade?.exit,historicalTrade?.stopPrice) +
+        visible.flatMap { listOfNotNull(if(showJaw) it.jaw else null,if(showTeeth) it.teeth else null,if(showLips) it.lips else null) })
+        .filter { it.isFinite() && it>0 }
+    val minPrice = min(visible.minOf { it.low },levels.minOrNull() ?: Double.MAX_VALUE)
+    val maxPrice = max(visible.maxOf { it.high },levels.maxOrNull() ?: 0.0)
+    val range = max(maxPrice-minPrice,maxPrice*.0001).coerceAtLeast(1e-9)
+    val density = LocalDensity.current
+    val labelPaint = remember(density.density,density.fontScale,AppColors.textMuted) {
+        android.graphics.Paint().apply {
+            color=AppColors.textMuted.toArgb()
+            textSize=with(density) { 11.sp.toPx() }
+            isAntiAlias=true
+        }
+    }
+    val axisWidthPx = (0..4).maxOf { labelPaint.measureText(formatChartPrice(minPrice+range*it/4.0)) } +
+        with(density) { 10.dp.toPx() }
+    val currentAxisWidth by rememberUpdatedState(axisWidthPx)
+    val currentVisible by rememberUpdatedState(visible)
+    val window = LocalWindowInfo.current.containerSize
+    val landscape = window.width>window.height
+    val windowHeight = with(density) { window.height.toDp().value }
+    val chartHeight = if(landscape) (windowHeight*.60f).coerceIn(180f,420f).dp else 360.dp
+    fun zoom(factor:Float) { requestedBars=(requestedBars/factor).coerceIn(min(20,series.size).toFloat(),series.size.toFloat()) }
 
-    val visibleCount = min(candles.size, max(1, (candles.size / scale).toInt()))
-
-    val maxStart = max(0, candles.size - visibleCount)
-    val shift =
-        (pan / 18f).toInt().coerceIn(-maxStart, 0)
-    val start =
-        (candles.size - visibleCount + shift).coerceIn(0, maxStart)
-
-    val visible =
-        candles.subList(start, start + visibleCount)
-    val pendingTrigger=williamsChartTrigger(status.decisionTracesJson,status.symbol,System.currentTimeMillis(),status.price)
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = AppColors.surface)
-    ) {
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf(Triple("Jaw", showJaw) { showJaw = !showJaw }, Triple("Teeth", showTeeth) { showTeeth = !showTeeth },
-                Triple("Lips", showLips) { showLips = !showLips }, Triple("Фракталы", showFractals) { showFractals = !showFractals },
-                Triple("Мудрецы", showSignals) { showSignals = !showSignals }, Triple("Уровни", showLevels) { showLevels = !showLevels },
-                Triple("AO", showAo) { showAo = !showAo }, Triple("AC", showAc) { showAc = !showAc },
-                Triple("MFI", showMfi) { showMfi = !showMfi }).forEach { (label, enabled, change) ->
-                FilterChip(enabled, change, label = { Text(label) })
+    Column(Modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+        FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+            TextButton(onClick={layerControls=!layerControls}) { Text(if(layerControls) "Скрыть слои" else "Слои графика") }
+            OutlinedButton(onClick={zoom(1.3f)},enabled=viewport.count>min(20,series.size)) { Text("+") }
+            OutlinedButton(onClick={zoom(1f/1.3f)},enabled=viewport.count<series.size) { Text("−") }
+            TextButton(onClick={barsBack=0f;selectedAt=0L;requestedBars=100f}) { Text("К последним свечам") }
+        }
+        if(layerControls) FlowRow(Modifier.fillMaxWidth(),
+            horizontalArrangement=Arrangement.spacedBy(6.dp),verticalArrangement=Arrangement.spacedBy(2.dp)) {
+            listOf(Triple("Челюсти",showJaw) {showJaw=!showJaw},Triple("Зубы",showTeeth) {showTeeth=!showTeeth},
+                Triple("Губы",showLips) {showLips=!showLips},Triple("Фракталы",showFractals) {showFractals=!showFractals},
+                Triple("Мудрецы",showSignals) {showSignals=!showSignals},Triple("Уровни",showLevels) {showLevels=!showLevels},
+                Triple("AO",showAo) {showAo=!showAo},Triple("AC",showAc) {showAc=!showAc},
+                Triple("MFI",showMfi) {showMfi=!showMfi}).forEach { (label,enabled,change) ->
+                FilterChip(selected=enabled,onClick=change,label={Text(label)})
             }
         }
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text("Заявка Binance: "+williamsTriggerStateLabel(pendingTrigger.state)+
-                (pendingTrigger.trigger?.let { " · "+fmt(it) } ?: ""),
-                color=AppColors.amber,style=MaterialTheme.typography.labelSmall)
-            Text("Аллигатор: челюсти 13/8 • зубы 8/5 • губы 5/3  |  фракталы подтверждаются после двух закрытых свечей справа",
-                color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
-            Text(
-                "График • " + chartIntervalLabel(interval) +
-                    " • H1 остаётся единственным таймфреймом торгового решения",
-                color = AppColors.textMuted,
-                style = MaterialTheme.typography.labelSmall
-            )
+        Text("Заявка Binance: "+williamsTriggerStateLabel(pendingTrigger.state)+
+            (pendingTrigger.trigger?.let {" · "+formatChartPrice(it)} ?: ""),
+            color=AppColors.amber,style=MaterialTheme.typography.labelSmall)
+        if(!landscape || layerControls) {
+            Text("Аллигатор 13/8 · 8/5 · 5/3. Фрактал известен после двух закрытых свечей справа.",
+                color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
+            Text("График "+chartIntervalLabel(interval)+" · решение H1. Нажми свечу для деталей; двигай горизонтально и меняй масштаб.",
+                color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
         }
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(340.dp)
-                .padding(8.dp)
-                .pointerInput(visible.size) {
-                    detectTapGestures { tap -> selectedBar = (tap.x / size.width * visible.size).toInt().coerceIn(0, visible.lastIndex) }
-                }
-                .pointerInput(visible.size) {
-                    detectTransformGestures { _, drag, zoom, _ ->
-                        scale =
-                            (scale * zoom).coerceIn(1f, max(5f, candles.size / 20f))
-                        pan += drag.x
-                    }
-                }
-        ) {
-            val levels = listOfNotNull(
-                status.tp, status.entry, status.sl, status.price,
-                position?.entry, position?.stop, historicalTrade?.entry, historicalTrade?.exit, historicalTrade?.stopPrice
-            ) + visible.flatMap { listOfNotNull(if (showJaw) it.jaw else null, if (showTeeth) it.teeth else null, if (showLips) it.lips else null) }
-            val minPrice = min(
-                visible.minOf { it.low },
-                levels.minOrNull() ?: Double.MAX_VALUE
-            )
-            val maxPrice = max(
-                visible.maxOf { it.high },
-                levels.maxOrNull() ?: Double.MIN_VALUE
-            )
-            val range = max(1e-9, maxPrice - minPrice)
-
-            fun y(price: Double): Float =
-                (size.height - (price - minPrice) / range * size.height).toFloat()
-
-            fun x(index: Int): Float =
-                index.toFloat() / max(1, visible.size - 1) * size.width
-
-            for (grid in 1..4) {
-                val yy = size.height * grid / 5f
-                drawLine(
-                    AppColors.surface2,
-                    Offset(0f, yy),
-                    Offset(size.width, yy),
-                    1f
-                )
-            }
-
-            visible.forEachIndexed { index, candle ->
-                val center = x(index)
-                drawLine(
-                    AppColors.textMuted.copy(alpha = 0.55f),
-                    Offset(center, y(candle.high)),
-                    Offset(center, y(candle.low)),
-                    1f
-                )
-
-                val top = y(max(candle.open, candle.close))
-                val bottom = y(min(candle.open, candle.close))
-
-                drawRect(
-                    color = if (candle.close >= candle.open)
-                        AppColors.green else AppColors.red,
-                    topLeft = Offset(center - 3f, top),
-                    size = Size(
-                        6f,
-                        max(2f, bottom - top)
-                    )
-                )
-                if (showFractals && candle.fractalUp) {
-                    drawCircle(AppColors.red, radius = 4f, center = Offset(center, y(candle.high) - 7f))
-                }
-                if (showFractals && candle.fractalDown) {
-                    drawCircle(AppColors.green, radius = 4f, center = Offset(center, y(candle.low) + 7f))
+        Canvas(Modifier.fillMaxWidth().height(chartHeight)
+            .pointerInput(status.symbol,interval,series.size) {
+                detectTapGestures { tap ->
+                    val plot=chartPlotBounds(size.width.toFloat(),size.height.toFloat(),currentAxisWidth,labelPaint.textSize)
+                    plot.candleAt(tap.x,currentVisible.size)?.let { selectedAt=currentVisible[it].time }
                 }
             }
-
-            fun indicatorLine(
-                selector: (Candle) -> Double?,
-                color: Color
-            ) {
-                val path = Path()
-                var started = false
-                visible.forEachIndexed { index, candle ->
-                    selector(candle)?.let { value ->
-                        if (!started) {
-                            path.moveTo(x(index), y(value))
-                            started = true
-                        } else {
-                            path.lineTo(x(index), y(value))
+            .pointerInput(status.symbol,interval,series.size) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed=false)
+                    var total=Offset.Zero
+                    var horizontal=false
+                    do {
+                        val event=awaitPointerEvent()
+                        if(event.changes.any {it.isConsumed}) break
+                        val multi=event.changes.count {it.pressed}>1
+                        val drag=event.calculatePan()
+                        total+=drag
+                        if(!horizontal && !multi && abs(total.y)>viewConfiguration.touchSlop && abs(total.y)>abs(total.x)) break
+                        if(multi || horizontal || abs(total.x)>viewConfiguration.touchSlop) {
+                            horizontal=true
+                            val count=chartViewport(series.size,requestedBars,barsBack).count
+                            val plot=chartPlotBounds(size.width.toFloat(),size.height.toFloat(),currentAxisWidth,labelPaint.textSize)
+                            val factor=event.calculateZoom()
+                            if(factor.isFinite() && factor>0) zoom(factor)
+                            barsBack=(barsBack+drag.x/plot.width*count).coerceIn(0f,max(0,series.size-count).toFloat())
+                            event.changes.forEach {if(it.positionChanged()) it.consume()}
                         }
+                    } while(event.changes.any {it.pressed})
+                }
+            }) {
+            val plot=chartPlotBounds(size.width,size.height,axisWidthPx,labelPaint.textSize)
+            fun y(price:Double)=plot.bottom-((price-minPrice)/range*plot.height).toFloat()
+            fun x(index:Int)=plot.candleX(index,visible.size)
+            val paint=android.graphics.Paint(labelPaint)
+            fun label(text:String,anchor:Float,baseline:Float,color:Color) {
+                paint.color=color.toArgb()
+                if(paint.measureText(text)>plot.width) return
+                val xx=boundedChartLabelX(anchor,paint.measureText(text),plot.left,plot.right)
+                drawContext.canvas.nativeCanvas.drawText(text,xx,
+                    baseline.coerceIn(-paint.fontMetrics.ascent,size.height-paint.fontMetrics.descent),paint)
+            }
+            for(grid in 0..4) {
+                val price=minPrice+range*grid/4.0
+                val yy=y(price)
+                drawLine(AppColors.surface2,Offset(plot.left,yy),Offset(plot.right,yy),1f)
+                paint.color=AppColors.textMuted.toArgb()
+                val text=formatChartPrice(price)
+                val xx=boundedChartLabelX(plot.right+4.dp.toPx(),paint.measureText(text),plot.right,size.width)
+                if(paint.measureText(text)<=size.width-plot.right) drawContext.canvas.nativeCanvas.drawText(text,xx,
+                    (yy-(paint.fontMetrics.ascent+paint.fontMetrics.descent)/2f).coerceIn(-paint.fontMetrics.ascent,size.height-paint.fontMetrics.descent),paint)
+            }
+            val bodyWidth=(plot.width/visible.size*.62f).coerceIn(1f,12.dp.toPx())
+            visible.forEachIndexed { index,c ->
+                val center=x(index)
+                drawLine(AppColors.textMuted.copy(alpha=.65f),Offset(center,y(c.high)),Offset(center,y(c.low)),1f)
+                val top=y(max(c.open,c.close));val bottom=y(min(c.open,c.close))
+                drawRect(if(c.close>=c.open) AppColors.green else AppColors.red,
+                    Offset(center-bodyWidth/2,top),Size(bodyWidth,max(2f,bottom-top)))
+                if(showFractals && c.fractalUp) drawCircle(AppColors.red,3.dp.toPx()/2,Offset(center,y(c.high)-5.dp.toPx()))
+                if(showFractals && c.fractalDown) drawCircle(AppColors.green,3.dp.toPx()/2,Offset(center,y(c.low)+5.dp.toPx()))
+            }
+            fun indicatorLine(selector:(Candle)->Double?,color:Color) {
+                val path=Path();var started=false
+                visible.forEachIndexed { index,c ->
+                    val value=selector(c)?.takeIf {it.isFinite() && it>0}
+                    if(value==null) started=false else {
+                        if(!started) {path.moveTo(x(index),y(value));started=true}
+                        else path.lineTo(x(index),y(value))
                     }
                 }
-                if (started) {
-                    drawPath(
-                        path = path,
-                        color = color,
-                        style = Stroke(
-                            width = 2.2f,
-                            cap = StrokeCap.Round
-                        )
-                    )
-                }
+                drawPath(path,color,style=Stroke(width=1.dp.toPx(),cap=StrokeCap.Round))
             }
-
-            if (showJaw) indicatorLine({ it.jaw }, AppColors.violet)
-            if (showTeeth) indicatorLine({ it.teeth }, AppColors.amber)
-            if (showLips) indicatorLine({ it.lips }, AppColors.primary)
-            if (showSignals) visible.forEachIndexed { index, c ->
-                c.signalTypes.forEach { type ->
-                    val short = type.startsWith("SHORT")
-                    val family = when { type.contains("REVERSAL") -> "WM1"; type.contains("SUPER_AO") -> "WM2"; type.contains("FRACTAL") -> "WM3"; else -> type }
-                    drawContext.canvas.nativeCanvas.drawText((if (short) "▼" else "▲") + family,
-                        x(index), y(if (short) c.high else c.low), android.graphics.Paint().apply {
-                            color = (if (short) AppColors.red else AppColors.green).toArgb(); textSize = 10.sp.toPx(); isAntiAlias = true
-                        })
-                }
-            }
-            fun tradeMarker(at: Long, price: Double?, label: String, color: Color) {
-                if (at <= 0L || price == null || visible.isEmpty()) return
-                val frameMs = when (interval) { "1h" -> 3_600_000L; "4h" -> 14_400_000L; "1d" -> 86_400_000L; else -> 0L }
-                val index = visible.indexOfLast { it.time <= at }
-                if (index < 0 || (index == visible.lastIndex && frameMs > 0 && at >= visible.last().time + frameMs)) return
-                drawLine(color.copy(alpha = 0.6f), Offset(x(index), 0f), Offset(x(index), size.height), 1f)
-                drawCircle(color, 5f, Offset(x(index), y(price)))
-                drawContext.canvas.nativeCanvas.drawText(label, x(index), max(20f, y(price) - 8f), android.graphics.Paint().apply {
-                    this.color = color.toArgb(); textSize = 11.sp.toPx(); isAntiAlias = true
-                })
-            }
-            historicalTrade?.let { trade ->
-                tradeMarker(trade.openedAtMs, trade.entry, "ВХОД ${trade.direction}", AppColors.primary)
-                tradeMarker(trade.closedAtMs, trade.exit, "ВЫХОД", AppColors.violet)
-            }
-            if (selectedBar in visible.indices) drawLine(AppColors.textMuted, Offset(x(selectedBar), 0f), Offset(x(selectedBar), size.height), 1f)
-
-            fun level(price: Double?, color: Color, label: String) {
-                if (price == null || !price.isFinite() || !showLevels) return
-                val yy = y(price)
-                drawLine(
-                    color,
-                    Offset(0f, yy),
-                    Offset(size.width, yy),
-                    2f
-                )
-
-                drawContext.canvas.nativeCanvas.drawText(
-                    label + " " + fmt(price),
-                    12f,
-                    max(20f, yy - 6f),
-                    android.graphics.Paint().apply {
-                        this.color = color.toArgb()
-                        textSize = 11.sp.toPx()
-                        isAntiAlias = true
+            if(showJaw) indicatorLine({it.jaw},AppColors.violet)
+            if(showTeeth) indicatorLine({it.teeth},AppColors.amber)
+            if(showLips) indicatorLine({it.lips},AppColors.primary)
+            if(showSignals) visible.forEachIndexed { index,c ->
+                c.signalTypes.distinct().forEachIndexed { order,type ->
+                    val short=type.startsWith("SHORT")
+                    val family=when {
+                        type.contains("REVERSAL")->"WM1";type.contains("SUPER_AO")->"WM2";type.contains("FRACTAL")->"WM3"
+                        else->"СИГНАЛ"
                     }
-                )
+                    label((if(short) "▼" else "▲")+family,x(index),
+                        y(if(short) c.high else c.low)+(if(short) -1 else 1)*(order+1)*(paint.textSize+3f),
+                        if(short) AppColors.red else AppColors.green)
+                }
             }
-
-            level(status.price, AppColors.primary, "LIVE")
-            level(position?.entry ?: status.entry, AppColors.primary, "ENTRY")
-            level(position?.take ?: status.tp, AppColors.green, "TP")
-            level(position?.stop ?: status.sl, AppColors.red, "SL")
-            pendingTrigger.trigger?.takeIf { it in minPrice..maxPrice }?.let { level(it,AppColors.amber,"ОЖИДАНИЕ BINANCE") }
-            pendingTrigger.stop?.takeIf { it in minPrice..maxPrice }?.let { level(it,AppColors.red,"СТОП НЕ ПОДТВЕРЖДЁН") }
+            fun tradeMarker(at:Long,price:Double?,text:String,color:Color) {
+                if(at<=0 || price==null || !price.isFinite()) return
+                val index=visible.indexOfLast {it.time<=at}
+                if(index<0) return
+                val end=visible.getOrNull(index+1)?.time ?: chartIntervalEnd(visible[index].time,interval) ?: return
+                if(at>=end) return
+                drawLine(color.copy(alpha=.6f),Offset(x(index),plot.top),Offset(x(index),plot.bottom),1f)
+                drawCircle(color,3.dp.toPx(),Offset(x(index),y(price)))
+                label(text,x(index),y(price)-8.dp.toPx(),color)
+            }
+            historicalTrade?.let {trade->
+                tradeMarker(trade.openedAtMs,trade.entry,"ВХОД "+russianDirection(trade.direction),AppColors.primary)
+                tradeMarker(trade.closedAtMs,trade.exit,"ВЫХОД",AppColors.violet)
+            }
+            if(selectedBar>=0) drawLine(AppColors.textMuted,Offset(x(selectedBar),plot.top),Offset(x(selectedBar),plot.bottom),1f)
+            fun level(price:Double?,color:Color) {
+                if(price==null || !price.isFinite() || !showLevels || price !in minPrice..(minPrice+range)) return
+                drawLine(color,Offset(plot.left,y(price)),Offset(plot.right,y(price)),1.5f)
+            }
+            level(status.price,AppColors.primary)
+            level(position?.entry ?: status.entry,AppColors.primary)
+            level(position?.take ?: status.tp,AppColors.green)
+            level(position?.stop ?: status.sl,AppColors.red)
+            level(pendingTrigger.trigger,AppColors.amber)
+            level(pendingTrigger.stop,AppColors.red)
         }
-        Text(cockpitTime(visible.first().time) + "  —  " + cockpitTime(visible.last().time), modifier = Modifier.padding(horizontal = 8.dp), color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
-        if (selectedBar in visible.indices) {
-            val c = visible[selectedBar]
-            Text("${cockpitTime(c.time)} • O ${fmt(c.open)} • H ${fmt(c.high)} • L ${fmt(c.low)} • C ${fmt(c.close)}\nAO ${fmt(c.ao, 5)} • AC ${fmt(c.ac, 5)} • ${c.signalTypes.joinToString()}", modifier = Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
+        if(showLevels) FlowRow(Modifier.fillMaxWidth(),
+            horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+            status.price?.let {Text("Цена "+formatChartPrice(it),color=AppColors.primary,style=MaterialTheme.typography.labelSmall)}
+            (position?.entry ?: status.entry)?.let {Text("Вход "+formatChartPrice(it),style=MaterialTheme.typography.labelSmall)}
+            (position?.stop ?: status.sl)?.let {Text("SL "+formatChartPrice(it),color=AppColors.red,style=MaterialTheme.typography.labelSmall)}
+            (position?.take ?: status.tp)?.let {Text("TP "+formatChartPrice(it),color=AppColors.green,style=MaterialTheme.typography.labelSmall)}
+            pendingTrigger.trigger?.let {Text("Заявка "+formatChartPrice(it),color=AppColors.amber,style=MaterialTheme.typography.labelSmall)}
+            pendingTrigger.stop?.let {Text("План SL "+formatChartPrice(it),color=AppColors.amber,style=MaterialTheme.typography.labelSmall)}
+        }
+        Text(cockpitTime(visible.first().time)+" — "+cockpitTime(visible.last().time),
+            color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
+        if(selectedBar>=0) {
+            val c=visible[selectedBar]
+            Text(cockpitTime(c.time)+" · O "+formatChartPrice(c.open)+" · H "+formatChartPrice(c.high)+
+                " · L "+formatChartPrice(c.low)+" · C "+formatChartPrice(c.close),
+                style=MaterialTheme.typography.bodySmall)
+            Text("AO "+fmt(c.ao,5)+" · AC "+fmt(c.ac,5)+" · "+
+                c.signalTypes.joinToString {russianSignalFamily(it)}.ifBlank {"Сигналов нет"},
+                style=MaterialTheme.typography.bodySmall)
         }
         if (showAo) {
         Text("Чудесный осциллятор (AO) • зелёный: столбец растёт, красный: снижается",
@@ -3819,12 +3746,12 @@ private fun TradingChart(
             val zeroY = size.height / 2f
             drawLine(AppColors.textMuted.copy(alpha = 0.65f), Offset(0f, zeroY), Offset(size.width, zeroY), 1f)
             if (maxAbs > 0.0 && visible.isNotEmpty()) {
-                val step = size.width / visible.size.toFloat()
+                val step = chartPlotBounds(size.width, size.height, axisWidthPx, 1f).width / visible.size.toFloat()
                 visible.forEachIndexed { index, candle ->
                     val value = candle.ao?.takeIf(Double::isFinite) ?: return@forEachIndexed
                     val height = (kotlin.math.abs(value) / maxAbs * (size.height * 0.42f)).toFloat()
                     val left = index * step + step * 0.15f
-                    val previous = if (index > 0) visible[index - 1].ao else null
+                    val previous = series.getOrNull(viewport.start + index - 1)?.ao
                     val rising = previous?.let { value > it } ?: false
                     drawRect(color = if (rising) AppColors.green else AppColors.red,
                         topLeft = Offset(left, if (value >= 0.0) zeroY - height else zeroY),
@@ -3843,12 +3770,12 @@ private fun TradingChart(
             val zeroY = size.height / 2f
             drawLine(AppColors.textMuted.copy(alpha = 0.65f), Offset(0f, zeroY), Offset(size.width, zeroY), 1f)
             if (maxAbs > 0.0 && visible.isNotEmpty()) {
-                val step = size.width / visible.size.toFloat()
+                val step = chartPlotBounds(size.width, size.height, axisWidthPx, 1f).width / visible.size.toFloat()
                 visible.forEachIndexed { index, candle ->
                     val value = candle.ac?.takeIf(Double::isFinite) ?: return@forEachIndexed
                     val height = (kotlin.math.abs(value) / maxAbs * (size.height * 0.42f)).toFloat()
                     val left = index * step + step * 0.15f
-                    val previous = if (index > 0) visible[index - 1].ac else null
+                    val previous = series.getOrNull(viewport.start + index - 1)?.ac
                     val rising = previous?.let { value > it } ?: false
                     drawRect(color = if (rising) AppColors.green else AppColors.red,
                         topLeft = Offset(left, if (value >= 0.0) zeroY - height else zeroY),
@@ -3865,8 +3792,8 @@ private fun TradingChart(
             val finite = visible.mapNotNull { it.mfiProxy?.takeIf { v -> v.isFinite() && v >= 0.0 } }
             val maxValue = finite.maxOrNull() ?: 0.0
             if (maxValue > 0.0 && visible.isNotEmpty()) {
-                val step = size.width / visible.size.toFloat()
-                var previous: Double? = null
+                val step = chartPlotBounds(size.width, size.height, axisWidthPx, 1f).width / visible.size.toFloat()
+                var previous: Double? = series.getOrNull(viewport.start - 1)?.mfiProxy
                 visible.forEachIndexed { index, candle ->
                     val value = candle.mfiProxy?.takeIf { it.isFinite() && it >= 0.0 } ?: return@forEachIndexed
                     val height = (value / maxValue * (size.height * 0.8f)).toFloat()
@@ -3885,13 +3812,7 @@ private fun TradingChart(
 
 @Composable
 private fun InfoRow(label: String, value: String) {
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(label, color = AppColors.textMuted)
-        Text(value, fontWeight = FontWeight.SemiBold)
-    }
+    ResponsiveCockpitField(label, value, MaterialTheme.colorScheme.onSurface)
 }
 
 private fun parsePortfolio(json: JSONObject): PortfolioSummary {
