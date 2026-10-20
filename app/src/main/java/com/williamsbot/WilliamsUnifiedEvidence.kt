@@ -41,6 +41,7 @@ internal fun buildWilliamsUnifiedEvidence(
     var conflicts = 0
     var tc2Conflicts = 0
     var activeCampaigns = 0
+    var observerProofComplete = true
     val visited = mutableSetOf<String>()
     val bySymbol = candidates.groupBy { it.optString("symbol") }
     for (symbol in APPROVED_FUTURES_SYMBOLS) {
@@ -49,6 +50,33 @@ internal fun buildWilliamsUnifiedEvidence(
         val candidate = rows.firstOrNull()
         if (candidate != null) visited += symbol
         val rawSignals = CockpitDiagnostics.rows(candidate?.optJSONArray("campaign_signals"))
+        val latestObserverRows = CockpitDiagnostics.rows(candidate?.optJSONArray("edition_observations"))
+        // Distinguish an observed empty result from a failed/missing source
+        // extraction. No signal is not evidence that all books were evaluated.
+        val observerProof = JSONObject()
+        for(source in williamsSourceProfiles) {
+            val rows=latestObserverRows.filter { it.optString("profile")==source }
+            val report=rows.singleOrNull()
+            val state=when {
+                candidate==null || report==null || rows.size!=1 -> "UNAVAILABLE"
+                report.optString("execution_role")!=(if(source==williamsExecutionProfile) "LIVE" else "OBSERVE") ->
+                    "ROLE_MISMATCH"
+                report.optLong("as_of_close_ms")<=0L ||
+                    report.optLong("as_of_close_ms")>nowMs -> "UNCERTAIN_H1_TIME"
+                report.optString("state")=="ANALYSIS_FAILED" -> "ANALYSIS_FAILED"
+                report.optString("state") in setOf("NO_VALID_FORMATION","FORMATION_OBSERVED") -> report.optString("state")
+                else -> "UNKNOWN_SOURCE_STATE"
+            }
+            observerProof.put(source,JSONObject().put("state",state)
+                .put("execution_role",if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
+                .put("as_of_close_ms",report?.optLong("as_of_close_ms") ?: JSONObject.NULL)
+                .put("reported_signal_count",report?.optInt("signal_count") ?: JSONObject.NULL)
+                .put("error_type",report?.opt("error_type") ?: JSONObject.NULL))
+            if(state !in setOf("NO_VALID_FORMATION","FORMATION_OBSERVED"))
+                observerProofComplete=false
+            if(state=="ANALYSIS_FAILED" || state=="ROLE_MISMATCH")
+                errors.put("SOURCE_EXTRACTION_"+state+":"+symbol+":"+source)
+        }
         val evidence = JSONArray()
         val sourceCounts = JSONObject()
         for (source in williamsSourceProfiles) sourceCounts.put(source, 0)
@@ -137,6 +165,7 @@ internal fun buildWilliamsUnifiedEvidence(
             .put("live_tc2_opposing_entries_before_context",liveConflict)
             .put("observed", candidate != null)
             .put("source_counts", sourceCounts)
+            .put("edition_observation_proof",observerProof)
             .put("observed_signal_count", rawSignals.size)
             .put("fresh_opposing_entries_before_context", conflict)
             .put("signals", evidence)
@@ -154,6 +183,7 @@ internal fun buildWilliamsUnifiedEvidence(
         scanning -> "SCAN_IN_PROGRESS"
         !complete || visited.size != 10 -> "INCOMPLETE_SCAN"
         errors.length() > 0 -> "INVALID_SNAPSHOT"
+        !observerProofComplete -> "INCOMPLETE_OBSERVER_PROOF"
         else -> "COMPLETE_OBSERVATION_ONLY"
     }
     return JSONObject()
@@ -172,6 +202,7 @@ internal fun buildWilliamsUnifiedEvidence(
         .put("observed_symbols", visited.size)
         .put("expected_symbols", 10)
         .put("observed_signal_count", total)
+        .put("observer_proof_complete",observerProofComplete)
         .put("by_source", sourceSummary)
         .put("by_symbol", perPair)
         .put("source_contract_errors", errors)
