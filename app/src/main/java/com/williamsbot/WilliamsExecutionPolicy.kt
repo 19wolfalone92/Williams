@@ -53,3 +53,31 @@ internal fun williamsOpposingSignalCanMarketClose(ownerProfile:String):Boolean =
  */
 internal fun williamsAdditionRequiresHigherFrameTrendVeto(ownerProfile:String):Boolean =
     ownerProfile != williamsTc2Profile
+
+
+/** Trading Chaos 2nd ed. chapter 12 (three possible FIRST presenting
+ * Wise Men): a valid, independently confirmed H1 Super AO or WM3 fractal
+ * does not require a bullish/bearish H4/D1 Alligator before the initial
+ * entry. D1/H4 remain read-only market context and ranking evidence.
+ *
+ * This only adjusts the textbook signal-ranking gate. It NEVER overrides
+ * history freshness, H1 trigger consumption, WM3 Teeth validity, funding,
+ * exchange position ownership, risk budgets, protected stops, or Futures
+ * reconciliation; those are checked independently before every Binance POST.
+ */
+internal fun williamsBookInitialContextRank(
+    source:String,signalType:String,
+    d1Bull:Boolean,d1Bear:Boolean,h4Bull:Boolean,h4Bear:Boolean,
+    validatedCorrection:Boolean=false
+):Int {
+    val prior=directionalSignalContextRank(signalType,d1Bull,d1Bear,h4Bull,h4Bear)
+    if(source!=williamsTc2Profile) return maxOf(prior,if(validatedCorrection) 2 else 0)
+    val side=campaignSignalDirection(signalType) ?: return 0
+    if(side !in setOf("LONG","SHORT")) return 0
+    val type=signalType.removePrefix("SHORT_").removePrefix("LONG_")
+    // TC2 supports three initial entry families. Unknown/obsolete
+    // signal families are not admitted via this book exception.
+    return if(type in setOf("REVERSAL","SUPER_AO","FRACTAL"))
+        maxOf(prior,1,if(validatedCorrection) 2 else 0)
+    else maxOf(prior,if(validatedCorrection) 2 else 0)
+}
