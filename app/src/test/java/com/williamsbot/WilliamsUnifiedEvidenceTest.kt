@@ -19,8 +19,18 @@ class WilliamsUnifiedEvidenceTest {
     private fun scanner(complete: Boolean = true, signals: JSONArray = JSONArray()): JSONObject {
         val candidates = JSONArray()
         APPROVED_FUTURES_SYMBOLS.forEachIndexed { i, symbol ->
-            candidates.put(JSONObject().put("symbol", symbol)
-                .put("campaign_signals", if (i == 0) signals else JSONArray()))
+            val pairSignals=if(i==0) signals else JSONArray()
+            val independentProof=JSONArray()
+            for(source in williamsSourceProfiles) {
+                val observed=CockpitDiagnostics.rows(pairSignals).count { it.optString("strategy_profile")==source }
+                independentProof.put(JSONObject().put("profile",source)
+                    .put("execution_role",if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
+                    .put("state",if(observed>0) "FORMATION_OBSERVED" else "NO_VALID_FORMATION")
+                    .put("as_of_close_ms",now).put("signal_count",observed))
+            }
+            candidates.put(JSONObject().put("symbol",symbol)
+                .put("campaign_signals",pairSignals).put("closed_h1_as_of_ms",now)
+                .put("edition_observations",independentProof))
         }
         return JSONObject().put("scanner_state", "READY")
             .put("scanning", !complete).put("last_scan_at", now - 3_000L)
@@ -160,6 +170,37 @@ class WilliamsUnifiedEvidenceTest {
         val stale=buildWilliamsUnifiedEvidence(scanner(signals=JSONArray().put(reverse)),status(),now)
         assertFalse(stale.getJSONArray("by_symbol").getJSONObject(0)
             .getJSONArray("signals").getJSONObject(0).getBoolean("signal_time_eligible"))
+    }
+
+    @Test fun failedObserverMustNotBeReportedAsNoTradingSignal() {
+        val scan=scanner()
+        val candidate=scan.getJSONArray("candidates").getJSONObject(0)
+        candidate.getJSONArray("edition_observations").getJSONObject(1)
+            .put("state","ANALYSIS_FAILED").put("error_type","IllegalStateException")
+        val report=buildWilliamsUnifiedEvidence(scan,status(),now)
+        assertEquals("INVALID_SNAPSHOT",report.getString("status"))
+        assertFalse(report.getBoolean("observer_proof_complete"))
+        val state=report.getJSONArray("by_symbol").getJSONObject(0).getJSONObject("edition_observation_proof")
+            .getJSONObject(williamsNtdProfile)
+        assertEquals("ANALYSIS_FAILED",state.getString("state"))
+        assertEquals("IllegalStateException",state.getString("error_type"))
+    }
+
+    @Test fun staleAndMissingIndependentH1ProofCannotPretendAllThreeSourcesRan() {
+        val scan=scanner()
+        val first=scan.getJSONArray("candidates").getJSONObject(0)
+        first.remove("edition_observations")
+        val missing=buildWilliamsUnifiedEvidence(scan,status(),now)
+        assertEquals("INCOMPLETE_OBSERVER_PROOF",missing.getString("status"))
+        assertFalse(missing.getBoolean("observer_proof_complete"))
+        val scan2=scanner()
+        scan2.getJSONArray("candidates").getJSONObject(0)
+            .getJSONArray("edition_observations").getJSONObject(1)
+            .put("as_of_close_ms",now-WILLIAMS_H1_MS)
+        val stale=buildWilliamsUnifiedEvidence(scan2,status(),now)
+        assertEquals("INCOMPLETE_OBSERVER_PROOF",stale.getString("status"))
+        assertEquals("H1_SNAPSHOT_MISMATCH",stale.getJSONArray("by_symbol").getJSONObject(0)
+            .getJSONObject("edition_observation_proof").getJSONObject(williamsNtdProfile).getString("state"))
     }
 
 }
