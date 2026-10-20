@@ -84,7 +84,8 @@ class WilliamsUnifiedEvidenceTest {
         assertFalse(result.getBoolean("is_execution_decision"))
         assertEquals("NO_SIGNALS_IN_SNAPSHOT; detector rejection details not persisted",
             result.getJSONArray("by_symbol").getJSONObject(0).getString("no_signal_explanation"))
-        assertEquals("NONE",result.getJSONArray("by_symbol").getJSONObject(0).getString("owner_strategy_profile"))
+        assertEquals("UNKNOWN",result.getJSONArray("by_symbol").getJSONObject(0).getString("owner_strategy_profile"))
+        assertEquals("UNAVAILABLE",result.getJSONArray("by_symbol").getJSONObject(0).getString("owner_snapshot_state"))
     }
 
     @Test fun staleAndLegacyProfileAreExplicitlyMarked() {
@@ -124,7 +125,8 @@ class WilliamsUnifiedEvidenceTest {
         assertEquals("old_tc2",pair.getString("owner_signal_id"))
         assertEquals("SHORT",pair.getString("owner_direction"))
         assertTrue(pair.getBoolean("campaign_occupied"))
-        assertTrue(pair.getBoolean("owner_exchange_verified"))
+        assertTrue(pair.getBoolean("owner_strategy_binding_verified"))
+        assertEquals("PINNED_SOURCE_OBSERVED_NOT_LIVE_EXCHANGE_PROOF",pair.getString("owner_snapshot_state"))
         assertFalse(pair.getBoolean("other_strategies_can_trade_this_pair"))
         assertEquals(1,report.getInt("active_campaigns_in_snapshot"))
     }
