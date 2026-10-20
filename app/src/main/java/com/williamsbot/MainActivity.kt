@@ -1113,7 +1113,7 @@ fun WilliamsApp(context: Context) {
         val reconciliationBlocked =
             status.reconcileRequired ||
                 status.executionContractReconcileRequired ||
-                status.state == "ТРЕБУЕТСЯ СВЕРКА С BINANCE"
+                status.state == "RECONCILE_REQUIRED"
 
         // Reconciliation is a trading safety barrier, not a UI/navigation barrier.
         // The user must be able to inspect Wave Map, Positions, Incidents and Config
@@ -1805,7 +1805,7 @@ private fun DashboardScreen(
 
         if (status.reconcileRequired ||
             status.executionContractReconcileRequired ||
-            status.state == "ТРЕБУЕТСЯ СВЕРКА С BINANCE") {
+            status.state == "RECONCILE_REQUIRED") {
             item {
                 Card(
                     Modifier.fillMaxWidth(),
