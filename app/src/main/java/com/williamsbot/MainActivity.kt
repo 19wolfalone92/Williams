@@ -1076,7 +1076,7 @@ fun WilliamsApp(context: Context) {
                     }
                 },
                 actions = {
-                    ModeChip("TESTNET", AppColors.green)
+                    ModeChip("ДЕМО", AppColors.green)
                     IconButton(onClick = { refresh(true) }) {
                         Icon(
                             Icons.Filled.Refresh,
@@ -1668,31 +1668,31 @@ private fun DiagnosticsScreen(
         item {
             Text("Диагностика", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         }
-        item { DiagnosticRow("REST price", if (status.price != null) "PASS • " + fmt(status.price, 6) else "FAIL • no price") }
-        item { DiagnosticRow("USDT balance", if (status.balance != null) "PASS • " + fmt(status.balance, 4) else "WAIT • no account data") }
-        item { DiagnosticRow("History", if (status.historyReady) "PASS" else "BLOCK • " + status.scannerState) }
-        item { DiagnosticRow("Market WS", if (status.marketWsConnected) "CONNECTED" else "DEGRADED • REST fallback") }
-        item { DiagnosticRow("User WS", if (status.userWsConnected && !status.userStreamSyncRequired) "CONNECTED" else "DEGRADED • REST reconciliation") }
+        item { DiagnosticRow("Цена REST", if (status.price != null) "Успешно • " + fmt(status.price, 6) else "Ошибка • котировка отсутствует") }
+        item { DiagnosticRow("Баланс USDT", if (status.balance != null) "Успешно • " + fmt(status.balance, 4) else "Ожидание данных счёта") }
+        item { DiagnosticRow("История свечей", if (status.historyReady) "Успешно" else "Нет допуска • " + williamsRuStatus(status.scannerState)) }
+        item { DiagnosticRow("Поток котировок", if (status.marketWsConnected) "Подключён" else "Нет связи • переход на REST") }
+        item { DiagnosticRow("Поток счёта", if (status.userWsConnected && !status.userStreamSyncRequired) "Подключён" else "Требуется сверка через REST") }
         item {
             DiagnosticRow(
-                "Scanner",
-                status.scannerState + " • " + status.scannerSymbols + "/" +
-                    status.scannerConfiguredSymbols + " pairs • LONG " +
-                    status.scannerLongCandidates + " / SHORT " +
+                "Сканер",
+                williamsRuStatus(status.scannerState) + " • " + status.scannerSymbols + "/" +
+                    status.scannerConfiguredSymbols +  " пар • покупка LONG " +
+                    status.scannerLongCandidates + " / продажа SHORT " +
                     status.scannerShortCandidates + " • " + status.scanDurationMs + " ms"
             )
         }
         item {
             DiagnosticRow(
-                "Approved Futures universe",
-                status.scannerUniverse.joinToString(", ").ifBlank { "not available" }
+                "Разрешённые пары Futures",
+                status.scannerUniverse.joinToString(", ").ifBlank { "нет данных" }
             )
         }
         item {
             DiagnosticRow(
-                "Directions",
-                "LONG ${if (status.allowLong) "ENABLED" else "BLOCKED"} • SHORT " +
-                    "${if (status.allowShort) "ENABLED" else "BLOCKED"}"
+                "Направления",
+                "LONG ${if (status.allowLong) "Разрешено" else "Заблокировано"} • SHORT " +
+                    "${if (status.allowShort) "Разрешено" else "Заблокировано"}"
             )
         }
         item {
@@ -1750,18 +1750,18 @@ private fun ReconcileBarrierScreen(
         Text("Торговый цикл заблокирован. Android не принимает торговое решение и не снимает этот барьер локально.", color = AppColors.textMuted)
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                InfoRow("Execution State", status.state)
-                InfoRow("P0 Gate", if (status.p0GatePassed) "PASS" else status.p0GateReason)
-                InfoRow("WSS", if (status.marketWsConnected) "CONNECTED" else "OFFLINE")
-                InfoRow("Binance", if (status.binanceConfigured) "CONFIGURED" else "NOT CONFIGURED")
-                InfoRow("Positions", status.openPositions.toString() + " / " + status.maxOpenPositions)
+                InfoRow("Состояние исполнения", williamsRuStatus(status.state))
+                InfoRow("Защитные условия P0", if (status.p0GatePassed) "Пройдены" else williamsRuRuntimeMessage(status.p0GateReason))
+                InfoRow("Поток данных", if (status.marketWsConnected) "Подключён" else "Не подключён")
+                InfoRow("Binance", if (status.binanceConfigured) "Настроен" else "Не настроен")
+                InfoRow("Позиции", status.openPositions.toString() + " / " + status.maxOpenPositions)
                 status.unresolvedSymbols.takeIf { it.isNotEmpty() }?.let {
-                    InfoRow("Unresolved", it.joinToString(", "))
+                    InfoRow("Не разрешены", it.joinToString(", "))
                 }
                 status.pendingEntrySymbols.takeIf { it.isNotEmpty() }?.let {
-                    InfoRow("Pending entry", it.joinToString(", "))
+                    InfoRow("Ожидающий вход", it.joinToString(", "))
                 }
-                status.error?.takeIf { it.isNotBlank() }?.let { Text(it, color = AppColors.red) }
+                status.error?.takeIf { it.isNotBlank() }?.let { Text(williamsRuRuntimeMessage(it), color = AppColors.red) }
             }
         }
         Button(onClick = onRecover, modifier = Modifier.fillMaxWidth()) {
@@ -1816,7 +1816,7 @@ private fun DashboardScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text("ВХОДЫ ЗАБЛОКИРОВАНЫ • НУЖНА СВЕРКА", color = AppColors.red, fontWeight = FontWeight.Bold)
-                        Text(status.error ?: "Состояние Binance ещё не сверено.", color = AppColors.textMuted)
+                        Text(williamsRuRuntimeMessage(status.error ?: "Состояние Binance ещё не сверено."), color = AppColors.textMuted)
                         OutlinedButton(
                             onClick = onRecoverDashboard,
                             modifier = Modifier.fillMaxWidth()
@@ -1937,7 +1937,7 @@ private fun HeroCard(status: Status, best: Candidate?) {
                 ) {
                     Text("Торговый центр", style = MaterialTheme.typography.labelLarge)
                     StatusDot(
-                        label = statusLabel(status),
+                        label = williamsRuStatus(statusLabel(status)),
                         color = runningColor
                     )
                 }
@@ -1948,10 +1948,10 @@ private fun HeroCard(status: Status, best: Candidate?) {
                 )
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    ModeChip("TESTNET", AppColors.green)
+                    ModeChip("ДЕМО", AppColors.green)
                     Spacer(Modifier.width(8.dp))
                     ModeChip(
-                        if (status.binanceConfigured) "BINANCE OK" else "НЕТ КЛЮЧЕЙ",
+                        if (status.binanceConfigured) "BINANCE • НАСТРОЕНО" else "НЕТ КЛЮЧЕЙ",
                         if (status.binanceConfigured) AppColors.green else AppColors.amber
                     )
                 }
@@ -1968,7 +1968,7 @@ private fun HeroCard(status: Status, best: Candidate?) {
                         best.wavePosition == 3 ->
                             "Рабочая структура близка к W3 — приоритет повышен."
                         else ->
-                            "Williams Profitunity Conservative: Alligator + AO + Fractals + MTF."
+                            "Торговая система Вильямса: Аллигатор, AO, фракталы и контекст старших масштабов."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = AppColors.textMuted
@@ -2019,7 +2019,7 @@ private fun ScanSummaryCard(
                             status.scannerConfiguredSymbols + " H1-пар изучено. Новые входы заблокированы; анализ работает."
                         "READY" -> status.scannerSymbols.toString() + "/" +
                             status.scannerConfiguredSymbols + " пар проверено • LONG " +
-                            status.scannerLongCandidates + " / SHORT " +
+                            status.scannerLongCandidates + " / продажа SHORT " +
                             status.scannerShortCandidates + " • " + formatMs(status.scanDurationMs)
                         "PARTIAL", "PARTIAL_BLOCKED" -> "Проверено " + status.scannerSymbols + "/" +
                             status.scannerConfiguredSymbols + "; новые входы заблокированы"
@@ -2115,12 +2115,12 @@ private fun BestCandidateCard(best: Candidate?) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MiniMetric("RR", fmt(best.riskReward, 2))
                     MiniMetric("ATR", fmt(best.atrPct * 100.0, 2) + "%")
-                    MiniMetric("HTF", if (best.htfConfirmed) "OK" else "WAIT")
+                    MiniMetric("Старший ТФ", if (best.htfConfirmed) "Да" else "Ожидание")
                     MiniMetric("W", waveText(best))
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MiniMetric("РЕЖИМ", best.regime)
+                    MiniMetric("РЕЖИМ", williamsRuStatus(best.regime))
                     MiniMetric("OBI", fmt(best.obi, 2))
                     MiniMetric("ТЕНЕВАЯ ОЦЕНКА", best.shadowDirection + " " + fmt(best.shadowConfidence, 2))
                 }
@@ -2236,7 +2236,7 @@ private fun ControlCard(
                 )
                 ActionButton(
                     modifier = Modifier.weight(1f),
-                    text = if (status.paused) "RESUME" else "PAUSE",
+                    text = if (status.paused) "ВОЗОБНОВИТЬ" else "ПАУЗА",
                     icon = if (status.paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                     enabled = status.running,
                     accent = AppColors.amber,
@@ -2412,7 +2412,7 @@ private fun ScannerScreen(
                             "READY" ->
                                 status.scannerSymbols.toString() + "/" +
                                     status.scannerConfiguredSymbols + " утверждённых пар • LONG " +
-                                    status.scannerLongCandidates + " / SHORT " +
+                                    status.scannerLongCandidates + " / продажа SHORT " +
                                     status.scannerShortCandidates + " • кандидатов " +
                                     candidates.size
                             else -> "Состояние: " + status.scannerState
@@ -2435,7 +2435,7 @@ private fun ScannerScreen(
             CockpitCard("Исторический график • ${historicalTrade.symbol}", AppColors.violet) {
                 Text("Вход: ${cockpitTime(historicalTrade.openedAtMs)} • выход: ${cockpitTime(historicalTrade.closedAtMs)}", style = MaterialTheme.typography.bodySmall)
                 Text(historicalTrade.reason.ifBlank { "Причина входа не записана" }, style = MaterialTheme.typography.bodySmall)
-                Text("Выход: " + historicalTrade.exitReason.ifBlank { "Причина не записана" }, style = MaterialTheme.typography.bodySmall)
+                Text("Выход: " + williamsRuRuntimeMessage(historicalTrade.exitReason).ifBlank { "Причина не записана" }, style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = onLive) { Text("Вернуться к прямому эфиру") }
             }
         }
@@ -2588,7 +2588,7 @@ private fun MarketChartPanel(
                 InfoRow("Волновая фаза", "W" + candidate.wavePosition + " • " + candidate.wavePhase)
                 InfoRow("Волновые оценки (эвристика) / истощение", fmt(candidate.waveConfidence, 2) + " / " + fmt(candidate.waveExhaustionRisk, 1) + "%")
                 InfoRow("Оценки W3 / W5 (некалиброваны)", fmt(candidate.wave3Probability, 2) + " / " + fmt(candidate.wave5Probability, 2))
-                InfoRow("Режим рынка", candidate.regime + " • score " + fmt(candidate.regimeScore, 2))
+                InfoRow("Режим рынка", williamsRuStatus(candidate.regime) + " • оценка " + fmt(candidate.regimeScore, 2))
                 InfoRow("OBI стакана", fmt(candidate.obi, 3))
                 InfoRow("Дисбаланс потока сделок", fmt(candidate.tradeFlowImbalance, 3))
                 InfoRow("Теневая оценка", candidate.shadowDirection + " • " + fmt(candidate.shadowConfidence, 2))
@@ -2603,7 +2603,7 @@ private fun MarketChartPanel(
                     style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
                 if (candidate.xaiTopFactor.isNotBlank()) Text("Главный фактор: " + candidate.xaiTopFactor,
                     style = MaterialTheme.typography.bodySmall, color = AppColors.violet)
-                if (candidate.reason.isNotBlank()) Text("Почему сканер так решил: " + candidate.reason,
+                if (candidate.reason.isNotBlank()) Text("Почему сканер так решил: " + williamsRuRuntimeMessage(candidate.reason),
                     style = MaterialTheme.typography.bodySmall)
                 if (candidate.wavePath.isNotBlank()) Text("Контекст волны: " + candidate.wavePath,
                     color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
@@ -2654,14 +2654,14 @@ private fun CandidateCardModern(candidate: Candidate) {
                 MiniMetric("ВОЛНА", waveText(candidate))
                 MiniMetric("ОЦЕНКА ВОЛНЫ", fmt(candidate.waveScore, 0))
                 MiniMetric("ИСТОЩЕНИЕ", fmt(candidate.waveExhaustionRisk, 0) + "%")
-                MiniMetric("HTF", if (candidate.htfConfirmed) "OK" else "WAIT")
+                MiniMetric("Старший ТФ", if (candidate.htfConfirmed) "Да" else "Ожидание")
             }
 
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                MiniMetric("РЕЖИМ", candidate.regime)
+                MiniMetric("РЕЖИМ", williamsRuStatus(candidate.regime))
                 MiniMetric("OBI", fmt(candidate.obi, 2))
                 MiniMetric("ТЕНЕВАЯ ОЦЕНКА", candidate.shadowDirection + " " + fmt(candidate.shadowConfidence, 2))
             }
@@ -3013,9 +3013,9 @@ private fun HistoryScreen(
                         color = AppColors.textMuted
                     )
                     if (it.reason.isNotBlank()) {
-                        Text("Почему открыли: " + it.reason, style = MaterialTheme.typography.bodySmall)
+                        Text("Почему открыли: " + williamsRuRuntimeMessage(it.reason), style = MaterialTheme.typography.bodySmall)
                     }
-                    if (it.exitReason.isNotBlank()) Text("Почему вышли: " + it.exitReason, style = MaterialTheme.typography.bodySmall)
+                    if (it.exitReason.isNotBlank()) Text("Почему вышли: " + williamsRuRuntimeMessage(it.exitReason), style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = { onTradeChart(it) }) { Text("Открыть график сделки") }
                     if (it.classification.isNotBlank()) {
                         Text(
@@ -3106,7 +3106,7 @@ private fun SettingsScreen(
                             tint = AppColors.green
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("Williams Runtime", style = MaterialTheme.typography.titleMedium)
+                        Text("Торговый движок Williams", style = MaterialTheme.typography.titleMedium)
                     }
 
                     Text(
@@ -4409,8 +4409,8 @@ private fun candidateState(candidate: Candidate): String =
         }
         candidate.nestedW3ParentW5 -> "NESTED W3"
         candidate.wavePosition == 5 -> "W5 • EXHAUSTION WATCH"
-        candidate.wavePosition == 3 -> "W3 • PRIORITY"
-        else -> "WATCHING"
+        candidate.wavePosition == 3 -> "ВОЛНА 3 • ПРИОРИТЕТ"
+        else -> "НАБЛЮДЕНИЕ"
     }
 
 private fun waveText(candidate: Candidate): String =
@@ -4424,13 +4424,13 @@ private fun statusLabel(status: Status): String =
     }
 
 private fun formatMs(value: Long): String =
-    if (value <= 0L) "ожидание" else (value / 1000L).toString() + "s"
+    if (value <= 0L) "ожидание" else (value / 1000L).toString() + " с"
 
 private fun commandLabel(path: String): String =
     when {
         path.endsWith("/start") -> "Двигатель запущен"
         path.endsWith("/pause") -> "Пауза включена"
-        path.endsWith("/panic") -> "PANIC STOP: новые входы остановлены"
+        path.endsWith("/panic") -> "Аварийная пауза: новые входы остановлены"
         path.endsWith("/kill") -> "Аварийное закрытие запрошено; результат требует подтверждения Binance"
         path.endsWith("/resume") -> "Сканирование возобновлено"
         path.endsWith("/stop") -> "Двигатель остановлен"
