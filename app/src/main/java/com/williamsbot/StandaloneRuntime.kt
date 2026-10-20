@@ -5760,10 +5760,17 @@ private class NativeEngine(
         val price=if(market) mark else signal.triggerPrice
         val stop=owner.getString("protective_stop").toDouble()
         if((if(direction=="LONG") stop>=price || !market && price<=mark else stop<=price || !market && price>=mark)) return
-        val d1=waveInfo(fetchCandles(symbol,"1d",90),"1d")
-        val h4=waveInfo(fetchCandles(symbol,"4h",120),"4h")
-        if(direction=="LONG" && (d1.alligatorBearish || h4.alligatorBearish) ||
-            direction=="SHORT" && (d1.alligatorBullish || h4.alligatorBullish)) return
+        // TC2 ch10/12 explicitly permits a countertrend WM1 followed by
+        // H1 Super AO and H1 fractal add-ons before the D1/H4 Alligators turn.
+        // A blanket D1/H4 veto here was silently suppressing a valid textbook
+        // addition to an already owned/protected TC2 campaign. NTD/Course
+        // legacy campaigns retain their existing separate higher-TF policy.
+        if (williamsAdditionRequiresHigherFrameTrendVeto(profile)) {
+            val d1=waveInfo(fetchCandles(symbol,"1d",90),"1d")
+            val h4=waveInfo(fetchCandles(symbol,"4h",120),"4h")
+            if(direction=="LONG" && (d1.alligatorBearish || h4.alligatorBearish) ||
+                direction=="SHORT" && (d1.alligatorBullish || h4.alligatorBullish)) return
+        }
         val reserved=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.filter {
             it.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(it)
         }.sumOf { futuresCampaignReservedRisk(it,all) }
@@ -7538,17 +7545,24 @@ private class NativeEngine(
             val signalIndex = candles.lastIndex - (streak - 3)
             if (signalIndex in 35..candles.lastIndex) {
                 val trigger = candles[signalIndex].h + tick
-                if (triggerStillPending(signalIndex, trigger)) {
+                val structuralStop = williamsTc2SuperAoInitialStop(
+                    "LONG",waveBars,signalIndex,tick,window=5
+                )
+                if (structuralStop != null && structuralStop<trigger &&
+                    triggerStillPending(signalIndex, trigger)) {
                     out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[signalIndex].t),
                         type = "SUPER_AO",
                         role = "ENTRY",
                         signalBarTimeMs = candles[signalIndex].t,
                         triggerPrice = trigger,
-                        protectivePrice = candles[signalIndex].l - tick,
+                        protectivePrice = structuralStop,
                         teethAtDetection = teethS[signalIndex].takeIf { it.isFinite() } ?: 0.0,
-                        invalidationPrice = candles[signalIndex].l - tick,
-                        reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
+                        invalidationPrice = structuralStop,
+                        reason = "WM2 Super AO: third rising AO bar; stop behind previous five closed H1 bars",
+                        setupContext = JSONObject().put("initial_stop_rule","TC2_3_TO_5_CLOSED_PRICE_BARS")
+                            .put("initial_stop_window",5).put("third_ao_bar_at_ms",candles[signalIndex].t)
+                            .put("risk_stop_at_price",structuralStop).toString()
                     )
                 }
             }
@@ -7622,6 +7636,13 @@ private class NativeEngine(
                     optJSONObject("angulation")?.let { proof ->
                         for(key in listOf("price_slope","jaw_slope","teeth_slope"))
                             if(!proof.isNull(key) && proof.has(key)) proof.put(key,-proof.getDouble(key))
+                    }
+                    // WM2 is detected on price-reflected candles for SHORT.
+                    // Translate its recorded protective stop back, too:
+                    // otherwise diagnostic provenance contradicts the real
+                    // Binance Futures plan even when the order itself is right.
+                    if(has("risk_stop_at_price") && !isNull("risk_stop_at_price")) {
+                        put("risk_stop_at_price",reflection-getDouble("risk_stop_at_price"))
                     }
                 }.toString(),
                 invalidationPrice = stop,

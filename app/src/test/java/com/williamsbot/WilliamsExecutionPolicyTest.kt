@@ -67,4 +67,15 @@ class WilliamsExecutionPolicyTest {
         assertFalse(williamsOpposingSignalCanMarketClose("UNKNOWN"))
     }
 
+    @Test fun tc2H1WiseMenCanAddBeforeDailyOrH4AlligatorAlignment() {
+        assertFalse(williamsAdditionRequiresHigherFrameTrendVeto(williamsTc2Profile))
+        assertTrue(williamsAdditionRequiresHigherFrameTrendVeto(williamsNtdProfile))
+        assertTrue(williamsAdditionRequiresHigherFrameTrendVeto(williamsCourseProfile))
+        assertTrue(williamsAdditionRequiresHigherFrameTrendVeto(williamsUnifiedProfile))
+        // Executable exposure permission is a separate gate: NTD & Course
+        // may observe H1 signals but cannot create new live risk.
+        assertNull(williamsNewExposureBlocker(williamsTc2Profile))
+        assertNotNull(williamsNewExposureBlocker(williamsNtdProfile))
+        assertNotNull(williamsNewExposureBlocker(williamsCourseProfile))
+    }
 }

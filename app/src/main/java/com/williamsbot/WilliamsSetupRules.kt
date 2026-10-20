@@ -55,3 +55,32 @@ internal fun selectWilliamsPendingFractal(
     }
     return null
 }
+
+
+/**
+ * Trading Chaos 2nd ed., chapter 12 (PDF pp. 156-161):
+ * when Super AO is the first presenting Wise Man, the initial protective
+ * stop is behind the LOWEST low (LONG) / HIGHEST high (SHORT) of the last
+ * three-to-five price bars, not merely the low/high of the third AO bar.
+ *
+ * Choose five CLOSED H1 price bars ending with that third AO bar, retaining
+ * the original time and series causality; this is a documented, consistent
+ * choice inside the book's 3–5 bar range. Never examine subsequent bars.
+ */
+internal fun williamsTc2SuperAoInitialStop(
+    direction:String,bars:List<WilliamsWaveBar>,thirdAoBarIndex:Int,tick:Double,
+    window:Int=5
+):Double? {
+    if(direction !in setOf("LONG","SHORT") || window !in 3..5 ||
+        thirdAoBarIndex !in (window-1)..bars.lastIndex || !tick.isFinite() || tick<=0)
+        return null
+    val history=bars.subList(thirdAoBarIndex-window+1,thirdAoBarIndex+1)
+    if(history.any { b ->
+            !b.h.isFinite() || !b.l.isFinite() || b.l<=0 ||
+                b.h<b.l || b.h<maxOf(b.o,b.c) || b.l>minOf(b.o,b.c)
+        }) return null
+    val price=if(direction=="LONG") history.minOf { it.l }-tick
+        else history.maxOf { it.h }+tick
+    if(!price.isFinite() || price<=0) return null
+    return price
+}
