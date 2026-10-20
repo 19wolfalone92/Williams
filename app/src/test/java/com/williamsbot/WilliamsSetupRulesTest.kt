@@ -38,4 +38,42 @@ class WilliamsSetupRulesTest {
         val crossed=bars+WilliamsWaveBar(6*3_600_000L,103.0,106.0,102.0,104.0)
         assertNull(selectWilliamsPendingFractal("LONG",crossed,List(crossed.size){104.0},.1))
     }
+    @Test fun superAoThirdBarUsesFiveBarStructureInsteadOfOnlyItsOwnLow() {
+        val h=3_600_000L
+        val lows=listOf(100.0,97.0,94.0,99.0,98.0,101.0,102.0)
+        val bars=lows.mapIndexed { i,low ->
+            WilliamsWaveBar((i+1)*h,low+1.0,low+4.0,low,low+2.0,10.0)
+        }
+        // At third AO bar index 4, its own low=98 but the five-price-bar
+        // risk boundary is 94; TC2 ch12 says use lowest of recent 3–5.
+        val proposed=williamsTc2SuperAoInitialStop("LONG",bars,4,.1)
+        assertEquals(93.9,proposed!!,1e-9)
+        assertTrue(proposed<bars[4].l-.1)
+        assertEquals(97.9,williamsTc2SuperAoInitialStop("LONG",bars,4,.1,3)!!,1e-9)
+    }
+
+    @Test fun bearishSuperAoInitialStopIsTheMirroredHighestOfFiveH1Bars() {
+        val highs=listOf(105.0,107.0,114.0,109.0,108.0,106.0,104.0)
+        val bars=highs.mapIndexed { i,high ->
+            WilliamsWaveBar((i+1)*3_600_000L,high-2,high,high-4,high-1,10.0)
+        }
+        assertEquals(114.1,williamsTc2SuperAoInitialStop("SHORT",bars,4,.1)!!,1e-9)
+        assertEquals(109.1,williamsTc2SuperAoInitialStop("SHORT",bars,4,.1,3)!!,1e-9)
+    }
+
+    @Test fun superAoStopsCannotLookAheadOrReadUnclosedFuturePriceBars() {
+        val h=3_600_000L
+        val bars=(0..7).map { i ->
+            WilliamsWaveBar((i+1)*h,100.0,102.0,99.0,100.0,10.0)
+        }.toMutableList()
+        val result=williamsTc2SuperAoInitialStop("LONG",bars,4,.01)
+        bars[5]=bars[5].copy(l=1.0) // The following H1 candle MUST have no effect.
+        bars[6]=bars[6].copy(h=5000.0)
+        assertEquals(result,williamsTc2SuperAoInitialStop("LONG",bars,4,.01))
+        assertNull(williamsTc2SuperAoInitialStop("LONG",bars,2,.01))
+        assertNull(williamsTc2SuperAoInitialStop("LONG",bars,4,0.0))
+        assertNull(williamsTc2SuperAoInitialStop("SIDEWAYS",bars,4,.01))
+        assertNull(williamsTc2SuperAoInitialStop("SHORT",bars,4,.01,6))
+    }
+
 }
