@@ -146,7 +146,7 @@ internal fun CockpitDashboard(
         if (status.futuresIntents.isEmpty()) item {
             CockpitCard("Наблюдение за рынком") {
                 Text("Сканер: ${russianStatus(status.scannerState)} • ${status.scannerSymbols}/10 пар")
-                Text(candidates.firstOrNull()?.let { "${it.symbol}: ${it.reason}" }
+                Text(candidates.firstOrNull()?.let { "${it.symbol}: ${russianExecutionBlocker(it.reason)}" }
                     ?: "Подтверждённых торговых кампаний в текущем снимке нет.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
             }
         }

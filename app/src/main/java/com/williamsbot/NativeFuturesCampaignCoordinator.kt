@@ -765,6 +765,18 @@ internal class NativeFuturesCampaignCoordinator(
 
     private val lock = Any()
     @Volatile private var observationSink: ((JSONArray) -> Unit)? = null
+    @Volatile private var entryPassportAuditSink:((JSONObject)->Long)?=null
+
+    fun setEntryPassportAuditSink(sink:(JSONObject)->Long)=synchronized(lock) {
+        check(state==State.UNINITIALIZED) { "Entry audit must be bound before reconciliation" }
+        entryPassportAuditSink=sink
+    }
+
+    private fun appendEntryPassport(plan:EntryPlan,attempt:String,phase:String,outcome:JSONObject?=null):Long {
+        val sink=entryPassportAuditSink?:return -1L // Offline fixtures can omit the production audit database.
+        return runCatching { sink(williamsEntryPassportEvent(plan,attempt,phase,clock(),outcome)) }
+            .getOrDefault(0L).coerceAtLeast(0L)
+    }
 
     @Volatile private var editionSelectionProvider:(()->String)?=null
     fun setEditionSelectionProvider(provider:()->String)=synchronized(lock) {
@@ -2193,20 +2205,43 @@ internal class NativeFuturesCampaignCoordinator(
 
     /** Persist the entry request before any account/order mutation. */
     fun submitPendingEntry(plan: EntryPlan): JSONObject {
+        val attempt=java.util.UUID.randomUUID().toString()
+        val preparedId=appendEntryPassport(plan,attempt,"PREPARED")
+        if(preparedId==0L) {
+            val rejection=safePreflightRejection("ENTRY_PASSPORT_AUDIT_UNAVAILABLE: order not attempted")
+            runCatching { recordEntryDecision(plan,rejection,attempt,0L) }
+            return rejection
+        }
         val result=try { submitPendingEntryLocked(plan) } catch(failure:Exception) {
-            runCatching { recordEntryDecision(plan,JSONObject().put("accepted",false).put("blocker",safeDiagnosticText(failure.message ?: failure.javaClass.simpleName))) }
+            // A lost reply cannot prove that Binance rejected or never saw the request.
+            val unknown=JSONObject().put("accepted",false).put("outcome_unknown",true)
+                .put("mutation_attempted",JSONObject.NULL)
+                .put("blocker",safeDiagnosticText(failure.message?:failure.javaClass.simpleName))
+            val eventId=appendEntryPassport(plan,attempt,"EXECUTION_EXCEPTION_UNVERIFIED",unknown)
+            runCatching { recordEntryDecision(plan,unknown,attempt,maxOf(0L,eventId,preparedId),
+                "EXECUTION_EXCEPTION_UNVERIFIED") }
             throw failure
         }
-        runCatching { recordEntryDecision(plan,result) }
+        val eventId=appendEntryPassport(plan,attempt,"COORDINATOR_RETURNED",result)
+        if(eventId==0L) result.put("passport_audit_status","OUTCOME_WRITE_FAILED_RECONCILE_REQUIRED")
+        // Diagnostic persistence failure after an accepted order NEVER retries that order.
+        runCatching { recordEntryDecision(plan,result,attempt,maxOf(0L,eventId,preparedId)) }
         return result
     }
-    private fun recordEntryDecision(plan:EntryPlan,result:JSONObject) {
-        val trace=JSONObject().put("stage","EXECUTION_COORDINATOR").put("observed_at_ms",clock())
+    private fun recordEntryDecision(
+        plan:EntryPlan,result:JSONObject,attempt:String,auditEventId:Long,
+        phase:String="COORDINATOR_RETURNED"
+    ) {
+        val trace=JSONObject().put("schema","WILLIAMS_ENTRY_DECISION_V2")
+            .put("stage","EXECUTION_COORDINATOR").put("observed_at_ms",clock())
+            .put("symbol",plan.symbol).put("attempt_id",attempt).put("audit_event_id",auditEventId).put("phase",phase)
             .put("signal_bar_time_ms",plan.signalBarTimeMs).put("client_id",plan.clientId).put("direction",plan.direction.name)
-            .put("strategy_profile",plan.strategyProfile)
+            .put("entry_client_id",plan.entryClientId).put("strategy_profile",plan.strategyProfile)
+            .put("signal_id",plan.signalId).put("signal_reason",safeDiagnosticText(plan.signalReason))
+            .put("setup_context",runCatching { JSONObject(plan.setupContext) }.getOrDefault(JSONObject()))
             .put("entry_time_policy",entryTimePolicyProvider().toJson()).put("signal_type",plan.signalType)
             .put("quantity",plan.quantity).put("entry_price",plan.entryPrice).put("protective_stop",plan.protectiveStop)
-            .put("risk_pct",plan.riskPct).put("outcome",result)
+            .put("risk_pct",plan.riskPct).put("leverage",plan.leverage).put("outcome",result)
         executionStore.writeState("decision_execution_"+plan.symbol,trace.toString())
         WilliamsSignalJournal(executionStore).decision(plan.symbol,"EXECUTION_COORDINATOR",
             result.optString("blocker").ifBlank { result.optString("state","EXCHANGE_RESULT_RECORDED") }+" "+result.optString("error"),

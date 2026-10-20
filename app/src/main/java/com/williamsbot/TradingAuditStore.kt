@@ -14,7 +14,7 @@ import org.json.JSONArray
  * Binance told the bot, without relying on RAM or SharedPreferences.
  */
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 3) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 5) {
 
     private val lastCampaignObservations = mutableMapOf<String, String>()
     // Reduce repeating successful reconciliation messages in a bounded UI
@@ -70,9 +70,7 @@ class TradingAuditStore(context: Context) :
             val id = item.optString("client_id")
             val fields = listOf("campaign_status", "order_status", "exchange_status", "protection_status", "protective_stop", "actual_risk_audit_status")
             val fingerprint = fields.joinToString("|") { item.optString(it) }
-            if (lastCampaignObservations[id] == fingerprint) continue
-            lastCampaignObservations[id] = fingerprint
-            if (lastCampaignObservations.size > 1000) lastCampaignObservations.remove(lastCampaignObservations.keys.first())
+            recordChangedCampaignObservation(lastCampaignObservations,id,fingerprint) {
             val audit = CockpitDiagnostics.lifecycleAudit(item)
             recordCockpitEvent("EXECUTION", item.optString("symbol"), item.optString("direction"),
                 campaignLifecycleStatus(item), "Post-change audit=${audit.optString("severity")}; " + fields.joinToString("; ") { "$it=${item.optString(it)}" })
@@ -86,7 +84,8 @@ class TradingAuditStore(context: Context) :
                     put("received_at", System.currentTimeMillis())
                     put("raw_json", JSONObject().put("e", "COCKPIT_INCIDENT").put("events", incident).toString())
                 }
-                writableDatabase.insert("events", null, values)
+                check(writableDatabase.insert("events", null, values)>0L) { "COCKPIT_INCIDENT_WRITE_FAILED" }
+            }
             }
         }
     }
@@ -104,6 +103,44 @@ class TradingAuditStore(context: Context) :
         return result
     }
 
+
+    /** Append facts before any entry mutation; never rewrite an older attempt. */
+    @Synchronized
+    internal fun recordEntryPassportEvent(event:JSONObject):Long = runCatching {
+        require(event.optString("schema")==entryPassportEventSchema)
+        require(event.optString("symbol").isNotBlank() && event.optString("client_id").isNotBlank() &&
+            event.optString("attempt_id").isNotBlank() && event.optString("direction") in setOf("LONG","SHORT") &&
+            event.optString("phase") in setOf("PREPARED","COORDINATOR_RETURNED","EXECUTION_EXCEPTION_UNVERIFIED"))
+        val row=ContentValues().apply {
+            put("symbol",event.getString("symbol"));put("client_id",event.getString("client_id"))
+            put("attempt_id",event.getString("attempt_id"));put("direction",event.getString("direction"))
+            put("phase",event.getString("phase"));put("observed_at_ms",event.getLong("observed_at_ms"))
+            put("raw_json",event.toString())
+        }
+        writableDatabase.insertOrThrow("h1_entry_passport_events",null,row)
+    }.getOrDefault(0L)
+
+    /** One query serves all ten symbols; no per-symbol polling scan. */
+    @Synchronized
+    internal fun latestEntryPassportEvents():Map<String,JSONObject> {
+        val result=linkedMapOf<String,JSONObject>()
+        readableDatabase.rawQuery(latestH1EntryPassportsSql,null).use { c->
+            while(c.moveToNext()) result[c.getString(1)]=JSONObject(c.getString(2))
+                .put("audit_event_id",c.getLong(0))
+        }
+        return result
+    }
+
+    @Synchronized
+    internal fun recentEntryPassportEvents(symbol:String,limit:Int=100):JSONArray {
+        val result=JSONArray()
+        readableDatabase.query("h1_entry_passport_events",arrayOf("id","raw_json"),"symbol=?",
+            arrayOf(symbol),null,null,"id DESC",limit.coerceIn(1,500).toString()).use { c->
+            while(c.moveToNext()) result.put(JSONObject(c.getString(1)).put("audit_event_id",c.getLong(0)))
+        }
+        return result
+    }
+
     @Synchronized
     fun lastCockpitIncident(): JSONObject? = readableDatabase.query("events", arrayOf("raw_json"),
         "event_type = ?", arrayOf("COCKPIT_INCIDENT"), null, null, "id DESC", "1").use {
@@ -111,6 +148,7 @@ class TradingAuditStore(context: Context) :
     }
 
     override fun onCreate(db: SQLiteDatabase) {
+        h1EntryPassportSchema.forEach(db::execSQL)
         db.execSQL("""
             CREATE TABLE orders(
                 client_order_id TEXT PRIMARY KEY,
@@ -208,6 +246,7 @@ class TradingAuditStore(context: Context) :
         oldVersion: Int,
         newVersion: Int
     ) {
+        h1EntryPassportSchema.forEach(db::execSQL)
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS trades(
                 trade_id TEXT PRIMARY KEY,
@@ -423,7 +462,7 @@ class TradingAuditStore(context: Context) :
         values.put("event_time", eventTime)
         values.put("received_at", System.currentTimeMillis())
         values.put("raw_json", event.toString())
-        writableDatabase.insert("events", null, values)
+        writableDatabase.insertOrThrow("events", null, values)
 
         // Binance USD-M Futures sends ORDER_TRADE_UPDATE with all execution fields
         // nested in "o"; Spot-style executionReport fields live at the root. Normalize

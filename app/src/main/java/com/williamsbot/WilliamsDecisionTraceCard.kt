@@ -30,16 +30,17 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
         Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(7.dp)) {
             Text("История решений · $symbol",style=MaterialTheme.typography.titleMedium)
             trace?.optJSONObject("runtime_preflight")?.let { check ->
-                Text("Проверка Runtime: "+time(check.optLong("observed_at_ms")),style=MaterialTheme.typography.bodySmall)
+                Text("Проверка движка: "+time(check.optLong("observed_at_ms")),style=MaterialTheme.typography.bodySmall)
                 Text(russianExecutionBlocker(check.optJSONObject("outcome")?.optString("blocker").orEmpty()),style=MaterialTheme.typography.bodySmall)
             }
             val history=trace?.optJSONObject("signal_history")
             val historySignals=rows(history?.optJSONArray("signals"))
             if(history?.optString("state")=="HISTORY_UNAVAILABLE") Text("История сигналов недоступна",color=MaterialTheme.colorScheme.error)
             historySignals.takeLast(5).forEach { item ->
-                Text("${item.optString("direction")} ${item.optString("family")} · ${williamsTriggerStateLabel(item.optString("state"))}",style=MaterialTheme.typography.bodySmall)
+                Text("${russianDirection(item.optString("direction"))} · ${russianSignalFamily(item.optString("family"))} · ${williamsTriggerStateLabel(item.optString("state"))}",style=MaterialTheme.typography.bodySmall)
                 Text("Формирование: ${time(item.optLong("formation_at_ms"))} · подтверждение: ${time(item.optLong("known_at_ms"))}\nТриггер ${item.opt("trigger")} · впервые записан: ${time(item.optLong("first_seen_at_ms"))}",style=MaterialTheme.typography.bodySmall)
             }
+            trace?.optJSONObject("entry_passport")?.let { WilliamsEntryPassportCard(it) }
             if(trace==null || !trace.has("decision")) {
                 Text("Анализ закрытых H1-свечей ещё не получен. Вывод о направлении не сделан.")
             } else {
@@ -53,10 +54,10 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                 val close=trace.optLong("as_of_close_ms")
                 if(close<=0L || System.currentTimeMillis()-close>3_600_000L) Text("Снимок устарел. Текущая ситуация не подтверждена.",color=MaterialTheme.colorScheme.error)
                 val reasons=decision.optJSONArray("reasons")
-                if(reasons!=null && reasons.length()>0) Text("Причины: "+(0 until reasons.length()).joinToString("; ") { reasons.optString(it) },style=MaterialTheme.typography.bodySmall)
+                if(reasons!=null && reasons.length()>0) Text("Причины: "+(0 until reasons.length()).joinToString("; ") { russianExecutionBlocker(reasons.optString(it)) },style=MaterialTheme.typography.bodySmall)
                 Text("Волны: "+when(trace.optString("wave_state")) { "PROVISIONAL" -> "предварительная гипотеза";"ALTERNATIVES" -> "несколько допустимых гипотез";else -> "структура не определена" })
                 rows(trace.optJSONArray("wave_hypotheses")).take(3).forEach { hypothesis ->
-                    Text("${hypothesis.optString("frame")} · ${hypothesis.optString("active_label")} · ${hypothesis.optString("active_direction")} · ${hypothesis.optString("scenario_id")}",style=MaterialTheme.typography.bodySmall)
+                    Text("${hypothesis.optString("frame")} · ${hypothesis.optString("active_label")} · ${russianDirection(hypothesis.optString("active_direction"))} · ${hypothesis.optString("scenario_id")}",style=MaterialTheme.typography.bodySmall)
                 }
                 trace.optJSONObject("market_reading")?.takeIf { it.optString("state")=="OBSERVED" }?.let { reading ->
                     val alligator=when(reading.optJSONObject("alligator")?.optString("state")) {
@@ -67,7 +68,7 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                         else -> "не определён"
                     }
                     Text("Аллигатор H1: $alligator",style=MaterialTheme.typography.bodySmall)
-                    Text("Ритм: AO ${reading.optString("ao_direction")} · AC ${reading.optString("ac_direction")} · TWR ${reading.optJSONObject("twr")?.optString("direction")}",style=MaterialTheme.typography.bodySmall)
+                    Text("Ритм: AO ${russianDirection(reading.optString("ao_direction"))} · AC ${russianDirection(reading.optString("ac_direction"))} · TWR ${russianDirection(reading.optJSONObject("twr")?.optString("direction"))}",style=MaterialTheme.typography.bodySmall)
                     Text(when(reading.optString("wave_phase")) {
                         "START_CANDIDATE" -> "Гипотеза: начало движения"
                         "CORRECTION_CANDIDATE" -> "Гипотеза: коррекция"
@@ -88,7 +89,7 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                             "ALTERNATIVES" -> "несколько разметок"
                             else -> "предварительная фаза"
                         }
-                        val labels=hypotheses.map { it.optString("active_label")+" "+it.optString("active_direction") }.distinct()
+                        val labels=hypotheses.map { it.optString("active_label")+" "+russianDirection(it.optString("active_direction")) }.distinct()
                         Text(frame.optString("frame")+" · "+state+if(labels.isEmpty()) "" else " · "+labels.joinToString(" / "),style=MaterialTheme.typography.bodySmall)
                         if(expanded) hypotheses.take(3).forEach { h ->
                             val signs=h.optJSONArray("signs") ?: JSONArray()
@@ -126,7 +127,7 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                     val evidence=rows(book.optJSONArray("evidence"))
                     val role=if(book.optString("execution_role")=="LIVE") "торговля" else "наблюдение"
                     Text(label+" · "+role+": "+if(book.optString("state")=="ANALYSIS_FAILED") "анализ недоступен; сигнал неизвестен" else if(evidence.isEmpty()) "нет действующей формации" else evidence.take(3).joinToString("; ") {
-                        "${it.optString("direction")} ${it.optString("family",it.optString("type"))} @ ${it.opt("trigger")} · ${time(it.optLong("signal_bar_time_ms"))}"
+                        "${russianDirection(it.optString("direction"))} · ${russianSignalFamily(it.optString("family",it.optString("type")))} @ ${it.opt("trigger")} · ${time(it.optLong("signal_bar_time_ms"))}"
                     },style=MaterialTheme.typography.bodySmall)
                 }
                 val execution=trace.optJSONObject("execution")
@@ -139,7 +140,7 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                 if(expanded) {
                     Text("История решений · последние 20 событий",style=MaterialTheme.typography.bodySmall)
                     rows(history?.optJSONArray("events")).takeLast(20).reversed().forEach { e ->
-                        Text("${time(e.optLong("observed_at_ms"))} · ${e.optString("reason_category")} · ${williamsTriggerStateLabel(e.optString("state"))}\n${e.optString("direction")} ${e.optString("family")} @ ${e.opt("trigger")} · ${e.optString("reason")}"+
+                        Text("${time(e.optLong("observed_at_ms"))} · ${e.optString("reason_category")} · ${williamsTriggerStateLabel(e.optString("state"))}\n${russianDirection(e.optString("direction"))} · ${russianSignalFamily(e.optString("family"))} @ ${e.opt("trigger")} · ${russianExecutionBlocker(e.optString("reason"))}"+
                             if(e.optString("attribution")=="PAIR_GATE") "\nОграничение пары; индивидуальный допуск не выполнялся." else "",style=MaterialTheme.typography.bodySmall)
                     }
                     Text("Аллигатор: челюсти=${value(indicators,"jaw")} · зубы=${value(indicators,"teeth")} · губы=${value(indicators,"lips")}",style=MaterialTheme.typography.bodySmall)
@@ -161,7 +162,7 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                     }
                     val chain=rows(trace.optJSONArray("order_chain"))
                     Text(if(trace.optString("order_chain_state")=="UNAVAILABLE_RECONCILE_REQUIRED") "Журнал недоступен; нужна сверка исполнения и защиты." else if(chain.isEmpty()) "Ордеров этой пары в журнале нет." else "Цепочка из журнала исполнения:",style=MaterialTheme.typography.bodySmall)
-                    chain.forEach { item -> Text("${item.optString("client_id")} · ${item.optString("order_status")} · ${item.optString("campaign_status")}\nЗащита: ${item.optString("protection_status")} @ ${item.optString("protective_stop")}",style=MaterialTheme.typography.bodySmall) }
+                    chain.forEach { item -> Text("${item.optString("client_id")} · ${russianStatus(item.optString("order_status"))} · ${russianStatus(item.optString("campaign_status"))}\nЗащита: ${russianStatus(item.optString("protection_status"))} @ ${item.optString("protective_stop")}",style=MaterialTheme.typography.bodySmall) }
                     val candles=trace.optJSONArray("candles") ?: JSONArray()
                     Text("Последние свечи H1 · время, O/H/L/C/V",style=MaterialTheme.typography.bodySmall)
                     for(i in maxOf(0,candles.length()-5) until candles.length()) {

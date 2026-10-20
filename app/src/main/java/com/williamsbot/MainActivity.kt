@@ -1752,8 +1752,8 @@ private fun ReconcileBarrierScreen(
         Text("Торговый цикл заблокирован. Android не принимает торговое решение и не снимает этот барьер локально.", color = AppColors.textMuted)
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                InfoRow("Состояние исполнения", status.state)
-                InfoRow("Защитный шлюз P0", if (status.p0GatePassed) "УСПЕХ" else status.p0GateReason)
+                InfoRow("Состояние исполнения", russianStatus(status.state))
+                InfoRow("Защитный шлюз P0", if (status.p0GatePassed) "УСПЕХ" else russianExecutionBlocker(status.p0GateReason))
                 InfoRow("WSS", if (status.marketWsConnected) "СОЕДИНЕНО" else "НЕТ СВЯЗИ")
                 InfoRow("Binance", if (status.binanceConfigured) "НАСТРОЕНО" else "НЕ НАСТРОЕНО")
                 InfoRow("Позиции", status.openPositions.toString() + " / " + status.maxOpenPositions)
@@ -2447,7 +2447,7 @@ private fun ScannerScreen(
             CockpitCard("Исторический график • ${historicalTrade.symbol}", AppColors.violet) {
                 Text("Вход: ${cockpitTime(historicalTrade.openedAtMs)} • выход: ${cockpitTime(historicalTrade.closedAtMs)}", style = MaterialTheme.typography.bodySmall)
                 Text(historicalTrade.reason.ifBlank { "Причина входа не записана" }, style = MaterialTheme.typography.bodySmall)
-                Text("Выход: " + historicalTrade.exitReason.ifBlank { "Причина не записана" }, style = MaterialTheme.typography.bodySmall)
+                Text("Выход: " + russianExecutionBlocker(historicalTrade.exitReason).ifBlank { "Причина не записана" }, style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = onLive) { Text("Вернуться к прямому эфиру") }
             }
         }
@@ -2593,17 +2593,17 @@ private fun MarketChartPanel(
                     candidate.signal -> "сигнал наблюдается; допуск не подтверждён"
                     else -> "наблюдение / вход не подтверждён"
                 })
-                InfoRow("Семейство Williams", candidate.entrySignalType.ifBlank { "не указано" })
-                InfoRow("HTF-контекст", if (candidate.htfConfirmed) "подтверждён" else "не подтверждён")
+                InfoRow("Семейство Williams", russianSignalFamily(candidate.entrySignalType))
+                InfoRow("Контекст старших масштабов", if (candidate.htfConfirmed) "подтверждён" else "не подтверждён")
                 if (details) {
-                InfoRow("Согласование направления", candidate.wiseManCount.toString() + "/3 (диагностика, не счётчик Three Wise Men)")
-                InfoRow("Волновая фаза", "W" + candidate.wavePosition + " • " + candidate.wavePhase)
+                InfoRow("Согласование направления", candidate.wiseManCount.toString() + "/3 (диагностика, не последовательность Мудрецов)")
+                InfoRow("Волновая фаза", "W" + candidate.wavePosition + " • " + russianStatus(candidate.wavePhase))
                 InfoRow("Волновые оценки (эвристика) / истощение", fmt(candidate.waveConfidence, 2) + " / " + fmt(candidate.waveExhaustionRisk, 1) + "%")
                 InfoRow("Оценки W3 / W5 (некалиброваны)", fmt(candidate.wave3Probability, 2) + " / " + fmt(candidate.wave5Probability, 2))
                 InfoRow("Режим рынка", russianStatus(candidate.regime) + " • оценка " + fmt(candidate.regimeScore, 2))
                 InfoRow("OBI стакана", fmt(candidate.obi, 3))
                 InfoRow("Дисбаланс потока сделок", fmt(candidate.tradeFlowImbalance, 3))
-                InfoRow("Теневая оценка", candidate.shadowDirection + " • " + fmt(candidate.shadowConfidence, 2))
+                InfoRow("Теневая оценка", russianDirection(candidate.shadowDirection) + " • " + fmt(candidate.shadowConfidence, 2))
                 InfoRow("Количественная оценка", fmt(candidate.quantScore, 2))
                 InfoRow("Оценка риска", if (candidate.riskPct > 0.0) fmt(candidate.riskPct, 2) + "%" else "—")
                 InfoRow("Прибыль / риск", if (candidate.riskReward > 0.0) fmt(candidate.riskReward, 2) else "—")

@@ -1317,6 +1317,7 @@ private class NativeEngine(
             coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }
             coordinator.setEditionSelectionProvider { williamsProfile }
             coordinator.setEntryTimePolicyProvider { entryTimePolicy }
+            coordinator.setEntryPassportAuditSink { event -> auditStore.recordEntryPassportEvent(event) }
             coordinator.setObservationSink { snapshot ->
                 auditStore.recordCampaignSnapshot(snapshot)
                 runCatching { WilliamsSignalJournal(executionStore).orders(snapshot,System.currentTimeMillis()) }
@@ -8740,6 +8741,9 @@ private class NativeEngine(
     private fun decisionTraceSnapshot(fullHistory:Boolean=false):JSONObject {
         val journal=runCatching { futuresCampaignCoordinator.intentsSnapshot() }
         val intents=journal.getOrDefault(JSONArray())
+        val audit=runCatching { auditStore.latestEntryPassportEvents() }
+        val passportNow=futuresMarketData.cachedExchangeNowMs()
+        val passportClockFresh=futuresMarketData.clockSnapshot().optBoolean("fresh",false)
         return JSONObject().apply { BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.forEach { symbol ->
             val trace=runCatching { JSONObject(executionStore.readState("decision_trace_"+symbol).orEmpty()) }
                 .getOrDefault(JSONObject().put("symbol",symbol).put("state","NOT_ANALYSED"))
@@ -8757,6 +8761,12 @@ private class NativeEngine(
             runCatching { JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) }.getOrNull()
                 ?.let { trace.put("opposition_check",it) }
             trace.put("order_chain",williamsExecutionChain(intents,symbol))
+            trace.put("entry_passport",williamsEntryPassport(symbol,execution,intents,
+                audit.getOrNull()?.get(symbol),passportNow,passportClockFresh,journal.isSuccess)
+                .put("audit_available",audit.isSuccess))
+            if(fullHistory) trace.put("entry_passport_events",runCatching {
+                auditStore.recentEntryPassportEvents(symbol,500)
+            }.getOrElse { JSONArray() })
             trace.put("signal_history",runCatching {
                 WilliamsSignalJournal(executionStore).view(symbol,intents,System.currentTimeMillis()).apply {
                     if(!fullHistory) {

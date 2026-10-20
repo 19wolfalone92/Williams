@@ -196,6 +196,93 @@ class NativeFuturesCoordinatorLifecycleTest {
         return coordinator to exchange
     }
 
+
+    @Test fun passportPreparedCommitPrecedesAnyEntryMutationInBothDirections() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange=Exchange(direction);val journal=Journal()
+            val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val events=mutableListOf<JSONObject>()
+            coordinator.setEntryPassportAuditSink { event->
+                if(event.getString("phase")=="PREPARED") {
+                    assertEquals(0,exchange.posts("/fapi/v1/marginType"))
+                    assertEquals(0,exchange.posts("/fapi/v1/leverage"))
+                    assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+                }
+                events+=JSONObject(event.toString());events.size.toLong()
+            }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val p=plan(direction).copy(signalId="signal",signalType="FRACTAL",signalReason="H1 fractal")
+            assertTrue(coordinator.submitPendingEntry(p).getBoolean("accepted"))
+            assertEquals(listOf("PREPARED","COORDINATOR_RETURNED"),events.map { it.getString("phase") })
+            assertEquals(1,events.map { it.getString("attempt_id") }.distinct().size)
+            assertEquals("signal",events.last().getString("signal_id"))
+            assertFalse(events.last().getBoolean("m15_confirmation_required"))
+            val trace=JSONObject(journal.readState("decision_execution_BTCUSDT")!!)
+            assertEquals(2L,trace.getLong("audit_event_id"))
+            assertEquals(p.signalReason,trace.getString("signal_reason"))
+            assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+            exchange.fill()
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val passport=williamsEntryPassport("BTCUSDT",trace,coordinator.intentsSnapshot(),null,
+                System.currentTimeMillis()+1000L,true)
+            assertTrue(passport.toString(),passport.getBoolean("identity_match"))
+            assertEquals(passport.toString(),"EXCHANGE_PROTECTION_OBSERVED",
+                passport.getString("protection_observation"))
+        }
+    }
+
+    @Test fun passportAuditFailureBeforeSubmissionDoesNotReachAnyMutation() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            coordinator.setEntryPassportAuditSink { 0L }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val result=coordinator.submitPendingEntry(plan(direction))
+            assertFalse(result.getBoolean("accepted"))
+            assertTrue(result.getBoolean("safe_rejection"))
+            assertFalse(result.getBoolean("mutation_attempted"))
+            assertEquals(0,exchange.requests.count { it.method=="POST" })
+            assertEquals("READY",coordinator.state.name)
+        }
+    }
+
+    @Test fun passportOutcomeFailureAfterAcceptanceNeverRetriesTheFinancialEffect() {
+        val direction=NativeFuturesCampaignCoordinator.Direction.LONG
+        val exchange=Exchange(direction);val journal=Journal()
+        val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        coordinator.setEntryPassportAuditSink { event->if(event.getString("phase")=="PREPARED") 1L else 0L }
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+        val result=coordinator.submitPendingEntry(plan(direction))
+        assertTrue(result.getBoolean("accepted"))
+        assertEquals("OUTCOME_WRITE_FAILED_RECONCILE_REQUIRED",result.getString("passport_audit_status"))
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        exchange.fill()
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+        assertEquals("OPEN_PROTECTED",coordinator.state.name)
+    }
+
+    @Test fun thrownAdmissionFailureRemainsUnknownInTheDurablePassport() {
+        val direction=NativeFuturesCampaignCoordinator.Direction.SHORT
+        val exchange=Exchange(direction);val journal=Journal()
+        var failRead=false
+        val coordinator=NativeFuturesCampaignCoordinator(journal) {
+            check(!failRead) { "lost adapter response" };exchange.adapter()
+        }
+        val events=mutableListOf<JSONObject>()
+        coordinator.setEntryPassportAuditSink { events+=JSONObject(it.toString());events.size.toLong() }
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+        failRead=true
+        val failure=runCatching { coordinator.submitPendingEntry(plan(direction)) }.exceptionOrNull()
+        assertNotNull("An exception must reach the outer coordinator wrapper",failure)
+        assertEquals(listOf("PREPARED","EXECUTION_EXCEPTION_UNVERIFIED"),
+            events.map { it.getString("phase") })
+        val trace=JSONObject(journal.readState("decision_execution_BTCUSDT")!!)
+        assertTrue(trace.getJSONObject("outcome").getBoolean("outcome_unknown"))
+        assertTrue(trace.getJSONObject("outcome").isNull("mutation_attempted"))
+        assertEquals(0,exchange.requests.count { it.method=="POST" })
+    }
+
+
     @Test fun triggeringAndTriggeredAreReconciledWithoutDuplicateOrdersAndRecoveredFillsAreProtected() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) for(status in listOf("TRIGGERING","TRIGGERED")) {
             val exchange=Exchange(direction);val journal=Journal()

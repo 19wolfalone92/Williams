@@ -67,8 +67,10 @@ internal fun buildWilliamsDecisionTrace(symbol:String,profile:String,input:List<
 }
 internal fun williamsExecutionChain(intents:JSONArray,symbol:String):JSONArray = JSONArray(
     (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.filter { it.optString("symbol")==symbol }.takeLast(12).map { row ->
-        JSONObject().apply { listOf("client_id","entry_client_id","intent_role","direction","strategy_profile","signal_type",
-            "signal_bar_time_ms","exchange_status","order_status","campaign_status","protection_status","protective_client_id",
-            "protective_stop","initial_protective_stop","quantity","confirmed_position_qty","risk_pct","strategy_ownership_verified")
+        JSONObject().apply { listOf("symbol","client_id","entry_client_id","intent_role","direction","strategy_profile","signal_type","signal_id",
+            "signal_bar_time_ms","exchange_status","order_status","campaign_status","protection_status","protection_client_id",
+            "previous_protection_client_id","protective_stop","initial_protective_stop","quantity","confirmed_position_qty",
+            "risk_pct","strategy_ownership_verified","last_reconciled_ms","created_at_ms","actual_entry_price",
+            "executed_qty","exchange_order_id","fill_observed_at_ms")
             .forEach { key -> if(row.has(key)) put(key,row.get(key)) } }
     })
