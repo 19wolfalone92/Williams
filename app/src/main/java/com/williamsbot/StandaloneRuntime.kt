@@ -5669,7 +5669,10 @@ private class NativeEngine(
             val direction = if (signedQty > 0.0) NativeFuturesCampaignCoordinator.Direction.LONG
                 else NativeFuturesCampaignCoordinator.Direction.SHORT
             val dir = direction.name
-            val candles = fetchCandles(symbol, "1h", 180)
+            // The validated H1 startup working set is 150 closed candles. Requesting
+                    // 180 on every scan bypassed that ready SQLite cache, forced ten
+                    // redundant REST GETs and failed the whole cycle on empty replies.
+                    val candles = fetchCandles(symbol, "1h", 150)
             if (candles.size < 45) throw IllegalStateException(symbol + " needs at least 45 closed H1 candles")
             val rules = symbolFilters(symbol)
             val mark = futuresMarketData.markPrice(symbol)
@@ -6514,7 +6517,7 @@ private class NativeEngine(
         lastScanAt = System.currentTimeMillis()
         scanRunId = "futures-" + lastScanAt
         runCatching { PositionsWidgetProvider.refresh(context) }
-        runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 180) }
+        runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 150) }
 
         // Never overwrite a safety blocker with READY merely because market data was
         // scanned. Market-analysis success and permission to execute are separate facts.
