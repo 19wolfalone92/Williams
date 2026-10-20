@@ -109,6 +109,12 @@ class WilliamsExecutionPolicyTest {
             false,false,false,false))
         assertEquals(0,williamsBookInitialContextRank(williamsTc2Profile,"SHORT_MADE_UP",
             false,false,false,false))
+        assertEquals(0,williamsBookInitialContextRank(williamsTc2Profile,"AO_SAUCER",
+            true,false,true,false))
+        assertEquals(0,williamsBookInitialContextRank(williamsTc2Profile,"SHORT_AO_ZERO_LINE",
+            false,true,false,true))
+        assertEquals(0,williamsBookInitialContextRank(williamsTc2Profile,"AC_SIGNAL",
+            true,false,true,false,validatedCorrection=true))
     }
 
     @Test fun tc2InitialEntryDoesNotRequire45D1OrH4Bars() {
