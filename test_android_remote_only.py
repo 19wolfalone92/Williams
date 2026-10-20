@@ -166,10 +166,11 @@ def test_android_reversal_htf_gate_matches_python_campaign_contract():
     python = _read(ROOT / "futures_williams_runtime.py")
 
     # Directional context is ranked only after both H1 hypotheses are preserved.
-    # The ordinary D1 veto remains; only separately proven correction context overrides it.
+    # TC2 chapter 12 requires its H1 book signal, not H4/D1 alignment; D1/H4 remain traced as context.
     assert "internal fun directionalSignalContextRank(" in android
     assert "val freshSignals = candidate.campaignSignals.filter" in android
-    assert "directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear)" in android
+    assert "fun contextRank(signal: CampaignSignalN): Int = williamsBookInitialContextRank(" in android
+    assert 'williamsInitialHigherFrameHistoryRequired(it.strategyProfile)' in android
     assert "internal fun campaignSignalDirection(signalType: String): String?" in android
     assert "WILLIAMS_SIGNAL_DIRECTION_UNKNOWN: refusing to default an unknown signal to LONG" in android
     assert "return signal_type != SignalType.REVERSAL" in python
@@ -857,8 +858,10 @@ def test_android_futures_long_and_short_readiness_uses_h1_signal_not_m5_mtf_gate
     assert '"SHORT" -> NativeFuturesCampaignCoordinator.Direction.SHORT' in submit
     assert "WILLIAMS_SIGNAL_DIRECTION_UNKNOWN" in submit
     assert "val freshSignals = candidate.campaignSignals.filter" in submit
-    assert "directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear)" in submit
-    assert "neither LONG nor SHORT is allowed by D1/H4" in submit
+    assert "williamsBookInitialContextRank(" in submit
+    assert "H1_CONTEXT_EVIDENCE_NOT_DURABLE" in submit
+    assert 'put("reason","MISSING_GAPPED_OR_STALE_HTF_HISTORY")' in submit
+    assert "WILLIAMS_NO_BOOK_ELIGIBLE_H1_SIGNAL" in submit
     assert "internal fun directionalSignalContextRank(" in runtime
 
 
