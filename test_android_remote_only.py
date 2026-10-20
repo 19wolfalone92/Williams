@@ -874,3 +874,18 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
     assert "hierarchy.links.any" in enrich
     assert 'link.relationship == "ALIGNED"' in enrich
     assert 'p?.activeLabel == "W5" && c?.activeLabel == "W3"' in enrich
+
+
+def test_tc2_opposing_h1_signal_is_an_advisory_not_an_automatic_market_exit():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    policy = _read(ANDROID / "java/com/williamsbot/WilliamsExecutionPolicy.kt")
+    manage = runtime.split("private fun manageVerifiedNativePositions(", 1)[1].split(
+        "private fun submitNativeFuturesAddition(", 1
+    )[0]
+    assert "val actionableOpposing = opposing?.takeIf { williamsOpposingSignalCanMarketClose(profile) }" in manage
+    assert "if (actionableOpposing != null || boundaryExit || editionExit.isNotEmpty())" in manage
+    assert 'market_close_authorized",false' in manage
+    assert "futuresCampaignCoordinator.saveManagementState(" in manage
+    assert "planWilliamsCampaignStop(" in manage
+    assert 'ownerProfile!=williamsTc2Profile' in policy
+    assert "futuresCampaignCoordinator.trailProtectiveStop(" in manage
