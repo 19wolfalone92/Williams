@@ -2174,10 +2174,10 @@ private fun RiskCard(status: Status) {
                         "/" + status.maxOpenPositions
                 )
                 MiniMetric("Сегодня", status.tradesToday.toString())
-                MiniMetric("Loss", status.consecutiveLosses.toString())
+                MiniMetric("Убытков подряд", status.consecutiveLosses.toString())
             }
             Text(
-                status.tradingMode + " • торговый PnL сегодня " + fmt(status.dailyPnlUsdt, 2) + " USDT",
+                russianStatus(status.tradingMode) + " • торговый результат за сутки UTC " + fmt(status.dailyPnlUsdt, 2) + " USDT",
                 style = MaterialTheme.typography.labelSmall,
                 color = if (status.tradingMode == "PAUSED") AppColors.red else AppColors.textMuted
             )
@@ -2224,7 +2224,7 @@ private fun ControlCard(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ActionButton(
                     modifier = Modifier.weight(1f),
-                    text = "START",
+                    text = "ЗАПУСТИТЬ",
                     icon = Icons.Filled.PlayArrow,
                     enabled = runtimeStartButtonEnabled(
                         binanceConfigured = status.binanceConfigured,
@@ -2236,7 +2236,7 @@ private fun ControlCard(
                 )
                 ActionButton(
                     modifier = Modifier.weight(1f),
-                    text = if (status.paused) "RESUME" else "PAUSE",
+                    text = if (status.paused) "ВОЗОБНОВИТЬ" else "ПАУЗА",
                     icon = if (status.paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                     enabled = status.running,
                     accent = AppColors.amber,
@@ -2244,7 +2244,7 @@ private fun ControlCard(
                 )
                 ActionButton(
                     modifier = Modifier.weight(1f),
-                    text = "STOP",
+                    text = "ОСТАНОВИТЬ",
                     icon = Icons.Filled.Stop,
                     enabled = status.running,
                     accent = AppColors.red,
@@ -2296,7 +2296,7 @@ private fun ConnectionHealthCard(status: Status) {
             )
             HealthRow("История готова", status.historyReady)
             Text(
-                "FSM: " + status.fsmState,
+                "Состояние движка: " + russianStatus(status.fsmState),
                 style = MaterialTheme.typography.bodySmall,
                 color = if (status.fsmState.contains("RECONCILE") ||
                     status.fsmState.contains("KILL")
@@ -3117,7 +3117,7 @@ private fun SettingsScreen(
 
                     InfoRow("Управление исполнением", "Автономный телефон • Binance напрямую")
                     InfoRow("Торговые пары сканера", "USDⓈ-M Futures • 10 контрактов USDT")
-                    InfoRow("MTF", "D1/H4 контекст • H1 сценарий • вход по фракталу M15")
+                    InfoRow("Масштабы", "D1/H4 — контекст • H1 — сигналы WM1/WM2/WM3 • M15 не требуется для входа")
                 }
             }
         }
