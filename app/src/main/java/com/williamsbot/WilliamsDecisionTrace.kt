@@ -12,7 +12,7 @@ internal fun buildWilliamsDecisionTrace(symbol:String,profile:String,input:List<
     if(bars.size<45 || !validWilliamsEditionBars(bars) || !contiguous) reasons+="CLOSED_H1_HISTORY_NOT_PROVEN"
     if(bars.isEmpty() || now-(bars.lastOrNull()?.t ?: 0L)>7_200_000L) reasons+="H1_SNAPSHOT_STALE"
     val rows=(0 until signals.length()).mapNotNull { signals.optJSONObject(it) }
-    val entries=rows.filter { it.optString("role")=="ENTRY" }
+    val entries=rows.filter { it.optString("role")=="ENTRY" && (profile==williamsUnifiedProfile || it.optString("strategy_profile")==profile) }
     val latest=entries.maxOfOrNull { it.optLong("signal_bar_time_ms") }
     if(profile==williamsUnifiedProfile && entries.filter { it.optLong("signal_bar_time_ms")==latest }
         .map { it.optString("direction") }.distinct().size>1) reasons+="OPPOSING_ENTRIES_BEFORE_CONTEXT"
@@ -45,17 +45,21 @@ internal fun buildWilliamsDecisionTrace(symbol:String,profile:String,input:List<
             else if(row.optString("strategy_profile")==source) listOf(JSONObject(row.toString())) else emptyList()
         }
         JSONObject().put("profile",source).put("state",if(evidence.isEmpty()) "NO_VALID_FORMATION" else "FORMATION_OBSERVED")
+            .put("execution_role",if(source==williamsExecutionProfile) "LIVE" else "OBSERVE").put("can_place_orders",false)
             .put("evidence",JSONArray(evidence))
     })
     val scenarios=hierarchy.optJSONArray("scenarios") ?: JSONArray()
     val active=(0 until scenarios.length()).mapNotNull { scenarios.optJSONObject(it) }.filter {
         it.optString("frame")=="1h" && it.optString("status")=="PROVISIONAL" }
     return JSONObject().put("schema","WILLIAMS_DECISION_TRACE_V1").put("engine","ANDROID").put("symbol",symbol)
+        .put("execution_policy",williamsExecutionPolicySnapshot())
         .put("strategy_profile",profile).put("frame","1h").put("observed_at_ms",now)
         .put("as_of_close_ms",bars.lastOrNull()?.t?.plus(3_600_000L) ?: 0L).put("closed_bar_count",bars.size)
         .put("history_contiguous",contiguous).put("indicators",indicators).put("divergences",divergences)
         .put("wave_state",if(active.size==1) "PROVISIONAL" else if(active.isEmpty()) "UNRESOLVED" else "ALTERNATIVES")
         .put("wave_hypotheses",JSONArray(active)).put("books",books).put("signals",signals)
+        .put("market_phase",williamsMarketPhaseContext(hierarchy))
+        .put("market_reading",williamsMarketReading(bars,williamsMarketPhaseContext(hierarchy)))
         .put("candles",JSONArray(bars.takeLast(150).map { JSONArray(listOf(it.t,it.o,it.h,it.l,it.c,it.v)) }))
         .put("decision",JSONObject().put("stage","CLOSED_BAR_ANALYSIS")
             .put("state",if(reasons.any { it!="OPPOSING_ENTRIES_BEFORE_CONTEXT" }) "BLOCKED" else if(reasons.isNotEmpty()) "CONTEXT_REQUIRED" else "CANDIDATE_REQUIRES_PREFLIGHT")
@@ -63,8 +67,10 @@ internal fun buildWilliamsDecisionTrace(symbol:String,profile:String,input:List<
 }
 internal fun williamsExecutionChain(intents:JSONArray,symbol:String):JSONArray = JSONArray(
     (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.filter { it.optString("symbol")==symbol }.takeLast(12).map { row ->
-        JSONObject().apply { listOf("symbol","client_id","entry_client_id","intent_role","direction","strategy_profile","signal_type",
-            "signal_bar_time_ms","exchange_status","order_status","campaign_status","protection_status","protective_client_id",
-            "protective_stop","initial_protective_stop","quantity","confirmed_position_qty","risk_pct","strategy_ownership_verified","last_reconciled_ms","created_at_ms")
+        JSONObject().apply { listOf("symbol","client_id","entry_client_id","intent_role","direction","strategy_profile","signal_type","signal_id",
+            "signal_bar_time_ms","exchange_status","order_status","campaign_status","protection_status","protection_client_id",
+            "previous_protection_client_id","protective_stop","initial_protective_stop","quantity","confirmed_position_qty",
+            "risk_pct","strategy_ownership_verified","last_reconciled_ms","created_at_ms","actual_entry_price",
+            "executed_qty","exchange_order_id","fill_observed_at_ms")
             .forEach { key -> if(row.has(key)) put(key,row.get(key)) } }
     })

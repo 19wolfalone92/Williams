@@ -274,6 +274,9 @@ def test_teeth_close_exit_uses_only_closed_bars_for_long(monkeypatch):
     runtime._exit_market = lambda campaign, reason: exits.append(reason) or {
         "state": "EXIT_SIGNALLED", "reason": reason
     }
+    # The final candle is forming at this deterministic exchange time.
+    monkeypatch.setattr("futures_williams_runtime.time.time",
+        lambda: (int(frame.iloc[-1]["open_time_ms"])+1_800_000)/1000)
     monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *args, **kwargs: frame)
     campaign = type("C", (), {
         "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 80.0,
@@ -316,6 +319,9 @@ def test_teeth_close_exit_uses_only_closed_bars_for_short(monkeypatch):
     runtime._exit_market = lambda campaign, reason: exits.append(reason) or {
         "state": "EXIT_SIGNALLED", "reason": reason
     }
+    # The final candle is forming at this deterministic exchange time.
+    monkeypatch.setattr("futures_williams_runtime.time.time",
+        lambda: (int(frame.iloc[-1]["open_time_ms"])+1_800_000)/1000)
     monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *args, **kwargs: frame)
     campaign = type("C", (), {
         "symbol": "BTCUSDT", "side": "SELL", "current_stop_price": 220.0,
@@ -354,6 +360,9 @@ def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypa
     runtime._exit_market = lambda campaign, reason: (_ for _ in ()).throw(
         AssertionError("rising closes must not trigger a Teeth exit")
     )
+    # The final candle is forming at this deterministic exchange time.
+    monkeypatch.setattr("futures_williams_runtime.time.time",
+        lambda: (int(frame.iloc[-1]["open_time_ms"])+1_800_000)/1000)
     monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *args, **kwargs: frame)
     campaign = type("C", (), {
         "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 100.0,
@@ -896,7 +905,7 @@ def test_tc2_fractal_signal_time_is_confirmation_time_not_pivot_time():
     assert len(fractals) == 1
     assert fractals[0].source_candle_index == 4
     assert fractals[0].signal_bar_time_ms == times[6]
-    assert fractals[0].expires_at_ms == times[6] + 80 * 300_000
+    assert fractals[0].expires_at_ms == 0  # Structural validity; confirmation time remains unchanged.
 
 
 def test_ntd_external_fractal_is_initial_entry_and_requires_untriggered_breakout():

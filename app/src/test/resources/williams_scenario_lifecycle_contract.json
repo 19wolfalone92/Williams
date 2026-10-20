@@ -1,0 +1,2097 @@
+{
+  "schema": "WILLIAMS_SCENARIO_LIFECYCLE_CONTRACT_V1",
+  "provenance": "DETERMINISTIC_SYNTHETIC_NOT_MARKET_PROFITABILITY",
+  "level_events": [
+    {
+      "name": "waiting",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [],
+        "now": 73800000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "WAITING",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "live_cross",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 111.0,
+        "history": [],
+        "now": 73800000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "TRIGGERED",
+        "basis": "LIVE_MARK",
+        "known_at_ms": 73800000
+      }
+    },
+    {
+      "name": "live_invalidated",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 89.0,
+        "history": [],
+        "now": 73800000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "INVALIDATED",
+        "basis": "LIVE_MARK",
+        "known_at_ms": 73800000
+      }
+    },
+    {
+      "name": "historical_cross",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 112.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 79200000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "TRIGGERED",
+        "basis": "CLOSED_BAR_EXTREME",
+        "known_at_ms": 79200000
+      }
+    },
+    {
+      "name": "proven_event_survives_expiry",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 112.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 90000000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "TRIGGERED",
+        "basis": "CLOSED_BAR_EXTREME",
+        "known_at_ms": 75600000
+      }
+    },
+    {
+      "name": "expired_without_cross",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 79200000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 82800000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 90000000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "EXPIRED",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "cross_only_after_expiry",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 79200000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 82800000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 86400000,
+            "o": 100.0,
+            "h": 112.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 90000000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "EXPIRED",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "future_bar_ignored",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 112.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 72000000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "WAITING",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "forming_bar_ignored",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 112.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 73800000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "WAITING",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "invalidation_precedes_later_cross",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 89.0,
+            "c": 95.0,
+            "v": 10.0
+          },
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 112.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 79200000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "INVALIDATED",
+        "basis": "CLOSED_BAR_BOUNDARY",
+        "known_at_ms": 75600000
+      }
+    },
+    {
+      "name": "two_boundary_order_unknown",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 112.0,
+            "l": 89.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 75600000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "AMBIGUOUS",
+        "basis": "BOTH_BOUNDARIES_IN_ONE_BAR",
+        "known_at_ms": 75600000
+      }
+    },
+    {
+      "name": "opening_gap_proves_trigger_first",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 111.0,
+            "h": 112.0,
+            "l": 89.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 75600000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "TRIGGERED",
+        "basis": "CLOSED_BAR_OPEN",
+        "known_at_ms": 75600000
+      }
+    },
+    {
+      "name": "opening_gap_proves_invalidation_first",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 89.0,
+            "h": 112.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 75600000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "INVALIDATED",
+        "basis": "CLOSED_BAR_OPEN",
+        "known_at_ms": 75600000
+      }
+    },
+    {
+      "name": "missing_first_closed_bar",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 79200000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "UNVERIFIED",
+        "basis": "CLOSED_HISTORY_NOT_PROVEN",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "old_extreme_does_not_trigger",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 68400000,
+            "o": 100.0,
+            "h": 112.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 75600000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "WAITING",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "duplicate_history",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 79200000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "UNVERIFIED",
+        "basis": "CLOSED_HISTORY_NOT_PROVEN",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "malformed_ohlc",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 99.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 75600000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "UNVERIFIED",
+        "basis": "CLOSED_HISTORY_NOT_PROVEN",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "cross_in_last_valid_bar",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 79200000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 82800000,
+            "o": 100.0,
+            "h": 112.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 90000000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "TRIGGERED",
+        "basis": "CLOSED_BAR_EXTREME",
+        "known_at_ms": 86400000
+      }
+    },
+    {
+      "name": "opposition_must_postdate_scope",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 75600000,
+        "mark": 100.0,
+        "history": [],
+        "now": 79200000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "UNVERIFIED",
+        "basis": "INVALID_EVENT_INPUT",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "expired_mark_does_not_backdate_event",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 111.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 79200000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 82800000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 86400000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "EXPIRED",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "mark_cannot_resolve_missing_history",
+      "input": {
+        "side": "LONG",
+        "trigger": 110.0,
+        "invalidation": 90.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 111.0,
+        "history": [
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 112.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 79200000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "UNVERIFIED",
+        "basis": "CLOSED_HISTORY_NOT_PROVEN",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "waiting__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [],
+        "now": 73800000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "WAITING",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "live_cross__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 89.0,
+        "history": [],
+        "now": 73800000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "TRIGGERED",
+        "basis": "LIVE_MARK",
+        "known_at_ms": 73800000
+      }
+    },
+    {
+      "name": "live_invalidated__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 111.0,
+        "history": [],
+        "now": 73800000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "INVALIDATED",
+        "basis": "LIVE_MARK",
+        "known_at_ms": 73800000
+      }
+    },
+    {
+      "name": "historical_cross__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 79200000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "TRIGGERED",
+        "basis": "CLOSED_BAR_EXTREME",
+        "known_at_ms": 79200000
+      }
+    },
+    {
+      "name": "proven_event_survives_expiry__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 90000000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "TRIGGERED",
+        "basis": "CLOSED_BAR_EXTREME",
+        "known_at_ms": 75600000
+      }
+    },
+    {
+      "name": "expired_without_cross__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 79200000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 82800000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 90000000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "EXPIRED",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "cross_only_after_expiry__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 79200000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 82800000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 86400000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 90000000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "EXPIRED",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "future_bar_ignored__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 72000000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "WAITING",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "forming_bar_ignored__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 73800000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "WAITING",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "invalidation_precedes_later_cross__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 111.0,
+            "l": 99.0,
+            "c": 105.0,
+            "v": 10.0
+          },
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 79200000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "INVALIDATED",
+        "basis": "CLOSED_BAR_BOUNDARY",
+        "known_at_ms": 75600000
+      }
+    },
+    {
+      "name": "two_boundary_order_unknown__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 111.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 75600000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "AMBIGUOUS",
+        "basis": "BOTH_BOUNDARIES_IN_ONE_BAR",
+        "known_at_ms": 75600000
+      }
+    },
+    {
+      "name": "opening_gap_proves_trigger_first__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 89.0,
+            "h": 111.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 75600000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "TRIGGERED",
+        "basis": "CLOSED_BAR_OPEN",
+        "known_at_ms": 75600000
+      }
+    },
+    {
+      "name": "opening_gap_proves_invalidation_first__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 111.0,
+            "h": 112.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 75600000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "INVALIDATED",
+        "basis": "CLOSED_BAR_OPEN",
+        "known_at_ms": 75600000
+      }
+    },
+    {
+      "name": "missing_first_closed_bar__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 79200000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "UNVERIFIED",
+        "basis": "CLOSED_HISTORY_NOT_PROVEN",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "old_extreme_does_not_trigger__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 68400000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 75600000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "WAITING",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "duplicate_history__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 79200000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "UNVERIFIED",
+        "basis": "CLOSED_HISTORY_NOT_PROVEN",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "malformed_ohlc__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 101.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 75600000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "UNVERIFIED",
+        "basis": "CLOSED_HISTORY_NOT_PROVEN",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "cross_in_last_valid_bar__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 100.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 79200000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 82800000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 90000000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "TRIGGERED",
+        "basis": "CLOSED_BAR_EXTREME",
+        "known_at_ms": 86400000
+      }
+    },
+    {
+      "name": "opposition_must_postdate_scope__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 75600000,
+        "mark": 100.0,
+        "history": [],
+        "now": 79200000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "UNVERIFIED",
+        "basis": "INVALID_EVENT_INPUT",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "expired_mark_does_not_backdate_event__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 89.0,
+        "history": [
+          {
+            "t": 72000000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 79200000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          },
+          {
+            "t": 82800000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 99.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 86400000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "EXPIRED",
+        "basis": "NONE",
+        "known_at_ms": null
+      }
+    },
+    {
+      "name": "mark_cannot_resolve_missing_history__SHORT",
+      "input": {
+        "side": "SHORT",
+        "trigger": 90.0,
+        "invalidation": 110.0,
+        "signal_closed_at": 72000000,
+        "scope_started_at": 68400000,
+        "mark": 89.0,
+        "history": [
+          {
+            "t": 75600000,
+            "o": 100.0,
+            "h": 101.0,
+            "l": 88.0,
+            "c": 100.0,
+            "v": 10.0
+          }
+        ],
+        "now": 79200000,
+        "expires_at": 86400000,
+        "frame_ms": 3600000
+      },
+      "expected": {
+        "state": "UNVERIFIED",
+        "basis": "CLOSED_HISTORY_NOT_PROVEN",
+        "known_at_ms": null
+      }
+    }
+  ],
+  "phase_cases": [
+    {
+      "name": "junior_completion_does_not_complete_parent",
+      "input": {
+        "as_of": 144000000,
+        "scenarios": [
+          {
+            "scenario_id": "h1-w3",
+            "frame": "1h",
+            "label": "W2",
+            "last_confirmed_leg": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "1h",
+            "scale_bars": 120
+          },
+          {
+            "scenario_id": "m15-end",
+            "frame": "15m",
+            "label": "W5",
+            "last_confirmed_leg": "W5",
+            "active_label": "A",
+            "active_direction": "DOWN",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              },
+              {
+                "known_at": 18000000
+              },
+              {
+                "known_at": 21600000
+              },
+              {
+                "known_at": 25200000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "15m",
+            "scale_bars": 120,
+            "divergence": true,
+            "terminal_fractal": true,
+            "squat": true
+          }
+        ],
+        "frame_errors": {}
+      },
+      "expected": {
+        "warning_scope": "M15_ONLY_WARNING",
+        "frame_states": {
+          "1d": "UNRESOLVED",
+          "6h": "UNRESOLVED",
+          "1h": "PHASE_CANDIDATE",
+          "15m": "PHASE_CANDIDATE"
+        },
+        "signs_by_id": {
+          "m15-end": [
+            "AO_DIVERGENCE",
+            "TERMINAL_FRACTAL",
+            "SQUAT_VOLUME_PROXY"
+          ]
+        }
+      }
+    },
+    {
+      "name": "h1_and_junior_have_separate_evidence",
+      "input": {
+        "as_of": 144000000,
+        "scenarios": [
+          {
+            "scenario_id": "h1-end",
+            "frame": "1h",
+            "label": "W5",
+            "last_confirmed_leg": "W5",
+            "active_label": "A",
+            "active_direction": "DOWN",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              },
+              {
+                "known_at": 18000000
+              },
+              {
+                "known_at": 21600000
+              },
+              {
+                "known_at": 25200000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "1h",
+            "scale_bars": 120,
+            "momentum_shift": true
+          },
+          {
+            "scenario_id": "m15-end",
+            "frame": "15m",
+            "label": "W5",
+            "last_confirmed_leg": "W5",
+            "active_label": "A",
+            "active_direction": "DOWN",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              },
+              {
+                "known_at": 18000000
+              },
+              {
+                "known_at": 21600000
+              },
+              {
+                "known_at": 25200000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "15m",
+            "scale_bars": 120,
+            "divergence": true,
+            "terminal_fractal": true,
+            "squat": true
+          }
+        ],
+        "frame_errors": {}
+      },
+      "expected": {
+        "warning_scope": "H1_WARNING",
+        "frame_states": {
+          "1d": "UNRESOLVED",
+          "6h": "UNRESOLVED",
+          "1h": "PHASE_CANDIDATE",
+          "15m": "PHASE_CANDIDATE"
+        },
+        "signs_by_id": {
+          "h1-end": [
+            "MOMENTUM_SHIFT"
+          ],
+          "m15-end": [
+            "AO_DIVERGENCE",
+            "TERMINAL_FRACTAL",
+            "SQUAT_VOLUME_PROXY"
+          ]
+        }
+      }
+    },
+    {
+      "name": "competing_counts_remain_visible",
+      "input": {
+        "as_of": 144000000,
+        "scenarios": [
+          {
+            "scenario_id": "h1-w3",
+            "frame": "1h",
+            "label": "W2",
+            "last_confirmed_leg": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "1h",
+            "scale_bars": 120
+          },
+          {
+            "scenario_id": "h1-w5",
+            "frame": "1h",
+            "label": "W4",
+            "last_confirmed_leg": "W4",
+            "active_label": "W5",
+            "active_direction": "UP",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              },
+              {
+                "known_at": 18000000
+              },
+              {
+                "known_at": 21600000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "1h",
+            "scale_bars": 120
+          }
+        ],
+        "frame_errors": {}
+      },
+      "expected": {
+        "warning_scope": "NONE",
+        "frame_states": {
+          "1d": "UNRESOLVED",
+          "6h": "UNRESOLVED",
+          "1h": "ALTERNATIVES",
+          "15m": "UNRESOLVED"
+        },
+        "signs_by_id": {}
+      }
+    },
+    {
+      "name": "senior_warning_has_own_scope",
+      "input": {
+        "as_of": 144000000,
+        "scenarios": [
+          {
+            "scenario_id": "h1-w3",
+            "frame": "1h",
+            "label": "W2",
+            "last_confirmed_leg": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "1h",
+            "scale_bars": 120
+          },
+          {
+            "scenario_id": "m15-end",
+            "frame": "15m",
+            "label": "W5",
+            "last_confirmed_leg": "W5",
+            "active_label": "A",
+            "active_direction": "DOWN",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              },
+              {
+                "known_at": 18000000
+              },
+              {
+                "known_at": 21600000
+              },
+              {
+                "known_at": 25200000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "15m",
+            "scale_bars": 120,
+            "divergence": true,
+            "terminal_fractal": true,
+            "squat": true
+          },
+          {
+            "scenario_id": "h6-end",
+            "frame": "6h",
+            "label": "W5",
+            "last_confirmed_leg": "W5",
+            "active_label": "A",
+            "active_direction": "DOWN",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              },
+              {
+                "known_at": 18000000
+              },
+              {
+                "known_at": 21600000
+              },
+              {
+                "known_at": 25200000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "6h",
+            "scale_bars": 120,
+            "divergence": true
+          }
+        ],
+        "frame_errors": {}
+      },
+      "expected": {
+        "warning_scope": "SENIOR_WARNING",
+        "frame_states": {
+          "1d": "UNRESOLVED",
+          "6h": "PHASE_CANDIDATE",
+          "1h": "PHASE_CANDIDATE",
+          "15m": "PHASE_CANDIDATE"
+        },
+        "signs_by_id": {}
+      }
+    },
+    {
+      "name": "stale_junior_cannot_be_current_warning",
+      "input": {
+        "as_of": 144000000,
+        "scenarios": [
+          {
+            "scenario_id": "h1-w3",
+            "frame": "1h",
+            "label": "W2",
+            "last_confirmed_leg": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "1h",
+            "scale_bars": 120
+          },
+          {
+            "scenario_id": "m15-end",
+            "frame": "15m",
+            "label": "W5",
+            "last_confirmed_leg": "W5",
+            "active_label": "A",
+            "active_direction": "DOWN",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              },
+              {
+                "known_at": 18000000
+              },
+              {
+                "known_at": 21600000
+              },
+              {
+                "known_at": 25200000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "15m",
+            "scale_bars": 120,
+            "divergence": true,
+            "terminal_fractal": true,
+            "squat": true
+          }
+        ],
+        "frame_errors": {
+          "15m": "STALE_CLOSED_HISTORY"
+        }
+      },
+      "expected": {
+        "warning_scope": "NONE",
+        "frame_states": {
+          "1d": "UNRESOLVED",
+          "6h": "UNRESOLVED",
+          "1h": "PHASE_CANDIDATE",
+          "15m": "UNAVAILABLE"
+        },
+        "signs_by_id": {}
+      }
+    },
+    {
+      "name": "future_pivot_is_not_a_phase",
+      "input": {
+        "as_of": 144000000,
+        "scenarios": [
+          {
+            "scenario_id": "future",
+            "frame": "1h",
+            "label": "W4",
+            "last_confirmed_leg": "W4",
+            "active_label": "W5",
+            "active_direction": "UP",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              },
+              {
+                "known_at": 18000000
+              },
+              {
+                "known_at": 147600000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "1h",
+            "scale_bars": 120,
+            "divergence": true
+          }
+        ],
+        "frame_errors": {}
+      },
+      "expected": {
+        "warning_scope": "NONE",
+        "frame_states": {
+          "1d": "UNRESOLVED",
+          "6h": "UNRESOLVED",
+          "1h": "UNRESOLVED",
+          "15m": "UNRESOLVED"
+        },
+        "signs_by_id": {}
+      }
+    },
+    {
+      "name": "invalidated_count_does_not_warn",
+      "input": {
+        "as_of": 144000000,
+        "scenarios": [
+          {
+            "scenario_id": "invalid",
+            "frame": "1h",
+            "label": "W4",
+            "last_confirmed_leg": "W4",
+            "active_label": "W5",
+            "active_direction": "UP",
+            "direction": "UP",
+            "status": "INVALIDATED",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              },
+              {
+                "known_at": 18000000
+              },
+              {
+                "known_at": 21600000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "1h",
+            "scale_bars": 120,
+            "momentum_shift": true
+          }
+        ],
+        "frame_errors": {}
+      },
+      "expected": {
+        "warning_scope": "NONE",
+        "frame_states": {
+          "1d": "UNRESOLVED",
+          "6h": "UNRESOLVED",
+          "1h": "UNRESOLVED",
+          "15m": "UNRESOLVED"
+        },
+        "signs_by_id": {}
+      }
+    },
+    {
+      "name": "signs_are_not_pooled_across_counts",
+      "input": {
+        "as_of": 144000000,
+        "scenarios": [
+          {
+            "scenario_id": "one",
+            "frame": "1h",
+            "label": "W5",
+            "last_confirmed_leg": "W5",
+            "active_label": "A",
+            "active_direction": "DOWN",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              },
+              {
+                "known_at": 18000000
+              },
+              {
+                "known_at": 21600000
+              },
+              {
+                "known_at": 25200000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "1h",
+            "scale_bars": 120,
+            "divergence": true
+          },
+          {
+            "scenario_id": "two",
+            "frame": "1h",
+            "label": "W4",
+            "last_confirmed_leg": "W4",
+            "active_label": "W5",
+            "active_direction": "UP",
+            "direction": "UP",
+            "status": "PROVISIONAL",
+            "observed_at": 144000000,
+            "anchors": [
+              {
+                "known_at": 7200000
+              },
+              {
+                "known_at": 10800000
+              },
+              {
+                "known_at": 14400000
+              },
+              {
+                "known_at": 18000000
+              },
+              {
+                "known_at": 21600000
+              }
+            ],
+            "invalidation": 90.0,
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_frame": "1h",
+            "scale_bars": 120,
+            "squat": true
+          }
+        ],
+        "frame_errors": {}
+      },
+      "expected": {
+        "warning_scope": "H1_WARNING",
+        "frame_states": {
+          "1d": "UNRESOLVED",
+          "6h": "UNRESOLVED",
+          "1h": "ALTERNATIVES",
+          "15m": "UNRESOLVED"
+        },
+        "signs_by_id": {
+          "one": [
+            "AO_DIVERGENCE"
+          ],
+          "two": [
+            "SQUAT_VOLUME_PROXY"
+          ]
+        }
+      }
+    }
+  ]
+}

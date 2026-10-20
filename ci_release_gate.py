@@ -182,12 +182,16 @@ def main() -> None:
         "confirmed_up_center_index",
         "confirmed_up_group_start_index",
         "fractal_up_confirmed",
-        "middle-bar extreme must be",
-        "center_teeth",
+        "trigger_base <= float(current_teeth)",
+        "trigger_base >= float(current_teeth)",
         "side=side",
     ):
         must(signals, needle, "williams_signals.py")
 
+    geometry=read("williams_market_geometry.py")
+    for needle in ("def angulation_evidence", "def alligator_phases", "def ntd_initial_context",
+                   "MOUTH_ANCHORED_EDGE_SLOPES", "PRICE_PATH_NOT_STEEPER"):
+        must(geometry,needle,"williams_market_geometry.py")
     futures = read("futures_williams_runtime.py")
     must(futures, "canonical_indicator_config_from_env()", "futures_williams_runtime.py")
     must(futures, "_signal_profile_entry_block_reason(profile)", "futures_williams_runtime.py")
@@ -321,7 +325,14 @@ def main() -> None:
     must(market_data_source, "internal fun isLastClosedCandleCurrent", "BinanceUsdMFuturesMarketData.kt")
     must(runtime_source, "futuresMarketData.isLastClosedCandleCurrent(last.t, frame, nowMs)", "StandaloneRuntime.kt interval-aware cache freshness")
     must(runtime_source, "APPROVED_FUTURES_KLINE_INTERVALS", "StandaloneRuntime.kt chart interval contract")
-    must(runtime_source, "var endTime = futuresMarketData.exchangeNowMs()", "StandaloneRuntime.kt")
+    # Old implementation restarted backward pagination at 'now' on every boot,
+    # repeatedly downloading the same pages. Resumable archival data must use
+    # the oldest DURABLY saved candle as a strict backward cursor.
+    must(runtime_source, "val previousOldest = historyStore.oldest(normalizedSymbol, frame)", "StandaloneRuntime.kt resumable history cursor")
+    must(runtime_source, "else futuresMarketData.exchangeNowMs()", "StandaloneRuntime.kt first history fetch")
+    must(runtime_source, "endTime = oldestPageTime - 1L", "StandaloneRuntime.kt backward pagination")
+    must(runtime_source, "startTime = newest + 1L", "StandaloneRuntime.kt forward gap catch-up")
+    must(runtime_source, "private fun schedulePersistentHistoryBackfill", "StandaloneRuntime.kt asynchronous phone archival")
     must_not(
         runtime_source,
         "((it.entry - it.stop) / it.entry).coerceAtLeast(0.0)",
@@ -375,7 +386,7 @@ def main() -> None:
     must_not(runtime_source, "getOrElse { candles }", "StandaloneRuntime.kt H1 fallback")
     must(runtime_source, '.put("take_profit_pct", 0.0)', "StandaloneRuntime.kt canonical Futures settings")
     setup_source=read("app/src/main/java/com/williamsbot/WilliamsSetupRules.kt")
-    for needle in ("p<=teeth[i]", "trigger<=teeth.last()", "if (value==p) start=j",
+    for needle in ("p<=teeth.last()", "p<=teeth.last()", "if (value==p) start=j",
                    ".minOf { bars[it].l }-tick", "bars[it].h>=trigger", "bar.h<mouth.min()"):
         must(setup_source,needle,"WilliamsSetupRules.kt confirmed book setup")
     must(runtime_source, "val slowValues = medianPrices.subList(index - 33, index + 1)", "StandaloneRuntime.kt")
@@ -399,8 +410,13 @@ def main() -> None:
     must(runtime_source,'exchangeClosed=k.optBoolean("x",false)',"StandaloneRuntime.kt final WS close proof")
     must(runtime_source,"val closed = closedNativeStrategyCandles(live)","StandaloneRuntime.kt closed-only strategy cache")
     must(runtime_source, "val freshSignals = candidate.campaignSignals.filter", "StandaloneRuntime.kt directional hypotheses")
-    must(runtime_source, "isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)", "StandaloneRuntime.kt H1 signal freshness")
-    must(runtime_source, "directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear)", "StandaloneRuntime.kt D1/H4 directional selection")
+    must(runtime_source, "williamsH1SignalTimeEligible(it.signalBarTimeMs,it.type,it.strategyProfile,contextNow)", "StandaloneRuntime.kt source-specific H1 validity")
+    execution_policy = read("app/src/main/java/com/williamsbot/WilliamsExecutionPolicy.kt")
+    must(execution_policy, "WILLIAMS_SOURCE_OBSERVATION_ONLY", "TC2-only new risk policy")
+    must(execution_policy, "H1_SNAPSHOT_STALE", "Structural validity still requires fresh H1 data")
+
+    must(runtime_source, "williamsBookInitialContextRank(", "StandaloneRuntime.kt TC2 H1 book-native initial-entry selection")
+    must(runtime_source, "H1_CONTEXT_EVIDENCE_NOT_DURABLE", "StandaloneRuntime.kt source-context provenance")
     must(runtime_source, "private fun estimateManagedEquity(): Double =\n        liveFuturesEquity", "StandaloneRuntime.kt")
     equity_test = read("app/src/test/java/com/williamsbot/FuturesAccountEquityTest.kt")
     for needle in (

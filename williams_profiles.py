@@ -22,6 +22,28 @@ def addition_signal_time_allowed(signal,campaign):
     return signal.signal_bar_time_ms>int(campaign.tags.get("last_signal_time_ms",0))
 
 
+def observe_edition_signals(symbol,ind,*,timeframe,tick_size):
+    """Independent closed-bar observations; failure of one source stays local.
+
+    The returned signals are diagnostic evidence, never an execution pool.
+    A no-signal result and an analysis failure have different states.
+    """
+    signals=[]
+    observations=[]
+    for source in SOURCE_PROFILES:
+        try:
+            found=[s for side in ("LONG","SHORT") for s in extract_profile_signals(
+                symbol,ind,profile=source,side=side,timeframe=timeframe,tick_size=tick_size)]
+            signals.extend(found)
+            observations.append({"profile":source,"state":"FORMATION_OBSERVED" if found else "NO_VALID_FORMATION",
+                "signal_count":len(found),"execution_role":"LIVE" if source==TC2 else "OBSERVE",
+                "can_place_orders":False})
+        except Exception as exc:
+            observations.append({"profile":source,"state":"ANALYSIS_FAILED","error_type":type(exc).__name__,
+                "execution_role":"LIVE" if source==TC2 else "OBSERVE","can_place_orders":False})
+    return signals,observations
+
+
 def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_mode=False,**tc2_kwargs):
     if profile not in PROFILES or side not in {"LONG","SHORT"}:
         raise ValueError("Invalid Williams edition or direction")
@@ -56,11 +78,6 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
             # detector consumes the REAL long/short_fractal_outside field
             # from strategy.py. Missing or false evidence fails closed,
             # independently of exchange campaign ownership and risk checks.
-            if exit_mode and detector==extract_ntd_fractal_signal_specs:
-                work=ind.copy()
-                # An opposing exit signal is allowed on the position's side of
-                # the mouth. It cannot authorize a reverse/new position.
-                work["teeth_current"]=1e-12 if side=="LONG" else float(ind.high.max())*100
             specs.extend(detector(symbol,work,**kwargs,**({"exit_mode":exit_mode} if detector==extract_ntd_zone_add_on_specs else {})))
         def line(name):
             col=next((c for c in (name+"_current",name+"_shifted",name) if c in ind),None)
@@ -69,6 +86,18 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
             setup=ntd_balance_line_setup(side,bars,line("jaw"),line("teeth"),line("lips"),
                 [float(v) for v in ind.ao],[float(v) for v in ind.ac],tick_size,require_mouth=not exit_mode)
             if setup:setups.append(setup)
+        # The sleep/first-breakout rule concerns a NEW NTD cycle only.
+        # Keep later fractals visible as additions; never gate TC2 on sleep.
+        if not exit_mode:
+            from williams_market_geometry import ntd_initial_context
+            updated=[]
+            for signal in specs:
+                if signal.signal_type==SignalType.FRACTAL:
+                    proof=ntd_initial_context(bars,line("jaw"),line("teeth"),line("lips"),signal.source_candle_index,tick_size)
+                    signal=replace(signal,role=SignalRole.ENTRY if proof["eligible"] else SignalRole.ADD_ON,
+                        setup_context=signal.setup_context | {"ntd_initial":proof})
+                updated.append(signal)
+            specs=updated
         # NTD additional dimensions cannot initiate before the first fractal.
         # They also must point out of the current mouth, rather than feed it.
         mouth=[line(n)[-1] for n in ("jaw","teeth","lips")]

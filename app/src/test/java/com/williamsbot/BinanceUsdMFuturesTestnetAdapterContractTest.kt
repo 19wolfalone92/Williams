@@ -134,6 +134,41 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
     }
 
     @Test
+    fun http200EmptyKlinesBodyRetriesReadAndNeverParsesEmptyMarketAsHistory() {
+        var attempts = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            attempts++
+            val text = if (attempts == 1) "" else "[[1000]]"
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(text.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val result = BinanceUsdMFuturesTestnetAdapter("unit-test-key", "unit-test-secret", client)
+            .klines("DOGEUSDT", "1h", 1)
+        assertEquals(2, attempts)
+        assertEquals(1, result.length())
+    }
+
+    @Test
+    fun permanentlyEmptyFuturesReadFailsAfterBoundedGetRetries() {
+        var attempts = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            attempts++
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body("".toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            BinanceUsdMFuturesTestnetAdapter("unit-test-key", "unit-test-secret", client)
+                .klines("DOGEUSDT", "1h", 1)
+            throw AssertionError("An empty 200 response must never become a valid kline snapshot")
+        } catch (expected: java.io.IOException) {
+            assertTrue(expected.message.orEmpty().contains("Empty USD-M Futures GET"))
+        }
+        assertEquals(4, attempts)
+    }
+
+    @Test
     fun approvedUniverseIsExactlyTheRequiredTenUsdtContracts() {
         assertEquals(
             setOf(

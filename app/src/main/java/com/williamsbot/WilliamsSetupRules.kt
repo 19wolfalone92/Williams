@@ -13,18 +13,6 @@ internal fun validWilliamsReversalBar(
         else bar.h>previousExtreme && bar.c<=(bar.h+bar.l)/2 && bar.l>mouth.max()
 }
 
-internal fun williamsIncreasingJawDistanceScore(direction:String,bars:List<WilliamsWaveBar>,jaw:List<Double>):Double {
-    if (direction !in listOf("LONG","SHORT") || bars.size !in 3..5 || bars.size!=jaw.size ||
-        jaw.any { !it.isFinite() } || bars.any { !it.h.isFinite() || !it.l.isFinite() || !it.c.isFinite() || it.c<=0 }) return 0.0
-    val gaps=bars.indices.map { i -> maxOf(0.0,if (direction=="LONG") jaw[i]-bars[i].l else bars[i].h-jaw[i]) }
-    val delta=gaps.last()-gaps.first()
-    val meanX=(bars.size-1)/2.0
-    val meanY=gaps.average()
-    val slope=gaps.indices.sumOf { (it-meanX)*(gaps[it]-meanY) } /
-        gaps.indices.sumOf { (it-meanX)*(it-meanX) }
-    return if (delta>0 && slope>0) delta/bars.last().c*100.0 else 0.0
-}
-
 internal data class WilliamsPendingFractal(
     val center:Int,val groupStart:Int,val confirmation:Int,val trigger:Double,val protective:Double,val currentTeeth:Double
 )
@@ -35,7 +23,8 @@ internal fun selectWilliamsPendingFractal(
     direction:String,bars:List<WilliamsWaveBar>,teeth:List<Double>,tick:Double
 ):WilliamsPendingFractal? {
     if (direction !in listOf("LONG","SHORT") || bars.size<5 || teeth.size!=bars.size ||
-        !tick.isFinite() || tick<=0 || !teeth.last().isFinite()) return null
+        !tick.isFinite() || tick<=0 || !teeth.last().isFinite() || teeth.last()<=0 ||
+        !validWilliamsEditionBars(bars)) return null
     val long=direction=="LONG"
     fun extreme(i:Int)=if (long) bars[i].h else bars[i].l
     for (i in bars.lastIndex-2 downTo 2) {
@@ -51,11 +40,12 @@ internal fun selectWilliamsPendingFractal(
             else break
             j--
         }
-        if (count<2 || !teeth[i].isFinite() ||
-            !(i+1..i+2).all { if (long) extreme(it)<p else extreme(it)>p }) continue
+        if (count<2 || !(i+1..i+2).all { if (long) extreme(it)<p else extreme(it)>p }) continue
         val trigger=if (long) p+tick else p-tick
-        if (trigger<=0 || (if (long) p<=teeth[i] || trigger<=teeth.last() || bars.last().c>=trigger
-                else p>=teeth[i] || trigger>=teeth.last() || bars.last().c<=trigger)) continue
+        // Eligibility may change after formation; compare the unbuffered
+        // fractal extreme with the current displaced Teeth (NTD PDF52).
+        if (trigger<=0 || (if (long) p<=teeth.last() || bars.last().c>=trigger
+                else p>=teeth.last() || bars.last().c<=trigger)) continue
         if ((i+2..bars.lastIndex).any { if (long) bars[it].h>=trigger else bars[it].l<=trigger }) continue
         val stopStart=minOf(start,maxOf(0,i+2-4))
         val protective=if (long) (stopStart..i+2).minOf { bars[it].l }-tick
@@ -64,4 +54,33 @@ internal fun selectWilliamsPendingFractal(
         return WilliamsPendingFractal(i,start,i+2,trigger,protective,teeth.last())
     }
     return null
+}
+
+
+/**
+ * Trading Chaos 2nd ed., chapter 12 (PDF pp. 156-161):
+ * when Super AO is the first presenting Wise Man, the initial protective
+ * stop is behind the LOWEST low (LONG) / HIGHEST high (SHORT) of the last
+ * three-to-five price bars, not merely the low/high of the third AO bar.
+ *
+ * Choose five CLOSED H1 price bars ending with that third AO bar, retaining
+ * the original time and series causality; this is a documented, consistent
+ * choice inside the book's 3–5 bar range. Never examine subsequent bars.
+ */
+internal fun williamsTc2SuperAoInitialStop(
+    direction:String,bars:List<WilliamsWaveBar>,thirdAoBarIndex:Int,tick:Double,
+    window:Int=5
+):Double? {
+    if(direction !in setOf("LONG","SHORT") || window !in 3..5 ||
+        thirdAoBarIndex !in (window-1)..bars.lastIndex || !tick.isFinite() || tick<=0)
+        return null
+    val history=bars.subList(thirdAoBarIndex-window+1,thirdAoBarIndex+1)
+    if(history.any { b ->
+            !b.h.isFinite() || !b.l.isFinite() || b.l<=0 ||
+                b.h<b.l || b.h<maxOf(b.o,b.c) || b.l>minOf(b.o,b.c)
+        }) return null
+    val price=if(direction=="LONG") history.minOf { it.l }-tick
+        else history.maxOf { it.h }+tick
+    if(!price.isFinite() || price<=0) return null
+    return price
 }

@@ -1,6 +1,8 @@
 package com.williamsbot
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class ScannerReadinessTest {
@@ -21,6 +23,49 @@ class ScannerReadinessTest {
         accountReady = accountReady,
         marketDataFresh = marketDataFresh
     )
+
+    @Test fun unknown_daily_risk_baseline_retries_while_entries_are_paused_but_never_bypasses_guards() {
+        fun eligible(
+            running: Boolean = true,
+            paused: Boolean = true,
+            killLatched: Boolean = false,
+            reconcileRequired: Boolean = false,
+            accountReady: Boolean = true,
+            userStreamConnected: Boolean = true,
+            userStreamSyncRequired: Boolean = false,
+            baselineReady: Boolean = false
+        ) = shouldRetryDailyRiskBaseline(
+            running, paused, killLatched, reconcileRequired,
+            accountReady, userStreamConnected, userStreamSyncRequired, baselineReady
+        )
+        // The prior successful API resume could immediately be undone by
+        // FUTURES_DAILY_BASELINE_UNKNOWN, with no subsequent background repair.
+        assertEquals(true, eligible(paused = true))
+        assertEquals(true, eligible(paused = false))
+        assertEquals(false, eligible(running = false))
+        assertEquals(false, eligible(killLatched = true))
+        assertEquals(false, eligible(reconcileRequired = true))
+        assertEquals(false, eligible(accountReady = false))
+        assertEquals(false, eligible(userStreamConnected = false))
+        assertEquals(false, eligible(userStreamSyncRequired = true))
+        assertEquals(false, eligible(baselineReady = true))
+    }
+
+    @Test fun activeFailedTenPairScannerMustBeReportedAsDiagnosticFailure() {
+        assertEquals("FAIL", scannerFailureSeverity(true, true, false, "FAILED"))
+        assertEquals("WARN", scannerFailureSeverity(false, true, false, "FAILED"))
+        assertEquals("WARN", scannerFailureSeverity(true, false, false, "FAILED"))
+        assertEquals("WARN", scannerFailureSeverity(true, true, true, "RUNNING"))
+        assertEquals("WARN", scannerFailureSeverity(true, true, false, "READY_BLOCKED"))
+    }
+
+    @Test fun jsonFailureReportsAnalysisStageAndKotlinSourceLocation() {
+        val origin = org.json.JSONException("End of input at character 0 of")
+        val desc = h1ScannerExceptionDetail("ANALYSE_TC2_NTD_COURSE_H1", origin)
+        assertEquals(true, desc.contains("ANALYSE_TC2_NTD_COURSE_H1"))
+        assertEquals(true, desc.contains("JSONException"))
+        assertEquals(true, desc.contains("End of input"))
+    }
 
     @Test fun stopped_runtime_is_reported_before_other_gates() {
         assertEquals("STOPPED", state(running = false, historyReady = false))
@@ -45,7 +90,10 @@ class ScannerReadinessTest {
     @Test fun read_only_scanner_continues_when_execution_is_paused_or_reconciling() {
         assertEquals("RUNNABLE", scannerDataReadinessState(true, true, true))
         assertEquals("WAITING_FOR_HISTORY", scannerDataReadinessState(true, false, true))
-        assertEquals("WAITING_FOR_MARKET_DATA", scannerDataReadinessState(true, true, false))
+        // A stale quote blocks new Futures entries, not read-only H1 scanning.
+        assertEquals("RUNNABLE", scannerDataReadinessState(true, true, false))
+        assertEquals("STOPPED", scannerDataReadinessState(false, true, false))
+        assertEquals("WAITING_FOR_HISTORY",scannerDataReadinessState(true,false,false))
     }
 
     @Test fun completed_scan_never_hides_execution_blockers() {
@@ -65,6 +113,37 @@ class ScannerReadinessTest {
             paused = false, reconcileRequired = false, killLatched = false,
             accountReady = true, marketDataFresh = true, coordinatorState = "OPEN_PROTECTED"
         ))
+    }
+
+    @Test fun reconciledPendingOrderDoesNotHideIndependentPairAnalysisOrTrading() {
+        assertEquals(null,scannerExecutionBlocker(
+            paused=false,reconcileRequired=false,killLatched=false,
+            accountReady=true,marketDataFresh=true,coordinatorState="ENTRY_PENDING",
+            coordinatorReadyForEntry=true
+        ))
+        assertEquals("BLOCKED_FUTURES_RECONCILIATION",scannerExecutionBlocker(
+            paused=false,reconcileRequired=false,killLatched=false,
+            accountReady=true,marketDataFresh=true,coordinatorState="ENTRY_PENDING",
+            coordinatorReadyForEntry=false
+        ))
+        assertEquals("BLOCKED_FUTURES_RECONCILIATION",scannerExecutionBlocker(
+            paused=false,reconcileRequired=true,killLatched=false,
+            accountReady=true,marketDataFresh=true,coordinatorState="ENTRY_PENDING",
+            coordinatorReadyForEntry=true
+        ))
+        assertEquals("WAITING_FOR_MARKET_DATA",scannerExecutionBlocker(
+            paused=false,reconcileRequired=false,killLatched=false,
+            accountReady=true,marketDataFresh=false,coordinatorState="ENTRY_PENDING",
+            coordinatorReadyForEntry=true
+        ))
+    }
+
+    @Test fun h1RestScanIsThrottledButRuntimeOneSecondRecoveryIsUnaffected() {
+        assertEquals(true,shouldScheduleReadOnlyScan(150_000L,0L))
+        assertEquals(false,shouldScheduleReadOnlyScan(150_999L,150_000L))
+        assertEquals(false,shouldScheduleReadOnlyScan(179_999L,150_000L))
+        assertEquals(true,shouldScheduleReadOnlyScan(180_000L,150_000L))
+        assertEquals(false,shouldScheduleReadOnlyScan(149_999L,150_000L))
     }
 
     @Test fun empty_demo_wallet_does_not_suppress_read_only_scanning() {
@@ -212,4 +291,34 @@ class ScannerReadinessTest {
         assertEquals(false, streamNeedsReconnect(true, 40_000L, 10_000L, 55_000L, 45_000L))
         assertEquals(false, streamNeedsReconnect(false, 1_000L, 1_000L, 100_000L, 45_000L))
     }
+
+    @Test fun signedAccountMonitorIsNeverInitiatedInsideH1Scan() {
+        val now = 1_800_000_000_000L
+        assertFalse(shouldScheduleIndependentFuturesMonitor(now, now - 60_000, now - 60_000,
+            "READY", scanning = true, reconciliationActive = false))
+        assertFalse(shouldScheduleIndependentFuturesMonitor(now, now - 60_000, now - 60_000,
+            "READY", scanning = false, reconciliationActive = true))
+        assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 46_000, now - 46_000,
+            "READY", scanning = false, reconciliationActive = false))
+        assertFalse(shouldScheduleIndependentFuturesMonitor(now, now - 20_000, now - 20_000,
+            "READY", scanning = false, reconciliationActive = false))
+    }
+
+    @Test fun protectedPositionAndPendingEntryStillReceiveFastIndependentMonitoring() {
+        val now = 1_800_000_000_000L
+        assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 4_000, now - 4_000,
+            "OPEN_PROTECTED", scanning = false, reconciliationActive = false))
+        assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 3_000, now - 3_000,
+            "ENTRY_PENDING", scanning = false, reconciliationActive = false))
+        assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 3_000, now - 3_000,
+            "EXIT_PENDING", scanning = false, reconciliationActive = false))
+        assertFalse(shouldScheduleIndependentFuturesMonitor(now, now - 1_000, now - 1_000,
+            "OPEN_PROTECTED", scanning = false, reconciliationActive = false))
+        // Previous exchange lock timeout must be retried and verified promptly;
+        // do not wait 45 seconds merely because the coordinator is now flat.
+        assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 4_000, now - 4_000,
+            "READY", scanning = false, reconciliationActive = false,
+            safetyLatchUnresolved = true))
+    }
+
 }

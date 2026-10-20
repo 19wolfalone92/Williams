@@ -551,12 +551,9 @@ def correction_price_allowed(context: dict, mark: float) -> bool:
 
 def opposing_level_triggered(side: str, trigger: float, signal_closed_at: int,
                              opened_at: int, mark: float, subsequent: Sequence[WaveBar],
-                             now: int, expires_at: int) -> bool:
-    """Detection is distinct from triggering; an older signal cannot close a new trade."""
-    if (side not in {"LONG", "SHORT"} or not all(isfinite(v) and v > 0 for v in (trigger, mark))
-            or opened_at <= 0 or not opened_at < signal_closed_at <= now
-            or now >= expires_at):
-        return False
-    if side == "LONG":
-        return mark >= trigger or any(b.h >= trigger for b in subsequent if b.t >= signal_closed_at)
-    return mark <= trigger or any(b.l <= trigger for b in subsequent if b.t >= signal_closed_at)
+                             now: int, expires_at: int, frame_ms: int = 3_600_000,
+                             invalidation: float | None = None) -> bool:
+    """Use the same causal event policy as scenario admission and position exits."""
+    from williams_scenario_lifecycle import evaluate_level_event
+    return evaluate_level_event(side,trigger,signal_closed_at,opened_at,mark,subsequent,
+                                now,expires_at,frame_ms,invalidation).state == "TRIGGERED"

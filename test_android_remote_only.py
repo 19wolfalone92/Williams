@@ -19,7 +19,7 @@ def test_android_starts_native_futures_runtime_from_foreground_service():
     assert "StandaloneRuntime.autostart(applicationContext)" in service
     assert "StandaloneRuntime.stopTrading()" in service
     assert 'android:name=".TradingForegroundService"' in manifest
-    assert "Futures Testnet runtime on this device" in service
+    assert "Фоновое сопровождение Binance Futures Demo на этом устройстве" in service
 
 
 def test_android_boot_recovery_is_opt_in_and_keeps_reconciliation_gate():
@@ -45,7 +45,7 @@ def test_android_boot_recovery_is_opt_in_and_keeps_reconciliation_gate():
 def test_android_exposes_battery_policy_diagnostic():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     assert "isIgnoringBatteryOptimizations" in main
-    assert "Doze exemption" in main
+    assert "Разрешение на работу в режиме сна" in main
     assert "isLowPowerStandbyEnabled" in main
     assert "isExemptFromLowPowerStandby" in main
     assert "ACTION_APPLICATION_DETAILS_SETTINGS" in main
@@ -166,10 +166,11 @@ def test_android_reversal_htf_gate_matches_python_campaign_contract():
     python = _read(ROOT / "futures_williams_runtime.py")
 
     # Directional context is ranked only after both H1 hypotheses are preserved.
-    # The ordinary D1 veto remains; only separately proven correction context overrides it.
+    # TC2 chapter 12 requires its H1 book signal, not H4/D1 alignment; D1/H4 remain traced as context.
     assert "internal fun directionalSignalContextRank(" in android
     assert "val freshSignals = candidate.campaignSignals.filter" in android
-    assert "directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear)" in android
+    assert "fun contextRank(signal: CampaignSignalN): Int = williamsBookInitialContextRank(" in android
+    assert 'williamsInitialHigherFrameHistoryRequired(it.strategyProfile)' in android
     assert "internal fun campaignSignalDirection(signalType: String): String?" in android
     assert "WILLIAMS_SIGNAL_DIRECTION_UNKNOWN: refusing to default an unknown signal to LONG" in android
     assert "return signal_type != SignalType.REVERSAL" in python
@@ -298,8 +299,8 @@ def test_android_williams_indicator_decisions_use_chart_aligned_alligator_and_ca
     assert "priorFractalValid" not in runtime
     setups=_read(ANDROID / "java/com/williamsbot/WilliamsSetupRules.kt")
     assert 'selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)' in runtime
-    assert "p<=teeth[i]" in setups
-    assert "trigger<=teeth.last()" in setups
+    assert "p<=teeth.last()" in setups
+    assert "p<=teeth.last()" in setups
     assert "if (value==p) start=j" in setups
     assert ".minOf { bars[it].l }-tick" in setups
     assert "bar.h<mouth.min()" in setups
@@ -378,22 +379,30 @@ def test_android_execution_gate_requires_coordinator_and_stream_reconciliation()
     assert "if (shouldReconnectFuturesUserStream(event))" in user_stream
 
 
-def test_android_h1_is_the_only_directional_decision_and_m15_is_execution_readiness_only():
+def test_android_book_native_h1_entry_does_not_require_m15_fractal():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    book = _read(ANDROID / "java/com/williamsbot/WilliamsBookH1EntryPolicy.kt")
     entry = runtime.split("private fun submitNativeFuturesCampaignEntry(", 1)[1].split(
         "private fun performCampaignScan(", 1
     )[0]
-    assert "M15_EXECUTION_BLOCKED" in entry
-    assert "latest closed M15 candle is stale" in entry
-    assert "submitM15Bull" not in entry
-    assert "submitM15Bear" not in entry
-    assert "m15Confirmed" not in entry
-    assert "M15_CONFIRMATION_BLOCKED" not in entry
-    # H1 signals still pass through D1 macro veto and H4 context, then the
-    # exchange-side conditional entry uses the H1 trigger/structural stop.
-    assert "signal.triggerPrice" in entry
-    assert "signal.protectivePrice" in entry
-    assert "H1_TRIGGER_ALREADY_CROSSED" in entry
+    # Source-book signals (WM1, WM2, WM3, NTD, Course) set the exact H1 trigger
+    # and structural protection. A newly detected M15 pivot cannot authorize it.
+    assert "val reference=signal.triggerPrice" in entry
+    assert "normalizePrice(signal.protectivePrice" in entry
+    assert "williamsBookH1Proof(" in entry
+    assert "williamsBookH1TriggerConsumed(" in entry
+    assert "williamsBookFractalTeethBlocker(" in entry
+    assert "H1_BOOK_PROOF_INVALID_BEFORE_SUBMISSION" in entry
+    assert "M15_EXECUTION_BLOCKED" not in entry
+    assert "val reference=junior.trigger" not in entry
+    assert "m15EntryDecision(symbol,mtfParent" not in entry
+    assert "coordinator.requireM15FractalForAutomatedEntries = false" in runtime
+    assert "coordinator.requireBookH1ProofForAutomatedEntries = true" in runtime
+    assert "coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }" in runtime
+    assert "if(requireBookH1ProofForAutomatedEntries && !isAddition" in coordinator
+    assert "val verifier=bookH1EntryVerifier ?: error" in coordinator
+    assert '"BOOK_NATIVE_H1_TRIGGER"' in book
     assert "val submitMark = futuresMarketData.markPrice(symbol)" in entry
     assert "futuresCampaignCoordinator.submitPendingEntry(plan)" in entry
 
@@ -526,7 +535,12 @@ def test_android_configurable_entry_policy_blocks_new_exposure_and_cancels_resti
     manager = runtime.split("private fun scheduleNativePositionManagement()", 1)[1].split(
         "private fun performCampaignScan()", 1
     )[0]
-    assert "scheduleNativePositionManagement()" in scan
+    # Do not start full signed reconciliation inside the 10-symbol scanner:
+    # that put the coordinator into RECONCILE_REQUIRED before its own
+    # entry admission check and blocked every scan.
+    assert "scheduleNativePositionManagement()" not in scan
+    assert "shouldScheduleIndependentFuturesMonitor(" in runtime
+    assert "scheduleNativePositionManagement()" in runtime
     assert "manageNativeFuturesPositions()" in manager
     assert "cancelPendingEntriesOutsideWilliamsSession()" in manager
 
@@ -596,7 +610,8 @@ def test_android_super_ao_is_independent_of_the_wm3_fractal_gate():
     wm2 = long_signals.split("// WM2:", 1)[1].split("// WM3:", 1)[0]
     assert 'type = "SUPER_AO"' in wm2
     assert "triggerPrice = trigger" in wm2
-    assert "protectivePrice = candles[signalIndex].l - tick" in wm2
+    assert "protectivePrice = structuralStop" in wm2
+    assert "williamsTc2SuperAoInitialStop(" in wm2
 
 
 def test_android_campaign_analysis_never_relabels_fallback_candles_as_h1():
@@ -645,8 +660,16 @@ def test_android_super_ao_uses_the_third_rising_bar_and_not_the_oldest_of_three(
     assert "val signalIndex = candles.lastIndex - (streak - 3)" in wm2
     assert "signalBarTimeMs = candles[signalIndex].t" in wm2
     assert "triggerPrice = trigger" in wm2
-    assert "protectivePrice = candles[signalIndex].l - tick" in wm2
+    assert "protectivePrice = structuralStop" in wm2
+    assert "williamsTc2SuperAoInitialStop(" in wm2
     assert "streak == 3" not in wm2
+    assert "val structuralStop = williamsTc2SuperAoInitialStop(" in wm2
+    assert '.put("initial_stop_window",5)' in wm2
+    # SHORT context reflection was centralized to reject malformed proofs and
+    # allow only the explicitly documented legacy-empty WM3 source context.
+    assert "reflectedTc2SetupContext(signal.type, signal.setupContext, reflection)" in runtime
+    assert 'context.put("risk_stop_at_price", reflection - originalStop)' in runtime
+    assert 'check(signalType == "FRACTAL")' in runtime
 
 
 def test_android_williams_stop_entries_reject_any_intervening_trigger_cross():
@@ -659,7 +682,7 @@ def test_android_williams_stop_entries_reject_any_intervening_trigger_cross():
     assert "if (candles[later].h >= trigger) return false" in long_signals
     assert long_signals.count("triggerStillPending(") == 3  # helper + WM1 + WM2; WM3 has a pure tested selector
     assert "if (triggerStillPending(i, trigger))" in long_signals
-    assert "if (triggerStillPending(signalIndex, trigger))" in long_signals
+    assert "triggerStillPending(signalIndex, trigger))" in long_signals
     assert 'selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)' in long_signals
 
 
@@ -784,9 +807,9 @@ def test_position_chart_only_draws_levels_from_the_selected_contract():
 def test_android_candidate_state_never_labels_short_as_confirmed_long():
     ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     assert 'candidate.entrySignalType.startsWith("SHORT_", ignoreCase = true) -> "SHORT"' in ui
-    assert '"H1 SETUP • SHORT"' in ui
-    assert '"H1 SETUP • LONG"' in ui
-    assert '"H1 SETUP • DIRECTION UNKNOWN"' in ui
+    assert '"СИГНАЛ H1 • ШОРТ"' in ui
+    assert '"СИГНАЛ H1 • ЛОНГ"' in ui
+    assert '"СИГНАЛ H1 • НАПРАВЛЕНИЕ НЕ ОПРЕДЕЛЕНО"' in ui
     assert '"CONFIRMED LONG"' not in ui
     assert '"CONFIRMED SHORT"' not in ui
     assert "candidateDirection(candidate) == \"SHORT\" -> \"SHORT\"" in ui
@@ -844,8 +867,10 @@ def test_android_futures_long_and_short_readiness_uses_h1_signal_not_m5_mtf_gate
     assert '"SHORT" -> NativeFuturesCampaignCoordinator.Direction.SHORT' in submit
     assert "WILLIAMS_SIGNAL_DIRECTION_UNKNOWN" in submit
     assert "val freshSignals = candidate.campaignSignals.filter" in submit
-    assert "directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear)" in submit
-    assert "neither LONG nor SHORT is allowed by D1/H4" in submit
+    assert "williamsBookInitialContextRank(" in submit
+    assert "H1_CONTEXT_EVIDENCE_NOT_DURABLE" in submit
+    assert 'put("reason","MISSING_GAPPED_OR_STALE_HTF_HISTORY")' in submit
+    assert "WILLIAMS_NO_BOOK_ELIGIBLE_H1_SIGNAL" in submit
     assert "internal fun directionalSignalContextRank(" in runtime
 
 
@@ -866,3 +891,21 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
     assert "hierarchy.links.any" in enrich
     assert 'link.relationship == "ALIGNED"' in enrich
     assert 'p?.activeLabel == "W5" && c?.activeLabel == "W3"' in enrich
+
+
+def test_tc2_opposing_h1_signal_is_an_advisory_not_an_automatic_market_exit():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    policy = _read(ANDROID / "java/com/williamsbot/WilliamsExecutionPolicy.kt")
+    manage = runtime.split("private fun manageVerifiedNativePositions(", 1)[1].split(
+        "private fun submitNativeFuturesAddition(", 1
+    )[0]
+    assert "val actionableOpposing = opposing?.takeIf { williamsOpposingSignalCanMarketClose(profile) }" in manage
+    assert "if (williamsStrategyCanMarketClose(profile) &&" in manage
+    assert "(actionableOpposing != null || boundaryExit || editionExit.isNotEmpty()))" in manage
+    assert '"tc2_correction_boundary_advisory"' in manage
+    assert 'market_close_authorized",false' in manage
+    assert "futuresCampaignCoordinator.saveManagementState(" in manage
+    assert "planWilliamsCampaignStop(" in manage
+    assert 'ownerProfile==williamsNtdProfile || ownerProfile==williamsCourseProfile' in policy
+    assert 'williamsStrategyCanMarketClose(ownerProfile)' in policy
+    assert "futuresCampaignCoordinator.trailProtectiveStop(" in manage

@@ -145,9 +145,22 @@ def armed_runtime(monkeypatch, tmp_path, request):
     now = int(time.time() * 1000)
     signal = SignalSpec.new(symbol="BTCUSDT", side=side, signal_type=SignalType.FRACTAL if profile=="NTD_FIVE_DIMENSIONS" else SignalType.REVERSAL, role=SignalRole.ENTRY,
         timeframe="1h", signal_bar_time_ms=now - (7_200_000 if profile=="NTD_FIVE_DIMENSIONS" else 1000), trigger_price=101 if side == "BUY" else 99,
-        protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000,strategy_profile=profile)
+        protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000,strategy_profile=profile,
+        setup_context={"ntd_initial":{"eligible":True,"sleep_at_ms":now-10*3600000,"reason":"FIXTURE_OBSERVED_SLEEP"}} if profile=="NTD_FIVE_DIMENSIONS" else {})
     candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
-    armed = bot._arm_entry(candidate)
+    # Arrange a legacy pending order without granting the new release any
+    # observer execution authority. Submit its TC2-shaped fixture, then restore
+    # the persisted source/payload as it would have existed before this upgrade.
+    if profile!="TC2_THREE_WISE_MEN":
+        from dataclasses import replace
+        legacy_candidate=replace(candidate,signal=replace(signal,strategy_profile="TC2_THREE_WISE_MEN"))
+        armed=bot._arm_entry(legacy_candidate)
+        legacy=bot.engine.load_campaign(armed["campaign_id"])
+        legacy.tags["strategy_profile"]=profile
+        legacy.tags["pending_signal"]["signal"]=signal.to_dict()
+        bot.db.save_campaign(legacy)
+    else:
+        armed = bot._arm_entry(candidate)
     trace=bot.db.conn.execute("SELECT raw_json FROM events WHERE event='decision_trace_execution' ORDER BY id DESC LIMIT 1").fetchone()
     assert trace and '"stage": "_arm_entry"' in trace[0]
     assert "test-secret" not in trace[0]
@@ -408,7 +421,7 @@ def test_leverage_failure_never_sends_an_entry(monkeypatch, tmp_path, failure, s
 
 @pytest.mark.parametrize("armed_runtime",[{"side":"BUY","profile":"NTD_FIVE_DIMENSIONS"},{"side":"SELL","profile":"NTD_FIVE_DIMENSIONS"}],indirect=True)
 @pytest.mark.parametrize("lost_response",[False,True])
-def test_ntd_close_event_uses_one_market_order_and_recovers_its_aggregate_fill(armed_runtime,monkeypatch,lost_response):
+def test_observer_ntd_cannot_add_to_a_legacy_filled_campaign(armed_runtime,monkeypatch,lost_response):
     bot,exchange,_=armed_runtime
     exchange.fill_entry();bot._reconcile_pending()
     campaign=bot.engine.load_campaign(bot.db.open_campaigns()[0]["campaign_id"])
@@ -433,20 +446,13 @@ def test_ntd_close_event_uses_one_market_order_and_recovers_its_aggregate_fill(a
     signal=next(s for s in extract_profile_signals("BTCUSDT",ind,profile="NTD_FIVE_DIMENSIONS",
         side="LONG" if sign==1 else "SHORT",timeframe="1h",tick_size=.1) if s.signal_type==SignalType.ZONE_ADD_ON)
     assert signal.expires_at_ms==closed_at+90_000
-    try:bot._arm_add_on(campaign,signal)
-    except (RuntimeError,BinanceAPIError):
-        assert lost_response
-    bot._reconcile_pending()
-    updated=bot.engine.load_campaign(campaign.campaign_id)
-    assert abs(exchange.amount)>before
-    assert updated.position_qty==pytest.approx(abs(exchange.amount)) and updated.additions==1
-    assert not bot._pending_entries()
-    market=[p for method,path,p in exchange.calls if method=="POST" and path.endswith("/order") and p.get("reduceOnly")!="true"]
-    assert len(market)==1 and market[0]["type"]=="MARKET" and "stopPrice" not in market[0]
+    calls_before=len(exchange.calls)
+    with pytest.raises(RuntimeError,match="OBSERVATION_ONLY"):
+        bot._arm_add_on(campaign,signal)
+    assert abs(exchange.amount)==before
+    assert not any(method=="POST" for method,_,_ in exchange.calls[calls_before:])
     assert any(a.get("closePosition")=="true" and a["algoStatus"]=="NEW" for a in exchange.algos.values())
-    with pytest.raises(RuntimeError,match="already admitted"):
-        bot._arm_add_on(updated,signal)
-    assert len([p for method,path,p in exchange.calls if method=="POST" and path.endswith("/order") and p.get("reduceOnly")!="true"])==1
+
 
 
 @pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
@@ -510,7 +516,7 @@ def test_course_management_executes_an_observed_w4_trim_without_waiting_for_entr
 
 @pytest.mark.parametrize("armed_runtime",[{"side":"BUY","profile":"NTD_FIVE_DIMENSIONS"},{"side":"SELL","profile":"NTD_FIVE_DIMENSIONS"}],indirect=True)
 @pytest.mark.parametrize("market",[False,True])
-def test_ntd_profitable_authenticated_cycle_allows_one_new_dimension_entry(armed_runtime,monkeypatch,market):
+def test_observer_ntd_profit_cycle_cannot_authorize_new_exposure(armed_runtime,monkeypatch,market):
     bot,exchange,armed=armed_runtime
     exchange.fill_entry();bot._reconcile_pending()
     previous=bot.engine.load_campaign(armed["campaign_id"])
@@ -528,13 +534,12 @@ def test_ntd_profitable_authenticated_cycle_allows_one_new_dimension_entry(armed
         strategy_profile="NTD_FIVE_DIMENSIONS",expires_at_ms=closed_at+3_600_000)
     assert bot._ntd_reentry_source(signal).campaign_id==previous.campaign_id
     candidate=FuturesCandidate("BTCUSDT","LONG" if previous.side=="BUY" else "SHORT",signal,(signal,),.01,.001,True,90)
-    admitted=bot._arm_entry(candidate)
-    assert bot.db.state_get("ntd_reentry_consumed:"+previous.campaign_id)==admitted["campaign_id"]
-    assert bot._ntd_reentry_source(signal) is None
-    if market:
-        bot._reconcile_pending()
-        current=bot.engine.load_campaign(admitted["campaign_id"])
-        assert current.position_qty>0 and current.tags["strategy_profile"]=="NTD_FIVE_DIMENSIONS"
+    calls_before=len(exchange.calls)
+    with pytest.raises(RuntimeError,match="OBSERVATION_ONLY"):
+        bot._arm_entry(candidate)
+    assert not bot.db.state_get("ntd_reentry_consumed:"+previous.campaign_id)
+    assert not any(method=="POST" for method,_,_ in exchange.calls[calls_before:])
+
 
 
 @pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)

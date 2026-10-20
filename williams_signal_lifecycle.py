@@ -4,6 +4,7 @@ import json
 import re
 from math import isfinite
 from threading import RLock
+from williams_execution_policy import h1_signal_expiry
 
 
 def safe_reason(reason):
@@ -37,7 +38,8 @@ def signal_lifecycle(signal,owner,now,snapshot_at,current):
         if 'UNKNOWN' in status or status in {'TRIGGERED','PENDING'}:return 'PENDING_UNVERIFIED'
     known=signal.get('known_at_ms',0)
     if known<=0 or known>now:return 'DETECTED'
-    if signal.get('expires_at_ms',signal.get('signal_bar_time_ms',0)+18_000_000)<=now:return 'EXPIRED'
+    expiry=signal.get('expires_at_ms',signal.get('signal_bar_time_ms',0)+18_000_000)
+    if expiry and expiry<=now:return 'EXPIRED'
     if not current:return 'INVALIDATED'
     if snapshot_at<=0 or now<snapshot_at or now-snapshot_at>120_000:return 'DETECTED'
     return 'VALID'
@@ -56,7 +58,8 @@ def signal_facts(signals,bars,frame_ms):
             direction='LONG' if s.side=='BUY' else 'SHORT',role=s.role.value,
             signal_bar_time_ms=s.signal_bar_time_ms,known_at_ms=s.signal_bar_time_ms+frame_ms,
             formation_at_ms=formation,formation_time_basis='SOURCE_PIVOT_OR_BASE' if formation!=s.signal_bar_time_ms else 'SIGNAL_BAR',
-            expires_at_ms=min(s.expires_at_ms,s.signal_bar_time_ms+5*frame_ms) if s.expires_at_ms>0 else s.signal_bar_time_ms+5*frame_ms,
+            expires_at_ms=h1_signal_expiry(s.signal_bar_time_ms,s.signal_type,s.strategy_profile),
+            validity_policy='UNBROKEN_UNSUPERSEDED_FRACTAL' if h1_signal_expiry(s.signal_bar_time_ms,s.signal_type,s.strategy_profile)==0 else 'PROJECT_AGE_WINDOW',
             trigger=s.trigger_price,protective_stop=s.protective_reference,strategy_profile=s.strategy_profile,
             execution_semantics=s.execution_semantics,setup_context=dict(s.setup_context)))
     return facts
@@ -79,7 +82,7 @@ class SignalJournal:
             data=self._load(symbol);known={s['signal_id']:s for s in data['signals']};ids={s['signal_id'] for s in signals}
             for s in known.values():
                 if s.get('last_seen_at_ms')==data.get('snapshot_at_ms') and s['signal_id'] not in ids:
-                    self._event(data,s,'EXPIRED' if s['expires_at_ms']<=now else 'INVALIDATED','FORMATION','FORMATION_NO_LONGER_PRESENT_IN_CLOSED_BAR_SCAN',now)
+                    self._event(data,s,'EXPIRED' if s['expires_at_ms']>0 and s['expires_at_ms']<=now else 'INVALIDATED','FORMATION','FORMATION_NO_LONGER_PRESENT_IN_CLOSED_BAR_SCAN',now)
             for source in signals:
                 s=dict(deepcopy(source),first_seen_at_ms=known.get(source['signal_id'],{}).get('first_seen_at_ms',now),last_seen_at_ms=now)
                 self._event(data,s,'DETECTED','FORMATION','FORMATION_OBSERVED',now)

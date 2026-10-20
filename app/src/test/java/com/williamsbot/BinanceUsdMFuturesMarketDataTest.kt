@@ -132,6 +132,40 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
+    fun emptyHttp200ForH1HistoryRetriesAndThenResumesNormalAnalysis() {
+        var attempts = 0
+        val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            attempts++
+            val body = if (attempts == 1) "" else "[[1000]]"
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }).build()
+        val result = BinanceUsdMFuturesMarketData(client)
+            .klines("DOGEUSDT", "1h", 1)
+        assertEquals(2, attempts)
+        assertEquals(1, result.length())
+    }
+
+    @Test
+    fun repeatedEmptyHttp200KlinesCannotBeMisreadAsValidHistory() {
+        var attempts = 0
+        val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            attempts++
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body("".toResponseBody("application/json".toMediaType())).build()
+        }).build()
+        try {
+            BinanceUsdMFuturesMarketData(client).klines("DOGEUSDT", "1h", 1)
+            throw AssertionError("Empty HTTP 200 cannot silently authorize H1 scanner")
+        } catch (e: java.io.IOException) {
+            assertTrue(e.message.orEmpty().contains("Empty USD-M Futures market data GET"))
+        }
+        assertEquals(4, attempts)
+    }
+
+    @Test
     fun requestsUsdMFuturesKlinesAndPassesPaginationParameters() {
         var capturedUrl = ""
         val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->

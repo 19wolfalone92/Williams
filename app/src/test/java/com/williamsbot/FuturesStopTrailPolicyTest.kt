@@ -174,4 +174,19 @@ class FuturesStopTrailPolicyTest {
         )
         assertNull(blocked)
     }
+    @Test fun tc2BookTrailRequiresVerifiedOpeningTimeButKeepsProtection() {
+        val input=bars(
+            highs=listOf(110.0,109.0,108.0,107.0,106.0),
+            lows=listOf(99.0,98.0,97.0,96.0,95.0)
+        )
+        // This unknown opening observation must not move an exchange stop
+        // based on candles which may predate the actual live position.
+        assertNull(planWilliamsCampaignStop("SHORT",120.0,100.0,120.0,94.0,
+            0.1,0L,input))
+        val known=planWilliamsCampaignStop("SHORT",120.0,100.0,120.0,94.0,
+            0.1,2*3_600_000L,input)
+        assertEquals("TC2_LAST_5_CLOSED_BARS",known?.reason)
+        assertEquals(110.1,known!!.stop,1e-7)
+    }
+
 }

@@ -311,6 +311,12 @@ object TradeJournal {
     }
 }
 
+/** UTC exchange session boundary. Independent of Android local timezone. */
+internal fun futuresUtcDayStartMs(nowMs:Long):Long {
+    require(nowMs>0L) { "UTC risk-day timestamp invalid" }
+    return Math.floorDiv(nowMs,86_400_000L)*86_400_000L
+}
+
 /** Result of the entry-only Futures loss-streak circuit breaker. */
 internal data class FuturesLossStreakDecision(
     val available: Boolean,
@@ -336,13 +342,7 @@ internal fun evaluateFuturesLossStreak(
         hardPauseAt <= maximumConsecutiveLosses
     ) return FuturesLossStreakDecision(false, 0, false, null, "FUTURES_LOSS_STREAK_CONFIG_INVALID")
 
-    val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
-    utc.timeInMillis = nowMs
-    utc.set(Calendar.HOUR_OF_DAY, 0)
-    utc.set(Calendar.MINUTE, 0)
-    utc.set(Calendar.SECOND, 0)
-    utc.set(Calendar.MILLISECOND, 0)
-    val dayStart = utc.timeInMillis
+    val dayStart = futuresUtcDayStartMs(nowMs)
 
     val closed = (0 until tradeRows.length()).mapNotNull { index ->
         tradeRows.optJSONObject(index)

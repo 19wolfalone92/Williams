@@ -118,6 +118,8 @@ def run_williams_paper_replay(
     pending = None
     position = None
     used: set[str] = set()
+    opposition: dict[str, tuple[int, SignalSpec]] = {}
+    ambiguous_opposition_bars = 0
     equity_rows, trade_rows = [], []
     fee, slip = cfg.fee_rate_per_side, cfg.slippage_rate_per_side
 
@@ -144,6 +146,7 @@ def run_williams_paper_replay(
             "exit_reason": reason, "bars_held": max(0, i - p["entry_i"]),
         })
         position = None
+        opposition.clear()
 
     for i, (timestamp, row) in enumerate(work.iterrows()):
         close = float(row.close)
@@ -159,11 +162,36 @@ def run_williams_paper_replay(
             if stop_px is not None:
                 close_pos(stop_px, timestamp, i, "STRUCTURAL_STOP")
                 exited = True
-            elif cfg.exit_on_opposite_signal and any(x.side.upper() != position["side"] for x in candidates):
-                px = close * (1 - slip if position["side"] == "BUY" else 1 + slip)
-                close_pos(px, timestamp, i, "OPPOSITE_WILLIAMS_SIGNAL")
-                exited = True
             else:
+                opposite_fill = None
+                if cfg.exit_on_opposite_signal:
+                    for sid,(known_i,signal) in list(opposition.items()):
+                        if i <= known_i:
+                            continue
+                        stamp = int(timestamp.timestamp()*1000) if hasattr(timestamp,"timestamp") else 0
+                        if (i-known_i>cfg.max_pending_bars or
+                                signal.expires_at_ms and stamp>=signal.expires_at_ms):
+                            opposition.pop(sid,None);continue
+                        trigger=float(signal.trigger_price)
+                        invalid=float(signal.invalidation_price or signal.protective_reference)
+                        long=signal.side=="BUY"
+                        hit_open=float(row.open)>=trigger if long else float(row.open)<=trigger
+                        invalid_open=float(row.open)<=invalid if long else float(row.open)>=invalid
+                        hit=float(row.high)>=trigger if long else float(row.low)<=trigger
+                        broken=float(row.low)<=invalid if long else float(row.high)>=invalid
+                        if invalid_open and not hit_open:
+                            opposition.pop(sid,None);continue
+                        if hit and broken and not hit_open:
+                            ambiguous_opposition_bars+=1
+                            opposition.pop(sid,None);continue
+                        if hit:
+                            opposite_fill=_entry_fill(signal.side,row,trigger,slip)
+                            break
+                        if broken:opposition.pop(sid,None)
+                if opposite_fill is not None:
+                    close_pos(opposite_fill,timestamp,i,"OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
+                    exited=True
+            if position is not None:
                 # The new stop is effective only from the next candle onward.
                 frame = work.iloc[max(0, i - cfg.trailing_lookback_bars + 1):i + 1]
                 if position["side"] == "BUY":
@@ -198,6 +226,7 @@ def run_williams_paper_replay(
                             entry_fee = entry * qty * fee
                             position = {
                                 "symbol": pending["symbol"], "side": pending["side"],
+                                "strategy_profile":pending["strategy_profile"],
                                 "signal_id": pending["signal_id"], "signal_type": pending["signal_type"],
                                 "trigger": pending["trigger"], "entry": entry, "qty": qty,
                                 "entry_fee": entry_fee, "initial_risk": loss_per_unit * qty,
@@ -224,8 +253,17 @@ def run_williams_paper_replay(
                         "symbol": signal.symbol, "side": signal.side.upper(),
                         "signal_id": signal.signal_id, "signal_type": signal.signal_type.value,
                         "signal_time_ms": signal.signal_bar_time_ms, "created_i": i,
+                        "strategy_profile":signal.strategy_profile,
                         "trigger": float(signal.trigger_price), "stop": float(signal.protective_reference),
                     }
+
+        # A formation is observed at this close. Its price may trigger only
+        # on a later bar, and only under the source that owns this campaign.
+        if position is not None:
+            for signal in candidates:
+                if (signal.side!=position["side"] and signal.symbol==position["symbol"] and
+                        signal.strategy_profile==position["strategy_profile"]):
+                    opposition.setdefault(signal.signal_id,(i,signal))
 
         unrealized = _move(position["side"], position["entry"], close) * position["qty"] if position else 0.0
         equity_rows.append({
@@ -267,7 +305,7 @@ def run_williams_paper_replay(
         "net_pnl_usdt": ending - cfg.starting_equity_usdt,
         "net_return_pct": (ending / cfg.starting_equity_usdt - 1) * 100,
         "max_drawdown_pct": float(drawdown.min() * 100) if len(drawdown) else 0.0,
-        "trades": len(trades), "wins": wins, "losses": losses,
+        "trades": len(trades), "ambiguous_opposition_bars": ambiguous_opposition_bars, "wins": wins, "losses": losses,
         "win_rate_pct": wins / len(trades) * 100 if len(trades) else 0.0,
         "profit_factor": gross_win / gross_loss if gross_loss else (float("inf") if wins else 0.0),
         "fees_usdt": float(trades.fees_usdt.sum()) if len(trades) else 0.0,

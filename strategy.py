@@ -315,24 +315,10 @@ def calculate_indicators(df, cfg):
         mouth_values.max(axis=1) - mouth_values.min(axis=1)
     ) / x["close"].replace(0, np.nan)
     x["alligator_spread_pct"] = spread
-    spread_change = spread.diff()
-    x["alligator_state"] = "UNKNOWN"
-    for i in range(len(x)):
-        lines = mouth_values.iloc[i]
-        price = float(x["close"].iloc[i]) if pd.notna(x["close"].iloc[i]) else np.nan
-        width = spread.iloc[i]
-        change = spread_change.iloc[i]
-        if not (np.isfinite(lines.to_numpy(dtype=float)).all()
-                and np.isfinite(price) and np.isfinite(width)
-                and np.isfinite(change)):
-            state = "UNKNOWN"
-        elif bool(x["bullish_alligator"].iloc[i]) or bool(x["bearish_alligator"].iloc[i]):
-            state = "EATING" if change > 0 else "SATIATED"
-        elif change > 0:
-            state = "AWAKENING"
-        else:
-            state = "SLEEPING"
-        x.iloc[i, x.columns.get_loc("alligator_state")] = state
+    from williams_market_geometry import alligator_phases
+    from williams_wave_hierarchy import wave_bars_from_dataframe
+    x["alligator_state"] = alligator_phases(wave_bars_from_dataframe(x),
+        x["jaw_current"].tolist(),x["teeth_current"].tolist(),x["lips_current"].tolist())
 
     # Do not impose a percentage-width threshold: Williams describes Alligator
     # phases qualitatively through line separation/order and price position.
@@ -373,8 +359,8 @@ def calculate_indicators(df, cfg):
     # TC2 PDF128 explicitly rejects a divergent bar piercing the Alligator.
     bar_range = (x["high"] - x["low"]).replace(0, np.nan)
     close_location = (x["close"] - x["low"]) / bar_range
-    prior_low = x["low"].shift(1).rolling(2).min()
-    prior_high = x["high"].shift(1).rolling(2).max()
+    prior_low = x["low"].shift(1)
+    prior_high = x["high"].shift(1)
     x["bullish_reversal_bar"] = (
         (x["low"] < prior_low)
         & (close_location >= 0.50)

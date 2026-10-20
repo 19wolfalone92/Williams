@@ -11,7 +11,8 @@ internal val williamsWaveFrames = linkedMapOf(
     "1m" to 60_000L,"3m" to 180_000L,"5m" to 300_000L,
     "15m" to 900_000L, "30m" to 1_800_000L, "1h" to 3_600_000L,
     "2h" to 7_200_000L, "4h" to 14_400_000L, "6h" to 21_600_000L,
-    "8h" to 28_800_000L, "12h" to 43_200_000L, "1d" to 86_400_000L
+    "8h" to 28_800_000L, "12h" to 43_200_000L, "1d" to 86_400_000L,
+    "1w" to 604_800_000L
 )
 internal val williamsRequiredWaveFrames = listOf("1d", "6h", "1h", "15m")
 internal data class WilliamsWaveBar(
@@ -59,7 +60,8 @@ internal data class WilliamsWaveHierarchy(
     val asOf: Long, val scenarios: List<WilliamsWaveScenario>, val links: List<WilliamsWaveLink>,
     val frameErrors: Map<String, String>, val warnings: List<String>,
     val frameCandleCounts:Map<String,Int> = emptyMap(),
-    val complexStructures:List<JSONObject> = emptyList()
+    val complexStructures:List<JSONObject> = emptyList(),
+    val adaptiveHistory:JSONObject? = null
 ) {
     private fun containedChain():Boolean {
         val byId=scenarios.associateBy { it.id }
@@ -75,6 +77,7 @@ internal data class WilliamsWaveHierarchy(
         .put("links", JSONArray(links.map { it.toJson() })).put("frame_errors", JSONObject(frameErrors))
         .put("frame_candle_counts",JSONObject(frameCandleCounts)).put("contained_chain_observed",containedChain())
         .put("full_history",false).put("can_place_orders",false)
+        .put("adaptive_history",adaptiveHistory ?: JSONObject().put("status","NOT_YET_ANALYSED").put("can_place_orders",false))
         .put("complex_wave_patterns", if(complexStructures.isNotEmpty()) JSONArray(complexStructures.take(48)) else JSONArray(scenarios.filter { it.anchors.size >= 6 }
             .flatMap { scenario -> detectWilliamsComplexWave(scenario.anchors,scenario.direction,asOf)
                 .map { it.toJson().put("frame",scenario.frame).put("source_scenario_id",scenario.id) } }.take(48)))
@@ -415,11 +418,7 @@ internal fun williamsCorrectionBoundsValid(context: JSONObject): Boolean {
 
 internal fun williamsOpposingLevelTriggered(
     side: String, trigger: Double, signalClosedAt: Long, openedAt: Long, mark: Double,
-    subsequent: List<WilliamsWaveBar>, now: Long, expiresAt: Long
-): Boolean {
-    if (side !in listOf("LONG","SHORT") || !trigger.isFinite() || trigger <= 0 ||
-        !mark.isFinite() || mark <= 0 || openedAt <= 0 || signalClosedAt <= openedAt ||
-        signalClosedAt > now || now >= expiresAt) return false
-    return if (side == "LONG") mark >= trigger || subsequent.any { it.t >= signalClosedAt && it.h >= trigger }
-    else mark <= trigger || subsequent.any { it.t >= signalClosedAt && it.l <= trigger }
-}
+    subsequent: List<WilliamsWaveBar>, now: Long, expiresAt: Long,
+    frameMs:Long=3_600_000L,invalidation:Double?=null
+): Boolean = evaluateWilliamsLevelEvent(side,trigger,signalClosedAt,openedAt,mark,subsequent,
+    now,expiresAt,frameMs,invalidation).state=="TRIGGERED"

@@ -1,0 +1,83 @@
+name: Publish direct Demo APK
+
+on:
+  workflow_run:
+    workflows: ["Build Android APK"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  publish-demo-apk:
+    # Never publish artifacts from pull requests, forks, failed builds or non-main.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout exact built commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Fetch APK from successful Android build (not a replacement build)
+        uses: actions/download-artifact@v8
+        with:
+          name: williams-bot-debug-apk-${{ github.event.workflow_run.run_number }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: artifact
+
+      - name: Verify exact APK checksum and choose immutable release tag
+        id: apk
+        shell: bash
+        env:
+          BUILT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          test -s artifact/app-debug.apk
+          test -s artifact/app-debug.apk.sha256
+          EXPECTED="$(awk '{print $1}' artifact/app-debug.apk.sha256)"
+          ACTUAL="$(sha256sum artifact/app-debug.apk | awk '{print $1}')"
+          test -n "$EXPECTED" && test "$EXPECTED" = "$ACTUAL"
+          VERSION="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$BUILT_SHA" =~ ^[a-f0-9]{40}$ ]]
+          TAG="demo-v${VERSION}-${BUILT_SHA:0:12}"
+          FILE="Williams-${VERSION}-demo-debug.apk"
+          mkdir -p release
+          cp artifact/app-debug.apk "release/$FILE"
+          cp artifact/app-debug.apk.sha256 "release/$FILE.sha256.txt"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "name=$FILE" >> "$GITHUB_OUTPUT"
+          echo "sha=$BUILT_SHA" >> "$GITHUB_OUTPUT"
+          echo "sha256=$ACTUAL" >> "$GITHUB_OUTPUT"
+
+      - name: Publish direct APK as a GitHub Release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.apk.outputs.tag }}
+          APK_NAME: ${{ steps.apk.outputs.name }}
+          APK_SHA256: ${{ steps.apk.outputs.sha256 }}
+          BUILT_SHA: ${{ steps.apk.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "release/$APK_NAME" "release/$APK_NAME.sha256.txt" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "release/$APK_NAME" "release/$APK_NAME.sha256.txt" \
+              --repo "$GITHUB_REPOSITORY" --target "$BUILT_SHA" \
+              --title "Williams Bot ${TAG} (Binance Futures Demo)" --prerelease \
+              --notes "Test-only USD-M Futures Demo APK, exact commit $BUILT_SHA. SHA-256: $APK_SHA256. Android CI/APK job passed. Live phone acceptance, orders, protective-stop and risk-recovery E2E are NOT verified. Debug signing identity must match installed app to upgrade without uninstalling."
+          fi
+          echo "Direct APK link: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$APK_NAME" >> "$GITHUB_STEP_SUMMARY"

@@ -96,7 +96,13 @@ internal fun CockpitReadiness(status: Status) {
             r.optBoolean("position_management_ready") -> "Готово"
             else -> "Требуется сверка"
         })
-        Text(r.optString("new_entries_reason", "Ожидание первого снимка"), style = MaterialTheme.typography.bodySmall)
+        Text(russianExecutionBlocker(r.optString("new_entries_reason", "Ожидание первого снимка")), style = MaterialTheme.typography.bodySmall)
+        Text(r.optString("utc_loss_reset_explanation", "Суточные ограничения уточняются по времени Binance UTC."),
+            style = MaterialTheme.typography.bodySmall, color = AppColors.amber)
+        if (!r.optBoolean("daily_risk_baseline_known", false)) {
+            Text("⚠️ Дневная база риска не подтверждена. 00:00 UTC не снимает этот независимый блок.",
+                style = MaterialTheme.typography.bodySmall, color = AppColors.red)
+        }
         CockpitFreshness(status)
     }
 }
@@ -139,15 +145,15 @@ internal fun CockpitDashboard(
         }
         if (status.futuresIntents.isEmpty()) item {
             CockpitCard("Наблюдение за рынком") {
-                Text("Сканер: ${status.scannerState} • ${status.scannerSymbols}/10 пар")
-                Text(candidates.firstOrNull()?.let { "${it.symbol}: ${it.reason}" }
+                Text("Сканер: ${russianStatus(status.scannerState)} • ${status.scannerSymbols}/10 пар")
+                Text(candidates.firstOrNull()?.let { "${it.symbol}: ${russianExecutionBlocker(it.reason)}" }
                     ?: "Подтверждённых торговых кампаний в текущем снимке нет.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
             }
         }
         item { controls() }
         if (status.error != null || message.startsWith("Частичная ошибка")) item {
             CockpitCard("Требует внимания", AppColors.amber) {
-                Text(status.error ?: message, style = MaterialTheme.typography.bodySmall)
+                Text(russianExecutionBlocker(status.error ?: message), style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = onSystem) { Text("Открыть диагностику") }
             }
         }
@@ -160,9 +166,9 @@ internal fun CockpitIntentCard(intent: JSONObject, onMarket: (String) -> Unit) {
     val direction = intent.optString("direction")
     var expanded by remember(symbol, intent.optString("client_id_suffix")) { mutableStateOf(false) }
     CockpitCard("$symbol • $direction", if (direction == "SHORT") AppColors.red else AppColors.green) {
-        Text(intent.optString("campaign_status"), fontWeight = FontWeight.SemiBold)
+        Text(russianStatus(intent.optString("campaign_status")), fontWeight = FontWeight.SemiBold)
         CockpitField("Binance", intent.optString("order_status", "не подтверждено"))
-        Text(intent.optString("signal_reason").ifBlank { "Причина сигнала для этой кампании не записана" },
+        Text(russianExecutionBlocker(intent.optString("signal_reason")).ifBlank { "Причина сигнала для этой кампании не записана" },
             color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
         CockpitField("Вход / стоп", cockpitNumber(intent.optDouble("entry_price"), 4) + " / " +
             cockpitNumber(intent.optDouble("persisted_protective_stop"), 4))
@@ -202,7 +208,7 @@ internal fun CockpitAnalysis(padding: PaddingValues, status: Status, candidates:
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(symbol.removeSuffix("USDT"), Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                        Text(active?.optString("campaign_status") ?: when {
+                        Text(active?.optString("campaign_status")?.let(::russianStatus) ?: when {
                             c == null -> "Нет результата"
                             c.campaignReady -> "Проверка $direction"
                             c.signal -> "Сигнал $direction"
@@ -214,8 +220,8 @@ internal fun CockpitAnalysis(padding: PaddingValues, status: Status, candidates:
                         CockpitField("H1: семейство сигнала", c?.entrySignalType?.ifBlank { "Нет" } ?: "Не проверено")
                         CockpitField("Триггер / стоп", cockpitNumber(c?.entryTriggerPrice, 4) + " / " + cockpitNumber(c?.entryProtectivePrice, 4))
                         CockpitField("Оценка сканера", c?.let { "Риск ${cockpitNumber(it.riskPct)}% • R/R ${cockpitNumber(it.riskReward)}" } ?: "Нет данных")
-                        Text(c?.reason ?: "Нет фактического результата; направление не предполагается.", style = MaterialTheme.typography.bodySmall)
-                        Text(status.cockpitReadiness.optString("new_entries_reason"), color = AppColors.amber, style = MaterialTheme.typography.bodySmall)
+                        Text(russianExecutionBlocker(c?.reason ?: "Нет фактического результата; направление не предполагается."), style = MaterialTheme.typography.bodySmall)
+                        Text(russianExecutionBlocker(status.cockpitReadiness.optString("new_entries_reason")), color = AppColors.amber, style = MaterialTheme.typography.bodySmall)
                         TextButton(onClick = { onMarket(symbol) }) { Text("Открыть график") }
                     }
                 }
@@ -260,10 +266,10 @@ internal fun CockpitControls(status: Status, onStart: () -> Unit, onPause: () ->
     CockpitCard("Управление") {
         Button(onClick = if (status.running) { if (status.paused) onResume else onPause } else onStart,
             modifier = Modifier.fillMaxWidth(), enabled = !status.executionKillLatched) {
-            Text(if (!status.running) "Запустить движок" else if (status.paused) "Возобновить поиск" else "Остановить поиск новых сделок")
+            Text(if (!status.running) "Запустить движок" else if (status.paused) "Возобновить новые входы" else "Приостановить новые входы")
         }
         if (status.running) {
-            Text(if (status.paused) "Сопровождение работает. Уже размещённые заявки могут исполниться."
+            Text(if (status.paused) "H1-анализ и сопровождение продолжаются. Новые входы на паузе; ранее выставленные заявки могут исполниться."
                 else "Бот анализирует 10 пар и сопровождает позиции.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
             OutlinedButton(onClick = { confirmation = "suspend" }, modifier = Modifier.fillMaxWidth()) { Text("Приостановить входы и снять заявки") }
         }
@@ -303,8 +309,8 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
         }
         item {
             val summary = report?.optJSONObject("diagnostic_summary")
-            Text("Результат: " + (summary?.optString("overall") ?: "NOT VERIFIED"), fontWeight = FontWeight.Bold)
-            Text("PASS ${summary?.optInt("passed_test_count") ?: 0} • WARNING ${summary?.optInt("warning_test_count") ?: 0} • FAIL ${summary?.optInt("failed_test_count") ?: 0} • NOT VERIFIED ${summary?.optInt("not_verified_test_count") ?: 0}", style = MaterialTheme.typography.bodySmall)
+            Text("Результат: " + russianStatus(summary?.optString("overall")), fontWeight = FontWeight.Bold)
+            Text("УСПЕШНО ${summary?.optInt("passed_test_count") ?: 0} • ПРЕДУПРЕЖДЕНИЯ ${summary?.optInt("warning_test_count") ?: 0} • ОШИБКИ ${summary?.optInt("failed_test_count") ?: 0} • НЕ ПРОВЕРЕНО ${summary?.optInt("not_verified_test_count") ?: 0}", style = MaterialTheme.typography.bodySmall)
             Text("Проверено ${cockpitTime(report?.optLong("created_at_ms") ?: 0L)}", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
         }
         item {
@@ -316,7 +322,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
                         style = MaterialTheme.typography.bodySmall)
                 } else {
                     val snapshotStatus = evidence.optString("status")
-                    Text("Снимок: $snapshotStatus • сигналов ${evidence.optInt("observed_signal_count")}",
+                    Text("Снимок: ${russianStatus(snapshotStatus)} • сигналов ${evidence.optInt("observed_signal_count")}",
                         color = if (snapshotStatus == "COMPLETE_OBSERVATION_ONLY") AppColors.green else AppColors.amber,
                         style = MaterialTheme.typography.bodySmall)
                     val labels = listOf(williamsTc2Profile to "Trading Chaos 2",
@@ -326,7 +332,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
                         val row = evidence.optJSONObject("by_source")?.optJSONObject(id)
                         CockpitField(title,
                             "Σ${row?.optInt("total") ?: 0} · вход ${row?.optInt("entry") ?: 0}" +
-                            " · LONG ${row?.optInt("long") ?: 0}/SHORT ${row?.optInt("short") ?: 0}")
+                            " · покупка LONG ${row?.optInt("long") ?: 0}/продажа SHORT ${row?.optInt("short") ?: 0}")
                     }
                     Text("Встречных сигналов до фильтра D1/H4: " +
                         evidence.optInt("pre_context_opposing_symbol_count") + " пар.",
@@ -354,7 +360,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
         item {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("Все", "FAIL", "WARNING", "NOT_VERIFIED", "PASS").forEach { label ->
-                    FilterChip(filter == label, { filter = label }, label = { Text(label.replace('_', ' ')) })
+                    FilterChip(filter == label, { filter = label }, label = { Text(if(label=="Все") label else russianStatus(label)) })
                 }
             }
         }
@@ -364,9 +370,9 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
             val color = when (severity) { "PASS" -> AppColors.green; "FAIL" -> AppColors.red; "WARNING" -> AppColors.amber; else -> AppColors.textMuted }
             Card(Modifier.fillMaxWidth().clickable { expanded = !expanded }, colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(check.optString("id").ifBlank { check.optString("domain") } + " • " + severity.replace('_', ' '), color = color, style = MaterialTheme.typography.labelSmall)
-                    Text(check.optString("name"), style = MaterialTheme.typography.bodyMedium)
-                    if (expanded || severity == "FAIL" || severity == "WARNING") Text(check.optString("detail"), style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+                    Text(check.optString("id").ifBlank { check.optString("domain") } + " • " + russianStatus(severity), color = color, style = MaterialTheme.typography.labelSmall)
+                    Text(russianExecutionBlocker(check.optString("name")), style = MaterialTheme.typography.bodyMedium)
+                    if (expanded || severity == "FAIL" || severity == "WARNING") Text(russianExecutionBlocker(check.optString("detail")), style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
                 }
             }
         }

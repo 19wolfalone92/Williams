@@ -406,20 +406,99 @@ internal fun scannerReadinessState(
 }
 
 /**
+ * Recover missing UTC risk evidence even if a previous failed preflight
+ * put new entries on PAUSE. This schedules only the risk/reconciliation check:
+ * it NEVER resumes execution and never clears the operator pause or a safety latch.
+ * The executor remains fail-closed until a durable valid baseline is confirmed.
+ */
+internal fun shouldRetryDailyRiskBaseline(
+    running: Boolean,
+    @Suppress("UNUSED_PARAMETER") paused: Boolean,
+    killLatched: Boolean,
+    reconcileRequired: Boolean,
+    accountReady: Boolean,
+    userStreamConnected: Boolean,
+    userStreamSyncRequired: Boolean,
+    baselineReady: Boolean
+): Boolean = running && !killLatched && !reconcileRequired &&
+    accountReady && userStreamConnected && !userStreamSyncRequired && !baselineReady
+
+/**
  * Read-only discovery has fewer prerequisites than order execution. A pause,
  * kill switch, or unresolved exchange position must not stop H1 diagnostics;
  * the independent Execution Gate still blocks every new order mutation.
  */
+/**
+ * A live runtime with verified history and a failed H1 scan is a functional
+ * failure, not a yellow warning. An incomplete startup is still a warning.
+ */
+internal fun scannerFailureSeverity(
+    running: Boolean, historyReady: Boolean,
+    scanning: Boolean, scannerState: String
+): String = if (running && historyReady && !scanning && scannerState == "FAILED") {
+    "FAIL"
+} else {
+    "WARN"
+}
+
+/** Source location is necessary to distinguish failed H1 fetch from TC2 rule bugs. */
+internal fun h1ScannerExceptionDetail(stage: String, failure: Throwable): String {
+    val root = generateSequence(failure) { it.cause }.last()
+    val source = root.stackTrace.firstOrNull { it.className.startsWith("com.williamsbot.") }
+    val at = source?.let { "${it.fileName}:${it.lineNumber}" } ?: "SOURCE_NOT_CAPTURED"
+    val detail = safeDiagnosticText(root.message.orEmpty()).take(220)
+    return "$stage: ${root.javaClass.simpleName} @ $at: $detail"
+}
+
 internal fun scannerDataReadinessState(
     running: Boolean,
     historyReady: Boolean,
-    marketDataFresh: Boolean
+    @Suppress("UNUSED_PARAMETER") marketDataFresh: Boolean
 ): String = when {
     !running -> "STOPPED"
     !historyReady -> "WAITING_FOR_HISTORY"
-    !marketDataFresh -> "WAITING_FOR_MARKET_DATA"
+    // A stale/absent ticker quote may NEVER prevent read-only H1 analysis.
+    // Quote/market freshness is still an independent new-entry execution gate.
     else -> "RUNNABLE"
 }
+
+/** The runtime worker runs every second for recovery, but a completed 10-pair
+ * H1 REST scan must not be repeated every single second. Market WebSockets
+ * and stop/position reconciliation remain independently scheduled.
+ */
+/**
+ * Periodic signed Futures reconciliation must not be started by an H1 scan.
+ * On a verified flat account, the private user stream handles exchange events,
+ * with a 45-second independent REST fallback. Open exposure is monitored
+ * frequently. A running scan or another reconciliation wins the I/O slot.
+ */
+internal fun shouldScheduleIndependentFuturesMonitor(
+    nowMs: Long,
+    lastSuccessfulMs: Long,
+    lastAttemptMs: Long,
+    coordinatorState: String,
+    scanning: Boolean,
+    reconciliationActive: Boolean,
+    safetyLatchUnresolved: Boolean = false
+): Boolean {
+    if (nowMs <= 0L || scanning || reconciliationActive) return false
+    val interval = if (safetyLatchUnresolved) 2_500L else when (coordinatorState) {
+        "READY" -> 45_000L
+        "OPEN_PROTECTED" -> 3_000L
+        "ENTRY_PENDING" -> 2_500L
+        "EXIT_PENDING" -> 1_500L
+        else -> 5_000L
+    }
+    if (lastAttemptMs > 0L && nowMs >= lastAttemptMs &&
+        nowMs - lastAttemptMs < maxOf(2_000L, interval)) return false
+    return lastSuccessfulMs <= 0L || nowMs < lastSuccessfulMs ||
+        nowMs - lastSuccessfulMs >= interval
+}
+
+internal fun shouldScheduleReadOnlyScan(nowMs:Long,lastCompletedMs:Long,minimumMs:Long=30_000L):Boolean =
+    nowMs>0 && minimumMs>0 &&
+        (lastCompletedMs==0L ||
+            nowMs>=lastCompletedMs && nowMs-lastCompletedMs>=minimumMs)
 
 /** Execution blockers remain visible after a successful read-only market scan. */
 internal fun scannerExecutionBlocker(
@@ -428,14 +507,20 @@ internal fun scannerExecutionBlocker(
     killLatched: Boolean,
     accountReady: Boolean,
     marketDataFresh: Boolean,
-    coordinatorState: String
+    coordinatorState: String,
+    coordinatorReadyForEntry:Boolean=false
 ): String? = when {
     killLatched -> "BLOCKED_KILL"
     reconcileRequired -> "BLOCKED_FUTURES_RECONCILIATION"
     coordinatorState.uppercase(Locale.US) in setOf(
         "UNINITIALIZED", "RECONCILE_REQUIRED", "POSITION_UNPROTECTED",
-        "ENTRY_PENDING", "EXIT_PENDING"
+        "EXIT_PENDING"
     ) -> "BLOCKED_FUTURES_RECONCILIATION"
+    // ENTRY_PENDING is normal for a known, reconciled STOP_ENTRY on a
+    // different pair. The Futures coordinator must explicitly authorize
+    // another symbol; unresolved or partially filled states still block.
+    coordinatorState.uppercase(Locale.US)=="ENTRY_PENDING" && !coordinatorReadyForEntry ->
+        "BLOCKED_FUTURES_RECONCILIATION"
     paused -> "PAUSED"
     !accountReady -> "BLOCKED_ACCOUNT"
     !marketDataFresh -> "WAITING_FOR_MARKET_DATA"
@@ -488,6 +573,34 @@ internal fun streamNeedsReconnect(
  * account refresh is temporarily unknown. A confirmed risk breach that latches
  * PAUSE/KILL must stop scanning for entries and invoke position management.
  */
+/**
+ * Recovery may release only the pause produced by temporary UTC baseline
+ * uncertainty. An operator pause, kill, disabled runtime or outstanding
+ * exchange reconciliation remains authoritative.
+ */
+/**
+ * An expired conditional H1 entry does not become immortal just because
+ * Binance reports TRIGGERING/TRIGGERED. Request a cancel but never assume
+ * terminal state until exact exchange order and position proof are reconciled.
+ */
+internal fun expiredTriggeringEntryNeedsExchangeCancel(
+    expired:Boolean, orderStatus:String, accountPositionKnownFlat:Boolean,
+    explicitOperatorOrder:Boolean
+):Boolean = expired && accountPositionKnownFlat && !explicitOperatorOrder &&
+    orderStatus.uppercase(Locale.US) in setOf("TRIGGERING","TRIGGERED")
+
+internal fun canReleaseVerifiedUtcRiskPause(
+    baselineAndPnlVerified:Boolean,
+    wasRiskAutoPaused:Boolean,
+    runtimeRunning:Boolean,
+    operatorPaused:Boolean,
+    killLatched:Boolean,
+    reconcileRequired:Boolean,
+    testnetOverrideActive:Boolean
+):Boolean = baselineAndPnlVerified && wasRiskAutoPaused &&
+    runtimeRunning && !operatorPaused && !killLatched &&
+    !reconcileRequired && !testnetOverrideActive
+
 internal fun dailyRiskBlocksScanner(
     accountFunded: Boolean,
     dailyRiskAllowed: Boolean,
@@ -716,9 +829,11 @@ internal fun directionalSignalContextRank(
     val direction = campaignSignalDirection(type) ?: return 0
     val isLong = direction == "LONG"
     val isShort = direction == "SHORT"
+    val isReversal = type == "REVERSAL" || type.endsWith("_REVERSAL")
+    // TC2 ch9: WM1 is explicitly counter-trend; D1 is not its validity test.
+    if (isReversal) return 1
     if (isLong && d1Bear || isShort && d1Bull) return 0
     val h4Aligned = if (isLong) h4Bull else h4Bear
-    val isReversal = type == "REVERSAL" || type.endsWith("_REVERSAL")
     return when {
         h4Aligned -> 2
         isReversal -> 1
@@ -865,6 +980,40 @@ private data class TradeFlowSample(
     val quoteVolume: Double,
     val aggressiveBuy: Boolean
 )
+
+/**
+ * SHORT TC2 signals mirror LONG geometry. Older WM3 signals contain an
+ * empty setup context; blindly calling JSONObject("") crashed ALL ten H1
+ * scanner workers whenever a confirmed SHORT fractal was discovered.
+ *
+ * A documented legacy WM3 omission may be represented explicitly, whereas
+ * absent WM1/WM2 evidence or malformed nonempty JSON must remain fail-closed.
+ */
+internal fun reflectedTc2SetupContext(
+    signalType: String,
+    originalContext: String,
+    reflection: Double
+): String {
+    require(reflection.isFinite() && reflection > 0.0) { "TC2_SHORT_REFLECTION_INVALID" }
+    val context = if (originalContext.isBlank()) {
+        check(signalType == "FRACTAL") { "TC2_SOURCE_CONTEXT_MISSING:$signalType" }
+        JSONObject().put("wise_man", "WM3")
+            .put("legacy_source_context_missing", true)
+    } else {
+        JSONObject(originalContext)
+    }
+    context.optJSONObject("angulation")?.let { proof ->
+        for (key in listOf("price_slope", "jaw_slope", "teeth_slope")) {
+            if (!proof.isNull(key) && proof.has(key)) proof.put(key, -proof.getDouble(key))
+        }
+    }
+    if (context.has("risk_stop_at_price") && !context.isNull("risk_stop_at_price")) {
+        val originalStop = context.getDouble("risk_stop_at_price")
+        require(originalStop.isFinite()) { "TC2_SHORT_CONTEXT_STOP_INVALID" }
+        context.put("risk_stop_at_price", reflection - originalStop)
+    }
+    return context.toString()
+}
 
 private data class CampaignSignalN(
     val signalId: String,
@@ -1152,7 +1301,7 @@ private class NativeEngine(
     @Volatile private var entryTimePolicy=prefs.getString("entry_time_policy_v1",null)?.let {
         WilliamsEntryTimePolicy.fromJson(JSONObject(it))
     } ?: WilliamsEntryTimePolicy()
-    @Volatile private var williamsProfile=prefs.getString("williams_strategy_profile_v1",williamsUnifiedProfile) ?: williamsUnifiedProfile
+    @Volatile private var williamsProfile=williamsExecutionProfile
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
         NativeFuturesCampaignCoordinator(executionStore) {
@@ -1162,8 +1311,13 @@ private class NativeEngine(
                     check(RuntimeServiceState.active) { "Runtime service is not active before Futures exposure mutation" }
                 })
         }.also { coordinator ->
+            coordinator.requireM15FractalForAutomatedEntries = false
+            coordinator.m15EntryVerifier = null
+            coordinator.requireBookH1ProofForAutomatedEntries = true
+            coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }
             coordinator.setEditionSelectionProvider { williamsProfile }
             coordinator.setEntryTimePolicyProvider { entryTimePolicy }
+            coordinator.setEntryPassportAuditSink { event -> auditStore.recordEntryPassportEvent(event) }
             coordinator.setObservationSink { snapshot ->
                 auditStore.recordCampaignSnapshot(snapshot)
                 runCatching { WilliamsSignalJournal(executionStore).orders(snapshot,System.currentTimeMillis()) }
@@ -1199,7 +1353,16 @@ private class NativeEngine(
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
     // Startup only needs the frames that directly participate in execution.
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
-    private val startupFrames = listOf("1d", "6h", "4h", "1h", "15m")
+    // Prime H1 for all ten symbols before optional context/chart frames.
+    // Missing H4/D1/H6/M15 never turns off read-only H1 market analysis.
+    private val startupFrames = listOf("1h", "4h", "1d", "6h", "15m")
+    // Prioritize analysis horizons. Full exchange history of minute-by-minute
+    // bars for ten pairs can consume gigabytes and is NOT safe to force on mobile.
+    // 1m/3m/5m remain persisted on demand as bounded chart/monitoring history.
+    private val durableBackfillFrames = listOf(
+        "1h", "4h", "6h", "1d", "1w", "1M",
+        "15m", "30m", "2h", "8h", "12h", "3d"
+    )
     // The H1 decision engine needs the full 150-candle working set. Higher-timeframe
     // context has explicit lower minimums in the entry contract; requiring 150 D1
     // candles during startup can deadlock scanning on a fresh Futures Demo market.
@@ -1245,8 +1408,19 @@ private class NativeEngine(
     @Volatile private var publicSocketLastEventMs = 0L
     @Volatile private var publicSocketStartedMs = 0L
     @Volatile private var publicReconnectRequested = false
+    @Volatile private var deepHistoryBackfillRunning = false
+    @Volatile private var deepHistoryPairsComplete = 0
+    @Volatile private var deepHistoryLastError: String? = null
+    @Volatile private var deepHistoryStorageLow = false
+    @Volatile private var deepHistoryLastStartMs = 0L
     @Volatile private var historyWarmupRunning = false
-    @Volatile private var historyReady = false
+    @Volatile private var historyReady = false // All ten H1 decision sets ready.
+    @Volatile private var readOnlyH1Ready = false // At least one valid H1 working set.
+    @Volatile private var h1HistoryReadyCount = 0
+    @Volatile private var optionalContextHistoryReady = false
+    @Volatile private var historyWarmupLastStartedMs = 0L
+    private val historyWarmupRetryIntervalMs = 60_000L
+    @Volatile private var scannerMarketMetadataWarning:String? = null
     private val activeHistoryTasks = java.util.concurrent.ConcurrentHashMap.newKeySet<java.util.concurrent.Future<Boolean>>()
     @Volatile private var historyState = "IDLE"
     @Volatile private var historyLastError: String? = null
@@ -1257,12 +1431,34 @@ private class NativeEngine(
     @Volatile private var scanUniverseCacheAtMs = 0L
     private val dailyRiskCheckLock = Any()
     private val waveHierarchyCache = java.util.concurrent.ConcurrentHashMap<String, WilliamsWaveHierarchy>()
+    // Best-effort finer candles are fetched only to improve local wave context,
+    // never on the scan/Execution Door thread.
+    private val adaptiveWaveContextCache =
+        java.util.concurrent.ConcurrentHashMap<String, Pair<Long, JSONObject>>()
+    // One rate-limited research download queue. Never occupy scanner warmup
+    // or existing-position reconciliation executors with deep child history.
+    private val adaptiveWaveFetchExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable,"williams-adaptive-child-wave").apply { isDaemon=true }
+    }
+    private val adaptiveWaveFetchAttemptMs =
+        java.util.concurrent.ConcurrentHashMap<String, Long>()
+    @Volatile private var adaptiveWaveFetchLastError: String? = null
+    private val deviceWaveReplayExecutor=Executors.newSingleThreadScheduledExecutor { task->
+        Thread(task,"williams-historical-wave-replay").apply {
+            isDaemon=true;priority=Thread.NORM_PRIORITY-2
+        }
+    }
+    @Volatile private var deviceWaveReplayTask:java.util.concurrent.ScheduledFuture<*>?=null
+    @Volatile private var deviceWaveReplayState="IDLE"
+    @Volatile private var deviceWaveReplayLastError:String?=null
+    private var deviceWaveReplayNextPair=0
     private val dailyRiskPreflightLock = Any()
     @Volatile private var dailyRiskPreflightRunning = false
     @Volatile private var lastDailyRiskPreflightAtMs = 0L
     @Volatile private var lastScanDailyRiskCheckAtMs = 0L
     @Volatile private var lastScanDailyRiskCheckAllowed = false
     @Volatile private var lastNativeManagementAttemptMs = 0L
+    @Volatile private var lastProtectedRiskCapManagementAtMs = 0L
     private val deepWatchTopN = 10
     private val scannerUniverseLabel = "USD_M_FUTURES_TESTNET_10"
 
@@ -1372,7 +1568,11 @@ private class NativeEngine(
     @Volatile private var workerRecoveryAttemptsInWindow = 0
 
     @Volatile private var scannerState = "NOT_RUN"
+    // Re-evaluate confirmed H1 candidates immediately after a coincident
+    // exchange reconciliation, without waiting for another 30-second scan.
+    @Volatile private var scanRetryAfterReconciliation = false
     @Volatile private var scannerError: String? = null
+    @Volatile private var lastScannerSymbolErrors = JSONObject()
     @Volatile private var scanRunId = ""
     @Volatile private var scanStartedAt = 0L
     @Volatile private var scanLastProgressAt = 0L
@@ -1544,11 +1744,22 @@ private class NativeEngine(
         stateMachine.executionAllowed() ||
             (stateMachine.state == TradingState.ENTRY_PENDING && campaignCoordinatorReadyForEntry())
 
+    // The loss-streak UTC day must follow Binance Futures server time, not
+    // the Android timezone or an ahead-of-server handset clock (-1021).
+    // A stale clock fails closed for NEW entries, without stopping H1 analysis.
     private fun futuresLossStreakGuard(): FuturesLossStreakDecision =
-        evaluateFuturesLossStreak(
+        if(!futuresMarketData.clockSnapshot().optBoolean("fresh",false)) {
+            FuturesLossStreakDecision(false,0,false,null,"FUTURES_LOSS_STREAK_UTC_CLOCK_UNVERIFIED")
+        } else evaluateFuturesLossStreak(
             tradeRows = TradeJournal.trades(prefs),
-            nowMs = System.currentTimeMillis()
+            nowMs = futuresMarketData.cachedExchangeNowMs()
         )
+
+    private fun dailyEntryHalt(
+        nowMs:Long=futuresMarketData.cachedExchangeNowMs(),
+        clockFresh:Boolean=futuresMarketData.clockSnapshot().optBoolean("fresh",false)
+    ):FuturesDailyEntryHaltDecision = evaluateFuturesDailyEntryHalt(
+        executionStore.readState("futures_daily_entry_halt_utc_day_start_ms"),nowMs,clockFresh)
 
     /** Read-only SQLite/clock check: never perform signed REST I/O on the Android UI. */
     private fun dailyRiskBaselineReady(): Boolean {
@@ -1582,6 +1793,7 @@ private class NativeEngine(
             restAccountReady &&
             accountFundedForEntry() &&
             dailyRiskBaselineReady() &&
+            dailyEntryHalt().allowNewEntries &&
             historyReady &&
             futuresFsmAllowsEntry() &&
             futuresLossStreakGuard().allowNewEntries &&
@@ -1608,6 +1820,7 @@ private class NativeEngine(
             if (!restAccountReady) add("rest_account_not_ready")
             else if (!accountFundedForEntry()) add("futures_account_unfunded_or_zero_usdt")
             if (!dailyRiskBaselineReady()) add("futures_daily_risk_baseline_unverified")
+            dailyEntryHalt().reason?.let { add(it) }
             if (!historyReady) add("history_not_ready")
             if (!futuresFsmAllowsEntry()) add("fsm_not_execution_allowed")
             val lossStreak = futuresLossStreakGuard()
@@ -2149,6 +2362,7 @@ private class NativeEngine(
         )
         val generation = ++runtimeGeneration
         running = true
+        startDeviceWaveReplay(generation)
         // Independent reconciliation/account gates block entries. Only an explicit
         // kill latch needs to force the pause flag during safe monitoring.
         paused = killLatched || prefs.getBoolean("operator_entries_paused", false)
@@ -2175,11 +2389,15 @@ private class NativeEngine(
         userStreamSyncRequired = true
         userStream.start()
         historyReady = false
+        readOnlyH1Ready = false
+        h1HistoryReadyCount = 0
+        optionalContextHistoryReady = false
         historyState = "LOADING"
         historyLastError = null
         scannerState = "WAITING_FOR_HISTORY"
         scannerError = null
         scanRunId = ""
+        scanRetryAfterReconciliation = false
         scanProgressSymbols = 0
         warmCoreHistoryAsync(generation)
 
@@ -2199,43 +2417,49 @@ private class NativeEngine(
                         // Establish the UTC daily-loss baseline independently of signals.
                         // Never serialize H1 discovery/UI behind signed account/income requests.
                         // Missing provenance blocks new entries, not existing-position management.
-                        if (!paused && !killLatched && !reconcileRequired && restAccountReady &&
-                            userStreamConnected && !userStreamSyncRequired && !dailyRiskBaselineReady()) {
+                        if (shouldRetryDailyRiskBaseline(
+                                running = running,
+                                paused = paused,
+                                killLatched = killLatched,
+                                reconcileRequired = reconcileRequired,
+                                accountReady = restAccountReady,
+                                userStreamConnected = userStreamConnected,
+                                userStreamSyncRequired = userStreamSyncRequired,
+                                baselineReady = dailyRiskBaselineReady()
+                            )) {
                             scheduleDailyRiskBaselinePreflight()
                         }
 
-                        // Keep managing existing exposure while entry prerequisites are
-                        // degraded. manageNativeFuturesPositions reconciles with the exchange;
-                        // it does not weaken the new-entry Execution Gate.
-                        val campaignState = futuresCampaignCoordinator.state
-                        val campaignNeedsMonitoring = campaignState in setOf(
-                            NativeFuturesCampaignCoordinator.State.ENTRY_PENDING,
-                            NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED,
-                            NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
-                            NativeFuturesCampaignCoordinator.State.EXIT_PENDING,
-                            NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED
-                        )
-                        val prerequisitesDegraded =
-                            !historyReady || reconcileRequired || !restAccountReady ||
-                                !marketDataFresh() || !marketWebSocketFresh() ||
-                                !publicWebSocketFresh() || !userStreamConnected ||
-                                userStreamSyncRequired
-                        if (campaignNeedsMonitoring && (prerequisitesDegraded || killLatched || paused)) {
-                            // Do not run a second account-wide reconciliation on the scanner
-                            // worker. Route every monitor request through the single-flight
-                            // scheduler; overlapping REST reconciliation used to leave the
-                            // coordinator observable in RECONCILE_REQUIRED/in-progress and
-                            // starve scans while another reconcile held the Execution Door.
-                            scheduleNativePositionManagement()
+                        if (!historyReady && !historyWarmupRunning &&
+                            System.currentTimeMillis()-historyWarmupLastStartedMs >= historyWarmupRetryIntervalMs) {
+                            warmCoreHistoryAsync(generation)
                         }
-
-                        if (!historyReady) {
-                            scannerState = "WAITING_FOR_HISTORY"
-                            scannerError = historyLastError
-                            if (!historyWarmupRunning) warmCoreHistoryAsync(generation)
-                        } else {
+                        // The H1 read-only scanner works as soon as ONE
+                        // decision frame is ready. Trading additionally
+                        // requires all ten H1 series + independent safety
+                        // admission; partial chart data is never an entry pass.
+                        if(readOnlyH1Ready) {
+                            if (historyReady) schedulePersistentHistoryBackfill(generation)
                             requestScan()
+                        } else {
+                            scannerState = "WAITING_FOR_HISTORY"
+                            scannerError = historyLastError ?: "Waiting for the first closed H1 working set"
                         }
+                        // Never initiate account-wide reconciliation INSIDE an H1 scan:
+                        // the old scanner raced its own signed safety audit and finished
+                        // READY_BLOCKED on every pass. Manage exposure independently,
+                        // after read-only discovery gets priority. User-stream event
+                        // reconciliation remains independent and immediate.
+                        if (!nativeManagementRunning &&
+                            shouldScheduleIndependentFuturesMonitor(
+                                nowMs = System.currentTimeMillis(),
+                                lastSuccessfulMs = lastRestReconcileMs,
+                                lastAttemptMs = lastNativeManagementAttemptMs,
+                                coordinatorState = futuresCampaignCoordinator.state.name,
+                                scanning = scanning,
+                                reconciliationActive = futuresReconciliationRunning || futuresStreamReconcileRunning,
+                                safetyLatchUnresolved = reconcileRequired
+                            )) scheduleNativePositionManagement()
                     } catch (x: Exception) {
                         lastError = x.javaClass.simpleName + ": " + (x.message ?: "")
                     }
@@ -2342,6 +2566,8 @@ private class NativeEngine(
         }
         ++runtimeGeneration
         running = false
+        deviceWaveReplayTask?.cancel(false)
+        deviceWaveReplayState="STOPPED"
         paused = false
         runCatching { auditStore.recordCockpitEvent("CONTROL", state = "SHUTDOWN_CONFIRMED", detail = "Pending entries canceled and account flat confirmed after cancellation") }
         marketSocket?.close(1000, "Williams stopped")
@@ -2370,6 +2596,9 @@ private class NativeEngine(
         scannerState = "STOPPED"
         scannerError = null
         historyReady = false
+        readOnlyH1Ready = false
+        h1HistoryReadyCount = 0
+        optionalContextHistoryReady = false
         historyState = "STOPPED"
         historyLastError = null
         activeHistoryTasks.forEach { it.cancel(true) }
@@ -2386,6 +2615,8 @@ private class NativeEngine(
         killLatched = true
         paused = true
         running = false
+        deviceWaveReplayTask?.cancel(false)
+        deviceWaveReplayState="STOPPED"
         val killLatchPersisted = persistSafetyFlag("kill_latched", true)
         if (!killLatchPersisted) {
             reconcileRequired = true
@@ -3519,16 +3750,20 @@ private class NativeEngine(
 
     private fun warmCoreHistoryAsync(generation: Long = runtimeGeneration) {
         if (historyWarmupRunning || !running || generation != runtimeGeneration) return
+        if(historyWarmupLastStartedMs>0 &&
+            System.currentTimeMillis()-historyWarmupLastStartedMs<historyWarmupRetryIntervalMs) return
+        historyWarmupLastStartedMs=System.currentTimeMillis()
         historyWarmupRunning = true
-        historyReady = false
-        historyState = "LOADING"
+        // A retry for optional D1/H4/M15 frames must not revoke a previously
+        // verified H1 readiness signal or terminate working read-only charts.
+        historyState = if(historyReady) "H1_READY_CONTEXT_LOADING" else "LOADING"
         historyLastError = null
 
         Thread {
             val tasks = mutableListOf<Pair<String, java.util.concurrent.Future<Boolean>>>()
             try {
-                for (symbol in coreSymbols) {
-                    for (frame in startupFrames) {
+                for (frame in startupFrames) {
+                    for (symbol in coreSymbols) {
                         if (!running || generation != runtimeGeneration) return@Thread
                         val label = symbol + ":" + frame
                         val future = historyBackfillExecutor.submit(Callable {
@@ -3586,6 +3821,8 @@ private class NativeEngine(
                 }
 
                 var allReady = true
+                var h1ReadyNow = 0
+                var h1TasksResolved = 0
                 val deadline = System.currentTimeMillis() + 90_000L
                 tasks.forEach { (label, future) ->
                     val ok = runCatching {
@@ -3598,6 +3835,22 @@ private class NativeEngine(
                         false
                     }
                     activeHistoryTasks.remove(future)
+                    if(label.endsWith(":1h")) {
+                        h1TasksResolved++
+                        if(ok) h1ReadyNow++
+                        h1HistoryReadyCount=h1ReadyNow
+                        // Wait until the whole ten-symbol H1 warmup group
+                        // settles. Starting a ten-way REST scan after the
+                        // FIRST symbol finished caused a thundering herd that
+                        // could starve the remaining H1 startup workers.
+                        if(h1TasksResolved==coreSymbols.size) {
+                            if(h1ReadyNow>0) readOnlyH1Ready=true
+                            if(h1ReadyNow==coreSymbols.size) {
+                                historyReady=true
+                                historyState="H1_READY_CONTEXT_LOADING"
+                            }
+                        }
+                    } else if (!ok) allReady = false
                     if (!ok) allReady = false
                 }
                 if (System.currentTimeMillis() >= deadline && !allReady) {
@@ -3606,22 +3859,15 @@ private class NativeEngine(
 
                 if (generation != runtimeGeneration || !running) return@Thread
 
-                historyReady = allReady
-                historyState = if (historyReady) "READY" else "WAITING_RETRY"
-                if (historyReady) {
-                    // Deep history is bounded and sequential on mobile. It is
-                    // a cache warmer, never a prerequisite for first scan.
-                    historyBackfillExecutor.execute {
-                        for (symbol in coreSymbols) {
-                            if (!running || generation != runtimeGeneration) break
-                            runCatching { fetchFullHistory(symbol, "1h", 6) }
-                                .onFailure {
-                                    lastError = "background history " + symbol + ": " +
-                                        (it.message ?: it.javaClass.simpleName)
-                                }
-                        }
-                    }
+                historyReady = h1ReadyNow==coreSymbols.size
+                optionalContextHistoryReady=allReady
+                historyState = when {
+                    allReady && historyReady -> "READY"
+                    historyReady -> "H1_READY_CONTEXT_PARTIAL"
+                    readOnlyH1Ready -> "PARTIAL_H1_SCANNING_AVAILABLE"
+                    else -> "WAITING_RETRY"
                 }
+                if (historyReady) schedulePersistentHistoryBackfill(generation)
             } catch (x: Exception) {
                 if (generation == runtimeGeneration) {
                     historyReady = false
@@ -3638,6 +3884,80 @@ private class NativeEngine(
         }.apply {
             isDaemon = true
             name = "williams-recent-history"
+            start()
+        }
+    }
+
+    /**
+     * The phone owns an append-only SQLite kline history. Fetch the exchange's
+     * earliest available bar for the selected Williams analysis frames in
+     * small restartable batches. A network outage cannot erase progress.
+     *
+     * One background worker + inter-pair pauses avoid a 10×15 REST stampede.
+     * Existing H1 read-only scans and protective orders are never delayed on
+     * exhaustive archival downloads.
+     */
+    @Synchronized
+    private fun schedulePersistentHistoryBackfill(generation: Long) {
+        if (!running || !historyReady || deepHistoryBackfillRunning ||
+            generation != runtimeGeneration) return
+        val now = System.currentTimeMillis()
+        if (deepHistoryLastStartMs > 0L && now - deepHistoryLastStartMs < 60_000L) return
+        deepHistoryBackfillRunning = true
+        deepHistoryLastStartMs = now
+        Thread {
+            try {
+                while (running && generation == runtimeGeneration &&
+                    !Thread.currentThread().isInterrupted) {
+                    var incomplete = 0
+                    var successes = 0
+                    deepHistoryLastError = null
+                    for (frame in durableBackfillFrames) {
+                        for (symbol in coreSymbols) {
+                            if (!running || generation != runtimeGeneration ||
+                                Thread.currentThread().isInterrupted) return@Thread
+                            // Leave room for the Futures journal, SQLite WAL and Android.
+                            val freeBytes = runCatching {
+                                android.os.StatFs(context.filesDir.path).availableBytes
+                            }.getOrDefault(0L)
+                            if (freeBytes < 512L * 1024L * 1024L) {
+                                deepHistoryStorageLow = true
+                                deepHistoryLastError = "LOW_DEVICE_STORAGE: historical download paused; existing database preserved"
+                                return@Thread
+                            }
+                            deepHistoryStorageLow = false
+                            val result = runCatching { fetchFullHistory(symbol, frame, 4) }
+                            if (result.isFailure) {
+                                deepHistoryLastError = symbol + ":" + frame + " " +
+                                    (result.exceptionOrNull()?.message ?: "history error")
+                                incomplete++
+                            } else {
+                                successes++
+                                if (!historyStore.isComplete(symbol, frame)) incomplete++
+                            }
+                            // Allow new-order protection, scanning and foreground UI
+                            // to consume exchange-rate and device I/O budgets first.
+                            try { Thread.sleep(200L) } catch (_: InterruptedException) {
+                                Thread.currentThread().interrupt()
+                                return@Thread
+                            }
+                        }
+                    }
+                    deepHistoryPairsComplete = durableBackfillFrames.size * coreSymbols.size - incomplete
+                    // Once all backfill cursors reach the exchange beginning, the
+                    // same job periodically catches up missed newer candles.
+                    val intervalMs = if (incomplete == 0) 3_600_000L else 30_000L
+                    try { Thread.sleep(intervalMs) } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return@Thread
+                    }
+                }
+            } finally {
+                deepHistoryBackfillRunning = false
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-durable-history-sync"
             start()
         }
     }
@@ -3899,146 +4219,106 @@ private class NativeEngine(
             .takeLast(limit)
     }
 
+    /**
+     * Persist an exchange-history slice. Backwards sync always starts BEFORE
+     * SQLite's oldest saved bar, so restarts never download the same six pages.
+     * Once the exchange beginning was reached, only fetch missing new bars.
+     *
+     * Return only the small working set, never all historical rows in RAM.
+     */
     private fun fetchFullHistory(
         symbol: String,
         frame: String = "1h",
-        maxPages: Int = 6
+        maxPages: Int = 4
     ): List<CandleN> {
-        val normalizedSymbol = symbol.uppercase()
-
-        if (!historyStore.isComplete(normalizedSymbol, frame)) {
-            var endTime = futuresMarketData.exchangeNowMs()
-            var page = 0
-            var reachedHistoryBeginning = false
-            val pageLimit = maxPages.coerceIn(1, 100)
-            try {
-                while (page++ < pageLimit) {
-                    val body = futuresMarketData.klines(
-                        normalizedSymbol,
-                        frame,
-                        1000,
-                        endTime = endTime
-                    ).toString()
-                    val array = JSONArray(body)
+        val normalizedSymbol = symbol.uppercase(Locale.US)
+        val pageLimit = maxPages.coerceIn(1, 8)
+        try {
+            if (!historyStore.isComplete(normalizedSymbol, frame)) {
+                val previousOldest = historyStore.oldest(normalizedSymbol, frame)
+                var endTime = if (previousOldest > 0L) previousOldest - 1L
+                    else futuresMarketData.exchangeNowMs()
+                for (page in 0 until pageLimit) {
+                    if (!running || Thread.currentThread().isInterrupted) break
+                    val array = futuresMarketData.klines(
+                        normalizedSymbol, frame, 1000, endTime = endTime
+                    )
                     if (array.length() == 0) {
-                        reachedHistoryBeginning = true
+                        // No known candles means unavailable history, not a verified
+                        // exchange beginning. Do not mark an empty database complete.
+                        if (historyStore.count(normalizedSymbol, frame) > 0L)
+                            historyStore.markComplete(normalizedSymbol, frame)
                         break
                     }
                     val exchangeNowMs = futuresMarketData.exchangeNowMs()
-
-                    val batch = ArrayList<MarketHistoryStore.Candle>(
-                        array.length()
-                    )
-                    var oldest = Long.MAX_VALUE
-
+                    val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
+                    var oldestPageTime = Long.MAX_VALUE
                     for (i in 0 until array.length()) {
                         val row = array.getJSONArray(i)
                         val openTime = row.getLong(0)
                         val closeTime = row.getLong(6)
-                        oldest = min(oldest, openTime)
-
-                        if (!futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)) {
-                            continue
+                        if (openTime <= 0L || openTime > endTime) {
+                            throw IllegalStateException("Historical USD-M Futures pagination did not move backwards")
                         }
-
+                        oldestPageTime = minOf(oldestPageTime, openTime)
+                        if (!futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)) continue
                         batch += MarketHistoryStore.Candle(
-                            openTime = openTime,
-                            closeTime = closeTime,
-                            open = row.getString(1).toDouble(),
-                            high = row.getString(2).toDouble(),
-                            low = row.getString(3).toDouble(),
-                            close = row.getString(4).toDouble(),
-                            volume = row.getString(5).toDouble()
+                            openTime, row.getString(1).toDouble(), row.getString(2).toDouble(),
+                            row.getString(3).toDouble(), row.getString(4).toDouble(),
+                            row.getString(5).toDouble(), closeTime
                         )
                     }
-
                     if (batch.isNotEmpty()) {
-                        historyStore.upsertBatch(
-                            normalizedSymbol,
-                            frame,
-                            batch
-                        )
+                        historyStore.upsertBatch(normalizedSymbol, frame, batch)
                     }
-
-                    if (
-                        oldest == Long.MAX_VALUE ||
-                        oldest <= 0L ||
-                        array.length() < 1000
-                    ) {
-                        reachedHistoryBeginning = true
+                    if (oldestPageTime <= 0L || oldestPageTime >= endTime) {
+                        throw IllegalStateException("Historical pagination failed to advance")
+                    }
+                    if (array.length() < 1000) {
+                        historyStore.markComplete(normalizedSymbol, frame)
                         break
                     }
-
-                    endTime = oldest - 1L
+                    endTime = oldestPageTime - 1L
                 }
-
-                if (reachedHistoryBeginning) {
-                    historyStore.markComplete(
-                        normalizedSymbol,
-                        frame
+            } else {
+                // Catch up any number of closed bars missed while the phone was
+                // offline. A three-bar tail request missed gaps longer than 3 bars.
+                var newest = historyStore.newest(normalizedSymbol, frame)
+                if (newest <= 0L) throw IllegalStateException("Complete history has no persisted candles")
+                for (page in 0 until pageLimit) {
+                    if (!running || Thread.currentThread().isInterrupted) break
+                    val array = futuresMarketData.klines(
+                        normalizedSymbol, frame, 1000, startTime = newest + 1L
                     )
+                    if (array.length() == 0) break
+                    val now = futuresMarketData.exchangeNowMs()
+                    val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
+                    for (i in 0 until array.length()) {
+                        val row = array.getJSONArray(i)
+                        val opened = row.getLong(0)
+                        val closed = row.getLong(6)
+                        if (opened <= newest) continue
+                        if (!futuresMarketData.isCandleClosed(closed, now)) break
+                        batch += MarketHistoryStore.Candle(
+                            opened, row.getString(1).toDouble(), row.getString(2).toDouble(),
+                            row.getString(3).toDouble(), row.getString(4).toDouble(),
+                            row.getString(5).toDouble(), closed
+                        )
+                    }
+                    if (batch.isEmpty()) break
+                    historyStore.upsertBatch(normalizedSymbol, frame, batch)
+                    val next = batch.last().openTime
+                    if (next <= newest) throw IllegalStateException("History incremental cursor stalled")
+                    newest = next
+                    if (array.length() < 1000) break
                 }
-            } catch (x: Exception) {
-                historyStore.setError(
-                    normalizedSymbol,
-                    frame,
-                    x.message ?: x.javaClass.simpleName
-                )
-                throw x
             }
-        } else {
-            // After the initial full download, only refresh the recent tail.
-            val newest = historyStore.newest(
-                normalizedSymbol,
-                frame
-            )
-            val body = futuresMarketData.klines(
-                normalizedSymbol,
-                frame,
-                3,
-                startTime = newest.coerceAtLeast(0L)
-            ).toString()
-            val array = JSONArray(body)
-            val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
-            val exchangeNowMs = futuresMarketData.exchangeNowMs()
-
-            for (i in 0 until array.length()) {
-                val row = array.getJSONArray(i)
-                val closeTime = row.getLong(6)
-                if (!futuresMarketData.isCandleClosed(closeTime, exchangeNowMs)) continue
-                batch += MarketHistoryStore.Candle(
-                    openTime = row.getLong(0),
-                    closeTime = closeTime,
-                    open = row.getString(1).toDouble(),
-                    high = row.getString(2).toDouble(),
-                    low = row.getString(3).toDouble(),
-                    close = row.getString(4).toDouble(),
-                    volume = row.getString(5).toDouble()
-                )
-            }
-
-            historyStore.upsertBatch(
-                normalizedSymbol,
-                frame,
-                batch,
-                complete = true
-            )
+        } catch (failure: Exception) {
+            historyStore.setError(normalizedSymbol, frame, failure.message ?: failure.javaClass.simpleName)
+            throw failure
         }
-
-        // Only a bounded working set enters RAM.
-        return historyStore.loadRecent(
-            normalizedSymbol,
-            frame,
-            5000
-        ).map {
-            CandleN(
-                it.openTime,
-                it.open,
-                it.high,
-                it.low,
-                it.close,
-                it.volume
-            )
+        return historyStore.loadRecent(normalizedSymbol, frame, 150).map {
+            CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
         }
     }
 
@@ -4055,25 +4335,40 @@ private class NativeEngine(
             return Triple(cached.first.toList(), HashMap(cached.second), HashMap(cached.third))
         }
 
+        // Volume and public bid/ask are OPTIONAL read-only ranking context.
+        // Previously one missing contract or a short-lived 24h ticker outage
+        // threw here and cancelled analysis of ALL TEN H1 charts. Unknown
+        // spreads remain -1 (never executable) and final live top-of-book,
+        // account and spread preflights must still pass independently.
         val volumes = HashMap<String, Double>()
-        val volumeRows = futuresMarketData.ticker24h()
-        for (i in 0 until volumeRows.length()) {
-            val item = volumeRows.optJSONObject(i) ?: continue
-            val symbol = item.optString("symbol").uppercase(Locale.US)
-            if (symbol in coreSymbols) volumes[symbol] = item.optString("quoteVolume").toDoubleOrNull() ?: 0.0
+        val volumeError=runCatching { futuresMarketData.ticker24h() }
+        val volumeRows=volumeError.getOrNull()
+        if(volumeRows!=null) for(i in 0 until volumeRows.length()) {
+            val item=volumeRows.optJSONObject(i) ?: continue
+            val symbol=item.optString("symbol").uppercase(Locale.US)
+            val volume=item.optString("quoteVolume").toDoubleOrNull()
+            if(symbol in coreSymbols && volume!=null && volume.isFinite() && volume>0)
+                volumes[symbol]=volume
         }
         val spreads = HashMap<String, Double>()
-        val bookRows = futuresMarketData.bookTickers()
-        for (i in 0 until bookRows.length()) {
-            val item = bookRows.optJSONObject(i) ?: continue
-            val symbol = item.optString("symbol").uppercase(Locale.US)
-            if (symbol !in coreSymbols) continue
-            val bid = item.optString("bidPrice").toDoubleOrNull() ?: 0.0
-            val ask = item.optString("askPrice").toDoubleOrNull() ?: 0.0
-            if (bid > 0.0 && ask >= bid) spreads[symbol] = (ask - bid) / bid
+        val bookError=runCatching { futuresMarketData.bookTickers() }
+        val bookRows=bookError.getOrNull()
+        if(bookRows!=null) for(i in 0 until bookRows.length()) {
+            val item=bookRows.optJSONObject(i) ?: continue
+            val symbol=item.optString("symbol").uppercase(Locale.US)
+            if(symbol !in coreSymbols) continue
+            val bid=item.optString("bidPrice").toDoubleOrNull()
+            val ask=item.optString("askPrice").toDoubleOrNull()
+            if(bid!=null && ask!=null && bid.isFinite() && ask.isFinite() &&
+                bid>0 && ask>=bid) spreads[symbol]=(ask-bid)/bid
         }
-        val missing = coreSymbols.filter { (volumes[it] ?: 0.0) <= 0.0 || spreads[it] == null }
-        require(missing.isEmpty()) { "Futures market data missing approved contracts: " + missing.joinToString(",") }
+        val missingSpreads=coreSymbols.filter { spreads[it]==null }
+        val missingVolumes=coreSymbols.filter { volumes[it]==null }
+        scannerMarketMetadataWarning=if(missingSpreads.isEmpty() && missingVolumes.isEmpty()) null else
+            "READ_ONLY_MARKET_METADATA_PARTIAL: unknown_spread=" + missingSpreads.joinToString(",") +
+            "; unknown_volume=" + missingVolumes.joinToString(",") +
+            "; volume_error=" + (volumeError.exceptionOrNull()?.javaClass?.simpleName ?: "none") +
+            "; book_error=" + (bookError.exceptionOrNull()?.javaClass?.simpleName ?: "none")
         val snapshot = Triple(coreSymbols.toList(), volumes.toMap(), spreads.toMap())
         cachedScanUniverse = snapshot
         scanUniverseCacheAtMs = nowMs
@@ -4095,7 +4390,7 @@ private class NativeEngine(
         // coordinator; otherwise a manual scan can appear RUNNING during reconciliation.
         val gateState = scannerDataReadinessState(
             running = running,
-            historyReady = historyReady,
+            historyReady = readOnlyH1Ready,
             marketDataFresh = marketDataFresh()
         )
         if (gateState != "RUNNABLE") {
@@ -4110,7 +4405,12 @@ private class NativeEngine(
         }
 
         synchronized(this) {
-            if (scanning) return
+            val retryAfterVerifiedReconciliation = scanRetryAfterReconciliation &&
+                !futuresReconciliationRunning &&
+                futuresCampaignCoordinator.state != NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED
+            if (scanning || (!retryAfterVerifiedReconciliation &&
+                !shouldScheduleReadOnlyScan(System.currentTimeMillis(),lastScanAt))) return
+            scanRetryAfterReconciliation = false
             scanning = true
             scannerError = null
             scanRunId = "scan-" + System.currentTimeMillis()
@@ -4318,14 +4618,30 @@ private class NativeEngine(
         // Bound lock acquisition so a stalled account-wide reconciliation cannot strand
         // queued private-stream work indefinitely. Unknown exchange state remains blocked.
         val waitStartedAtMs = System.currentTimeMillis()
+        // Periodic management is a best-effort maintenance tick. If another
+        // authoritative reconciliation already owns the account lock, coalesce
+        // the tick rather than queue for 50s and falsely persist a fatal latch.
+        // Kill, startup, user-stream, and explicit recovery remain strict.
+        val maintenanceTick = purpose == "POSITION_MANAGEMENT_RECONCILIATION"
         val lockAcquired = try {
-            futuresReconciliationLock.tryLock(waitForDoorMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+            futuresReconciliationLock.tryLock(
+                if (maintenanceTick) 0L else waitForDoorMs.coerceAtLeast(0L),
+                TimeUnit.MILLISECONDS
+            )
         } catch (interrupted: InterruptedException) {
             Thread.currentThread().interrupt()
             lastReconciliationLockWaitFailure = "Interrupted while waiting for the account-wide reconciliation lock"
             false
         }
         lastReconciliationLockWaitMs = (System.currentTimeMillis() - waitStartedAtMs).coerceAtLeast(0L)
+        if (!lockAcquired && maintenanceTick &&
+            !Thread.currentThread().isInterrupted && futuresReconciliationRunning) {
+            // The owner continues to hold the Execution Door. No new entry is
+            // enabled here; the periodic monitor rechecks on the next tick.
+            return JSONObject().put("ok", false)
+                .put("deferred_to_active_reconciliation", true)
+                .put("blocker", "exchange_reconciliation_in_progress")
+        }
         if (!lockAcquired) {
             val baseReason = if (Thread.currentThread().isInterrupted) {
                 "Futures reconciliation ($purpose) was interrupted while waiting for the account-wide reconciliation lock"
@@ -4435,7 +4751,7 @@ private class NativeEngine(
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
         // TC2's first still-valid presenting Wise Man. Consumed levels have
         // already been removed by their causal trigger checks.
-        candidate.campaignSignals.minByOrNull { it.signalBarTimeMs }
+        candidate.campaignSignals.filter { it.strategyProfile==williamsExecutionProfile && it.role=="ENTRY" }.minByOrNull { it.signalBarTimeMs }
 
     // Legacy Spot-era campaign submission/management/recovery implementation removed.
     // Entry, trailing protection, and exits are owned by NativeFuturesCampaignCoordinator.
@@ -4555,7 +4871,11 @@ private class NativeEngine(
             }
             val baselineResult = baselineAttempt.getOrElse { failure ->
                 paused = true
-                prefs.edit().putBoolean("auto_run", false).commit()
+                // Distinguish an automatic, recoverable daily-baseline pause
+                // from the operator's explicit pause. Never erase either risk
+                // evidence or the original 3% daily loss limit.
+                prefs.edit().putBoolean("auto_run", false)
+                    .putBoolean("risk_daily_baseline_auto_paused", true).commit()
                 lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: unable to reconstruct UTC-day equity safely: " +
                     (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 3% and entries stay blocked"
                 return false
@@ -4683,9 +5003,19 @@ private class NativeEngine(
             return false
         }
         if (lossPct >= 0.03) {
-            paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            // A daily entry limit must expire with its UTC session. Do not turn
+            // it into the operator's indefinite pause or disable runtime auto-run.
+            if(!executionStore.writeState("futures_daily_entry_halt_utc_day_start_ms",utcDayStartMs.toString())) {
+                paused=true
+                prefs.edit().putBoolean("auto_run",false).commit()
+                lastError="FUTURES_DAILY_ENTRY_HALT_PERSIST_FAILED: entries paused; SQLite write failed"
+                return false
+            }
+        }
+        val halt=dailyEntryHalt(exchangeNowMs,true)
+        if(!halt.allowNewEntries) {
             lastError = "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"
+            if(!halt.available) lastError=halt.reason
             runCatching {
                 withCampaignMutation(
                     symbol = "FUTURES_ACCOUNT",
@@ -4698,6 +5028,30 @@ private class NativeEngine(
                 }
             }
             return false
+        }
+        if(lastError?.startsWith("FUTURES_DAILY_LOSS_LIMIT:")==true) lastError=null
+        // UTC midnight clears the *loss streak*, not financial drawdown or
+        // unresolved orders. A previously automatic UNKNOWN-baseline pause may
+        // be released ONLY once the current UTC baseline, daily PnL and
+        // exchange account have all passed this exact verification.
+        val recoverablePause = prefs.getBoolean("risk_daily_baseline_auto_paused", false) ||
+            (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true)
+        if (canReleaseVerifiedUtcRiskPause(
+                baselineAndPnlVerified=true,
+                wasRiskAutoPaused=recoverablePause,
+                runtimeRunning=running,
+                operatorPaused=prefs.getBoolean("operator_entries_paused", false),
+                killLatched=killLatched,
+                reconcileRequired=reconcileRequired,
+                testnetOverrideActive=forceTestnetMode
+            )) {
+            // Other gates (coordinator, pending orders, WSS, fresh market, FSM)
+            // remain authoritative; removing this PAUSE is not an entry permit.
+            if (prefs.edit().putBoolean("risk_daily_baseline_auto_paused", false).commit()) {
+                paused = false
+                if (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true)
+                    lastError = null
+            }
         }
         return true
     }
@@ -5177,6 +5531,12 @@ private class NativeEngine(
             allowStopped = true,
             allowKillLatched = true
         )
+        if (reconciliation.optBoolean("deferred_to_active_reconciliation", false)) {
+            // Coalesced behind an authoritative in-flight signed reconciliation:
+            // do NOT create a false 50-second lock timeout or latch. The owner
+            // still fences all new entries until its exchange proof is complete.
+            return true
+        }
         if (!reconciliation.optBoolean("ok", false)) {
             scannerError = reconciliation.optString("blocker", "Futures reconciliation failed")
             // Fence all new entries BEFORE deciding whether a zero-fill pending
@@ -5184,6 +5544,33 @@ private class NativeEngine(
             reconcileRequired = true
             persistSafetyFlag("reconcile_required", true)
             stateMachine.force(TradingState.RECONCILE_REQUIRED, scannerError ?: "Futures reconciliation failed")
+            val riskManagementNowMs = System.currentTimeMillis()
+            val riskManagementLastMs = lastProtectedRiskCapManagementAtMs
+            if (reconciliation.optBoolean("protected_over_cap_management_allowed", false) &&
+                (riskManagementLastMs <= 0L || riskManagementNowMs - riskManagementLastMs >= 30_000L)
+            ) {
+                // Limit repeated signed Futures requests while a hard risk cap
+                // is exceeded; preserve 24/7 exits and confirmed stop protection.
+                lastProtectedRiskCapManagementAtMs = riskManagementNowMs
+                // A failed risk-cap reconciliation is NOT a trading authorization.
+                // Retain the durable latch and permit only confirmed risk-reducing
+                // exits / stop improvements. New entries and add-ons remain forbidden.
+                val riskManagement = runCatching {
+                    manageVerifiedNativePositions(
+                        futuresCampaignCoordinator.positionsSnapshot(),
+                        futuresCampaignCoordinator.intentsSnapshot(),
+                        riskOnly = true
+                    )
+                }
+                riskManagement.onFailure { failure ->
+                    lastError = "PROTECTED_RISK_CAP_MANAGEMENT_FAILED: " +
+                        (failure.message ?: failure.javaClass.simpleName)
+                    runCatching { auditStore.recordCockpitEvent(
+                        "RISK_CAP_MANAGEMENT", state = "BLOCKED",
+                        detail = lastError.orEmpty()
+                    ) }
+                }
+            }
             if (scannerError?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:")==true) {
                 val candidate=runCatching {
                     proposePendingRiskRemediation(
@@ -5275,7 +5662,7 @@ private class NativeEngine(
             val expires=pending.optLong("signal_expires_at_ms",if (signalAt>0) signalAt+18_000_000L else 0L)
             val expired=expires>0 && futuresMarketData.exchangeNowMs()>=expires
             var invalidCorrection=false
-            var invalidEdition=false
+            var invalidEdition=williamsNewExposureBlocker(pending.optString("strategy_profile",williamsTc2Profile))!=null
             val profile=pending.optString("strategy_profile",williamsTc2Profile)
             // Re-anchor a still-unfilled conditional TC2 entry only after a newer
             // eligible WM3 was confirmed on closed H1 bars. Never reprice an order
@@ -5284,6 +5671,92 @@ private class NativeEngine(
                 val row=positions.optJSONObject(index) ?: return@all false
                 val qty=row.optString("positionAmt").toDoubleOrNull()
                 qty!=null && qty.isFinite() && (row.optString("symbol")!=symbol || qty==0.0)
+            }
+            if (expiredTriggeringEntryNeedsExchangeCancel(
+                    expired=expired,
+                    orderStatus=exchangeOrderStatus(pending),
+                    accountPositionKnownFlat=exchangeRowsValid,
+                    explicitOperatorOrder=pending.optString("signal_type")=="OPERATOR_FORCED_DIRECTION"
+                )) {
+                // Earlier book/M15 branches did 'continue' on TRIGGERING,
+                // leaving day-old expired orders blocking every new entry.
+                // This is an informed exchange cancellation attempt, never a
+                // local pretend reset of entry/fill or of the UTC risk baseline.
+                val result=withCampaignMutation(
+                    symbol,"EXPIRED_H1_TRIGGERING_CANCEL_RECONCILE",
+                    allowPaused=true
+                ) {
+                    try {
+                        futuresCampaignCoordinator.cancelPendingEntries(
+                            "H1_SIGNAL_EXPIRED",symbol)
+                    } finally {
+                        reconcileRequired=true
+                        check(persistSafetyFlag("reconcile_required",true)) {
+                            "EXPIRED_H1_TRIGGERING_CANCEL_RECONCILIATION_FENCE_FAILED"
+                        }
+                    }
+                }
+                if (!result.optBoolean("ok",false))
+                    lastError="EXPIRED_H1_TRIGGERING_CANCEL_NOT_CONFIRMED: "+
+                        symbol+": "+result.optString("blocker")
+                return false // Force fresh exchange position/fill/stop reconciliation.
+            }
+            if(pending.optString("intent_role","ENTRY")=="ENTRY" && exchangeRowsValid &&
+                pending.optString("client_id").startsWith("W2E_") && pending.optString("signal_type")!="OPERATOR_FORCED_DIRECTION") {
+                if(exchangeOrderStatus(pending) in setOf("TRIGGERING","TRIGGERED")) continue
+                if(manageM15PendingEntry(pending)) return false
+                continue // H1-only re-anchoring must never replace a junior-confirmed order.
+            }
+            // A book-H1 conditional entry is rechecked while waiting, because
+            // Binance executes conditional stops asynchronously. In particular,
+            // the WM3 fractal must still break on the correct side of Teeth.
+            if(pending.optString("intent_role","ENTRY")=="ENTRY" && exchangeRowsValid && !invalidEdition &&
+                pending.optString("client_id").startsWith("W2H_") &&
+                pending.optString("signal_type")!="OPERATOR_FORCED_DIRECTION") {
+                if(exchangeOrderStatus(pending) in setOf("TRIGGERING","TRIGGERED")) continue
+                val bookInvalidation=runCatching {
+                    val now=futuresMarketData.exchangeNowMs()
+                    val tick=symbolFilters(symbol).tick
+                    val setup=runCatching { JSONObject(pending.optString("setup_context")) }.getOrDefault(JSONObject())
+                    val parentId=pending.optString("signal_id")
+                    val price=pending.optString("entry_price").toDoubleOrNull() ?: Double.NaN
+                    val stop=pending.optString("protective_stop").toDoubleOrNull() ?: Double.NaN
+                    val proofError=williamsBookH1ProofBlocker(setup.toString(),
+                        pending.optString("direction"),parentId,pending.optString("signal_type"),
+                        pending.optString("strategy_profile",williamsTc2Profile),price,stop,now)
+                    if(proofError!=null) proofError
+                    else {
+                        val h1=fetchCandles(symbol,"1h",220)
+                        val valid=h1ContextCampaignSignals(symbol,h1,tick).any {
+                            it.signalId==parentId && it.type==pending.optString("signal_type") &&
+                            it.strategyProfile==profile && it.role=="ENTRY"
+                        }
+                        if(!valid) h1ParentRejectionReason(symbol,parentId,"H1_BOOK_PARENT_INVALIDATED")
+                        else {
+                            val closed=h1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+                            val teeth=williamsAlligatorLine(closed,8,5).lastOrNull() ?: Double.NaN
+                            williamsBookFractalTeethBlocker(pending.optString("signal_type"),
+                                pending.optString("direction"),price,teeth,tick)
+                        }
+                    }
+                }.getOrElse { failure ->
+                    lastError="H1_BOOK_PENDING_REVALIDATION_UNAVAILABLE: "+symbol+": "+(failure.message ?: failure.javaClass.simpleName)
+                    null // Never cancel an order on an uncertain network/market snapshot.
+                }
+                if(bookInvalidation!=null) {
+                    val result=withCampaignMutation(symbol,"H1_BOOK_PENDING_INVALIDATED_CANCEL",allowPaused=true) {
+                        try { futuresCampaignCoordinator.cancelPendingEntries(bookInvalidation,symbol) }
+                        finally {
+                            reconcileRequired=true
+                            check(persistSafetyFlag("reconcile_required",true)) {
+                                "H1_BOOK_CANCEL_RECONCILIATION_FENCE_FAILED"
+                            }
+                        }
+                    }
+                    if(!result.optBoolean("ok",false))
+                        lastError="H1_BOOK_PENDING_CANCEL_UNRESOLVED: "+symbol+": "+result.optString("blocker")
+                    return false // Reconcile fills and position ownership before further entry.
+                }
             }
             if (profile==williamsTc2Profile && pending.optString("intent_role","ENTRY")=="ENTRY" &&
                 exchangeRowsValid) {
@@ -5357,7 +5830,7 @@ private class NativeEngine(
                     return false // No second mutation before fresh position reconciliation.
                 }
             }
-            if(profile!=williamsTc2Profile && pending.optString("kind")!="MARKET") {
+            if(profile!=williamsTc2Profile && !invalidEdition && pending.optString("kind")!="MARKET") {
                 val current=editionCampaignSignals(symbol,fetchCandles(symbol,"1h",220),"1h",symbolFilters(symbol).tick,profile)
                 val expected=pending.optString("entry_price").toDoubleOrNull()
                 invalidEdition=current.none { it.type==pending.optString("signal_type") &&
@@ -5371,7 +5844,7 @@ private class NativeEngine(
                     !williamsCorrectionPriceAllowed(current.toJson(),futuresMarketData.markPrice(symbol))
             }
             if (expired || invalidCorrection || invalidEdition) {
-                val reason=if (expired) "H1_SIGNAL_EXPIRED" else if(invalidEdition) "EDITION_FORMATION_INVALIDATED" else "CORRECTION_PARENT_INVALIDATED"
+                val reason=if(williamsNewExposureBlocker(profile)!=null) "WILLIAMS_SOURCE_OBSERVATION_ONLY" else if (expired) "H1_SIGNAL_EXPIRED" else if(invalidEdition) "EDITION_FORMATION_INVALIDATED" else "CORRECTION_PARENT_INVALIDATED"
                 val result=withCampaignMutation(symbol,"WILLIAMS_INVALIDATED_ENTRY_CANCEL",allowPaused=true) {
                     futuresCampaignCoordinator.cancelPendingEntries(reason,symbol)
                 }
@@ -5381,6 +5854,81 @@ private class NativeEngine(
                 return false // force a fresh position/intent snapshot after a possible racing fill
             }
         }
+        manageVerifiedNativePositions(positions, intents, riskOnly = false)
+        return true
+    }
+
+    /** Cancel first; a replacement is sized only after a fresh complete exchange reconciliation. */
+    private fun manageM15PendingEntry(pending:JSONObject):Boolean {
+        val symbol=pending.getString("symbol")
+        val now=futuresMarketData.exchangeNowMs()
+        val setup=runCatching { JSONObject(pending.optString("setup_context")) }.getOrDefault(JSONObject())
+        val old=setup.optJSONObject("mtf_entry")?.let { williamsM15EntryFromJson(it) }
+        // A 4.35 M15 order is not a valid 4.36 book-native entry. Cancel only
+        // a proven ZERO-FILL pending order, then reconcile before new admission.
+        // TRIGGERING/TRIGGERED/fills are handled by the ordinary recovery path.
+        var reason="LEGACY_M15_ENTRY_POLICY_MIGRATED_TO_BOOK_H1"
+        var replacement:WilliamsM15Entry?=null
+        if(old!=null) {
+            reason=williamsMtfProofBlocker(setup.toString(),pending.optString("direction"),pending.optString("signal_id"),
+                pending.optString("entry_price").toDoubleOrNull() ?: Double.NaN,
+                pending.optString("protective_stop").toDoubleOrNull() ?: Double.NaN,now).orEmpty()
+        }
+        if(old!=null && reason.isEmpty()) {
+            // A history/network failure must not prevent management of other protected symbols.
+            val assessment=runCatching {
+                val h1=fetchCandles(symbol,"1h",220)
+                val parents=h1ContextCampaignSignals(symbol,h1,symbolFilters(symbol).tick)
+                val m15=fetchCandles(symbol,"15m",220).filter { it.t>0 && it.t+WILLIAMS_M15_MS<=now }
+                val bars=m15.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                val teeth=williamsAlligatorLine(m15,8,5).map { it ?: Double.NaN }
+                val mark=futuresMarketData.markPrice(symbol)
+                val invalid=if(parents.none { it.signalId==old.parent.signalId })
+                    h1ParentRejectionReason(symbol,old.parent.signalId,"H1_PARENT_NO_LONGER_VALID")
+                    else williamsPendingM15Invalidation(old,bars,teeth,mark,now).orEmpty()
+                val next=selectWilliamsH1M15Entry(old.parent,bars,teeth,old.tick,mark,now).entry
+                val closer=next!=null && next.pivotAt>old.pivotAt &&
+                    (if(old.parent.direction=="LONG") next.trigger<old.trigger-old.tick*.1 else next.trigger>old.trigger+old.tick*.1)
+                Triple(invalid,if(closer) next else null,closer)
+            }.getOrElse { failure ->
+                rejectDecision(symbol,"M15_PENDING_REVALIDATION_UNAVAILABLE: "+failure.javaClass.simpleName)
+                return false
+            }
+            reason=assessment.first
+            replacement=assessment.second
+            if(reason.isEmpty() && replacement==null) return false
+            if(reason.isEmpty()) reason="NEWER_CLOSER_M15_FRACTAL"
+        }
+        val oldId=pending.getString("client_id")
+        // Persist the replacement fence before canceling. Crash/retry cannot return to the old level.
+        val fence=JSONObject().put("parent_id",old?.parent?.signalId ?: pending.optString("signal_id"))
+            .put("pivot_at_ms",replacement?.pivotAt ?: -1L)
+            .put("expires_at_ms",old?.parent?.expiresAt ?: now+5*WILLIAMS_H1_MS)
+            .put("reason",reason).put("old_client_id",oldId)
+        if(old!=null) check(executionStore.writeState("mtf_reanchor_"+symbol,fence.toString())) { "M15_CANCEL_FENCE_NOT_DURABLE" }
+        val result=withCampaignMutation(symbol,"M15_PENDING_ENTRY_CANCEL",allowPaused=true) {
+            try { futuresCampaignCoordinator.cancelPendingEntries(reason,symbol) }
+            finally {
+                reconcileRequired=true
+                check(persistSafetyFlag("reconcile_required",true)) { "M15_CANCEL_RECONCILIATION_FENCE_FAILED" }
+            }
+        }
+        val after=futuresCampaignCoordinator.intentsSnapshot()
+        val prior=(0 until after.length()).mapNotNull { after.optJSONObject(it) }.singleOrNull { it.optString("client_id")==oldId }
+        check(result.optBoolean("ok") && prior!=null && campaignLifecycleStatus(prior)=="CLOSED_OR_STOPPED" &&
+            exchangeOrderStatus(prior) in ENTRY_ORDER_TERMINAL_STATUSES) { "M15_CANCEL_UNRESOLVED: replacement forbidden" }
+        // Invalid/expired parent has no replacement. Retain a finite fence against rearming it;
+        // a different/newer parent is allowed after the old one has expired/invalidated.
+        if(replacement==null) check(executionStore.writeState("mtf_reanchor_"+symbol,"")) { "Cannot retire invalid M15 target" }
+        auditStore.recordCockpitEvent("M15_ENTRY_CANCEL",symbol,pending.optString("direction"),"CANCEL_CONFIRMED",reason)
+        return true
+    }
+
+    private fun manageVerifiedNativePositions(
+        positions: JSONArray,
+        intents: JSONArray,
+        riskOnly: Boolean
+    ) {
         for (i in 0 until positions.length()) {
             val row = positions.optJSONObject(i)
                 ?: throw IllegalStateException("Malformed Binance Futures position row during structural exit evaluation")
@@ -5459,7 +6007,7 @@ private class NativeEngine(
                             management.put("course_pending_stage",stage).put("course_pending_target",abs(signedQty)-reduction)
                                 .put("course_pending_client_id",cid)
                             futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
-                            val trimmed=withCampaignMutation(symbol,"COURSE_STAGE_REDUCTION",allowPaused=true) {
+                            val trimmed=withCampaignMutation(symbol,"COURSE_STAGE_REDUCTION",allowPaused=true, allowReconcileRequired=riskOnly) {
                                 futuresCampaignCoordinator.closePosition(symbol,direction,fmtQty(reduction,rules.decimals),cid,"COURSE_STAGE_TRIM",partialReduction=true)
                             }
                             if(!trimmed.optBoolean("ok",false)) throw IllegalStateException(trimmed.optString("blocker","Course reduction requires reconciliation"))
@@ -5477,17 +6025,53 @@ private class NativeEngine(
                 }
                 editionStop=if(dir=="LONG") candidates.maxOrNull() else candidates.minOrNull()
             }
-            val opposing = triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,
-                if(williamsProfile==williamsUnifiedProfile) williamsUnifiedProfile else profile)
-            if (opposing != null || boundaryExit || editionExit.isNotEmpty()) {
-                val correction = if (opposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
-                    if (dir == "LONG") "SHORT" else "LONG",opposing.signalBarTimeMs,opposing.type) else WilliamsCorrectionContext()
+            // A TC2 opposite H1 signal is NOT authorization to market-close
+            // an exchange-protected open campaign. The 19-Oct SOL/XRP losses
+            // were explicitly recorded as opposite-signal market exits.
+            // Detect/log the hypothesis independently while preserving stop
+            // protection and monotone trailing. Legacy NTD/Course keep their
+            // source-specific exits. A TC2 correction-boundary observation
+            // also remains advisory: structural protection owns its exit.
+            val opposing = if(profile==williamsTc2Profile) {
+                runCatching { triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile) }
+                    .onFailure { lastError="TC2_OPPOSITION_ADVISORY_UNAVAILABLE: $symbol: "+
+                        (it.message ?: it.javaClass.simpleName) }.getOrNull()
+            } else triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile)
+            if(profile==williamsTc2Profile && opposing!=null) {
+                val advisory=JSONObject().put("policy","TC2_PROTECTIVE_STOP_ONLY")
+                    .put("signal_id",opposing.signalId).put("source",opposing.strategyProfile)
+                    .put("direction",campaignSignalDirection(opposing.type))
+                    .put("observed_at_ms",futuresMarketData.exchangeNowMs())
+                    .put("price_triggered",true).put("market_close_authorized",false)
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                    .put("tc2_opposing_signal_advisory",advisory)
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+            }
+            if(profile==williamsTc2Profile && boundaryExit) {
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                    .put("tc2_correction_boundary_advisory",JSONObject()
+                        .put("policy","TC2_PROTECTIVE_STOP_ONLY")
+                        .put("observed_at_ms",futuresMarketData.exchangeNowMs())
+                        .put("mark_price",mark).put("market_close_authorized",false))
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+            }
+            val actionableOpposing = opposing?.takeIf { williamsOpposingSignalCanMarketClose(profile) }
+            if (williamsStrategyCanMarketClose(profile) &&
+                (actionableOpposing != null || boundaryExit || editionExit.isNotEmpty())) {
+                val correction = if (actionableOpposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
+                    if (dir == "LONG") "SHORT" else "LONG",actionableOpposing.signalBarTimeMs,actionableOpposing.type) else WilliamsCorrectionContext()
                 val exitReason = if(editionExit.isNotEmpty()) editionExit else if (boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
-                    else if (correction.allowed) "HIGHER_WAVE_IMPULSE_COMPLETION_CONFIRMED"
+                    else if (correction.allowed) "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
                     else "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                management.put("exit_evidence",JSONObject().put("reason",exitReason)
+                    .put("observed_at_ms",futuresMarketData.exchangeNowMs()).put("edition_exit",editionExit)
+                    .put("correction_boundary_broken",boundaryExit).put("higher_correction",correction.toJson())
+                    .put("opposition_check",if(actionableOpposing!=null) JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) else JSONObject.NULL))
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
                 val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"),rules)
                 val clientId = ("W2O_"+symbol.take(8)+"_"+System.nanoTime().toString(16).takeLast(12)).take(36)
-                val result = withCampaignMutation(symbol,"TRIGGERED_WILLIAMS_EXIT",allowPaused=true) {
+                val result = withCampaignMutation(symbol,"TRIGGERED_WILLIAMS_EXIT",allowPaused=true, allowReconcileRequired=riskOnly) {
                     futuresCampaignCoordinator.closePosition(symbol,direction,closeQty,clientId,exitReason)
                 }
                 if (!result.optBoolean("ok",false)) throw IllegalStateException(result.optString("blocker",result.optString("error")))
@@ -5519,7 +6103,7 @@ private class NativeEngine(
                 val result = withCampaignMutation(
                     symbol = symbol,
                     purpose = "WILLIAMS_STRUCTURAL_STOP_TRAIL",
-                    allowPaused = true
+                    allowPaused = true, allowReconcileRequired = riskOnly
                 ) {
                     futuresCampaignCoordinator.trailProtectiveStop(
                         symbol, direction, fmtPrice(plan.stop, rules.tick), clientId
@@ -5537,7 +6121,6 @@ private class NativeEngine(
                 }
             }
         }
-        return true
     }
 
     private fun submitNativeFuturesAddition(candidate:BaseAnalysis,owner:JSONObject) {
@@ -5559,7 +6142,7 @@ private class NativeEngine(
         val signal=candidate.campaignSignals.filter { it.strategyProfile==profile &&
             campaignSignalDirection(it.type)==direction && williamsAdditionTimeEligible(profile,it.signalBarTimeMs,it.type,
                 owner.optLong("signal_bar_time_ms"),owner.optString("signal_type"),latest) &&
-            isSignalFresh(it.signalBarTimeMs,now,18_000_000L) &&
+            williamsH1SignalTimeEligible(it.signalBarTimeMs,it.type,it.strategyProfile,now) &&
             (it.executionSemantics!="MARKET_ON_CLOSE" || williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,now,it.triggerPrice,mark)==null) &&
             children.none { child -> child.optString("client_id")==additionClientId(it) } }
             .minWithOrNull(compareBy<CampaignSignalN> { it.executionSemantics!="MARKET_ON_CLOSE" }.thenBy { it.signalBarTimeMs }) ?: return
@@ -5569,10 +6152,17 @@ private class NativeEngine(
         val price=if(market) mark else signal.triggerPrice
         val stop=owner.getString("protective_stop").toDouble()
         if((if(direction=="LONG") stop>=price || !market && price<=mark else stop<=price || !market && price>=mark)) return
-        val d1=waveInfo(fetchCandles(symbol,"1d",90),"1d")
-        val h4=waveInfo(fetchCandles(symbol,"4h",120),"4h")
-        if(direction=="LONG" && (d1.alligatorBearish || h4.alligatorBearish) ||
-            direction=="SHORT" && (d1.alligatorBullish || h4.alligatorBullish)) return
+        // TC2 ch10/12 explicitly permits a countertrend WM1 followed by
+        // H1 Super AO and H1 fractal add-ons before the D1/H4 Alligators turn.
+        // A blanket D1/H4 veto here was silently suppressing a valid textbook
+        // addition to an already owned/protected TC2 campaign. NTD/Course
+        // legacy campaigns retain their existing separate higher-TF policy.
+        if (williamsAdditionRequiresHigherFrameTrendVeto(profile)) {
+            val d1=waveInfo(fetchCandles(symbol,"1d",90),"1d")
+            val h4=waveInfo(fetchCandles(symbol,"4h",120),"4h")
+            if(direction=="LONG" && (d1.alligatorBearish || h4.alligatorBearish) ||
+                direction=="SHORT" && (d1.alligatorBullish || h4.alligatorBullish)) return
+        }
         val reserved=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.filter {
             it.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(it)
         }.sumOf { futuresCampaignReservedRisk(it,all) }
@@ -5683,39 +6273,62 @@ private class NativeEngine(
             williamsProfileAllowsSource(williamsProfile,it.strategyProfile) && (it.role=="ENTRY" || profitReentry(it)) &&
                 (it.executionSemantics=="STOP_ENTRY" || profitReentry(it) && it.executionSemantics=="MARKET_ON_CLOSE" &&
                     williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,contextNow,it.triggerPrice,futuresMarketData.markPrice(symbol))==null) &&
-                isSignalFresh(it.signalBarTimeMs, contextNow, 5L * 60L * 60L * 1000L)
+                williamsH1SignalTimeEligible(it.signalBarTimeMs,it.type,it.strategyProfile,contextNow) &&
+                !williamsH1ParentAlreadyFilled(existing,it.signalId,it.type,it.signalBarTimeMs)
         }
         if (freshSignals.isEmpty()) {
             lastError = "WILLIAMS_SIGNAL_EXPIRED: no fresh confirmed H1 hypothesis for $symbol"
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 
-        // Macro D1 is an airbag; H4 supplies context; H1 is the only decision TF.
-        // M15 is execution/fill monitoring only; M5 remains diagnostics/replay only.
+        // Project D1/H4 risk/context policy; execution uses the native H1 book trigger.
         val d1BarMs = frameSeconds("1d") * 1000L
         val h4BarMs = frameSeconds("4h") * 1000L
-        val d1 = fetchCandles(symbol, "1d", 90)
-            .filter { it.t > 0L && it.t + d1BarMs <= contextNow }
-        val h4 = fetchCandles(symbol, "4h", 120)
-            .filter { it.t > 0L && it.t + h4BarMs <= contextNow }
-        if (d1.size < 45 || h4.size < 45) return rejectDecision(symbol,"HTF_HISTORY_INSUFFICIENT: D1=${d1.size}; H4=${h4.size}")
-        val d1Line = alligator(d1, d1.lastIndex)
-        val h4Line = alligator(h4, h4.lastIndex)
-        val d1Bull = d1Line.lips > d1Line.teeth && d1Line.teeth > d1Line.jaw &&
-            d1.last().c > d1Line.lips && ao(d1, d1.lastIndex) > 0.0
-        val d1Bear = d1Line.lips < d1Line.teeth && d1Line.teeth < d1Line.jaw &&
-            d1.last().c < d1Line.lips && ao(d1, d1.lastIndex) < 0.0
-        val h4Bull = h4Line.lips > h4Line.teeth && h4Line.teeth > h4Line.jaw &&
-            h4.last().c > h4Line.lips && ao(h4, h4.lastIndex) > 0.0
-        val h4Bear = h4Line.lips < h4Line.teeth && h4Line.teeth < h4Line.jaw &&
-            h4.last().c < h4Line.lips && ao(h4, h4.lastIndex) < 0.0
-        runCatching {
-            fun contextBar(frame:String,bars:List<CandleN>,jaw:Double,teeth:Double,lips:Double):JSONObject = JSONObject()
-                .put("frame",frame).put("bar_time_ms",bars.last().t).put("close",bars.last().c)
-                .put("ao",ao(bars,bars.lastIndex)).put("jaw",jaw).put("teeth",teeth).put("lips",lips)
-            executionStore.writeState("decision_context_"+symbol,JSONObject().put("observed_at_ms",contextNow)
-                .put("d1",contextBar("1d",d1,d1Line.jaw,d1Line.teeth,d1Line.lips)).put("h4",contextBar("4h",h4,h4Line.jaw,h4Line.teeth,h4Line.lips))
-                .put("d1_bull",d1Bull).put("d1_bear",d1Bear).put("h4_bull",h4Bull).put("h4_bear",h4Bear).toString())
+        val d1 = runCatching { fetchCandles(symbol,"1d",90) }.getOrDefault(emptyList())
+            .filter { it.t>0L && it.t+d1BarMs<=contextNow }
+        val h4 = runCatching { fetchCandles(symbol,"4h",120) }.getOrDefault(emptyList())
+            .filter { it.t>0L && it.t+h4BarMs<=contextNow }
+        fun htfProven(bars:List<CandleN>,frameMs:Long):Boolean =
+            bars.size>=45 && bars.zipWithNext().all { (a,b) -> b.t-a.t==frameMs } &&
+                contextNow-(bars.last().t+frameMs) in 0 until frameMs
+        val d1Proven=htfProven(d1,d1BarMs)
+        val h4Proven=htfProven(h4,h4BarMs)
+        if((!d1Proven || !h4Proven) && freshSignals.any {
+            williamsInitialHigherFrameHistoryRequired(it.strategyProfile)
+        }) return rejectDecision(symbol,"HTF_HISTORY_UNVERIFIED_FOR_LEGACY_SOURCE: D1=$d1Proven; H4=$h4Proven")
+        // An unverified higher timeframe must NEVER be silently interpreted
+        // as neutral/confirmed market structure. The H1 TC2 source requires
+        // no independent D1/H4 confirmation; mark both observations UNKNOWN.
+        val d1Line=if(d1Proven) alligator(d1,d1.lastIndex) else null
+        val h4Line=if(h4Proven) alligator(h4,h4.lastIndex) else null
+        val d1Bull=d1Line!=null && d1Line.lips>d1Line.teeth && d1Line.teeth>d1Line.jaw &&
+            d1.last().c>d1Line.lips && ao(d1,d1.lastIndex)>0.0
+        val d1Bear=d1Line!=null && d1Line.lips<d1Line.teeth && d1Line.teeth<d1Line.jaw &&
+            d1.last().c<d1Line.lips && ao(d1,d1.lastIndex)<0.0
+        val h4Bull=h4Line!=null && h4Line.lips>h4Line.teeth && h4Line.teeth>h4Line.jaw &&
+            h4.last().c>h4Line.lips && ao(h4,h4.lastIndex)>0.0
+        val h4Bear=h4Line!=null && h4Line.lips<h4Line.teeth && h4Line.teeth<h4Line.jaw &&
+            h4.last().c<h4Line.lips && ao(h4,h4.lastIndex)<0.0
+        fun htfEvidence(frame:String,bars:List<CandleN>,line:TripleValues?,proven:Boolean):JSONObject =
+            JSONObject().put("frame",frame).put("status",if(proven && line!=null) "PROVEN_CONTEXT" else "UNKNOWN")
+                .put("closed_bar_count",bars.size).apply {
+                    if(proven && line!=null) {
+                        put("bar_time_ms",bars.last().t).put("close",bars.last().c)
+                        put("ao",ao(bars,bars.lastIndex)).put("jaw",line.jaw)
+                            .put("teeth",line.teeth).put("lips",line.lips)
+                    } else {
+                        put("reason","MISSING_GAPPED_OR_STALE_HTF_HISTORY")
+                    }
+                }
+        check(executionStore.writeState("decision_context_"+symbol,JSONObject()
+            .put("observed_at_ms",contextNow)
+            .put("d1",htfEvidence("1d",d1,d1Line,d1Proven))
+            .put("h4",htfEvidence("4h",h4,h4Line,h4Proven))
+            .put("d1_bull",if(d1Proven) d1Bull else JSONObject.NULL)
+            .put("d1_bear",if(d1Proven) d1Bear else JSONObject.NULL)
+            .put("h4_bull",if(h4Proven) h4Bull else JSONObject.NULL)
+            .put("h4_bear",if(h4Proven) h4Bear else JSONObject.NULL).toString())) {
+            "H1_CONTEXT_EVIDENCE_NOT_DURABLE"
         }
         // Apply D1/H4 context before choosing between fresh confirmed H1 hypotheses.
         // H4-aligned context ranks before a reversal; signal recency breaks ties.
@@ -5738,11 +6351,14 @@ private class NativeEngine(
         val hierarchy = waveHierarchyFor(symbol)
         val corrections = freshSignals.associate { it.signalId to williamsCorrectionEntryContext(
             hierarchy,campaignSignalDirection(it.type).orEmpty(),it.signalBarTimeMs,it.type) }
-        fun contextRank(signal: CampaignSignalN): Int = maxOf(
-            directionalSignalContextRank(signal.type,d1Bull,d1Bear,h4Bull,h4Bear),
-            if (corrections[signal.signalId]?.allowed == true) 2 else 0)
-        // Only a causally contained, validated correction mode may override the
-        // project's D1/H4 trend filter. H1 remains the only signal authority.
+        // TC2 chapter 12 explicitly accepts any of WM1, WM2, WM3 as the
+        // first presenting H1 entry. Older D1/H4 blanket trend veto wrongly
+        // blocked initial H1 Super AO/fractal when a higher timeframe had not
+        // yet turned. Keep D1/H4 as context/ranking evidence, not mandatory
+        // confirmation. Final H1 proof, ownership, stop and risk gates remain.
+        fun contextRank(signal: CampaignSignalN): Int = williamsBookInitialContextRank(
+            signal.strategyProfile,signal.type,d1Bull,d1Bear,h4Bull,h4Bear,
+            corrections[signal.signalId]?.allowed == true)
         val allowedSignals = freshSignals.filter { contextRank(it)>0 }
         // A pending re-anchor must never hide a contradictory confirmed
         // hypothesis from another enabled Williams edition.
@@ -5778,11 +6394,13 @@ private class NativeEngine(
         if(reanchorLock!=null && selectableSignals.isEmpty()) {
             return rejectDecision(symbol,"FRACTAL_REANCHOR_TARGET_NOT_CURRENTLY_VALID: no fallback to old level")
         }
+        // Retired M15 cancel fences must not veto H1 book entries. The
+        // separate TC2 H1 re-anchor fence still protects replacement orders.
         val baseline = selectableSignals.minWithOrNull(
             compareBy<CampaignSignalN> { it.signalBarTimeMs }
                 .thenByDescending { contextRank(it) }.thenByDescending { nativeRank(it.type) }
         ) ?: run {
-            lastError = "WILLIAMS_DIRECTIONAL_CONTEXT_BLOCKED: neither LONG nor SHORT is allowed by D1/H4 for $symbol"
+            lastError = "WILLIAMS_NO_BOOK_ELIGIBLE_H1_SIGNAL: no TC2 first-Wise-Man signal survived book and risk context on $symbol"
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
         // Even with no old Binance order, prefer a newer confirmed WM3 level
@@ -5817,30 +6435,25 @@ private class NativeEngine(
             }
         }
 
-        // M15 is execution/fill monitoring only. It must not invent a second
-        // directional signal or veto a causally valid H1 Williams decision.
-        // Closed/fresh M15 data is still required for execution monitoring.
-        val m15BarMs = frameSeconds("15m") * 1000L
-        val m15 = fetchCandles(symbol, "15m", 120)
-            .filter { it.t > 0L && it.t + m15BarMs <= contextNow }
-        if (m15.size < 45) {
-            lastError = "M15_EXECUTION_BLOCKED: insufficient closed M15 history for $symbol"
-            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
-        }
-        val lastClosedM15At = m15.last().t + m15BarMs
-        if (contextNow - lastClosedM15At > 30L * 60L * 1000L) {
-            lastError = "M15_EXECUTION_BLOCKED: latest closed M15 candle is stale for $symbol"
-            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
-        }
-
-        // Display-only M15 pivot evidence. H1 remains the sole signal authority.
-        val initialM15Evidence = williamsM15FractalEvidence(
-            m15.map { WilliamsWaveBar(it.t, it.o, it.h, it.l, it.c, it.v) },
-            direction.name, contextNow
-        )
+        // The selected book source and closed H1 bars authorize the entry.
+        // No M15 candle, fractal or M15 re-anchor is required.
         val entries = futuresCampaignCoordinator.intentsSnapshot()
-        val clientId = ("W2E_" + symbol.take(7) + "_" + signal.type.take(4) + "_" + signal.signalBarTimeMs.toString(36)).take(36)
-        if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId }) return rejectDecision(symbol,"FORMATION_ALREADY_ADMITTED: "+clientId)
+        if(williamsH1ParentAlreadyFilled(entries,signal.signalId,signal.type,signal.signalBarTimeMs))
+            return rejectDecision(symbol,"H1_PARENT_ALREADY_FILLED: no repeated initial entry")
+        val retryGeneration=williamsBookH1RetryGeneration(entries,signal.signalId)
+            ?: return rejectDecision(symbol,"H1_PRIOR_ATTEMPT_FILL_OR_CANCELLATION_UNVERIFIED")
+        val clientId = williamsBookH1ClientId(symbol,signal.signalId,retryGeneration)
+        if ((0 until entries.length()).any { entries.optJSONObject(it)?.optString("client_id") == clientId })
+            return rejectDecision(symbol,"FORMATION_ALREADY_ADMITTED: "+clientId)
+        val currentH1=fetchCandles(symbol,"1h",220)
+        if(williamsBookH1TriggerConsumed(direction.name,signal.signalBarTimeMs,signal.triggerPrice,
+                contextNow,currentH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }))
+            return rejectDecision(symbol,"H1_BOOK_TRIGGER_ALREADY_CONSUMED: no late return to old breakout")
+        val closedH1=currentH1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=contextNow }
+        val h1Teeth=williamsAlligatorLine(closedH1,8,5).lastOrNull() ?: Double.NaN
+        williamsBookFractalTeethBlocker(signal.type,direction.name,signal.triggerPrice,h1Teeth,symbolFilters(symbol).tick)?.let {
+            return rejectDecision(symbol,it)
+        }
 
         val exchangePositions = futuresCampaignCoordinator.positionsSnapshot()
         val openPositions = (0 until exchangePositions.length()).map { index ->
@@ -5884,8 +6497,10 @@ private class NativeEngine(
         if (!futuresAccountFundedForEntry(available, equity)) return rejectDecision(symbol,"ACCOUNT_FUNDS_NOT_PROVEN")
         val mark = futuresMarketData.markPrice(symbol)
         val rules = symbolFilters(symbol)
-        val marketReentry=profitReentry(signal) && signal.executionSemantics=="MARKET_ON_CLOSE"
-        val reference=if(marketReentry) mark else signal.triggerPrice
+        // TC2 WM1 / WM2 / WM3 and NTD / Course preserve their H1 book
+        // signal bar trigger, independent of any junior execution fractal.
+        val marketReentry=false
+        val reference=signal.triggerPrice
         val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
             normalizeTriggerPrice(reference, rules.tick) else normalizePrice(reference, rules.tick)
         var stop = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
@@ -5893,8 +6508,10 @@ private class NativeEngine(
         if(signal.strategyProfile==williamsCourseProfile) {
             val higher=closedWilliamsWaveBars(fetchCandles(symbol,"6h",100).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },"6h",contextNow)
             val airbag=williamsCourseAirbagStop(direction.name,higher,rules.tick) ?: return rejectDecision(symbol,"REQUIRED_ENTRY_EVIDENCE_UNAVAILABLE")
-            stop=if(direction.name=="LONG") normalizePrice(minOf(stop,airbag),rules.tick)
-                else normalizeTriggerPrice(maxOf(stop,airbag),rules.tick)
+            // The Course higher Air Bag may tighten protection, not increase
+            // the original H1 book signal's initial risk.
+            stop=if(direction.name=="LONG") normalizePrice(maxOf(stop,airbag),rules.tick)
+                else normalizeTriggerPrice(minOf(stop,airbag),rules.tick)
         }
         if (trigger <= 0.0 || stop <= 0.0) return rejectDecision(symbol,"INVALID_TRIGGER_OR_STOP")
         if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
@@ -5940,12 +6557,16 @@ private class NativeEngine(
             referenceClose=if(marketReentry) signal.triggerPrice else 0.0,
             leverage = entryLeverage,
             signalBarTimeMs = signal.signalBarTimeMs,
-            signalReason = signal.reason,
+            signalReason = "BOOK H1 "+signal.reason+"; "+direction.name+
+                " stop-entry at H1 signal trigger (no M15 confirmation)",
             tradeMode = if (correction.allowed) "CORRECTION" else "TREND",
             waveContext = if (correction.allowed) correction.toJson().toString() else "",
-            strategyProfile=signal.strategyProfile,executionSemantics=signal.executionSemantics,
+            strategyProfile=signal.strategyProfile,executionSemantics="STOP_ENTRY",
             setupContext=(runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject()).apply {
-                put("m15_evidence", initialM15Evidence)
+                put("parent_execution_semantics",signal.executionSemantics)
+                put("book_h1_entry",williamsBookH1Proof(signal.signalId,direction.name,
+                    signal.type,signal.strategyProfile,signal.signalBarTimeMs,
+                    trigger,stop,rules.tick))
                 if(signal.strategyProfile==williamsCourseProfile) {
                     williamsCourseActiveContext(hierarchy,direction.name)?.let { context ->
                         put("course_origin_at",context.getLong("origin_at")).put("course_initial_stage",context.getString("phase"))
@@ -5955,13 +6576,7 @@ private class NativeEngine(
         )
         runCatching { auditStore.recordCockpitEvent("SIGNAL_RISK", symbol, direction.name, signal.type,
             "${signal.reason}; H1 bar=${signal.signalBarTimeMs}; trigger=$trigger; stop=$stop; qty=$qty; reserved_risk=$riskPct") }
-        // No Futures order is attempted if the immutable planned decision
-        // cannot be appended to the on-device audit database.
-        if (!auditStore.recordEntryPassportEvent(
-                williamsEntryPassportEvent(plan, "PREPARED", contextNow)
-            )) return rejectDecision(symbol, "ENTRY_PASSPORT_AUDIT_UNAVAILABLE: order not attempted")
-        var submittedPlan = plan
-        val result = try { withCampaignMutation(
+        val result = withCampaignMutation(
             symbol = symbol,
             purpose = "WILLIAMS_PENDING_ENTRY"
         ) {
@@ -5987,32 +6602,24 @@ private class NativeEngine(
                     .put("mutation_attempted", false)
                     .put("blocker", "ENTRY_TIME_POLICY_BLOCKED: "+entryTimePolicy.toJson()+"")
             }
-            require(isSignalFresh(signal.signalBarTimeMs, submitNow, 5L * 60L * 60L * 1000L)) {
+            require(williamsH1SignalTimeEligible(signal.signalBarTimeMs,signal.type,signal.strategyProfile,submitNow)) {
                 "STALE_H1_SCENARIO: signal expired before Futures submission"
             }
-            if (reanchorLock!=null) {
-                // Re-evaluate from the exchange CLOSED H1 series after waiting
-                // for the durable Mutation Door. Cached scanner evidence is
-                // never sufficient authority to resurrect a consumed fractal.
-                val verified=editionCampaignSignals(symbol,
-                    fetchCandles(symbol,"1h",220).filter {
-                        it.t>0L && it.t+3_600_000L<=submitNow
-                    },"1h",rules.tick,williamsTc2Profile)
-                require(verified.any { it.signalId==signal.signalId &&
-                    it.type==signal.type &&
-                    kotlin.math.abs(it.triggerPrice-signal.triggerPrice)<=rules.tick*0.1 &&
-                    kotlin.math.abs(it.protectivePrice-signal.protectivePrice)<=rules.tick*0.1 }) {
-                    "FRACTAL_REANCHOR_SIGNAL_REVALIDATION_FAILED: closed H1 formation changed"
-                }
+            val verifiedParents=h1ContextCampaignSignals(symbol,fetchCandles(symbol,"1h",220),rules.tick)
+            check(verifiedParents.any { it.signalId==signal.signalId && it.type==signal.type &&
+                abs(it.triggerPrice-signal.triggerPrice)<=rules.tick*.1 &&
+                abs(it.protectivePrice-signal.protectivePrice)<=rules.tick*.1 }) {
+                "H1_BOOK_SIGNAL_NO_LONGER_VALID: no Futures order submitted"
             }
-            val submitM15 = fetchCandles(symbol, "15m", 120)
-                .filter { it.t > 0L && it.t + m15BarMs <= submitNow }
-            require(submitM15.size >= 45) {
-                "M15_EXECUTION_BLOCKED: closed M15 history unavailable at submission"
+            val submitH1=fetchCandles(symbol,"1h",220)
+            check(!williamsBookH1TriggerConsumed(direction.name,signal.signalBarTimeMs,trigger,
+                submitNow,submitH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })) {
+                "H1_BOOK_BREAKOUT_ALREADY_CONSUMED_BEFORE_SUBMISSION"
             }
-            val submitM15Last = submitM15.last()
-            require(submitNow - (submitM15Last.t + m15BarMs) <= 30L * 60L * 1000L) {
-                "M15_EXECUTION_BLOCKED: latest closed M15 candle is stale at submission"
+            val submitH1Closed=submitH1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=submitNow }
+            val submitTeeth=williamsAlligatorLine(submitH1Closed,8,5).lastOrNull() ?: Double.NaN
+            check(williamsBookFractalTeethBlocker(signal.type,direction.name,trigger,submitTeeth,rules.tick)==null) {
+                "H1_FRACTAL_TEETH_INVALID_BEFORE_SUBMISSION"
             }
             if (correction.allowed) {
                 val currentCorrection = williamsCorrectionEntryContext(waveHierarchyFor(symbol,refresh=true),
@@ -6034,27 +6641,13 @@ private class NativeEngine(
                 else if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
                 else submitMark > trigger
             ) {
-                "H1_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
+                "H1_BOOK_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
             }
-            // Capture what was CLOSED when the actual coordinator decision was
-            // made, not merely what was available before waiting for the door.
-            submittedPlan = plan.copy(setupContext = JSONObject(plan.setupContext)
-                .put("m15_evidence", williamsM15FractalEvidence(
-                    submitM15.map { WilliamsWaveBar(it.t, it.o, it.h, it.l, it.c, it.v) },
-                    direction.name, submitNow
-                )).toString())
-            // M15 is evidence only; it cannot authorize a different order.
-            futuresCampaignCoordinator.submitPendingEntry(submittedPlan)
-        } } catch (failure: Exception) {
-            auditStore.recordEntryPassportEvent(williamsEntryPassportEvent(submittedPlan,
-                "EXECUTION_EXCEPTION_UNVERIFIED", futuresMarketData.exchangeNowMs(),
-                JSONObject().put("error", safeDiagnosticText(failure.message.orEmpty()))))
-            throw failure
-        }
-        if (!auditStore.recordEntryPassportEvent(williamsEntryPassportEvent(submittedPlan,
-                "COORDINATOR_RETURNED", futuresMarketData.exchangeNowMs(), result))) {
-            runCatching { auditStore.recordCockpitEvent("AUDIT_FAILURE", symbol, direction.name,
-                "ENTRY_PASSPORT_OUTCOME_UNAVAILABLE", "Execution may have occurred; reconcile with Binance") }
+            check(williamsBookH1ProofBlocker(plan.setupContext,direction.name,signal.signalId,
+                signal.type,signal.strategyProfile,trigger,stop,submitNow)==null) {
+                "H1_BOOK_PROOF_INVALID_BEFORE_SUBMISSION"
+            }
+            futuresCampaignCoordinator.submitPendingEntry(plan)
         }
         if(!result.optBoolean("accepted",false)) rejectDecision(symbol,result.optString("blocker","EXECUTION_DOOR_REJECTED"))
         runCatching { auditStore.recordCockpitEvent("ORDER_RESPONSE", symbol, direction.name,
@@ -6068,6 +6661,7 @@ private class NativeEngine(
                 stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Futures submission unresolved")
             }
         } else {
+            check(executionStore.writeState("mtf_reanchor_"+symbol,"")) { "Cannot retire migrated legacy M15 fence" }
             // A successfully persisted new Futures intent supersedes the
             // one-shot re-anchor hint; its own client id remains authoritative.
             if(reanchorLock!=null && signal.signalId==reanchorLock.optString("signal_id")) {
@@ -6144,26 +6738,32 @@ private class NativeEngine(
             return
         }
 
-        // Market discovery must not be serialized behind account income, position
-        // management, or entry-risk checks. Those checks still run immediately before
-        // every order mutation through Execution Door; scanning remains read-only.
-        scheduleNativePositionManagement()
-
+        // Read-only H1 discovery NEVER starts a signed account-wide reconciliation.
+        // Scheduling management here put the coordinator into RECONCILE_REQUIRED
+        // during every scan and suppressed all ten otherwise-valid TC2 entries.
         val universe = loadUniverse()
         scanSymbols = universe.first.toMutableList()
         val volumes = universe.second
         val spreads = universe.third
+        val coarseMetadataMissing=coreSymbols.filter { symbol ->
+            (volumes[symbol] ?: 0.0)<=0.0 || spreads[symbol]==null
+        }
+        val symbolErrors = java.util.concurrent.ConcurrentHashMap<String, String>()
         val futures = scanSymbols.map { symbol ->
             scanExecutor.submit(Callable {
+                var stage = "FETCH_H1_CLOSED_CANDLES"
                 try {
-                    val candles = fetchCandles(symbol, "1h", 180)
+                    // The validated H1 startup history has 150 closed bars.
+                    // Do not trigger extra REST traffic just to demand 180.
+                    val candles = fetchCandles(symbol, "1h", 150)
                     if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
+                    stage = "ANALYSE_TC2_NTD_COURSE_H1"
                     val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
                     markScanProgress()
                     result
                 } catch (x: Exception) {
                     markScanProgress()
-                    scannerError = symbol + ": " + (x.message ?: x.javaClass.simpleName)
+                    symbolErrors[symbol] = h1ScannerExceptionDetail(stage, x)
                     null
                 }
             })
@@ -6195,10 +6795,13 @@ private class NativeEngine(
                 .take(20).forEach { put(toJson(it)) }
         }
         lastSymbolsScanned = ranked.size
+        lastScannerSymbolErrors = JSONObject().apply {
+            symbolErrors.toSortedMap().forEach { (symbol,reason) -> put(symbol,reason) }
+        }
         lastScanAt = System.currentTimeMillis()
         scanRunId = "futures-" + lastScanAt
         runCatching { PositionsWidgetProvider.refresh(context) }
-        runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 180) }
+        runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 150) }
 
         // Never overwrite a safety blocker with READY merely because market data was
         // scanned. Market-analysis success and permission to execute are separate facts.
@@ -6212,10 +6815,21 @@ private class NativeEngine(
             reconcileRequired = reconcileRequired,
             killLatched = killLatched,
             accountReady = restAccountReady,
-            marketDataFresh = marketDataFresh(),
-            coordinatorState = coordinatorStateForCompletion
+            // H1 detection remains independent of coarse volume/spread REST
+            // outages. But NEVER create a Futures order while any approved
+            // symbol has unverified market metadata.
+            marketDataFresh = marketDataFresh() && coarseMetadataMissing.isEmpty(),
+            coordinatorState = coordinatorStateForCompletion,
+            coordinatorReadyForEntry = campaignCoordinatorReadyForEntry()
         )
         val missing = coreSymbols - ranked.map { it.symbol }.toSet()
+        // A valid read-only scan can overlap an unrelated Binance recovery
+        // and be temporarily blocked by the coordinator's in-flight marker.
+        // Preserve the entry fence, but recheck promptly after it finishes.
+        if (completeScan && executionBlocker == "BLOCKED_FUTURES_RECONCILIATION" &&
+            futuresReconciliationRunning && !reconcileRequired) {
+            scanRetryAfterReconciliation = true
+        }
         scannerState = when {
             !completeScan && ranked.isEmpty() -> "FAILED"
             !completeScan && executionBlocker != null -> "PARTIAL_BLOCKED"
@@ -6224,6 +6838,13 @@ private class NativeEngine(
             else -> "READY"
         }
         scannerError = when {
+            !completeScan && symbolErrors.isNotEmpty() ->
+                "Не удалось завершить H1-анализ: " + symbolErrors.entries
+                    .sortedBy { it.key }.take(3)
+                    .joinToString("; ") { it.key + ": " + it.value } +
+                    (if (symbolErrors.size>3) "; и ещё " + (symbolErrors.size-3) + " пар" else "")
+            !completeScan && ranked.isEmpty() ->
+                "Сканер не завершил анализ ни одной пары: " + missing.joinToString(",")
             executionBlocker != null -> {
                 when (executionBlocker) {
                     "BLOCKED_KILL" -> "Kill switch is latched; read-only market scan completed, new entries remain disabled"
@@ -6232,7 +6853,11 @@ private class NativeEngine(
                         ?: "Futures positions/orders/protection reconciliation is required"
                     "PAUSED" -> lastError ?: "Runtime is paused; read-only market scan completed"
                     "BLOCKED_ACCOUNT" -> restAccountLastError ?: "Futures account snapshot is not ready; entries remain disabled"
-                    "WAITING_FOR_MARKET_DATA" -> restLastError ?: "Futures market data is stale; entries remain disabled"
+                    "WAITING_FOR_MARKET_DATA" -> if(coarseMetadataMissing.isNotEmpty())
+                        "Read-only H1 analysis completed; new entries blocked by unverified Binance quotes/volume: " +
+                            coarseMetadataMissing.joinToString(",") +
+                            (scannerMarketMetadataWarning?.let { "; $it" } ?: "")
+                        else restLastError ?: "Futures market data is stale; entries remain disabled"
                     else -> executionBlocker
                 }
             }
@@ -7241,12 +7866,19 @@ private class NativeEngine(
         }
 
     private fun editionCampaignSignals(symbol:String,candles:List<CandleN>,frame:String,tick:Double,
-        profile:String=williamsProfile,exitMode:Boolean=false):List<CampaignSignalN> {
+        profile:String=williamsUnifiedProfile,exitMode:Boolean=false):List<CampaignSignalN> {
         if(profile==williamsUnifiedProfile) {
             // One causal H1 snapshot, three independent rule extractors. Preserve
             // each source on its own signal for replay, journal and risk controls.
-            return williamsSourceProfiles.flatMap {
-                editionCampaignSignals(symbol,candles,frame,tick,it,exitMode)
+            return williamsSourceProfiles.flatMap { source ->
+                val result=runCatching { editionCampaignSignals(symbol,candles,frame,tick,source,exitMode) }
+                if(!exitMode) executionStore.writeState("edition_observation_"+symbol+"_"+source,JSONObject()
+                    .put("profile",source).put("execution_role",if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
+                    .put("state",if(result.isFailure) "ANALYSIS_FAILED" else if(result.getOrNull().isNullOrEmpty()) "NO_VALID_FORMATION" else "FORMATION_OBSERVED")
+                    .put("error_type",result.exceptionOrNull()?.javaClass?.simpleName ?: JSONObject.NULL)
+                    .put("as_of_close_ms",candles.lastOrNull()?.let { it.t+WILLIAMS_H1_MS } ?: 0L)
+                    .put("signal_count",result.getOrNull()?.size ?: 0).put("can_place_orders",false).toString())
+                result.getOrDefault(emptyList())
             }.distinctBy { it.signalId }.sortedWith(
                 compareBy<CampaignSignalN> { it.signalBarTimeMs }.thenBy { it.signalId })
         }
@@ -7305,10 +7937,8 @@ private class NativeEngine(
                 candles[i].c > lipsS[i]
 
         val waveBars = candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
-        fun angulationScore(i: Int): Double {
-            val start = maxOf(0,i-4)
-            return williamsIncreasingJawDistanceScore("LONG",waveBars.subList(start,i+1),jawS.subList(start,i+1))
-        }
+        fun angulationProof(i:Int)=williamsAngulation("LONG",waveBars.take(i+1),
+            jawS.take(i+1),teethS.take(i+1),lipsS.take(i+1))
 
         val current = candles.lastIndex
         val out = mutableListOf<CampaignSignalN>()
@@ -7328,9 +7958,9 @@ private class NativeEngine(
         // for a break above its high. Countertrend WM1 is intentionally allowed.
         val reversalStart = max(2, candles.lastIndex - 20)
         for (i in candles.lastIndex downTo reversalStart) {
-            val priorLow = min(candles[i - 1].l, candles[i - 2].l)
+            val priorLow = candles[i - 1].l
             if (validWilliamsReversalBar("LONG",waveBars[i],priorLow,
-                listOf(jawS[i],teethS[i],lipsS[i]),angulationScore(i))) {
+                listOf(jawS[i],teethS[i],lipsS[i]),angulationProof(i).score)) {
                 val trigger = candles[i].h + tick
                 if (triggerStillPending(i, trigger)) {
                     out += CampaignSignalN(
@@ -7342,7 +7972,8 @@ private class NativeEngine(
                         protectivePrice = candles[i].l - tick,
                         teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
                         invalidationPrice = candles[i].l - tick,
-                        reason = "WM1 bullish reversal; waiting above signal-bar high"
+                        reason = "WM1 bullish reversal with mouth-anchored angulation; waiting above signal-bar high",
+                        setupContext = JSONObject().put("angulation",angulationProof(i).toJson()).toString()
                     )
                 }
                 break
@@ -7363,17 +7994,24 @@ private class NativeEngine(
             val signalIndex = candles.lastIndex - (streak - 3)
             if (signalIndex in 35..candles.lastIndex) {
                 val trigger = candles[signalIndex].h + tick
-                if (triggerStillPending(signalIndex, trigger)) {
+                val structuralStop = williamsTc2SuperAoInitialStop(
+                    "LONG",waveBars,signalIndex,tick,window=5
+                )
+                if (structuralStop != null && structuralStop<trigger &&
+                    triggerStillPending(signalIndex, trigger)) {
                     out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[signalIndex].t),
                         type = "SUPER_AO",
                         role = "ENTRY",
                         signalBarTimeMs = candles[signalIndex].t,
                         triggerPrice = trigger,
-                        protectivePrice = candles[signalIndex].l - tick,
+                        protectivePrice = structuralStop,
                         teethAtDetection = teethS[signalIndex].takeIf { it.isFinite() } ?: 0.0,
-                        invalidationPrice = candles[signalIndex].l - tick,
-                        reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
+                        invalidationPrice = structuralStop,
+                        reason = "WM2 Super AO: third rising AO bar; stop behind previous five closed H1 bars",
+                        setupContext = JSONObject().put("initial_stop_rule","TC2_3_TO_5_CLOSED_PRICE_BARS")
+                            .put("initial_stop_window",5).put("third_ao_bar_at_ms",candles[signalIndex].t)
+                            .put("risk_stop_at_price",structuralStop).toString()
                     )
                 }
             }
@@ -7390,6 +8028,12 @@ private class NativeEngine(
                 triggerPrice=fractal.trigger,protectivePrice=fractal.protective,
                 teethAtDetection=fractal.currentTeeth,invalidationPrice=fractal.protective,
                 reason="WM3 eligible confirmed fractal outside Teeth; waiting for actual trigger",
+                setupContext=JSONObject()
+                    .put("wise_man","WM3")
+                    .put("signal_family","CONFIRMED_FRACTAL")
+                    .put("fractal_center_time_ms",candles[fractal.center].t)
+                    .put("fractal_confirmation_time_ms",candles[fractal.confirmation].t)
+                    .put("teeth_filter_verified",true).toString(),
                 formationAtMs=candles[fractal.center].t)
         }
 
@@ -7437,15 +8081,141 @@ private class NativeEngine(
             ) return@mapNotNull null
             signal.copy(
                 signalId = campaignSignalId(
-                    symbol, frame, "SHORT_" + signal.type, signal.signalBarTimeMs
+                    symbol, frame, "SHORT_" + signal.type, signal.formationAtMs
                 ),
                 type = "SHORT_" + signal.type,
                 triggerPrice = trigger,
                 protectivePrice = stop,
+                teethAtDetection = reflection-signal.teethAtDetection,
+                setupContext = reflectedTc2SetupContext(signal.type, signal.setupContext, reflection),
                 invalidationPrice = stop,
-                reason = "Bearish mirror of confirmed Williams setup: " + signal.reason
+                reason = signal.reason.replace("bullish","bearish").replace("above signal-bar high","below signal-bar low")
+                    .replace("rising AO","falling AO").replace("above price bar","below price bar")
             )
         }.distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
+    }
+
+    private fun h1EntryParent(signal:CampaignSignalN)=WilliamsH1Parent(signal.signalId,
+        campaignSignalDirection(signal.type).orEmpty(),signal.signalBarTimeMs,signal.triggerPrice,signal.protectivePrice,
+        williamsH1SignalExpiry(signal.signalBarTimeMs,signal.type,signal.strategyProfile).takeIf { it>0L } ?: Long.MAX_VALUE)
+
+    /** Reconstruct causal H1 prefixes so crossing the old H1 trigger does not erase the parent
+     * while it waits for M15. Structural invalidation and the original five-hour expiry remain. */
+    private fun h1ContextCampaignSignals(symbol:String,input:List<CandleN>,tick:Double):List<CampaignSignalN> {
+        val now=futuresMarketData.exchangeNowMs()
+        val bars=input.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+        if(williamsClosedH1HistoryBlocker(bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)!=null) return emptyList()
+        val mark=futuresMarketData.markPrice(symbol)
+        val out=mutableListOf<CampaignSignalN>()
+        for(omitted in 0..minOf(4,bars.size-45)) {
+            val prefix=bars.take(bars.size-omitted)
+            val signals=editionCampaignSignals(symbol,prefix,"1h",tick,if(omitted==0) williamsUnifiedProfile else williamsExecutionProfile)
+            out+=signals.filter { signal ->
+                if(signal.strategyProfile!=williamsExecutionProfile || signal.role!="ENTRY") omitted==0
+                else williamsH1SignalTimeEligible(signal.signalBarTimeMs,signal.type,signal.strategyProfile,now) &&
+                    williamsH1ParentInvalidation(h1EntryParent(signal),
+                        bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },mark,now)==null
+            }
+        }
+        val oppositeCandidates=h1OppositionCandidates(symbol,bars,tick,williamsProfile)
+        val sourceEvidence=oppositeCandidates.map { scenarioSignal(it) }
+        val waveBars=bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        val lifecycle=JSONArray()
+        val valid=out.distinctBy { it.signalId }.filter { signal ->
+            if(signal.strategyProfile!=williamsExecutionProfile || signal.role!="ENTRY") return@filter true
+            val parent=h1EntryParent(signal)
+            val assessment=assessWilliamsScenarioOpposition(parent.direction,parent.knownAt,sourceEvidence,waveBars,mark,now)
+            lifecycle.put(JSONObject().put("parent_id",parent.signalId).put("direction",parent.direction)
+                .put("state",if(assessment.blocker==null) "VALID_CONTEXT" else if(assessment.opposition!=null) "REVOKED" else "UNVERIFIED")
+                .put("reason",assessment.blocker ?: "NO_LATER_TRIGGERED_OPPOSITION")
+                .put("opposition",assessment.opposition?.toJson() ?: JSONObject.NULL)
+                .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })))
+            assessment.blocker==null
+        }.sortedBy { it.signalBarTimeMs }
+        check(executionStore.writeState("decision_h1_parent_lifecycle_"+symbol,JSONObject()
+            .put("observed_at_ms",now).put("parents",lifecycle).toString())) { "H1_LIFECYCLE_PROOF_NOT_DURABLE" }
+        return valid
+    }
+
+    /** Final non-M15 book-rule check executed by the coordinator AFTER
+     * exchange leverage confirmation and immediately BEFORE Binance POST.
+     * Historic M15 entry verifier stays available only for recovery.
+     */
+    private fun verifyBookH1PlanBeforeSubmit(plan:NativeFuturesCampaignCoordinator.EntryPlan) {
+        check(!forceTestnetMode) { "OPERATOR_DIRECTION_MODE_ACTIVE_BEFORE_SUBMISSION" }
+        val now=futuresMarketData.exchangeNowMs()
+        val tick=symbolFilters(plan.symbol).tick
+        val target=plan.entryPrice.toDouble()
+        val stop=plan.protectiveStop.toDouble()
+        check(williamsProfileAllowsSource(williamsProfile,plan.strategyProfile)) { "H1_BOOK_EDITION_CHANGED" }
+        check(williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
+            plan.signalType,plan.strategyProfile,target,stop,now)==null) { "H1_BOOK_PROOF_UNVERIFIED" }
+        val candles=fetchCandles(plan.symbol,"1h",220)
+        val signals=h1ContextCampaignSignals(plan.symbol,candles,tick)
+        val actual=signals.singleOrNull { it.signalId==plan.signalId &&
+            it.type==plan.signalType && it.strategyProfile==plan.strategyProfile && it.role=="ENTRY" &&
+            campaignSignalDirection(it.type)==plan.direction.name }
+            ?: error(h1ParentRejectionReason(plan.symbol,plan.signalId,"H1_BOOK_PARENT_NO_LONGER_VALID"))
+        val expected=if(plan.direction.name=="LONG")
+            normalizeTriggerPrice(actual.triggerPrice,tick)
+            else normalizePrice(actual.triggerPrice,tick)
+        check(abs(expected-target)<=tick*.11) { "H1_BOOK_ENTRY_PRICE_CHANGED" }
+        val expectedStop=if(plan.direction.name=="LONG")
+            normalizePrice(actual.protectivePrice,tick)
+            else normalizeTriggerPrice(actual.protectivePrice,tick)
+        check(if(plan.direction.name=="LONG") stop>=expectedStop-tick*.11
+              else stop<=expectedStop+tick*.11) { "H1_BOOK_PROTECTIVE_STOP_WIDENED" }
+        check(!williamsBookH1TriggerConsumed(plan.direction.name,plan.signalBarTimeMs,target,now,
+            candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })) {
+            "H1_BOOK_BREAKOUT_WAS_ALREADY_CONSUMED"
+        }
+        val closed=candles.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+        val teeth=williamsAlligatorLine(closed,8,5).lastOrNull() ?: Double.NaN
+        check(williamsBookFractalTeethBlocker(plan.signalType,plan.direction.name,target,teeth,tick)==null) {
+            "H1_BOOK_FRACTAL_NO_LONGER_OUTSIDE_TEETH"
+        }
+        val mark=futuresMarketData.markPrice(plan.symbol)
+        check(if(plan.direction.name=="LONG") mark<target else mark>target) {
+            "H1_BOOK_PENDING_BREAKOUT_ALREADY_CROSSED"
+        }
+    }
+
+    private fun verifyMtfPlanBeforeSubmit(plan:NativeFuturesCampaignCoordinator.EntryPlan) {
+        check(!forceTestnetMode) { "OPERATOR_DIRECTION_MODE_ACTIVE_BEFORE_SUBMISSION" }
+        val now=futuresMarketData.exchangeNowMs()
+        val evidence=williamsM15EntryFromJson(JSONObject(plan.setupContext).getJSONObject("mtf_entry"))
+            ?: error("M15_ENTRY_PROOF_UNREADABLE")
+        val parents=h1ContextCampaignSignals(plan.symbol,fetchCandles(plan.symbol,"1h",220),evidence.tick)
+        check(parents.any { it.signalId==plan.signalId && campaignSignalDirection(it.type)==plan.direction.name }) {
+            h1ParentRejectionReason(plan.symbol,plan.signalId,"H1_PARENT_INVALIDATED_BEFORE_SUBMISSION")
+        }
+        val candles=fetchCandles(plan.symbol,"15m",220).filter { it.t>0 && it.t+WILLIAMS_M15_MS<=now }
+        val fresh=m15EntryDecision(plan.symbol,evidence.parent,candles,evidence.tick,now).entry
+            ?: error("M15_ENTRY_NO_LONGER_VALID_BEFORE_SUBMISSION")
+        check(fresh.pivotAt==evidence.pivotAt && fresh.confirmedAt==evidence.confirmedAt &&
+            abs(fresh.trigger-plan.entryPrice.toDouble())<=evidence.tick*.1 &&
+            (if(plan.direction.name=="LONG") plan.protectiveStop.toDouble()>=fresh.stop
+                else plan.protectiveStop.toDouble()<=fresh.stop)) { "M15_ENTRY_CHANGED_BEFORE_SUBMISSION" }
+    }
+
+    private fun h1ParentRejectionReason(symbol:String,parentId:String,fallback:String):String {
+        val rows=runCatching { JSONObject(executionStore.readState("decision_h1_parent_lifecycle_"+symbol).orEmpty())
+            .getJSONArray("parents") }.getOrNull() ?: return fallback
+        return (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.firstOrNull {
+            it.optString("parent_id")==parentId && it.optString("state")!="VALID_CONTEXT"
+        }?.optString("reason")?.takeIf { it.isNotBlank() } ?: fallback
+    }
+
+    private fun m15EntryDecision(symbol:String,parent:WilliamsH1Parent,candles:List<CandleN>,tick:Double,now:Long):WilliamsM15Decision {
+        val bars=candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        val teeth=williamsAlligatorLine(candles,8,5).map { it ?: Double.NaN }
+        val result=selectWilliamsH1M15Entry(parent,bars,teeth,tick,futuresMarketData.markPrice(symbol),now)
+        check(executionStore.writeState("decision_m15_entry_"+symbol,JSONObject()
+            .put("mode",WILLIAMS_MTF_ENTRY_MODE).put("observed_at_ms",now).put("parent",parent.toJson())
+            .put("reason",result.reason).put("entry",result.entry?.toJson() ?: JSONObject.NULL)
+            .put("candles",JSONArray(candles.takeLast(160).map { listOf(it.t,it.o,it.h,it.l,it.c,it.v) }))
+            .toString())) { "M15_DECISION_PROOF_NOT_DURABLE" }
+        return result
     }
 
     private fun analyseBase(
@@ -7498,7 +8268,7 @@ private class NativeEngine(
             // Build both directional hypotheses from the same exchange-confirmed
             // closed H1 series. Candidates reach execution only through the native
             // Futures coordinator after context, risk, and reconciliation gates pass.
-            editionCampaignSignals(symbol,workCandles,campaignExecutionTimeframe,campaignTick)
+            h1ContextCampaignSignals(symbol,workCandles,campaignTick)
         } else {
             emptyList()
         }
@@ -7571,7 +8341,7 @@ private class NativeEngine(
 
         var strictSignal =
             if (campaignEngineEnabled) {
-                campaignSignals.isNotEmpty() &&
+                campaignSignals.any { it.strategyProfile==williamsExecutionProfile } &&
                     atrPct in 0.0..0.08 &&
                     spread <= maxSpreadPct
             } else {
@@ -7640,8 +8410,168 @@ private class NativeEngine(
             tradeFlowImbalance = flowImbalance,
             reason = reason,
             campaignSignals = campaignSignals,
-            campaignReady = campaignEngineEnabled && campaignSignals.isNotEmpty()
+            campaignReady = campaignEngineEnabled && campaignSignals.any { it.strategyProfile==williamsExecutionProfile && it.role=="ENTRY" }
         )
+    }
+
+    /**
+     * Demand-load only a bounded REAL Binance child window if the observed
+     * cycle would otherwise have fewer than ~100 bars on the parent frame.
+     * Background-only, rate-limited; never grants entry/exit permission.
+     */
+    private fun requestMissingAdaptiveWaveFrames(
+        symbol: String, report: JSONObject, cutoff: Long
+    ) {
+        if(!running) return
+        val rows=report.optJSONArray("hypotheses") ?: return
+        val allowed=setOf("30m","15m","5m","3m","1m")
+        var queued=0
+        for(i in rows.length()-1 downTo 0) {
+            if(queued>=1) break
+            val evidence=rows.optJSONObject(i) ?: continue
+            val scale=evidence.optJSONObject("scale") ?: continue
+            if(scale.optString("status")=="BOOK_WINDOW_OBSERVED") continue
+            val frame=scale.optString("wanted_frame")
+            val ms=williamsWaveFrames[frame] ?: continue
+            if(frame !in allowed) continue
+            val start=evidence.optLong("wave_start_ms",0L)
+            val end=evidence.optLong("wave_end_ms",0L)
+            if(start<=0L || end<=start || end>cutoff ||
+                (end-start)/ms !in 40L..900L) continue
+            val key=symbol+":"+frame+":"+(start/(15L*60L*1000L))
+            val now=System.currentTimeMillis()
+            val last=adaptiveWaveFetchAttemptMs[key] ?: 0L
+            if(last>0L && now-last<15L*60L*1000L) continue
+            adaptiveWaveFetchAttemptMs[key]=now
+            queued++
+            adaptiveWaveFetchExecutor.execute {
+                runCatching {
+                    val free=runCatching {
+                        android.os.StatFs(context.filesDir.path).availableBytes
+                    }.getOrDefault(0L)
+                    if(free<512L*1024L*1024L)
+                        throw IllegalStateException("WAVE_CHILD_DISK_BUDGET")
+                    val from=(start-40L*ms).coerceAtLeast(0L)
+                    val lastClosed=futuresMarketData.exchangeNowMs()
+                    val until=minOf(lastClosed-ms,end+ms)
+                    if(until<=from) return@runCatching
+                    val array=futuresMarketData.klines(symbol,frame,1000,
+                        startTime=from,endTime=until)
+                    val batch=ArrayList<MarketHistoryStore.Candle>()
+                    var lastOpen=Long.MIN_VALUE
+                    for(j in 0 until array.length()) {
+                        val row=array.getJSONArray(j)
+                        val opened=row.getLong(0);val closed=row.getLong(6)
+                        if(opened<=lastOpen || opened<from ||
+                            opened>until)
+                            throw IllegalStateException("WAVE_CHILD_INVALID_ORDER")
+                        lastOpen=opened
+                        if(!futuresMarketData.isCandleClosed(closed,lastClosed)) continue
+                        batch+=MarketHistoryStore.Candle(opened,
+                            row.getString(1).toDouble(),row.getString(2).toDouble(),
+                            row.getString(3).toDouble(),row.getString(4).toDouble(),
+                            row.getString(5).toDouble(),closed)
+                    }
+                    if(batch.isNotEmpty()) {
+                        historyStore.upsertBatch(symbol,frame,batch)
+                        // Wave report is recalculated at next 15m closure. It
+                        // never sees exchange data not yet closed at that time.
+                        adaptiveWaveContextCache.remove(symbol)
+                        waveHierarchyCache.remove(symbol)
+                    }
+                }.onFailure { e ->
+                    adaptiveWaveFetchLastError=frame+":"+
+                        (e.message ?: e.javaClass.simpleName)
+                }
+            }
+        }
+    }
+
+    /** Bounded lower-priority slices replay the durable H1 decision timeline.
+     * Scanner, Execution Door, reconciliation and stop ownership are not involved.
+     */
+    private fun startDeviceWaveReplay(generation:Long) {
+        deviceWaveReplayTask?.cancel(false)
+        val archiveFrames=listOf("1w","1d","12h","8h","6h","4h","2h","1h","30m","15m")
+        fun active()=running && generation==runtimeGeneration && !Thread.currentThread().isInterrupted
+        deviceWaveReplayTask=deviceWaveReplayExecutor.scheduleWithFixedDelay({
+            if(!active()) return@scheduleWithFixedDelay
+            if(nativeManagementRunning || futuresReconciliationRunning || futuresStreamReconcileRunning) {
+                deviceWaveReplayState="WAITING_RUNTIME_PRIORITY"
+                return@scheduleWithFixedDelay
+            }
+            val symbol=coreSymbols[deviceWaveReplayNextPair]
+            deviceWaveReplayNextPair=(deviceWaveReplayNextPair+1)%coreSymbols.size
+            runCatching {
+                if(!historyStore.waveArchiveReady(symbol,archiveFrames)) {
+                    deviceWaveReplayState="WAITING_FULL_ARCHIVE"
+                    historyStore.waveReplayStatusUpdate(symbol,"WAITING_FULL_ARCHIVE")
+                    return@runCatching
+                }
+                val free=android.os.StatFs(context.filesDir.path).availableBytes
+                if(free<512L*1024*1024) {
+                    deviceWaveReplayState="WAITING_DEVICE_STORAGE"
+                    historyStore.waveReplayStatusUpdate(symbol,"WAITING_DEVICE_STORAGE")
+                    return@runCatching
+                }
+                var cursor=historyStore.prepareWaveReplay(symbol)
+                val through=futuresMarketData.exchangeNowMs()/3_600_000L*3_600_000L
+                val closes=historyStore.waveClockPage(symbol,cursor.lastClosedMs,through)
+                if(closes.isEmpty()) {
+                    deviceWaveReplayState="CAUGHT_UP_AVAILABLE_H1"
+                    historyStore.waveReplayStatusUpdate(symbol,"CAUGHT_UP_AVAILABLE_H1")
+                    return@runCatching
+                }
+                val started=System.nanoTime()
+                for(asOf in closes) {
+                    if(!active() || System.nanoTime()-started>350_000_000L) break
+                    if(nativeManagementRunning || futuresReconciliationRunning || futuresStreamReconcileRunning) {
+                        deviceWaveReplayState="WAITING_RUNTIME_PRIORITY"
+                        break
+                    }
+                    val revision=historyStore.waveSourceRevision(symbol)
+                    val history=linkedMapOf<String,List<WilliamsWaveBar>>()
+                    for(frame in williamsWaveFrames.keys) {
+                        val ms=williamsWaveFrames.getValue(frame)
+                        val rows=historyStore.loadRecent(symbol,frame,deviceWaveReplayLimit,beforeMs=asOf-ms)
+                            .filter { it.closeTime<asOf }.map { WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume) }
+                        if(rows.isNotEmpty()) history[frame]=rows
+                    }
+                    // The bounded tail of a short TF may not reach an older
+                    // parent. Read its exact missing window from SQLite only.
+                    val probe=buildAdaptiveHistoricalWaveReport(history,asOf).getJSONArray("hypotheses")
+                    val loaded=mutableSetOf<String>()
+                    for(i in 0 until probe.length()) {
+                        val row=probe.getJSONObject(i);val scale=row.getJSONObject("scale")
+                        if(scale.optString("status")=="BOOK_WINDOW_OBSERVED") continue
+                        val frame=scale.optString("wanted_frame");val ms=williamsWaveFrames[frame]?:continue
+                        val start=row.getLong("wave_start_ms");val end=row.getLong("wave_end_ms")
+                        val key="$frame:$start:$end"
+                        if(!loaded.add(key) || (end-start)/ms !in 40L..450L ||
+                            verifiedAdaptiveWaveWindow(history[frame].orEmpty(),frame,start,end,asOf,true).isNotEmpty()) continue
+                        val extra=historyStore.waveTargetWindow(symbol,frame,start,end,asOf).map {
+                            WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+                        }
+                        history[frame]=(history[frame].orEmpty()+extra).associateBy { it.t }.values.sortedBy { it.t }
+                    }
+                    if(!active()) break
+                    val step=buildDeviceWaveReplayStep(cursor,history,asOf)
+                    if(!active()) break
+                    if(!historyStore.commitWaveReplay(symbol,cursor,revision,step)) {
+                        deviceWaveReplayState="SOURCE_CHANGED_RETRY"
+                        break
+                    }
+                    cursor=step.cursor
+                    deviceWaveReplayState="REPLAYING_H1_ARCHIVE"
+                    deviceWaveReplayLastError=null
+                }
+            }.onFailure { e->
+                deviceWaveReplayState="ANALYSIS_REPLAY_ERROR"
+                deviceWaveReplayLastError=safeDiagnosticText(e.message?:e.javaClass.simpleName)
+                runCatching { historyStore.waveReplayStatusUpdate(symbol,"ANALYSIS_REPLAY_ERROR",deviceWaveReplayLastError) }
+            }
+            if(!running) deviceWaveReplayState="STOPPED"
+        },1L,1L,java.util.concurrent.TimeUnit.SECONDS)
     }
 
     private fun waveHierarchyFor(symbol: String, refresh: Boolean = false): WilliamsWaveHierarchy {
@@ -7660,6 +8590,41 @@ private class NativeEngine(
                 .getOrDefault(emptyList()).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
         }
         report = buildWilliamsWaveHierarchy(frames,cutoff)
+
+        // A separate observational pass reads the device's deep SQLite
+        // archive, not only the old 240 recent bars. It explicitly resolves
+        // H1 inside H4 inside D1 and attempts genuinely finer real candles
+        // to reach the approximate 100-140-bar analysis resolution.
+        // Never allow a history/cache failure to alter the execution hierarchy.
+        val adaptive = runCatching {
+            val hourlyCutoff=cutoff/3_600_000L*3_600_000L
+            adaptiveWaveContextCache[symbol]
+                ?.takeIf { it.first==hourlyCutoff }?.second?.let { return@runCatching JSONObject(it.toString()) }
+            val historicalFrames = listOf(
+                "1w","1d","12h","8h","6h","4h","2h","1h",
+                "30m","15m","5m","3m","1m"
+            )
+            val history = historicalFrames.associateWith { frame ->
+                // Deep history remains fully durable in SQLite; the current
+                // wave engine examines 1800 recent closed bars per degree.
+                // Scanning 6000*13 rows per symbol would risk stalling
+                // the read-only scanner on resource-constrained devices.
+                historyStore.loadRecent(symbol,frame,1800,
+                    beforeMs=hourlyCutoff-williamsWaveFrames.getValue(frame)).map {
+                    WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+                }
+            }
+            val contextReport=buildAdaptiveHistoricalWaveReport(history,hourlyCutoff)
+            adaptiveWaveContextCache[symbol]=hourlyCutoff to JSONObject(contextReport.toString())
+            requestMissingAdaptiveWaveFrames(symbol,contextReport,hourlyCutoff)
+            contextReport
+        }.getOrElse { error ->
+            JSONObject().put("schema","ADAPTIVE_WILLIAMS_WAVE_HISTORY_V1")
+                .put("status","HISTORY_UNVERIFIED")
+                .put("error_type",error.javaClass.simpleName)
+                .put("can_place_orders",false)
+        }
+        report=report.copy(adaptiveHistory=adaptive)
 
         val previous = executionStore.readState("wave_hierarchy_" + symbol)
         val proof = report.toJson().toString()
@@ -7686,28 +8651,37 @@ private class NativeEngine(
         symbol: String, direction: NativeFuturesCampaignCoordinator.Direction,
         candles: List<CandleN>, tick: Double, mark: Double, openedAt: Long, profile:String=williamsTc2Profile
     ): CampaignSignalN? {
-        if (openedAt <= 0L) return null
+        if(openedAt<=0L) return null
         val now = futuresMarketData.exchangeNowMs()
-        val opposingSide = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) "SHORT" else "LONG"
+        val closed=candles.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+        val candidates=h1OppositionCandidates(symbol,closed,tick,profile)
+        val assessment=assessWilliamsScenarioOpposition(direction.name,openedAt,candidates.map { scenarioSignal(it) },
+            closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },mark,now)
+        val evidence=assessment.opposition
+        check(executionStore.writeState("decision_h1_opposition_"+symbol,JSONObject()
+            .put("observed_at_ms",now).put("scope_started_at_ms",openedAt).put("direction",direction.name)
+            .put("opposition",evidence?.toJson() ?: JSONObject.NULL)
+            .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })).toString())) { "H1_EXIT_PROOF_NOT_DURABLE" }
+        return candidates.firstOrNull { it.signalId==evidence?.signal?.id }
+    }
+
+    private fun scenarioSignal(signal:CampaignSignalN)=WilliamsScenarioSignal(signal.signalId,
+        campaignSignalDirection(signal.type).orEmpty(),signal.strategyProfile,signal.executionSemantics,
+        signal.signalBarTimeMs,signal.triggerPrice,signal.invalidationPrice.takeIf { it.isFinite() && it>0 },
+        williamsH1SignalExpiry(signal.signalBarTimeMs,signal.type,signal.strategyProfile).takeIf { it>0L } ?: Long.MAX_VALUE)
+
+    private fun h1OppositionCandidates(symbol:String,candles:List<CandleN>,tick:Double,profile:String):List<CampaignSignalN> {
+        if(candles.size<45) return emptyList()
+        val out=mutableListOf<CampaignSignalN>()
         // Reconstruct only causal prefixes. This also catches a valid level
         // crossed in a completed H1 bar while the app/scanner was offline.
         for (omitted in 0..minOf(5,candles.size-45)) {
             val prefix = candles.take(candles.size-omitted)
-            val signals=editionCampaignSignals(symbol,prefix,"1h",tick,profile,exitMode=true)
-                .filter { campaignSignalDirection(it.type)==opposingSide }
-            for (signal in signals.filter { it.strategyProfile==williamsNtdProfile || it.role == "ENTRY" }) {
-                if(signal.strategyProfile==williamsNtdProfile && signal.executionSemantics=="MARKET_ON_CLOSE") {
-                    if(williamsOpposingCloseEventTriggered(signal.signalBarTimeMs,3_600_000L,openedAt,now)) return signal
-                    continue
-                }
-                if(signal.executionSemantics!="STOP_ENTRY") continue
-                if (williamsOpposingLevelTriggered(opposingSide,signal.triggerPrice,
-                    signal.signalBarTimeMs+3_600_000L,openedAt,mark,
-                    candles.drop(prefix.size).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
-                    now,signal.signalBarTimeMs+18_000_000L)) return signal
-            }
+            out+=editionCampaignSignals(symbol,prefix,"1h",tick,profile,exitMode=true)
+                .filter { it.role=="ENTRY" && (it.strategyProfile!=williamsNtdProfile ||
+                    it.type.removePrefix("SHORT_")=="FRACTAL") }
         }
-        return null
+        return out.distinctBy { it.signalId }
     }
 
     private fun enrichWithMtf(baseCandidate: BaseAnalysis): BaseAnalysis {
@@ -7767,6 +8741,9 @@ private class NativeEngine(
     private fun decisionTraceSnapshot(fullHistory:Boolean=false):JSONObject {
         val journal=runCatching { futuresCampaignCoordinator.intentsSnapshot() }
         val intents=journal.getOrDefault(JSONArray())
+        val audit=runCatching { auditStore.latestEntryPassportEvents() }
+        val passportNow=futuresMarketData.cachedExchangeNowMs()
+        val passportClockFresh=futuresMarketData.clockSnapshot().optBoolean("fresh",false)
         return JSONObject().apply { BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.forEach { symbol ->
             val trace=runCatching { JSONObject(executionStore.readState("decision_trace_"+symbol).orEmpty()) }
                 .getOrDefault(JSONObject().put("symbol",symbol).put("state","NOT_ANALYSED"))
@@ -7777,9 +8754,16 @@ private class NativeEngine(
             trace.put("order_chain_state",if(journal.isSuccess) "JOURNAL_SNAPSHOT" else "UNAVAILABLE_RECONCILE_REQUIRED")
             runCatching { JSONObject(executionStore.readState("decision_context_"+symbol).orEmpty()) }.getOrNull()
                 ?.let { trace.put("admission_context",it) }
-            val chain = williamsExecutionChain(intents,symbol)
-            trace.put("order_chain",chain)
-            trace.put("entry_passport",williamsEntryPassport(symbol,execution,chain))
+            runCatching { JSONObject(executionStore.readState("decision_m15_entry_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("mtf_entry",it) }
+            runCatching { JSONObject(executionStore.readState("decision_h1_parent_lifecycle_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("parent_lifecycle",it) }
+            runCatching { JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("opposition_check",it) }
+            trace.put("order_chain",williamsExecutionChain(intents,symbol))
+            trace.put("entry_passport",williamsEntryPassport(symbol,execution,intents,
+                audit.getOrNull()?.get(symbol),passportNow,passportClockFresh,journal.isSuccess)
+                .put("audit_available",audit.isSuccess))
             if(fullHistory) trace.put("entry_passport_events",runCatching {
                 auditStore.recentEntryPassportEvents(symbol,500)
             }.getOrElse { JSONArray() })
@@ -7802,6 +8786,45 @@ private class NativeEngine(
         runCatching { executionStore.writeState("decision_runtime_"+symbol,JSONObject()
             .put("stage","RUNTIME_PREFLIGHT").put("observed_at_ms",System.currentTimeMillis())
             .put("outcome",JSONObject().put("accepted",false).put("mutation_attempted",false).put("blocker",safeDiagnosticText(reason))).toString()) }
+    }
+
+    /**
+     * Long-term market LOCATION (not a wave label or an entry trigger).
+     * All extrema come strictly from persistently stored, CLOSED Binance H1
+     * candles. Unknown/insufficient history is not presented as a strong signal.
+     */
+    private fun persistentH1MarketLocation(symbol: String): JSONObject {
+        val rows = historyStore.loadRecent(symbol, "1h", 6000)
+        val last = rows.lastOrNull()
+        val result = JSONObject().put("source", "DEVICE_SQLITE_CLOSED_H1")
+            .put("used_for_order_entry", false)
+            .put("full_history_backfilled", historyStore.isComplete(symbol, "1h"))
+            .put("loaded_bars", rows.size)
+            .put("first_bar_open_ms", rows.firstOrNull()?.openTime ?: JSONObject.NULL)
+            .put("last_bar_open_ms", last?.openTime ?: JSONObject.NULL)
+        if (last == null) return result.put("status", "NO_HISTORY")
+        val exchangeTime = futuresMarketData.cachedExchangeNowMs()
+        if (!futuresMarketData.isKlineOpenTimeClosed(last.openTime, "1h", exchangeTime)) {
+            return result.put("status", "UNVERIFIED_LAST_H1_CLOSE")
+        }
+        for (period in listOf(150, 720, 2160, 6000)) {
+            if (rows.size < period) {
+                result.put("range_" + period + "_hours", JSONObject().put("status", "INSUFFICIENT_HISTORY"))
+                continue
+            }
+            val sample = rows.takeLast(period)
+            val low = sample.minOf { it.low }
+            val high = sample.maxOf { it.high }
+            val position = if (high > low)
+                ((last.close - low) / (high - low)).coerceIn(0.0, 1.0)
+                else null
+            result.put("range_" + period + "_hours", JSONObject()
+                .put("status", "OBSERVED_NOT_WAVE_CLASSIFICATION")
+                .put("high", high).put("low", low)
+                .put("last_close", last.close)
+                .put("position_from_0_low_to_1_high", position ?: JSONObject.NULL))
+        }
+        return result.put("status", "HISTORICAL_CONTEXT")
     }
 
     private fun toJson(candidate: BaseAnalysis): JSONObject {
@@ -7899,7 +8922,7 @@ private class NativeEngine(
             .put("formation_candle",candidate.candles.firstOrNull { it.t==signal.formationAtMs }?.let { JSONArray(listOf(it.t,it.o,it.h,it.l,it.c,it.v)) } ?: JSONObject.NULL)
             .put("confirmation_candle",candidate.candles.firstOrNull { it.t==signal.signalBarTimeMs }?.let { JSONArray(listOf(it.t,it.o,it.h,it.l,it.c,it.v)) } ?: JSONObject.NULL)
             .put("teeth_at_detection",signal.teethAtDetection.takeIf { it.isFinite() } ?: JSONObject.NULL)
-            .put("expires_at_ms",if(signal.executionSemantics=="MARKET_ON_CLOSE") signal.signalBarTimeMs+3_600_000L+90_000L else signal.signalBarTimeMs+18_000_000L)
+            .put("expires_at_ms",if(signal.executionSemantics=="MARKET_ON_CLOSE") signal.signalBarTimeMs+3_600_000L+90_000L else williamsH1SignalExpiry(signal.signalBarTimeMs,signal.type,signal.strategyProfile))
             .put("trigger",signal.triggerPrice).put("protective_stop",signal.protectivePrice)
             .put("strategy_profile",signal.strategyProfile).put("execution_semantics",signal.executionSemantics)
             .put("setup_context",runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject())) })
@@ -7909,16 +8932,36 @@ private class NativeEngine(
         val trace=buildWilliamsDecisionTrace(candidate.symbol,williamsProfile,
             candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },futuresMarketData.exchangeNowMs(),
             indicators,traceSignals,candidate.waveHierarchy?.toJson() ?: JSONObject())
+        val observations=JSONArray(williamsSourceProfiles.mapNotNull { source ->
+            executionStore.readState("edition_observation_"+candidate.symbol+"_"+source)
+                ?.let { runCatching { JSONObject(it) }.getOrNull() }
+        })
+        trace.put("edition_observations",observations)
+        val traceBooks=trace.getJSONArray("books")
+        for(index in 0 until observations.length()) {
+            val observation=observations.getJSONObject(index)
+            if(observation.optString("state")=="ANALYSIS_FAILED") for(j in 0 until traceBooks.length()) {
+                val book=traceBooks.getJSONObject(j)
+                if(book.optString("profile")==observation.optString("profile"))
+                    book.put("state","ANALYSIS_FAILED").put("error_type",observation.optString("error_type"))
+            }
+        }
         runCatching { WilliamsSignalJournal(executionStore).observe(candidate.symbol,traceSignals,futuresMarketData.exchangeNowMs(),entryTimePolicy) }
         if(!candidate.campaignReady) rejectDecision(candidate.symbol,"H1_STRUCTURE_NOT_READY: "+candidate.reason)
         runCatching { executionStore.writeState("decision_trace_"+candidate.symbol,trace.toString()) }
         return JSONObject()
             .put("decision_trace",trace)
+            .put("persistent_h1_market_location", runCatching {
+                persistentH1MarketLocation(candidate.symbol)
+            }.getOrElse {
+                JSONObject().put("status", "HISTORY_READ_FAILED")
+                    .put("used_for_order_entry", false)
+            })
             .put("directional_context_native", directionTrace)
             .put("wave4_zero_line_diagnostic", wave4Trace)
             .put("ntd_balance_line_diagnostics", ntdTrace)
             .put("wave_hierarchy", candidate.waveHierarchy?.toJson() ?: JSONObject().put("state","NOT_ANALYSED"))
-            .put("strategy_profile", williamsProfile)
+             .put("execution_policy",williamsExecutionPolicySnapshot()).put("strategy_profile", williamsProfile)
             .put("wave_scores_calibrated", false)
             .put("symbol", candidate.symbol)
             .put("score", candidate.score)
@@ -7938,6 +8981,11 @@ private class NativeEngine(
             .put("setup_state", setupState)
             .put("reason", candidate.reason)
             .put("campaign_engine", campaignEngineEnabled)
+            .put("closed_h1_as_of_ms",candidate.candles.lastOrNull()?.let { it.t+WILLIAMS_H1_MS } ?: 0L)
+            // Each source ran independently on this exact closed H1 series.
+            // Preserve absent/failed observer evidence instead of quietly
+            // equating "no signal" with "analyser could not execute".
+            .put("edition_observations",observations)
             .put("campaign_ready", candidate.campaignReady)
             .put(
                 "campaign_signals",
@@ -8371,6 +9419,12 @@ private class NativeEngine(
             .put("scanning", scanning)
             .put("scanner_state", scannerState)
             .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("scanner_symbol_errors",lastScannerSymbolErrors)
+            .put("market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
+            .put("h1_scanner_history_ready",readOnlyH1Ready)
+            .put("h1_ready_symbol_count",h1HistoryReadyCount)
+            .put("h1_all_ten_ready",historyReady)
+            .put("optional_context_history_ready",optionalContextHistoryReady)
             .put("run_id", scanRunId)
             .put("progress_symbols", scanProgressSymbols)
             .put("progress_total", coreSymbols.size)
@@ -8396,7 +9450,7 @@ private class NativeEngine(
     }
 
     fun status(fast: Boolean = false): JSONObject {
-        if (!fast && primaryCandles.isEmpty()) {
+        if (!fast && (primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, interval))) {
             runCatching {
                 primaryCandles =
                     fetchCandles(primarySymbol, interval, 150)
@@ -8510,7 +9564,7 @@ private class NativeEngine(
             .put("last_reconciliation_attempt_at_ms", lastReconciliationAttemptAtMs)
             .put("last_reconciliation_completed_at_ms", lastReconciliationCompletedAtMs)
             .put("last_reconciliation_result", lastReconciliationResult)
-            .put("strategy_profile",williamsProfile)
+             .put("execution_policy",williamsExecutionPolicySnapshot()).put("strategy_profile",williamsProfile)
             .put("entry_time_policy",entryTimePolicy.toJson())
             .put("decision_traces",decisionTraceSnapshot())
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
@@ -8607,10 +9661,20 @@ private class NativeEngine(
             .put("daily_pnl_usdt", futuresDailyPnl)
             .put("daily_loss_pct", futuresDailyLossPct)
             .put("daily_capital_flow_usdt", futuresDailyCapitalFlow)
+            .put("daily_entry_halt",dailyEntryHalt().let { halt->
+                JSONObject().put("available",halt.available).put("allow_new_entries",halt.allowNewEntries)
+                    .put("until_ms",halt.untilMs?:JSONObject.NULL).put("reason",halt.reason?:JSONObject.NULL)
+                    .put("reset_policy","UTC_00_00_ENTRY_ONLY; OPERATOR_PAUSE_AND_KILL_UNCHANGED")
+            })
             .put("consecutive_losses", futuresLossStreakGuard().consecutiveLosses)
             .put("consecutive_losses_available", futuresLossStreakGuard().available)
             .put("consecutive_loss_blocker", futuresLossStreakGuard().reason ?: JSONObject.NULL)
             .put("consecutive_loss_cooldown_until_ms", futuresLossStreakGuard().cooldownUntilMs ?: JSONObject.NULL)
+            .put("consecutive_loss_utc_day_start_ms",
+                if(futuresMarketData.clockSnapshot().optBoolean("fresh",false))
+                    futuresUtcDayStartMs(futuresMarketData.cachedExchangeNowMs())
+                else JSONObject.NULL)
+            .put("consecutive_loss_reset_policy","UTC_00_00_AUTOMATIC_IF_EXCHANGE_CLOCK_VERIFIED")
             .put("trading_mode", when {
                 killLatched -> "KILL_SWITCH_LATCHED"
                 reconcileRequired -> "RECONCILE_REQUIRED"
@@ -8634,8 +9698,24 @@ private class NativeEngine(
             .put("user_stream_reconcile_duration_ms", if (userStreamReconcileStartedAtMs > 0L) ((if (futuresStreamReconcileRunning) System.currentTimeMillis() else userStreamReconcileFinishedAtMs) - userStreamReconcileStartedAtMs).coerceAtLeast(0L) else JSONObject.NULL)
             .put("user_stream_reconcile_failure", userStreamReconcileFailure ?: JSONObject.NULL)
             .put("history_ready", historyReady)
+            .put("h1_scanner_history_ready",readOnlyH1Ready)
+            .put("h1_ready_symbol_count",h1HistoryReadyCount)
+            .put("optional_context_history_ready",optionalContextHistoryReady)
             .put("history_state", historyState)
             .put("history_last_error", historyLastError ?: JSONObject.NULL)
+            .put("adaptive_wave_finer_history_last_error",
+                adaptiveWaveFetchLastError ?: JSONObject.NULL)
+            .put("historical_wave_replay",runCatching {
+                historyStore.waveReplayStatus().put("worker_state",deviceWaveReplayState)
+                    .put("worker_last_error",deviceWaveReplayLastError?:JSONObject.NULL)
+            }.getOrElse { JSONObject().put("worker_state","STATUS_UNAVAILABLE")
+                .put("can_place_orders",false).put("can_close_positions",false) })
+            .put("persistent_history_sync_active", deepHistoryBackfillRunning)
+            .put("persistent_history_frames", JSONArray(durableBackfillFrames))
+            .put("persistent_history_complete_pairs", deepHistoryPairsComplete)
+            .put("persistent_history_total_pairs", durableBackfillFrames.size * coreSymbols.size)
+            .put("persistent_history_storage_low", deepHistoryStorageLow)
+            .put("persistent_history_last_error", deepHistoryLastError ?: JSONObject.NULL)
             .put("fsm_state", stateMachine.state.name)
             .put("kill_switch_latched", killLatched)
             .put("live_prices", JSONObject().apply {
@@ -8646,6 +9726,8 @@ private class NativeEngine(
             .put("scanner_scanning", scanning)
             .put("scanner_state", scannerState)
             .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("scanner_symbol_errors", lastScannerSymbolErrors)
+            .put("scanner_market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
             .put("scanner_run_id", scanRunId)
             .put("scanner_symbols", lastSymbolsScanned)
             .put("scanner_progress_symbols", scanProgressSymbols)
@@ -8715,7 +9797,8 @@ private class NativeEngine(
             .filter { futuresMarketData.isKlineOpenTimeClosed(it.openTime, selectedInterval, futuresMarketData.exchangeNowMs()) }
             .map { CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume) } else emptyList()
         val sourceCandles = if (historical) stored else if (stored.size >= 150 && candleSeriesCurrent(stored, selectedInterval)) stored else if (symbol == primarySymbol && selectedInterval == interval) {
-            if (primaryCandles.isEmpty()) primaryCandles = fetchCandles(primarySymbol, selectedInterval, 150)
+            if(primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, selectedInterval))
+                primaryCandles=fetchCandles(primarySymbol,selectedInterval,150)
             primaryCandles
         } else {
             fetchCandles(symbol, selectedInterval, 150)
@@ -8790,6 +9873,11 @@ private class NativeEngine(
 
         return marketQuote(symbol).put("interval", selectedInterval)
             .put("indicator_snapshot", indicatorSnapshot).put("candles", output)
+            .put("h1_market_analysis_independent_of_entry_gate",true)
+            .put("candles_fresh",candleSeriesCurrent(sourceCandles,selectedInterval))
+            .put("last_closed_bar_open_ms",sourceCandles.lastOrNull()?.t ?: JSONObject.NULL)
+            .put("scanner_state",scannerState)
+            .put("execution_allowed",executionReady())
     }
 
     fun marketQuote(requestedSymbol: String?): JSONObject {
@@ -9090,7 +10178,8 @@ private class NativeEngine(
             scanProgressSymbols in 0..coreSymbols.size &&
             (scannerProgressAgeMs <= 60_000L || (scanProgressSymbols == 0 && scannerStartupGrace))
         test(
-            "scanner_state", "scanner", scannerComplete || scannerActivelyProgressing, "WARN",
+            "scanner_state", "scanner", scannerComplete || scannerActivelyProgressing,
+            scannerFailureSeverity(running, historyReady, scanning, scannerState),
             "state=" + scannerState + "; complete=" + scannerComplete +
                 "; universe_matches=" + scannerUniverseMatches + "; run_id=" + scanRunId +
                 "; progress=" + scanProgressSymbols + "/" + scanSymbols.size +
@@ -9456,7 +10545,7 @@ private class NativeEngine(
         val next = FuturesLeverageSettings.fromJson(payload)
         val profile=payload.optString("strategy_profile",williamsProfile)
         val nextTime=payload.optJSONObject("entry_time_policy")?.let { WilliamsEntryTimePolicy.fromJson(it) } ?: entryTimePolicy
-        require(profile in williamsEditionProfiles) { "Неизвестный профиль Вильямса" }
+        require(profile==williamsExecutionProfile) { "Торговля — TC2; NTD и Course работают в наблюдении" }
         fun persist() {
             check(prefs.edit().putString("entry_time_policy_v1",nextTime.toJson().toString()).putString("williams_strategy_profile_v1",profile)
                 .putString("futures_leverage_settings_v1", next.toJson().toString()).commit()) {
@@ -9474,7 +10563,7 @@ private class NativeEngine(
 
     fun settings(): JSONObject =
         JSONObject()
-            .put("strategy_profile",williamsProfile)
+             .put("execution_policy",williamsExecutionPolicySnapshot()).put("strategy_profile",williamsProfile)
             .put("entry_time_policy",entryTimePolicy.toJson())
             .put("decision_traces",decisionTraceSnapshot())
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
@@ -9485,7 +10574,10 @@ private class NativeEngine(
             .put("version", BuildConfig.VERSION_NAME)
             .put("campaign_engine", campaignEngineEnabled)
             .put("campaign_execution_timeframe", campaignExecutionTimeframe)
-            .put("campaign_entry_mode", "CONDITIONAL_STOP")
+            .put("campaign_entry_mode", WILLIAMS_BOOK_H1_ENTRY_MODE)
+            .put("campaign_context_timeframe", "1h")
+            .put("campaign_trigger_timeframe", "1h")
+            .put("campaign_m15_confirmation_required", false)
             .put("campaign_fixed_take_profit", false)
             .put("campaign_entry_execution", "USD_M_FUTURES_TESTNET_COORDINATOR")
             .put("campaign_risk_limit_pct", campaignRiskLimitPct)
