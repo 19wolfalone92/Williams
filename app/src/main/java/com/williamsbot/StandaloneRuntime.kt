@@ -8160,6 +8160,77 @@ private class NativeEngine(
         )
     }
 
+    /**
+     * Demand-load only a bounded REAL Binance child window if the observed
+     * cycle would otherwise have fewer than ~100 bars on the parent frame.
+     * Background-only, rate-limited; never grants entry/exit permission.
+     */
+    private fun requestMissingAdaptiveWaveFrames(
+        symbol: String, report: JSONObject, cutoff: Long
+    ) {
+        val rows=report.optJSONArray("hypotheses") ?: return
+        val allowed=setOf("30m","15m","5m","3m","1m")
+        var queued=0
+        for(i in rows.length()-1 downTo 0) {
+            if(queued>=2) break
+            val evidence=rows.optJSONObject(i) ?: continue
+            val scale=evidence.optJSONObject("scale") ?: continue
+            if(scale.optString("status")=="BOOK_WINDOW_OBSERVED") continue
+            val frame=scale.optString("wanted_frame")
+            val ms=williamsWaveFrames[frame] ?: continue
+            if(frame !in allowed) continue
+            val start=evidence.optLong("wave_start_ms",0L)
+            val end=evidence.optLong("wave_end_ms",0L)
+            if(start<=0L || end<=start || end>cutoff ||
+                (end-start)/ms !in 40L..900L) continue
+            val key=symbol+":"+frame+":"+(start/(15L*60L*1000L))
+            val now=System.currentTimeMillis()
+            val last=adaptiveWaveFetchAttemptMs[key] ?: 0L
+            if(last>0L && now-last<15L*60L*1000L) continue
+            adaptiveWaveFetchAttemptMs[key]=now
+            queued++
+            historyBackfillExecutor.execute {
+                runCatching {
+                    val free=runCatching {
+                        android.os.StatFs(context.filesDir.path).availableBytes
+                    }.getOrDefault(0L)
+                    if(free<512L*1024L*1024L)
+                        throw IllegalStateException("WAVE_CHILD_DISK_BUDGET")
+                    val from=(start-40L*ms).coerceAtLeast(0L)
+                    val lastClosed=futuresMarketData.exchangeNowMs()
+                    val until=minOf(lastClosed-ms,end+ms)
+                    if(until<=from) return@runCatching
+                    val array=futuresMarketData.klines(symbol,frame,1000,
+                        startTime=from,endTime=until)
+                    val batch=ArrayList<MarketHistoryStore.Candle>()
+                    var lastOpen=Long.MIN_VALUE
+                    for(j in 0 until array.length()) {
+                        val row=array.getJSONArray(j)
+                        val opened=row.getLong(0);val closed=row.getLong(6)
+                        if(opened<=lastOpen || opened<from ||
+                            opened>until)
+                            throw IllegalStateException("WAVE_CHILD_INVALID_ORDER")
+                        lastOpen=opened
+                        if(!futuresMarketData.isCandleClosed(closed,lastClosed)) continue
+                        batch+=MarketHistoryStore.Candle(opened,
+                            row.getString(1).toDouble(),row.getString(2).toDouble(),
+                            row.getString(3).toDouble(),row.getString(4).toDouble(),
+                            row.getString(5).toDouble(),closed)
+                    }
+                    if(batch.isNotEmpty()) {
+                        historyStore.upsertBatch(symbol,frame,batch)
+                        // Wave report is recalculated at next 15m closure. It
+                        // never sees exchange data not yet closed at that time.
+                        waveHierarchyCache.remove(symbol)
+                    }
+                }.onFailure { e ->
+                    adaptiveWaveFetchLastError=frame+":"+
+                        (e.message ?: e.javaClass.simpleName)
+                }
+            }
+        }
+    }
+
     private fun waveHierarchyFor(symbol: String, refresh: Boolean = false): WilliamsWaveHierarchy {
         val now = futuresMarketData.exchangeNowMs()
         val cutoff = now / 900_000L * 900_000L
