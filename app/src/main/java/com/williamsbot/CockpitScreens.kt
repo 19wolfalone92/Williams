@@ -316,7 +316,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
                         style = MaterialTheme.typography.bodySmall)
                 } else {
                     val snapshotStatus = evidence.optString("status")
-                    Text("Снимок: $snapshotStatus • сигналов ${evidence.optInt("observed_signal_count")}",
+                    Text("Снимок: ${russianStatus(snapshotStatus)} • сигналов ${evidence.optInt("observed_signal_count")}",
                         color = if (snapshotStatus == "COMPLETE_OBSERVATION_ONLY") AppColors.green else AppColors.amber,
                         style = MaterialTheme.typography.bodySmall)
                     val labels = listOf(williamsTc2Profile to "Trading Chaos 2",
@@ -343,7 +343,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
                             val brief = listOf("TC2 ${counts?.optInt(williamsTc2Profile) ?: 0}",
                                 "NTD ${counts?.optInt(williamsNtdProfile) ?: 0}",
                                 "Course ${counts?.optInt(williamsCourseProfile) ?: 0}").joinToString(" · ")
-                            Text(row.optString("symbol") + " · " + brief +
+                            Text(row.optString("symbol") + " · " + russianStatus(brief) +
                                 (if (row.optBoolean("fresh_opposing_entries_before_context")) " · ⚠️ LONG/SHORT" else ""),
                                 style = MaterialTheme.typography.bodySmall)
                         }
