@@ -48,6 +48,10 @@ def test_scan_uses_the_verified_h1_startup_cache_limit_and_does_not_force_180_ba
     # Startup verifies and persists 150 H1 closed bars. Requiring 180 on every
     # scan misses a valid 150-bar cache and can stall all 10 charts when
     # Demo REST returns an occasional empty success response.
-    assert 'val candles = fetchCandles(symbol, "1h", 150)' in RUNTIME
+    scan_source = RUNTIME.split('private fun performCampaignScan()', 1)[1].split(
+        'val ranked = mutableListOf<BaseAnalysis>()', 1
+    )[0]
+    assert 'val candles = fetchCandles(symbol, "1h", 150)' in scan_source
     assert 'runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 150) }' in RUNTIME
-    assert 'val candles = fetchCandles(symbol, "1h", 180)' not in RUNTIME
+    # Position management correctly retains an independent 180-bar requirement.
+    assert 'val candles = fetchCandles(symbol, "1h", 180)' not in scan_source
