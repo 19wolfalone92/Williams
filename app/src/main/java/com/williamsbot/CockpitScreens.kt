@@ -20,6 +20,50 @@ import java.util.Locale
 import android.content.Context
 import androidx.core.content.edit
 
+/**
+ * Human-readable Russian status labels. Raw exchange/diagnostic codes are still
+ * retained in the exported JSON for reproducibility and Binance support.
+ */
+internal fun williamsRuStatus(raw: String): String = when (raw.trim().uppercase(Locale.ROOT)) {
+    "RUNNING" -> "Выполняется"
+    "STOPPED" -> "Остановлено"
+    "READY" -> "Готово"
+    "READY_BLOCKED" -> "Анализ завершён, входы заблокированы"
+    "PARTIAL_BLOCKED" -> "Частичный анализ, входы заблокированы"
+    "PARTIAL", "INCOMPLETE_SCAN" -> "Анализ выполнен частично"
+    "FAILED", "FAIL" -> "Ошибка"
+    "PASS" -> "Успешно"
+    "WARNING", "WARN" -> "Предупреждение"
+    "NOT_VERIFIED", "NOT VERIFIED" -> "Не проверено"
+    "RECONCILE_REQUIRED", "BLOCKED_FUTURES_RECONCILIATION" -> "Требуется сверка с биржей"
+    "ENTRY_PENDING" -> "Ожидается исполнение входа"
+    "EXIT_PENDING" -> "Ожидается подтверждение выхода"
+    "OPEN_PROTECTED" -> "Позиция защищена стопом"
+    "POSITION_UNPROTECTED" -> "Защита позиции не подтверждена"
+    "PAUSED" -> "Новые входы на паузе"
+    "TRIGGERING", "TRIGGERED" -> "Условный ордер срабатывает; исполнение не подтверждено"
+    "NEW", "PENDING", "WORKING", "ACCEPTED" -> "Ордер ожидает исполнения"
+    "FILLED", "FINISHED" -> "Исполнено"
+    "CANCELED", "CANCELLED" -> "Отменено"
+    "REJECTED" -> "Отклонено"
+    "COMPLETE_OBSERVATION_ONLY" -> "Полный снимок наблюдений; не допуск к торговле"
+    "BLOCKED_ACCOUNT" -> "Ожидание данных счёта"
+    "WAITING_FOR_HISTORY" -> "Загрузка исторических свечей"
+    "WAITING_FOR_MARKET_DATA" -> "Ожидание котировок"
+    "BLOCKED_KILL", "KILL_SWITCH_LATCHED" -> "Аварийная блокировка"
+    else -> raw
+}
+
+internal fun williamsRuRuntimeMessage(raw: String): String = when {
+    raw.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN", ignoreCase = true) ->
+        "Не удалось подтвердить капитал на начало суток UTC. Новые входы запрещены; анализ рынка и защита позиций продолжаются. Требуется сверка истории доходов, позиций и ожидающих ордеров Binance."
+    raw.contains("exchange_confirmed_pending_entry_or_fill_not_yet_resolved", ignoreCase = true) ->
+        "Binance подтверждает ожидающий вход или ещё не завершённое исполнение. Новые заявки заблокированы до сверки."
+    raw.contains("Unable to resolve host", ignoreCase = true) ->
+        "Не удалось подключиться к Binance: ошибка DNS. Проверьте интернет и повторите сверку."
+    else -> williamsRuStatus(raw)
+}
+
 @Composable
 internal fun CockpitAppearanceCard(context: Context) {
     val preferences = remember { context.getSharedPreferences("cockpit_appearance", Context.MODE_PRIVATE) }
@@ -96,7 +140,7 @@ internal fun CockpitReadiness(status: Status) {
             r.optBoolean("position_management_ready") -> "Готово"
             else -> "Требуется сверка"
         })
-        Text(r.optString("new_entries_reason", "Ожидание первого снимка"), style = MaterialTheme.typography.bodySmall)
+        Text(williamsRuRuntimeMessage(r.optString("new_entries_reason", "Ожидание первого снимка")), style = MaterialTheme.typography.bodySmall)
         CockpitFreshness(status)
     }
 }
@@ -139,7 +183,7 @@ internal fun CockpitDashboard(
         }
         if (status.futuresIntents.isEmpty()) item {
             CockpitCard("Наблюдение за рынком") {
-                Text("Сканер: ${status.scannerState} • ${status.scannerSymbols}/10 пар")
+                Text("Сканер: ${williamsRuStatus(status.scannerState)} • ${status.scannerSymbols}/10 пар")
                 Text(candidates.firstOrNull()?.let { "${it.symbol}: ${it.reason}" }
                     ?: "Подтверждённых торговых кампаний в текущем снимке нет.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
             }
@@ -147,7 +191,7 @@ internal fun CockpitDashboard(
         item { controls() }
         if (status.error != null || message.startsWith("Частичная ошибка")) item {
             CockpitCard("Требует внимания", AppColors.amber) {
-                Text(status.error ?: message, style = MaterialTheme.typography.bodySmall)
+                Text(williamsRuRuntimeMessage(status.error ?: message), style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = onSystem) { Text("Открыть диагностику") }
             }
         }
@@ -160,8 +204,8 @@ internal fun CockpitIntentCard(intent: JSONObject, onMarket: (String) -> Unit) {
     val direction = intent.optString("direction")
     var expanded by remember(symbol, intent.optString("client_id_suffix")) { mutableStateOf(false) }
     CockpitCard("$symbol • $direction", if (direction == "SHORT") AppColors.red else AppColors.green) {
-        Text(intent.optString("campaign_status"), fontWeight = FontWeight.SemiBold)
-        CockpitField("Binance", intent.optString("order_status", "не подтверждено"))
+        Text(williamsRuStatus(intent.optString("campaign_status")), fontWeight = FontWeight.SemiBold)
+        CockpitField("Binance", williamsRuStatus(intent.optString("order_status", "не подтверждено")))
         Text(intent.optString("signal_reason").ifBlank { "Причина сигнала для этой кампании не записана" },
             color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
         CockpitField("Вход / стоп", cockpitNumber(intent.optDouble("entry_price"), 4) + " / " +
@@ -303,8 +347,8 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
         }
         item {
             val summary = report?.optJSONObject("diagnostic_summary")
-            Text("Результат: " + (summary?.optString("overall") ?: "NOT VERIFIED"), fontWeight = FontWeight.Bold)
-            Text("PASS ${summary?.optInt("passed_test_count") ?: 0} • WARNING ${summary?.optInt("warning_test_count") ?: 0} • FAIL ${summary?.optInt("failed_test_count") ?: 0} • NOT VERIFIED ${summary?.optInt("not_verified_test_count") ?: 0}", style = MaterialTheme.typography.bodySmall)
+            Text("Результат: " + williamsRuStatus(summary?.optString("overall") ?: "NOT VERIFIED"), fontWeight = FontWeight.Bold)
+            Text("Успешно: ${summary?.optInt("passed_test_count") ?: 0} • Предупреждения: ${summary?.optInt("warning_test_count") ?: 0} • Ошибки: ${summary?.optInt("failed_test_count") ?: 0} • Не проверено: ${summary?.optInt("not_verified_test_count") ?: 0}", style = MaterialTheme.typography.bodySmall)
             Text("Проверено ${cockpitTime(report?.optLong("created_at_ms") ?: 0L)}", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
         }
         item {
@@ -316,7 +360,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
                         style = MaterialTheme.typography.bodySmall)
                 } else {
                     val snapshotStatus = evidence.optString("status")
-                    Text("Снимок: $snapshotStatus • сигналов ${evidence.optInt("observed_signal_count")}",
+                    Text("Снимок: ${williamsRuStatus(snapshotStatus)} • сигналов ${evidence.optInt("observed_signal_count")}",
                         color = if (snapshotStatus == "COMPLETE_OBSERVATION_ONLY") AppColors.green else AppColors.amber,
                         style = MaterialTheme.typography.bodySmall)
                     val labels = listOf(williamsTc2Profile to "Trading Chaos 2",
@@ -354,7 +398,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
         item {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("Все", "FAIL", "WARNING", "NOT_VERIFIED", "PASS").forEach { label ->
-                    FilterChip(filter == label, { filter = label }, label = { Text(label.replace('_', ' ')) })
+                    FilterChip(filter == label, { filter = label }, label = { Text(williamsRuStatus(label)) })
                 }
             }
         }
@@ -364,9 +408,9 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
             val color = when (severity) { "PASS" -> AppColors.green; "FAIL" -> AppColors.red; "WARNING" -> AppColors.amber; else -> AppColors.textMuted }
             Card(Modifier.fillMaxWidth().clickable { expanded = !expanded }, colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(check.optString("id").ifBlank { check.optString("domain") } + " • " + severity.replace('_', ' '), color = color, style = MaterialTheme.typography.labelSmall)
+                    Text(check.optString("id").ifBlank { check.optString("domain") } + " • " + williamsRuStatus(severity), color = color, style = MaterialTheme.typography.labelSmall)
                     Text(check.optString("name"), style = MaterialTheme.typography.bodyMedium)
-                    if (expanded || severity == "FAIL" || severity == "WARNING") Text(check.optString("detail"), style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+                    if (expanded || severity == "FAIL" || severity == "WARNING") Text(williamsRuRuntimeMessage(check.optString("detail")), style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
                 }
             }
         }
@@ -374,7 +418,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
         if (engineering) {
             item { Text("Последние события перед ошибками сохраняются автоматически. ZIP содержит временную шкалу и снимок последнего инцидента.", style = MaterialTheme.typography.bodySmall) }
             items(CockpitDiagnostics.rows(report?.optJSONArray("event_timeline"))) { event ->
-                Text("${cockpitTime(event.optLong("E"))} • ${event.optString("symbol")} • ${event.optString("state")}\n${event.optString("detail")}", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+                Text("${cockpitTime(event.optLong("E"))} • ${event.optString("symbol")} • ${williamsRuStatus(event.optString("state"))}\n${williamsRuRuntimeMessage(event.optString("detail"))}", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
             }
             item { SelectionContainer { Text(report?.toString(2) ?: "Диагностика ещё не выполнена", style = MaterialTheme.typography.labelSmall) } }
         }
