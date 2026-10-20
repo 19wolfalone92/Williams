@@ -1446,6 +1446,7 @@ private class NativeEngine(
 
     @Volatile private var scannerState = "NOT_RUN"
     @Volatile private var scannerError: String? = null
+    @Volatile private var lastScannerSymbolErrors = JSONObject()
     @Volatile private var scanRunId = ""
     @Volatile private var scanStartedAt = 0L
     @Volatile private var scanLastProgressAt = 0L
@@ -6536,6 +6537,7 @@ private class NativeEngine(
         val coarseMetadataMissing=coreSymbols.filter { symbol ->
             (volumes[symbol] ?: 0.0)<=0.0 || spreads[symbol]==null
         }
+        val symbolErrors = java.util.concurrent.ConcurrentHashMap<String, String>()
         val futures = scanSymbols.map { symbol ->
             scanExecutor.submit(Callable {
                 try {
@@ -6548,7 +6550,8 @@ private class NativeEngine(
                     result
                 } catch (x: Exception) {
                     markScanProgress()
-                    scannerError = symbol + ": " + (x.message ?: x.javaClass.simpleName)
+                    symbolErrors[symbol] = x.javaClass.simpleName + ": " +
+                        (x.message ?: "no details")
                     null
                 }
             })
@@ -6580,6 +6583,9 @@ private class NativeEngine(
                 .take(20).forEach { put(toJson(it)) }
         }
         lastSymbolsScanned = ranked.size
+        lastScannerSymbolErrors = JSONObject().apply {
+            symbolErrors.toSortedMap().forEach { (symbol,reason) -> put(symbol,reason) }
+        }
         lastScanAt = System.currentTimeMillis()
         scanRunId = "futures-" + lastScanAt
         runCatching { PositionsWidgetProvider.refresh(context) }
@@ -6613,6 +6619,13 @@ private class NativeEngine(
             else -> "READY"
         }
         scannerError = when {
+            !completeScan && symbolErrors.isNotEmpty() ->
+                "Не удалось завершить H1-анализ: " + symbolErrors.entries
+                    .sortedBy { it.key }.take(3)
+                    .joinToString("; ") { it.key + ": " + it.value } +
+                    (if (symbolErrors.size>3) "; и ещё " + (symbolErrors.size-3) + " пар" else "")
+            !completeScan && ranked.isEmpty() ->
+                "Сканер не завершил анализ ни одной пары: " + missing.joinToString(",")
             executionBlocker != null -> {
                 when (executionBlocker) {
                     "BLOCKED_KILL" -> "Kill switch is latched; read-only market scan completed, new entries remain disabled"
@@ -9096,6 +9109,7 @@ private class NativeEngine(
             .put("scanning", scanning)
             .put("scanner_state", scannerState)
             .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("scanner_symbol_errors",lastScannerSymbolErrors)
             .put("market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
             .put("h1_scanner_history_ready",readOnlyH1Ready)
             .put("h1_ready_symbol_count",h1HistoryReadyCount)
