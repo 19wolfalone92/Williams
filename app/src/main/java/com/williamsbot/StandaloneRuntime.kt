@@ -9026,6 +9026,8 @@ private class NativeEngine(
             .put("consecutive_losses_available", futuresLossStreakGuard().available)
             .put("consecutive_loss_blocker", futuresLossStreakGuard().reason ?: JSONObject.NULL)
             .put("consecutive_loss_cooldown_until_ms", futuresLossStreakGuard().cooldownUntilMs ?: JSONObject.NULL)
+            .put("consecutive_loss_day_scope", "UTC_CALENDAR_DAY")
+            .put("consecutive_loss_utc_reset_at_ms",futuresLossStreakNextUtcResetMs(System.currentTimeMillis()) ?: JSONObject.NULL)
             .put("trading_mode", when {
                 killLatched -> "KILL_SWITCH_LATCHED"
                 reconcileRequired -> "RECONCILE_REQUIRED"
