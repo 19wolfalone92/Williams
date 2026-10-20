@@ -260,10 +260,10 @@ internal fun CockpitControls(status: Status, onStart: () -> Unit, onPause: () ->
     CockpitCard("Управление") {
         Button(onClick = if (status.running) { if (status.paused) onResume else onPause } else onStart,
             modifier = Modifier.fillMaxWidth(), enabled = !status.executionKillLatched) {
-            Text(if (!status.running) "Запустить движок" else if (status.paused) "Возобновить поиск" else "Остановить поиск новых сделок")
+            Text(if (!status.running) "Запустить движок" else if (status.paused) "Возобновить новые входы" else "Приостановить новые входы")
         }
         if (status.running) {
-            Text(if (status.paused) "Сопровождение работает. Уже размещённые заявки могут исполниться."
+            Text(if (status.paused) "H1-анализ и сопровождение продолжаются. Новые входы на паузе; ранее выставленные заявки могут исполниться."
                 else "Бот анализирует 10 пар и сопровождает позиции.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
             OutlinedButton(onClick = { confirmation = "suspend" }, modifier = Modifier.fillMaxWidth()) { Text("Приостановить входы и снять заявки") }
         }
