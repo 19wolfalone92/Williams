@@ -8518,6 +8518,15 @@ private class NativeEngine(
                 val through=futuresMarketData.exchangeNowMs()/3_600_000L*3_600_000L
                 val closes=historyStore.waveClockPage(symbol,cursor.lastClosedMs,through)
                 if(closes.isEmpty()) {
+                    // 'archive ready' with six years of H1 bars but zero replay
+                    // steps is NOT a successful catch-up. Never silently report
+                    // zero processed candles as a completed historical audit.
+                    if(cursor.processed==0L) {
+                        throw IllegalStateException(
+                            "FULL_H1_ARCHIVE_HAS_NO_REPLAY_CLOCK: $symbol; " +
+                            "verify SQLite candle timestamps and rawQuery numeric binding"
+                        )
+                    }
                     deviceWaveReplayState="CAUGHT_UP_AVAILABLE_H1"
                     historyStore.waveReplayStatusUpdate(symbol,"CAUGHT_UP_AVAILABLE_H1")
                     return@runCatching
