@@ -3625,6 +3625,7 @@ private class NativeEngine(
 
                 var allReady = true
                 var h1ReadyNow = 0
+                var h1TasksResolved = 0
                 val deadline = System.currentTimeMillis() + 90_000L
                 tasks.forEach { (label, future) ->
                     val ok = runCatching {
@@ -3638,12 +3639,19 @@ private class NativeEngine(
                     }
                     activeHistoryTasks.remove(future)
                     if(label.endsWith(":1h")) {
+                        h1TasksResolved++
                         if(ok) h1ReadyNow++
                         h1HistoryReadyCount=h1ReadyNow
-                        if(h1ReadyNow>0) readOnlyH1Ready=true
-                        if(h1ReadyNow==coreSymbols.size) {
-                            historyReady=true
-                            historyState="H1_READY_CONTEXT_LOADING"
+                        // Wait until the whole ten-symbol H1 warmup group
+                        // settles. Starting a ten-way REST scan after the
+                        // FIRST symbol finished caused a thundering herd that
+                        // could starve the remaining H1 startup workers.
+                        if(h1TasksResolved==coreSymbols.size) {
+                            if(h1ReadyNow>0) readOnlyH1Ready=true
+                            if(h1ReadyNow==coreSymbols.size) {
+                                historyReady=true
+                                historyState="H1_READY_CONTEXT_LOADING"
+                            }
                         }
                     } else if (!ok) allReady = false
                     if (!ok) allReady = false
