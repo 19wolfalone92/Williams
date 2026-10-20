@@ -11,7 +11,7 @@ class WilliamsUnifiedEvidenceTest {
     private fun signal(id: String, profile: String, family: String, role: String = "ENTRY") =
         JSONObject().put("signal_id", id).put("strategy_profile", profile)
             .put("type", family).put("role", role)
-            .put("signal_bar_time_ms", now - 4_000_000L)
+            .put("signal_bar_time_ms", now - 2 * WILLIAMS_H1_MS)
             .put("trigger_price", 100.0)
             .put("protective_price", if (family.startsWith("SHORT_")) 101.0 else 99.0)
             .put("reason", "CLOSED_H1_TEST")
@@ -139,8 +139,8 @@ class WilliamsUnifiedEvidenceTest {
         val report=buildWilliamsUnifiedEvidence(scanner(),status().put("futures_runtime",
             JSONObject().put("pending_intent_details",a)),now)
         assertEquals("INVALID_SNAPSHOT",report.getString("status"))
-        val errors=CockpitDiagnostics.rows(report.getJSONArray("source_contract_errors"))
-        assertTrue(errors.isNotEmpty())
+        val errors=report.getJSONArray("source_contract_errors")
+        assertTrue((0 until errors.length()).any { errors.optString(it)=="MULTIPLE_ACTIVE_CAMPAIGN_OWNERS:BTCUSDT" })
         assertEquals(2,report.getJSONArray("by_symbol").getJSONObject(0).getInt("active_owner_count"))
     }
 
