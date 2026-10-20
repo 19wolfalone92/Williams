@@ -48,6 +48,46 @@ class CockpitDiagnosticsTest {
         assertFalse(r.getBoolean("new_entries_allowed"))
         assertTrue(r.getString("new_entries_reason").contains("база риска"))
     }
+    @Test fun threePendingStopOrdersUseEntireRiskBudgetEvenWhenDailyLossReset() {
+        val orders = JSONArray()
+        for (symbol in listOf("ETHUSDT","BNBUSDT","BTCUSDT")) {
+            orders.put(entry().put("symbol", symbol).put("risk_pct", 0.002))
+        }
+        val healthyAccount = healthy()
+            .put("reserved_risk_pct", 0.006)
+            .put("max_total_risk_pct", 0.006)
+            .put("daily_loss_pct", 0.0)
+            .put("consecutive_losses", 0)
+        val admission = CockpitDiagnostics.readiness(healthyAccount,
+            coordinator().put("pending_intent_details", orders), now)
+        assertTrue(admission.getBoolean("technical_ready"))
+        assertTrue(admission.getBoolean("execution_door_ready"))
+        assertFalse(admission.getBoolean("new_entries_allowed"))
+        assertTrue(admission.getBoolean("entry_risk_budget_exhausted"))
+        assertEquals(0.0, admission.getDouble("entry_risk_budget_remaining_pct"), 1e-9)
+        assertEquals(3, admission.getInt("pending_orders"))
+        assertTrue(admission.getString("new_entries_reason").contains("Ожидающие заявки"))
+        assertTrue(admission.getString("new_entries_reason").contains("0.60%"))
+        assertTrue(admission.getString("new_entries_reason").contains("Суточный лимит"))
+        // Releasing exchange-confirmed reservations (not bypassing them) restores
+        // the UI explanation, while the native entry door stays authoritative.
+        healthyAccount.put("reserved_risk_pct", 0.004)
+        val freed = CockpitDiagnostics.readiness(healthyAccount, coordinator(), now)
+        assertTrue(freed.getBoolean("new_entries_allowed"))
+        assertFalse(freed.getBoolean("entry_risk_budget_exhausted"))
+        assertEquals(0.002, freed.getDouble("entry_risk_budget_remaining_pct"), 1e-9)
+    }
+
+    @Test fun riskBudgetUnknownIsNotMisreportedAsZeroOrUnlimitedCapacity() {
+        val s=healthy().remove("max_total_risk_pct").let { healthy().put("max_total_risk_pct", Double.NaN) }
+        // org.json rejects NaN; this test deliberately omits the limit instead.
+        s.remove("max_total_risk_pct")
+        val readiness = CockpitDiagnostics.readiness(s, coordinator(), now)
+        assertFalse(readiness.getBoolean("entry_risk_budget_known"))
+        assertFalse(readiness.has("entry_risk_budget_remaining_pct") &&
+            !readiness.isNull("entry_risk_budget_remaining_pct"))
+    }
+
     @Test fun staleDisplayOnlyPositionsDoNotOverrideAuthoritativeFuturesEntryGate() {
         val s = healthy().put("positions_snapshot_ok", false).put("positions_snapshot_at_ms", now - 20_000)
         val readiness = CockpitDiagnostics.readiness(s, coordinator(), now)
