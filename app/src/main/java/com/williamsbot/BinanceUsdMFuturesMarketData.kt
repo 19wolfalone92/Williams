@@ -294,16 +294,24 @@ internal class BinanceUsdMFuturesMarketData(
             response.use {
                 rateGuard?.observe(it.headers, it.code)
                 val body = it.body?.string().orEmpty()
-                if (it.isSuccessful) return body
-                val failure = IOException(
-                    "USD-M Futures market data HTTP ${it.code}: ${body.take(300)}"
-                )
-                // Only retry explicitly transient server failures. In particular, 418/429
-                // are never hammered with automatic retries; rate limiting remains visible.
-                if (it.code !in setOf(500, 502, 503, 504) || attempt >= retryDelaysMs.size) {
-                    throw failure
+                if (it.isSuccessful) {
+                    if (body.isNotBlank()) return body
+                    // Empty 200 response caused JSON "End of input at character 0",
+                    // observed in DOGEUSDT scanner diagnostics. Retrying this safe
+                    // public GET is allowed; an empty payload is NEVER valid H1 data.
+                    val failure = IOException("Empty USD-M Futures market data GET response")
+                    if (attempt >= retryDelaysMs.size) throw failure
+                    lastTransportFailure = failure
+                } else {
+                    val failure = IOException(
+                        "USD-M Futures market data HTTP ${it.code}: ${body.take(300)}"
+                    )
+                    // Only retry transient 5xx. Never hammer 418/429.
+                    if (it.code !in setOf(500, 502, 503, 504) || attempt >= retryDelaysMs.size) {
+                        throw failure
+                    }
+                    lastTransportFailure = failure
                 }
-                lastTransportFailure = failure
             }
             sleepBeforeSafeReadRetry(retryDelaysMs[attempt])
         }
