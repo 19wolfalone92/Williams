@@ -49,7 +49,7 @@ internal object CockpitDiagnostics {
         val reason = when {
             !status.optBoolean("running") -> "Движок остановлен"
             status.optBoolean("kill_switch_latched") -> "Аварийная блокировка новых операций"
-            dailyBaselineMissing -> resetExplanation
+            dailyBaselineMissing -> "Не подтверждена суточная база риска Binance. " + resetExplanation
             status.optBoolean("paused") -> "Новые входы приостановлены; сопровождение продолжается"
             !snapshotFresh -> "Снимок позиций Binance обновляется или устарел"
             !coordinatorReady -> russianExecutionBlocker(coordinator.optString("blocker"))
