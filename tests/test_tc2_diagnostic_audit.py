@@ -37,8 +37,8 @@ def test_archive_observes_opposition_without_claiming_stop_fill():
            "wave_hypotheses":[]}
     item=audit.audit_trade(t,trace)
     assert item["reversal_geometry_valid_without_alligator"]
-    assert item["candidate_book_h1_trigger"]==99.9
-    assert item["estimated_original_protective_stop"]==105.1
+    assert abs(item["candidate_book_h1_trigger"]-99.9)<1e-8
+    assert abs(item["estimated_original_protective_stop"]-105.1)<1e-8
     assert item["exit_class"]=="DISCRETIONARY_OPPOSITION_MARKET_EXIT"
     assert item["exchange_confirmed_exit_intent_in_trace"]
     assert not item["exchange_stop_order_fill_identity_verified"]
