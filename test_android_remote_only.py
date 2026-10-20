@@ -605,7 +605,7 @@ def test_android_super_ao_is_independent_of_the_wm3_fractal_gate():
     assert 'type = "SUPER_AO"' in wm2
     assert "triggerPrice = trigger" in wm2
     assert "protectivePrice = structuralStop" in wm2
-    assert 'williamsTc2SuperAoInitialStop("LONG",waveBars,signalIndex,tick,window=5)' not in wm2 or "williamsTc2SuperAoInitialStop(" in wm2
+    assert "williamsTc2SuperAoInitialStop(" in wm2
 
 
 def test_android_campaign_analysis_never_relabels_fallback_candles_as_h1():
@@ -655,7 +655,7 @@ def test_android_super_ao_uses_the_third_rising_bar_and_not_the_oldest_of_three(
     assert "signalBarTimeMs = candles[signalIndex].t" in wm2
     assert "triggerPrice = trigger" in wm2
     assert "protectivePrice = structuralStop" in wm2
-    assert 'williamsTc2SuperAoInitialStop("LONG",waveBars,signalIndex,tick,window=5)' not in wm2 or "williamsTc2SuperAoInitialStop(" in wm2
+    assert "williamsTc2SuperAoInitialStop(" in wm2
     assert "streak == 3" not in wm2
     assert "val structuralStop = williamsTc2SuperAoInitialStop(" in wm2
     assert '.put("initial_stop_window",5)' in wm2
