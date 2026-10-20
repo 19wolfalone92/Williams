@@ -70,6 +70,37 @@ class ScannerReadinessTest {
         ))
     }
 
+    @Test fun reconciledPendingOrderDoesNotHideIndependentPairAnalysisOrTrading() {
+        assertEquals(null,scannerExecutionBlocker(
+            paused=false,reconcileRequired=false,killLatched=false,
+            accountReady=true,marketDataFresh=true,coordinatorState="ENTRY_PENDING",
+            coordinatorReadyForEntry=true
+        ))
+        assertEquals("BLOCKED_FUTURES_RECONCILIATION",scannerExecutionBlocker(
+            paused=false,reconcileRequired=false,killLatched=false,
+            accountReady=true,marketDataFresh=true,coordinatorState="ENTRY_PENDING",
+            coordinatorReadyForEntry=false
+        ))
+        assertEquals("BLOCKED_FUTURES_RECONCILIATION",scannerExecutionBlocker(
+            paused=false,reconcileRequired=true,killLatched=false,
+            accountReady=true,marketDataFresh=true,coordinatorState="ENTRY_PENDING",
+            coordinatorReadyForEntry=true
+        ))
+        assertEquals("WAITING_FOR_MARKET_DATA",scannerExecutionBlocker(
+            paused=false,reconcileRequired=false,killLatched=false,
+            accountReady=true,marketDataFresh=false,coordinatorState="ENTRY_PENDING",
+            coordinatorReadyForEntry=true
+        ))
+    }
+
+    @Test fun h1RestScanIsThrottledButRuntimeOneSecondRecoveryIsUnaffected() {
+        assertEquals(true,shouldScheduleReadOnlyScan(150_000L,0L))
+        assertEquals(false,shouldScheduleReadOnlyScan(150_999L,150_000L))
+        assertEquals(false,shouldScheduleReadOnlyScan(179_999L,150_000L))
+        assertEquals(true,shouldScheduleReadOnlyScan(180_000L,150_000L))
+        assertEquals(false,shouldScheduleReadOnlyScan(149_999L,150_000L))
+    }
+
     @Test fun empty_demo_wallet_does_not_suppress_read_only_scanning() {
         assertEquals(false, dailyRiskBlocksScanner(
             accountFunded = false,
