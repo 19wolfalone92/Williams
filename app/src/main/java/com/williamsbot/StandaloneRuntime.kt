@@ -428,6 +428,28 @@ internal fun shouldRetryDailyRiskBaseline(
  * kill switch, or unresolved exchange position must not stop H1 diagnostics;
  * the independent Execution Gate still blocks every new order mutation.
  */
+/**
+ * A live runtime with verified history and a failed H1 scan is a functional
+ * failure, not a yellow warning. An incomplete startup is still a warning.
+ */
+internal fun scannerFailureSeverity(
+    running: Boolean, historyReady: Boolean,
+    scanning: Boolean, scannerState: String
+): String = if (running && historyReady && !scanning && scannerState == "FAILED") {
+    "FAIL"
+} else {
+    "WARN"
+}
+
+/** Source location is necessary to distinguish failed H1 fetch from TC2 rule bugs. */
+internal fun h1ScannerExceptionDetail(stage: String, failure: Throwable): String {
+    val root = generateSequence(failure) { it.cause }.last()
+    val source = root.stackTrace.firstOrNull { it.className.startsWith("com.williamsbot.") }
+    val at = source?.let { "${it.fileName}:${it.lineNumber}" } ?: "SOURCE_NOT_CAPTURED"
+    val detail = safeDiagnosticText(root.message.orEmpty()).take(220)
+    return "$stage: ${root.javaClass.simpleName} @ $at: $detail"
+}
+
 internal fun scannerDataReadinessState(
     running: Boolean,
     historyReady: Boolean,
@@ -6637,18 +6659,19 @@ private class NativeEngine(
         val symbolErrors = java.util.concurrent.ConcurrentHashMap<String, String>()
         val futures = scanSymbols.map { symbol ->
             scanExecutor.submit(Callable {
+                var stage = "FETCH_H1_CLOSED_CANDLES"
                 try {
                     // The validated H1 startup history has 150 closed bars.
                     // Do not trigger extra REST traffic just to demand 180.
                     val candles = fetchCandles(symbol, "1h", 150)
                     if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
+                    stage = "ANALYSE_TC2_NTD_COURSE_H1"
                     val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
                     markScanProgress()
                     result
                 } catch (x: Exception) {
                     markScanProgress()
-                    symbolErrors[symbol] = x.javaClass.simpleName + ": " +
-                        (x.message ?: "no details")
+                    symbolErrors[symbol] = h1ScannerExceptionDetail(stage, x)
                     null
                 }
             })
@@ -9497,6 +9520,7 @@ private class NativeEngine(
             .put("scanner_scanning", scanning)
             .put("scanner_state", scannerState)
             .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("scanner_symbol_errors", lastScannerSymbolErrors)
             .put("scanner_market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
             .put("scanner_run_id", scanRunId)
             .put("scanner_symbols", lastSymbolsScanned)
@@ -9948,7 +9972,8 @@ private class NativeEngine(
             scanProgressSymbols in 0..coreSymbols.size &&
             (scannerProgressAgeMs <= 60_000L || (scanProgressSymbols == 0 && scannerStartupGrace))
         test(
-            "scanner_state", "scanner", scannerComplete || scannerActivelyProgressing, "WARN",
+            "scanner_state", "scanner", scannerComplete || scannerActivelyProgressing,
+            scannerFailureSeverity(running, historyReady, scanning, scannerState),
             "state=" + scannerState + "; complete=" + scannerComplete +
                 "; universe_matches=" + scannerUniverseMatches + "; run_id=" + scanRunId +
                 "; progress=" + scanProgressSymbols + "/" + scanSymbols.size +
