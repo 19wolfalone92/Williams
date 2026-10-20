@@ -26,13 +26,24 @@ internal object CockpitDiagnostics {
         val coordinatorReady = coordinator.optBoolean("ready_for_new_entry")
         val scannerReady = status.optString("scanner_state") == "READY" &&
             fresh(status.optLong("scanner_last_scan_at"), now, 120_000L)
+        // The available NEW exposure budget is independent of the daily loss reset.
+        // Accepted STOP entries reserve capital risk even before a position opens;
+        // a healthy execution door is necessary but not sufficient for a new order.
+        val reservedRisk = status.optDouble("reserved_risk_pct", Double.NaN)
+        val totalRiskLimit = status.optDouble("max_total_risk_pct", Double.NaN)
+        val riskBudgetKnown = reservedRisk.isFinite() && totalRiskLimit.isFinite() &&
+            reservedRisk >= 0.0 && totalRiskLimit > 0.0
+        val riskBudgetExhausted = riskBudgetKnown && reservedRisk >= totalRiskLimit - 1e-9
+        val riskBudgetRemaining = if (riskBudgetKnown) (totalRiskLimit - reservedRisk).coerceAtLeast(0.0)
+            else Double.NaN
         // The 15s cached positions envelope belongs to UI display ONLY.
         // Execution_enabled is decided independently by the native coordinator,
         // durable Entry Door and fresh signed account/exchange risk checks.
         // An asynchronous UI refresh must not create a fictitious order ban.
         val entries = technical && coordinatorReady && scannerReady &&
             status.optBoolean("execution_enabled") && !status.optBoolean("paused") &&
-            !status.optBoolean("reconcile_required", true) && !status.optBoolean("kill_switch_latched")
+            !status.optBoolean("reconcile_required", true) && !status.optBoolean("kill_switch_latched") &&
+            !riskBudgetExhausted
         val positions = rows(status.optJSONArray("futures_positions"))
         val intents = rows(coordinator.optJSONArray("pending_intent_details"))
         val unprotected = positions.filter { p ->
@@ -60,6 +71,11 @@ internal object CockpitDiagnostics {
             !coordinatorReady -> russianExecutionBlocker(coordinator.optString("blocker"))
             !scannerReady -> "Сканер: " + russianStatus(status.optString("scanner_state", "NOT_RUN"))
             !technical -> "Ожидание связи, истории или синхронизации"
+            riskBudgetExhausted -> "Свободный резерв риска исчерпан: " +
+                "${String.format(java.util.Locale.US, "%.2f", reservedRisk * 100)}% из " +
+                "${String.format(java.util.Locale.US, "%.2f", totalRiskLimit * 100)}%. " +
+                "Ожидающие заявки Binance ($pendingCount) также резервируют риск. " +
+                "Суточный лимит убытков здесь ни при чём; защита открытых сделок продолжает работать."
             !entries -> "Торговый шлюз ограничивает новые входы"
             !snapshotFresh ->
                 "Новые входы разрешены шлюзом; снимок позиций для экрана пока обновляется"
@@ -67,6 +83,12 @@ internal object CockpitDiagnostics {
         }
         return JSONObject().put("observed_at_ms", now)
             .put("technical_ready", technical).put("new_entries_allowed", entries)
+            .put("execution_door_ready", status.optBoolean("execution_enabled") && coordinatorReady)
+            .put("entry_risk_budget_known", riskBudgetKnown)
+            .put("entry_risk_budget_exhausted", riskBudgetExhausted)
+            .put("entry_reserved_risk_pct", if (riskBudgetKnown) reservedRisk else JSONObject.NULL)
+            .put("entry_max_total_risk_pct", if (riskBudgetKnown) totalRiskLimit else JSONObject.NULL)
+            .put("entry_risk_budget_remaining_pct", if (riskBudgetKnown) riskBudgetRemaining else JSONObject.NULL)
             .put("position_management_ready", monitoring && unprotected.isEmpty())
             .put("positions_snapshot_fresh", snapshotFresh)
             .put("unprotected_positions", JSONArray(unprotected))

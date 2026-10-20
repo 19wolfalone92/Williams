@@ -7,14 +7,14 @@ internal const val deviceWaveReplayModel="WILLIAMS_H1_ARCHIVE_W3_GLOBAL_LAG_V2"
 internal const val deviceWaveReplayLimit=1800
 
 internal val deviceWaveReplayClockSql="""SELECT open_time+3600000 FROM candles
-    WHERE symbol=? AND interval='1h' AND open_time+3600000>?
-      AND open_time+3600000<=? AND close_time<? AND close_time=open_time+3599999
+    WHERE symbol=? AND interval='1h' AND open_time+3600000>CAST(? AS INTEGER)
+      AND open_time+3600000<=CAST(? AS INTEGER) AND close_time<? AND close_time=open_time+3599999
     ORDER BY open_time LIMIT ?""".trimIndent()
 
 internal val deviceWaveReplayCommitGuardSql="""SELECT 1 FROM wave_replay_state s
     WHERE s.symbol=? AND s.last_closed_ms=? AND s.model=? AND s.dirty_from_ms=0
       AND s.chain_sha256=? AND s.processed=? AND COALESCE(
-        (SELECT r.revision FROM market_history_revision r WHERE r.symbol=s.symbol),0)=?""".trimIndent()
+        (SELECT r.revision FROM market_history_revision r WHERE r.symbol=s.symbol),0)=CAST(? AS INTEGER)""".trimIndent()
 
 internal data class DeviceWaveReplayCursor(
     val lastClosedMs:Long=0L,val processed:Long=0L,val chain:String="",
@@ -66,7 +66,10 @@ internal fun deviceWaveCursorFromJson(json:JSONObject):DeviceWaveReplayCursor {
         json.getString("chain_sha256"),records.keys().asSequence().associateWith { records.getString(it) })
 }
 
-/** Shared SQL is exercised by real SQLite transaction tests, not Android mocks. */
+/** SQLite rawQuery binds args as TEXT. Arithmetic expressions have no column affinity,
+ * so comparisons MUST CAST numeric parameters. Without CAST the H1 clock returns zero
+ * rows and the revision guard rejects every replay commit on an otherwise full archive.
+ * Shared SQL is exercised by real SQLite transaction tests, not Android mocks. */
 internal val deviceWaveReplaySchema=listOf(
     """CREATE TABLE IF NOT EXISTS market_history_revision(
         symbol TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0)""".trimIndent(),
