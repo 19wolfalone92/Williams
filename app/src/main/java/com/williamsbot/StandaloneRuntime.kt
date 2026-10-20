@@ -1319,6 +1319,8 @@ private class NativeEngine(
     private val waveHierarchyCache = java.util.concurrent.ConcurrentHashMap<String, WilliamsWaveHierarchy>()
     // Best-effort finer candles are fetched only to improve local wave context,
     // never on the scan/Execution Door thread.
+    private val adaptiveWaveContextCache =
+        java.util.concurrent.ConcurrentHashMap<String, Pair<Long, JSONObject>>()
     private val adaptiveWaveFetchAttemptMs =
         java.util.concurrent.ConcurrentHashMap<String, Long>()
     @Volatile private var adaptiveWaveFetchLastError: String? = null
@@ -8221,6 +8223,7 @@ private class NativeEngine(
                         historyStore.upsertBatch(symbol,frame,batch)
                         // Wave report is recalculated at next 15m closure. It
                         // never sees exchange data not yet closed at that time.
+                        adaptiveWaveContextCache.remove(symbol)
                         waveHierarchyCache.remove(symbol)
                     }
                 }.onFailure { e ->
@@ -8259,11 +8262,19 @@ private class NativeEngine(
                 "30m","15m","5m","3m","1m"
             )
             val history = historicalFrames.associateWith { frame ->
-                historyStore.loadRecent(symbol,frame,6000).map {
+                // Deep history remains fully durable in SQLite; the current
+                // wave engine examines 1800 recent closed bars per degree.
+                // Reading 6000*13 rows for all 10 contracts each scan
+                // blocked the scanner on underpowered phones.
+                historyStore.loadRecent(symbol,frame,1800).map {
                     WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
                 }
             }
+            val hourlyCutoff=cutoff/3_600_000L*3_600_000L
+            adaptiveWaveContextCache[symbol]
+                ?.takeIf { it.first==hourlyCutoff }?.second?.let { return@runCatching JSONObject(it.toString()) }
             val contextReport=buildAdaptiveHistoricalWaveReport(history,cutoff)
+            adaptiveWaveContextCache[symbol]=hourlyCutoff to JSONObject(contextReport.toString())
             requestMissingAdaptiveWaveFrames(symbol,contextReport,cutoff)
             contextReport
         }.getOrElse { error ->
