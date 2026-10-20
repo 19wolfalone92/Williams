@@ -81,3 +81,12 @@ internal fun williamsBookInitialContextRank(
         maxOf(prior,1,if(validatedCorrection) 2 else 0)
     else maxOf(prior,if(validatedCorrection) 2 else 0)
 }
+
+
+/** Source-specific initial H1 readiness. TC2 ch.12 needs complete H1
+ * signal proof, not an arbitrary 45-bar D1/H4 history requirement.
+ * Higher-timeframe analysis is retained as UNKNOWN when unavailable;
+ * exchange account/mark freshness, risk and stop gates are unaffected.
+ */
+internal fun williamsInitialHigherFrameHistoryRequired(source:String):Boolean =
+    source!=williamsTc2Profile
