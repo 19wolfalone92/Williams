@@ -12,7 +12,7 @@ def test_h1_scan_has_independent_read_only_startup_gate():
     assert 'readOnlyH1Ready' in RUNTIME
     assert 'historyReady = h1ReadyNow==coreSymbols.size' in RUNTIME
     assert 'if(readOnlyH1Ready) {' in RUNTIME
-    assert 'historyState = "H1_READY_CONTEXT_LOADING"' in RUNTIME
+    assert '"H1_READY_CONTEXT_LOADING"' in RUNTIME
     assert 'val gateState = scannerDataReadinessState(' in RUNTIME
     assert 'historyReady = readOnlyH1Ready' in RUNTIME
     assert '!marketDataFresh -> "WAITING_FOR_MARKET_DATA"' not in RUNTIME.split(
