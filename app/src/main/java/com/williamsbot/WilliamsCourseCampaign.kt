@@ -47,7 +47,10 @@ internal fun planWilliamsCourse(
         "W5" -> "EXIT"
         else -> ""
     }
-    if(nextStage!=expected) return blocked("NON_SEQUENTIAL_STAGE")
+    // The W3 extension in the illustrated Course is optional. If a real
+    // W4 is observed directly, do not invent a missing W3 extension.
+    if(nextStage!=expected && !(s.stage=="W3" && nextStage=="W4"))
+        return blocked("NON_SEQUENTIAL_STAGE")
     if(signalCloseMs<=0 || signalCloseMs>nowMs ||
        nowMs-signalCloseMs>maxSignalAgeMs || signalCloseMs<=s.lastSignalCloseMs)
         return blocked("SIGNAL_NOT_CLOSED_FRESH_AND_NEW")
@@ -79,7 +82,21 @@ internal fun acknowledgeWilliamsCourseFill(
     if(fillId in s.confirmedFillIds) return s
     require(exchangeReconciled && protectiveStopVerified) { "RECONCILIATION_OR_PROTECTION_MISSING" }
     val expected=if(s.stage.isEmpty()) "W1" else courseStages.getOrNull(courseStages.indexOf(s.stage)+1)
-    require(proposed.stage==expected && proposed.idempotencyKey.isNotBlank()) { "STALE_COURSE_PROPOSAL" }
+    // Re-derive the original idempotency key from THIS campaign, side,
+    // revision and closed-bar time. A foreign or replayed proposal must not
+    // advance a new owner's stage even if its delta happens to match.
+    val allowedStage = proposed.stage==expected || (s.stage=="W3" && proposed.stage=="W4")
+    val raw="${s.campaignId}|${s.side}|${proposed.stage}|${signalCloseMs}|${s.revision}"
+    val expectedKey="COURSE_"+MessageDigest.getInstance("SHA-256")
+        .digest(raw.toByteArray()).joinToString("") { "%02x".format(it) }.take(24)
+    require(allowedStage && proposed.idempotencyKey==expectedKey &&
+        proposed.targetUnits==courseTargets[proposed.stage] &&
+        proposed.signedUnitDelta==proposed.targetUnits-s.confirmedUnits &&
+        proposed.action==when {
+            proposed.signedUnitDelta>0 -> "ADD"
+            proposed.signedUnitDelta<0 -> "REDUCE"
+            else -> "HOLD"
+        }) { "STALE_OR_FOREIGN_COURSE_PROPOSAL" }
     require(filledDelta==proposed.signedUnitDelta && verifiedUnits==s.confirmedUnits+filledDelta &&
         verifiedUnits==proposed.targetUnits && verifiedUnits>=0 && signalCloseMs>s.lastSignalCloseMs) {
         "FILL_QUANTITY_OR_TIME_MISMATCH"
