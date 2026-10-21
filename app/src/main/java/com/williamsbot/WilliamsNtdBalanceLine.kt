@@ -55,14 +55,11 @@ internal fun williamsNtdBalanceLine(
     val base = if (long) candidates.minWithOrNull(compareBy<Int> { selected(bars[it]) }.thenByDescending { it })!!
         else candidates.maxWithOrNull(compareBy<Int> { selected(bars[it]) }.thenBy { it })!!
     val basePrice=selected(bars[base])
-    val relation=when {
-        basePrice>bars[base].jaw -> "ABOVE"
-        basePrice<bars[base].jaw -> "BELOW"
-        else -> "ON"
-    }
-    val uphill=(long && relation!="ABOVE") || (!long && relation!="BELOW")
-    var needed=if (uphill) 2 else 1
-    if ((long && zone=="RED") || (!long && zone=="GREEN")) needed*=2
+    // NTD PDF p104 Fig 8-9(D) / p108 Fig 8-20(D): it is the
+    // SIGNAL reference bar's position relative to Jaw, not the base
+    // bar's historic Jaw, that decides 1 vs 2 extremes.
+    var relation="UNKNOWN"
+    var needed=0
     var count=0
     var prior=basePrice
     var ref=-1
@@ -71,12 +68,25 @@ internal fun williamsNtdBalanceLine(
         val price=selected(bars[i])
         if (!price.isFinite() || price<=0) return blocked("INVALID_PRICE_IN_FORMATION")
         if ((long && price>prior) || (!long && price<prior)) {
+            if(count==0) {
+                val jaw=bars[i].jaw
+                if(!jaw.isFinite() || jaw<=0) return blocked("SIGNAL_JAW_NOT_READY")
+                relation=when {
+                    price>jaw -> "ABOVE"
+                    price<jaw -> "BELOW"
+                    else -> "ON"
+                }
+                val uphill=(long && relation!="ABOVE") || (!long && relation!="BELOW")
+                needed=(if(uphill) 2 else 1)*
+                    (if((long && zone=="RED") || (!long && zone=="GREEN")) 2 else 1)
+            }
             count++
             prior=price
             ref=i
             if (count==needed) break
         }
     }
+    if (needed==0) return blocked("NO_NEW_REFERENCE_EXTREME")
     if (count<needed) return WilliamsNtdBalanceEvidence(
         side,"INCOMPLETE",base,ref,needed,count,zone=zone,
         relation=relation,reason="MISSING_REQUIRED_REFERENCE_EXTREMES"
