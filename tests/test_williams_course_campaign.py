@@ -105,3 +105,35 @@ def test_course_origin_is_explicit_and_competing_h1_degrees_cannot_size_a_plan()
     report.scenarios.append(other)
     assert course_active_context(report,"LONG") is None
     assert course_active_context(report,"LONG",context["origin_at"])["scenario_id"]==context["scenario_id"]
+
+@pytest.mark.parametrize("side",["LONG","SHORT"])
+def test_optional_w3_extension_may_be_skipped_with_verified_w4_reduction(side):
+    s=CourseState("owner",side,stage="W3",confirmed_units=6,revision=3,last_signal_close_ms=1000)
+    p=plan(s,"W4",2000)
+    assert (p.status,p.action,p.signed_unit_delta,p.target_units)==("PROPOSED","REDUCE",-3,3)
+    f=acknowledge_course_fill(s,p,fill_id="verified-"+side,confirmed_delta=-3,
+        new_confirmed_units=3,signal_close_ms=2000,
+        exchange_reconciled=True,protective_stop_verified=True)
+    assert (f.stage,f.confirmed_units,f.revision)==("W4",3,4)
+
+
+def test_foreign_revised_or_tampered_proposal_can_never_confirm_another_campaign():
+    s=CourseState("owned","LONG")
+    correct=plan(s,"W1",100000)
+    attempts=[
+        plan(replace(s,campaign_id="foreign"),"W1",100000),
+        plan(replace(s,side="SHORT"),"W1",100000),
+        plan(s,"W1",100001),
+        replace(correct,idempotency_key="COURSE_FAKE"),
+        replace(correct,action="HOLD"),
+        replace(correct,target_units=4),
+    ]
+    for foreign in attempts:
+        with pytest.raises(ValueError):
+            acknowledge_course_fill(s,foreign,fill_id="new-exchange-id",
+                confirmed_delta=3,new_confirmed_units=3,signal_close_ms=100000,
+                exchange_reconciled=True,protective_stop_verified=True)
+        assert s.revision==0
+    assert acknowledge_course_fill(s,correct,fill_id="genuine-fill",confirmed_delta=3,
+        new_confirmed_units=3,signal_close_ms=100000,
+        exchange_reconciled=True,protective_stop_verified=True).revision==1
