@@ -203,4 +203,40 @@ class FuturesStopTrailPolicyTest {
             assertNotNull(planWilliamsCampaignStop(direction,old,100.0,null,mark,.1,1L,regular))
         }
     }
+
+    @Test fun tc2CampaignNeverTrailsOnlyBecauseOneRWasReachedLongOrShort() {
+        // Neither series has a post-entry fractal, and its five-bar stop
+        // would not tighten the existing exchange-confirmed protection.
+        val longBars=bars(
+            highs=listOf(105.0,106.0,107.0,108.0,109.0),
+            lows=listOf(92.0,93.0,94.0,95.0,96.0)
+        )
+        val shortBars=bars(
+            highs=listOf(108.0,107.0,106.0,105.0,104.0),
+            lows=listOf(92.0,91.0,90.0,89.0,88.0)
+        )
+        assertNull(planWilliamsCampaignStop("LONG",99.0,100.0,90.0,125.0,
+            0.1,1L,longBars))
+        assertNull(planWilliamsCampaignStop("SHORT",101.0,100.0,110.0,75.0,
+            0.1,1L,shortBars))
+    }
+
+    @Test fun tc2CampaignStillUsesBookFiveClosedBarsBothDirections() {
+        val longBars=bars(
+            highs=listOf(105.0,106.0,107.0,108.0,109.0),
+            lows=listOf(92.0,93.0,94.0,95.0,96.0)
+        )
+        val shortBars=bars(
+            highs=listOf(108.0,107.0,106.0,105.0,104.0),
+            lows=listOf(92.0,91.0,90.0,89.0,88.0)
+        )
+        val long=planWilliamsCampaignStop("LONG",90.0,100.0,90.0,125.0,
+            0.1,1L,longBars)
+        val short=planWilliamsCampaignStop("SHORT",110.0,100.0,110.0,75.0,
+            0.1,1L,shortBars)
+        assertEquals("TC2_LAST_5_CLOSED_BARS",long?.reason)
+        assertEquals(91.9,long!!.stop,1e-7)
+        assertEquals("TC2_LAST_5_CLOSED_BARS",short?.reason)
+        assertEquals(108.1,short!!.stop,1e-7)
+    }
 }
