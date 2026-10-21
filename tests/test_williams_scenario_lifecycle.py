@@ -24,7 +24,14 @@ def test_shared_degree_scoped_phase_contract(case):
     result=market_phase_context(case["input"])
     expected=case["expected"]
     assert result["warning_scope"]==expected["warning_scope"]
-    assert {r["frame"]:r["state"] for r in result["frames"]}==expected["frame_states"]
+    # H4 is now included as an independent read-only observation frame.
+    # Historic cross-language fixtures intentionally cover D1/H6/H1/M15.
+    assert {r["frame"]:r["state"] for r in result["frames"]
+            if r["frame"] in expected["frame_states"]}==expected["frame_states"]
+    h4=next(r for r in result["frames"] if r["frame"]=="4h")
+    assert h4["state"]=="UNAVAILABLE"
+    assert h4["hypothesis_count"]==0
+    assert not h4["can_place_orders"] and not h4["wave_degree_confirmed"]
     hypotheses={h["scenario_id"]:h for f in result["frames"] for h in f["hypotheses"]}
     for id,signs in expected["signs_by_id"].items():
         assert hypotheses[id]["signs"]==signs
