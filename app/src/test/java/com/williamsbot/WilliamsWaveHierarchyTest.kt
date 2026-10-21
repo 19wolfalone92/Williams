@@ -13,6 +13,22 @@ class WilliamsWaveHierarchyTest {
         return (0 until rows.length()).map { i -> val r=rows.getJSONArray(i)
             WilliamsWaveBar(r.getLong(0),r.getDouble(1),r.getDouble(2),r.getDouble(3),r.getDouble(4),r.getDouble(5)) }
     }
+    @Test fun realH4BarsParticipateInHypothesesAndUseH1ForSubdivisionEvidence() {
+        val fixture=fixtureCases().getJSONObject(0)
+        val h4=fixtureBars(fixture).map { it.copy(t=it.t*4) }
+        val h1=h4.flatMap { b -> (0..3).map { i -> b.copy(t=b.t+i*hour) } }
+        val now=fixture.getLong("as_of")*4
+        val report=buildWilliamsWaveHierarchy(mapOf("4h" to h4,"1h" to h1),now)
+        assertTrue(report.scenarios.any { it.frame=="4h" })
+        assertEquals(setOf("4h","1h"),report.frameCandleCounts.keys)
+        val structures=report.complexStructures.filter { it.getString("frame")=="4h" }
+        assertTrue(structures.isNotEmpty())
+        assertTrue(structures.all { it.getString("child_frame")=="1h" && !it.getBoolean("can_place_orders") })
+        val cutoff=160*4*hour
+        val all=buildWilliamsWaveHierarchy(mapOf("4h" to h4,"1h" to h1),cutoff).toJson()
+        val prefix=buildWilliamsWaveHierarchy(mapOf("4h" to h4.take(160),"1h" to h1.take(640)),cutoff).toJson()
+        assertEquals(prefix.toString(),all.toString())
+    }
     @Test fun pythonAndAndroidConsumeTheSameWaveContractInBothDirections() {
         val cases=fixtureCases()
         for (i in 0 until cases.length()) {

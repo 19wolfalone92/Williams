@@ -220,9 +220,9 @@ class CampaignEngine:
             0.0,
             campaign_capacity - float(campaign_reserved_risk_quote),
         )
-        # The historical 1:5:4:3:2 reverse-pyramid example is not a mandatory
-        # sizing rule. Each add-on is independently capped; the persisted
-        # campaign budget remains the controlling hard limit.
+        # This function returns only a RISK CEILING. The execution runtime
+        # separately enforces pinned TC2 1:5:4:3:2 contract/share quantities;
+        # a cap may reject a tranche, never silently change its book ratio.
         _ = tranche_index  # retained for call compatibility; it does not set risk
         return min(remaining / equity_quote, 0.0025)
 

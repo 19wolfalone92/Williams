@@ -55,6 +55,37 @@ def test_every_prefix_is_identical_with_or_without_all_future_candles():
     assert build_wave_hierarchy({"1h":future},120*HOUR).to_dict() == build_wave_hierarchy({"1h":bars[:120]},120*HOUR).to_dict()
 
 
+def test_real_h4_history_participates_in_hierarchy_and_internal_subdivision_checks():
+    bars=[replace(b,t=b.t*4) for b in rhythm_bars()]
+    hourly=[replace(b,t=b.t+i*HOUR) for b in bars for i in range(4)]
+    now=len(bars)*4*HOUR
+    report=build_wave_hierarchy({"4h":bars,"1h":hourly},now)
+    assert any(s.frame=="4h" for s in report.scenarios)
+    assert set(report.to_dict()["analysed_frames"])=={"4h","1h"}
+    structures=[p for p in report.complex_structures if p["frame"]=="4h"]
+    assert structures and all(p["child_frame"]=="1h" for p in structures)
+    assert all(not p["can_place_orders"] for p in structures)
+    # Both resolutions retain their own closes, and no future H4 bar is read.
+    cutoff=160*4*HOUR
+    full=build_wave_hierarchy({"4h":bars,"1h":hourly},cutoff)
+    prefix=build_wave_hierarchy({"4h":bars[:160],"1h":hourly[:640]},cutoff)
+    assert full.to_dict()==prefix.to_dict()
+
+
+def test_intermediate_h4_does_not_break_the_required_containment_chain():
+    report=correction_report()
+    h4=deepcopy(report.scenarios[1]);h4.frame="4h";h4.scenario_id="real-h4"
+    h4.leg_start=305*HOUR;h4.leg_low=95;h4.leg_high=180
+    # Preserve the H6 -> H4 containment as well as H4 -> H1.
+    h4.anchors=[replace(a,extreme_at=(301+i)*HOUR,price=p)
+                for i,(a,p) in enumerate(zip(h4.anchors,[175,130,165,140]))]
+    report.scenarios.append(h4)
+    report.links=link_wave_hypotheses(report.scenarios)
+    assert any(e["parent"]=="real-h4" and e["child"]==report.scenarios[2].scenario_id for e in report.links)
+    assert report.to_dict()["contained_chain_observed"]
+    assert all(not e["wave_genealogy_confirmed"] for e in report.links)
+
+
 @pytest.mark.parametrize("defect", ["gap","duplicate","nan","stale","bad_ohlc"])
 def test_unreliable_candle_history_does_not_create_a_wave_permission(defect):
     bars = rhythm_bars()

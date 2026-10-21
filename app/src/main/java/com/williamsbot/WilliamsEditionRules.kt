@@ -138,12 +138,29 @@ internal fun williamsCourseThumbSetup(side:String,bars:List<WilliamsWaveBar>,tic
         else fingers=listOf(i)
     }
     if (fingers.size<3 || fingers.count { it>0 && bars[it].v>bars[it-1].v && bars[it-1].v>0 }<2) return null
+    val colours=fingers.map { i ->
+        if(i<=0 || bars[i].v<=bars[i-1].v || bars[i-1].v<=0) "OTHER"
+        else {
+            val current=(bars[i].h-bars[i].l)/bars[i].v
+            val previous=(bars[i-1].h-bars[i-1].l)/bars[i-1].v
+            when { current<previous->"SQUAT";current>previous->"GREEN";else->"MFI_UNCHANGED" }
+        }
+    }
+    // PDF69: any two or increasing-volume shortcut. PDF71: mixed is ideal,
+    // otherwise weak; do not invent a mandatory mixed-colour execution veto.
+    val strength=when {
+        "SQUAT" in colours && "GREEN" in colours->"IDEAL_MIXED"
+        colours.count { it in listOf("SQUAT","GREEN") }>=2->"WEAK"
+        else->"UNCONFIRMED_FLAT_MFI"
+    }
     val thumb=fingers.first();val middle=fingers.last()
     val trigger=if (sign==1) bars[thumb].l-tick else bars[thumb].h+tick
     val stop=if (sign==1) bars[middle].h+tick else bars[middle].l-tick
     if (trigger<=0 || stop<=0 || bars.drop(middle).any { if (sign==1) it.l<=trigger else it.h>=trigger }) return null
     return WilliamsEditionSetup("COURSE_THUMB",side,middle,trigger,stop,stop,JSONObject()
         .put("finger_indices",JSONArray(fingers)).put("thumb_index",thumb).put("reverse_level",stop)
+        .put("finger_profitunity_colours",JSONArray(colours)).put("thumb_strength",strength)
+        .put("thumb_admission_basis","COURSE_PDF69_VOLUME_SHORTCUT")
         .put("volume_input","KLINE_VOLUME_PROXY"))
 }
 

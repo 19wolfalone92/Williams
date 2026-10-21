@@ -59,10 +59,9 @@ internal fun planFuturesStopTrail(
     if (bars.size >= 5 && openedObservedAtMs > 0L &&
         bars.all { it.high.isFinite() && it.low.isFinite() && it.high >= it.low &&
             it.low > 0.0 }) {
-        // The most recent five-bar confirmed fractal only. The pivot must
-        // have formed after the live position was first observed. Group
-        // equal-extreme plateaus just like Williams' ENTRY detector: only the
-        // final bar of a plateau is eligible, with two closed bars to the right.
+        // TC2 figs11.1/11.2: equality can be separated by an inner bar.
+        // Count two strict neighbours to the left, skipping equal extremes,
+        // exactly as for ENTRY. Only the last tied extremum is the pivot.
         for (i in bars.lastIndex - 2 downTo 2) {
             if (bars[i].openTimeMs < openedObservedAtMs) break
             val extreme = if (direction == "LONG") bars[i].low else bars[i].high
@@ -70,12 +69,17 @@ internal fun planFuturesStopTrail(
                 if (direction == "LONG") bars[j].low == extreme else bars[j].high == extreme
             if (sameExtreme(i + 1)) continue
             var start = i
-            while (start > 0 && sameExtreme(start - 1)) start--
-            if (start < 2 || bars[start].openTimeMs < openedObservedAtMs) continue
             fun onProtectiveSide(j: Int): Boolean =
                 if (direction == "LONG") bars[j].low > extreme else bars[j].high < extreme
-            if (!(onProtectiveSide(start - 1) && onProtectiveSide(start - 2) &&
-                onProtectiveSide(i + 1) && onProtectiveSide(i + 2))) continue
+            var count=0;var j=i-1
+            while(j>=0 && count<2) {
+                if(sameExtreme(j)) start=j
+                else if(onProtectiveSide(j)) count++
+                else break
+                j--
+            }
+            if(count<2 || bars[start].openTimeMs<openedObservedAtMs ||
+                !onProtectiveSide(i+1) || !onProtectiveSide(i+2)) continue
             val price = if (direction == "LONG") floorTick(extreme - tickSize)
                 else ceilTick(extreme + tickSize)
             if (usable(price)) {

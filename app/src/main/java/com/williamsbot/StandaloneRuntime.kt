@@ -5994,9 +5994,10 @@ private class NativeEngine(
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
                 val setup=runCatching { JSONObject(intent.optString("setup_context")) }.getOrDefault(JSONObject())
                 val initialStage=setup.optString("course_initial_stage")
-                if(!management.has("course_unit_quantity") && initialStage in courseTargets && setup.has("course_origin_at")) {
+                val initialUnits=williamsCourseTarget(initialStage,setup.optDouble("course_w3_to_w1_ratio",Double.NaN))
+                if(!management.has("course_unit_quantity") && initialUnits!=null && initialUnits>0 && setup.has("course_origin_at")) {
                     management.put("course_stage",initialStage).put("course_origin_at",setup.getLong("course_origin_at"))
-                        .put("course_unit_quantity",abs(signedQty)/courseTargets.getValue(initialStage))
+                        .put("course_unit_quantity",abs(signedQty)/initialUnits)
                         .put("policy","COURSE_BOOK_EXAMPLE_RATIOS_RISK_CAPPED")
                 }
                 fun filledIntent(cid:String):Boolean=(0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
@@ -6170,6 +6171,10 @@ private class NativeEngine(
         val price=if(market) mark else signal.triggerPrice
         val stop=owner.getString("protective_stop").toDouble()
         if((if(direction=="LONG") stop>=price || !market && price<=mark else stop<=price || !market && price>=mark)) return
+        if(profile==williamsTc2Profile) {
+            williamsTc2ProfitBlocker(direction,owner.optString("actual_entry_price").toDoubleOrNull() ?: Double.NaN,mark,price)
+                ?.let { return rejectDecision(symbol,it) }
+        }
         // TC2 ch10/12 explicitly permits a countertrend WM1 followed by
         // H1 Super AO and H1 fractal add-ons before the D1/H4 Alligators turn.
         // A blanket D1/H4 veto here was silently suppressing a valid textbook
@@ -6194,11 +6199,24 @@ private class NativeEngine(
         val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
         var quantity=floorStep(notional/price,step)
         val setup=runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject())
+        if(profile==williamsTc2Profile && williamsTc2PyramidPolicy(owner)!=null) {
+            val tranche=williamsTc2NextTranche(owner,all)
+            tranche.blocker?.let { return rejectDecision(symbol,it) }
+            val required=tranche.quantity!!
+            if(required>quantity.toBigDecimal()) return rejectDecision(symbol,"TC2_PYRAMID_TRANCHE_EXCEEDS_RISK_OR_MARGIN_CAP")
+            quantity=required.toDouble()
+            setup.put("tc2_reverse_pyramid",JSONObject().put("policy",WILLIAMS_TC2_PYRAMID_POLICY)
+                .put("tranche_number",tranche.number).put("entry_client_id",parentId)
+                .put("quantity",required.toPlainString()))
+        }
         val courseManagement=owner.optJSONObject("edition_management")
         if(profile==williamsCourseProfile && courseManagement?.has("course_unit_quantity")==true) {
             val context=williamsCourseActiveContext(waveHierarchyFor(symbol),direction,courseManagement.getLong("course_origin_at")) ?: return
-            val targetStage=williamsCourseNextStage(courseManagement.getString("course_stage"),context.getString("phase"),true) ?: return
-            val target=floorStep(courseManagement.getDouble("course_unit_quantity")*courseTargets.getValue(targetStage),step)
+            val targetStage=williamsCourseNextStage(courseManagement.getString("course_stage"),context.getString("phase"),true,
+                context.optDouble("w3_to_w1_ratio",Double.NaN)) ?: return
+            val units=williamsCourseTarget(targetStage,context.optDouble("w3_to_w1_ratio",Double.NaN))
+                ?: return rejectDecision(symbol,"COURSE_W5_W3_W1_RATIO_UNCONFIRMED")
+            val target=floorStep(courseManagement.getDouble("course_unit_quantity")*units,step)
             quantity=floorStep(minOf(quantity,maxOf(0.0,target-owner.getString("confirmed_position_qty").toDouble())),step)
             setup.put("course_target_stage",targetStage).put("course_target_quantity",target)
         }
@@ -6508,7 +6526,10 @@ private class NativeEngine(
                 )
             } else 0.0
         }.coerceAtMost(maxTotalRiskPct)
-        val riskPct = min(campaignInitialRiskPct, min(maxRiskPerTradePct, maxTotalRiskPct - riskUsed))
+        val initialCap=if(signal.strategyProfile==williamsTc2Profile)
+            williamsTc2InitialUnitRisk(campaignInitialRiskPct,campaignRiskLimitPct,maxRiskPerTradePct)
+            else campaignInitialRiskPct
+        val riskPct = min(initialCap, min(maxRiskPerTradePct, maxTotalRiskPct - riskUsed))
         if (riskPct <= 0.0) return rejectDecision(symbol,"PORTFOLIO_RISK_EXHAUSTED: used=$riskUsed; limit=$maxTotalRiskPct")
         val account = futuresCampaignCoordinator.accountSnapshot()
         val parsedAccount = parseFuturesAccountSnapshot(account) ?: run {
@@ -6588,12 +6609,15 @@ private class NativeEngine(
             strategyProfile=signal.strategyProfile,executionSemantics="STOP_ENTRY",
             setupContext=(runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject()).apply {
                 put("parent_execution_semantics",signal.executionSemantics)
+                if(signal.strategyProfile==williamsTc2Profile)
+                    put("tc2_reverse_pyramid",JSONObject().put("policy",WILLIAMS_TC2_PYRAMID_POLICY))
                 put("book_h1_entry",williamsBookH1Proof(signal.signalId,direction.name,
                     signal.type,signal.strategyProfile,signal.signalBarTimeMs,
                     trigger,stop,rules.tick))
                 if(signal.strategyProfile==williamsCourseProfile) {
                     williamsCourseActiveContext(hierarchy,direction.name)?.let { context ->
                         put("course_origin_at",context.getLong("origin_at")).put("course_initial_stage",context.getString("phase"))
+                        if(!context.isNull("w3_to_w1_ratio")) put("course_w3_to_w1_ratio",context.getDouble("w3_to_w1_ratio"))
                     }
                 }
             }).toString()
@@ -10669,7 +10693,10 @@ private class NativeEngine(
             .put("campaign_fixed_take_profit", false)
             .put("campaign_entry_execution", "USD_M_FUTURES_TESTNET_COORDINATOR")
             .put("campaign_risk_limit_pct", campaignRiskLimitPct)
-            .put("campaign_initial_risk_pct", campaignInitialRiskPct)
+            .put("campaign_initial_risk_pct", williamsTc2InitialUnitRisk(campaignInitialRiskPct,campaignRiskLimitPct,maxRiskPerTradePct))
+            .put("campaign_initial_risk_cap_pct", campaignInitialRiskPct)
+            .put("campaign_quantity_policy", WILLIAMS_TC2_PYRAMID_POLICY)
+            .put("campaign_quantity_policy_scope", "NEW_AUTOMATED_TC2_CAMPAIGNS_ACTUAL_FIRST_FILL")
             .put("campaign_add_on_risk_cap_pct", campaignAddRiskCapPct)
             .put("campaign_trail_bars", campaignTrailBars)
             .put("symbol", primarySymbol)

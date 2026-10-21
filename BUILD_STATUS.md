@@ -1,3 +1,5 @@
+> Архивный отчёт 4.24.0. Действующие книжные правила и границы проверки: [docs/WILLIAMS_BOOK_RULES.md](docs/WILLIAMS_BOOK_RULES.md), версия 4.53.0. Приведённые ниже лимиты и HTF-правила описывают старую версию.
+
 # Williams Bot 2.1 / Android 4.24.0 — evidence-based status
 **Checked:** 2026-10-14  
 **Working branch:** `futures-williams-campaign`  

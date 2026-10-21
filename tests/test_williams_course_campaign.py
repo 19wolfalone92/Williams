@@ -11,7 +11,7 @@ def plan(s,phase,t,**kw):
 
 @pytest.mark.parametrize("side",["LONG","SHORT"])
 def test_course_example_requires_actual_fills_and_is_symmetric(side):
-    state=CourseState("owner-1",side)
+    state=CourseState("owner-1",side,w3_to_w1_ratio=2.0)
     for i,(phase,expected) in enumerate(zip(STAGES,[3,1,6,10,3,6,0])):
         t=100000+i*3600000
         proposal=plan(state,phase,t)
@@ -86,7 +86,9 @@ def test_executable_course_policy_requires_phase_and_new_formation_for_each_incr
     assert course_next_stage("W1","W2")=="W2"
     assert course_next_stage("W2","W3") is None
     assert course_next_stage("W2","W3",True)=="W3"
-    assert course_next_stage("W3","W3",True)=="W3_EXTENSION"
+    assert course_next_stage("W3","W3",True) is None
+    assert course_next_stage("W3","W3",True,1.09) is None
+    assert course_next_stage("W3","W3",True,1.1)=="W3_EXTENSION"
     assert course_next_stage("W3","W4")=="W4"  # optional extension can be skipped
     assert course_next_stage("W3_EXTENSION","W4")=="W4"
     assert course_next_stage("W4","W5") is None
@@ -137,3 +139,18 @@ def test_foreign_revised_or_tampered_proposal_can_never_confirm_another_campaign
     assert acknowledge_course_fill(s,correct,fill_id="genuine-fill",confirmed_delta=3,
         new_confirmed_units=3,signal_close_ms=100000,
         exchange_reconciled=True,protective_stop_verified=True).revision==1
+
+
+@pytest.mark.parametrize("side",["LONG","SHORT"])
+def test_w5_branch_is_bound_to_the_campaign_length_evidence(side):
+    state=CourseState("owned",side,stage="W4",confirmed_units=3,revision=4,w3_to_w1_ratio=1.5)
+    proposal=plan(state,"W5",100000)
+    assert proposal.target_units==8 and proposal.signed_unit_delta==5
+    confirmed=acknowledge_course_fill(state,proposal,fill_id="verified",confirmed_delta=5,
+        new_confirmed_units=8,signal_close_ms=100000,exchange_reconciled=True,protective_stop_verified=True)
+    assert confirmed.confirmed_units==8 and not proposal.can_place_orders
+    for changed in [replace(state,w3_to_w1_ratio=None),replace(state,w3_to_w1_ratio=2.0)]:
+        with pytest.raises(ValueError):
+            acknowledge_course_fill(changed,proposal,fill_id="different",confirmed_delta=5,
+                new_confirmed_units=8,signal_close_ms=100000,exchange_reconciled=True,protective_stop_verified=True)
+    assert plan(replace(state,w3_to_w1_ratio=None),"W5",100000).reason=="COURSE_W5_W3_W1_RATIO_UNCONFIRMED"

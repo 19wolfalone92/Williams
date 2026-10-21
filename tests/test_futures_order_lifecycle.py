@@ -128,6 +128,18 @@ class DemoExchangeModel:
                             "status": "FILLED" if fraction == 1 else "PARTIALLY_FILLED",
                             "origQty": str(quantity), "executedQty": str(quantity * fraction), "avgPrice": str(self.entry_price)}
 
+    def fill_addition(self,client_id,fraction=1.0):
+        from decimal import Decimal
+        row=next(row for row in self.algos.values() if row.get("clientAlgoId")==client_id)
+        old=abs(self.amount);quantity=float(row["quantity"])*fraction;price=float(row["triggerPrice"])
+        self.entry_price=(self.entry_price*old+price*quantity)/(old+quantity)
+        self.amount=float(Decimal(str(self.amount))+Decimal(str(quantity))*(1 if self.amount>0 else -1))
+        self.price=price+(1 if self.amount>0 else -1)
+        oid=max([42,*self.orders])+1
+        row.update(algoStatus="FINISHED",actualOrderId=str(oid))
+        self.orders[oid]={"orderId":oid,"symbol":"BTCUSDT","side":row["side"],"status":"FILLED" if fraction==1 else "CANCELED",
+            "origQty":str(row["quantity"]),"executedQty":str(quantity),"avgPrice":str(price)}
+
 
 @pytest.fixture
 def armed_runtime(monkeypatch, tmp_path, request):
@@ -315,6 +327,8 @@ def test_a_campaign_exit_cancels_a_still_armed_add_on_before_closing(armed_runti
     exchange.fill_entry()
     bot._reconcile_pending()
     campaign = bot.engine.load_campaign(armed["campaign_id"])
+    exchange.price=102.0
+    bot._replace_protection(campaign,99.0)
     now = int(time.time() * 1000)
     signal = SignalSpec.new(symbol="BTCUSDT", side="BUY", signal_type=SignalType.SUPER_AO,
         role=SignalRole.ADD_ON, timeframe="1h", signal_bar_time_ms=now, trigger_price=103,
@@ -546,7 +560,10 @@ def test_observer_ntd_profit_cycle_cannot_authorize_new_exposure(armed_runtime,m
 def test_actual_gap_fill_cannot_reuse_the_planned_risk_reservation(armed_runtime):
     bot,exchange,armed=armed_runtime
     exchange.fill_entry()
-    actual=106 if exchange.amount>0 else 94
+    # The first book unit is smaller now. Force a genuine >0.25% actual
+    # loss-to-stop instead of relying on the previous larger first order.
+    stop=95 if exchange.amount>0 else 105
+    actual=stop+(26/abs(exchange.amount))*(1 if exchange.amount>0 else -1)
     exchange.entry_price=actual
     exchange.orders[42]["avgPrice"]=str(actual)
     result=bot._reconcile_pending()
@@ -558,3 +575,82 @@ def test_actual_gap_fill_cannot_reuse_the_planned_risk_reservation(armed_runtime
     assert any(row.get("closePosition")=="true" and row["algoStatus"]=="NEW" for row in exchange.algos.values())
     assert not bot.recover()["ok"]
     assert bot.manual_sell(campaign.symbol)["sold"]
+
+
+@pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
+def test_tc2_book_quantities_survive_fills_and_restart_without_unlimited_additions(armed_runtime):
+    from decimal import Decimal
+    from williams_tc2_pyramid import next_tranche
+    bot,exchange,armed=armed_runtime
+    exchange.fill_entry();bot._reconcile_pending()
+    campaign=bot.engine.load_campaign(armed["campaign_id"])
+    unit=Decimal(campaign.tags["tc2_reverse_pyramid"]["unit_quantity"])
+    sign=1 if campaign.side=="BUY" else -1
+    now=int(time.time()*1000)
+    for i,weight in enumerate((5,4,3,2)):
+        exchange.price=exchange.entry_price+3*sign
+        campaign=bot.engine.load_campaign(campaign.campaign_id)
+        bot._replace_protection(campaign,exchange.price-2*sign)
+        signal=SignalSpec.new(symbol=campaign.symbol,side=campaign.side,signal_type=SignalType.SUPER_AO,
+            role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=now-500+i,
+            trigger_price=exchange.price+sign,protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000)
+        pending=bot._arm_add_on(campaign,signal)
+        assert Decimal(str(pending["quantity"]))==unit*weight
+        exchange.fill_addition(pending["client_order_id"])
+        bot._reconcile_pending()
+        campaign=bot.engine.load_campaign(campaign.campaign_id)
+        assert campaign.additions==i+1 and bot.state(campaign.symbol)=="OPEN"
+        assert bot.recover()["ok"]
+    assert Decimal(str(campaign.position_qty))==unit*15
+    with pytest.raises(RuntimeError,match="COMPLETE_15_UNITS"):
+        next_tranche(campaign.tags["tc2_reverse_pyramid"],owned_quantity=campaign.position_qty,additions=campaign.additions)
+
+
+@pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
+def test_tc2_loss_or_partial_add_never_authorizes_the_next_book_tranche(armed_runtime):
+    bot,exchange,armed=armed_runtime
+    exchange.fill_entry();bot._reconcile_pending()
+    campaign=bot.engine.load_campaign(armed["campaign_id"])
+    sign=1 if campaign.side=="BUY" else -1
+    now=int(time.time()*1000)
+    def signal():return SignalSpec.new(symbol=campaign.symbol,side=campaign.side,signal_type=SignalType.SUPER_AO,
+        role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=now-500,trigger_price=exchange.price+sign,
+        protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000)
+    exchange.price=exchange.entry_price
+    posts=len(exchange.calls)
+    with pytest.raises(RuntimeError,match="PROFITABLE_POSITION"):bot._arm_add_on(campaign,signal())
+    assert not any(m=="POST" for m,_,_ in exchange.calls[posts:])
+    exchange.price=exchange.entry_price+3*sign
+    bot._replace_protection(campaign,exchange.price-2*sign)
+    pending=bot._arm_add_on(campaign,signal())
+    exchange.fill_addition(pending["client_order_id"],.4);bot._reconcile_pending()
+    campaign=bot.engine.load_campaign(campaign.campaign_id)
+    from williams_tc2_pyramid import next_tranche
+    with pytest.raises(RuntimeError,match="PARTIAL_OR_CHANGED_TRANCHE"):
+        next_tranche(campaign.tags["tc2_reverse_pyramid"],owned_quantity=campaign.position_qty,additions=campaign.additions)
+    assert any(row.get("closePosition")=="true" and row["algoStatus"]=="NEW" for row in exchange.algos.values())
+
+
+@pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
+@pytest.mark.parametrize("change",["profit_lost","trigger_consumed"])
+def test_tc2_addition_revalidates_after_sizing_before_exchange_post(armed_runtime,monkeypatch,change):
+    bot,exchange,armed=armed_runtime
+    exchange.fill_entry();bot._reconcile_pending()
+    campaign=bot.engine.load_campaign(armed["campaign_id"])
+    sign=1 if campaign.side=="BUY" else -1
+    exchange.price=exchange.entry_price+3*sign
+    bot._replace_protection(campaign,exchange.price-2*sign)
+    now=int(time.time()*1000)
+    signal=SignalSpec.new(symbol=campaign.symbol,side=campaign.side,signal_type=SignalType.SUPER_AO,
+        role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=now-500,trigger_price=exchange.price+sign,
+        protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000)
+    real_check=bot._futures_pre_submit_checks
+    def raced(intent):
+        if intent.purpose=="CAMPAIGN_ADD_ON":
+            exchange.price=exchange.entry_price if change=="profit_lost" else signal.trigger_price
+        return real_check(intent)
+    monkeypatch.setattr(bot,"_futures_pre_submit_checks",raced)
+    before=sum(m=="POST" and p.endswith("algoOrder") for m,p,_ in exchange.calls)
+    expected="PROFITABLE_POSITION|invalidated_before_trigger" if change=="profit_lost" else "already_crossed"
+    with pytest.raises(RuntimeError,match=expected):bot._arm_add_on(campaign,signal)
+    assert before==sum(m=="POST" and p.endswith("algoOrder") for m,p,_ in exchange.calls)

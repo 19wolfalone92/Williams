@@ -150,7 +150,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         fun fill(fraction: Double = 1.0, childClientId: String? = null) {
             val pending = algos.values.single { it.optString("closePosition") != "true" }
             entry = pending.getString("triggerPrice").toDouble()
-            quantity = pending.getString("quantity").toDouble() * fraction *
+            quantity = pending.getString("quantity").toBigDecimal().multiply(fraction.toBigDecimal()).toDouble() *
                 if (pending.getString("side") == "BUY") 1.0 else -1.0
             mark = if (quantity > 0) 102.0 else 98.0
             pending.put("algoStatus", "FINISHED").put("actualOrderId", "42")
@@ -618,6 +618,58 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals(0,exchange.posts("/fapi/v1/order"))
             assertEquals(.005,futuresCampaignReservedRisk(coordinator.intentsSnapshot().getJSONObject(0),coordinator.intentsSnapshot()),1e-9)
             assertEquals("OPEN_PROTECTED",coordinator.state.name)
+        }
+    }
+
+    @Test fun pinnedTc2CampaignUsesActualInitialFillAndExactlyFourBookAdditions() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(fraction in listOf(1.0,.4)) {
+            val exchange=Exchange(direction);val journal=Journal();var now=System.currentTimeMillis()
+            fun coordinator()=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            var c=coordinator();c.reconcile()
+            val initial=plan(direction).copy(quantity="0.1",riskPct=.0004,signalType="FRACTAL",signalBarTimeMs=now-7_200_000L,
+                setupContext=JSONObject().put("tc2_reverse_pyramid",JSONObject().put("policy",WILLIAMS_TC2_PYRAMID_POLICY)).toString())
+            assertTrue(c.submitPendingEntry(initial).getBoolean("accepted"))
+            exchange.fill(fraction);assertTrue(c.reconcile().getBoolean("ok"))
+            val unit=kotlin.math.abs(exchange.quantity).toString().toBigDecimal()
+            for((index,weight) in listOf(5,4,3,2).withIndex()) {
+                now+=3_600_000L
+                c=coordinator();assertTrue(c.reconcile().getBoolean("ok"))
+                val addition=initial.copy(quantity=unit.multiply(weight.toBigDecimal()).toPlainString(),riskPct=.001,
+                    entryClientId=initial.clientId,clientId="W2A_BOOK_${direction.name}_${fraction}_$index",
+                    signalType="SUPER_AO",signalBarTimeMs=now-3_601_000L,
+                    entryPrice=(exchange.mark+if(direction.name=="LONG") 1 else -1).toString())
+                val before=exchange.posts("/fapi/v1/algoOrder")
+                val wrong=c.submitPendingEntry(addition.copy(quantity=unit.toPlainString(),clientId=addition.clientId+"_bad"))
+                assertTrue(wrong.toString(),wrong.getBoolean("safe_rejection"))
+                assertEquals(before,exchange.posts("/fapi/v1/algoOrder"))
+                val accepted=c.submitPendingEntry(addition)
+                assertTrue(accepted.toString(),accepted.getBoolean("accepted"))
+                exchange.fillAddition(addition.clientId)
+                assertTrue(c.reconcile().getBoolean("ok"))
+            }
+            assertEquals(unit.multiply(15.toBigDecimal()).toDouble(),kotlin.math.abs(exchange.quantity),1e-12)
+            val owner=c.intentsSnapshot().getJSONObject(0)
+            assertEquals("TC2_PYRAMID_COMPLETE_15_UNITS",williamsTc2NextTranche(owner,c.intentsSnapshot()).blocker)
+            assertEquals("OPEN_PROTECTED",c.state.name)
+        }
+    }
+
+    @Test fun tc2AdditionRechecksProfitAfterLeverageAndBeforePost() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(finalChange in listOf(false,true)) {
+            val exchange=Exchange(direction);val c=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            c.reconcile();val first=plan(direction).copy(signalType="FRACTAL",signalBarTimeMs=System.currentTimeMillis()-7_200_000L)
+            assertTrue(c.submitPendingEntry(first).getBoolean("accepted"));exchange.fill();assertTrue(c.reconcile().getBoolean("ok"))
+            if(finalChange) exchange.afterSymbolConfig={ exchange.mark=exchange.entry }
+            else exchange.mark=exchange.entry
+            val addition=first.copy(quantity="0.1",riskPct=.001,entryClientId=first.clientId,clientId="W2A_PROFIT_${direction.name}_$finalChange",
+                signalType="SUPER_AO",signalBarTimeMs=System.currentTimeMillis()-3_601_000L,
+                entryPrice=(exchange.entry+if(direction.name=="LONG") 3 else -3).toString())
+            val posts=exchange.posts("/fapi/v1/algoOrder")
+            val result=c.submitPendingEntry(addition)
+            assertFalse(result.toString(),result.getBoolean("accepted"))
+            assertTrue(result.toString(),result.getBoolean("safe_rejection"))
+            assertTrue(result.toString(),result.optString("blocker").contains("PROFITABLE_POSITION"))
+            assertEquals(posts,exchange.posts("/fapi/v1/algoOrder"))
         }
     }
 

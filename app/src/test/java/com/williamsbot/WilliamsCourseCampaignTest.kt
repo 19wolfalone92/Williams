@@ -6,14 +6,14 @@ import org.junit.Test
 class WilliamsCourseCampaignTest {
     @Test fun bookStagesAreExecutedInBothDirectionsOnlyAfterConfirmedFills() {
         for(side in listOf("LONG","SHORT")) {
-            var state=WilliamsCourseState("owned-$side",side)
+            var state=WilliamsCourseState("owned-$side",side,w3ToW1Ratio=2.0)
             for((i,stage) in courseStages.withIndex()) {
                 val t=100_000L+i*3_600_000L
                 val p=planWilliamsCourse(state,stage,t,t+1000,
                     waveConfirmed=true,exchangeReconciled=true,protectionVerified=true,
                     newRiskAdmitted=true)
                 assertEquals("PROPOSED",p.status)
-                assertEquals(courseTargets.getValue(stage),p.targetUnits)
+                assertEquals(williamsCourseTarget(stage,2.0),p.targetUnits)
                 assertFalse(p.canPlaceOrders)
                 val filled=acknowledgeWilliamsCourseFill(state,p,"fill-$i",p.signedUnitDelta,
                     p.targetUnits,t,true,true)
@@ -59,7 +59,9 @@ class WilliamsCourseCampaignTest {
         assertEquals("W2",williamsCourseNextStage("W1","W2"))
         assertNull(williamsCourseNextStage("W2","W3"))
         assertEquals("W3",williamsCourseNextStage("W2","W3",true))
-        assertEquals("W3_EXTENSION",williamsCourseNextStage("W3","W3",true))
+        assertNull(williamsCourseNextStage("W3","W3",true))
+        assertNull(williamsCourseNextStage("W3","W3",true,1.09))
+        assertEquals("W3_EXTENSION",williamsCourseNextStage("W3","W3",true,1.1))
         assertEquals("W4",williamsCourseNextStage("W3","W4"))
         assertEquals("W4",williamsCourseNextStage("W3_EXTENSION","W4"))
         assertNull(williamsCourseNextStage("W4","W5"))
@@ -99,5 +101,22 @@ class WilliamsCourseCampaignTest {
         }
         assertEquals(1,acknowledgeWilliamsCourseFill(owner,correct,"genuine-fill",
             3,3,100000,true,true).revision)
+    }
+
+    @Test fun w5EightUnitBranchCannotBeReplayedWithDifferentWaveLengthEvidence() {
+        for(side in listOf("LONG","SHORT")) {
+            val s=WilliamsCourseState("owned",side,stage="W4",confirmedUnits=3,revision=4,w3ToW1Ratio=1.5)
+            val p=planWilliamsCourse(s,"W5",100000,100500,true,true,true,true)
+            assertEquals(8,p.targetUnits);assertEquals(5,p.signedUnitDelta)
+            assertEquals(8,acknowledgeWilliamsCourseFill(s,p,"verified",5,8,100000,true,true).confirmedUnits)
+            for(changed in listOf(s.copy(w3ToW1Ratio=null),s.copy(w3ToW1Ratio=2.0))) {
+                try {
+                    acknowledgeWilliamsCourseFill(changed,p,"different",5,8,100000,true,true)
+                    fail("W5 proposal accepted without its original length evidence")
+                } catch(expected:IllegalArgumentException) { assertEquals(4,changed.revision) }
+            }
+            assertEquals("COURSE_W5_W3_W1_RATIO_UNCONFIRMED",
+                planWilliamsCourse(s.copy(w3ToW1Ratio=null),"W5",100000,100500,true,true,true,true).reason)
+        }
     }
 }

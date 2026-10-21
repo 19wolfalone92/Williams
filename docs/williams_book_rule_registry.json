@@ -1,0 +1,892 @@
+{
+  "schema_version": 1,
+  "updated": "2026-10-21",
+  "release": "4.53.0",
+  "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
+  "whole_book_certified": false,
+  "source_review_complete": false,
+  "all_historical_figures_digitized": false,
+  "physical_android_demo_verified": false,
+  "execution_authority": false,
+  "source_catalog": {
+    "TC1": {
+      "filename": "1. Торговый Хаос - 1.pdf",
+      "pdf_pages": 140,
+      "sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "source": "USER_PROVIDED_PDF",
+      "text_acquisition": "PDF_TEXT_AND_TARGETED_FIGURE_REVIEW"
+    },
+    "TC2": {
+      "filename": "Торговый Хаос 2 (3книга).pdf",
+      "pdf_pages": 224,
+      "sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+      "source": "USER_PROVIDED_PDF",
+      "text_acquisition": "PDF_TEXT_AND_TARGETED_FIGURE_REVIEW"
+    },
+    "NTD": {
+      "filename": "Билл_Вильямс_Новые_измерения_в_биржевой_торговле_2_книга.pdf",
+      "pdf_pages": 156,
+      "sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "source": "USER_PROVIDED_PDF",
+      "text_acquisition": "PDF_TEXT_AND_TARGETED_FIGURE_REVIEW"
+    },
+    "COURSE": {
+      "filename": "Bill Williams - Trading Chaos Course.pdf",
+      "pdf_pages": 122,
+      "sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "source": "USER_PROVIDED_PDF",
+      "text_acquisition": "OCR_122_PAGES_ENGLISH_VISUAL_SPOT_CHECKS"
+    },
+    "WAVE_MEMO": {
+      "filename": "Памятка для подсчета волн..pdf",
+      "pdf_pages": 6,
+      "sha256": "295bc6616170b19bf03b8d0179365582956e246358a7758adba4d4452eb70aeb",
+      "source": "USER_PROVIDED_PDF",
+      "text_acquisition": "PDF_TEXT_AND_TARGETED_FIGURE_REVIEW"
+    }
+  },
+  "fixture_file": "app/src/test/resources/williams_book_rules_contract.json",
+  "rules": [
+    {
+      "id": "TC2.PYRAMID.QUANTITIES",
+      "book": "TC2",
+      "pdf_pages": [
+        164,
+        165
+      ],
+      "rule": "The illustrated reverse pyramid uses contract/share quantities 1,5,4,3,2, fixed to actual first execution, total15 units.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_tc2_pyramid.py",
+        "app/src/main/java/com/williamsbot/WilliamsTc2Pyramid.kt"
+      ],
+      "tests": [
+        "tests/test_williams_book_rules_contract.py::test_exact_quantity_tranches_from_real_fill_ledger",
+        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::exactTranchesUseConfirmedQuantitiesAndRejectPartialAdds"
+      ],
+      "fixtures": [
+        "pyramid/second-five",
+        "pyramid/third-four",
+        "pyramid/fourth-three",
+        "pyramid/fifth-two",
+        "pyramid/complete",
+        "pyramid/partial-initial-fixes-unit",
+        "pyramid/partial-add-not-full-stage"
+      ],
+      "remaining_evidence": "More book chart replays and physical exchange fills; this validates the illustrated policy, not all discretionary allocations.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.PYRAMID.PROFIT",
+      "book": "TC2",
+      "pdf_pages": [
+        164
+      ],
+      "rule": "An existing campaign must be profitable before adding on the next Wise Man; mirror price profit for shorts.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "futures_williams_runtime.py",
+        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
+      ],
+      "tests": [
+        "tests/test_williams_book_rules_contract.py::test_profitable_position_must_be_proven_before_an_addition",
+        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::profitAndRiskCapsAreIndependentFromQuantityRatios"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Price profit is checked; transaction-cost risk is a separate engineering budget.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.FRACTAL.EQUAL_EXTREMES",
+      "book": "TC2",
+      "pdf_pages": [
+        145,
+        146
+      ],
+      "rule": "Two strict neighbours each side; equal central extremes and inner bars may extend formation beyond five bars.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_exit_policy.py",
+        "app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt"
+      ],
+      "tests": [
+        "tests/test_williams_book_rules_contract.py::test_protection_and_entry_use_the_same_five_six_seven_nine_bar_geometry",
+        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::entryAndProtectionAgreeForFiveSixSevenAndNineBarFractals"
+      ],
+      "fixtures": [
+        "fractals/five",
+        "fractals/six-adjacent-ties",
+        "fractals/seven-separated-ties",
+        "fractals/nine-ties-and-inner-bars"
+      ],
+      "remaining_evidence": "These are synthetic boundary fixtures tied to figures11.1/11.2, not digitizations of every historical bar.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.BALANCE.LOCAL_BASE",
+      "book": "NTD",
+      "pdf_pages": [
+        102,
+        103,
+        104,
+        108
+      ],
+      "rule": "Walk from newest bar right to left until first qualifying reference; do not replace the local base with an unrelated old global extremum.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "ntd_balance_line.py",
+        "williams_edition_rules.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdBalanceLine.kt",
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+      ],
+      "tests": [
+        "tests/test_williams_book_rules_contract.py::test_ntd_diagnostic_and_edition_scanners_agree_on_local_base",
+        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::ntdScannersAgreeOnLocalBaseInsteadOfOldGlobalExtremum"
+      ],
+      "fixtures": [
+        "balance_line/local-base-not-old-global-trough",
+        "balance_line/newer-rising-high-does-not-move-level"
+      ],
+      "remaining_evidence": "This rule concerns base/trigger geometry. Diagnostic protective_reference is not an authorized exchange SL.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.W3.EXTENSION_110",
+      "book": "COURSE",
+      "pdf_pages": [
+        81
+      ],
+      "rule": "Illustrated increase6 to10 units requires emerging W3 at least10 percent longer than W1. A new formation alone is insufficient.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_course_campaign.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseCampaign.kt"
+      ],
+      "tests": [
+        "tests/test_williams_book_rules_contract.py::test_course_targets_need_the_actual_w3_w1_ratio",
+        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::courseW3ExtensionAndW5QuantitiesNeedActualLengthRatio"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Ratio belongs to a provisional wave count; it cannot certify the degree or permit an order.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.W5.QUANTITY_6_OR_8",
+      "book": "COURSE",
+      "pdf_pages": [
+        81
+      ],
+      "rule": "W3/W1 greater than1.62 gives6 total W5 units; less than1.62 gives8; missing or exactly-boundary evidence is unresolved.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_course_campaign.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseCampaign.kt"
+      ],
+      "tests": [
+        "tests/test_williams_book_rules_contract.py::test_course_targets_need_the_actual_w3_w1_ratio",
+        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::courseW3ExtensionAndW5QuantitiesNeedActualLengthRatio"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Course example includes entry location38-50 percent and other wave evidence not proved by this quantity branch.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.WM1.DIVERGENT_BAR",
+      "book": "TC2",
+      "pdf_pages": [
+        122,
+        123,
+        124
+      ],
+      "rule": "New lower low and upper-half close for LONG, inverse for SHORT; reversal bar away from Alligator mouth.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_signals.py",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Need all source figures digitized; not only synthetic detections.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.WM1.ANGULATION",
+      "book": "TC2",
+      "pdf_pages": [
+        122,
+        123,
+        124
+      ],
+      "rule": "Increasing separation of price-edge path from Jaw/Teeth from last mouth passage; parallel paths fail.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_market_geometry.py",
+        "app/src/main/java/com/williamsbot/WilliamsMarketGeometry.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Numeric slope formalization still needs complete figure-by-figure acceptance.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.WM1.AO_CONTEXT",
+      "book": "TC2",
+      "pdf_pages": [
+        122,
+        137
+      ],
+      "rule": "AO colour on divergent bar is recorded as context; do not invent a mandatory same-bar all-indicator gate.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_signals.py",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Review every text qualification before declaring normative completeness.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.WM2.THREE_AO_BARS",
+      "book": "TC2",
+      "pdf_pages": [
+        135,
+        136,
+        137,
+        138
+      ],
+      "rule": "Third successive AO colour in intended direction; price trigger one tick beyond its corresponding bar.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_signals.py",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "All flat/zero/broken-sequence source examples still need exhaustive causal fixtures.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.WM2.FIRST_STOP",
+      "book": "TC2",
+      "pdf_pages": [
+        156,
+        157
+      ],
+      "rule": "If SuperAO appears first, choose book three/five-bar or trend-base initial protection, documented selection.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_signals.py",
+        "app/src/main/java/com/williamsbot/WilliamsSetupRules.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Five-bar choice implemented; alternative discretionary stop choice is not uniquely determined by text.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.WM3.ACTIVATION_TEETH",
+      "book": "TC2",
+      "pdf_pages": [
+        145,
+        146,
+        147
+      ],
+      "rule": "Unbuffered fractal extreme must be outside currently displayed displaced Teeth at activation.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_signals.py",
+        "app/src/main/java/com/williamsbot/WilliamsBookH1EntryPolicy.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "More exact source figures, including eligibility changing after formation.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.WISEMEN.FIRST_PRESENTING",
+      "book": "TC2",
+      "pdf_pages": [
+        155,
+        156,
+        157
+      ],
+      "rule": "Any first-presenting Wise Man can initiate; do not demand simultaneous WM1+WM2+WM3.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_profiles.py",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Every source sequence has not been transcribed into independent fixtures.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.STOP.THREE_OR_FIVE",
+      "book": "TC2",
+      "pdf_pages": [
+        155,
+        156,
+        157,
+        163,
+        165
+      ],
+      "rule": "Structural stop behind three or five price bars; choose one documented comfort policy and only tighten.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_exit_policy.py",
+        "app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Physical Android/Binance trailing chain remains unverified.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.INDICATORS",
+      "book": "NTD",
+      "pdf_pages": [
+        36,
+        55,
+        72,
+        73
+      ],
+      "rule": "Alligator displaced SMMA13/8,8/5,5/3; AO SMA5-SMA34 median; AC AO-SMA5(AO).",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "strategy.py",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Boundary/seed parity is implemented; full historical figure parity not complete.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.FIRST_FRACTAL",
+      "book": "NTD",
+      "pdf_pages": [
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54
+      ],
+      "rule": "First external fractal starts the cycle after sleep; other dimensions follow that cycle.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_profiles.py",
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Full independent NTD execution acceptance absent; remains OBSERVE.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.AO.SAUCER",
+      "book": "NTD",
+      "pdf_pages": [
+        57,
+        58,
+        59,
+        60
+      ],
+      "rule": "AO saucer uses same-side three-bar momentum-colour sequence and its signal price bar.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_signals.py",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "All figure and zero/flat-colour variants not completely digitized.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.AO.ZERO_CROSS",
+      "book": "NTD",
+      "pdf_pages": [
+        62,
+        63,
+        64
+      ],
+      "rule": "AO zero crossing uses actual closed sign transition and corresponding price trigger.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_signals.py",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Exact zero touches and edition-specific conventions need full source matrix.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.AO.TWIN_PEAKS",
+      "book": "NTD",
+      "pdf_pages": [
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73
+      ],
+      "rule": "Same-side peaks, second nearer zero, no intervening zero crossing.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_signals.py",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Every plateau/zero timing example still pending independent figure fixtures.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.AC.COUNTS",
+      "book": "NTD",
+      "pdf_pages": [
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87
+      ],
+      "rule": "Two colour confirmations with acceleration, three against; zero crossing alone is not AC entry.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_signals.py",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Complete zero-line exception matrix pending.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.ZONE.ADDITIONS",
+      "book": "NTD",
+      "pdf_pages": [
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96
+      ],
+      "rule": "Zone is joint AO+AC colour, closing-price progress, consecutive zone bars2 through5.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_signals.py",
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Full independent profile lifecycle and source-chart replay pending.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.ZONE.FIFTH_TRAIL",
+      "book": "NTD",
+      "pdf_pages": [
+        91,
+        92,
+        93,
+        94,
+        95,
+        96
+      ],
+      "rule": "Fifth same-zone bar activates one-bar protective ratchet; later colour change does not cancel it.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_edition_rules.py",
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Physical exchange stop ratchet not demonstrated for NTD.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.BALANCE.REFERENCE_JAW",
+      "book": "NTD",
+      "pdf_pages": [
+        104,
+        108
+      ],
+      "rule": "First qualifying reference bar relative to Jaw decides one/two extremes; adverse zone doubles to two/four.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "ntd_balance_line.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdBalanceLine.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Known book figure tests exist; full source-path and initial-stop semantics not accepted.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.EXIT.TEETH_LIPS",
+      "book": "NTD",
+      "pdf_pages": [
+        115,
+        116,
+        117,
+        118,
+        119,
+        120
+      ],
+      "rule": "Edition-specific Teeth/Lips exits and five-zone priority.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_edition_rules.py",
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Chart-angle to percentage-slope choice is a declared heuristic, not an exact original rule.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.HUMP",
+      "book": "COURSE",
+      "pdf_pages": [
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68
+      ],
+      "rule": "Ordered opposite fractals define Hump start/signal and inside leverage boundary; protect behind two opposite fractals.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_edition_rules.py",
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "All leverage/finger drawings need complete digitization.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.THUMB.FINGERS",
+      "book": "COURSE",
+      "pdf_pages": [
+        69,
+        70,
+        71,
+        72
+      ],
+      "rule": "Three risingHH+HL fingers for SHORT or fallingLL+LH fingers for LONG; inside bars excluded.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_edition_rules.py",
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Inside-bar/finger geometry implemented; every historical example is not yet digitized. Colour/strength evidence recorded separately.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.AIRBAG",
+      "book": "COURSE",
+      "pdf_pages": [
+        86,
+        87
+      ],
+      "rule": "Two-bar reversal on significant higher frame, skip inside bars; framework suggests approximately5x duration.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_edition_rules.py",
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "6h for H1 is exchange adaptation; exact plus/minus tick wording and all illustrations need review.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.RHYTHM",
+      "book": "COURSE",
+      "pdf_pages": [
+        45,
+        46,
+        87,
+        88,
+        89,
+        90
+      ],
+      "rule": "Own-frame oscillator versus signal SMA5 and market rhythm context.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_edition_rules.py",
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Full four-rhythm Trading Partner evidence not certified.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.W1_W2_W3_W4_LOCATION",
+      "book": "COURSE",
+      "pdf_pages": [
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84
+      ],
+      "rule": "Stage examples include entry/retracement/target locations and partial reductions; a wave label alone is insufficient proof.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_course_campaign.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseCampaign.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Only selected stage/quantity constraints implemented; all price-location predicates not complete.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "WAVE.AO.MINIMUM_W4",
+      "book": "TC1",
+      "pdf_pages": [
+        60,
+        61,
+        62,
+        63,
+        65
+      ],
+      "rule": "AO behaviour is evidence of minimum W4 conditions, not proof W4 has ended.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_wave_hierarchy.py",
+        "app/src/main/java/com/williamsbot/WilliamsWaveRhythm.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Exact page/figure mapping and distinction between cross, touch and approach require final source review.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "WAVE.REAL_TIMEFRAMES",
+      "book": "TC1",
+      "pdf_pages": [
+        49,
+        61,
+        62,
+        63,
+        65
+      ],
+      "rule": "Wave subdivisions use each actual closed timeframe, including H4, without manufacturing lower-frame candles.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_wave_hierarchy.py",
+        "app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Time/price containment remains a hypothesis; cannot certify wave genealogy.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "MEMO.MOTIVE_AND_CORRECTION",
+      "book": "WAVE_MEMO",
+      "pdf_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "rule": "Outer motive/corrective geometry has explicit subdivisions, overlap/truncation and context distinctions.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_complex_waves.py",
+        "williams_wave_subdivisions.py",
+        "app/src/main/java/com/williamsbot/WilliamsComplexWave.kt",
+        "app/src/main/java/com/williamsbot/WilliamsWaveSubdivisions.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Price-only lower-frame witnesses do not certify every nested degree; leading/ending context still incomplete.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.THUMB.COLOUR_COMBINATION",
+      "book": "COURSE",
+      "pdf_pages": [
+        69,
+        71
+      ],
+      "rule": "PDF69 permits any two Squat/Green or explicit increasing-volume shortcut. PDF71 distinguishes ideal mixed colour from weaker formations; it does not invalidate every weak Thumb.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_edition_rules.py",
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+      ],
+      "tests": [
+        "tests/test_williams_book_rules_contract.py::test_thumb_ideal_and_weak_are_not_confused_with_invalid_formation",
+        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::thumbWeakAndIdealUseImmediatePreviousBarWithoutInventingColours"
+      ],
+      "fixtures": [
+        "thumb/weak-two-squats",
+        "thumb/ideal-colours-use-immediate-previous-bar",
+        "thumb/volume-shortcut-does-not-invent-flat-mfi-colour"
+      ],
+      "remaining_evidence": "Visual pages69 and71 reconciled. Flat MFI is labelled unconfirmed; base-volume input is still a declared proxy. Full historical Thumb examples remain pending.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.COMPLETE_CORRECTIVE_CAMPAIGN",
+      "book": "COURSE",
+      "pdf_pages": [
+        82,
+        83,
+        84
+      ],
+      "rule": "Full example also trades corrective a,b,c after motive sequence.",
+      "status": "PENDING",
+      "modules": [],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Current stage planner ends at EXIT; complete corrective campaign is not implemented.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "WAVE.FULL_NESTED_GENEALOGY",
+      "book": "WAVE_MEMO",
+      "pdf_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "rule": "Degree and leading/ending/combination role require verified nested substructure and parent context.",
+      "status": "PENDING",
+      "modules": [],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Causal alternatives and subdivision witnesses exist; full unambiguous classification is not proven.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.EXIT.STOP_AND_REVERSE",
+      "book": "TC2",
+      "pdf_pages": [
+        155,
+        165
+      ],
+      "rule": "Text includes stop-and-reverse/discretionary exits; project owner selected ordinary TC2 exit only through exchange SL.",
+      "status": "USER_POLICY",
+      "modules": [
+        "williams_execution_policy.py",
+        "app/src/main/java/com/williamsbot/WilliamsExecutionPolicy.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Explicit project deviation; broad book-alignment request does not silently enable financial reversals against prior SL-only constraint.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "ENGINEERING.RISK_AND_LOT_LIMITS",
+      "book": "TC2",
+      "pdf_pages": [
+        164
+      ],
+      "rule": "Initial nominal budget <=campaignCap/15 and entryCap/5 is engineering; later exact quantity must pass risk, lot, leverage, margin and portfolio gates.",
+      "status": "PROJECT_POLICY",
+      "modules": [
+        "williams_tc2_pyramid.py",
+        "app/src/main/java/com/williamsbot/WilliamsTc2Pyramid.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "The book does not specify these Binance risk percentages or order filters.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "ENGINEERING.MFI_PROXY",
+      "book": "TC1",
+      "pdf_pages": [
+        42,
+        43,
+        44,
+        45,
+        58,
+        59,
+        60
+      ],
+      "rule": "Kline base volume/trade count is labelled a proxy, not canonical original tick-volume MFI.",
+      "status": "PROJECT_POLICY",
+      "modules": [
+        "strategy.py",
+        "app/src/main/java/com/williamsbot/WilliamsMarketReading.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Exchange data source differs from original tick-volume illustrations.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "ENGINEERING.NO_AUTOMATIC_1R",
+      "book": "TC2",
+      "pdf_pages": [
+        155,
+        156,
+        157
+      ],
+      "rule": "Automatic1R/cost-buffer break-even disabled by project policy; only documented structure can tighten TC2 SL.",
+      "status": "PROJECT_POLICY",
+      "modules": [
+        "williams_exit_policy.py",
+        "app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt"
+      ],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "No claim that every discretionary book trader is prohibited from break-even.",
+      "can_place_orders_from_registry": false
+    }
+  ],
+  "required_remaining_evidence": [
+    "Independent digitization of all relevant historical book figures",
+    "Finish Air Bag tick-offset and higher-frame illustration review",
+    "Complete nested wave/context and Course corrective campaign specification",
+    "Preserve or explicitly revise prior TC2 SL-only user policy",
+    "Physical Android Binance Futures Demo LONG/SHORT fills, partial fills, protection, restart and offline recovery"
+  ]
+}

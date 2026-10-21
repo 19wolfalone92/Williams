@@ -43,7 +43,11 @@ from williams_decision_trace import build_decision_trace
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
 from williams_execution_policy import EXECUTION_PROFILE,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker
-from williams_course_campaign import course_active_context,course_next_stage,TARGETS as COURSE_TARGETS
+from williams_course_campaign import course_active_context,course_next_stage,course_target,TARGETS as COURSE_TARGETS
+from williams_tc2_pyramid import (
+    POLICY as TC2_PYRAMID_POLICY, initial_unit_risk_pct, require_profitable_position,
+    next_tranche as tc2_next_tranche, cap_book_tranche,
+)
 from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,unified_direction_conflict,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan
 from campaign_engine import CampaignEngine
 from equity_breaker import EquityCircuitBreaker
@@ -206,7 +210,7 @@ def _pending_entry_preflight_reason(pending, intent, current_price: float, now_m
     signal_at = int(signal.get("signal_bar_time_ms",0) or 0)
     if signal_at>0 and not structural and now-signal_at>=5*3_600_000:
         return "pending_h1_signal_exceeded_project_freshness_limit"
-    if trigger <= 0 or protective <= 0 or price <= 0:
+    if not all(math.isfinite(v) and v>0 for v in (trigger,protective,price)):
         return "pending_signal_trigger_stop_or_market_price_invalid"
     if side == "BUY" and price <= protective:
         return "long_setup_invalidated_before_trigger"
@@ -1319,6 +1323,18 @@ class FuturesWilliamsRuntime:
             payload=(campaign.tags.get("pending_signal") or {}).get("signal") or {}
             if payload.get("strategy_profile",TC2)!=campaign.tags.get("strategy_profile",TC2):
                 raise RuntimeError("Add-on edition changed before submission")
+            if campaign.tags.get("strategy_profile",TC2)==TC2:
+                current=float(self.client.ticker_price(intent.symbol).get("price",0) or 0)
+                reason=_pending_entry_preflight_reason(campaign.tags.get("pending_signal"),intent,current,
+                    int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
+                if reason:raise RuntimeError("TC2_ADDITION_PREFLIGHT_BLOCKED: "+reason)
+                require_profitable_position(campaign.side,position.get("entryPrice"),current,
+                    campaign.tags.get("pending_order_trigger"))
+                pyramid=campaign.tags.get("tc2_reverse_pyramid")
+                if pyramid is not None:
+                    required=tc2_next_tranche(pyramid,owned_quantity=pos_qty,additions=campaign.additions)
+                    if Decimal(str(intent.quantity))!=required:
+                        raise RuntimeError("TC2_PYRAMID_EXACT_BOOK_QUANTITY_REQUIRED")
             if intent.order_type=="MARKET":
                 if campaign.tags.get("strategy_profile")!=NTD or payload.get("signal_type")!="ZONE_ADD_ON" or payload.get("execution_semantics")!="MARKET_ON_CLOSE":
                     raise RuntimeError("MARKET add-on requires an owned NTD close event")
@@ -1383,18 +1399,21 @@ class FuturesWilliamsRuntime:
         pending["updated_at_ms"] = int(time.time() * 1000)
         campaign.tags["pending_signal"] = pending
 
-    def _initial_risk_pct(self):
-        # Keep the actual first entry aligned with Android: 0.20% equity by
-        # default, never above the unified 0.25% per-entry ceiling.
-        return max(0.0, min(
+    def _initial_risk_pct(self, profile=TC2):
+        cap=max(0.0, min(
             float(self.config.initial_entry_risk_pct),
             float(self.config.risk_per_trade_pct),
             0.0025,
         ))
+        if profile!=TC2:
+            return cap
+        # Engineering risk ceiling, separate from the book's quantity ratios.
+        return initial_unit_risk_pct(cap,min(float(self.config.campaign_risk_limit_pct),
+            float(self.config.max_total_risk_pct),0.006),min(float(self.config.risk_per_trade_pct),0.0025))
 
     def _next_add_risk_pct(self, campaign):
         # Add-ons consume the same persisted campaign/portfolio risk budget;
-        # this is a ceiling, not a mandatory reverse-pyramid sizing formula.
+        # this is a ceiling; pinned TC2 book quantities must fit it unchanged.
         cap = max(0.0, min(
             float(self.config.campaign_risk_limit_pct),
             float(self.config.max_total_risk_pct),
@@ -1630,7 +1649,7 @@ class FuturesWilliamsRuntime:
 
         equity = self._equity()
         initial_risk_pct = min(
-            self._initial_risk_pct(),
+            self._initial_risk_pct(signal.strategy_profile),
             self._portfolio_available_risk_pct(equity),
         )
         if initial_risk_pct <= 0:
@@ -1653,11 +1672,16 @@ class FuturesWilliamsRuntime:
         campaign.tags["trade_mode"] = candidate.trade_mode
         campaign.tags["strategy_profile"] = signal.strategy_profile
         campaign.tags["setup_context"] = dict(signal.setup_context)
+        if signal.strategy_profile==TC2:
+            campaign.tags["tc2_reverse_pyramid"]={"policy":TC2_PYRAMID_POLICY,
+                "unit_quantity":None,"completed_quantities":[]}
         if signal.strategy_profile==COURSE:
             context=course_active_context(self.scanner.wave_hierarchy(symbol),signal.side)
-            if context and context["phase"] in COURSE_TARGETS:
+            target=course_target(context["phase"],context.get("w3_to_w1_ratio")) if context else None
+            if target:
                 campaign.tags["course_plan"]={"stage":context["phase"],"origin_at":context["origin_at"],
-                    "unit_quantity":qty/COURSE_TARGETS[context["phase"]],"unit_is_actual":False,"policy":"COURSE_BOOK_EXAMPLE_RATIOS_RISK_CAPPED"}
+                    "unit_quantity":qty/target,"unit_is_actual":False,
+                    "w3_to_w1_ratio":context.get("w3_to_w1_ratio"),"policy":"COURSE_BOOK_EXAMPLE_RATIOS_RISK_CAPPED"}
         campaign.tags["pending_order_type"] = "MARKET" if market_close else "STOP_MARKET"
         campaign.tags["correction_context"] = dict(candidate.correction_context)
         campaign.pending_risk_quote = risk_quote
@@ -1792,6 +1816,8 @@ class FuturesWilliamsRuntime:
             trigger=current
         elif (signal.side == "BUY" and current >= trigger) or (signal.side == "SELL" and current <= trigger):
             raise RuntimeError("add-on trigger already crossed")
+        if profile==TC2:
+            require_profitable_position(campaign.side,campaign.average_entry_price,current,trigger)
         self._ensure_symbol_config(signal.symbol)
 
         add_ok, add_reason = self._daily_entry_guard()
@@ -1816,12 +1842,21 @@ class FuturesWilliamsRuntime:
             stop,
             add_risk_pct,
         )
+        if profile==TC2 and campaign.tags.get("tc2_reverse_pyramid") is not None:
+            required=tc2_next_tranche(campaign.tags["tc2_reverse_pyramid"],
+                owned_quantity=campaign.position_qty,additions=campaign.additions)
+            admitted=cap_book_tranche(required,qty)
+            # Quantization must not alter the fixed multiple of the actual unit.
+            if Decimal(str(self._normalize_qty(signal.symbol,admitted)))!=required:
+                raise RuntimeError("TC2_PYRAMID_QUANTITY_FILTER_CHANGED")
+            ratio=admitted/qty;qty=admitted;risk_quote*=ratio;notional*=ratio
         if profile==COURSE and campaign.tags.get("course_plan"):
             plan=campaign.tags["course_plan"]
             context=course_active_context(self.scanner.wave_hierarchy(signal.symbol),signal.side,plan["origin_at"])
-            next_stage=course_next_stage(plan["stage"],context["phase"],True) if context else None
-            if next_stage not in COURSE_TARGETS:raise RuntimeError("COURSE_STAGE_REQUIRES_CONFIRMED_NEW_FORMATION")
-            target=self._normalize_qty(signal.symbol,plan["unit_quantity"]*COURSE_TARGETS[next_stage])
+            next_stage=course_next_stage(plan["stage"],context["phase"],True,context.get("w3_to_w1_ratio")) if context else None
+            units=course_target(next_stage,context.get("w3_to_w1_ratio")) if context else None
+            if units is None:raise RuntimeError("COURSE_STAGE_OR_W3_W1_RATIO_UNCONFIRMED")
+            target=self._normalize_qty(signal.symbol,plan["unit_quantity"]*units)
             admitted=self._normalize_qty(signal.symbol,min(qty,max(0,target-campaign.position_qty)))
             if admitted<=0:raise RuntimeError("COURSE_TARGET_QUANTITY_ALREADY_REACHED")
             ratio=admitted/qty;qty=admitted;risk_quote*=ratio;notional*=ratio
@@ -2743,6 +2778,11 @@ class FuturesWilliamsRuntime:
                                 + (float(avg) * float(executed))
                             ) / max(old_qty + float(executed), 1e-12)
                         campaign.position_qty = pos_qty
+                        pyramid=campaign.tags.get("tc2_reverse_pyramid")
+                        if pyramid is not None:
+                            # Preserve the actual partial fill. The next admission
+                            # will reject it instead of inventing a full tranche.
+                            pyramid.setdefault("completed_quantities",[]).append(str(executed))
                         campaign.additions += 1
                         campaign.tranche_index = min(4, campaign.tranche_index + 1)
                         campaign.open_risk_quote += float(campaign.pending_risk_quote or 0)
@@ -2811,6 +2851,9 @@ class FuturesWilliamsRuntime:
                         stop = float(campaign.initial_stop_price)
                         campaign.position_qty = pos_qty
                         campaign.average_entry_price = avg
+                        pyramid=campaign.tags.get("tc2_reverse_pyramid")
+                        if pyramid is not None:
+                            pyramid["unit_quantity"]=str(executed)
                         campaign.tags.setdefault("position_open_observed_at_ms", int(time.time()*1000))
                         campaign.current_stop_price = stop
                         campaign.open_risk_quote = float(campaign.pending_risk_quote or 0)
@@ -3104,8 +3147,10 @@ class FuturesWilliamsRuntime:
                     campaign.tags.pop("pending_protection_price", None)
                 course_plan=campaign.tags.get("course_plan")
                 if course_plan and not course_plan.get("unit_is_actual",False) and campaign.additions==0:
-                    course_plan["unit_quantity"]=campaign.position_qty/COURSE_TARGETS[course_plan["stage"]]
-                    course_plan["unit_is_actual"]=True
+                    units=course_target(course_plan["stage"],course_plan.get("w3_to_w1_ratio"))
+                    if units:
+                        course_plan["unit_quantity"]=campaign.position_qty/units
+                        course_plan["unit_is_actual"]=True
                 pending_stage=campaign.tags.get("course_pending_add_stage")
                 if pending_stage and math.isclose(campaign.position_qty,float(campaign.tags.get("course_pending_add_target",0)),rel_tol=1e-9,abs_tol=1e-9):
                     campaign.tags["course_plan"]["stage"]=pending_stage

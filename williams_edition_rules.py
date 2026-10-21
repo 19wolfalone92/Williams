@@ -185,6 +185,18 @@ def course_thumb_setup(side,bars,tick):
             fingers=[i]
     if len(fingers)<3:return None
     if sum(i>0 and bars[i].v>bars[i-1].v>0 for i in fingers)<2:return None
+    colours=[]
+    for i in fingers:
+        if i<=0 or not bars[i].v>bars[i-1].v>0:
+            colours.append("OTHER");continue
+        current=(bars[i].h-bars[i].l)/bars[i].v
+        previous=(bars[i-1].h-bars[i-1].l)/bars[i-1].v
+        colours.append("SQUAT" if current<previous else "GREEN" if current>previous else "MFI_UNCHANGED")
+    # PDF69 permits any two and explicitly gives the increasing-volume
+    # shortcut. PDF71 calls mixed Squat+Green ideal and other setups weak;
+    # it does not say the weak formation ceases to exist.
+    strength=("IDEAL_MIXED" if "SQUAT" in colours and "GREEN" in colours else
+              "WEAK" if sum(c in {"SQUAT","GREEN"} for c in colours)>=2 else "UNCONFIRMED_FLAT_MFI")
     thumb,middle=fingers[0],fingers[-1]
     # PDF69 figure: thumb is the OLDEST/lowest of the rising fingers.
     trigger=bars[thumb].l-tick if sign==1 else bars[thumb].h+tick
@@ -193,7 +205,8 @@ def course_thumb_setup(side,bars,tick):
     if any(b.l<=trigger if sign==1 else b.h>=trigger for b in bars[middle:]):return None
     return EditionSetup("COURSE_THUMB",side,middle,trigger,stop,stop,
         {"finger_indices":fingers,"thumb_index":thumb,"reverse_level":stop,
-         "volume_input":"KLINE_VOLUME_PROXY"})
+         "volume_input":"KLINE_VOLUME_PROXY","finger_profitunity_colours":colours,
+         "thumb_strength":strength,"thumb_admission_basis":"COURSE_PDF69_VOLUME_SHORTCUT"})
 
 
 def course_squat_setup(side,bars,tick):

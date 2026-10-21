@@ -1049,6 +1049,8 @@ internal class NativeFuturesCampaignCoordinator(
                     val actualId = parent?.optString("actualOrderId").orEmpty()
                     if(parent!=null) owner.put("conditional_parent_status",parent.optString("algoStatus"))
                         .put("conditional_actual_order_id",actualId)
+                        .put("conditional_untriggered_terminal",parent.optString("algoStatus") in setOf("CANCELED","REJECTED","EXPIRED") &&
+                            parent.has("actualOrderId") && (actualId.isBlank() || actualId=="0"))
                     if (actualId.isNotBlank() && actualId != "0") {
                         check(parent != null && parent.optString("symbol") == symbol && parent.optString("clientAlgoId") == cid) {
                             "Conditional entry parent identity mismatch"
@@ -2445,6 +2447,29 @@ internal class NativeFuturesCampaignCoordinator(
             .put("state", state.name)
             .put("blocker", blocker)
 
+    private fun tc2AdditionBookBlocker(plan:EntryPlan,owner:JSONObject,ledger:JSONArray,
+        live:JSONObject,mark:Double):String? {
+        val amount=live.optString("positionAmt").toBigDecimalOrNull()
+            ?: return "TC2_ADDITION_POSITION_UNPROVEN"
+        if(live.optString("positionSide","BOTH")!="BOTH" || amount.signum()==0 ||
+            (amount.signum()>0)!=(plan.direction==Direction.LONG)) return "TC2_ADDITION_DIRECTION_UNPROVEN"
+        val entry=live.optString("entryPrice").toDoubleOrNull() ?: Double.NaN
+        val recorded=owner.optString("actual_entry_price").toDoubleOrNull() ?: Double.NaN
+        if(!recorded.isFinite() || !entry.isFinite() || recorded<=0 || entry<=0 ||
+            kotlin.math.abs(entry-recorded)>maxOf(1e-8,recorded*1e-8)) return "TC2_ADDITION_ENTRY_OWNERSHIP_CHANGED"
+        williamsTc2ProfitBlocker(plan.direction.name,entry,mark,plan.entryPrice.toDouble())?.let { return it }
+        if(if(plan.direction==Direction.LONG) mark>=plan.entryPrice.toDouble() else mark<=plan.entryPrice.toDouble())
+            return "TC2_ADDITION_TRIGGER_CONSUMED_BEFORE_SUBMISSION"
+        // Existing campaigns keep their persisted allocation semantics. Only
+        // newly pinned campaigns may claim the book's exact quantity sequence.
+        if(williamsTc2PyramidPolicy(owner)!=null) {
+            val next=williamsTc2NextTranche(owner,ledger,plan.clientId)
+            next.blocker?.let { return it }
+            return williamsTc2TrancheQuantityBlocker(next.quantity!!,plan.quantity)
+        }
+        return null
+    }
+
     /** Persist the entry request before any account/order mutation. */
     fun submitPendingEntry(plan: EntryPlan): JSONObject {
         val attempt=java.util.UUID.randomUUID().toString()
@@ -2668,6 +2693,10 @@ internal class NativeFuturesCampaignCoordinator(
             val live=openPositionRows[plan.symbol] ?: return@synchronized safePreflightRejection("Addition requires a live owned position")
             if (live.optString("positionAmt").toBigDecimal().abs().compareTo(primary!!.getString("confirmed_position_qty").toBigDecimal())!=0)
                 return@synchronized safePreflightRejection("Position changed since ownership reconciliation")
+            if(plan.strategyProfile==williamsTc2Profile) {
+                val blocker=tc2AdditionBookBlocker(plan,primary,currentIntents,live,preflightAdapter.markPrice(plan.symbol))
+                if(blocker!=null) return@synchronized safePreflightRejection(blocker)
+            }
         }
 
         // Sum active intent risk conservatively. Missing/invalid reservations cannot
@@ -2723,6 +2752,11 @@ internal class NativeFuturesCampaignCoordinator(
             .put("campaign_status", "ENTRY_PENDING")
             .put("protection_status", "NOT_SUBMITTED")
             .put("created_at_ms", clock())
+        if(!isAddition && plan.strategyProfile==williamsTc2Profile) {
+            val policy=runCatching { JSONObject(plan.setupContext.ifBlank { "{}" }) }.getOrNull()
+                ?.optJSONObject("tc2_reverse_pyramid")?.optString("policy") ?: "LEGACY_UNPINNED"
+            intent.put("tc2_quantity_policy",policy)
+        }
         if(reentry) prior!!.put("ntd_reentry_consumed_by",plan.clientId)
         if(isAddition && plan.strategyProfile==williamsCourseProfile) {
             val setup=runCatching { JSONObject(plan.setupContext) }.getOrDefault(JSONObject())
@@ -2774,6 +2808,18 @@ internal class NativeFuturesCampaignCoordinator(
                 }
                 val verifier=bookH1EntryVerifier ?: error("H1_BOOK_FINAL_VERIFIER_REQUIRED")
                 verifier(plan)
+            }
+            if(isAddition && plan.strategyProfile==williamsTc2Profile) {
+                val positions=adapter.positions()
+                val live=(0 until positions.length()).mapNotNull { positions.optJSONObject(it) }
+                    .singleOrNull { it.optString("symbol")==plan.symbol &&
+                        it.optString("positionAmt").toBigDecimalOrNull()?.signum()!=0 }
+                    ?: error("TC2_PYRAMID_LIVE_POSITION_UNPROVEN")
+                check(live.optString("positionAmt").toBigDecimal().abs()
+                    .compareTo(primary!!.getString("confirmed_position_qty").toBigDecimal())==0) {
+                    "TC2_PYRAMID_OWNED_QUANTITY_CHANGED_BEFORE_SUBMISSION"
+                }
+                tc2AdditionBookBlocker(plan,primary,currentIntents,live,adapter.markPrice(plan.symbol))?.let { error(it) }
             }
             if(plan.kind==EntryKind.MARKET) check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
                 plan.referenceClose,adapter.markPrice(plan.symbol))==null) { "NTD close-event expired or moved before mutation" }
@@ -2833,6 +2879,7 @@ internal class NativeFuturesCampaignCoordinator(
                 // sent. Do not reserve a phantom SUBMISSION_UNKNOWN order.
                 intent.put("exchange_status", "REJECTED")
                     .put("order_status", "REJECTED")
+                    .put("entry_submission_attempted",false).put("executed_qty","0")
                     .put("campaign_status", "CLOSED_OR_STOPPED")
                     .put("error", failure.message ?: failure.javaClass.simpleName)
                 saveIntents(currentIntents)

@@ -35,7 +35,7 @@ class BalanceLineEvidence:
 
 def ntd_balance_line_evidence(
     highs, lows, jaw, teeth, lips, ao, ac, *,
-    side: str, tick_size: float, lookback: int = 20
+    side: str, tick_size: float, lookback: int | None = None
 ) -> BalanceLineEvidence:
     """Analyse ONLY a supplied completed-bar prefix; never forecast or execute.
 
@@ -55,7 +55,8 @@ def ntd_balance_line_evidence(
     if not isfinite(tick) or tick <= 0:
         return blocked("INVALID_TICK")
     n = len(series[0])
-    if n < 5 or lookback < 3 or any(len(s) != n for s in series):
+    if lookback is None:lookback=n
+    if n < 3 or lookback < 3 or any(len(s) != n for s in series):
         return blocked("INSUFFICIENT_OR_MISMATCHED_BARS")
     h,l,j,t,lip,o,a = series
     # Indicator warm-up values earlier in history may be NaN. We only need
@@ -66,15 +67,18 @@ def ntd_balance_line_evidence(
             else "RED" if o[-1] < o[-2] and a[-1] < a[-2] else "GRAY")
     is_long = side == "LONG"
     prices = h if is_long else l
-    # Rightmost equal extremum is the newest valid base: do not use later bars
-    # as if they were available when that base was formed.
-    start = max(1, n - lookback)
-    possible = [i for i in range(start, n)
-                if all(isfinite(v) for v in (h[i],l[i],j[i],t[i],lip[i]))
-                and l[i] > 0 and h[i] >= l[i] and min(j[i],t[i],lip[i]) > 0]
-    if not possible:
-        return blocked("NO_VALID_BASE")
-    base = min(possible, key=lambda i: (prices[i], -i)) if is_long else max(possible, key=lambda i: (prices[i], i))
+    # NTD fig8-8/8-13: begin at the newest bar and walk left only until
+    # the first qualifying reference. An unrelated older global extremum
+    # must not replace this local base or resurrect a different formation.
+    start=max(0,n-lookback)
+    if any(not all(isfinite(v) for v in (h[i],l[i])) or l[i]<=0 or h[i]<l[i] for i in range(start,n)):
+        return blocked("INVALID_PRICE_IN_FORMATION")
+    if not all(isfinite(v) and v>0 for v in (j[-1],t[-1],lip[-1])):
+        return blocked("NO_VALID_CURRENT_MOUTH")
+    base=n-1
+    for k in range(n-2,start-1,-1):
+        if prices[k]<prices[base] if is_long else prices[k]>prices[base]:base=k
+        elif prices[k]>prices[base] if is_long else prices[k]<prices[base]:break
     base_price = prices[base]
     # NTD pp104/108, figs 8-9(D), 8-20(D): use the position of the
     # first qualifying SIGNAL-reference bar relative to current Jaw at
@@ -83,7 +87,7 @@ def ntd_balance_line_evidence(
     count, previous, reference = 0, base_price, -1
     # Read from RIGHT to LEFT: each 'new high/low' must exceed the previous
     # qualifying extremum in the trade direction, not merely the base.
-    for k in range(base - 1, max(-1, base - 1 - 2 * lookback), -1):
+    for k in range(base - 1, start-1, -1):
         if not isfinite(prices[k]) or prices[k] <= 0:
             return blocked("INVALID_PRICE_IN_FORMATION")
         if (prices[k] > previous if is_long else prices[k] < previous):

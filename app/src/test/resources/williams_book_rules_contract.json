@@ -1,0 +1,315 @@
+{
+  "schema_version": 1,
+  "provenance": "Synthetic boundary fixtures derived from cited rules; not historical chart digitization or full-book certification.",
+  "sources": {
+    "tc2_pyramid": {
+      "book": "TC2",
+      "pdf_page": 164,
+      "printed_page": 149
+    },
+    "fractals": {
+      "book": "TC2",
+      "pdf_pages": [
+        145,
+        146
+      ],
+      "figures": [
+        "11.1",
+        "11.2"
+      ]
+    },
+    "course": {
+      "book": "Course",
+      "pdf_page": 81,
+      "printed_page": "Level III p6"
+    },
+    "balance_line": {
+      "book": "NTD",
+      "pdf_pages": [
+        102,
+        103,
+        104,
+        108
+      ],
+      "figures": [
+        "8-8",
+        "8-9",
+        "8-20"
+      ]
+    }
+  },
+  "pyramid": [
+    {
+      "id": "second-five",
+      "unit": "0.1",
+      "fills": [],
+      "owned": "0.1",
+      "next": "0.5"
+    },
+    {
+      "id": "third-four",
+      "unit": "0.1",
+      "fills": [
+        "0.5"
+      ],
+      "owned": "0.6",
+      "next": "0.4"
+    },
+    {
+      "id": "fourth-three",
+      "unit": "0.1",
+      "fills": [
+        "0.5",
+        "0.4"
+      ],
+      "owned": "1",
+      "next": "0.3"
+    },
+    {
+      "id": "fifth-two",
+      "unit": "0.1",
+      "fills": [
+        "0.5",
+        "0.4",
+        "0.3"
+      ],
+      "owned": "1.3",
+      "next": "0.2"
+    },
+    {
+      "id": "complete",
+      "unit": "0.1",
+      "fills": [
+        "0.5",
+        "0.4",
+        "0.3",
+        "0.2"
+      ],
+      "owned": "1.5",
+      "blocker": "TC2_PYRAMID_COMPLETE_15_UNITS"
+    },
+    {
+      "id": "partial-initial-fixes-unit",
+      "unit": "0.04",
+      "fills": [],
+      "owned": "0.04",
+      "next": "0.20"
+    },
+    {
+      "id": "partial-add-not-full-stage",
+      "unit": "0.1",
+      "fills": [
+        "0.2"
+      ],
+      "owned": "0.3",
+      "blocker": "TC2_PYRAMID_PARTIAL_OR_CHANGED_TRANCHE"
+    },
+    {
+      "id": "unowned-reduction",
+      "unit": "0.1",
+      "fills": [
+        "0.5"
+      ],
+      "owned": "0.59",
+      "blocker": "TC2_PYRAMID_OWNED_QUANTITY_CHANGED"
+    }
+  ],
+  "fractals": [
+    {
+      "id": "five",
+      "extrema": [
+        112,
+        111,
+        108,
+        110,
+        111
+      ],
+      "center": 2
+    },
+    {
+      "id": "six-adjacent-ties",
+      "extrema": [
+        112,
+        111,
+        108,
+        108,
+        110,
+        111
+      ],
+      "center": 3
+    },
+    {
+      "id": "seven-separated-ties",
+      "extrema": [
+        112,
+        111,
+        108,
+        110,
+        108,
+        110,
+        111
+      ],
+      "center": 4
+    },
+    {
+      "id": "nine-ties-and-inner-bars",
+      "extrema": [
+        112,
+        111,
+        108,
+        108,
+        110,
+        108,
+        108,
+        110,
+        111
+      ],
+      "center": 6
+    }
+  ],
+  "course": [
+    {
+      "stage": "W3_EXTENSION",
+      "ratio": 1.09,
+      "target": null
+    },
+    {
+      "stage": "W3_EXTENSION",
+      "ratio": 1.1,
+      "target": 10
+    },
+    {
+      "stage": "W3_EXTENSION",
+      "ratio": null,
+      "target": null
+    },
+    {
+      "stage": "W5",
+      "ratio": 2.0,
+      "target": 6
+    },
+    {
+      "stage": "W5",
+      "ratio": 1.5,
+      "target": 8
+    },
+    {
+      "stage": "W5",
+      "ratio": 1.62,
+      "target": null
+    },
+    {
+      "stage": "W5",
+      "ratio": null,
+      "target": null
+    }
+  ],
+  "balance_line": [
+    {
+      "id": "local-base-not-old-global-trough",
+      "highs": [
+        115,
+        95,
+        110,
+        108,
+        106
+      ],
+      "base": 4,
+      "reference": 3,
+      "trigger": 108.1
+    },
+    {
+      "id": "newer-rising-high-does-not-move-level",
+      "highs": [
+        115,
+        95,
+        110,
+        106,
+        107
+      ],
+      "base": 3,
+      "reference": 2,
+      "trigger": 110.1
+    }
+  ],
+  "thumb": [
+    {
+      "id": "weak-two-squats",
+      "highs": [
+        10,
+        11,
+        10.8,
+        12
+      ],
+      "lows": [
+        8,
+        9,
+        9.2,
+        10
+      ],
+      "volumes": [
+        100,
+        200,
+        50,
+        400
+      ],
+      "strength": "WEAK",
+      "colours": [
+        "OTHER",
+        "SQUAT",
+        "SQUAT"
+      ]
+    },
+    {
+      "id": "ideal-colours-use-immediate-previous-bar",
+      "highs": [
+        10,
+        11,
+        10.8,
+        12
+      ],
+      "lows": [
+        8,
+        9,
+        10.7,
+        10
+      ],
+      "volumes": [
+        100,
+        200,
+        50,
+        400
+      ],
+      "strength": "IDEAL_MIXED",
+      "colours": [
+        "OTHER",
+        "SQUAT",
+        "GREEN"
+      ]
+    },
+    {
+      "id": "volume-shortcut-does-not-invent-flat-mfi-colour",
+      "highs": [
+        10,
+        13,
+        18
+      ],
+      "lows": [
+        8,
+        9,
+        10
+      ],
+      "volumes": [
+        100,
+        200,
+        400
+      ],
+      "strength": "UNCONFIRMED_FLAT_MFI",
+      "colours": [
+        "OTHER",
+        "MFI_UNCHANGED",
+        "MFI_UNCHANGED"
+      ]
+    }
+  ]
+}

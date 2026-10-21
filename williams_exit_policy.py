@@ -31,6 +31,7 @@ def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_a
                        *, window=5, fee_allowance=.0035, break_even=True):
     """TC2 PDF158/163/165: verified 3/5-bar and confirmed fractal stops only.
 
+    window=None selects only the confirmed-fractal component of this policy.
     Legacy keyword arguments remain accepted, but *never* authorize automatic
     1R/break-even. A favorable mark move without a book structure does nothing.
     """
@@ -39,7 +40,7 @@ def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_a
     long = side in {"LONG", "BUY"}
     if not all(isfinite(v) and v > 0 for v in (old_stop, mark, tick)):
         return None
-    if window not in (3, 5) or not isfinite(fee_allowance) or fee_allowance < 0:
+    if window not in (None, 3, 5) or not isfinite(fee_allowance) or fee_allowance < 0:
         return None
     if any(not all(isfinite(v) and v > 0 for v in (b.h, b.l)) or b.h < b.l for b in bars):
         return None
@@ -56,7 +57,7 @@ def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_a
         ):
             proposals.append({"stop": price, "reason": reason})
 
-    if len(bars) >= window and (opened_at <= 0 or bars[-1].t + 3_600_000 > opened_at):
+    if window is not None and len(bars) >= window and (opened_at <= 0 or bars[-1].t + 3_600_000 > opened_at):
         offer(min(b.l for b in bars[-window:])-tick if long else max(b.h for b in bars[-window:])+tick,
               f"TC2_LAST_{window}_CLOSED_BARS")
     for i in range(len(bars)-3, 1, -1):
@@ -67,11 +68,18 @@ def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_a
         value = lambda j: bars[j].l if long else bars[j].h
         if value(i+1) == extreme:
             continue
-        while start > 0 and value(start-1) == extreme:
-            start -= 1
-        if start < 2 or bars[start].t < opened_at:
+        count, j = 0, i-1
+        while j >= 0 and count < 2:
+            if value(j)==extreme:
+                start=j
+            elif value(j)>extreme if long else value(j)<extreme:
+                count+=1
+            else:
+                break
+            j-=1
+        if count<2 or bars[start].t < opened_at:
             continue
-        if all((value(j)>extreme if long else value(j)<extreme) for j in (start-2,start-1,i+1,i+2)):
+        if all((value(j)>extreme if long else value(j)<extreme) for j in (i+1,i+2)):
             before = len(proposals)
             offer(extreme-tick if long else extreme+tick,"CONFIRMED_H1_FRACTAL")
             if len(proposals) > before:

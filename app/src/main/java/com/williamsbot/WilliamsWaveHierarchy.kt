@@ -67,7 +67,14 @@ internal data class WilliamsWaveHierarchy(
         val byId=scenarios.associateBy { it.id }
         fun path(node:String,index:Int):Boolean {
             if (index==williamsRequiredWaveFrames.lastIndex) return true
-            return links.any { it.parent==node && byId[it.child]?.frame==williamsRequiredWaveFrames[index+1] && path(it.child,index+1) }
+            val next=williamsRequiredWaveFrames[index+1]
+            return links.any {
+                val frame=byId[it.child]?.frame
+                it.parent==node && frame!=null &&
+                    williamsWaveFrames.getValue(byId.getValue(node).frame)>williamsWaveFrames.getValue(frame) &&
+                    williamsWaveFrames.getValue(frame)>=williamsWaveFrames.getValue(next) &&
+                    path(it.child,if(frame==next) index+1 else index)
+            }
         }
         return scenarios.any { it.frame=="1d" && path(it.id,0) }
     }
@@ -76,6 +83,7 @@ internal data class WilliamsWaveHierarchy(
         .put("scenarios", JSONArray(scenarios.map { it.toJson() }))
         .put("links", JSONArray(links.map { it.toJson() })).put("frame_errors", JSONObject(frameErrors))
         .put("frame_candle_counts",JSONObject(frameCandleCounts)).put("contained_chain_observed",containedChain())
+        .put("analysed_frames",JSONArray(frameCandleCounts.keys.sortedByDescending { williamsWaveFrames.getValue(it) }))
         .put("full_history",false).put("can_place_orders",false)
         .put("adaptive_history",adaptiveHistory ?: JSONObject().put("status","NOT_YET_ANALYSED").put("can_place_orders",false))
         .put("complex_wave_patterns", if(complexStructures.isNotEmpty()) JSONArray(complexStructures.take(48)) else JSONArray(scenarios.filter { it.anchors.size >= 6 }
@@ -312,7 +320,6 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
     val scenarios = mutableListOf<WilliamsWaveScenario>()
     val warnings = mutableListOf<String>()
     for ((frame,bars) in valid) {
-        if (frame !in williamsRequiredWaveFrames) continue
         val hypotheses = williamsHypothesesFromAnchors(frame,bars,
             confirmedWilliamsWaveAnchors(bars,williamsWaveFrames.getValue(frame)))
         for (h in hypotheses) {
@@ -340,9 +347,8 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
     }
     val structures=mutableListOf<JSONObject>()
     val anchorsByFrame=valid.mapValues { (frame,bars)->confirmedWilliamsWaveAnchors(bars,williamsWaveFrames.getValue(frame)) }
-    for(frame in williamsRequiredWaveFrames) {
-        if(frame !in valid) continue
-        val childFrame=williamsRequiredWaveFrames.filter { it in valid && williamsWaveFrames.getValue(it)<williamsWaveFrames.getValue(frame) }
+    for(frame in valid.keys) {
+        val childFrame=valid.keys.filter { williamsWaveFrames.getValue(it)<williamsWaveFrames.getValue(frame) }
             .maxByOrNull { williamsWaveFrames.getValue(it) }.orEmpty()
         val points=anchorsByFrame.getValue(frame)
         for(direction in listOf("UP","DOWN")) for(evidence in detectWilliamsComplexWave(points,direction,asOf)) {

@@ -1177,6 +1177,8 @@ def test_final_entry_preflight_blocks_expired_or_already_crossed_williams_trigge
     )
     assert _pending_entry_preflight_reason(pending, intent, 96.9, now_ms=2000) == "long_setup_invalidated_before_trigger"
     assert _pending_entry_preflight_reason(pending, intent, 99.9, now_ms=5000) == "pending_signal_expired"
+    assert _pending_entry_preflight_reason(pending,intent,float("nan"),now_ms=2000)=="pending_signal_trigger_stop_or_market_price_invalid"
+    assert _pending_entry_preflight_reason(pending,intent,float("inf"),now_ms=2000)=="pending_signal_trigger_stop_or_market_price_invalid"
 
     short_intent = SimpleNamespace(signal_id="ETHUSDT:1h:SUPER_AO:1000", side="SELL")
     short_pending = {

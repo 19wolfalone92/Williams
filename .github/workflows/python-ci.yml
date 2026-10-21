@@ -6,12 +6,18 @@ on:
     paths:
       - "*.py"
       - "tests/**"
+      - "docs/williams_book_rule_registry.json"
+      - "tools/audit_book_rule_registry.py"
+      - "app/src/test/resources/williams_book_rules_contract.json"
       - "requirements.txt"
       - ".github/workflows/**"
   pull_request:
     paths:
       - "*.py"
       - "tests/**"
+      - "docs/williams_book_rule_registry.json"
+      - "tools/audit_book_rule_registry.py"
+      - "app/src/test/resources/williams_book_rules_contract.json"
       - "requirements.txt"
       - ".github/workflows/**"
   workflow_dispatch:
@@ -42,6 +48,9 @@ jobs:
         run: python -m ruff check --select F821,F822,F823,E9 .
       - name: Run release contract gate
         run: python3 ci_release_gate.py
+
+      - name: Validate book source and regression links (not whole-book approval)
+        run: python3 tools/audit_book_rule_registry.py
 
       - name: Compile production Python
         run: |

@@ -28,12 +28,12 @@ internal data class WilliamsNtdBalanceEvidence(
 /** All bars passed here MUST be actual exchange-closed candles. */
 internal fun williamsNtdBalanceLine(
     bars: List<WilliamsNtdBar>, side: String, tick: Double,
-    lookback: Int = 20
+    lookback: Int = Int.MAX_VALUE
 ): WilliamsNtdBalanceEvidence {
     fun blocked(reason: String) = WilliamsNtdBalanceEvidence(side,"BLOCKED",reason=reason)
     if (side !in listOf("LONG","SHORT")) return blocked("INVALID_SIDE")
     if (!tick.isFinite() || tick <= 0.0) return blocked("INVALID_TICK")
-    if (bars.size < 5 || lookback < 3) return blocked("INSUFFICIENT_BARS")
+    if (bars.size < 3 || lookback < 3) return blocked("INSUFFICIENT_BARS")
     val last=bars.last()
     val prev=bars[bars.lastIndex-1]
     if (!listOf(last.ao,last.ac,prev.ao,prev.ac).all { it.isFinite() })
@@ -45,15 +45,18 @@ internal fun williamsNtdBalanceLine(
     }
     val long = side == "LONG"
     fun selected(b: WilliamsNtdBar) = if (long) b.h else b.l
-    val start = maxOf(1,bars.size-lookback)
-    val candidates = (start..bars.lastIndex).filter { i ->
+    val start = maxOf(0,bars.size-lookback)
+    if((start..bars.lastIndex).any { i ->
         val b=bars[i]
-        listOf(b.h,b.l,b.jaw,b.teeth,b.lips).all { it.isFinite() } &&
-            b.l>0 && b.h>=b.l && minOf(b.jaw,b.teeth,b.lips)>0
+        !b.h.isFinite() || !b.l.isFinite() || b.l<=0 || b.h<b.l
+    }) return blocked("INVALID_PRICE_IN_FORMATION")
+    if(listOf(last.jaw,last.teeth,last.lips).any { !it.isFinite() || it<=0 }) return blocked("NO_VALID_CURRENT_MOUTH")
+    var base=bars.lastIndex
+    for(i in bars.lastIndex-1 downTo start) {
+        val p=selected(bars[i]);val current=selected(bars[base])
+        if(if(long) p<current else p>current) base=i
+        else if(if(long) p>current else p<current) break
     }
-    if(candidates.isEmpty()) return blocked("NO_VALID_BASE")
-    val base = if (long) candidates.minWithOrNull(compareBy<Int> { selected(bars[it]) }.thenByDescending { it })!!
-        else candidates.maxWithOrNull(compareBy<Int> { selected(bars[it]) }.thenBy { it })!!
     val basePrice=selected(bars[base])
     // NTD PDF p104 Fig 8-9(D) / p108 Fig 8-20(D): it is the
     // SIGNAL reference bar's position relative to Jaw, not the base
@@ -63,7 +66,7 @@ internal fun williamsNtdBalanceLine(
     var count=0
     var prior=basePrice
     var ref=-1
-    val left=maxOf(0,base-2*lookback)
+    val left=start
     for (i in base-1 downTo left) {
         val price=selected(bars[i])
         if (!price.isFinite() || price<=0) return blocked("INVALID_PRICE_IN_FORMATION")

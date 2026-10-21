@@ -109,7 +109,12 @@ class WaveHierarchy:
         def path(node,index):
             if index==len(REQUIRED_FRAMES)-1:
                 return True
-            return any(p==node and by_id.get(c) and by_id[c].frame==REQUIRED_FRAMES[index+1] and path(c,index+1)
+            next_frame=REQUIRED_FRAMES[index+1]
+            # A real H4/H2 (or other available resolution) may sit between
+            # the required frames. Its insertion must not erase the chain.
+            return any(p==node and by_id.get(c) and
+                       FRAME_MS[by_id[node].frame]>FRAME_MS[by_id[c].frame]>=FRAME_MS[next_frame] and
+                       path(c,index+1 if by_id[c].frame==next_frame else index)
                        for p,c in edges)
         contained=any(s.frame=="1d" and path(s.scenario_id,0) for s in self.scenarios)
         complex_patterns = []
@@ -128,6 +133,7 @@ class WaveHierarchy:
                               "schema_version": 1,
                               "wave_labels": "HYPOTHESES_NOT_CERTAINTY",
                               "chain": list(REQUIRED_FRAMES),"contained_chain_observed":contained,
+                              "analysed_frames":sorted(self.frame_candle_counts,key=lambda f:-FRAME_MS[f]),
                               "full_history":False,"can_place_orders":False,
                               "squat_volume_input":"KLINE_BASE_VOLUME_PROXY_NOT_CANONICAL_TICK_VOLUME"}
 
@@ -408,8 +414,6 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) ->
         except (ValueError, TypeError, OverflowError) as exc:
             errors[frame] = str(exc)
     for frame, bars in valid.items():
-        if frame not in REQUIRED_FRAMES:
-            continue  # analytical resolution is not automatic parent genealogy
         hypotheses = hypotheses_from_anchors(frame, bars, confirmed_wave_anchors(bars, FRAME_MS[frame]))
         for h in hypotheses:
             # A daily candle is not fabricated up to the current hour. The
@@ -442,9 +446,8 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) ->
                                  "can_reverse": False})
     structures=[]
     anchors_by_frame={frame:confirmed_wave_anchors(bars,FRAME_MS[frame]) for frame,bars in valid.items()}
-    for frame in REQUIRED_FRAMES:
-        if frame not in valid:continue
-        lower=[f for f in REQUIRED_FRAMES if f in valid and FRAME_MS[f]<FRAME_MS[frame]]
+    for frame in valid:
+        lower=[f for f in valid if FRAME_MS[f]<FRAME_MS[frame]]
         child_frame=max(lower,key=lambda f:FRAME_MS[f]) if lower else ""
         points=anchors_by_frame[frame]
         for direction in ("UP","DOWN"):

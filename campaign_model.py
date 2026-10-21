@@ -16,10 +16,10 @@ Book-alignment:
   opposite/exhaustion signals govern the campaign exit.
 
 Risk adaptation:
-The book's reverse-pyramid quantity ratios are 1:5:4:3:2.  Williams applies
-those as *risk-budget weights* here rather than blindly copying historical
-contract/share counts.  Every live campaign remains bounded by the portfolio
-risk budget.
+The book's 1:5:4:3:2 values are contract/share QUANTITY ratios. New TC2
+campaigns pin that policy and derive every tranche from the actual first
+fill. Risk/margin ceilings can veto a tranche; they do not change its ratio.
+Older campaigns retain their previously persisted allocation semantics.
 """
 
 from __future__ import annotations
