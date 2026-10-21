@@ -800,6 +800,10 @@ internal class NativeFuturesCampaignCoordinator(
     @Volatile private var structuralStopRecoveryProvider:
         ((String, String, Double, Double, Double) -> RecoveredStructuralStop?)? = null
     private val intentsKey = "futures_campaign_intents_v2"
+    @Volatile private var protectionObservationsJson = "[]"
+    @Volatile private var externalOrdersJson = "[]"
+
+    fun protectionSnapshot(): JSONArray = JSONArray(protectionObservationsJson)
 
     /**
      * Configure H1 structural-stop recovery before the first reconciliation. This
@@ -917,15 +921,20 @@ internal class NativeFuturesCampaignCoordinator(
         verifiedRiskCapManagementAtMs = 0L
         state = State.RECONCILE_REQUIRED
         lastBlocker = "exchange_reconciliation_in_progress"
+        externalOrdersJson = "[]"
+        var safetyAdapter: BinanceUsdMFuturesTestnetAdapter? = null
+        var safetyIntents: JSONArray? = null
+        val entryExecutions = mutableMapOf<String, JSONObject>()
         try {
             // Adapter construction can fail too (for example, credentials/storage
             // becoming unavailable during recovery). Keep it inside this guarded
             // region so the failure is recorded as the real blocker instead of
             // leaving the coordinator permanently reporting "in progress".
             val adapter = adapterFactory()
+            safetyAdapter = adapter
             adapter.serverTime()
             adapter.requireOneWayMode()
-            adapter.account() // verifies authenticated Futures account access
+            val exchangeAccount = adapter.account() // verifies authenticated Futures account access
             val exchangePositions = adapter.positions()
             val openBySymbol = linkedMapOf<String, JSONObject>()
             for (i in 0 until exchangePositions.length()) {
@@ -947,6 +956,7 @@ internal class NativeFuturesCampaignCoordinator(
             }
 
             val persisted = intents()
+            safetyIntents = persisted
             // Migrate legacy snapshots conservatively. Actual order state and campaign
             // lifecycle must be stored separately: FILLED does not mean a campaign is flat.
             for (i in 0 until persisted.length()) {
@@ -1007,7 +1017,6 @@ internal class NativeFuturesCampaignCoordinator(
             }
             // A triggered conditional's matching-engine child has its own client id.
             // Bind it through the signed parent actualOrderId, never through a prefix.
-            val entryExecutions = mutableMapOf<String, JSONObject>()
             for (i in 0 until persisted.length()) {
                 val owner = persisted.optJSONObject(i) ?: continue
                 val symbol = owner.optString("symbol")
@@ -1065,6 +1074,7 @@ internal class NativeFuturesCampaignCoordinator(
             // A manual or orphaned order can create exposure without any local intent.
             // Block startup if any account-wide open order cannot be tied to this bot's
             // durable intent journal; never silently adopt or duplicate it.
+            val externalOrders = JSONArray()
             val allOpenOrders = adapter.allOpenOrders()
             for (i in 0 until allOpenOrders.length()) {
                 val order = allOpenOrders.optJSONObject(i)
@@ -1077,9 +1087,7 @@ internal class NativeFuturesCampaignCoordinator(
                         !isOwnedClientOrderForSymbol(symbol, clientId, activeEntryClientIdsBySymbol) &&
                         !isOwnedClientOrderForSymbol(symbol, clientId, activeExitClientIdsBySymbol))
                 ) {
-                    throw IllegalStateException(
-                        "Unmanaged Futures open order detected ($symbol/$clientId); cancel/reconcile manually before trading"
-                    )
+                    externalOrders.put(JSONObject(order.toString()).put("observation_kind", "EXTERNAL_OPEN_ORDER"))
                 }
             }
             val allOpenAlgoOrders = adapter.allOpenAlgoOrders()
@@ -1092,11 +1100,14 @@ internal class NativeFuturesCampaignCoordinator(
                     (!isOwnedClientOrderForSymbol(symbol, clientId, activeEntryClientIdsBySymbol) &&
                         !isOwnedClientOrderForSymbol(symbol, clientId, activeProtectionClientIdsBySymbol))
                 ) {
-                    throw IllegalStateException(
-                        "Unmanaged Futures conditional/algo order detected ($symbol/$clientId); reconcile manually before trading"
-                    )
+                    externalOrders.put(JSONObject(order.toString()).put("observation_kind", "EXTERNAL_ALGO_ORDER"))
                 }
             }
+            // Unknown orders fence NEW exposure. They must never short-circuit
+            // verification/protection of positions already open on the account.
+            externalOrdersJson = externalOrders.toString()
+            val externalOrderBlocker = if (externalOrders.length() > 0)
+                "External Futures orders require ownership reconciliation; position protection was audited separately" else null
             var hasPendingExit = false
             var hasPendingAddition = false
             var anyUnprotected = false
@@ -1356,6 +1367,10 @@ internal class NativeFuturesCampaignCoordinator(
                         openBySymbol[symbol] = confirmedPosition
                             ?: throw IllegalStateException("Binance omitted $symbol after confirming a non-zero position amount")
                     }
+                    entryExecutions[clientId]?.let { fill ->
+                        intent.put("order_status", fill.optString("status"))
+                            .put("exchange_status", fill.optString("status"))
+                    }
                     intent.put("campaign_status", "POSITION_OPEN")
                         .put("last_reconciled_ms", clock())
                     continue
@@ -1458,6 +1473,10 @@ internal class NativeFuturesCampaignCoordinator(
                 val direction = if (amount > 0.0) "LONG" else "SHORT"
                 val algos = protectiveOrdersBySymbol.getOrPut(symbol) { adapter.openAlgoOrders(symbol) }
                 val latestIntentIndex = latestEntryIndexBySymbol[symbol]
+                val manualProtection = findFullPositionStop(adapter, algos, symbol, direction,
+                    position.getString("positionAmt").toBigDecimal().abs())?.takeIf { order ->
+                    !isOwnedClientOrderForSymbol(symbol, order.optString("clientAlgoId"), activeProtectionClientIdsBySymbol)
+                }
                 var matchingIntent = latestIntentIndex?.let { persisted.optJSONObject(it) }
                     ?.takeIf { intent ->
                         val clientId = intent.optString("client_id")
@@ -1532,6 +1551,14 @@ internal class NativeFuturesCampaignCoordinator(
                     }
                     verifiedOwner.put("confirmed_position_qty", liveQuantity.toPlainString())
                         .put("actual_entry_price", positionPrice.toString())
+                }
+                if (manualProtection != null) {
+                    // Protection is verified independently. Keep the exact prior
+                    // bot stop journal for reconciliation; do not adopt or cancel
+                    // an operator's order or pretend normal trailing is ready.
+                    matchingIntent?.put("protection_status", "EXTERNAL_PROTECTED")
+                        ?.put("external_protection_observed_at_ms", clock())
+                    continue
                 }
                 if (matchingIntent == null && latestIntentIndex == null) {
                     // The exchange is authoritative, but an orphan position must not
@@ -2030,6 +2057,49 @@ internal class NativeFuturesCampaignCoordinator(
                 }
             }
 
+            // Audit every live position independently of intent ownership. Keep the
+            // complete signed order evidence, including manual SLs, for diagnostics.
+            val protectionObservations = JSONArray()
+            for ((symbol, position) in openBySymbol) {
+                val quantity = position.getString("positionAmt").toBigDecimal()
+                val direction = if (quantity.signum() > 0) "LONG" else "SHORT"
+                val owner = latestEntryIndexBySymbol[symbol]?.let { persisted.optJSONObject(it) }
+                val ordersAttempt = runCatching { adapter.openAlgoOrders(symbol) }
+                val orders = ordersAttempt.getOrNull()
+                val fullStop = orders?.let { findFullPositionStop(adapter, it, symbol, direction, quantity.abs()) }
+                val owned = fullStop != null && owner != null &&
+                    fullStop.optString("clientAlgoId") in setOf(owner.optString("protection_client_id"),
+                        owner.optString("previous_protection_client_id"))
+                val observation = JSONObject().put("symbol", symbol).put("direction", direction)
+                    .put("position_quantity", quantity.abs().toPlainString())
+                    .put("position_entry", position.optString("entryPrice"))
+                    .put("observed_at_ms", clock()).put("protection_confirmed", fullStop != null)
+                    .put("status", if (fullStop == null) "UNCONFIRMED" else if (owned) "PROTECTED" else "EXTERNAL_PROTECTED")
+                    .put("strategy_ownership_verified", owner?.optBoolean("strategy_ownership_verified", false) == true)
+                    .put("stop", fullStop?.optString("triggerPrice")?.toDoubleOrNull() ?: JSONObject.NULL)
+                    .put("stop_order", fullStop ?: JSONObject.NULL)
+                    .put("open_algo_orders", orders ?: JSONObject.NULL)
+                    .put("query_error", ordersAttempt.exceptionOrNull()?.message ?: JSONObject.NULL)
+                val entry = position.optString("entryPrice").toDoubleOrNull()
+                val stop = fullStop?.optString("triggerPrice")?.toDoubleOrNull()
+                val equity = parseFuturesAccountSnapshot(exchangeAccount)?.equityUsdt
+                val risk = if (entry != null && stop != null && equity != null && equity > 0.0)
+                    (if (direction == "LONG") entry - stop else stop - entry).coerceAtLeast(0.0) * quantity.abs().toDouble() / equity else null
+                observation.put("price_risk_pct", risk ?: JSONObject.NULL)
+                protectionObservations.put(observation)
+                // Only a campaign whose fill/quantity was independently attributed
+                // above can request an automatic close. Orphans stay observation-only.
+                if (fullStop == null && owner != null && owner.optBoolean("strategy_ownership_verified", false) &&
+                    owner.optString("direction") == direction && campaignLifecycleStatus(owner) in ACTIVE_CAMPAIGN_STATUSES &&
+                    owner.optString("confirmed_position_qty").toBigDecimalOrNull()?.compareTo(quantity.abs()) == 0 &&
+                    owner.optString("actual_entry_price").toBigDecimalOrNull()?.compareTo(position.optString("entryPrice").toBigDecimalOrNull() ?: java.math.BigDecimal.ZERO) == 0 &&
+                    (0 until requiredSafetyExits.length()).none { requiredSafetyExits.getJSONObject(it).optString("symbol") == symbol }
+                ) requiredSafetyExits.put(JSONObject().put("symbol", symbol).put("direction", direction)
+                    .put("quantity", quantity.abs().toPlainString()).put("entry_client_id", owner.optString("client_id"))
+                    .put("reason", "PROTECTION_UNCONFIRMED"))
+            }
+            protectionObservationsJson = protectionObservations.toString()
+
             // Once Binance reports the symbol flat, prior position intents are terminal.
             for (i in 0 until persisted.length()) {
                 val intent = persisted.optJSONObject(i) ?: continue
@@ -2121,6 +2191,7 @@ internal class NativeFuturesCampaignCoordinator(
             verifiedRiskCapManagementAtMs = if (verifiedOverCap) clock() else 0L
             state = when {
                 anyUnprotected -> State.POSITION_UNPROTECTED
+                externalOrderBlocker != null -> State.RECONCILE_REQUIRED
                 actualRiskAuditBlocked -> State.RECONCILE_REQUIRED
                 hasPendingExit -> State.EXIT_PENDING
                 hasPendingEntry -> State.ENTRY_PENDING
@@ -2129,6 +2200,7 @@ internal class NativeFuturesCampaignCoordinator(
             }
             if (!anyUnprotected) {
                 lastBlocker = when {
+                    externalOrderBlocker != null -> externalOrderBlocker
                     actualRiskAuditBlocked ->
                         actualRiskAuditBlocker ?: "Actual Futures position risk audit is unresolved"
                     state == State.ENTRY_PENDING -> "exchange_confirmed_pending_entry_or_fill_not_yet_resolved"
@@ -2137,7 +2209,10 @@ internal class NativeFuturesCampaignCoordinator(
                 }
             }
             JSONObject()
-                .put("ok", !anyUnprotected && !actualRiskAuditBlocked && !hasPendingExit)
+                .put("ok", !anyUnprotected && externalOrderBlocker == null && !actualRiskAuditBlocked && !hasPendingExit)
+                .put("account_snapshot_verified", true)
+                .put("protection_observations", protectionObservations)
+                .put("external_orders", externalOrders)
                 .put("actual_risk_audit_blocked", actualRiskAuditBlocked)
                 .put("protected_over_cap_management_allowed", verifiedOverCap)
                 .put("actual_risk_audit_blocker", actualRiskAuditBlocker ?: JSONObject.NULL)
@@ -2153,10 +2228,22 @@ internal class NativeFuturesCampaignCoordinator(
         } catch (failure: Exception) {
             state = State.RECONCILE_REQUIRED
             lastBlocker = failure.message ?: failure.javaClass.simpleName
+            // A failure in an unrelated order/risk audit must not strand a
+            // freshly attributed live fill without protection. This fallback
+            // uses only fills verified during THIS reconciliation, never an
+            // old quantity or a client-id prefix as ownership proof.
+            val safety = runCatching {
+                val adapter = safetyAdapter ?: return@runCatching JSONArray()
+                val rows = safetyIntents ?: return@runCatching JSONArray()
+                protectionAuditAfterFailure(adapter, rows, entryExecutions)
+            }.getOrDefault(JSONArray())
             JSONObject()
                 .put("ok", false)
                 .put("engine", "USD_M_FUTURES_TESTNET")
                 .put("state", state.name)
+                .put("required_safety_exits", safety)
+                .put("protection_observations", protectionSnapshot())
+                .put("external_orders", JSONArray(externalOrdersJson))
                 .put("blocker", lastBlocker)
         } finally {
             reconciliationFinishedAtMs = clock()
@@ -2164,23 +2251,110 @@ internal class NativeFuturesCampaignCoordinator(
         }
     }
 
-    /** Revalidate an observed liquidation breach before a distinct reduce-only exit. */
+    private fun protectionAuditAfterFailure(
+        adapter: BinanceUsdMFuturesTestnetAdapter, rows: JSONArray,
+        fills: Map<String, JSONObject>
+    ): JSONArray {
+        val required = JSONArray()
+        if (fills.isEmpty()) return required
+        adapter.requireOneWayMode()
+        val livePositions = adapter.positions()
+        val observations = JSONArray()
+        for (position in (0 until livePositions.length()).mapNotNull { livePositions.optJSONObject(it) }) {
+            val symbol = position.optString("symbol")
+            if (symbol !in allowedSymbols || position.optString("positionSide", "BOTH") != "BOTH") continue
+            val amount = position.optString("positionAmt").toBigDecimalOrNull() ?: continue
+            if (amount.signum() == 0) continue
+            val direction = if (amount.signum() > 0) "LONG" else "SHORT"
+            val owner = latestEntryIntentIndex(rows, symbol)?.let { rows.optJSONObject(it) } ?: continue
+            val cid = owner.optString("client_id")
+            if (!owner.optBoolean("strategy_ownership_verified", false) ||
+                owner.optString("direction") != direction || campaignLifecycleStatus(owner) !in ACTIVE_CAMPAIGN_STATUSES ||
+                listOf("W2E_", "W2H_", "W5E_", "W2F_").none { cid.startsWith(it) }) continue
+            // A reduced campaign needs the complete exit ledger from the normal
+            // audit. Never infer its ownership from stale remainder metadata.
+            if ((0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.any {
+                    it.optString("intent_role") == "EXIT" && it.optString("entry_client_id") == cid
+                }) continue
+            val components = (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.filter {
+                it.optString("client_id") == cid || it.optString("intent_role") == "ADD_ON" && it.optString("entry_client_id") == cid
+            }.mapNotNull { fills[it.optString("client_id")] }
+            if (fills[cid] == null || components.isEmpty()) continue
+            var quantity = java.math.BigDecimal.ZERO
+            var cost = java.math.BigDecimal.ZERO
+            for (fill in components) {
+                val q = fill.getString("executedQty").toBigDecimal()
+                val price = fill.getString("avgPrice").toBigDecimal()
+                if (q.signum() < 0 || q.signum() > 0 && price.signum() <= 0) error("Invalid safety fill")
+                quantity += q; cost += q * price
+            }
+            if (quantity.signum() <= 0 || quantity.compareTo(amount.abs()) != 0) continue
+            val entry = position.optString("entryPrice").toDoubleOrNull() ?: continue
+            val expected = cost.divide(quantity, java.math.MathContext.DECIMAL128).toDouble()
+            if (!entry.isFinite() || entry <= 0 || kotlin.math.abs(expected - entry) > maxOf(1e-8, expected * 1e-8)) continue
+            owner.put("confirmed_position_qty", amount.abs().toPlainString()).put("actual_entry_price", entry.toString())
+                .put("order_status", fills.getValue(cid).optString("status"))
+                .put("exchange_status", fills.getValue(cid).optString("status"))
+                .put("campaign_status", "POSITION_OPEN")
+            val algos = runCatching { adapter.openAlgoOrders(symbol) }.getOrNull()
+            val stop = algos?.let { findFullPositionStop(adapter, it, symbol, direction, amount.abs()) }
+            val ownedStop = stop != null && stop.optString("clientAlgoId") in
+                setOf(owner.optString("protection_client_id"), owner.optString("previous_protection_client_id"))
+            observations.put(JSONObject().put("symbol", symbol).put("direction", direction)
+                .put("position_quantity", amount.abs().toPlainString()).put("position_entry", entry.toString())
+                .put("observed_at_ms", clock()).put("protection_confirmed", stop != null)
+                .put("status", if (stop == null) "UNCONFIRMED" else if (ownedStop) "PROTECTED" else "EXTERNAL_PROTECTED")
+                .put("stop", stop?.optString("triggerPrice")?.toDoubleOrNull() ?: JSONObject.NULL)
+                .put("stop_order", stop ?: JSONObject.NULL).put("open_algo_orders", algos ?: JSONObject.NULL)
+                .put("strategy_ownership_verified", true))
+            if (stop == null) required.put(JSONObject().put("symbol", symbol).put("direction", direction)
+                .put("quantity", amount.abs().toPlainString()).put("entry_client_id", cid).put("reason", "PROTECTION_UNCONFIRMED"))
+        }
+        if (observations.length() > 0) {
+            saveIntents(rows)
+            protectionObservationsJson = observations.toString()
+        }
+        return required
+    }
+
+    /** Revalidate an observed protection failure before a distinct reduce-only exit. */
     fun executeRequiredSafetyExit(request: JSONObject): JSONObject = synchronized(lock) {
         val symbol = request.optString("symbol")
         val entryClientId = request.optString("entry_client_id")
         val rows = intents()
         val owner = latestEntryIntentIndex(rows, symbol)?.let { rows.optJSONObject(it) }
         val direction = runCatching { Direction.valueOf(request.optString("direction")) }.getOrNull()
-        if (request.optString("reason") != "LIQUIDATION_GUARD" || direction == null ||
+        val reason = request.optString("reason")
+        val protectionFailure = reason == "PROTECTION_UNCONFIRMED"
+        val ownedUnprotected = owner != null && owner.optBoolean("strategy_ownership_verified", false) &&
+            campaignLifecycleStatus(owner) in ACTIVE_CAMPAIGN_STATUSES &&
+            owner.optString("direction") == direction?.name
+        if (reason !in setOf("LIQUIDATION_GUARD", "PROTECTION_UNCONFIRMED") || direction == null ||
             symbol !in allowedSymbols || owner == null || entryClientId.isBlank() ||
             owner.optString("client_id") != entryClientId ||
-            !isManagedOpenPositionIntent(campaignLifecycleStatus(owner), owner.optString("direction"),
+            !(if (protectionFailure) ownedUnprotected else isManagedOpenPositionIntent(campaignLifecycleStatus(owner), owner.optString("direction"),
                 direction.name, owner.optString("protection_status"), owner.optString("protection_client_id"),
-                owner.optBoolean("strategy_ownership_verified", false))
+                owner.optBoolean("strategy_ownership_verified", false)))
         ) return@synchronized JSONObject().put("ok", false).put("safe_rejection", true)
             .put("blocker", "Safety exit requires the same current, verified and protected campaign")
 
-        val positions = adapterFactory().positions()
+        val adapter = adapterFactory()
+        adapter.requireOneWayMode()
+        if (protectionFailure) {
+            // Stop every possible remainder/addition before closing. A cancel
+            // racing a fill must be reconciled before the exit quantity is fixed.
+            val pending = (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.any {
+                it.optString("symbol") == symbol && it.optString("intent_role", "ENTRY") in setOf("ENTRY", "ADD_ON") &&
+                    exchangeOrderStatus(it) in activeStatuses
+            }
+            if (pending) {
+                val canceled = cancelPendingEntries("PROTECTION_FAILURE_CANCEL_EXPOSURE", symbol)
+                return@synchronized JSONObject().put("ok", false).put("state", state.name)
+                    .put("blocker", "Exposure cancellation checked; reconcile racing fills before safety exit")
+                    .put("cancellation", canceled)
+            }
+        }
+        val positions = adapter.positions()
         val live = (0 until positions.length()).mapNotNull { positions.optJSONObject(it) }
             .filter { it.optString("symbol") == symbol && it.optString("positionAmt").toDoubleOrNull()?.let { q -> q.isFinite() && q != 0.0 } == true }
         if (live.size != 1) return@synchronized JSONObject().put("ok", false)
@@ -2190,15 +2364,24 @@ internal class NativeFuturesCampaignCoordinator(
             request.optString("quantity").toBigDecimalOrNull()?.compareTo(amount.abs()) != 0
         ) return@synchronized JSONObject().put("ok", false).put("safe_rejection", true)
             .put("blocker", "Safety exit quantity/direction changed; fresh reconciliation required")
-        val check = assessFuturesLiquidationProtection(direction.name, owner.optString("protective_stop"),
-            live.single().opt("liquidationPrice"))
-        if (check.status != "UNSAFE") return@synchronized JSONObject().put("ok", false)
-            .put("safe_rejection", true).put("blocker", check.blocker ?: "Liquidation stop buffer recovered; exit not submitted")
+        if (protectionFailure) {
+            val fullStop = runCatching { findFullPositionStop(adapter, adapter.openAlgoOrders(symbol),
+                symbol, direction.name, amount.abs()) }.getOrNull()
+            if (fullStop != null) return@synchronized JSONObject().put("ok", true)
+                .put("safe_rejection", true).put("mutation_attempted", false)
+                .put("protection_retained", true).put("stop_order", fullStop)
+        } else {
+            val check = assessFuturesLiquidationProtection(direction.name, owner.optString("protective_stop"),
+                live.single().opt("liquidationPrice"))
+            if (check.status != "UNSAFE") return@synchronized JSONObject().put("ok", false)
+                .put("safe_rejection", true).put("blocker", check.blocker ?: "Liquidation stop buffer recovered; exit not submitted")
+        }
         val digest = java.security.MessageDigest.getInstance("SHA-256")
             .digest((symbol + ":" + entryClientId).toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }.take(24)
-        closePositionInternal(symbol, direction, amount.abs().toPlainString(), "W2X_LIQ_$digest",
-            "LIQUIDATION_GUARD", partialReduction=false, riskEmergencyVerified=true)
+        closePositionInternal(symbol, direction, amount.abs().toPlainString(),
+            (if (protectionFailure) "W2X_PROT_" else "W2X_LIQ_") + digest,
+            reason, partialReduction=false, riskEmergencyVerified=true)
     }
 
     /** Definite pre-order rejection. No exchange mutation was attempted. */
@@ -2714,15 +2897,29 @@ internal class NativeFuturesCampaignCoordinator(
                 val clientId = intent.optString("client_id")
                 var confirmedLiveOrderStatusForCancel: String? = null
                 try {
+                // Cancel the matching-engine remainder, not its finished algo parent.
+                val conditional = intent.optString("kind") in setOf(EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name)
+                val parent = if (conditional) adapter.queryAlgoOrder(symbol, clientId) else null
+                val childId = parent?.optString("actualOrderId")?.takeIf { it.isNotBlank() && it != "0" }
+                if (parent != null) check(parent.optString("symbol") == symbol && parent.optString("clientAlgoId") == clientId) {
+                    "Conditional cancellation parent identity mismatch"
+                }
+                val observedBeforeCancel = if (childId != null) adapter.orderById(symbol, childId)
+                    else parent ?: adapter.order(symbol, clientId)
+                if (childId != null) {
+                    check(observedBeforeCancel.optString("symbol") == symbol && observedBeforeCancel.optString("orderId") == childId &&
+                        observedBeforeCancel.optString("side") == parent?.optString("side")) { "Conditional cancellation child identity mismatch" }
+                    intent.put("conditional_actual_order_id", childId)
+                }
+                val observedBeforeStatus = observedBeforeCancel.optString("status").ifBlank { observedBeforeCancel.optString("algoStatus") }.uppercase(Locale.US)
+                if (observedBeforeStatus in ENTRY_ORDER_TERMINAL_STATUSES) {
+                    persistConfirmedCancellation(intent, symbol, clientId, observedBeforeStatus, confirmedOrder = observedBeforeCancel)
+                    continue
+                }
                 if (status == "CANCEL_SUBMISSION_UNKNOWN") {
                     // A previous cancellation may have reached Binance before process death.
                     // Query the exchange; never issue the same cancel again blindly.
-                    val observed = when (intent.optString("kind")) {
-                        EntryKind.LIMIT.name, EntryKind.MARKET.name -> runCatching { adapter.order(symbol, clientId) }.getOrNull()
-                        EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name ->
-                            runCatching { adapter.queryAlgoOrder(symbol, clientId) }.getOrNull()
-                        else -> throw IllegalStateException("Unknown pending-entry type; cannot reconcile cancellation")
-                    }
+                    val observed = observedBeforeCancel
                     val observedStatus = observed
                         ?.let { it.optString("status", it.optString("algoStatus", "")) }
                         ?.uppercase(Locale.US).orEmpty()
@@ -2748,14 +2945,14 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("cancel_reason", reason)
                     .put("cancel_attempt_at_ms", clock())
                 saveIntents(all)
-                val result = when (intent.optString("kind")) {
+                val result = if (childId != null) adapter.cancelOrderById(symbol, childId) else when (intent.optString("kind")) {
                     EntryKind.LIMIT.name, EntryKind.MARKET.name -> adapter.cancelOrder(symbol, clientId)
                     EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name -> adapter.cancelAlgoOrder(symbol, clientId)
                     else -> throw IllegalStateException("Unknown pending-entry type; cannot cancel safely")
                 }
                 // A successful DELETE response is not enough to declare cancellation:
                 // read back the exact client id and require a terminal exchange status.
-                val confirmed = when (intent.optString("kind")) {
+                val confirmed = if (childId != null) adapter.orderById(symbol, childId) else when (intent.optString("kind")) {
                     EntryKind.LIMIT.name, EntryKind.MARKET.name -> adapter.order(symbol, clientId)
                     EntryKind.STOP.name, EntryKind.TAKE_PROFIT.name -> adapter.queryAlgoOrder(symbol, clientId)
                     else -> throw IllegalStateException("Unknown pending-entry type; cannot confirm cancellation")
@@ -2985,7 +3182,7 @@ internal class NativeFuturesCampaignCoordinator(
     ): JSONObject = closePositionInternal(symbol,direction,quantity,clientOrderId,reason,
         partialReduction,riskEmergencyVerified=false)
 
-    /** Only the liquidation-remediation method may pass the private emergency capability. */
+    /** Only the revalidated safety method may pass the private emergency capability. */
     private fun closePositionInternal(
         symbol:String,direction:Direction,quantity:String,clientOrderId:String,reason:String,
         partialReduction:Boolean,riskEmergencyVerified:Boolean
@@ -3033,16 +3230,18 @@ internal class NativeFuturesCampaignCoordinator(
             return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
         }
         val manualExit = reason == "MANUAL_EXIT" || reason == "KILL_SWITCH"
+        val protectionEmergency = riskEmergencyVerified && reason == "PROTECTION_UNCONFIRMED"
         val latestIndex = latestEntryIntentIndex(intents, symbol)
         val managedEntry = latestIndex?.let { intents.optJSONObject(it) }
             ?.takeIf { row ->
                 row.optString("intent_role", "ENTRY") == "ENTRY" &&
-                    if (manualExit) {
+                    if (manualExit || protectionEmergency) {
                         // An explicit user close must remain possible when protection
                         // metadata was lost. It still requires a persisted active campaign
                         // and exact agreement with the exchange-confirmed position direction.
                         campaignLifecycleStatus(row) in ACTIVE_CAMPAIGN_STATUSES &&
                             (reason != "KILL_SWITCH" || row.optBoolean("strategy_ownership_verified", false)) &&
+                            (!protectionEmergency || row.optBoolean("strategy_ownership_verified", false)) &&
                             row.optString("direction").equals(direction.name, ignoreCase = true)
                     } else {
                         isManagedOpenPositionIntent(
@@ -3120,7 +3319,13 @@ internal class NativeFuturesCampaignCoordinator(
                     "$symbol automatic exit entry price no longer matches the confirmed campaign"
                 }
             }
-            if (!manualExit) {
+            if (protectionEmergency) {
+                val fullStop = runCatching { findFullPositionStop(adapterPreflight,
+                    adapterPreflight.openAlgoOrders(symbol), symbol, direction.name, liveAmount.abs()) }.getOrNull()
+                if (fullStop != null) return@synchronized JSONObject().put("ok", true)
+                    .put("safe_rejection", true).put("mutation_attempted", false)
+                    .put("protection_retained", true).put("stop_order", fullStop)
+            } else if (!manualExit) {
                 val expectedProtectionId = managedEntry!!.optString("protection_client_id")
                 val expectedStop = managedEntry!!.optString("protective_stop")
                 val openAlgos = adapterPreflight.openAlgoOrders(symbol)
@@ -3295,6 +3500,10 @@ internal class NativeFuturesCampaignCoordinator(
             }
             state = if (remainingProtectedPositions > 0) State.OPEN_PROTECTED else State.READY
             lastBlocker = null
+            if (riskEmergencyVerified) {
+                state = State.RECONCILE_REQUIRED
+                lastBlocker = "safety_exit_confirmed_fresh_account_reconciliation_required"
+            }
             JSONObject().put("ok", true).put("state", state.name).put("order", result)
                 .put("flat_confirmed", true).put("open_positions_remaining", remainingProtectedPositions)
                 .put("reason", reason)
@@ -3409,6 +3618,8 @@ internal class NativeFuturesCampaignCoordinator(
             .put("reconciliation_finished_at_ms", reconciliationFinishedAtMs)
             .put("pending_intents", pendingDetails.length())
             .put("pending_intent_details", pendingDetails)
+            .put("protection_observations", protectionSnapshot())
+            .put("external_orders", JSONArray(externalOrdersJson))
             .put("testnet_only", true)
             .put("position_sides", JSONArray().put("LONG").put("SHORT"))
     }
@@ -3455,6 +3666,23 @@ internal class NativeFuturesCampaignCoordinator(
             }
         }
         require(plan.clientId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client order ID" }
+    }
+
+    private fun findFullPositionStop(
+        adapter: BinanceUsdMFuturesTestnetAdapter, orders: JSONArray, symbol: String,
+        direction: String, quantity: java.math.BigDecimal
+    ): JSONObject? {
+        val references = mutableMapOf<String, Double?>()
+        return (0 until orders.length()).mapNotNull { orders.optJSONObject(it) }.firstOrNull { row ->
+            if (row.optString("symbol") != symbol ||
+                row.optString("orderType", row.optString("type")) != "STOP_MARKET") return@firstOrNull false
+            val basis = row.optString("workingType")
+            if (basis !in setOf("MARK_PRICE", "CONTRACT_PRICE")) return@firstOrNull false
+            val reference = if (references.containsKey(basis)) references[basis] else runCatching {
+                if (basis == "MARK_PRICE") adapter.markPrice(symbol) else adapter.contractPrice(symbol)
+            }.getOrNull().also { references[basis] = it }
+            reference != null && isFullPositionFuturesStop(row, symbol, direction, quantity, reference)
+        }
     }
 
     private fun findProtectiveStop(

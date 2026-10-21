@@ -108,6 +108,15 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         return value
     }
 
+    fun contractPrice(symbol: String): Double {
+        requireSymbol(symbol)
+        val body = request("GET", "/fapi/v2/ticker/price", mapOf("symbol" to symbol), signed = false)
+        val value = body.optString("price").toDoubleOrNull()
+            ?: throw IOException("Futures contract price response is malformed")
+        if (!value.isFinite() || value <= 0.0) throw IOException("Futures contract price is invalid")
+        return value
+    }
+
     fun klines(symbol: String, interval: String = "1h", limit: Int = 300): JSONArray {
         requireSymbol(symbol)
         require(interval in APPROVED_FUTURES_KLINE_INTERVALS) { "Unsupported USD-M Futures kline interval: $interval" }

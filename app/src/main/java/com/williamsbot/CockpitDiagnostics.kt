@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 /** Observations are read-only. This contract never authorizes an exchange mutation. */
 internal object CockpitDiagnostics {
-    const val VERSION = 10
+    const val VERSION = 11
     const val POSITION_TTL_MS = 15_000L
     const val QUOTE_TTL_MS = 60_000L
 
@@ -47,6 +47,11 @@ internal object CockpitDiagnostics {
         val positions = rows(status.optJSONArray("futures_positions"))
         val intents = rows(coordinator.optJSONArray("pending_intent_details"))
         val unprotected = positions.filter { p ->
+            !exchangeProtectionProven(p, coordinator, now) &&
+                (coordinator.has("protection_observations") ||
+                    intents.none { i -> matchesPosition(i, p) && protectionProven(i, now) })
+        }
+        val unmanaged = positions.filter { p ->
             intents.none { i -> matchesPosition(i, p) && protectionProven(i, now) }
         }
         val monitoring = status.optBoolean("running") && snapshotFresh &&
@@ -64,6 +69,10 @@ internal object CockpitDiagnostics {
         val reason = when {
             !status.optBoolean("running") -> "Движок остановлен"
             status.optBoolean("kill_switch_latched") -> "Аварийная блокировка новых операций"
+            snapshotFresh && unprotected.isNotEmpty() -> "Не подтверждена защита открытой позиции: " +
+                unprotected.joinToString { it.optString("symbol") } + ". Проверка защиты и аварийного выхода продолжается."
+            rows(coordinator.optJSONArray("external_orders")).isNotEmpty() ->
+                "На Binance есть внешние заявки. Стоп проверяется отдельно; новые входы заблокированы до сверки принадлежности позиции и заявок."
             dailyBaselineMissing -> "Не подтверждена суточная база риска Binance. " + resetExplanation
             status.optBoolean("paused") -> "Новые входы приостановлены; сопровождение продолжается"
             !coordinatorReady && coordinator.optString("blocker") == "exchange_reconciliation_in_progress" ->
@@ -89,7 +98,8 @@ internal object CockpitDiagnostics {
             .put("entry_reserved_risk_pct", if (riskBudgetKnown) reservedRisk else JSONObject.NULL)
             .put("entry_max_total_risk_pct", if (riskBudgetKnown) totalRiskLimit else JSONObject.NULL)
             .put("entry_risk_budget_remaining_pct", if (riskBudgetKnown) riskBudgetRemaining else JSONObject.NULL)
-            .put("position_management_ready", monitoring && unprotected.isEmpty())
+            .put("position_management_ready", monitoring && unprotected.isEmpty() && unmanaged.isEmpty())
+            .put("unmanaged_positions", JSONArray(unmanaged))
             .put("positions_snapshot_fresh", snapshotFresh)
             .put("unprotected_positions", JSONArray(unprotected))
             .put("pending_orders", intents.count { it.optString("campaign_status") in
@@ -111,6 +121,20 @@ internal object CockpitDiagnostics {
         intent.optString("role", "ENTRY") == "ENTRY" &&
             intent.optString("symbol") == position.optString("symbol") &&
             intent.optString("direction") == position.optString("direction")
+
+    fun exchangeProtectionProven(position: JSONObject, coordinator: JSONObject, now: Long): Boolean =
+        rows(coordinator.optJSONArray("protection_observations")).any { proof ->
+            proof.optString("symbol") == position.optString("symbol") &&
+                proof.optString("direction") == position.optString("direction") &&
+                proof.optBoolean("protection_confirmed", false) &&
+                fresh(proof.optLong("observed_at_ms"), now, POSITION_TTL_MS) &&
+                proof.optString("position_quantity").toBigDecimalOrNull()?.let { quantity ->
+                    position.optString("qty").toBigDecimalOrNull()?.compareTo(quantity) == 0
+                } == true &&
+                proof.optString("position_entry").toBigDecimalOrNull()?.let { entry ->
+                    position.optString("entry").toBigDecimalOrNull()?.compareTo(entry) == 0
+                } == true
+        }
 
     fun protectionProven(intent: JSONObject, now: Long): Boolean =
         intent.optString("campaign_status") == "OPEN_PROTECTED" &&
@@ -220,17 +244,19 @@ internal object CockpitDiagnostics {
             else -> "PASS"
         }, "Ожидающих входов: ${pending.size}; некорректных уровней: ${invalidEntries.size}. " +
             "До исполнения отсутствие защитного ордера допустимо.")
+        val positions = rows(status.optJSONArray("futures_positions"))
         val partial = entries.filter { it.optString("order_status") == "PARTIALLY_FILLED" }
         check("EXE-02", "execution", "Частичное исполнение", when {
             partial.isEmpty() -> "NOT_VERIFIED"
-            partial.any { !protectionProven(it, now) } -> "FAIL"
+            partial.any { i -> !protectionProven(i, now) && positions.none { p -> matchesPosition(i, p) && exchangeProtectionProven(p, coordinator, now) } } -> "FAIL"
             else -> "PASS"
         }, "Частично исполненных: ${partial.size}. Любая исполненная часть требует подтверждённой защиты.")
-        val positions = rows(status.optJSONArray("futures_positions"))
-        val unprotected = positions.filter { p -> entries.none { matchesPosition(it, p) && protectionProven(it, now) } }
+        val unprotected = positions.filter { p -> !exchangeProtectionProven(p, coordinator, now) &&
+            (coordinator.has("protection_observations") || entries.none { matchesPosition(it, p) && protectionProven(it, now) }) }
         val filledUnprotected = entries.filter {
             (it.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
-                it.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) && !protectionProven(it, now)
+                it.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) && !protectionProven(it, now) &&
+                positions.none { p -> matchesPosition(it, p) && exchangeProtectionProven(p, coordinator, now) }
         }
         val protectionSeverity = when {
             filledUnprotected.isNotEmpty() -> "FAIL"
@@ -243,7 +269,7 @@ internal object CockpitDiagnostics {
             "Открытых=${positions.size}; без свежего подтверждения=${unprotected.size}; " +
                 "исполненных кампаний без защиты=${filledUnprotected.size}.")
         check("EXE-04", "execution", "Подтверждение стопа Binance", protectionSeverity,
-            "Требуются OPEN_PROTECTED, PROTECTED, принадлежность кампании и свежая сверка; запись цены стопа сама по себе не является защитой.")
+            "Проверяется свежий полный SL Binance. Внешний стоп подтверждает защиту позиции, но не принадлежность стратегии и не разрешает новые входы.")
         val trailed = entries.filter { it.optLong("trailing_at_ms") > 0L }
         check("EXE-05", "execution", "Перенос стопа", when {
             trailed.isEmpty() -> "NOT_VERIFIED"

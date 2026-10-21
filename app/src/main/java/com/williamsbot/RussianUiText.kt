@@ -83,6 +83,12 @@ internal fun russianExecutionBlocker(value: String?): String {
     val code=value?.trim().orEmpty()
     return when {
         code.isEmpty() -> ""
+        code.contains("External Futures orders require ownership reconciliation", ignoreCase = true) ->
+            "Обнаружены внешние заявки Binance. Защита позиций проверяется отдельно; новые входы ожидают сверки принадлежности."
+        code.contains("PROTECTION_UNCONFIRMED") ->
+            "Биржевая защита позиции не подтверждена; выполняется проверка аварийного выхода."
+        code.contains("safety_exit_confirmed_fresh_account_reconciliation_required") ->
+            "Аварийный выход подтверждён Binance. Перед новыми входами требуется свежая сверка счёта."
         code=="TC2_PROTECTIVE_STOP_ONLY" ->
             "TC2: обычный выход разрешён только через биржевой защитный SL."
         code=="EXIT_STRATEGY_OWNER_UNVERIFIED" ->

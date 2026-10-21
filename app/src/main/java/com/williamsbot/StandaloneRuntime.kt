@@ -408,20 +408,20 @@ internal fun scannerReadinessState(
 /**
  * Recover missing UTC risk evidence even if a previous failed preflight
  * put new entries on PAUSE. This schedules only the risk/reconciliation check:
- * it NEVER resumes execution and never clears the operator pause or a safety latch.
+ * Signed REST accounting is independent of private-stream/order ownership sync.
+ * It NEVER resumes execution and never clears the operator pause or a safety latch.
  * The executor remains fail-closed until a durable valid baseline is confirmed.
  */
 internal fun shouldRetryDailyRiskBaseline(
     running: Boolean,
     @Suppress("UNUSED_PARAMETER") paused: Boolean,
     killLatched: Boolean,
-    reconcileRequired: Boolean,
+    @Suppress("UNUSED_PARAMETER") reconcileRequired: Boolean,
     accountReady: Boolean,
-    userStreamConnected: Boolean,
-    userStreamSyncRequired: Boolean,
+    @Suppress("UNUSED_PARAMETER") userStreamConnected: Boolean,
+    @Suppress("UNUSED_PARAMETER") userStreamSyncRequired: Boolean,
     baselineReady: Boolean
-): Boolean = running && !killLatched && !reconcileRequired &&
-    accountReady && userStreamConnected && !userStreamSyncRequired && !baselineReady
+): Boolean = running && !killLatched && accountReady && !baselineReady
 
 /**
  * Read-only discovery has fewer prerequisites than order execution. A pause,
@@ -2013,7 +2013,9 @@ private class NativeEngine(
         reconcileRequired = true
         persistSafetyFlag("reconcile_required", true)
         val blocker = "RECONCILE_REQUIRED: " + reason
-        scannerState = "BLOCKED_FUTURES_RECONCILIATION"
+        scannerState = if (lastSymbolsScanned == coreSymbols.size && lastScanAt > 0L &&
+            System.currentTimeMillis() - lastScanAt in 0L..120_000L) "READY_BLOCKED"
+            else "BLOCKED_FUTURES_RECONCILIATION"
         scannerError = blocker
         lastError = blocker
         stateMachine.force(
@@ -4703,7 +4705,7 @@ private class NativeEngine(
             for (index in 0 until requiredExits.length()) {
                 val request = requiredExits.getJSONObject(index)
                 val outcome = runCatching {
-                    withCampaignMutation(symbol = request.getString("symbol"), purpose = "LIQUIDATION_GUARD_EXIT",
+                    withCampaignMutation(symbol = request.getString("symbol"), purpose = "VERIFIED_PROTECTION_SAFETY_EXIT",
                         allowPaused = true, allowStopped = true, allowKillLatched = true,
                         allowReconcileRequired = true, waitForDoorMs = waitForDoorMs
                     ) { futuresCampaignCoordinator.executeRequiredSafetyExit(request) }
@@ -5195,7 +5197,7 @@ private class NativeEngine(
         val out = JSONArray()
         if (key().isBlank() || secret().isBlank()) return out
         val positions = futuresCampaignCoordinator.positionsSnapshot()
-        val intents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
+        val protections = futuresCampaignCoordinator.protectionSnapshot()
         for (i in 0 until positions.length()) {
             val row = positions.optJSONObject(i)
                 ?: throw IllegalStateException("Malformed Binance Futures position row in position snapshot")
@@ -5209,22 +5211,28 @@ private class NativeEngine(
                 )
             }
             val direction = if (signedQty > 0.0) "LONG" else "SHORT"
-            val intentIndex = latestEntryIntentIndex(intents, symbol)
-            val intent = intentIndex?.let { intents.optJSONObject(it) }
-                ?.takeIf {
-                    it.optString("direction").equals(direction, ignoreCase = true) &&
-                        campaignLifecycleStatus(it) == "OPEN_PROTECTED"
-                }
             val entry = row.optString("entryPrice").toDoubleOrNull() ?: 0.0
             val mark = row.optString("markPrice").toDoubleOrNull()
                 ?: runCatching { futuresMarketData.markPrice(symbol) }.getOrDefault(0.0)
             val qty = kotlin.math.abs(signedQty)
             val pnl = row.optString("unRealizedProfit").toDoubleOrNull() ?: 0.0
+            val proof = (0 until protections.length()).mapNotNull { protections.optJSONObject(it) }.singleOrNull {
+                it.optString("symbol") == symbol && it.optString("direction") == direction &&
+                    it.optString("position_quantity").toBigDecimalOrNull()?.compareTo(row.getString("positionAmt").toBigDecimal().abs()) == 0 &&
+                    it.optString("position_entry").toBigDecimalOrNull()?.compareTo(row.getString("entryPrice").toBigDecimal()) == 0 &&
+                    System.currentTimeMillis() - it.optLong("observed_at_ms") in 0L..30_000L
+            }
+            val protectionConfirmed = proof?.optBoolean("protection_confirmed", false) == true
             out.put(JSONObject()
                 .put("symbol", symbol).put("direction", direction).put("side", direction)
                 .put("positionAmt", signedQty).put("qty", qty).put("entry", entry).put("entryPrice", entry)
-                .put("mark_price", mark).put("stop", intent?.optString("protective_stop")?.toDoubleOrNull() ?: JSONObject.NULL)
-                .put("risk_pct", intent?.optDouble("risk_pct", 0.0) ?: 0.0)
+                .put("mark_price", mark).put("stop", if (protectionConfirmed) proof?.opt("stop") else JSONObject.NULL)
+                .put("risk_pct", if (protectionConfirmed) proof?.opt("price_risk_pct") ?: JSONObject.NULL else JSONObject.NULL)
+                .put("risk_measurement", if (protectionConfirmed) "EXCHANGE_STOP_PRICE_RISK" else "UNKNOWN")
+                .put("protection_status", proof?.optString("status") ?: "UNCONFIRMED")
+                .put("protection_confirmed", protectionConfirmed)
+                .put("protection_order", proof?.opt("stop_order") ?: JSONObject.NULL)
+                .put("strategy_ownership_verified", proof?.optBoolean("strategy_ownership_verified", false) == true)
                 .put("unrealized_pnl_usdt", pnl).put("margin_type", row.optString("marginType"))
                 .put("leverage", row.optString("leverage")).put("exchange_confirmed", true))
         }
@@ -7081,7 +7089,11 @@ private class NativeEngine(
                         allowStopped = true,
                         allowKillLatched = true
                     )
-                    check(result.optBoolean("ok", false)) {
+                    // REST synchronization and permission to trade are separate.
+                    // A complete signed snapshot may contain an external/manual
+                    // position that keeps the Entry Door blocked. That is not a
+                    // broken private stream and must not create a sync retry loop.
+                    check(result.optBoolean("ok", false) || result.optBoolean("account_snapshot_verified", false)) {
                         result.optString("blocker", "Futures reconciliation returned not-ok")
                     }
                     val repeat = synchronized(this) {
@@ -7102,6 +7114,8 @@ private class NativeEngine(
                         } else {
                             userStreamSyncRequired = false
                             lastUserStreamSyncAtMs = System.currentTimeMillis()
+                            userStreamLastError = null
+                            userStreamReconcileFailure = null
                             futuresStreamReconcileRunning = false
                             false
                         }

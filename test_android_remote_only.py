@@ -443,7 +443,9 @@ def test_android_exit_requires_exchange_position_protection_and_filled_order_con
     assert 'val manualExit = reason == "MANUAL_EXIT" || reason == "KILL_SWITCH"' in coordinator
     assert 'if (managedEntry == null && reason != "MANUAL_EXIT")' in coordinator
     assert '(reason != "KILL_SWITCH" || row.optBoolean("strategy_ownership_verified", false))' in coordinator
-    assert 'if (!manualExit)' in coordinator
+    assert 'else if (!manualExit)' in coordinator
+    assert 'val protectionEmergency = riskEmergencyVerified && reason == "PROTECTION_UNCONFIRMED"' in coordinator
+    assert '(!protectionEmergency || row.optBoolean("strategy_ownership_verified", false))' in coordinator
     assert 'managedEntry?.put("campaign_status", "CLOSED_OR_STOPPED")' in coordinator
     assert 'exitIntent.put("exchange_status", "EXIT_CONFIRMED")' in coordinator
     assert 'allowReconcileRequired = true' in _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
@@ -487,7 +489,9 @@ def test_android_entry_cancellation_rechecks_order_and_partial_fill_before_retir
     cancel = coordinator.split("fun cancelPendingEntries(", 1)[1].split(
         "fun trailProtectiveStop(", 1
     )[0]
-    assert "val confirmed = when (intent.optString(\"kind\"))" in cancel
+    assert 'val confirmed = if (childId != null) adapter.orderById(symbol, childId)' in cancel
+    assert 'adapter.cancelOrderById(symbol, childId)' in cancel
+    assert 'Conditional cancellation child identity mismatch' in cancel
     assert "adapter.order(symbol, clientId)" in cancel
     assert "adapter.queryAlgoOrder(symbol, clientId)" in cancel
     assert "persistConfirmedCancellation(" in cancel

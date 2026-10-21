@@ -27,6 +27,27 @@ class CockpitDiagnosticsTest {
         CockpitDiagnostics.rows(CockpitDiagnostics.checks(s, c, JSONObject(), now)).single { it.optString("id") == id }
     private fun severity(id: String, s: JSONObject, c: JSONObject = coordinator()) = check(id, s, c).optString("severity")
 
+    @Test fun manualSlProvesExchangeProtectionWithoutInventingCampaignOwnership() {
+        val p = JSONObject().put("symbol", "BNBUSDT").put("direction", "LONG")
+            .put("qty", 0.64).put("entry", 741.66)
+        val proof = JSONObject().put("symbol", "BNBUSDT").put("direction", "LONG")
+            .put("position_quantity", "0.64").put("position_entry", "741.66")
+            .put("observed_at_ms", now).put("protection_confirmed", true)
+            .put("status", "EXTERNAL_PROTECTED")
+        val s = healthy().put("futures_positions", JSONArray().put(p)).put("execution_enabled", false)
+        val c = coordinator().put("ready_for_new_entry", false)
+            .put("protection_observations", JSONArray().put(proof))
+        val result = CockpitDiagnostics.readiness(s, c, now)
+        assertEquals("PASS", result.getString("protection_state"))
+        assertFalse(result.getBoolean("position_management_ready"))
+        assertFalse(result.getBoolean("new_entries_allowed"))
+        assertEquals("PASS", severity("EXE-03", s, c))
+        proof.put("position_quantity", "0.63")
+        assertEquals("FAIL", CockpitDiagnostics.readiness(s, c, now).getString("protection_state"))
+        proof.put("position_quantity", "0.64").put("observed_at_ms", now - 15_001)
+        assertEquals("FAIL", CockpitDiagnostics.readiness(s, c, now).getString("protection_state"))
+    }
+
     @Test fun liquidationCheckNeedsFreshMeasuredEvidenceAndReportsAnUnsafeStop() {
         val s = healthy().put("futures_positions", JSONArray().put(JSONObject()
             .put("symbol", "SOLUSDT").put("direction", "LONG").put("qty", 1)))
