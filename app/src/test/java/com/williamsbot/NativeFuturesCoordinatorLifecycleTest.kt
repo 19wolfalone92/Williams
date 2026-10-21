@@ -1143,4 +1143,25 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals(1,exchange.posts("/fapi/v1/order"))
         }
     }
+
+    @Test fun canceledConfirmedStopStillEmitsEmergencyExitAfterMarkAlreadyCrossesItsLevel() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator,exchange)=open(direction)
+            val stop=exchange.algos.values.single { it.optString("closePosition")=="true" }
+            stop.put("algoStatus","CANCELED")
+            exchange.mark=if(direction.name=="LONG") 94.0 else 106.0
+            val first=coordinator.reconcile()
+            assertFalse(first.getBoolean("ok"))
+            assertEquals("POSITION_UNPROTECTED",coordinator.state.name)
+            val requests=first.getJSONArray("required_safety_exits")
+            assertEquals(first.toString(),1,requests.length())
+            val again=coordinator.reconcile()
+            assertEquals(again.toString(),1,again.getJSONArray("required_safety_exits").length())
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
+            val reduction=coordinator.executeRequiredUnprotectedSafetyExit(requests.getJSONObject(0))
+            assertTrue(reduction.toString(),reduction.getBoolean("ok"))
+            assertEquals(0.0,exchange.quantity,0.0)
+            assertEquals(1,exchange.posts("/fapi/v1/order"))
+        }
+    }
 }
