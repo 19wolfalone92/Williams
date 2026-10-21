@@ -1087,4 +1087,34 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals(0, exchange.posts("/fapi/v1/order"))
         }
     }
+
+    @Test fun neverSubmittedInvalidInitialStopIsSafelyReducedButUnknownAckIsNot() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.fill()
+            // Fill occurred while price crossed the planned initial SL.
+            // No STOP_MARKET was ever POSTed, which is much stronger proof
+            // than an HTTP timeout or an unrecognized clientAlgoId.
+            exchange.mark=if(direction.name=="LONG") 94.0 else 106.0
+            val rec=coordinator.reconcile()
+            assertFalse(rec.getBoolean("ok"))
+            val requests=rec.getJSONArray("required_safety_exits")
+            assertEquals(rec.toString(),1,requests.length())
+            val req=requests.getJSONObject(0)
+            assertEquals("NEVER_SUBMITTED_PROVEN",req.getString("guard_origin"))
+            assertEquals(0,exchange.algos.values.count {
+                it.optString("closePosition")=="true"
+            })
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
+            val result=coordinator.executeRequiredUnprotectedSafetyExit(req)
+            assertTrue(result.toString(),result.getBoolean("ok"))
+            assertEquals(0.0,exchange.quantity,0.0)
+            assertEquals(1,exchange.posts("/fapi/v1/order"))
+            assertFalse(coordinator.executeRequiredUnprotectedSafetyExit(req).getBoolean("ok"))
+            assertEquals(1,exchange.posts("/fapi/v1/order"))
+        }
+    }
 }
