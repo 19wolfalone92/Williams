@@ -2255,7 +2255,7 @@ internal class NativeFuturesCampaignCoordinator(
             stopId.isBlank() || stopId != owner.optString("protection_client_id") -> "EMERGENCY_STOP_ID_MISMATCH"
             owner.optString("previous_protection_client_id").isNotBlank() -> "EMERGENCY_PREDECESSOR_STOP_AMBIGUOUS"
             !owner.optBoolean("strategy_ownership_verified", false) -> "EMERGENCY_OWNER_UNVERIFIED"
-            campaignLifecycleStatus(owner) != "OPEN_PROTECTED" -> "EMERGENCY_CAMPAIGN_NOT_OPEN_PROTECTED"
+            campaignLifecycleStatus(owner) !in setOf("POSITION_OPEN","OPEN_PROTECTED") -> "EMERGENCY_CAMPAIGN_NOT_LIVE"
             owner.optString("direction") != direction.name -> "EMERGENCY_POSITION_SIDE_CHANGED"
             owner.optString("protection_status") != "SUBMISSION_UNKNOWN" -> "EMERGENCY_PROTECTION_STATE_CHANGED"
             owner.optLong("unprotected_safety_exit_required_at_ms") <= 0L -> "EMERGENCY_MISSING_DURABLE_SAFETY_PROOF"
@@ -3156,7 +3156,9 @@ internal class NativeFuturesCampaignCoordinator(
                         // The public closePosition() has NO access to this
                         // exception; only the separately exchange-verified
                         // unprotected-risk capability may pass it.
-                        campaignLifecycleStatus(row) == "OPEN_PROTECTED" &&
+                        // The entry loop downgrades a previously protected live
+                        // owner to POSITION_OPEN while its stop is missing.
+                        campaignLifecycleStatus(row) in setOf("POSITION_OPEN","OPEN_PROTECTED") &&
                             row.optBoolean("strategy_ownership_verified", false) &&
                             row.optString("direction") == direction.name &&
                             row.optString("protection_status") == "SUBMISSION_UNKNOWN" &&
