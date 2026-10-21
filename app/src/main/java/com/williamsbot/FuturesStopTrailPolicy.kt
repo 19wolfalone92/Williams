@@ -1,6 +1,5 @@
 package com.williamsbot
 
-import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
@@ -10,8 +9,8 @@ import kotlin.math.max
  * consume this proposal. This function never places or cancels Binance orders.
  *
  * Fractal trailing follows confirmed five-bar swing structure (two bars to the
- * right); fee-aware 1R break-even is an explicitly engineered risk overlay,
- * NOT a claim that Bill Williams prescribed a universal 1R rule.
+ * right). TC2 uses structural 3/5-bar and confirmed-fractal protection ONLY.
+ * Automatic 1R/cost-buffered break-even is retired and never proposed.
  */
 internal data class FuturesTrailBar(
     val openTimeMs: Long,
@@ -25,6 +24,7 @@ internal data class FuturesStopTrailProposal(
     val fractalAtMs: Long? = null
 )
 
+@Suppress("UNUSED_PARAMETER") // legacy arguments remain source-compatible, but cannot re-enable 1R
 internal fun planFuturesStopTrail(
     direction: String,
     oldStop: Double,
@@ -36,17 +36,11 @@ internal fun planFuturesStopTrail(
     bars: List<FuturesTrailBar>,
     breakEvenAtR: Double = 1.0,
     feeAndSlippageAllowancePct: Double = 0.0035,
-    breakEvenEnabled: Boolean = true
+    breakEvenEnabled: Boolean = false
 ): FuturesStopTrailProposal? {
     if (direction != "LONG" && direction != "SHORT") return null
-    if (listOf(oldStop, actualEntry, markPrice, tickSize, breakEvenAtR,
-            feeAndSlippageAllowancePct).any { !it.isFinite() }) return null
-    if (oldStop <= 0.0 || actualEntry <= 0.0 ||
-        markPrice <= 0.0 || tickSize <= 0.0 || breakEvenAtR <= 0.0 ||
-        feeAndSlippageAllowancePct < 0.0) return null
-    if (breakEvenEnabled && (!initialStop.isFinite() || initialStop <= 0.0 ||
-        direction == "LONG" && initialStop >= actualEntry ||
-        direction == "SHORT" && initialStop <= actualEntry)) return null
+    if (!oldStop.isFinite() || !markPrice.isFinite() || !tickSize.isFinite() ||
+        oldStop <= 0.0 || markPrice <= 0.0 || tickSize <= 0.0) return null
     if (bars.zipWithNext().any { (a,b) -> b.openTimeMs-a.openTimeMs != WILLIAMS_H1_MS }) return null
 
     fun floorTick(price: Double): Double = floor(price / tickSize + 1e-12) * tickSize
@@ -97,28 +91,16 @@ internal fun planFuturesStopTrail(
         }
     }
 
-    val oneR = abs(initialStop - actualEntry)
-    val favorable = if (direction == "LONG") markPrice - actualEntry else actualEntry - markPrice
-    if (breakEvenEnabled && oneR > 0.0 && favorable >= breakEvenAtR * oneR) {
-        // Cover a configured fee/slippage allowance. Exact net flatness cannot
-        // be guaranteed across funding, gaps and unexpected execution slippage.
-        val rawBreakEven = if (direction == "LONG") {
-            actualEntry * (1.0 + feeAndSlippageAllowancePct)
-        } else {
-            actualEntry * (1.0 - feeAndSlippageAllowancePct)
-        }
-        val breakEven = if (direction == "LONG") ceilTick(rawBreakEven) else floorTick(rawBreakEven)
-        if (usable(breakEven)) {
-            proposals += FuturesStopTrailProposal(breakEven, "COST_BUFFERED_BREAKEVEN_1R")
-        }
-    }
+    // There is deliberately no entry-price/1R trigger. A favorable price
+    // excursion alone never moves TC2 protection without book structure.
 
     return if (direction == "LONG") proposals.maxByOrNull { it.stop }
     else proposals.minByOrNull { it.stop }
 }
 
-/** TC2 chapter 12: the 3/5 CLOSED price-bar stop also moves without a new
- * confirmed fractal or +1R move. Unknown original R disables only break-even. */
+/** TC2 chapter 12: structural 3/5 CLOSED price-bar and confirmed fractal stop.
+ * No discretionary 1R/break-even stop; unknown original R cannot prevent a
+ * structurally valid protective move. */
 internal fun planWilliamsCampaignStop(
     direction: String, oldStop: Double, actualEntry: Double, initialStop: Double?,
     markPrice: Double, tickSize: Double, openedObservedAtMs: Long,
@@ -132,11 +114,11 @@ internal fun planWilliamsCampaignStop(
         listOf(oldStop,markPrice,tickSize).any { !it.isFinite() || it <= 0 } ||
         bars.any { !it.high.isFinite() || !it.low.isFinite() || it.low <= 0 || it.high < it.low } ||
         bars.zipWithNext().any { (a,b) -> b.openTimeMs-a.openTimeMs != WILLIAMS_H1_MS }) return null
-    val validR = initialStop != null && initialStop.isFinite() && initialStop > 0 &&
-        (if (direction == "LONG") initialStop < actualEntry else initialStop > actualEntry)
     val proposals = mutableListOf<FuturesStopTrailProposal>()
+    // Legacy signature retained for existing call sites. Break-even and its
+    // fee buffer are intentionally ignored regardless of caller flags.
     planFuturesStopTrail(direction,oldStop,actualEntry,initialStop ?: Double.NaN,markPrice,tickSize,
-        openedObservedAtMs,bars,feeAndSlippageAllowancePct=feeAllowance,breakEvenEnabled=validR)?.let { proposals += it }
+        openedObservedAtMs,bars,breakEvenEnabled=false)?.let { proposals += it }
     if (bars.size >= window && bars.last().openTimeMs+3_600_000L > openedObservedAtMs) {
         val price = if (direction == "LONG") {
             floor((bars.takeLast(window).minOf { it.low }-tickSize)/tickSize+1e-12)*tickSize
