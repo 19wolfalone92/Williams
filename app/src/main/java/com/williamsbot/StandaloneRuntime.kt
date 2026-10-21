@@ -5210,6 +5210,12 @@ private class NativeEngine(
         if (key().isBlank() || secret().isBlank()) return out
         val positions = futuresCampaignCoordinator.positionsSnapshot()
         val intents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
+        // The persisted campaign STOP is only a planned value. A refreshed
+        // signed Binance protection observation is separate and authoritative
+        // even when a 4.52 upgrade lost the original local campaign journal.
+        val observedStops = futuresCampaignCoordinator.status()
+            .optJSONArray("exchange_protection_observations") ?: JSONArray()
+        val snapshotAt = System.currentTimeMillis()
         for (i in 0 until positions.length()) {
             val row = positions.optJSONObject(i)
                 ?: throw IllegalStateException("Malformed Binance Futures position row in position snapshot")
@@ -5234,10 +5240,28 @@ private class NativeEngine(
                 ?: runCatching { futuresMarketData.markPrice(symbol) }.getOrDefault(0.0)
             val qty = kotlin.math.abs(signedQty)
             val pnl = row.optString("unRealizedProfit").toDoubleOrNull() ?: 0.0
+            val exchangeStop=(0 until observedStops.length()).mapNotNull {
+                observedStops.optJSONObject(it)
+            }.singleOrNull { proof ->
+                val observedAt=proof.optLong("observed_at_ms")
+                val signedProof=proof.optString("quantity").toBigDecimalOrNull()
+                proof.optString("symbol")==symbol && proof.optString("direction")==direction &&
+                    signedProof?.compareTo(row.optString("positionAmt").toBigDecimalOrNull())==0 &&
+                    observedAt>0L && snapshotAt>=observedAt && snapshotAt-observedAt<=60_000L &&
+                    proof.optString("stop_proof") in setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED")
+            }
+            // Do not mistake old journal stop level for an exchange-confirmed
+            // working protective order.
+            val stopProof=exchangeStop?.optString("stop_proof") ?: "UNVERIFIED_OR_STALE"
+            val stop=exchangeStop?.optString("stop")?.toDoubleOrNull()
+                ?.takeIf { it.isFinite() && it>0.0 } ?: JSONObject.NULL
             out.put(JSONObject()
                 .put("symbol", symbol).put("direction", direction).put("side", direction)
                 .put("positionAmt", signedQty).put("qty", qty).put("entry", entry).put("entryPrice", entry)
-                .put("mark_price", mark).put("stop", intent?.optString("protective_stop")?.toDoubleOrNull() ?: JSONObject.NULL)
+                .put("mark_price", mark).put("stop", stop)
+                .put("stop_verification_status",stopProof)
+                .put("stop_confirmed_at_ms",exchangeStop?.optLong("observed_at_ms") ?: JSONObject.NULL)
+                .put("stop_can_be_auto_trailed",stopProof=="OWNED_STOP_SEEN")
                 .put("risk_pct", intent?.optDouble("risk_pct", 0.0) ?: 0.0)
                 .put("unrealized_pnl_usdt", pnl).put("margin_type", row.optString("marginType"))
                 .put("leverage", row.optString("leverage")).put("exchange_confirmed", true))
