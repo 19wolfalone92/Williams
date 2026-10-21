@@ -197,6 +197,56 @@ class NativeFuturesCoordinatorLifecycleTest {
     }
 
 
+    @Test fun bookH1W2HStopsMustBePlacedAndConfirmedAfterBothLongAndShortFills() {
+        // Production book H1 client IDs start with W2H_ (not W2E_).
+        // Before the regression fix the live Binance position was detected
+        // but matchingIntent was null, despite the durable structural stop;
+        // no protective algo was ever submitted for a filled WM3 entry.
+        for (direction in listOf(NativeFuturesCampaignCoordinator.Direction.LONG,NativeFuturesCampaignCoordinator.Direction.SHORT)) {
+            val exchange=Exchange(direction)
+            val journal=Journal()
+            val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val first=coordinator.reconcile()
+            assertTrue(first.toString(),first.optBoolean("ok"))
+            val bookId=williamsBookH1ClientId(
+                "BTCUSDT", "BTCUSDT:1h:"+(if(direction.name=="LONG") "FRACTAL" else "SHORT_FRACTAL")+":1792504800000"
+            )
+            assertTrue(bookId.startsWith("W2H_"))
+            val intent=plan(direction).copy(clientId=bookId)
+            val accepted=coordinator.submitPendingEntry(intent)
+            assertTrue(accepted.toString(),accepted.getBoolean("accepted"))
+            assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+            exchange.fill()
+            val protection=coordinator.reconcile()
+            assertTrue(protection.toString(),protection.getBoolean("ok"))
+            assertEquals("OPEN_PROTECTED",coordinator.state.name)
+            val owner=coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("PROTECTED",owner.getString("protection_status"))
+            assertEquals(bookId,owner.getString("client_id"))
+            assertTrue(owner.getString("protection_client_id").isNotBlank())
+            assertEquals(2,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(1,exchange.algos.values.count { it.optString("closePosition")=="true" && it.optString("algoStatus")=="NEW" })
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertEquals(2,exchange.posts("/fapi/v1/algoOrder")) // never duplicate protection
+        }
+    }
+
+    @Test fun unknownManualClientPrefixNeverAuthorizesAutomaticProtectionMutation() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val journal=Journal()
+        val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+        assertTrue(coordinator.submitPendingEntry(
+            plan(NativeFuturesCampaignCoordinator.Direction.LONG,prefix="USER_MANUAL_")
+        ).getBoolean("accepted"))
+        exchange.fill()
+        val result=coordinator.reconcile()
+        assertFalse(result.toString(),result.optBoolean("ok"))
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.algos.values.count { it.optString("closePosition")=="true" })
+        assertEquals("POSITION_UNPROTECTED",coordinator.state.name)
+    }
+
     @Test fun passportPreparedCommitPrecedesAnyEntryMutationInBothDirections() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val exchange=Exchange(direction);val journal=Journal()
