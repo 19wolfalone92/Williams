@@ -57,7 +57,10 @@ def course_plan(
         state.revision < 0 or not isinstance(signal_close_ms,int) or
         not isinstance(now_ms,int)):
         return blocked("INVALID_STATE")
-    if next_stage not in STAGES or NEXT.get(state.stage or None) != next_stage:
+    # The illustrated W3_EXTENSION is optional; direct W3 -> W4 is valid.
+    if (next_stage not in STAGES or
+        (NEXT.get(state.stage or None) != next_stage and
+         not (state.stage=="W3" and next_stage=="W4"))):
         return blocked("NON_SEQUENTIAL_STAGE")
     if not (0 < signal_close_ms <= now_ms and
             now_ms-signal_close_ms <= max_signal_age_ms and
@@ -94,8 +97,16 @@ def acknowledge_course_fill(
         return state
     if not exchange_reconciled or not protective_stop_verified:
         raise ValueError("RECONCILIATION_OR_PROTECTION_MISSING")
-    if NEXT.get(state.stage or None) != proposal.stage or not proposal.idempotency_key:
-        raise ValueError("STALE_COURSE_PROPOSAL")
+    allowed = (NEXT.get(state.stage or None)==proposal.stage or
+               (state.stage=="W3" and proposal.stage=="W4"))
+    expected_nonce = f"{state.campaign_id}|{state.side}|{proposal.stage}|{signal_close_ms}|{state.revision}"
+    expected_key = "COURSE_"+hashlib.sha256(expected_nonce.encode()).hexdigest()[:24]
+    delta = TARGETS.get(proposal.stage, -1) - state.confirmed_units
+    action = "ADD" if delta > 0 else "REDUCE" if delta < 0 else "HOLD"
+    if (not allowed or proposal.idempotency_key != expected_key or
+        proposal.target_units != TARGETS.get(proposal.stage) or
+        proposal.signed_unit_delta != delta or proposal.action != action):
+        raise ValueError("STALE_OR_FOREIGN_COURSE_PROPOSAL")
     if (confirmed_delta != proposal.signed_unit_delta or
         new_confirmed_units != state.confirmed_units+confirmed_delta or
         new_confirmed_units != proposal.target_units or new_confirmed_units < 0 or
