@@ -2877,8 +2877,11 @@ private fun PositionScreen(
                         InfoRow(
                             "Защита",
                             when {
-                                p.stopVerificationStatus=="EXTERNAL_PROTECTED" ->
+                                p.stopVerificationStatus=="EXTERNAL_PROTECTED" && status.positionsSnapshotOk &&
+                                    CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,System.currentTimeMillis(),15_000L) ->
                                     "Биржевой SL подтверждён, владелец кампании не установлен"
+                                p.stopVerificationStatus=="EXTERNAL_PROTECTED" ->
+                                    "Биржевой SL обнаружен ранее • требуется свежая сверка"
                                 status.positionsSnapshotOk && status.futuresIntents.any {
                                     it.optString("symbol") == p.symbol && it.optString("direction") == p.direction &&
                                         CockpitDiagnostics.protectionProven(it, System.currentTimeMillis())
