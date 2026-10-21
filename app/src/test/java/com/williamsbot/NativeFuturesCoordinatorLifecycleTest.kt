@@ -1045,6 +1045,10 @@ class NativeFuturesCoordinatorLifecycleTest {
             val foreign = JSONObject(request.toString()).put("entry_client_id", "FOREIGN")
             assertFalse(coordinator.executeRequiredUnprotectedSafetyExit(foreign).getBoolean("ok"))
             assertEquals(0, exchange.posts("/fapi/v1/order"))
+            // A blocked attempt must not lose the already proven hazard on
+            // the next reconciliation tick.
+            val retry=coordinator.reconcile()
+            assertEquals(retry.toString(),1,retry.getJSONArray("required_safety_exits").length())
             val closed = coordinator.executeRequiredUnprotectedSafetyExit(request)
             assertTrue(closed.toString(), closed.getBoolean("ok"))
             assertEquals(0.0, exchange.quantity, 0.0)
@@ -1109,6 +1113,8 @@ class NativeFuturesCoordinatorLifecycleTest {
                 it.optString("closePosition")=="true"
             })
             assertEquals(0,exchange.posts("/fapi/v1/order"))
+            val retry=coordinator.reconcile()
+            assertEquals(retry.toString(),1,retry.getJSONArray("required_safety_exits").length())
             val result=coordinator.executeRequiredUnprotectedSafetyExit(req)
             assertTrue(result.toString(),result.getBoolean("ok"))
             assertEquals(0.0,exchange.quantity,0.0)
