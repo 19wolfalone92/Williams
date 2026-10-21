@@ -1776,7 +1776,7 @@ internal class NativeFuturesCampaignCoordinator(
                         }
                         // Query only. A missing order after an ambiguous/protected
                         // state is not permission to resend the same client id.
-                        runCatching { adapter.queryAlgoOrder(symbol, protectionClientId) }
+                        val stopQuery = runCatching { adapter.queryAlgoOrder(symbol, protectionClientId) }.getOrNull()
                         val refreshed = adapter.openAlgoOrders(symbol)
                         protective = findProtectiveStop(
                             refreshed, direction, protectionClientId,
@@ -1784,8 +1784,37 @@ internal class NativeFuturesCampaignCoordinator(
                         )
                         if (protective == null) {
                             anyUnprotected = true
-                            lastBlocker = "$symbol protective-stop outcome is ambiguous; no retry performed"
+                            // A known formerly confirmed stop is now explicitly
+                            // terminal, the live exchange has no other algo for
+                            // this symbol, and there is no replacement candidate.
+                            // A 404/timeout is NOT proof of a terminal stop:
+                            // it must NEVER authorize a second financial mutation.
+                            val terminal = stopQuery?.optString("algoStatus", "")
+                                ?.uppercase(Locale.US)
+                            val definitelyMissing =
+                                protectionStatus == "PROTECTED" &&
+                                terminal in setOf("CANCELED", "REJECTED", "EXPIRED") &&
+                                refreshed.length() == 0 &&
+                                previousProtectionId.isBlank() &&
+                                matchingIntent.optBoolean("strategy_ownership_verified", false) &&
+                                matchingIntent.optString("confirmed_position_qty").toBigDecimalOrNull()
+                                    ?.compareTo(position.getString("positionAmt").toBigDecimal().abs()) == 0
+                            if (definitelyMissing) {
+                                val emergency = JSONObject()
+                                    .put("symbol", symbol).put("direction", direction)
+                                    .put("entry_client_id", matchingIntent.optString("client_id"))
+                                    .put("quantity", matchingIntent.optString("confirmed_position_qty"))
+                                    .put("missing_protection_client_id", protectionClientId)
+                                    .put("reason", "UNPROTECTED_POSITION_GUARD")
+                                    .put("last_stop_exchange_status", terminal)
+                                requiredSafetyExits.put(emergency)
+                                lastBlocker = "$symbol formerly confirmed protective stop is terminal ($terminal); verified emergency reduce-only exit required"
+                                matchingIntent.put("unprotected_safety_exit_required_at_ms", clock())
+                            } else {
+                                lastBlocker = "$symbol protective-stop outcome is ambiguous; no retry performed"
+                            }
                             matchingIntent.put("protection_status", "SUBMISSION_UNKNOWN")
+                            saveIntents(persisted)
                             continue
                         }
                     } else if (protectionStatus != "NOT_SUBMITTED" && protectionStatus.isNotBlank()) {
@@ -2199,6 +2228,82 @@ internal class NativeFuturesCampaignCoordinator(
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }.take(24)
         closePositionInternal(symbol, direction, amount.abs().toPlainString(), "W2X_LIQ_$digest",
             "LIQUIDATION_GUARD", partialReduction=false, riskEmergencyVerified=true)
+    }
+
+    /**
+     * Exchange-proven loss of an earlier CONFIRMED protective STOP_MARKET.
+     * This capability cannot originate from a scanner, user-defined exit,
+     * failed GET, unowned position, partial fill, or a merely missing local id.
+     * It is an emergency risk reduction, NOT a TC2 strategy exit.
+     */
+    fun executeRequiredUnprotectedSafetyExit(request: JSONObject): JSONObject = synchronized(lock) {
+        fun blocked(why: String) = JSONObject().put("ok", false)
+            .put("safe_rejection", true).put("mutation_attempted", false)
+            .put("blocker", why)
+        if (request.optString("reason") != "UNPROTECTED_POSITION_GUARD")
+            return@synchronized blocked("Wrong emergency exit reason")
+        val symbol = request.optString("symbol")
+        val direction = runCatching { Direction.valueOf(request.optString("direction")) }.getOrNull()
+            ?: return@synchronized blocked("Unknown emergency exit direction")
+        if (symbol !in allowedSymbols) return@synchronized blocked("Symbol not allowed")
+        val persisted = intents()
+        val owner = latestEntryIntentIndex(persisted, symbol)?.let { persisted.optJSONObject(it) }
+            ?: return@synchronized blocked("Missing persisted campaign owner")
+        val stopId = request.optString("missing_protection_client_id")
+        if (request.optString("entry_client_id") != owner.optString("client_id") ||
+            stopId.isBlank() || stopId != owner.optString("protection_client_id") ||
+            owner.optString("previous_protection_client_id").isNotBlank() ||
+            !owner.optBoolean("strategy_ownership_verified", false) ||
+            campaignLifecycleStatus(owner) != "OPEN_PROTECTED" ||
+            owner.optString("direction") != direction.name ||
+            owner.optString("protection_status") != "SUBMISSION_UNKNOWN" ||
+            owner.optLong("unprotected_safety_exit_required_at_ms") <= 0L) {
+            return@synchronized blocked("Emergency request is stale, ambiguous, or not owned")
+        }
+        val adapter = adapterFactory()
+        return@synchronized try {
+            adapter.requireOneWayMode()
+            // Require a fresh, explicit terminal Algo response; missing/HTTP
+            // failure or FINISHED (possibly already triggered) is NOT enough.
+            val detail = adapter.queryAlgoOrder(symbol, stopId)
+            val terminal = detail.optString("algoStatus").uppercase(Locale.US)
+            if (terminal !in setOf("CANCELED", "REJECTED", "EXPIRED"))
+                return@synchronized blocked("Protective Algo is not proven terminal")
+            if (adapter.openAlgoOrders(symbol).length() != 0 ||
+                adapter.openOrders(symbol).length() != 0)
+                return@synchronized blocked("Exchange has other live orders; reconcile before emergency exit")
+            val positions = adapter.positions()
+            val live = (0 until positions.length()).mapNotNull { positions.optJSONObject(it) }
+                .filter { it.optString("symbol") == symbol &&
+                    it.optString("positionAmt").toBigDecimalOrNull()?.signum() != 0 }
+            if (live.size != 1 || live.single().optString("positionSide", "BOTH") != "BOTH")
+                return@synchronized blocked("Exactly one One-Way position is required")
+            val amount = live.single().optString("positionAmt").toBigDecimalOrNull()
+                ?: return@synchronized blocked("Malformed live Futures position")
+            val qty = amount.abs()
+            if ((amount.signum() > 0) != (direction == Direction.LONG) ||
+                qty.compareTo(owner.optString("confirmed_position_qty").toBigDecimalOrNull()
+                    ?: return@synchronized blocked("Unknown campaign quantity")) != 0 ||
+                qty.compareTo(request.optString("quantity").toBigDecimalOrNull()
+                    ?: return@synchronized blocked("Unknown requested quantity")) != 0)
+                return@synchronized blocked("Foreign quantity/side change after original reconciliation")
+            val entry = live.single().optString("entryPrice").toDoubleOrNull()
+                ?: return@synchronized blocked("Unknown live entry price")
+            val recorded = owner.optString("actual_entry_price").toDoubleOrNull()
+                ?: return@synchronized blocked("Unknown attributed entry price")
+            if (!entry.isFinite() || !recorded.isFinite() || entry <= 0 ||
+                kotlin.math.abs(entry-recorded)>maxOf(1e-8, recorded*1e-8))
+                return@synchronized blocked("Exchange entry price no longer matches campaign")
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest((symbol + ":" + owner.optString("client_id") + ":" + stopId)
+                    .toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it.toInt() and 0xff) }.take(20)
+            closePositionInternal(symbol, direction, qty.toPlainString(),
+                "W2X_NOSTOP_$digest", "UNPROTECTED_POSITION_GUARD",
+                partialReduction=false, riskEmergencyVerified=true)
+        } catch (e: Exception) {
+            blocked("Emergency revalidation unavailable: " + (e.message ?: e.javaClass.simpleName))
+        }
     }
 
     /** Definite pre-order rejection. No exchange mutation was attempted. */
@@ -2998,6 +3103,7 @@ internal class NativeFuturesCampaignCoordinator(
         // reading Binance, or writing an exit intent. A scanner bug cannot bypass it.
         val ownerIndex = latestEntryIntentIndex(intents, symbol)
         val exitOwner = ownerIndex?.let { intents.optJSONObject(it) }
+        val emergencyWithoutStop = riskEmergencyVerified && reason == "UNPROTECTED_POSITION_GUARD"
         val policyBlocker = if(riskEmergencyVerified) null else
             williamsMarketExitBlocker(exitOwner?.optString("strategy_profile").orEmpty(), reason)
         if (policyBlocker != null) {
@@ -3044,6 +3150,17 @@ internal class NativeFuturesCampaignCoordinator(
                         campaignLifecycleStatus(row) in ACTIVE_CAMPAIGN_STATUSES &&
                             (reason != "KILL_SWITCH" || row.optBoolean("strategy_ownership_verified", false)) &&
                             row.optString("direction").equals(direction.name, ignoreCase = true)
+                    } else if (emergencyWithoutStop) {
+                        // The public closePosition() has NO access to this
+                        // exception; only the separately exchange-verified
+                        // unprotected-risk capability may pass it.
+                        campaignLifecycleStatus(row) == "OPEN_PROTECTED" &&
+                            row.optBoolean("strategy_ownership_verified", false) &&
+                            row.optString("direction") == direction.name &&
+                            row.optString("protection_status") == "SUBMISSION_UNKNOWN" &&
+                            row.optLong("unprotected_safety_exit_required_at_ms") > 0L &&
+                            row.optString("protection_client_id").isNotBlank() &&
+                            row.optString("previous_protection_client_id").isBlank()
                     } else {
                         isManagedOpenPositionIntent(
                             status = campaignLifecycleStatus(row),
@@ -3120,7 +3237,21 @@ internal class NativeFuturesCampaignCoordinator(
                     "$symbol automatic exit entry price no longer matches the confirmed campaign"
                 }
             }
-            if (!manualExit) {
+            if (emergencyWithoutStop) {
+                // Second read as close to POST as possible, because the
+                // previously missing STOP could have been replaced meanwhile.
+                val stopId = managedEntry!!.optString("protection_client_id")
+                val terminal = adapterPreflight.queryAlgoOrder(symbol, stopId)
+                    .optString("algoStatus").uppercase(Locale.US)
+                if (terminal !in setOf("CANCELED","REJECTED","EXPIRED") ||
+                    adapterPreflight.openAlgoOrders(symbol).length() != 0 ||
+                    adapterPreflight.openOrders(symbol).length() != 0) {
+                    state = State.RECONCILE_REQUIRED
+                    lastBlocker = "$symbol cannot prove no live exchange protection just before emergency close"
+                    return@synchronized JSONObject().put("ok",false).put("state",state.name)
+                        .put("safe_rejection",true).put("blocker",lastBlocker)
+                }
+            } else if (!manualExit) {
                 val expectedProtectionId = managedEntry!!.optString("protection_client_id")
                 val expectedStop = managedEntry!!.optString("protective_stop")
                 val openAlgos = adapterPreflight.openAlgoOrders(symbol)
