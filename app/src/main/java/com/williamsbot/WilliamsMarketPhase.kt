@@ -9,10 +9,11 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
     fun rows(a:JSONArray?)=if(a==null) emptyList() else (0 until a.length()).mapNotNull { a.optJSONObject(it) }
     val asOf=hierarchy.optLong("as_of")
     val errors=hierarchy.optJSONObject("frame_errors") ?: JSONObject()
+    val counts=hierarchy.optJSONObject("frame_candle_counts") ?: JSONObject()
     val all=rows(hierarchy.optJSONArray("scenarios"))
     val signs=linkedMapOf("divergence" to "AO_DIVERGENCE","momentum_shift" to "MOMENTUM_SHIFT",
         "terminal_fractal" to "TERMINAL_FRACTAL","target_zone" to "TARGET_ZONE","squat" to "SQUAT_VOLUME_PROXY")
-    val frames=listOf("1d","6h","1h","15m").map { frame ->
+    val frames=listOf("1d","6h","4h","1h","15m").map { frame ->
         val usable=all.filter { h ->
             val anchors=rows(h.optJSONArray("anchors"))
             h.optString("frame")==frame && h.optString("status")=="PROVISIONAL" &&
@@ -31,16 +32,24 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
             .put("signs",JSONArray(signs.filterKeys { h.optBoolean(it) }.values.toList())) }
         JSONObject().put("frame",frame).put("state",when {
             errors.has(frame) -> "UNAVAILABLE"
+            // H4 is a requested independent frame. Do not invent an H4
+            // reading when history/scenarios were not provided by the engine.
+            frame=="4h" && !counts.has(frame) && usable.isEmpty() -> "UNAVAILABLE"
             phases.isEmpty() -> "UNRESOLVED"
             phases.size>1 -> "ALTERNATIVES"
             else -> "PHASE_CANDIDATE"
         }).put("history_error",errors.optString(frame).takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
             .put("hypotheses",JSONArray(hypotheses))
+            .put("history_candle_count",if(counts.has(frame)) counts.optInt(frame) else JSONObject.NULL)
+            .put("hypothesis_count",hypotheses.size)
+            .put("wave_degree_confirmed",false)
+            .put("probability_calibrated",false)
+            .put("can_place_orders",false).put("can_close",false)
             .put("exhaustion_warning",usable.any { it.optBoolean("divergence") || it.optBoolean("momentum_shift") })
     }
     fun warns(frame:String)=frames.any { it.optString("frame")==frame && it.optBoolean("exhaustion_warning") }
     val scope=when {
-        warns("1d") || warns("6h") -> "SENIOR_WARNING"
+        warns("1d") || warns("6h") || warns("4h") -> "SENIOR_WARNING"
         warns("1h") -> "H1_WARNING"
         warns("15m") -> "M15_ONLY_WARNING"
         else -> "NONE"
