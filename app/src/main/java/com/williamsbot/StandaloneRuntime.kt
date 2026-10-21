@@ -7978,7 +7978,19 @@ private class NativeEngine(
                         teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
                         invalidationPrice = candles[i].l - tick,
                         reason = "WM1 bullish reversal with mouth-anchored angulation; waiting above signal-bar high",
-                        setupContext = JSONObject().put("angulation",angulationProof(i).toJson()).toString()
+                        setupContext = JSONObject()
+                            .put("angulation",angulationProof(i).toJson())
+                            .put("wm1_ao_color",when {
+                                !ao(candles,i).isFinite() || !ao(candles,i-1).isFinite() -> "UNAVAILABLE"
+                                ao(candles,i)<ao(candles,i-1) -> "RED"
+                                ao(candles,i)>ao(candles,i-1) -> "GREEN"
+                                else -> "UNCHANGED"
+                            })
+                            .put("wm1_ao_opposite_color_observed",
+                                ao(candles,i).isFinite() && ao(candles,i-1).isFinite() &&
+                                ao(candles,i)<ao(candles,i-1))
+                            .put("wm1_ao_color_is_evidence_not_new_execution_veto",true)
+                            .toString()
                     )
                 }
                 break
