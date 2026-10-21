@@ -789,6 +789,9 @@ internal class NativeFuturesCampaignCoordinator(
     /** Signed exchange observations; never infer strategy ownership from an order prefix. */
     @Volatile private var externalOrderObservationsJson = "[]"
     @Volatile private var externalProtectionObservationsJson = "[]"
+    /** Fresh read-only-scope proof; isolated risk-reducing stop moves only. */
+    @Volatile private var externalStopManagementSymbolsJson = "[]"
+    @Volatile private var externalStopManagementVerifiedAtMs = 0L
 
     private val lock = Any()
     @Volatile private var observationSink: ((JSONArray) -> Unit)? = null
@@ -939,6 +942,10 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     fun reconcile(): JSONObject = synchronized(lock) {
+        // A stale success cannot authorize a later stop mutation while the
+        // account is being refreshed or when a REST call fails halfway.
+        externalStopManagementSymbolsJson = "[]"
+        externalStopManagementVerifiedAtMs = 0L
         reconciliationRunning = true
         reconciliationStartedAtMs = clock()
         verifiedRiskCapManagementAtMs = 0L
@@ -2356,6 +2363,9 @@ internal class NativeFuturesCampaignCoordinator(
             }
             saveIntents(persisted)
             externalProtectionObservationsJson=protectionObservations.toString()
+            // Existing unknown orders block NEW risk, but must not freeze
+            // stop-tightening for a DIFFERENT, completely verified campaign.
+            val otherRiskBlock=actualRiskAuditBlocked
             if(externalOrders.length()>0) {
                 actualRiskAuditBlocked=true
                 if(actualRiskAuditBlocker==null)
@@ -2371,6 +2381,20 @@ internal class NativeFuturesCampaignCoordinator(
             }
             // A strictly verified over-cap portfolio may continue risk-REDUCING
             // management. Failed reconciliation remains failed and entries stay locked.
+            // Allow only a narrowly scoped maintenance exception when the
+            // SOLE global reconciliation blocker is a foreign order on an
+            // unrelated symbol. A closed/read-only campaign gets no permission.
+            val eligibleExternalStopManagement=if(
+                externalOrders.length()>0 && !otherRiskBlock &&
+                !anyUnprotected && !hasPendingExit && !hasPendingAddition && !hasPendingEntry &&
+                requiredSafetyExits.length()==0
+            ) {
+                verifiedExternalStopManagementScope(
+                    protectionObservations,externalOrders,persisted
+                )
+            } else emptySet()
+            externalStopManagementSymbolsJson=JSONArray(eligibleExternalStopManagement.sorted()).toString()
+            externalStopManagementVerifiedAtMs=if(eligibleExternalStopManagement.isNotEmpty()) clock() else 0L
             val verifiedOverCap = !anyUnprotected && !hasPendingExit && !hasPendingAddition &&
                 !hasPendingEntry && requiredSafetyExits.length() == 0 &&
                 actualRiskAuditBlocked && verifiedProtectedRiskCapManagement(
@@ -2398,6 +2422,10 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("ok", !anyUnprotected && !actualRiskAuditBlocked && !hasPendingExit)
                 .put("external_open_orders",JSONArray(externalOrderObservationsJson))
                 .put("exchange_protection_observations",JSONArray(externalProtectionObservationsJson))
+                .put("verified_external_stop_management_symbols",
+                    JSONArray(externalStopManagementSymbolsJson))
+                .put("verified_external_stop_management_at_ms",
+                    externalStopManagementVerifiedAtMs)
                 .put("actual_risk_audit_blocked", actualRiskAuditBlocked)
                 .put("protected_over_cap_management_allowed", verifiedOverCap)
                 .put("actual_risk_audit_blocker", actualRiskAuditBlocker ?: JSONObject.NULL)
@@ -3201,11 +3229,20 @@ internal class NativeFuturesCampaignCoordinator(
         clientAlgoId: String,
         reason: String = "UNSPECIFIED_STRUCTURAL_TRAIL"
     ): JSONObject = synchronized(lock) {
+        val foreignOrderRiskOnly = state == State.RECONCILE_REQUIRED &&
+            clientAlgoId.startsWith("W2T_") &&
+            externalStopManagementVerifiedAtMs>0L &&
+            clock()>=externalStopManagementVerifiedAtMs &&
+            clock()-externalStopManagementVerifiedAtMs<=30_000L &&
+            (0 until JSONArray(externalStopManagementSymbolsJson).length()).any {
+                JSONArray(externalStopManagementSymbolsJson).optString(it)==symbol
+            }
         val cappedRiskOnly = state == State.RECONCILE_REQUIRED &&
             lastBlocker?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:") == true &&
             verifiedRiskCapManagementAtMs > 0L && clock() >= verifiedRiskCapManagementAtMs &&
             clock() - verifiedRiskCapManagementAtMs <= 30_000L
-        check(state == State.OPEN_PROTECTED || state == State.ENTRY_PENDING || cappedRiskOnly) {
+        check(state == State.OPEN_PROTECTED || state == State.ENTRY_PENDING ||
+            cappedRiskOnly || foreignOrderRiskOnly) {
             "Stop trail blocked while Futures state is $state"
         }
         require(symbol in allowedSymbols)
@@ -3837,6 +3874,8 @@ internal class NativeFuturesCampaignCoordinator(
             .put("reconciliation_finished_at_ms", reconciliationFinishedAtMs)
             .put("external_open_orders",JSONArray(externalOrderObservationsJson))
             .put("exchange_protection_observations",JSONArray(externalProtectionObservationsJson))
+            .put("verified_external_stop_management_symbols",JSONArray(externalStopManagementSymbolsJson))
+            .put("verified_external_stop_management_at_ms",externalStopManagementVerifiedAtMs)
             .put("pending_intents", pendingDetails.length())
             .put("pending_intent_details", pendingDetails)
             .put("testnet_only", true)
