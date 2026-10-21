@@ -3882,6 +3882,219 @@ internal class NativeFuturesCampaignCoordinator(
             .put("position_sides", JSONArray().put("LONG").put("SHORT"))
     }
 
+
+    /**
+     * Operator-authorized maintenance of an existing exchange position after loss
+     * of the original ENTRY journal. This is NOT restored TC2 ownership. It has
+     * no authority to enter, add, reverse or market-close a position.
+     *
+     * The operator confirms the exact signed snapshot displayed on the device.
+     * A unique live Binance full-position stop, exact quantity and entry price
+     * are mandatory; no algorithmic stop is claimed from its W2PS_ prefix.
+     */
+    private val operatorSupervisionKey = "futures_operator_stop_supervision_v1"
+
+    private fun operatorSupervisions(): JSONArray =
+        JSONArray(executionStore.readState(operatorSupervisionKey) ?: "[]")
+
+    private fun saveOperatorSupervisions(rows: JSONArray) {
+        check(executionStore.writeState(operatorSupervisionKey, rows.toString())) {
+            "Cannot durably commit operator supervision; no Binance mutation authorized"
+        }
+    }
+
+    fun operatorSupervisionsSnapshot(): JSONArray = synchronized(lock) {
+        JSONArray(operatorSupervisions().toString())
+    }
+
+    fun approveOperatorStopSupervision(
+        symbol: String, quantity: String, entryPrice: String, stopPrice: String,
+        confirmation: String
+    ): JSONObject = synchronized(lock) {
+        require(confirmation == "СОПРОВОЖДАТЬ ТОЛЬКО СТОП") {
+            "Подтвердите режим сопровождения без новых входов и рыночных закрытий"
+        }
+        require(symbol in allowedSymbols) { "Unsupported Futures symbol" }
+        val requestedQuantity = quantity.toBigDecimalOrNull()
+        val requestedEntry = entryPrice.toDoubleOrNull()
+        val requestedStop = stopPrice.toBigDecimalOrNull()
+        require(requestedQuantity != null && requestedQuantity.signum() > 0 &&
+            requestedEntry != null && requestedEntry.isFinite() && requestedEntry > 0 &&
+            requestedStop != null && requestedStop.signum() > 0) { "Invalid operator snapshot" }
+        val rows = operatorSupervisions()
+        check((0 until rows.length()).none { rows.optJSONObject(it)?.optString("symbol") == symbol }) {
+            "Supervision already exists; review its current state before retrying"
+        }
+        check(latestEntryIntentIndex(intents(), symbol) == null) {
+            "A durable campaign already exists; operator takeover is not allowed"
+        }
+        val adapter = adapterFactory()
+        adapter.requireOneWayMode()
+        val positions = adapter.positions()
+        val live = (0 until positions.length()).mapNotNull { positions.optJSONObject(it) }
+            .filter { it.optString("symbol") == symbol &&
+                it.optString("positionAmt").toBigDecimalOrNull()?.signum() != 0 }
+        check(live.size == 1) { "Exactly one live position is required" }
+        val position = live.single()
+        val amount = position.optString("positionAmt").toBigDecimalOrNull()
+            ?: error("Binance position quantity is unavailable")
+        val direction = if (amount.signum() > 0) "LONG" else "SHORT"
+        val liveEntry = position.optString("entryPrice").toDoubleOrNull()
+            ?: error("Binance entry price is unavailable")
+        check(position.optString("positionSide", "BOTH") == "BOTH" &&
+            amount.abs().compareTo(requestedQuantity) == 0 &&
+            kotlin.math.abs(liveEntry - requestedEntry) <= maxOf(1e-8, liveEntry * 1e-8)) {
+            "Position changed since operator confirmation; refresh positions"
+        }
+        val mark = adapter.markPrice(symbol)
+        check(mark.isFinite() && mark > 0) { "Binance mark unavailable" }
+        val algos = adapter.openAlgoOrders(symbol)
+        val qualifying = (0 until algos.length()).mapNotNull { algos.optJSONObject(it) }
+            .filter { isFullPositionFuturesStop(it, symbol, direction, amount.abs(), mark) }
+        check(qualifying.size == 1 && algos.length() == 1) {
+            "A unique, exchange-confirmed protective stop is required; no other algo orders allowed"
+        }
+        val openOrders = adapter.allOpenOrders()
+        check((0 until openOrders.length()).mapNotNull { openOrders.optJSONObject(it) }
+            .none { it.optString("symbol") == symbol }) {
+            "Other open orders on this symbol must be reconciled first"
+        }
+        val stop = qualifying.single()
+        val liveStop = stop.optString("triggerPrice").ifBlank { stop.optString("stopPrice") }
+            .toBigDecimalOrNull() ?: error("Binance stop trigger is missing")
+        check(liveStop.compareTo(requestedStop) == 0) {
+            "Stop changed since operator confirmation; refresh positions"
+        }
+        val stopClientId = stop.optString("clientAlgoId")
+        check(stopClientId.isNotBlank() && stop.optString("algoId").toLongOrNull()?.let { it > 0 } == true) {
+            "Stop identity not confirmed"
+        }
+        // A missing entry journal is NOT retroactively constructed or labeled as
+        // strategy-verified. Supervision can only tighten an existing stop.
+        rows.put(JSONObject()
+            .put("symbol",symbol).put("direction",direction)
+            .put("quantity",amount.abs().stripTrailingZeros().toPlainString())
+            .put("entry_price",liveEntry.toString())
+            .put("stop",liveStop.stripTrailingZeros().toPlainString())
+            .put("protection_client_id",stopClientId)
+            .put("approved_at_ms",clock())
+            .put("state","ACTIVE")
+            .put("mode","OPERATOR_APPROVED_STOP_ONLY")
+            .put("strategy_ownership_verified",false)
+            .put("market_close_authorized",false)
+            .put("add_on_authorized",false))
+        saveOperatorSupervisions(rows)
+        JSONObject().put("ok",true).put("symbol",symbol)
+            .put("mode","OPERATOR_APPROVED_STOP_ONLY")
+            .put("strategy_ownership_verified",false)
+            .put("stop",liveStop.toPlainString())
+    }
+
+    /**
+     * Dedicated stop-only executor, isolated from the strategy-owned campaign
+     * execution path. Called under the account-wide durable Execution Door.
+     * Unknown Binance acknowledgements remain journaled and are NEVER retried.
+     */
+    fun trailOperatorSupervisedStop(
+        symbol:String, direction:Direction, proposedStop:String, newClientId:String
+    ):JSONObject = synchronized(lock) {
+        require(symbol in allowedSymbols && newClientId.startsWith("W2T_") &&
+            newClientId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
+        val rows = operatorSupervisions()
+        val record=(0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+            .singleOrNull { it.optString("symbol")==symbol }
+            ?: error("No operator-approved supervision for $symbol")
+        check(record.optString("state")=="ACTIVE" &&
+            record.optString("direction")==direction.name &&
+            !record.optBoolean("strategy_ownership_verified",false)) {
+            "Operator supervision is suspended or has invalid ownership flags"
+        }
+        val oldPrice=record.optString("stop").toBigDecimalOrNull() ?: error("Missing protected stop")
+        val next=proposedStop.toBigDecimalOrNull() ?: error("Malformed requested stop")
+        require(next.signum()>0 && if(direction==Direction.LONG) next>oldPrice else next<oldPrice) {
+            "Operator stop may only tighten"
+        }
+        val adapter=adapterFactory()
+        adapter.requireOneWayMode()
+        fun verifyLivePosition():java.math.BigDecimal {
+            val livePositions=adapter.positions()
+            val matched=(0 until livePositions.length()).mapNotNull { livePositions.optJSONObject(it) }
+                .filter { it.optString("symbol")==symbol &&
+                    it.optString("positionAmt").toBigDecimalOrNull()?.signum()!=0 }
+            check(matched.size==1) { "Exchange position no longer uniquely identified" }
+            val position=matched.single()
+            val signed=position.optString("positionAmt").toBigDecimalOrNull() ?: error("Invalid position qty")
+            val expected=record.optString("quantity").toBigDecimalOrNull() ?: error("Invalid saved qty")
+            val entry=position.optString("entryPrice").toDoubleOrNull() ?: error("Invalid Binance entry")
+            val approvedEntry=record.optString("entry_price").toDoubleOrNull() ?: error("Invalid saved entry")
+            check(position.optString("positionSide","BOTH")=="BOTH" &&
+                (signed.signum()>0)==(direction==Direction.LONG) &&
+                signed.abs().compareTo(expected)==0 &&
+                kotlin.math.abs(entry-approvedEntry)<=maxOf(1e-8,approvedEntry*1e-8)) {
+                "Quantity, side or entry changed; operator supervision suspended"
+            }
+            return expected
+        }
+        val qty=verifyLivePosition()
+        val mark=adapter.markPrice(symbol)
+        check(isProtectiveStopOnCorrectSide(direction.name,mark.toString(),proposedStop)) {
+            "New stop would already be triggered or lies on the wrong side of mark"
+        }
+        val before=adapter.openAlgoOrders(symbol)
+        val prior=(0 until before.length()).mapNotNull { before.optJSONObject(it) }
+            .filter { isFullPositionFuturesStop(it,symbol,direction.name,qty,mark) }
+        val currentId=record.optString("protection_client_id")
+        check(prior.size==1 && prior.single().optString("clientAlgoId")==currentId &&
+            before.length()==1 &&
+            prior.single().optString("triggerPrice").ifBlank {
+                prior.single().optString("stopPrice")
+            }.toBigDecimalOrNull()?.compareTo(oldPrice)==0) {
+            "Original protective stop not uniquely confirmed; no Binance mutation"
+        }
+        // A journal failure occurs BEFORE the Binance POST.
+        record.put("state","REPLACEMENT_UNRESOLVED")
+            .put("previous_protection_client_id",currentId)
+            .put("pending_protection_client_id",newClientId)
+            .put("pending_stop",next.stripTrailingZeros().toPlainString())
+        saveOperatorSupervisions(rows)
+        try {
+            adapter.placeProtectiveStop(symbol,direction.name,next.toPlainString(),newClientId)
+            val created=adapter.openAlgoOrders(symbol)
+            val newStop=(0 until created.length()).mapNotNull { created.optJSONObject(it) }
+                .singleOrNull { it.optString("clientAlgoId")==newClientId &&
+                    isFullPositionFuturesStop(it,symbol,direction.name,qty,adapter.markPrice(symbol)) &&
+                    it.optString("triggerPrice").ifBlank { it.optString("stopPrice") }
+                        .toBigDecimalOrNull()?.compareTo(next)==0 }
+                ?: error("Replacement stop not uniquely confirmed")
+            // No old-stop cancellation if exposure changed after placement.
+            verifyLivePosition()
+            val oldAlgoId=prior.single().optString("algoId")
+            check(oldAlgoId.toLongOrNull()?.let { it>0 }==true) { "Old stop lacks exact algo ID" }
+            adapter.cancelAlgoOrderById(symbol,oldAlgoId)
+            val final=adapter.openAlgoOrders(symbol)
+            check(final.length()==1 &&
+                final.optJSONObject(0)?.optString("clientAlgoId")==newClientId &&
+                isFullPositionFuturesStop(final.getJSONObject(0),symbol,direction.name,qty,adapter.markPrice(symbol))) {
+                "Stop replacement requires manual reconciliation after exchange mutation"
+            }
+            record.put("state","ACTIVE")
+                .put("stop",next.stripTrailingZeros().toPlainString())
+                .put("protection_client_id",newClientId)
+                .put("last_confirmed_trail_at_ms",clock())
+            record.remove("previous_protection_client_id")
+            record.remove("pending_protection_client_id")
+            record.remove("pending_stop")
+            saveOperatorSupervisions(rows)
+            JSONObject().put("ok",true).put("symbol",symbol).put("stop",next.toPlainString())
+        } catch(failure:Exception) {
+            // Do not erase the pending id: a lost POST response might represent
+            // an accepted Binance order. Never POST the same financial effect twice.
+            JSONObject().put("ok",false).put("symbol",symbol)
+                .put("state","REPLACEMENT_UNRESOLVED")
+                .put("blocker",failure.message ?: failure.javaClass.simpleName)
+        }
+    }
+
     fun saveManagementState(symbol:String, clientId:String, state:JSONObject) = synchronized(lock) {
         val all=intents()
         val owner=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.singleOrNull {
