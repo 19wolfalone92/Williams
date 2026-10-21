@@ -1740,7 +1740,44 @@ internal class NativeFuturesCampaignCoordinator(
                         saveIntents(persisted)
                         lastBlocker="$symbol initial protective stop was never submitted and is now invalid relative to the mark; verified emergency reduction required"
                     } else {
-                        lastBlocker = "$symbol neither the current stop nor its tracked predecessor is confirmed on the protective side of Binance mark price; entries and automatic closure are blocked pending reconciliation"
+                        // The first missing-SL rescue was masked by this
+                        // stale-price guard when the market had ALREADY crossed
+                        // the former stop. Query the EXACT previously confirmed
+                        // algo before deciding whether risk reduction is allowed.
+                        val knownId=matchingIntent.optString("protection_client_id")
+                        val status=matchingIntent.optString("protection_status")
+                        val previouslyProtected=status=="PROTECTED" ||
+                            (status=="SUBMISSION_UNKNOWN" &&
+                                matchingIntent.optString("unprotected_safety_guard_origin")==
+                                    "TERMINAL_PREVIOUSLY_CONFIRMED" &&
+                                matchingIntent.optLong("unprotected_safety_exit_required_at_ms")>0L)
+                        val terminal=if(previouslyProtected && knownId.isNotBlank() &&
+                            previousProtectionId.isBlank() && algos.length()==0) {
+                            runCatching { adapter.queryAlgoOrder(symbol,knownId)
+                                .optString("algoStatus").uppercase(Locale.US) }.getOrNull()
+                        } else null
+                        val verifiedTerminal=terminal in setOf("CANCELED","REJECTED","EXPIRED") &&
+                            matchingIntent.optBoolean("strategy_ownership_verified",false) &&
+                            matchingIntent.optString("confirmed_position_qty").toBigDecimalOrNull()
+                                ?.compareTo(position.getString("positionAmt").toBigDecimal().abs())==0
+                        if(verifiedTerminal) {
+                            requiredSafetyExits.put(JSONObject()
+                                .put("symbol",symbol).put("direction",direction)
+                                .put("entry_client_id",matchingIntent.optString("client_id"))
+                                .put("quantity",matchingIntent.optString("confirmed_position_qty"))
+                                .put("missing_protection_client_id",knownId)
+                                .put("last_stop_exchange_status",terminal)
+                                .put("reason","UNPROTECTED_POSITION_GUARD"))
+                            matchingIntent.put("protection_status","SUBMISSION_UNKNOWN")
+                                .put("unprotected_safety_guard_origin","TERMINAL_PREVIOUSLY_CONFIRMED")
+                                .put("unprotected_safety_exit_required_at_ms",
+                                    matchingIntent.optLong("unprotected_safety_exit_required_at_ms")
+                                        .takeIf { it>0L } ?: clock())
+                            saveIntents(persisted)
+                            lastBlocker="$symbol canceled protective stop ($terminal) is already past mark; verified emergency risk reduction required"
+                        } else {
+                            lastBlocker = "$symbol neither the current stop nor its tracked predecessor is confirmed on the protective side of Binance mark price; entries and automatic closure are blocked pending reconciliation"
+                        }
                     }
                     continue
                 }
