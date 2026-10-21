@@ -1457,4 +1457,38 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertFalse(revived.intentsSnapshot().getJSONObject(0).has("protection_rebound_proof"))
         assertEquals(0,exchange.posts("/fapi/v1/order"))
     }
+
+    @Test fun unrelatedManualOrderCannotFreezeOwnedTc2StructuralStopTrail() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator,exchange)=open(direction)
+            val foreign=JSONObject().put("symbol","SOLUSDT")
+                .put("orderId","900").put("clientOrderId","USER_OTHER_PAIR")
+                .put("side","BUY").put("status","NEW")
+                .put("type","LIMIT").put("positionSide","BOTH")
+            exchange.orders["900"]=foreign
+            val inspected=coordinator.reconcile()
+            assertFalse(inspected.toString(),inspected.getBoolean("ok"))
+            assertEquals("RECONCILE_REQUIRED",coordinator.state.name)
+            val eligible=inspected.getJSONArray("verified_external_stop_management_symbols")
+            assertEquals(inspected.toString(),1,eligible.length())
+            assertEquals("BTCUSDT",eligible.getString(0))
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+            val oldProtection=exchange.algos.values.single { it.optString("closePosition")=="true" }
+            val newStop=if(direction.name=="LONG") "96" else "104"
+            val moved=coordinator.trailProtectiveStop(
+                "BTCUSDT",direction,newStop,
+                "W2T_BTC_EXTPROOF_"+direction.name,
+                reason="TC2_LAST_5_CLOSED_BARS"
+            )
+            assertTrue(moved.toString(),moved.getBoolean("ok"))
+            assertEquals("RECONCILE_REQUIRED",coordinator.state.name)
+            assertEquals("CANCELED",oldProtection.getString("algoStatus"))
+            assertEquals(1,exchange.algos.values.count {
+                it.optString("closePosition")=="true" && it.optString("algoStatus")=="NEW"
+            })
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
+            // Foreign SOL limit order is never canceled or edited by BTC trailing.
+            assertEquals("NEW",foreign.getString("status"))
+        }
+    }
 }
