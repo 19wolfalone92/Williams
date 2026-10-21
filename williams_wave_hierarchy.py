@@ -218,6 +218,20 @@ def _ao(bars):
             if i >= 33 else float("nan") for i in range(len(mid))]
 
 
+def classify_fourth_ao(third_peak: float, fourth_minimum: float, scale_bars: int) -> str:
+    """Exact AO zero counts; close-but-positive is NON-authorizing evidence."""
+    if not 100 <= scale_bars <= 140:
+        return "WRONG_SCALE"
+    if not (isfinite(third_peak) and third_peak > 0 and isfinite(fourth_minimum)):
+        return "MISSING_W3_MOMENTUM"
+    if fourth_minimum <= 0:
+        return "MINIMUM_ONLY"
+    # Ten percent is a documented research heuristic, not a book gate.
+    if fourth_minimum / third_peak <= .10:
+        return "NEAR_ZERO_UNCONFIRMED"
+    return "NO_ZERO_CROSS"
+
+
 def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
     if len(h.anchors) < 4:
         return
@@ -257,14 +271,11 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
         return
     w3 = max(w3_indexes, key=lambda i: sign * osc[i])
     end = p[4].extreme_at if len(p) >= 5 else stop
-    cross = any(sign * osc[i] < 0 for i in indexes
-                if i > w3 and bars[i].t <= end)
-    if not 100 <= h.scale_bars <= 140:
-        h.w4_zero = "WRONG_SCALE"
-    elif sign * osc[w3] <= 0:
-        h.w4_zero = "MISSING_W3_MOMENTUM"
-    else:
-        h.w4_zero = "MINIMUM_ONLY" if cross else "NO_ZERO_CROSS"
+    fourth_values = [sign * osc[i] for i in indexes
+                     if i > w3 and bars[i].t <= end and isfinite(osc[i])]
+    h.w4_zero = classify_fourth_ao(sign * osc[w3],
+                                  min(fourth_values) if fourth_values else float("nan"),
+                                  h.scale_bars)
     if len(p) >= 6:
         third = peak(p[2].extreme_at, third_end)
         fifth = peak(p[4].extreme_at, min(stop, p[5].extreme_at + 5 * FRAME_MS[frame]))
