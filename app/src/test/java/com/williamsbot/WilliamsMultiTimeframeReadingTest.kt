@@ -32,6 +32,30 @@ class WilliamsMultiTimeframeReadingTest {
         }
     }
 
+    @Test fun independentH4WaveAlternativesUseRealClosedBarsWithoutCertifyingDirection() {
+        val contract=JSONObject(requireNotNull(javaClass.getResource("/williams_wave_contract.json")).readText())
+        val first=contract.getJSONArray("cases").getJSONObject(0).getJSONArray("bars")
+        val candles=(0 until first.length()).map { i ->
+            val row=first.getJSONArray(i)
+            WilliamsWaveBar(row.getLong(0)*4,row.getDouble(1),row.getDouble(2),
+                row.getDouble(3),row.getDouble(4),row.getDouble(5))
+        }
+        val reading=williamsMarketReading(candles,JSONObject(),"4h")
+        assertEquals("OBSERVED",reading.getString("state"))
+        assertEquals("4h",reading.getString("frame"))
+        val hypotheses=reading.getJSONArray("independent_wave_hypotheses")
+        assertTrue(hypotheses.length()>0)
+        assertEquals(hypotheses.length(),reading.getInt("independent_wave_hypothesis_count"))
+        val knownLimit=candles.last().t+williamsWaveFrames.getValue("4h")
+        for(i in 0 until hypotheses.length()) {
+            val h=hypotheses.getJSONObject(i)
+            assertTrue(h.getLong("last_pivot_known_at")<=knownLimit)
+            assertFalse(h.getBoolean("wave_degree_confirmed"))
+            assertFalse(h.getBoolean("can_place_orders"))
+        }
+        assertEquals("UNRESOLVED",reading.getString("wave_phase"))
+    }
+
     @Test fun unknownFrameNeverInventsAnIndicatorOrWaveReading() {
         val result=williamsMarketReading(emptyList(),JSONObject(),"2d")
         assertEquals("UNSUPPORTED_FRAME",result.getString("state"))
