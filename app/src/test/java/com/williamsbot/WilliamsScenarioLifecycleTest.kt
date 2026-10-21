@@ -34,6 +34,15 @@ class WilliamsScenarioLifecycleTest {
             val all=mutableMapOf<String,JSONObject>()
             for(j in 0 until frames.length()) {
                 val f=frames.getJSONObject(j)
+                // H4 is an additive, explicitly unavailable observer until
+                // native H4 candles/scenarios are actually present. Legacy
+                // shared Python fixture covers D1/H6/H1/M15 only.
+                if(f.getString("frame")=="4h") {
+                    assertEquals("UNAVAILABLE",f.getString("state"))
+                    assertFalse(f.getBoolean("wave_degree_confirmed"))
+                    assertFalse(f.getBoolean("can_place_orders"))
+                    continue
+                }
                 assertEquals(expected.getJSONObject("frame_states").getString(f.getString("frame")),f.getString("state"))
                 val hs=f.getJSONArray("hypotheses")
                 for(k in 0 until hs.length()) { val h=hs.getJSONObject(k);all[h.getString("scenario_id")]=h }
