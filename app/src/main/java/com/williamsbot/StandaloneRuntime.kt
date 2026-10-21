@@ -1468,6 +1468,7 @@ private class NativeEngine(
     @Volatile private var lastScanDailyRiskCheckAllowed = false
     @Volatile private var lastNativeManagementAttemptMs = 0L
     @Volatile private var lastProtectedRiskCapManagementAtMs = 0L
+    @Volatile private var lastExternalStopManagementAtMs = 0L
     private val deepWatchTopN = 10
     private val scannerUniverseLabel = "USD_M_FUTURES_TESTNET_10"
 
@@ -5610,6 +5611,36 @@ private class NativeEngine(
                     ) }
                 }
             }
+            // An unrelated orphan/manual algo must not freeze stop tightening
+            // of a DIFFERENT fully identified live TC2 campaign. Coordinator
+            // grants a 30-second, per-symbol, non-exposure risk-only scope,
+            // verified by BOTH durable fill ownership and live protective stop.
+            val isolated=reconciliation.optJSONArray("verified_external_stop_management_symbols")
+                ?: JSONArray()
+            if(isolated.length()>0) {
+                val now=System.currentTimeMillis()
+                if(lastExternalStopManagementAtMs<=0L ||
+                    now-lastExternalStopManagementAtMs>=10_000L) {
+                    lastExternalStopManagementAtMs=now
+                    val authorized=(0 until isolated.length()).map {
+                        isolated.optString(it)
+                    }.filter { it.isNotBlank() }.toSet()
+                    runCatching {
+                        manageVerifiedNativePositions(
+                            futuresCampaignCoordinator.positionsSnapshot(),
+                            futuresCampaignCoordinator.intentsSnapshot(),
+                            riskOnly=true,eligibleSymbols=authorized
+                        )
+                    }.onFailure { error ->
+                        runCatching { auditStore.recordCockpitEvent(
+                            "EXTERNAL_ORDER_ISOLATED_TRAIL",state="BLOCKED",
+                            detail=error.message ?: error.javaClass.simpleName
+                        ) }
+                        lastError="OWNED_STOP_TRAILING_UNAVAILABLE: "+
+                            (error.message ?: error.javaClass.simpleName)
+                    }
+                }
+            }
             if (scannerError?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:")==true) {
                 val candidate=runCatching {
                     proposePendingRiskRemediation(
@@ -5970,13 +6001,14 @@ private class NativeEngine(
     private fun manageVerifiedNativePositions(
         positions: JSONArray,
         intents: JSONArray,
-        riskOnly: Boolean
+        riskOnly: Boolean,
+        eligibleSymbols: Set<String>? = null
     ) {
         for (i in 0 until positions.length()) {
             val row = positions.optJSONObject(i)
                 ?: throw IllegalStateException("Malformed Binance Futures position row during structural exit evaluation")
             val symbol = row.optString("symbol").uppercase(Locale.US)
-            if (symbol !in coreSymbols) continue
+            if (symbol !in coreSymbols || (eligibleSymbols!=null && symbol !in eligibleSymbols)) continue
             val signedQty = row.optString("positionAmt").toDoubleOrNull()
                 ?: throw IllegalStateException("Malformed Binance Futures position amount for $symbol during structural exit evaluation")
             if (signedQty == 0.0) continue
@@ -6001,6 +6033,10 @@ private class NativeEngine(
             } else null
             val boundaryExit = correctionProof != null && !williamsCorrectionPriceAllowed(correctionProof,mark)
             val profile=intent.optString("strategy_profile",williamsTc2Profile)
+            // Only TC2's exchange-protected structural trailing may operate
+            // in a partially reconciled account. Course/NTD exits have their
+            // own authorization lifecycle and are NOT generic risk-only stops.
+            if(eligibleSymbols!=null && profile!=williamsTc2Profile) continue
             require(profile in williamsEditionProfiles) { "Unknown durable strategy profile; retain protection" }
             val bars=candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
             var editionExit="";var editionStop:Double?=null
