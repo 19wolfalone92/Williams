@@ -1586,6 +1586,11 @@ class NativeFuturesCoordinatorLifecycleTest {
                 NativeFuturesCampaignCoordinator.Direction.LONG,"97","W2T_SECOND_ATTEMPT")
         }
         assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        val recovered=coordinator.recoverOperatorSupervisedStop("BTCUSDT")
+        assertTrue(recovered.toString(),recovered.getBoolean("ok"))
+        assertEquals("ACTIVE",coordinator.operatorSupervisionsSnapshot().getJSONObject(0).getString("state"))
+        assertEquals("CANCELED",old.getString("algoStatus"))
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
         assertEquals(0,exchange.posts("/fapi/v1/order"))
     }
 }
