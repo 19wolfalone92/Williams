@@ -2250,16 +2250,18 @@ internal class NativeFuturesCampaignCoordinator(
         val owner = latestEntryIntentIndex(persisted, symbol)?.let { persisted.optJSONObject(it) }
             ?: return@synchronized blocked("Missing persisted campaign owner")
         val stopId = request.optString("missing_protection_client_id")
-        if (request.optString("entry_client_id") != owner.optString("client_id") ||
-            stopId.isBlank() || stopId != owner.optString("protection_client_id") ||
-            owner.optString("previous_protection_client_id").isNotBlank() ||
-            !owner.optBoolean("strategy_ownership_verified", false) ||
-            campaignLifecycleStatus(owner) != "OPEN_PROTECTED" ||
-            owner.optString("direction") != direction.name ||
-            owner.optString("protection_status") != "SUBMISSION_UNKNOWN" ||
-            owner.optLong("unprotected_safety_exit_required_at_ms") <= 0L) {
-            return@synchronized blocked("Emergency request is stale, ambiguous, or not owned")
+        val ownerBlocker = when {
+            request.optString("entry_client_id") != owner.optString("client_id") -> "EMERGENCY_OWNER_ID_MISMATCH"
+            stopId.isBlank() || stopId != owner.optString("protection_client_id") -> "EMERGENCY_STOP_ID_MISMATCH"
+            owner.optString("previous_protection_client_id").isNotBlank() -> "EMERGENCY_PREDECESSOR_STOP_AMBIGUOUS"
+            !owner.optBoolean("strategy_ownership_verified", false) -> "EMERGENCY_OWNER_UNVERIFIED"
+            campaignLifecycleStatus(owner) != "OPEN_PROTECTED" -> "EMERGENCY_CAMPAIGN_NOT_OPEN_PROTECTED"
+            owner.optString("direction") != direction.name -> "EMERGENCY_POSITION_SIDE_CHANGED"
+            owner.optString("protection_status") != "SUBMISSION_UNKNOWN" -> "EMERGENCY_PROTECTION_STATE_CHANGED"
+            owner.optLong("unprotected_safety_exit_required_at_ms") <= 0L -> "EMERGENCY_MISSING_DURABLE_SAFETY_PROOF"
+            else -> null
         }
+        if(ownerBlocker!=null) return@synchronized blocked(ownerBlocker)
         val adapter = adapterFactory()
         return@synchronized try {
             adapter.requireOneWayMode()
