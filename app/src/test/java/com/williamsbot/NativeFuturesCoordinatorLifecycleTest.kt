@@ -1046,7 +1046,6 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertFalse(coordinator.executeRequiredUnprotectedSafetyExit(foreign).getBoolean("ok"))
             assertEquals(0, exchange.posts("/fapi/v1/order"))
             val closed = coordinator.executeRequiredUnprotectedSafetyExit(request)
-            println("UNPROTECTED_SAFETY_EXIT_TEST: " + closed.toString())
             assertTrue(closed.toString(), closed.getBoolean("ok"))
             assertEquals(0.0, exchange.quantity, 0.0)
             assertEquals(1, exchange.posts("/fapi/v1/order"))
