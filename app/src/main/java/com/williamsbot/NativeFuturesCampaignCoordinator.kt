@@ -1637,6 +1637,7 @@ internal class NativeFuturesCampaignCoordinator(
                     observedOwnerId.isNotBlank() &&
                     signedFullStops.single().optString("clientAlgoId")==observedOwnerId
                 protectionObservations.put(JSONObject().put("symbol",symbol)
+                    .put("observed_at_ms",clock())
                     .put("direction",direction)
                     .put("quantity",position.optString("positionAmt"))
                     .put("stop_proof",when {
