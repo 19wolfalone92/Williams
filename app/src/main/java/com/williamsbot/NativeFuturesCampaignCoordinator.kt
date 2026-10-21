@@ -1115,6 +1115,60 @@ internal class NativeFuturesCampaignCoordinator(
                 }
             }
             val allOpenAlgoOrders = adapter.allOpenAlgoOrders()
+            // Upgrade/restart recovery: a legacy W2PS stop can lose only its
+            // local protection binding even though the ENTRY ledger survives.
+            // Rebind ONLY a derived exact clientAlgoId to the same signed
+            // exchange entry fill, volume and average; never infer ownership
+            // from the W2PS prefix or an unrelated orphan Binance position.
+            for ((symbol, position) in openBySymbol) {
+                val owner = latestEntryIndexBySymbol[symbol]?.let { persisted.optJSONObject(it) }
+                    ?: continue
+                if (!owner.optBoolean("strategy_ownership_verified",false) ||
+                    campaignLifecycleStatus(owner) !in ACTIVE_CAMPAIGN_STATUSES) continue
+                val entryId=owner.optString("client_id")
+                if (listOf("W2E_","W2H_","W5E_","W2F_").none { entryId.startsWith(it) } ||
+                    owner.optString("protection_client_id").isNotBlank()) continue
+                // The simple 1-entry full-fill proof is intentionally strict:
+                // an ADD_ON or partial reduction must be reconciled using its
+                // full fill ledger before owner rebind is ever authorized.
+                val hasOtherFills=(0 until persisted.length()).mapNotNull { persisted.optJSONObject(it) }
+                    .any { it.optString("entry_client_id")==entryId &&
+                        it.optString("intent_role") in setOf("ADD_ON","EXIT") }
+                if(hasOtherFills) continue
+                val fill=entryExecutions[entryId] ?: continue
+                val amount=position.optString("positionAmt").toBigDecimalOrNull() ?: continue
+                if(amount.signum()==0 || owner.optString("direction") !=
+                    (if(amount.signum()>0) "LONG" else "SHORT") ||
+                    fill.optString("executedQty").toBigDecimalOrNull()?.compareTo(amount.abs())!=0)
+                    continue
+                val entry=position.optString("entryPrice").toDoubleOrNull() ?: continue
+                val average=fill.optString("avgPrice").toDoubleOrNull() ?: continue
+                if(!entry.isFinite() || entry<=0 || !average.isFinite() ||
+                    kotlin.math.abs(entry-average)>maxOf(1e-8,entry*1e-8)) continue
+                val mark=runCatching { adapter.markPrice(symbol) }.getOrNull() ?: continue
+                val stopId=stableProtectionId(symbol,entryId)
+                val matches=(0 until allOpenAlgoOrders.length()).mapNotNull {
+                    allOpenAlgoOrders.optJSONObject(it)
+                }.filter { it.optString("clientAlgoId")==stopId }
+                if(matches.size!=1 || !isFullPositionFuturesStop(matches.single(),symbol,
+                    owner.optString("direction"),amount.abs(),mark)) continue
+                val price=matches.single().optString("triggerPrice").ifBlank {
+                    matches.single().optString("stopPrice")
+                }.toDoubleOrNull() ?: continue
+                val old=owner.optString("protective_stop").toDoubleOrNull()
+                // Never silently widen a protective stop that survived in the
+                // journal. A manually tightened stop can still be recognized.
+                if(old!=null && old.isFinite() && old>0 &&
+                    (if(amount.signum()>0) price+1e-8<old else price-1e-8>old))
+                    continue
+                owner.put("protection_client_id",stopId)
+                    .put("protective_stop",price.toString())
+                    .put("protection_status","PROTECTED")
+                    .put("protection_rebound_from_exchange_at_ms",clock())
+                    .put("protection_rebound_proof","EXACT_DERIVED_W2PS_AND_AUTHENTICATED_FILL")
+                addOwner(activeProtectionClientIdsBySymbol,symbol,stopId)
+                saveIntents(persisted)
+            }
             for (i in 0 until allOpenAlgoOrders.length()) {
                 val order = allOpenAlgoOrders.optJSONObject(i)
                     ?: throw IllegalStateException("Malformed account-wide Futures algo-order row")
