@@ -29,5 +29,14 @@ class WilliamsDecisionTraceTest {
         assertEquals("UNRESOLVED",trace.getString("wave_state"))
         assertEquals("BLOCKED",trace.getJSONObject("decision").getString("state"))
         assertEquals(0,trace.getJSONArray("divergences").length())
+        val frames=trace.getJSONObject("market_phase").getJSONArray("frames")
+        assertEquals(5,frames.length())
+        val h4=(0 until frames.length()).map { frames.getJSONObject(it) }
+            .single { it.getString("frame")=="4h" }
+        assertEquals("UNAVAILABLE",h4.getString("state"))
+        assertEquals(0,h4.getInt("hypothesis_count"))
+        assertFalse(h4.getBoolean("wave_degree_confirmed"))
+        assertFalse(h4.getBoolean("probability_calibrated"))
+        assertFalse(h4.getBoolean("can_place_orders"))
     }
 }
