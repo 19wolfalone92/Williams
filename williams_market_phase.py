@@ -1,4 +1,26 @@
 """Degree-scoped, competing market phase evidence; no order authority."""
+from williams_wave_hierarchy import FRAME_MS, REQUIRED_FRAMES, build_wave_hierarchy
+from williams_market_reading import market_reading
+
+OBSERVED_MARKET_FRAMES=("1d","6h","4h","1h","15m")
+
+
+def observed_market_context(history,as_of,read_errors=None):
+    """Bounded causal snapshot of already stored candles, without any network IO."""
+    read_errors=read_errors or {}
+    closed={frame:[b for b in history.get(frame,[]) if b.t+FRAME_MS[frame]<=as_of][-240:]
+            for frame in OBSERVED_MARKET_FRAMES}
+    result=build_wave_hierarchy(closed,as_of,analysis_frames=OBSERVED_MARKET_FRAMES).to_dict()
+    result.update(context_source="DEVICE_CLOSED_CANDLE_SNAPSHOT",scope="OBSERVATION_ONLY",
+                  can_close=False,can_reverse=False)
+    result["frame_errors"].update(read_errors)
+    phase=market_phase_context(result)
+    result["frame_readings"]=[]
+    for frame in OBSERVED_MARKET_FRAMES:
+        reading=market_reading(closed[frame],phase,frame,as_of)
+        if frame in read_errors:reading.update(state="HISTORY_READ_FAILED",history_error=read_errors[frame])
+        result["frame_readings"].append(reading)
+    return result
 
 
 def market_phase_context(hierarchy):
@@ -7,7 +29,7 @@ def market_phase_context(hierarchy):
     signs={"divergence":"AO_DIVERGENCE","momentum_shift":"MOMENTUM_SHIFT",
         "terminal_fractal":"TERMINAL_FRACTAL","target_zone":"TARGET_ZONE","squat":"SQUAT_VOLUME_PROXY"}
     frames=[]
-    for frame in ("1d","6h","1h","15m"):
+    for frame in hierarchy.get("chain") or REQUIRED_FRAMES:
         usable=[h for h in hierarchy.get("scenarios",[]) if h.get("frame")==frame
             and h.get("status")=="PROVISIONAL" and 0<h.get("observed_at",0)<=as_of
             and len(h.get("anchors",[]))>=2
@@ -24,13 +46,20 @@ def market_phase_context(hierarchy):
             "w4_zero":h.get("w4_zero",""),"scale_frame":h.get("scale_frame",""),
             "scale_bars":h.get("scale_bars",0),"signs":[name for key,name in signs.items() if h.get(key,False)]}
             for h in usable]
-        state=("UNAVAILABLE" if frame in errors else "UNRESOLVED" if not phases
+        state=("NOT_ANALYSED" if as_of<=0 else "UNAVAILABLE" if frame in errors else "UNRESOLVED" if not phases
             else "ALTERNATIVES" if len(phases)>1 else "PHASE_CANDIDATE")
-        frames.append({"frame":frame,"state":state,"history_error":errors.get(frame) or None,
+        scenarios=[h for h in hierarchy.get("scenarios",[]) if h.get("frame")==frame]
+        frames.append({"frame":frame,"state":state,"history_error":"WAVE_ANALYSIS_NOT_RUN" if as_of<=0 else errors.get(frame) or None,
+            "reason":("WAVE_ANALYSIS_NOT_RUN" if as_of<=0 else errors[frame] if frame in errors else
+                "NO_UNAMBIGUOUS_CAUSAL_WAVE_COUNT" if not phases else "COMPETING_WAVE_COUNTS" if len(phases)>1 else "PROVISIONAL_COUNT_NOT_CERTAINTY"),
+            "closed_bar_count":hierarchy.get("frame_candle_counts",{}).get(frame,0),
+            "examined_scenarios":len(scenarios),
+            "invalidated_scenarios":sum(h.get("status")=="INVALIDATED" for h in scenarios),
+            "market_reading":next((r for r in hierarchy.get("frame_readings",[]) if r["frame"]==frame),None),
             "hypotheses":hypotheses,"exhaustion_warning":any(h.get("divergence") or h.get("momentum_shift") for h in usable)})
     def warns(frame):
         return any(f["frame"]==frame and f["exhaustion_warning"] for f in frames)
-    scope=("SENIOR_WARNING" if warns("1d") or warns("6h") else "H1_WARNING" if warns("1h")
+    scope=("SENIOR_WARNING" if warns("1d") or warns("6h") or warns("4h") else "H1_WARNING" if warns("1h")
         else "M15_ONLY_WARNING" if warns("15m") else "NONE")
     return {"schema":"WILLIAMS_MARKET_PHASE_V1","as_of":as_of,"frames":frames,"warning_scope":scope,
         "wave_genealogy_confirmed":False,"probability_calibrated":False,

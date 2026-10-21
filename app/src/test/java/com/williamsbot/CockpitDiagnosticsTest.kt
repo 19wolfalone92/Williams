@@ -6,6 +6,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CockpitDiagnosticsTest {
+    @Test fun recurringReconciliationCannotHideAFullyReservedPortfolioBudget() {
+        val status=healthy().put("reserved_risk_pct",.006)
+            .put("consecutive_losses_available",true)
+        val coordinator=coordinator().put("ready_for_new_entry",false)
+            .put("blocker","exchange_reconciliation_in_progress")
+            .put("pending_intent_details",JSONArray().put(entry()).put(entry()).put(entry()))
+        val result=CockpitDiagnostics.readiness(status,coordinator,now)
+        assertTrue(result.getString("new_entries_reason").startsWith("Свободный резерв риска исчерпан"))
+        assertTrue(result.getString("new_entries_reason").contains("текущая сверка"))
+        assertFalse(result.getBoolean("new_entries_allowed"))
+        assertFalse(result.getString("utc_loss_reset_explanation").contains("Ожидаются подтверждения"))
+    }
     private val now = 1_800_000_000_000L
     private fun healthy() = JSONObject().put("running", true).put("rest_market_ready", true)
         .put("market_ws_connected", true).put("user_ws_connected", true)

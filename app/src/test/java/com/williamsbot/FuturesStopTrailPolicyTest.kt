@@ -7,6 +7,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FuturesStopTrailPolicyTest {
+    @Test fun tc2BookStopDoesNotSilentlyTightenToAnUnrequestedOneROverlay() {
+        val bars=(0 until 5).map { i -> FuturesTrailBar(i*3_600_000L,106.0+i,94.0+i) }
+        val book=planWilliamsCampaignStop("LONG",90.0,100.0,90.0,111.0,.1,1L,bars)
+        assertEquals("TC2_LAST_5_CLOSED_BARS",book?.reason)
+        assertEquals(93.9,book!!.stop,1e-9)
+        val optIn=planWilliamsCampaignStop("LONG",90.0,100.0,90.0,111.0,.1,1L,bars,breakEvenOverlay=true)
+        assertEquals("COST_BUFFERED_BREAKEVEN_1R",optIn?.reason)
+        assertEquals(100.4,optIn!!.stop,1e-9)
+        // An already installed break-even stop is never loosened by this change.
+        assertNull(planWilliamsCampaignStop("LONG",100.4,100.0,90.0,111.0,.1,1L,bars))
+    }
     private fun bars(highs: List<Double>, lows: List<Double>): List<FuturesTrailBar> =
         highs.indices.map { i -> FuturesTrailBar(i * 3_600_000L, highs[i], lows[i]) }
 

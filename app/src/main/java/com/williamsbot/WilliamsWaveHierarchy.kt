@@ -61,18 +61,19 @@ internal data class WilliamsWaveHierarchy(
     val frameErrors: Map<String, String>, val warnings: List<String>,
     val frameCandleCounts:Map<String,Int> = emptyMap(),
     val complexStructures:List<JSONObject> = emptyList(),
-    val adaptiveHistory:JSONObject? = null
+    val adaptiveHistory:JSONObject? = null,
+    val analysisFrames:List<String> = williamsRequiredWaveFrames
 ) {
     private fun containedChain():Boolean {
         val byId=scenarios.associateBy { it.id }
         fun path(node:String,index:Int):Boolean {
-            if (index==williamsRequiredWaveFrames.lastIndex) return true
-            return links.any { it.parent==node && byId[it.child]?.frame==williamsRequiredWaveFrames[index+1] && path(it.child,index+1) }
+            if (index==analysisFrames.lastIndex) return true
+            return links.any { it.parent==node && byId[it.child]?.frame==analysisFrames[index+1] && path(it.child,index+1) }
         }
-        return scenarios.any { it.frame=="1d" && path(it.id,0) }
+        return analysisFrames.isNotEmpty() && scenarios.any { it.frame==analysisFrames.first() && path(it.id,0) }
     }
     fun toJson(): JSONObject = JSONObject().put("schema_version", 1).put("as_of", asOf)
-        .put("wave_labels", "HYPOTHESES_NOT_CERTAINTY").put("chain", JSONArray(williamsRequiredWaveFrames))
+        .put("wave_labels", "HYPOTHESES_NOT_CERTAINTY").put("chain", JSONArray(analysisFrames))
         .put("scenarios", JSONArray(scenarios.map { it.toJson() }))
         .put("links", JSONArray(links.map { it.toJson() })).put("frame_errors", JSONObject(frameErrors))
         .put("frame_candle_counts",JSONObject(frameCandleCounts)).put("contained_chain_observed",containedChain())
@@ -286,17 +287,18 @@ internal fun williamsWaveLegObservationStart(anchor:WilliamsWaveAnchor,frame:Str
     return end
 }
 
-internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>>, asOf: Long): WilliamsWaveHierarchy {
+internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>>, asOf: Long,
+    analysisFrames:List<String> = williamsRequiredWaveFrames): WilliamsWaveHierarchy {
     val valid = linkedMapOf<String,List<WilliamsWaveBar>>()
     val errors = linkedMapOf<String,String>()
-    for (frame in (frames.keys + williamsRequiredWaveFrames).sortedByDescending { williamsWaveFrames[it] ?: 0 }) {
+    for (frame in (frames.keys + analysisFrames).sortedByDescending { williamsWaveFrames[it] ?: 0 }) {
         runCatching { closedWilliamsWaveBars(frames[frame].orEmpty(),frame,asOf) }
             .onSuccess { valid[frame] = it }.onFailure { errors[frame] = it.message ?: "INVALID_HISTORY" }
     }
     val scenarios = mutableListOf<WilliamsWaveScenario>()
     val warnings = mutableListOf<String>()
     for ((frame,bars) in valid) {
-        if (frame !in williamsRequiredWaveFrames) continue
+        if (frame !in analysisFrames) continue
         val hypotheses = williamsHypothesesFromAnchors(frame,bars,
             confirmedWilliamsWaveAnchors(bars,williamsWaveFrames.getValue(frame)))
         for (h in hypotheses) {
@@ -324,9 +326,9 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
     }
     val structures=mutableListOf<JSONObject>()
     val anchorsByFrame=valid.mapValues { (frame,bars)->confirmedWilliamsWaveAnchors(bars,williamsWaveFrames.getValue(frame)) }
-    for(frame in williamsRequiredWaveFrames) {
+    for(frame in analysisFrames) {
         if(frame !in valid) continue
-        val childFrame=williamsRequiredWaveFrames.filter { it in valid && williamsWaveFrames.getValue(it)<williamsWaveFrames.getValue(frame) }
+        val childFrame=analysisFrames.filter { it in valid && williamsWaveFrames.getValue(it)<williamsWaveFrames.getValue(frame) }
             .maxByOrNull { williamsWaveFrames.getValue(it) }.orEmpty()
         val points=anchorsByFrame.getValue(frame)
         for(direction in listOf("UP","DOWN")) for(evidence in detectWilliamsComplexWave(points,direction,asOf)) {
@@ -337,7 +339,8 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
                 .put("source_scenario_id","$frame:$direction:${evidence.startAt}:${parent.size}").put("internal_proof",proof.toJson())
         }
     }
-    return WilliamsWaveHierarchy(asOf,scenarios,linkWilliamsWaveHypotheses(scenarios),errors,warnings,valid.mapValues { it.value.size },structures)
+    return WilliamsWaveHierarchy(asOf,scenarios,linkWilliamsWaveHypotheses(scenarios),errors,warnings,
+        valid.mapValues { it.value.size },structures,analysisFrames=analysisFrames)
 }
 
 internal fun suggestedWilliamsAnalyticalFrames(report: WilliamsWaveHierarchy): List<String> {

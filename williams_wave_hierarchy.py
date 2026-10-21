@@ -102,16 +102,17 @@ class WaveHierarchy:
     warnings: list[dict]
     frame_candle_counts: dict[str,int] = field(default_factory=dict)
     complex_structures: list[dict] = field(default_factory=list)
+    analysis_frames: tuple[str, ...] = REQUIRED_FRAMES
 
     def to_dict(self):
         by_id={s.scenario_id:s for s in self.scenarios}
         edges={(e["parent"],e["child"]) for e in self.links}
         def path(node,index):
-            if index==len(REQUIRED_FRAMES)-1:
+            if index==len(self.analysis_frames)-1:
                 return True
-            return any(p==node and by_id.get(c) and by_id[c].frame==REQUIRED_FRAMES[index+1] and path(c,index+1)
+            return any(p==node and by_id.get(c) and by_id[c].frame==self.analysis_frames[index+1] and path(c,index+1)
                        for p,c in edges)
-        contained=any(s.frame=="1d" and path(s.scenario_id,0) for s in self.scenarios)
+        contained=bool(self.analysis_frames) and any(s.frame==self.analysis_frames[0] and path(s.scenario_id,0) for s in self.scenarios)
         complex_patterns = []
         # The outer leg's changing label is not proof of the internal degree.
         # Serialize non-trading complex alternatives beside existing counts.
@@ -127,7 +128,7 @@ class WaveHierarchy:
         return asdict(self) | {"scenarios":[s.to_dict() for s in self.scenarios],"complex_wave_patterns":(self.complex_structures or complex_patterns)[:48],
                               "schema_version": 1,
                               "wave_labels": "HYPOTHESES_NOT_CERTAINTY",
-                              "chain": list(REQUIRED_FRAMES),"contained_chain_observed":contained,
+                              "chain": list(self.analysis_frames),"contained_chain_observed":contained,
                               "full_history":False,"can_place_orders":False,
                               "squat_volume_input":"KLINE_BASE_VOLUME_PROXY_NOT_CANONICAL_TICK_VOLUME"}
 
@@ -387,9 +388,10 @@ def link_wave_hypotheses(scenarios: Sequence[WaveHypothesis]) -> list[dict]:
     return links
 
 
-def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) -> WaveHierarchy:
+def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int,
+                         *, analysis_frames=REQUIRED_FRAMES) -> WaveHierarchy:
     valid, errors, scenarios, warnings = {}, {}, [], []
-    for frame in sorted(set(frames) | set(REQUIRED_FRAMES), key=lambda f: -FRAME_MS.get(f, 0)):
+    for frame in sorted(set(frames) | set(analysis_frames), key=lambda f: -FRAME_MS.get(f, 0)):
         try:
             if frame not in FRAME_MS:
                 raise ValueError("UNSUPPORTED_FRAME")
@@ -397,7 +399,7 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) ->
         except (ValueError, TypeError, OverflowError) as exc:
             errors[frame] = str(exc)
     for frame, bars in valid.items():
-        if frame not in REQUIRED_FRAMES:
+        if frame not in analysis_frames:
             continue  # analytical resolution is not automatic parent genealogy
         hypotheses = hypotheses_from_anchors(frame, bars, confirmed_wave_anchors(bars, FRAME_MS[frame]))
         for h in hypotheses:
@@ -431,9 +433,9 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) ->
                                  "can_reverse": False})
     structures=[]
     anchors_by_frame={frame:confirmed_wave_anchors(bars,FRAME_MS[frame]) for frame,bars in valid.items()}
-    for frame in REQUIRED_FRAMES:
+    for frame in analysis_frames:
         if frame not in valid:continue
-        lower=[f for f in REQUIRED_FRAMES if f in valid and FRAME_MS[f]<FRAME_MS[frame]]
+        lower=[f for f in analysis_frames if f in valid and FRAME_MS[f]<FRAME_MS[frame]]
         child_frame=max(lower,key=lambda f:FRAME_MS[f]) if lower else ""
         points=anchors_by_frame[frame]
         for direction in ("UP","DOWN"):
@@ -445,7 +447,7 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int) ->
                     "source_scenario_id":f"{frame}:{direction}:{evidence.start_at}:{len(parent)}",
                     "internal_proof":proof.to_dict(),"can_place_orders":False})
     return WaveHierarchy(as_of, scenarios, link_wave_hypotheses(scenarios), errors, warnings,
-                         {frame:len(bars) for frame,bars in valid.items()},structures)
+                         {frame:len(bars) for frame,bars in valid.items()},structures,tuple(analysis_frames))
 
 
 def suggested_analytical_frames(report: WaveHierarchy) -> list[str]:

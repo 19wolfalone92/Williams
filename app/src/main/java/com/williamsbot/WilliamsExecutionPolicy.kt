@@ -14,6 +14,9 @@ internal fun williamsExecutionPolicySnapshot():JSONObject = JSONObject()
     .put("mode",WILLIAMS_EXECUTION_POLICY).put("execution_profile",williamsExecutionProfile)
     .put("observer_profiles",JSONArray(williamsObserverProfiles)).put("one_campaign_per_symbol",true)
     .put("legacy_management","PINNED_SOURCE_NO_NEW_EXPOSURE")
+    .put("tc2_stop_policy",JSONObject().put("trailing_window_closed_h1_bars",5)
+        .put("one_r_break_even_overlay_enabled",false).put("existing_stops_may_widen",false)
+        .put("opposite_signal_auto_reverse_enabled",false))
 
 internal fun williamsStructuralFractal(type:String,source:String):Boolean =
     source==williamsTc2Profile && type.removePrefix("SHORT_").removePrefix("LONG_")=="FRACTAL"

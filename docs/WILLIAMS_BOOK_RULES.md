@@ -1,61 +1,130 @@
-# Bill Williams source rules for Williams bot
+# Williams: правила источников и границы исполнения
 
-This repository uses the book collection in:
-https://github.com/19wolfalone92/Williams-Trading-Books
+Обновлено 21.10.2026 для 4.51.5. Подробная матрица:
+[WILLIAMS_4_51_5_BOOK_AUDIT_RU.md](WILLIAMS_4_51_5_BOOK_AUDIT_RU.md).
 
-The collection currently contains six PDF files:
-- 1. Торговый Хаос - 1.pdf
-- Bill Williams - Trading Chaos 2nd Ed.pdf
-- Bill Williams - Trading Chaos Course.pdf
-- Билл_Вильямс_Новые_измерения_в_биржевой_торговле_2_книга.pdf
-- Билл_Вильямс_Торговый_Хаос_2_3_книга.pdf
-- Торговый Хаос 2 (3книга).pdf
+Предыдущая версия документа смешивала требование первого фрактала NTD с
+независимыми мудрецами TC2 и содержала устаревший статус реализации.
+Ниже приведены правила отдельно по редакциям. Прохождение тестов не доказывает
+прибыльность и полное совпадение каждого дискреционного примера из книг.
 
-## Entry-search rules adopted by the bot
+## Источники
 
-1. Balance first, trigger second. For a LONG trend, the first actionable prerequisite is a confirmed bullish fractal above the Alligator Teeth / red balance line. A breakout above that fractal is the primary mechanical trigger.
-2. Do not manufacture an entry from AO, AC, MFI/MFI-proxy or the Alligator alone before the external fractal exists.
-3. Alligator is the trend/balance filter. LONG requires price on the bullish side of the mouth with the lines ordered Lips > Teeth > Jaw and an awake/spread condition.
-4. AO is momentum confirmation (Profitunity 5/34 on median price). AC is acceleration confirmation. AO/AC colors and zones are used for ranking, confirmation and trade management; they are not a substitute for the fractal trigger.
-5. Wiseman signals are treated as a family, not as three indicators that must all fire on the same bar. Fractal breakout is the conservative primary trigger; reversal/divergent-bar and Super AO signals are confirmation/context.
-6. Wave hierarchy is multi-timeframe. A lower-timeframe five-wave impulse can be a subdivision of a higher-timeframe impulse.
-7. Wave 3 receives the highest entry priority. If a credible lower-timeframe W3 exists, it should outrank a late higher-timeframe W5.
-8. A lower-timeframe bullish W3 inside a bullish higher-timeframe W5 is valid and must not be vetoed solely because the parent is W5.
-9. A five-wave move against the parent trend inside higher W2/W4 is corrective structure (for example A/C). It must not be treated as a continuation LONG signal.
-10. W5 entries require a substantially stronger exhaustion check: price in the 62%-100% target zone, price/oscillator divergence, terminal fractal, squat/volume-facilitation evidence and momentum change. A W5 is a low-priority exception, not the default entry.
-11. Wave analysis keeps a 100-140+ bar structural context; the latest closed bar, not an unfinished bar, is used for confirmed signals.
-12. Initial protection is structure-aware (recent opposite fractal / Teeth with volatility buffer). A fixed profit target is only a safety cap; the main trend exit is market-generated.
-13. After five consecutive green Profitunity bars, stop management can trail below the last strong bar / higher lows.
-14. A confirmed close through the Teeth is an important trend-exit condition and must not be converted into a higher stop that sits above market price.
-15. Exchange filters, spread, slippage, balance, order status and reconciliation remain hard execution gates. Strategy signals never bypass Binance execution safety.
+Коллекция пользователя: https://github.com/19wolfalone92/Williams-Trading-Books
 
-## Important implementation boundary
+Шесть PDF представляют четыре содержательно разных источника: Trading Chaos 1,
+New Trading Dimensions, Trading Chaos 2nd edition (английский оригинал и два
+русских варианта) и Trading Chaos Course. Ссылки на страницы означают страницы
+PDF, если явно не указана печатная нумерация. Course распознан OCR; существенные
+визуальные правила сверяются с самим рисунком.
 
-The public GitHub connector cannot decode the binary PDFs in-place, so this file records the implementation rules derived from the book collection plus accessible book excerpts/figures used for verification. It does not reproduce copyrighted book text.
+## Общие вычисления
 
+- Median price = (high + low) / 2. Встречающееся в тексте (H-L)/2 — опечатка,
+  не другая база осциллятора.
+- AO = SMA5(median) - SMA34(median). Знак AO и изменение его последнего столбца
+  означают разное: зелёный столбец может находиться ниже нуля.
+- AC = AO - SMA5(AO). Пересечение нуля само по себе не является сигналом AC.
+- Alligator: seeded SMMA 13/8, 8/5, 5/3. Для линии на ценовом баре берётся
+  уже известное более раннее значение средней. Будущая цена не нужна.
+- TC2 EN PDF134-135, печатные105-106: уже рассчитанный правый край линий
+  полезно показывать за последней ценовой свечой. Нельзя достраивать
+  отсутствующие Lips/Teeth по выдуманным будущим значениям.
+- Profitunity MACD5/34/5, AO и AC используют общие вычисления. Это не три
+  независимых подтверждения. Course сравнивает осциллятор с сигнальной средней,
+  что отличается от цвета последнего AO-столбца.
+- Объём свечи и число сделок Binance — явно помеченные proxy исходной
+  информации о тиках; точная эквивалентность tick volume не заявляется.
 
-## Edition-specific runtime profiles (2026-10-13)
+## TC2: источник новых рисков
 
-The active runtime must not collapse different editions into a single same-bar Boolean rule.
+Основной эталон: английский оригинал PDF138-186, печатные109-157, главы9-12.
 
-- `WILLIAMS_SIGNAL_PROFILE=TC2_THREE_WISE_MEN` (default): the production signal path uses the Trading Chaos 2 Wise-Men/campaign flow already implemented by `williams_signals.py`.
-- `WILLIAMS_SIGNAL_PROFILE=NTD_FIVE_DIMENSIONS`: an explicit alternate profile now exposes New Trading Dimensions AO Saucer, AO Zero-line Cross, AO Twin Peaks, and AC acceleration formations. Each produces a conditional stop beyond its own signal bar. AO and AC signals are not silently mixed into the TC2 signal list.
-- Any other profile value is rejected by the scanner rather than silently falling back.
+1. WM1 LONG делает lower low и закрывается в верхней половине бара; SHORT
+   делает higher high и закрывается в нижней. Бар должен быть вне пасти
+   Alligator с ангуляцией; проникновение в пасть делает его невалидным.
+2. Ангуляция сравнивает края ценовых баров с линиями от последнего прохода
+   пасти. Регрессия в коде — явная аппроксимация визуального правила.
+3. WM1 контртрендовый. AO может быть направлен против новой сделки.
+   Общее обязательное согласие D1/H4 не является правилом этого входа.
+4. Вход — за экстремум сигнального бара на tick; первый SL — за другим концом.
+5. WM2: третий подряд направленный AO-столбец определяет соответствующий
+   ценовой бар. Это не три бычьих/медвежьих тела свечей.
+6. WM3: минимум два подходящих бара слева и два закрытых справа; равные
+   экстремумы обрабатываются группами. Подтверждение нельзя датировать центром.
+7. Положение относительно Teeth важно при пробое, не только формировании.
+   Непробитый фрактал действует до срабатывания или замены; свежесть данных
+   и биржевой допуск по-прежнему обязательны.
+8. WM1→WM2→WM3 — идеальная последовательность, а не обязательная цепочка.
+   Валидный WM2/WM3 может быть первым. Точный номер волны не обязателен.
+9. Для первого WM2/WM3 и последующего сопровождения глава12 допускает SL
+   за3–5барами/противоположной структурой. Выбран вариант5закрытых H1-баров.
+   Действующая защита двигается только в сторону уменьшения риска.
+10. Книга описывает stop-and-reverse, пример количеств1:5:4:3:2 и
+    дискреционные частичные выходы. Они не включаются молча как универсальные
+    правила бота; ниже указаны намеренные настройки проекта.
 
-### NTD profile implementation boundary
+## NTD: отдельный наблюдатель
 
-Implemented in this pass:
-- AO Saucer: three-bar green-red-green above zero for LONG, mirrored below zero for SHORT.
-- AO Zero-line Cross: closed-bar sign crossing; crossing bar defines the price trigger.
-- AO Twin Peaks: confirmed pair of same-side peaks on the required side of zero, with no intervening zero-line crossing and the second peak closer to zero.
-- AC acceleration: two same-colour AC bars when AC is with the trade, three when against it; the zero-cross exception changes the required count but is not itself an AC signal.
-- Trigger is one tick beyond the signal candle; protective reference is the opposite signal-candle extreme.
+PDF34-54:Alligator/фракталы;55-71:AO;72-90:AC;91-98:зоны;
+99-114:Balance Line;115-122:выходы;123-138:общие примеры.
 
-Still NOT APPROVED as a complete New Trading Dimensions implementation:
-- AC formation edge cases and every zero-cross timing variation need more source-derived fixtures.
-- Full Alligator/Fractal admission semantics for each NTD setup need a dedicated profile-level contract and tests.
-- Zones and standalone Balance-Line trading logic are not yet a complete, independently tested execution profile.
-- MFI on exchange traded-volume data remains a labelled proxy, not an exact replacement for original tick-volume MFI.
-- The scanned Trading Chaos Course and earlier Trading Chaos rules must remain separate edition-specific profiles unless an explicit cross-edition rule is supported by source evidence.
+- Первый внешний фрактал начинает цикл; остальные измерения добавляют
+  в установленном направлении. Это отличается от независимого первого мудреца TC2.
+- AO: Saucer на нужной стороне нуля, Zero Line и Twin Peaks на противоположной
+  стороне без промежуточного пересечения нуля; для входа нужен ценовой триггер.
+- AC: разворот цвета, затем2столбца с направлением сделки/3против него;
+  переход через ноль меняет число. Неисполненный сигнал отменяется при смене
+  цвета. Позднее восстановление требует новой формации.
+- Цвет зоны определяется изменениями AO+AC, не телом свечи. Добавление требует
+  второго одноцветного бара и благоприятного закрытия. После пятого прекращаются
+  именно зональные добавления, а не все остальные измерения.
+- Зональный однобаровый trailing после пятого бара сохраняется независимо
+  от последующего серого или противоположного цвета.
+- Balance Line читается справа налево: один/два record-экстремума при движении
+  от/к Blue Jaw; неблагоприятная зона удваивает требования.
+- Выход по Teeth/Lips — условие закрытия бара, а не любого intrabar-касания.
+  Эти выходы и правила повторного входа не подменяют TC2-сопровождение.
 
-These status statements describe implementation scope, not a claim that the full method is 100% complete or approved for live trading.
+## TC1 и Course: волновой контекст и самостоятельные правила
+
+TC1 PDF37-105; Course PDF15-95, особенно32-72 и77-92.
+
+- Около100–140реальных баров относится к исследуемой серии волн в подходящем
+  масштабе, не ко всей базе. График150баров сам по себе не даёт номер волны.
+- W3 проверяется глобальным пиком5/34 в предполагаемой степени; ценовой
+  экстремум может предшествовать ему на1–5реальных баров.
+- Пересечение нуля после W3 — минимальное условие W4, не доказательство её конца.
+- W5:0.62–1.00расстояния от начала W1 до конца W3, отложенного от конца W4.
+  Цель/дивергенция/фрактал/Squat/смена моментума — отдельные признаки,
+  не калиброванная вероятность и не безусловная команда на ордер.
+- Внутренние подразделения и степень волн существенны. Вложение по времени
+  и цене само по себе не доказывает волновую родословную.
+- Hump: неперекрывающиеся start/signal-фракталы, отмена при потере leverage,
+  защита за более далёким из двух последних противоположных фракталов.
+- Thumb: три последовательно расположенных price fingers, без учёта inside/
+  parallel bars; учитывается рост объёма. В тексте и кратком листе Course
+  различается оценка силы комбинации GREEN/SQUAT.
+- Air Bag: защитный2-bar reversal на существенно старшем ТФ, не отдельный
+  инициирующий сигнал.
+- Младший ТФ для внутренней структуры/точности входа есть в TC1 PDF61-63,83-85
+  и Course78-79,92. Универсального требования M5/M15 до закрытого мудреца H1 нет.
+- PPT — отдельная волновая кампания, включая выбор6или8контрактов для W5
+  в зависимости от удлинения W3. Это не TC2 reverse pyramid.
+
+## Явная политика проекта
+
+- Новые Binance Futures Demo риски принадлежат TC2. NTD/Course наблюдают;
+  заполненные legacy-кампании сохраняют свой источник сопровождения.
+- Исполнение H1. Обязательная проверка M15 остаётся выключенной.
+- Общий зарезервированный риск0.006(0.6%); принятые ожидающие ордера тоже его
+  занимают. Начальная аллокация кампании0.002 ограничена другими меньшими caps.
+- Обычный выход TC2 через защищённый SL. Автоматический разворот и фиксированный
+  TP выключены по пользовательской политике. Проверенная аварийная редукция
+  риска — отдельный путь исполнения.
+- С4.51.5 автоматический1R break-even выключен в обычном TC2 trailing: это
+  дополнительное правило проекта, не книга. Уже более тесный SL не расширяется.
+- Количества, комиссии, allowances проскальзывания, TTL WM1/WM2, сессии и
+  ликвидационные проверки — инженерная политика, требующая отдельной оценки.
+- Сводка рынка только наблюдает: не отправляет, не отменяет, не закрывает
+  и не разворачивает заявки. Безошибочный номер волны/прогноз не заявляются.

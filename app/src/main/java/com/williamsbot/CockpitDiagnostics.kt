@@ -66,6 +66,11 @@ internal object CockpitDiagnostics {
             baselineReady=!dailyBaselineMissing,
             pendingEntries=pendingCount
         )
+        val riskBudgetReason="Свободный резерв риска исчерпан: " +
+            "${String.format(java.util.Locale.US, "%.2f", reservedRisk * 100)}% из " +
+            "${String.format(java.util.Locale.US, "%.2f", totalRiskLimit * 100)}%. " +
+            "Ожидающие заявки Binance ($pendingCount) также резервируют риск. " +
+            "Суточный лимит убытков проверяется отдельно. Защита открытых сделок продолжает работать."
         val reason = when {
             !status.optBoolean("running") -> "Движок остановлен"
             status.optBoolean("kill_switch_latched") -> "Аварийная блокировка новых операций"
@@ -76,15 +81,12 @@ internal object CockpitDiagnostics {
             dailyBaselineMissing -> "Не подтверждена суточная база риска Binance. " + resetExplanation
             status.optBoolean("paused") -> "Новые входы приостановлены; сопровождение продолжается"
             !coordinatorReady && coordinator.optString("blocker") == "exchange_reconciliation_in_progress" ->
-                "Binance: выполняется текущая сверка позиций и заявок; новые входы временно ожидают проверки"
+                if(riskBudgetExhausted) riskBudgetReason+" Также идёт текущая сверка Binance."
+                else "Binance: выполняется текущая сверка позиций и заявок; новые входы временно ожидают проверки"
             !coordinatorReady -> russianExecutionBlocker(coordinator.optString("blocker"))
             !scannerReady -> "Сканер: " + russianStatus(status.optString("scanner_state", "NOT_RUN"))
             !technical -> "Ожидание связи, истории или синхронизации"
-            riskBudgetExhausted -> "Свободный резерв риска исчерпан: " +
-                "${String.format(java.util.Locale.US, "%.2f", reservedRisk * 100)}% из " +
-                "${String.format(java.util.Locale.US, "%.2f", totalRiskLimit * 100)}%. " +
-                "Ожидающие заявки Binance ($pendingCount) также резервируют риск. " +
-                "Суточный лимит убытков здесь ни при чём; защита открытых сделок продолжает работать."
+            riskBudgetExhausted -> riskBudgetReason
             !entries -> "Торговый шлюз ограничивает новые входы"
             !snapshotFresh ->
                 "Новые входы разрешены шлюзом; снимок позиций для экрана пока обновляется"

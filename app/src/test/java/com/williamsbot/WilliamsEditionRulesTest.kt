@@ -5,6 +5,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsEditionRulesTest {
+    @Test fun oppositeAcColourCancelsAnUnhitNtdSignalEvenAfterALaterRecovery() {
+        for(side in listOf("LONG","SHORT")) for(tail in listOf(
+            listOf(5.0,4.0,5.0,6.0,5.0),listOf(4.0,5.0,6.0,5.0,5.5))) {
+            val sign=if(side=="LONG") 1 else -1
+            val bars=(0 until 60).map { i ->
+                val high=if(i==58 || i==57) 110.0 else 100.0
+                if(sign==1) WilliamsWaveBar((i+1)*3_600_000L,99.0,high,98.0,99.0,100.0)
+                else WilliamsWaveBar((i+1)*3_600_000L,101.0,102.0,200-high,101.0,100.0)
+            }
+            val line=List(60) { if(sign==1) 90.0 else 110.0 }
+            val ac=List(55) { 0.0 }+tail.map { sign*it }
+            val ao=List(60) { sign*(it+1.0) }
+            assertFalse(williamsNtdSetups(side,bars,line,line,line,ao,ac,.1).any { it.kind=="AC_SIGNAL" })
+        }
+    }
     @Test fun unifiedBooksAllowEveryVerifiedSourceWithoutChangingItsIdentity() {
         assertEquals(4,williamsEditionProfiles.size)
         assertEquals(3,williamsSourceProfiles.size)

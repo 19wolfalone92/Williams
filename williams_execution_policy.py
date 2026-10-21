@@ -17,7 +17,10 @@ def new_exposure_blocker(source):
 def execution_policy_snapshot():
     return {"mode": EXECUTION_POLICY, "execution_profile": EXECUTION_PROFILE,
             "observer_profiles": list(OBSERVER_PROFILES), "one_campaign_per_symbol": True,
-            "legacy_management": "PINNED_SOURCE_NO_NEW_EXPOSURE"}
+            "legacy_management": "PINNED_SOURCE_NO_NEW_EXPOSURE",
+            "tc2_stop_policy":{"trailing_window_closed_h1_bars":5,
+                "one_r_break_even_overlay_enabled":False,"existing_stops_may_widen":False,
+                "opposite_signal_auto_reverse_enabled":False}}
 
 
 def structural_fractal(signal_type, source=TC2):

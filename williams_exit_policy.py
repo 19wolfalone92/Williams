@@ -28,10 +28,10 @@ def zone_trailing_activation(ind, side, opened_at=0):
 
 
 def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_at, bars,
-                       *, window=5, fee_allowance=.0035, break_even=True):
+                       *, window=5, fee_allowance=.0035, break_even=False):
     """TC2 PDF158/163/165: 3-5 bar stop, confirmed fractal, optional 1R overlay.
 
-    1R cost-buffered break-even is project policy, explicitly not a book rule.
+    1R cost-buffered break-even is an opt-in project overlay, not a book rule.
     Missing initial R disables only that overlay, never structural management.
     """
     if side not in {"LONG", "SHORT", "BUY", "SELL"}:

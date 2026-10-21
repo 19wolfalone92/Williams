@@ -107,7 +107,8 @@ internal fun smmaSeededValues(values: List<Double>, period: Int): List<Double?> 
     return output
 }
 
-/** Display-only future chart displacement. Execution paths use current-time SMMA values instead. */
+/** Align a forward-plotted SMMA with each price bar using known historical values.
+ * Trading consumers use these displaced lines; no future candle is read. */
 internal fun shiftAlligatorForDisplay(raw: List<Double?>, displacement: Int): List<Double?> {
     require(displacement >= 0) { "Alligator displacement must be non-negative" }
     return List(raw.size) { displayIndex ->
@@ -8852,6 +8853,24 @@ private class NativeEngine(
 
     private fun toJson(candidate: BaseAnalysis): JSONObject {
         val wave = candidate.wave
+        // performCampaignScan deliberately does not call the old REST-heavy
+        // enrichWithMtf path. Build the displayed context from real local data
+        // here instead of serializing a null candidate.waveHierarchy as {}.
+        val observedAt=futuresMarketData.exchangeNowMs()
+        val contextErrors=linkedMapOf<String,String>()
+        val localFrames=williamsObservedMarketFrames.associateWith { frame ->
+            if(frame=="1h") candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+            else runCatching {
+                historyStore.loadRecent(candidate.symbol,frame,240,
+                    beforeMs=observedAt-williamsWaveFrames.getValue(frame)).map {
+                    WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+                }
+            }.getOrElse { error ->
+                contextErrors[frame]="HISTORY_READ_FAILED:"+error.javaClass.simpleName
+                emptyList()
+            }
+        }
+        val observedHierarchy=buildWilliamsObservedMarketContext(localFrames,observedAt,contextErrors)
         // Match the exact signal selected by execution, rather than displaying
         // the oldest item in the candidate list as if it were the pending entry.
         val primarySignal = campaignEntryCandidate(candidate)
@@ -8953,8 +8972,8 @@ private class NativeEngine(
         val indicators=JSONObject().apply { mapOf("ao" to h1Ao,"ac" to h1Ac,"jaw" to line.jaw,"teeth" to line.teeth,"lips" to line.lips)
             .forEach { (name,value) -> put(name,if(value.isFinite()) value else JSONObject.NULL) } }
         val trace=buildWilliamsDecisionTrace(candidate.symbol,williamsProfile,
-            candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },futuresMarketData.exchangeNowMs(),
-            indicators,traceSignals,candidate.waveHierarchy?.toJson() ?: JSONObject())
+            candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },observedAt,
+            indicators,traceSignals,observedHierarchy)
         val observations=JSONArray(williamsSourceProfiles.mapNotNull { source ->
             executionStore.readState("edition_observation_"+candidate.symbol+"_"+source)
                 ?.let { runCatching { JSONObject(it) }.getOrNull() }
@@ -8983,7 +9002,7 @@ private class NativeEngine(
             .put("directional_context_native", directionTrace)
             .put("wave4_zero_line_diagnostic", wave4Trace)
             .put("ntd_balance_line_diagnostics", ntdTrace)
-            .put("wave_hierarchy", candidate.waveHierarchy?.toJson() ?: JSONObject().put("state","NOT_ANALYSED"))
+            .put("wave_hierarchy",observedHierarchy)
              .put("execution_policy",williamsExecutionPolicySnapshot()).put("strategy_profile", williamsProfile)
             .put("wave_scores_calibrated", false)
             .put("symbol", candidate.symbol)

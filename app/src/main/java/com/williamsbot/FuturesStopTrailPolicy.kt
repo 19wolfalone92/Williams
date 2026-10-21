@@ -118,11 +118,13 @@ internal fun planFuturesStopTrail(
 }
 
 /** TC2 chapter 12: the 3/5 CLOSED price-bar stop also moves without a new
- * confirmed fractal or +1R move. Unknown original R disables only break-even. */
+ * confirmed fractal or +1R move. The non-book 1R overlay requires explicit opt-in.
+ * Existing exchange stops are never widened when that overlay is disabled. */
 internal fun planWilliamsCampaignStop(
     direction: String, oldStop: Double, actualEntry: Double, initialStop: Double?,
     markPrice: Double, tickSize: Double, openedObservedAtMs: Long,
-    bars: List<FuturesTrailBar>, window: Int = 5, feeAllowance: Double = .0035
+    bars: List<FuturesTrailBar>, window: Int = 5, feeAllowance: Double = .0035,
+    breakEvenOverlay:Boolean = false
 ): FuturesStopTrailProposal? {
     // Never infer an H1 3/5 bar stop from pre-entry candles when the
     // exchange-confirmed position opening timestamp is unknown. Reconciliation
@@ -136,7 +138,8 @@ internal fun planWilliamsCampaignStop(
         (if (direction == "LONG") initialStop < actualEntry else initialStop > actualEntry)
     val proposals = mutableListOf<FuturesStopTrailProposal>()
     planFuturesStopTrail(direction,oldStop,actualEntry,initialStop ?: Double.NaN,markPrice,tickSize,
-        openedObservedAtMs,bars,feeAndSlippageAllowancePct=feeAllowance,breakEvenEnabled=validR)?.let { proposals += it }
+        openedObservedAtMs,bars,feeAndSlippageAllowancePct=feeAllowance,
+        breakEvenEnabled=breakEvenOverlay && validR)?.let { proposals += it }
     if (bars.size >= window && bars.last().openTimeMs+3_600_000L > openedObservedAtMs) {
         val price = if (direction == "LONG") {
             floor((bars.takeLast(window).minOf { it.low }-tickSize)/tickSize+1e-12)*tickSize
