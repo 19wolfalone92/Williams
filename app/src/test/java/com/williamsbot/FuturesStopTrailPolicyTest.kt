@@ -37,20 +37,24 @@ class FuturesStopTrailPolicyTest {
         assertEquals(105.1, result!!.stop, 1e-9)
     }
 
-    @Test fun oneRBreakEvenAccountsForCostsInBothDirections() {
+    @Test fun favorableOneRAloneNeverProposesBreakEven() {
         val long = planFuturesStopTrail(
             "LONG", 90.0, 100.0, 90.0, 111.0, 0.1, 0L, emptyList()
         )
         val short = planFuturesStopTrail(
             "SHORT", 110.0, 100.0, 110.0, 89.0, 0.1, 0L, emptyList()
         )
-        assertEquals("COST_BUFFERED_BREAKEVEN_1R", long?.reason)
-        assertEquals(100.4, long!!.stop, 1e-9)
-        assertEquals("COST_BUFFERED_BREAKEVEN_1R", short?.reason)
-        assertEquals(99.6, short!!.stop, 1e-9)
+        assertNull(long)
+        assertNull(short)
+        // Even legacy explicit enablement cannot silently reactivate the
+        // unbooked 1R algorithm for either direction.
+        assertNull(planFuturesStopTrail("LONG", 90.0, 100.0, 90.0, 111.0,
+            0.1, 0L, emptyList(), breakEvenEnabled=true))
+        assertNull(planFuturesStopTrail("SHORT", 110.0, 100.0, 110.0, 89.0,
+            0.1, 0L, emptyList(), breakEvenEnabled=true))
     }
 
-    @Test fun moreProtectiveFractalWinsOverBreakEven() {
+    @Test fun confirmedFractalRemainsActiveAfterDisablingOneR() {
         val result = planFuturesStopTrail(
             "LONG", oldStop = 90.0, actualEntry = 100.0, initialStop = 90.0,
             markPrice = 118.0, tickSize = 0.1, openedObservedAtMs = 2 * 3_600_000L,
@@ -87,7 +91,7 @@ class FuturesStopTrailPolicyTest {
         assertNull(result)
     }
 
-    @Test fun smallRiskCannotPlaceBreakEvenBeyondCurrentMark() {
+    @Test fun smallRiskAndFavorableMarkCannotInventBreakEven() {
         val result = planFuturesStopTrail(
             "LONG", 99.0, 100.0, 99.95, 100.1, 0.1, 0L, emptyList()
         )
@@ -164,10 +168,8 @@ class FuturesStopTrailPolicyTest {
         assertEquals(3 * 3_600_000L, result.fractalAtMs)
     }
 
-    @Test fun twoTickOrPriceRelativeMarkBufferBlocksNearMarketStop() {
-        // Threshold 2 ticks: proposed protective BE is 100.4, mark 100.55
-        // is too near for a safe replacement. The +1R trigger is satisfied
-        // because the original initial risk is only 0.05.
+    @Test fun unbookedOneRNeverPlacesNearMarketStop() {
+        // Favorable price alone does not authorize a stop, even beyond 1R.
         val blocked = planFuturesStopTrail(
             "LONG", oldStop = 99.9, actualEntry = 100.0, initialStop = 99.95,
             markPrice = 100.55, tickSize = 0.1, openedObservedAtMs = 0L,
