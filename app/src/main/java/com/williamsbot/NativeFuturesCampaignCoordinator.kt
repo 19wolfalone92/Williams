@@ -3876,6 +3876,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("exchange_protection_observations",JSONArray(externalProtectionObservationsJson))
             .put("verified_external_stop_management_symbols",JSONArray(externalStopManagementSymbolsJson))
             .put("verified_external_stop_management_at_ms",externalStopManagementVerifiedAtMs)
+            .put("operator_supervised_positions",operatorSupervisionsSnapshot())
             .put("pending_intents", pendingDetails.length())
             .put("pending_intent_details", pendingDetails)
             .put("testnet_only", true)
