@@ -29,10 +29,10 @@ def zone_trailing_activation(ind, side, opened_at=0):
 
 def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_at, bars,
                        *, window=5, fee_allowance=.0035, break_even=True):
-    """TC2 PDF158/163/165: 3-5 bar stop, confirmed fractal, optional 1R overlay.
+    """TC2 PDF158/163/165: verified 3/5-bar and confirmed fractal stops only.
 
-    1R cost-buffered break-even is project policy, explicitly not a book rule.
-    Missing initial R disables only that overlay, never structural management.
+    Legacy keyword arguments remain accepted, but *never* authorize automatic
+    1R/break-even. A favorable mark move without a book structure does nothing.
     """
     if side not in {"LONG", "SHORT", "BUY", "SELL"}:
         return None
@@ -76,11 +76,4 @@ def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_a
             offer(extreme-tick if long else extreme+tick,"CONFIRMED_H1_FRACTAL")
             if len(proposals) > before:
                 break
-    valid_r = (initial_stop is not None and isfinite(initial_stop) and
-               isfinite(entry) and entry > 0 and initial_stop > 0 and
-               (initial_stop < entry if long else initial_stop > entry))
-    if break_even and valid_r and (mark-entry if long else entry-mark) >= abs(entry-initial_stop):
-        raw = entry*(1+fee_allowance if long else 1-fee_allowance)
-        price = ceil(raw/tick-1e-12)*tick if long else floor(raw/tick+1e-12)*tick
-        offer(price,"COST_BUFFERED_BREAKEVEN_1R",True)
     return (max(proposals,key=lambda p:p["stop"]) if long else min(proposals,key=lambda p:p["stop"])) if proposals else None
