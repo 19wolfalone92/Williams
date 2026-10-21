@@ -1349,4 +1349,61 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals(0,exchange.posts("/fapi/v1/order"))
         }
     }
+
+    @Test fun previousInstallWilliamsStopIsObservedNotCanceledOrSilentlyAdoptedLongAndShort() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange=Exchange(direction)
+            exchange.quantity=if(direction.name=="LONG") 1.0 else -1.0
+            exchange.entry=if(direction.name=="LONG") 101.0 else 99.0
+            exchange.mark=if(direction.name=="LONG") 100.0 else 100.0
+            val stopId="W2PS_BTCUSDT_1234567890"
+            val stop=JSONObject().put("symbol","BTCUSDT")
+                .put("clientAlgoId",stopId).put("algoId","5001")
+                .put("algoStatus","NEW").put("orderType","STOP_MARKET")
+                .put("side",if(direction.name=="LONG") "SELL" else "BUY")
+                .put("positionSide","BOTH").put("workingType","MARK_PRICE")
+                .put("closePosition","true")
+                .put("triggerPrice",if(direction.name=="LONG") "95" else "105")
+            exchange.algos["5001"]=stop
+            val newInstall=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            val inspected=newInstall.reconcile()
+            assertFalse(inspected.toString(),inspected.getBoolean("ok"))
+            val observations=inspected.getJSONArray("exchange_protection_observations")
+            assertEquals(inspected.toString(),1,observations.length())
+            assertEquals("EXTERNAL_PROTECTED",observations.getJSONObject(0).getString("stop_proof"))
+            assertEquals(stopId,observations.getJSONObject(0).getString("protection_client_id"))
+            assertFalse(observations.getJSONObject(0).getBoolean("automatic_trailing_authorized"))
+            assertEquals("RECONCILE_REQUIRED",newInstall.state.name)
+            assertEquals(0,newInstall.intentsSnapshot().length())
+            assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
+            assertEquals("NEW",stop.getString("algoStatus"))
+            assertEquals(1,inspected.getJSONArray("external_open_orders").length())
+            assertTrue(newInstall.status().getJSONArray("exchange_protection_observations").length()>0)
+            assertFalse(newInstall.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
+    @Test fun malformedPreviousInstallStopIsNotMisreportedAsProtectedOrReplaced() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.quantity=1.0
+        exchange.entry=101.0
+        exchange.mark=100.0
+        val foreign=JSONObject().put("symbol","BTCUSDT")
+            .put("clientAlgoId","W2PS_BTCUSDT_1234567890").put("algoId","5001")
+            .put("algoStatus","NEW").put("orderType","STOP_MARKET")
+            .put("side","BUY").put("positionSide","BOTH")
+            .put("workingType","MARK_PRICE").put("closePosition","true")
+            .put("triggerPrice","95")
+        exchange.algos["5001"]=foreign
+        val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+        val result=coordinator.reconcile()
+        assertFalse(result.getBoolean("ok"))
+        assertEquals("STOP_UNCONFIRMED",
+            result.getJSONArray("exchange_protection_observations")
+                .getJSONObject(0).getString("stop_proof"))
+        assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+    }
 }
