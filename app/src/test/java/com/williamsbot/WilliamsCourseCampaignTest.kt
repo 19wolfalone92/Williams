@@ -66,4 +66,38 @@ class WilliamsCourseCampaignTest {
         assertEquals("W5",williamsCourseNextStage("W4","W5",true))
         assertNull(williamsCourseNextStage("W5","A",true))
     }
+
+    @Test fun optionalW3ExtensionMayBeSkippedWithoutFabricatedFills() {
+        for(side in listOf("LONG","SHORT")) {
+            val s=WilliamsCourseState("owner-"+side,side,stage="W3",
+                confirmedUnits=6,revision=3,lastSignalCloseMs=1000L)
+            val p=planWilliamsCourse(s,"W4",2000,2500,true,true,true,true)
+            assertEquals("PROPOSED",p.status)
+            assertEquals(-3,p.signedUnitDelta)
+            val confirmed=acknowledgeWilliamsCourseFill(s,p,"ex-fill-"+side,
+                -3,3,2000,true,true)
+            assertEquals("W4",confirmed.stage)
+            assertEquals(3,confirmed.confirmedUnits)
+            assertFalse(p.canPlaceOrders)
+        }
+    }
+
+    @Test fun differentCampaignSideRevisionOrBarCannotHijackCourseFill() {
+        val owner=WilliamsCourseState("owned","LONG")
+        val correct=planWilliamsCourse(owner,"W1",100000,100500,true,true,true,true)
+        val foreign=planWilliamsCourse(owner.copy(campaignId="attacker"),"W1",100000,100500,true,true,true,true)
+        val wrongSide=planWilliamsCourse(owner.copy(side="SHORT"),"W1",100000,100500,true,true,true,true)
+        val wrongTime=planWilliamsCourse(owner,"W1",100001,100500,true,true,true,true)
+        val tampered=correct.copy(idempotencyKey="COURSE_FAKE",signedUnitDelta=3)
+        for(p in listOf(foreign,wrongSide,wrongTime,tampered)) {
+            try {
+                acknowledgeWilliamsCourseFill(owner,p,"new-exchange-id",3,3,100000,true,true)
+                fail("Foreign or tampered proposal changed Course state: "+p)
+            } catch(expected:IllegalArgumentException) {
+                assertEquals(0,owner.revision)
+            }
+        }
+        assertEquals(1,acknowledgeWilliamsCourseFill(owner,correct,"genuine-fill",
+            3,3,100000,true,true).revision)
+    }
 }
