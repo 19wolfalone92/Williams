@@ -76,13 +76,10 @@ def ntd_balance_line_evidence(
         return blocked("NO_VALID_BASE")
     base = min(possible, key=lambda i: (prices[i], -i)) if is_long else max(possible, key=lambda i: (prices[i], i))
     base_price = prices[base]
-    relation = "ABOVE" if base_price > j[base] else "BELOW" if base_price < j[base] else "ON"
-    # Moving towards Jaw is the more demanding direction.
-    uphill = (is_long and relation != "ABOVE") or (not is_long and relation != "BELOW")
-    needed = 2 if uphill else 1
-    if (is_long and zone == "RED") or (not is_long and zone == "GREEN"):
-        needed *= 2
-    required = needed
+    # NTD pp104/108, figs 8-9(D), 8-20(D): use the position of the
+    # first qualifying SIGNAL-reference bar relative to current Jaw at
+    # that bar. The base bar can lie on the OTHER side of Balance Line.
+    relation, needed = "UNKNOWN", 0
     count, previous, reference = 0, base_price, -1
     # Read from RIGHT to LEFT: each 'new high/low' must exceed the previous
     # qualifying extremum in the trade direction, not merely the base.
@@ -90,11 +87,22 @@ def ntd_balance_line_evidence(
         if not isfinite(prices[k]) or prices[k] <= 0:
             return blocked("INVALID_PRICE_IN_FORMATION")
         if (prices[k] > previous if is_long else prices[k] < previous):
+            if count == 0:
+                if not isfinite(j[k]) or j[k] <= 0:
+                    return blocked("SIGNAL_JAW_NOT_READY")
+                relation = ("ABOVE" if prices[k] > j[k] else "BELOW"
+                            if prices[k] < j[k] else "ON")
+                uphill = (is_long and relation != "ABOVE") or (not is_long and relation != "BELOW")
+                needed = (2 if uphill else 1) * (
+                    2 if (is_long and zone == "RED") or (not is_long and zone == "GREEN") else 1
+                )
             count += 1
             previous = prices[k]
             reference = k
             if count == needed:
                 break
+    if needed == 0:
+        return blocked("NO_NEW_REFERENCE_EXTREME")
     if count != needed:
         return BalanceLineEvidence(side, "INCOMPLETE", base, reference, needed, count,
                                    zone=zone, relation=relation,
