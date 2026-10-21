@@ -73,12 +73,16 @@ def _trigger_still_pending(
         if "high" not in ind.columns:
             return False
         highs = pd.to_numeric(ind.iloc[signal_index + 1:]["high"], errors="coerce")
+        if not all(math.isfinite(float(v)) and float(v) > 0 for v in highs):
+            return False
         return not bool((highs >= trigger_price).any())
     if float(current_close) <= trigger_price:
         return False
     if "low" not in ind.columns:
         return False
     lows = pd.to_numeric(ind.iloc[signal_index + 1:]["low"], errors="coerce")
+    if not all(math.isfinite(float(v)) and float(v) > 0 for v in lows):
+        return False
     return not bool((lows <= trigger_price).any())
 
 
@@ -270,6 +274,9 @@ def _latest_confirmed_fractal(
         # or a 3-5-bar structural stop. Do not substitute the single up/down
         # fractal bar's other edge. Preserve the whole plateau if it is longer.
         group = ind.iloc[min(group_start_i,max(0,confirmation_i-4)):confirmation_i+1]
+        structural_extremes = pd.to_numeric(group["low" if direction == "LONG" else "high"], errors="coerce")
+        if not all(math.isfinite(float(v)) and float(v) > 0 for v in structural_extremes):
+            continue  # Never infer a structural SL by silently dropping a missing extreme.
         trigger_base = float(center["high"] if direction == "LONG" else center["low"])
         trigger = trigger_base + tick if direction == "LONG" else trigger_base - tick
         protective = float(
@@ -288,6 +295,11 @@ def _latest_confirmed_fractal(
         # bars close. If any bar from confirmation onward already touched the
         # trigger intrabar, do not revive that old stop order after a scan gap.
         since_confirmation = ind.iloc[confirmation_i:]
+        observed_extremes = pd.to_numeric(
+            since_confirmation["high" if direction == "LONG" else "low"], errors="coerce"
+        )
+        if not all(math.isfinite(float(v)) and float(v) > 0 for v in observed_extremes):
+            continue  # Missing bars/extremes cannot prove an unconsumed breakout.
         if direction == "LONG":
             if current_close is not None and float(current_close) >= trigger:
                 continue

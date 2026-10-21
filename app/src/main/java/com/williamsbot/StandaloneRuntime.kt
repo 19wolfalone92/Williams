@@ -5724,8 +5724,11 @@ private class NativeEngine(
             // A book-H1 conditional entry is rechecked while waiting, because
             // Binance executes conditional stops asynchronously. In particular,
             // the WM3 fractal must still break on the correct side of Teeth.
-            if(pending.optString("intent_role","ENTRY")=="ENTRY" && exchangeRowsValid && !invalidEdition &&
-                pending.optString("client_id").startsWith("W2H_") &&
+            val bookAddition=pending.optString("intent_role")=="ADD_ON" &&
+                profile==williamsTc2Profile && pending.optString("entry_client_id").isNotBlank() &&
+                pending.optString("client_id").startsWith("W2A_")
+            if(((pending.optString("intent_role","ENTRY")=="ENTRY" && exchangeRowsValid &&
+                    pending.optString("client_id").startsWith("W2H_")) || bookAddition) && !invalidEdition &&
                 pending.optString("signal_type")!="OPERATOR_FORCED_DIRECTION") {
                 if(exchangeOrderStatus(pending) in setOf("TRIGGERING","TRIGGERED")) continue
                 val bookInvalidation=runCatching {
@@ -5737,7 +5740,8 @@ private class NativeEngine(
                     val stop=pending.optString("protective_stop").toDoubleOrNull() ?: Double.NaN
                     val proofError=williamsBookH1ProofBlocker(setup.toString(),
                         pending.optString("direction"),parentId,pending.optString("signal_type"),
-                        pending.optString("strategy_profile",williamsTc2Profile),price,stop,now)
+                        pending.optString("strategy_profile",williamsTc2Profile),price,stop,now,
+                        pending.optString("entry_client_id"))
                     if(proofError!=null) proofError
                     else {
                         val h1=fetchCandles(symbol,"1h",220)
@@ -5748,7 +5752,7 @@ private class NativeEngine(
                         if(!valid) h1ParentRejectionReason(symbol,parentId,"H1_BOOK_PARENT_INVALIDATED")
                         else {
                             val closed=h1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
-                            val teeth=williamsAlligatorLine(closed,8,5).lastOrNull() ?: Double.NaN
+                            val teeth=williamsBookH1ActivationTeeth(closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)
                             williamsBookFractalTeethBlocker(pending.optString("signal_type"),
                                 pending.optString("direction"),price,teeth,tick)
                         }
@@ -6199,6 +6203,12 @@ private class NativeEngine(
             setup.put("course_target_stage",targetStage).put("course_target_quantity",target)
         }
         if(!quantity.isFinite() || quantity<=0) return
+        if(profile==williamsTc2Profile) setup.put("book_h1_entry",williamsBookH1Proof(
+            signal.signalId,direction,signal.type,profile,signal.signalBarTimeMs,
+            fmtPrice(price,rules.tick).toDouble(),
+            (if(direction=="LONG") normalizePrice(signal.protectivePrice,rules.tick)
+                else normalizeTriggerPrice(signal.protectivePrice,rules.tick)),
+            rules.tick,parentId,stop))
         val clientId=additionClientId(signal)
         if((0 until all.length()).any { all.optJSONObject(it)?.optString("client_id")==clientId }) return
         val plan=NativeFuturesCampaignCoordinator.EntryPlan(symbol,
@@ -6464,7 +6474,7 @@ private class NativeEngine(
                 contextNow,currentH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }))
             return rejectDecision(symbol,"H1_BOOK_TRIGGER_ALREADY_CONSUMED: no late return to old breakout")
         val closedH1=currentH1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=contextNow }
-        val h1Teeth=williamsAlligatorLine(closedH1,8,5).lastOrNull() ?: Double.NaN
+        val h1Teeth=williamsBookH1ActivationTeeth(closedH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },contextNow)
         williamsBookFractalTeethBlocker(signal.type,direction.name,signal.triggerPrice,h1Teeth,symbolFilters(symbol).tick)?.let {
             return rejectDecision(symbol,it)
         }
@@ -6631,7 +6641,7 @@ private class NativeEngine(
                 "H1_BOOK_BREAKOUT_ALREADY_CONSUMED_BEFORE_SUBMISSION"
             }
             val submitH1Closed=submitH1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=submitNow }
-            val submitTeeth=williamsAlligatorLine(submitH1Closed,8,5).lastOrNull() ?: Double.NaN
+            val submitTeeth=williamsBookH1ActivationTeeth(submitH1Closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },submitNow)
             check(williamsBookFractalTeethBlocker(signal.type,direction.name,trigger,submitTeeth,rules.tick)==null) {
                 "H1_FRACTAL_TEETH_INVALID_BEFORE_SUBMISSION"
             }
@@ -8175,7 +8185,7 @@ private class NativeEngine(
         val stop=plan.protectiveStop.toDouble()
         check(williamsProfileAllowsSource(williamsProfile,plan.strategyProfile)) { "H1_BOOK_EDITION_CHANGED" }
         check(williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
-            plan.signalType,plan.strategyProfile,target,stop,now)==null) { "H1_BOOK_PROOF_UNVERIFIED" }
+            plan.signalType,plan.strategyProfile,target,stop,now,plan.entryClientId)==null) { "H1_BOOK_PROOF_UNVERIFIED" }
         val candles=fetchCandles(plan.symbol,"1h",220)
         val signals=h1ContextCampaignSignals(plan.symbol,candles,tick)
         val actual=signals.singleOrNull { it.signalId==plan.signalId &&
@@ -8189,14 +8199,24 @@ private class NativeEngine(
         val expectedStop=if(plan.direction.name=="LONG")
             normalizePrice(actual.protectivePrice,tick)
             else normalizeTriggerPrice(actual.protectivePrice,tick)
-        check(if(plan.direction.name=="LONG") stop>=expectedStop-tick*.11
+        if(plan.entryClientId.isBlank()) check(if(plan.direction.name=="LONG") stop>=expectedStop-tick*.11
               else stop<=expectedStop+tick*.11) { "H1_BOOK_PROTECTIVE_STOP_WIDENED" }
-        check(!williamsBookH1TriggerConsumed(plan.direction.name,plan.signalBarTimeMs,target,now,
-            candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })) {
-            "H1_BOOK_BREAKOUT_WAS_ALREADY_CONSUMED"
+        // fetchCandles deliberately excludes the forming bar. Fetch its raw
+        // extremes separately so a breakout followed by an intrahour retreat
+        // cannot revive a consumed H1 entry (including a campaign addition).
+        val recent=futuresMarketData.klines(plan.symbol,"1h",2)
+        val recentBars=(0 until recent.length()).map { index ->
+            val row=recent.getJSONArray(index)
+            WilliamsWaveBar(row.getLong(0),row.getDouble(1),row.getDouble(2),
+                row.getDouble(3),row.getDouble(4),row.getDouble(5))
         }
+        val breakoutBlocker=williamsBookH1ObservedBreakoutBlocker(plan.direction.name,
+            plan.signalBarTimeMs,target,futuresMarketData.exchangeNowMs(),
+            candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },recentBars)
+        check(breakoutBlocker==null) { breakoutBlocker ?: "H1_BREAKOUT_UNVERIFIED" }
         val closed=candles.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
-        val teeth=williamsAlligatorLine(closed,8,5).lastOrNull() ?: Double.NaN
+        val teeth=williamsBookH1ActivationTeeth(closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
+            futuresMarketData.exchangeNowMs())
         check(williamsBookFractalTeethBlocker(plan.signalType,plan.direction.name,target,teeth,tick)==null) {
             "H1_BOOK_FRACTAL_NO_LONGER_OUTSIDE_TEETH"
         }

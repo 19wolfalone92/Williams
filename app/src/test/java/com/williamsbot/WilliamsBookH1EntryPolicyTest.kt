@@ -74,4 +74,61 @@ class WilliamsBookH1EntryPolicyTest {
         assertTrue(williamsBookH1TriggerConsumed("LONG",t,105.0,t+2*WILLIAMS_H1_MS,
             listOf(h1Bars().first(),h1Bars().last().copy(h=Double.NaN))))
     }
+
+    @Test fun additionProofPinsCampaignWithoutResettingItsProtectiveStop() {
+        for(side in listOf("LONG","SHORT")) {
+            val entry=if(side=="LONG") 105.0 else 95.0
+            val signalStop=if(side=="LONG") 102.0 else 98.0
+            val campaignStop=if(side=="LONG") 99.0 else 101.0
+            val type=if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL"
+            val p=williamsBookH1Proof("new-fractal",side,type,williamsTc2Profile,t,
+                entry,signalStop,.1,"owner-1",campaignStop)
+            val setup=JSONObject().put("book_h1_entry",p).toString()
+            assertNull(williamsBookH1ProofBlocker(setup,side,"new-fractal",type,williamsTc2Profile,
+                entry,campaignStop,now,"owner-1"))
+            assertNotNull(williamsBookH1ProofBlocker(setup,side,"new-fractal",type,williamsTc2Profile,
+                entry,campaignStop,now,"other-owner"))
+            assertNotNull(williamsBookH1ProofBlocker(setup,side,"new-fractal",type,williamsTc2Profile,
+                entry,campaignStop,now))
+            assertNotNull(williamsBookH1ProofBlocker(setup,side,"new-fractal",type,williamsTc2Profile,
+                entry,signalStop,now,"owner-1"))
+        }
+    }
+
+    @Test fun freshFormingBarVetoesPastTouchAfterRetreatInBothDirections() {
+        val closed=listOf(h1Bars().first())
+        val live=h1Bars().last()
+        assertNull(williamsBookH1ObservedBreakoutBlocker("LONG",t,105.0,now,closed,listOf(live)))
+        assertNull(williamsBookH1ObservedBreakoutBlocker("SHORT",t,95.0,now,closed,listOf(live)))
+        assertNotNull(williamsBookH1ObservedBreakoutBlocker("LONG",t,105.0,now,closed,listOf(live.copy(h=106.0))))
+        assertNotNull(williamsBookH1ObservedBreakoutBlocker("SHORT",t,95.0,now,closed,listOf(live.copy(l=94.0))))
+        assertNotNull(williamsBookH1ObservedBreakoutBlocker("LONG",t,105.0,now,closed,emptyList()))
+        assertNotNull(williamsBookH1ObservedBreakoutBlocker("LONG",t,105.0,now,closed,closed))
+        assertNotNull(williamsBookH1ObservedBreakoutBlocker("LONG",t,105.0,now,closed,listOf(live.copy(h=Double.NaN))))
+        // At a new hour an old raw snapshot cannot prove the new bar untouched.
+        assertNotNull(williamsBookH1ObservedBreakoutBlocker("LONG",t,105.0,t+2*WILLIAMS_H1_MS,closed,listOf(live)))
+    }
+
+    @Test fun historyBeginningAfterSignalKnowledgeCannotProveUntouchedBreakout() {
+        val late=h1Bars().last().copy(t=t+2*WILLIAMS_H1_MS)
+        assertTrue(williamsBookH1TriggerConsumed("LONG",t,105.0,t+2*WILLIAMS_H1_MS+1,listOf(late)))
+    }
+
+    @Test fun activationTeethUsesCurrentDisplayedLineFromClosedPricesOnly() {
+        val bars=(0 until 50).map { index ->
+            val price=100.0+index
+            WilliamsWaveBar(t+index*WILLIAMS_H1_MS,price,price+1,price-1,price,10.0)
+        }
+        val at=bars.last().t+WILLIAMS_H1_MS+30_000L
+        val raw=smmaSeededValues(bars.map { (it.h+it.l)/2 },8)
+        val lastClosedLine=shiftAlligatorForDisplay(raw,5).last()!!
+        val active=williamsBookH1ActivationTeeth(bars,at)
+        assertEquals(raw[bars.size-5]!!,active,1e-12)
+        assertTrue(active>lastClosedLine)
+        // An extreme between the previous and current red line must be refused.
+        val extreme=(active+lastClosedLine)/2
+        assertNull(williamsBookFractalTeethBlocker("FRACTAL","LONG",extreme+.1,lastClosedLine,.1))
+        assertNotNull(williamsBookFractalTeethBlocker("FRACTAL","LONG",extreme+.1,active,.1))
+        assertTrue(williamsBookH1ActivationTeeth(bars,at+WILLIAMS_H1_MS).isNaN())
+    }
 }

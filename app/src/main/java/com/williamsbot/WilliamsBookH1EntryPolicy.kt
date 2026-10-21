@@ -49,7 +49,7 @@ internal fun williamsBookH1RetryGeneration(intents:JSONArray,parentId:String):In
 internal fun williamsBookH1Proof(
     signalId:String, direction:String,signalType:String,source:String,
     signalAtMs:Long,bookTrigger:Double,bookStop:Double,
-    tick:Double
+    tick:Double,entryClientId:String="",campaignStop:Double=bookStop
 ):JSONObject = JSONObject()
     .put("mode",WILLIAMS_BOOK_H1_ENTRY_MODE).put("frame","1h")
     .put("signal_id",signalId).put("direction",direction)
@@ -59,6 +59,8 @@ internal fun williamsBookH1Proof(
     .put("expires_at_ms",williamsH1SignalExpiry(signalAtMs,signalType,source))
     .put("validity_policy",if(williamsStructuralFractal(signalType,source)) "UNBROKEN_UNSUPERSEDED_FRACTAL" else "PROJECT_AGE_WINDOW")
     .put("book_trigger",bookTrigger).put("book_stop",bookStop)
+    .put("intent_role",if(entryClientId.isBlank()) "ENTRY" else "ADD_ON")
+    .put("entry_client_id",entryClientId).put("campaign_stop",campaignStop)
     .put("tick",tick)
 
 /** Structural, identity and price schema checks; NOT a replacement for
@@ -66,7 +68,7 @@ internal fun williamsBookH1Proof(
  */
 internal fun williamsBookH1ProofBlocker(
     setup:String,direction:String,signalId:String,signalType:String,source:String,
-    entry:Double,stop:Double,now:Long
+    entry:Double,stop:Double,now:Long,entryClientId:String=""
 ):String? {
     val proof=runCatching { JSONObject(setup).getJSONObject("book_h1_entry") }.getOrNull()
         ?:return "H1_BOOK_PROOF_REQUIRED"
@@ -79,6 +81,14 @@ internal fun williamsBookH1ProofBlocker(
     val tick=proof.optDouble("tick",Double.NaN)
     val bookTrigger=proof.optDouble("book_trigger",Double.NaN)
     val bookStop=proof.optDouble("book_stop",Double.NaN)
+    val addition=entryClientId.isNotBlank()
+    if(proof.optString("intent_role","ENTRY")!=(if(addition) "ADD_ON" else "ENTRY") ||
+        proof.optString("entry_client_id")!=entryClientId ||
+        addition && (source!=williamsTc2Profile ||
+            signalType.removePrefix("SHORT_").removePrefix("LONG_") !in setOf("SUPER_AO","FRACTAL") ||
+            !proof.optDouble("campaign_stop",Double.NaN).isFinite() ||
+            abs(proof.optDouble("campaign_stop")-stop)>tick*.11))
+        return "H1_BOOK_CAMPAIGN_PROOF_MISMATCH"
     if(proof.optString("mode")!=WILLIAMS_BOOK_H1_ENTRY_MODE ||
         proof.optString("frame")!="1h" ||
         proof.optString("signal_id")!=signalId || signalId.isBlank() ||
@@ -92,11 +102,14 @@ internal fun williamsBookH1ProofBlocker(
         !tick.isFinite() || tick<=0 ||
         listOf(bookTrigger,bookStop,entry,stop).any { !it.isFinite() || it<=0 } ||
         abs(bookTrigger-entry)>tick*.11 ||
-        (if(direction=="LONG") bookStop>=bookTrigger || stop>=entry || stop<bookStop-tick*.11
-         else bookStop<=bookTrigger || stop<=entry || stop>bookStop+tick*.11)) return "H1_BOOK_PROOF_MISMATCH_OR_EXPIRED"
+        (if(direction=="LONG") bookStop>=bookTrigger || stop>=entry || !addition && stop<bookStop-tick*.11
+         else bookStop<=bookTrigger || stop<=entry || !addition && stop>bookStop+tick*.11)) return "H1_BOOK_PROOF_MISMATCH_OR_EXPIRED"
     // Only Course may tighten the original stop using its independent higher
     // timeframe Air Bag. Other editions must keep the source signal's stop.
-    if(source!=williamsCourseProfile && abs(stop-bookStop)>tick*.11)
+    // Additions use the existing campaign stop, independently checked against
+    // its protected owner by the coordinator, rather than resetting that stop
+    // to the new signal bar. The original book stop remains evidence only.
+    if(!addition && source!=williamsCourseProfile && abs(stop-bookStop)>tick*.11)
         return "H1_BOOK_STOP_CHANGED"
     return null
 }
@@ -120,6 +133,16 @@ internal fun williamsBookFractalTeethBlocker(
     }
 }
 
+/** The red line displaced by five bars beside the forming H1 bar is already
+ * known from CLOSED prices. Using the last closed bar's displayed line would
+ * lag the actual activation check by one H1 bar. No forming OHLC is needed. */
+internal fun williamsBookH1ActivationTeeth(closedBars:List<WilliamsWaveBar>,now:Long):Double {
+    if(williamsClosedH1HistoryBlocker(closedBars,now)!=null || !validWilliamsEditionBars(closedBars))
+        return Double.NaN
+    return smmaSeededValues(closedBars.map { (it.h+it.l)/2.0 },8)
+        .getOrNull(closedBars.size-5)?.takeIf { it.isFinite() && it>0 } ?: Double.NaN
+}
+
 /** Do not re-submit a late H1 entry if its original breakout happened after
  * the signal was known, even if the mark later retraced behind the trigger.
  * Accept open H1 bars only for this historical-consumption veto, never for
@@ -134,7 +157,26 @@ internal fun williamsBookH1TriggerConsumed(
         return true
     if(bars.isEmpty() || bars.any { it.t<0 || it.t>observedAtMs ||
             !it.h.isFinite() || !it.l.isFinite() || it.l<=0 || it.h<it.l } ||
+        bars.first().t>signalAtMs+WILLIAMS_H1_MS ||
         bars.zipWithNext().any { (a,b) -> b.t-a.t!=WILLIAMS_H1_MS }) return true
     return bars.any { b -> b.t>=signalAtMs+WILLIAMS_H1_MS &&
         (if(direction=="LONG") b.h>=trigger else b.l<=trigger) }
+}
+
+/** Include the fresh forming H1 bar only as evidence that a trigger was already
+ * touched. It must never be used to form WM1/WM2/WM3 or their Alligator lines. */
+internal fun williamsBookH1ObservedBreakoutBlocker(
+    direction:String,signalAtMs:Long,trigger:Double,observedAtMs:Long,
+    closedBars:List<WilliamsWaveBar>,recentBars:List<WilliamsWaveBar>
+):String? {
+    if(observedAtMs<=0 || recentBars.isEmpty() || recentBars.any { b ->
+            b.t<=0 || b.t%WILLIAMS_H1_MS!=0L || b.t>observedAtMs ||
+                listOf(b.o,b.h,b.l,b.c).any { !it.isFinite() || it<=0 } ||
+                b.h<maxOf(b.o,b.l,b.c) || b.l>minOf(b.o,b.c)
+        } || recentBars.zipWithNext().any { (a,b) -> b.t-a.t!=WILLIAMS_H1_MS } ||
+        recentBars.last().t!=observedAtMs/WILLIAMS_H1_MS*WILLIAMS_H1_MS)
+        return "H1_CURRENT_BAR_OBSERVATION_UNVERIFIED"
+    val merged=(closedBars+recentBars).associateBy { it.t }.values.sortedBy { it.t }
+    return if(williamsBookH1TriggerConsumed(direction,signalAtMs,trigger,observedAtMs,merged))
+        "H1_BOOK_BREAKOUT_WAS_ALREADY_CONSUMED_OR_HISTORY_UNVERIFIED" else null
 }

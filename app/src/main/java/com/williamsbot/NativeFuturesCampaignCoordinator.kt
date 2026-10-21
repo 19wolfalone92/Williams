@@ -59,6 +59,30 @@ internal fun matchesConfirmedFuturesProtectiveStop(
     return clientId == expectedClientId && actual.compareTo(expected) == 0
 }
 
+/** A terminal parent is not proof of missing protection if it already spawned
+ * a child order. Bind the entire former STOP identity before granting the
+ * separately revalidated emergency reduction capability. */
+internal fun matchesTerminalUntriggeredFuturesProtectiveStop(
+    order: JSONObject?, symbol: String, direction: String,
+    expectedClientId: String, expectedStop: String
+): Boolean {
+    if (order == null || symbol.isBlank() || expectedClientId.isBlank() ||
+        direction !in setOf("LONG", "SHORT")) return false
+    val expected = expectedStop.toBigDecimalOrNull()?.takeIf { it.signum() > 0 } ?: return false
+    val actual = order.optString("triggerPrice").ifBlank { order.optString("stopPrice") }
+        .toBigDecimalOrNull() ?: return false
+    return order.optString("symbol") == symbol &&
+        order.optString("clientAlgoId") == expectedClientId &&
+        order.optString("orderType").ifBlank { order.optString("type") } == "STOP_MARKET" &&
+        order.optString("side") == (if (direction == "LONG") "SELL" else "BUY") &&
+        order.optString("positionSide", "BOTH") == "BOTH" &&
+        order.optString("closePosition").equals("true", true) &&
+        order.optString("workingType") == "MARK_PRICE" && actual.compareTo(expected) == 0 &&
+        order.optString("algoStatus").uppercase(Locale.US) in setOf("CANCELED", "REJECTED", "EXPIRED") &&
+        order.has("actualOrderId") && !order.isNull("actualOrderId") &&
+        order.optString("actualOrderId") in setOf("", "0")
+}
+
 
 /**
  * Independent pre-mutation risk assessment. Recomputes the quantity's stop risk
@@ -1751,12 +1775,13 @@ internal class NativeFuturesCampaignCoordinator(
                                 matchingIntent.optString("unprotected_safety_guard_origin")==
                                     "TERMINAL_PREVIOUSLY_CONFIRMED" &&
                                 matchingIntent.optLong("unprotected_safety_exit_required_at_ms")>0L)
-                        val terminal=if(previouslyProtected && knownId.isNotBlank() &&
+                        val terminalOrder=if(previouslyProtected && knownId.isNotBlank() &&
                             previousProtectionId.isBlank() && algos.length()==0) {
-                            runCatching { adapter.queryAlgoOrder(symbol,knownId)
-                                .optString("algoStatus").uppercase(Locale.US) }.getOrNull()
+                            runCatching { adapter.queryAlgoOrder(symbol,knownId) }.getOrNull()
                         } else null
-                        val verifiedTerminal=terminal in setOf("CANCELED","REJECTED","EXPIRED") &&
+                        val terminal=terminalOrder?.optString("algoStatus")?.uppercase(Locale.US)
+                        val verifiedTerminal=matchesTerminalUntriggeredFuturesProtectiveStop(
+                            terminalOrder,symbol,direction,knownId,matchingIntent.optString("protective_stop")) &&
                             matchingIntent.optBoolean("strategy_ownership_verified",false) &&
                             matchingIntent.optString("confirmed_position_qty").toBigDecimalOrNull()
                                 ?.compareTo(position.getString("positionAmt").toBigDecimal().abs())==0
@@ -1866,7 +1891,8 @@ internal class NativeFuturesCampaignCoordinator(
                                     (protectionStatus == "SUBMISSION_UNKNOWN" &&
                                         matchingIntent.optString("unprotected_safety_guard_origin")=="TERMINAL_PREVIOUSLY_CONFIRMED" &&
                                         matchingIntent.optLong("unprotected_safety_exit_required_at_ms")>0L)) &&
-                                terminal in setOf("CANCELED", "REJECTED", "EXPIRED") &&
+                                matchesTerminalUntriggeredFuturesProtectiveStop(stopQuery,symbol,direction,
+                                    protectionClientId,matchingIntent.optString("protective_stop")) &&
                                 refreshed.length() == 0 &&
                                 previousProtectionId.isBlank() &&
                                 matchingIntent.optBoolean("strategy_ownership_verified", false) &&
@@ -1905,6 +1931,7 @@ internal class NativeFuturesCampaignCoordinator(
                         }
                         matchingIntent.put("protection_status", "SUBMISSION_UNKNOWN")
                             .put("protection_attempt_at_ms", clock())
+                        matchingIntent.remove("protection_post_attempted")
                         saveIntents(persisted)
                         try {
                             adapter.placeProtectiveStop(
@@ -1912,9 +1939,24 @@ internal class NativeFuturesCampaignCoordinator(
                                 matchingIntent.optString("protective_stop"),
                                 protectionClientId
                             )
+                            matchingIntent.put("protection_post_attempted",true)
                         } catch (failure: Exception) {
                             anyUnprotected = true
-                            lastBlocker = "$symbol protective-stop placement ambiguous: ${failure.message ?: failure.javaClass.simpleName}"
+                            if(failure is FuturesProtectionNotSubmittedException) {
+                                // The adapter proves that its STOP POST was never
+                                // entered. Restore a retryable lifecycle, rather
+                                // than querying a phantom id forever. If mark has
+                                // crossed the stop, the next reconciliation emits
+                                // the existing NEVER_SUBMITTED safety capability.
+                                matchingIntent.put("protection_status","NOT_SUBMITTED")
+                                    .put("protection_preflight_rejected_at_ms",clock())
+                                    .put("protection_post_attempted",false)
+                                matchingIntent.remove("protection_client_id")
+                                saveIntents(persisted)
+                                lastBlocker="$symbol protective STOP was not submitted; protection will be re-evaluated without duplicating a POST"
+                            } else {
+                                lastBlocker = "$symbol protective-stop placement ambiguous: ${failure.message ?: failure.javaClass.simpleName}"
+                            }
                             continue
                         }
                         val refreshed = adapter.openAlgoOrders(symbol)
@@ -2352,9 +2394,9 @@ internal class NativeFuturesCampaignCoordinator(
             // failure or FINISHED (possibly already triggered) is NOT enough.
             if (!noPost) {
                 val detail = adapter.queryAlgoOrder(symbol, stopId)
-                val terminal = detail.optString("algoStatus").uppercase(Locale.US)
-                if (terminal !in setOf("CANCELED", "REJECTED", "EXPIRED"))
-                    return@synchronized blocked("Protective Algo is not proven terminal")
+                if (!matchesTerminalUntriggeredFuturesProtectiveStop(detail,symbol,direction.name,
+                        stopId,owner.optString("protective_stop")))
+                    return@synchronized blocked("Exact protective Algo is not proven terminal and untriggered")
             }
             if (adapter.openAlgoOrders(symbol).length() != 0 ||
                 adapter.openOrders(symbol).length() != 0)
@@ -2459,14 +2501,14 @@ internal class NativeFuturesCampaignCoordinator(
             if(williamsH1ParentAlreadyFilled(currentIntents,plan.signalId,plan.signalType,plan.signalBarTimeMs))
                 return@synchronized safePreflightRejection("H1_PARENT_ALREADY_FILLED: no second initial campaign")
         }
-        if(requireBookH1ProofForAutomatedEntries && plan.entryClientId.isBlank() &&
+        if(requireBookH1ProofForAutomatedEntries &&
             plan.signalType!="OPERATOR_FORCED_DIRECTION") {
             val bookProof=williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,
                 plan.signalId,plan.signalType,plan.strategyProfile,
                 plan.entryPrice.toDoubleOrNull() ?: Double.NaN,
-                plan.protectiveStop.toDoubleOrNull() ?: Double.NaN,clock())
+                plan.protectiveStop.toDoubleOrNull() ?: Double.NaN,clock(),plan.entryClientId)
             if(bookProof!=null) return@synchronized safePreflightRejection(bookProof)
-            if(williamsH1ParentAlreadyFilled(currentIntents,plan.signalId,plan.signalType,plan.signalBarTimeMs))
+            if(plan.entryClientId.isBlank() && williamsH1ParentAlreadyFilled(currentIntents,plan.signalId,plan.signalType,plan.signalBarTimeMs))
                 return@synchronized safePreflightRejection("H1_PARENT_ALREADY_FILLED")
         }
         if(!entryTimePolicyProvider().allows(clock()))
@@ -2724,10 +2766,10 @@ internal class NativeFuturesCampaignCoordinator(
                 val verifier=m15EntryVerifier ?: error("M15_FINAL_VERIFIER_REQUIRED")
                 verifier(plan)
             }
-            if(requireBookH1ProofForAutomatedEntries && !isAddition && plan.signalType!="OPERATOR_FORCED_DIRECTION") {
+            if(requireBookH1ProofForAutomatedEntries && plan.signalType!="OPERATOR_FORCED_DIRECTION") {
                 check(williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
                     plan.signalType,plan.strategyProfile,plan.entryPrice.toDouble(),
-                    plan.protectiveStop.toDouble(),clock())==null) {
+                    plan.protectiveStop.toDouble(),clock(),plan.entryClientId)==null) {
                     "H1_BOOK_PROOF_EXPIRED_BEFORE_SUBMISSION"
                 }
                 val verifier=bookH1EntryVerifier ?: error("H1_BOOK_FINAL_VERIFIER_REQUIRED")
@@ -3337,9 +3379,9 @@ internal class NativeFuturesCampaignCoordinator(
                 val stopId = managedEntry!!.optString("protection_client_id")
                 val noPost = managedEntry!!.optString("protection_status")=="NEVER_SUBMITTED_PROVEN" &&
                     stopId.isBlank()
-                val terminalConfirmed = if(noPost) true else adapterPreflight
-                    .queryAlgoOrder(symbol, stopId).optString("algoStatus")
-                    .uppercase(Locale.US) in setOf("CANCELED","REJECTED","EXPIRED")
+                val terminalConfirmed = noPost || matchesTerminalUntriggeredFuturesProtectiveStop(
+                    adapterPreflight.queryAlgoOrder(symbol, stopId),symbol,direction.name,stopId,
+                    managedEntry.optString("protective_stop"))
                 if (!terminalConfirmed ||
                     adapterPreflight.openAlgoOrders(symbol).length() != 0 ||
                     adapterPreflight.openOrders(symbol).length() != 0) {

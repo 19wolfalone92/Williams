@@ -19,6 +19,11 @@ internal class FuturesHttpException(
     detail: String
 ) : IOException("Binance USD-M Futures HTTP $statusCode: $detail")
 
+/** Thrown only before entering the protective STOP POST transport. A failed
+ * GET/preflight cannot be confused with a lost acknowledgement after POST. */
+internal class FuturesProtectionNotSubmittedException(cause: Exception) :
+    IOException("Protective STOP was not submitted: " + (cause.message ?: cause.javaClass.simpleName), cause)
+
 /**
  * Native USDⓈ-M Futures Testnet transport.
  *
@@ -544,37 +549,41 @@ internal class BinanceUsdMFuturesTestnetAdapter(
      * LONG protection is SELL below market; SHORT protection is BUY above market.
      */
     fun placeProtectiveStop(symbol: String, positionDirection: String, stopPrice: String, clientOrderId: String): JSONObject {
-        requireSymbol(symbol)
-        require(positionDirection == "LONG" || positionDirection == "SHORT")
-        val stop = stopPrice.toBigDecimalOrNull()
-            ?: throw IllegalArgumentException("Stop price must be numeric")
-        require(stop.signum() > 0) { "Stop price must be positive" }
-        require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client algo id" }
-        requireOneWayMode()
+        val params = try {
+            requireSymbol(symbol)
+            require(positionDirection == "LONG" || positionDirection == "SHORT")
+            val stop = stopPrice.toBigDecimalOrNull()
+                ?: throw IllegalArgumentException("Stop price must be numeric")
+            require(stop.signum() > 0) { "Stop price must be positive" }
+            require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client algo id" }
+            requireOneWayMode()
 
-        // Validate trigger orientation against the current mark price. A stale or
-        // unavailable mark price throws and therefore fails closed before mutation.
-        val mark = java.math.BigDecimal.valueOf(markPrice(symbol))
-        if (positionDirection == "LONG") {
-            require(stop < mark) { "LONG protective stop must be below the current mark price" }
-        } else {
-            require(stop > mark) { "SHORT protective stop must be above the current mark price" }
+            // Validate trigger orientation against the current mark price. A stale or
+            // unavailable mark price throws and therefore fails closed before mutation.
+            val mark = java.math.BigDecimal.valueOf(markPrice(symbol))
+            if (positionDirection == "LONG") {
+                require(stop < mark) { "LONG protective stop must be below the current mark price" }
+            } else {
+                require(stop > mark) { "SHORT protective stop must be above the current mark price" }
+            }
+
+            linkedMapOf(
+                "algoType" to "CONDITIONAL",
+                "symbol" to symbol,
+                "side" to if (positionDirection == "LONG") "SELL" else "BUY",
+                "type" to "STOP_MARKET",
+                "triggerPrice" to stop.stripTrailingZeros().toPlainString(),
+                "closePosition" to "true",
+                "workingType" to "MARK_PRICE",
+                // A protective stop must not be suppressed merely because MARK_PRICE
+                // and CONTRACT_PRICE diverge during volatility. Trigger directly on the
+                // chosen MARK_PRICE basis; priceProtect=true can delay the loss exit.
+                "priceProtect" to "false",
+                "clientAlgoId" to clientOrderId
+            )
+        } catch (failure: Exception) {
+            throw FuturesProtectionNotSubmittedException(failure)
         }
-
-        val params = linkedMapOf(
-            "algoType" to "CONDITIONAL",
-            "symbol" to symbol,
-            "side" to if (positionDirection == "LONG") "SELL" else "BUY",
-            "type" to "STOP_MARKET",
-            "triggerPrice" to stop.stripTrailingZeros().toPlainString(),
-            "closePosition" to "true",
-            "workingType" to "MARK_PRICE",
-            // A protective stop must not be suppressed merely because MARK_PRICE
-            // and CONTRACT_PRICE diverge during volatility. Trigger directly on the
-            // chosen MARK_PRICE basis; priceProtect=true can delay the loss exit.
-            "priceProtect" to "false",
-            "clientAlgoId" to clientOrderId
-        )
         return JSONObject(requestRaw("POST", "/fapi/v1/algoOrder", params, signed = true))
     }
 

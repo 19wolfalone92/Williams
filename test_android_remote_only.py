@@ -400,7 +400,14 @@ def test_android_book_native_h1_entry_does_not_require_m15_fractal():
     assert "coordinator.requireM15FractalForAutomatedEntries = false" in runtime
     assert "coordinator.requireBookH1ProofForAutomatedEntries = true" in runtime
     assert "coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }" in runtime
-    assert "if(requireBookH1ProofForAutomatedEntries && !isAddition" in coordinator
+    # Every new exposure, including an add-on, must reach the final H1 verifier.
+    final_check = coordinator.split("finalContextCheckStarted = true", 1)[1].split(
+        "orderSubmissionAttempted = true", 1
+    )[0]
+    assert 'if(requireBookH1ProofForAutomatedEntries && plan.signalType!="OPERATOR_FORCED_DIRECTION")' in final_check
+    assert "plan.protectiveStop.toDouble(),clock(),plan.entryClientId)" in final_check
+    assert "williamsBookH1ObservedBreakoutBlocker(" in runtime
+    assert "val recent=futuresMarketData.klines(plan.symbol,\"1h\",2)" in runtime
     assert "val verifier=bookH1EntryVerifier ?: error" in coordinator
     assert '"BOOK_NATIVE_H1_TRIGGER"' in book
     assert "val submitMark = futuresMarketData.markPrice(symbol)" in entry
