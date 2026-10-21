@@ -6062,7 +6062,7 @@ private class NativeEngine(
                     }
                     futuresCampaignCoordinator.recordOperatorSupervisionObservation(symbol,
                         if(result.optBoolean("ok")) "RECOVERED" else "BLOCKED",
-                        result.optString("blocker","Replacement confirmed by Binance"))
+                        result.optString("blocker",result.optString("reason","Replacement confirmed by Binance")))
                 }.onFailure { lastError="STOP_RECOVERY_BLOCKED "+symbol+": "+
                     (it.message ?: it.javaClass.simpleName)
                     runCatching { futuresCampaignCoordinator.recordOperatorSupervisionObservation(

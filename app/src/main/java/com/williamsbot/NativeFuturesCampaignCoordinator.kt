@@ -3946,8 +3946,11 @@ internal class NativeFuturesCampaignCoordinator(
         // Observation fields cannot authorize an order or alter the lifecycle.
         record.put("last_evaluated_at_ms",clock()).put("last_evaluation_status",status)
             .put("last_evaluation_reason",reason.take(1000))
-            .put("last_evaluated_closed_bar_at_ms",closedBarAtMs)
-            .put("last_proposed_stop",proposedStop?.takeIf { it.isFinite() && it>0 } ?: JSONObject.NULL)
+        // Recovery/error observations have no new candle or proposal. Retain the
+        // last evaluated H1 and requested trigger instead of replacing them by 0/null.
+        if(closedBarAtMs>0L) record.put("last_evaluated_closed_bar_at_ms",closedBarAtMs)
+        if(closedBarAtMs>0L || proposedStop!=null) record.put("last_proposed_stop",
+            proposedStop?.takeIf { it.isFinite() && it>0 } ?: JSONObject.NULL)
         saveOperatorSupervisions(rows)
     }
 
@@ -4115,9 +4118,17 @@ internal class NativeFuturesCampaignCoordinator(
             .put("previous_protection_client_id",currentId)
             .put("pending_protection_client_id",newClientId)
             .put("pending_stop",next.stripTrailingZeros().toPlainString())
+            .put("pending_submission_started_at_ms",clock())
+            .put("pending_submission_outcome","PREPARED")
+        record.remove("pending_absent_since_ms")
         saveOperatorSupervisions(rows)
+        var postAcknowledged=false
         try {
-            adapter.placeProtectiveStop(symbol,direction.name,next.toPlainString(),newClientId)
+            adapter.placeReplacementProtectiveStop(symbol,direction.name,next.toPlainString(),newClientId,
+                qty.toPlainString())
+            postAcknowledged=true
+            record.put("pending_submission_outcome","ACKNOWLEDGED")
+            saveOperatorSupervisions(rows)
             val created=adapter.openAlgoOrders(symbol)
             val newStop=(0 until created.length()).mapNotNull { created.optJSONObject(it) }
                 .singleOrNull { it.optString("clientAlgoId")==newClientId &&
@@ -4125,6 +4136,9 @@ internal class NativeFuturesCampaignCoordinator(
                     it.optString("triggerPrice").ifBlank { it.optString("stopPrice") }
                         .toBigDecimalOrNull()?.compareTo(next)==0 }
                 ?: error("Replacement stop not uniquely confirmed")
+            check(created.length()==2 && (0 until created.length()).all {
+                created.getJSONObject(it).optString("clientAlgoId") in setOf(currentId,newClientId)
+            }) { "Unexpected algo appeared during replacement; original stop retained" }
             // No old-stop cancellation if exposure changed after placement.
             verifyNoStandardOrders()
             verifyLivePosition()
@@ -4144,14 +4158,36 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("stop",next.stripTrailingZeros().toPlainString())
                 .put("protection_client_id",newClientId)
                 .put("last_confirmed_trail_at_ms",clock())
-            record.remove("previous_protection_client_id")
-            record.remove("pending_protection_client_id")
-            record.remove("pending_stop")
+            clearPendingOperatorReplacement(record)
             saveOperatorSupervisions(rows)
             JSONObject().put("ok",true).put("symbol",symbol).put("stop",next.toPlainString())
         } catch(failure:Exception) {
-            // Do not erase the pending id: a lost POST response might represent
-            // an accepted Binance order. Never POST the same financial effect twice.
+            // Only the POST phase may establish a definite rejection. A failed
+            // read/DELETE after an acknowledged POST cannot undo its acceptance.
+            val notSubmitted=!postAcknowledged && failure is FuturesProtectionNotSubmittedException
+            val rejected=!postAcknowledged && failure is FuturesHttpException &&
+                failure.statusCode in 400..499 && failure.exchangeCode?.let {
+                    it in -1136..-1100 || it in setOf(-2014,-2015,-2019,-2021,-2022,-2025,
+                        -4001,-4002,-4003,-4004,-4005,-4013,-4014,-4023,-4130,-4137,-4142,-4164)
+                }==true
+            record.put("pending_submission_outcome",when {
+                notSubmitted -> "NOT_SUBMITTED"
+                rejected -> "REJECTED"
+                postAcknowledged -> "ACKNOWLEDGED"
+                else -> "UNKNOWN"
+            })
+            val evidence=JSONObject().put("at_ms",clock()).put("client_id",newClientId)
+                .put("proposed_stop",next.toPlainString())
+                .put("phase",if(postAcknowledged) "AFTER_POST_ACK" else "PREFLIGHT_OR_POST")
+                .put("outcome",record.getString("pending_submission_outcome"))
+                .put("type",failure.javaClass.simpleName)
+                .put("message",safeDiagnosticText(failure.message ?: failure.javaClass.simpleName).take(1000))
+            if(failure is FuturesHttpException) evidence.put("http_status",failure.statusCode)
+                .put("exchange_code",failure.exchangeCode ?: JSONObject.NULL)
+            record.put("last_replacement_failure",evidence)
+            saveOperatorSupervisions(rows)
+            // Keep the exact pending identity even for a rejected POST until a
+            // signed read confirms the original stop and unchanged exposure.
             JSONObject().put("ok",false).put("symbol",symbol)
                 .put("state","REPLACEMENT_UNRESOLVED")
                 .put("blocker",failure.message ?: failure.javaClass.simpleName)
@@ -4159,9 +4195,10 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
 
-    /** Reconcile a lost STOP replacement acknowledgement without another POST.
-     * Only the exactly recorded old/new stop identifiers may be inspected or
-     * canceled. A successfully confirmed new stop is required before old DELETE.
+    /** Reconcile the exact pending identity, including legacy 4.53.2 journals.
+     * A missing open-order row alone never permits another POST. Query its history;
+     * uncertain absence requires a later signed query and cancellation fence.
+     * A confirmed new stop is always required before deleting the ORIGINAL stop.
      */
     fun recoverOperatorSupervisedStop(symbol:String):JSONObject = synchronized(lock) {
         val rows=operatorSupervisions()
@@ -4176,7 +4213,8 @@ internal class NativeFuturesCampaignCoordinator(
         val newId=record.getString("pending_protection_client_id")
         val oldStop=record.getString("stop").toBigDecimal()
         val newStop=record.getString("pending_stop").toBigDecimal()
-        check(oldId.isNotBlank() && newId.isNotBlank() && oldId!=newId &&
+        check(direction in setOf("LONG","SHORT") && oldId.isNotBlank() && newId.isNotBlank() && oldId!=newId &&
+            record.optString("protection_client_id")==oldId &&
             (if(direction=="LONG") newStop>oldStop else newStop<oldStop)) {
             "Uncertain stop journal is inconsistent"
         }
@@ -4217,16 +4255,98 @@ internal class NativeFuturesCampaignCoordinator(
                 isFullPositionFuturesStop(it,symbol,direction,recordedQty,mark)
         }) { "Unexpected or invalid Futures protection; no mutation allowed" }
         val old=list.singleOrNull { it.optString("clientAlgoId")==oldId }
+        if(old!=null) check(old.optString("triggerPrice").ifBlank {
+            old.optString("stopPrice")
+        }.toBigDecimalOrNull()?.compareTo(oldStop)==0) { "Prior stop trigger mismatch" }
         val replacement=list.singleOrNull { it.optString("clientAlgoId")==newId }
-            ?: return@synchronized JSONObject().put("ok",false)
-                .put("blocker","New stop not exchange-confirmed; original retained; no POST retry")
+        if(replacement==null) {
+            check(old!=null && list.size==1) { "Original stop is not uniquely confirmed" }
+            fun queryPending():JSONObject? = try {
+                adapter.queryAlgoOrder(symbol,newId)
+            } catch(failure:FuturesHttpException) {
+                if(failure.statusCode==400 && failure.exchangeCode == -2013) null else throw failure
+            }
+            fun terminalWithoutExecution(row:JSONObject):Boolean =
+                row.optString("clientAlgoId")==newId &&
+                row.optString("algoStatus").uppercase(Locale.US) in setOf("REJECTED","CANCELED","EXPIRED") &&
+                row.has("actualOrderId") && !row.isNull("actualOrderId") &&
+                row.optString("actualOrderId") in setOf("","0") &&
+                row.optString("actualQty","0").toBigDecimalOrNull()?.signum()==0 &&
+                row.optString("triggerPrice").ifBlank { row.optString("stopPrice") }
+                    .toBigDecimalOrNull()?.compareTo(newStop)==0 &&
+                isFullPositionFuturesStop(JSONObject(row.toString()).put("algoStatus","NEW"),
+                    symbol,direction,recordedQty,mark)
+            fun retainOriginal(proof:String):JSONObject {
+                verifyNoStandardOrders()
+                verifyLivePosition()
+                val current=adapter.openAlgoOrders(symbol)
+                val currentMark=adapter.markPrice(symbol)
+                check(current.length()==1 &&
+                    current.getJSONObject(0).optString("clientAlgoId")==oldId &&
+                    isFullPositionFuturesStop(current.getJSONObject(0),symbol,direction,recordedQty,currentMark) &&
+                    current.getJSONObject(0).optString("triggerPrice").ifBlank {
+                        current.getJSONObject(0).optString("stopPrice")
+                    }.toBigDecimalOrNull()?.compareTo(oldStop)==0) {
+                    "Original stop changed during replacement recovery"
+                }
+                verifyNoStandardOrders()
+                verifyLivePosition()
+                // Keep the resolved identity and proof for diagnostics. Do not
+                // misreport this recovery as a successfully moved stop.
+                record.put("last_replacement_resolution",JSONObject()
+                    .put("at_ms",clock()).put("client_id",newId)
+                    .put("proposed_stop",newStop.toPlainString()).put("proof",proof)
+                    .put("result","ORIGINAL_RETAINED"))
+                    .put("state","ACTIVE")
+                clearPendingOperatorReplacement(record)
+                saveOperatorSupervisions(rows)
+                return JSONObject().put("ok",true).put("symbol",symbol)
+                    .put("recovery_status","ORIGINAL_RETAINED").put("stop",oldStop.toPlainString())
+                    .put("reason","Исходный SL подтверждён; несостоявшаяся замена сверена с биржей; сопровождение возобновлено")
+            }
+            val queried=queryPending()
+            if(queried!=null) {
+                check(terminalWithoutExecution(queried)) {
+                    "Pending stop has not been proven terminal without execution; original retained"
+                }
+                return@synchronized retainOriginal("SIGNED_TERMINAL_UNTRIGGERED_QUERY")
+            }
+            if(record.optString("pending_submission_outcome") in setOf("REJECTED","NOT_SUBMITTED")) {
+                return@synchronized retainOriginal("DEFINITE_POST_REJECTION_AND_SIGNED_NOT_FOUND")
+            }
+            val now=clock()
+            val absentSince=record.optLong("pending_absent_since_ms",0L)
+            if(absentSince<=0L || now<absentSince) {
+                record.put("pending_absent_since_ms",now)
+                saveOperatorSupervisions(rows)
+            }
+            if(absentSince<=0L || now<absentSince || now-absentSince<60_000L) {
+                return@synchronized JSONObject().put("ok",false)
+                    .put("blocker","Биржа не находит новый SL по точному ID; повторная сверка через 60 секунд; исходный SL сохранён")
+            }
+            // Never blindly replay an unknown POST (including pre-upgrade journals).
+            // After two separated signed not-found reads, fence ONLY the pending
+            // identity; never cancel the still-confirmed original protection.
+            verifyNoStandardOrders()
+            verifyLivePosition()
+            try {
+                adapter.cancelAlgoOrder(symbol,newId)
+            } catch(failure:FuturesHttpException) {
+                val absent=failure.statusCode==400 && failure.exchangeCode in setOf(-2011,-2013) &&
+                    (failure.message.orEmpty().contains("does not exist",ignoreCase=true) ||
+                        failure.message.orEmpty().contains("Unknown order",ignoreCase=true))
+                if(!absent) throw failure
+            }
+            val afterFence=queryPending()
+            check(afterFence==null || terminalWithoutExecution(afterFence)) {
+                "Pending stop cancellation not confirmed; original retained"
+            }
+            return@synchronized retainOriginal("SEPARATED_SIGNED_NOT_FOUND_AND_EXACT_CANCEL_FENCE")
+        }
         check(replacement.optString("triggerPrice").ifBlank {
             replacement.optString("stopPrice")
         }.toBigDecimalOrNull()?.compareTo(newStop)==0) { "Replacement stop price mismatch" }
         if(old!=null) {
-            check(old.optString("triggerPrice").ifBlank {
-                old.optString("stopPrice")
-            }.toBigDecimalOrNull()?.compareTo(oldStop)==0) { "Prior stop trigger mismatch" }
             val oldAlgo=old.getString("algoId")
             check(oldAlgo.toLongOrNull()?.let { it>0L }==true) { "Old stop lacks exchange ID" }
             verifyNoStandardOrders()
@@ -4245,13 +4365,17 @@ internal class NativeFuturesCampaignCoordinator(
             .put("protection_client_id",newId)
             .put("state","ACTIVE")
             .put("last_confirmed_trail_at_ms",clock())
-        record.remove("previous_protection_client_id")
-        record.remove("pending_protection_client_id")
-        record.remove("pending_stop")
+        clearPendingOperatorReplacement(record)
         saveOperatorSupervisions(rows)
         JSONObject().put("ok",true).put("symbol",symbol)
             .put("mode","OPERATOR_APPROVED_STOP_ONLY")
             .put("stop",newStop.toPlainString())
+    }
+
+    private fun clearPendingOperatorReplacement(record:JSONObject) {
+        for(key in listOf("previous_protection_client_id","pending_protection_client_id",
+            "pending_stop","pending_submission_started_at_ms","pending_submission_outcome",
+            "pending_absent_since_ms")) record.remove(key)
     }
 
     fun saveManagementState(symbol:String, clientId:String, state:JSONObject) = synchronized(lock) {

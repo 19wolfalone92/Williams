@@ -558,7 +558,7 @@ def test_android_protective_stop_is_not_suppressed_by_price_protect_divergence()
         "private fun request(", 1
     )[0]
     assert '"type" to "STOP_MARKET"' in protective
-    assert '"closePosition" to "true"' in protective
+    assert 'params["closePosition"] = "true"' in protective
     assert '"workingType" to "MARK_PRICE"' in protective
     assert '"priceProtect" to "false"' in protective
 

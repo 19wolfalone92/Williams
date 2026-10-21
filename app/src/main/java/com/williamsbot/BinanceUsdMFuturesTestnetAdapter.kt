@@ -548,7 +548,22 @@ internal class BinanceUsdMFuturesTestnetAdapter(
      * partial fill/quantity rounding cannot leave an oversized exit quantity.
      * LONG protection is SELL below market; SHORT protection is BUY above market.
      */
-    fun placeProtectiveStop(symbol: String, positionDirection: String, stopPrice: String, clientOrderId: String): JSONObject {
+    fun placeProtectiveStop(symbol: String, positionDirection: String, stopPrice: String, clientOrderId: String): JSONObject =
+        submitProtectiveStop(symbol, positionDirection, stopPrice, clientOrderId, null)
+
+    /** A fixed, freshly verified exposure can be protected before its old close-all
+     * stop is canceled. Do not submit a second closePosition order for replacement.
+     * reduceOnly prevents either overlapping stop from reversing the position.
+     * Callers must recheck the exact quantity before removing the original stop. */
+    fun placeReplacementProtectiveStop(
+        symbol: String, positionDirection: String, stopPrice: String,
+        clientOrderId: String, quantity: String
+    ): JSONObject = submitProtectiveStop(symbol, positionDirection, stopPrice, clientOrderId, quantity)
+
+    private fun submitProtectiveStop(
+        symbol: String, positionDirection: String, stopPrice: String,
+        clientOrderId: String, replacementQuantity: String?
+    ): JSONObject {
         val params = try {
             requireSymbol(symbol)
             require(positionDirection == "LONG" || positionDirection == "SHORT")
@@ -567,13 +582,12 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                 require(stop > mark) { "SHORT protective stop must be above the current mark price" }
             }
 
-            linkedMapOf(
+            val params = linkedMapOf(
                 "algoType" to "CONDITIONAL",
                 "symbol" to symbol,
                 "side" to if (positionDirection == "LONG") "SELL" else "BUY",
                 "type" to "STOP_MARKET",
                 "triggerPrice" to stop.stripTrailingZeros().toPlainString(),
-                "closePosition" to "true",
                 "workingType" to "MARK_PRICE",
                 // A protective stop must not be suppressed merely because MARK_PRICE
                 // and CONTRACT_PRICE diverge during volatility. Trigger directly on the
@@ -581,6 +595,15 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                 "priceProtect" to "false",
                 "clientAlgoId" to clientOrderId
             )
+            if (replacementQuantity == null) {
+                params["closePosition"] = "true"
+            } else {
+                val quantity = replacementQuantity.toBigDecimalOrNull()
+                require(quantity != null && quantity.signum() > 0) { "Replacement quantity must be positive" }
+                params["quantity"] = quantity.stripTrailingZeros().toPlainString()
+                params["reduceOnly"] = "true"
+            }
+            params
         } catch (failure: Exception) {
             throw FuturesProtectionNotSubmittedException(failure)
         }
