@@ -3,6 +3,7 @@ from math import isfinite
 
 from williams_market_geometry import alligator_phases, angulation_evidence
 from williams_edition_rules import valid_edition_bars
+from williams_wave_hierarchy import confirmed_wave_anchors, hypotheses_from_anchors
 
 
 def chart_lines(bars):
@@ -44,6 +45,15 @@ def market_reading(bars,phase_context,frame="1h"):
     jaw,teeth,lips=chart_lines(bars);phases=alligator_phases(bars,jaw,teeth,lips)
     h1=next((f for f in phase_context.get("frames",[]) if f["frame"]==frame),{})
     labels={(h["active_label"],h["active_direction"]) for h in h1.get("hypotheses",[])}
+    local = ([h for h in hypotheses_from_anchors(
+        frame,bars,confirmed_wave_anchors(bars,duration))
+        if h.status in ("PROVISIONAL","ALTERNATIVE")][-12:]
+        if len(bars)>=40 else [])
+    local_evidence=[dict(scenario_id=h.scenario_id,last_confirmed_leg=h.label,
+        active_label=h.active_label,active_direction=h.active_direction,
+        status=h.status,invalidation=h.invalidation,
+        last_pivot_known_at=h.anchors[-1].known_at,
+        wave_degree_confirmed=False,can_place_orders=False) for h in local]
     wave="UNRESOLVED"
     if h1.get("state")=="ALTERNATIVES":wave="ALTERNATIVES"
     elif len(labels)==1:
@@ -60,4 +70,7 @@ def market_reading(bars,phase_context,frame="1h"):
         twr=dict(fast_5=fast,medium_13=medium,slow_34=slow,direction=direction),
         rhythm_condition=rhythm,wave_phase=wave,wave_state=h1.get("state","UNRESOLVED"),
         exhaustion_warning=h1.get("exhaustion_warning",False),
+        independent_wave_hypotheses=local_evidence,
+        independent_wave_hypothesis_count=len(local),
+        wave_degree_confirmed=False,probability_calibrated=False,
         angulation={side:angulation_evidence(side,bars,jaw,teeth,lips) for side in ("LONG","SHORT")})
