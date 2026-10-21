@@ -548,7 +548,8 @@ fun WilliamsApp(context: Context) {
                 status = status.copy(positionsSnapshotOk = false,
                     cockpitReadiness = JSONObject(status.cockpitReadiness.toString())
                         .put("technical_ready", false).put("new_entries_allowed", false)
-                        .put("position_management_ready", false).put("new_entries_reason", "Обновление состояния не подтверждено: $reason"))
+                        .put("position_management_ready", false).put("stop_only_management_ready",false)
+                        .put("new_entries_reason", "Обновление состояния не подтверждено: $reason"))
             }
             withContext(Dispatchers.IO) {
                 runCatching { api.post("/api/v1/ui/event", JSONObject().put("action", "REFRESH_FAILED").put("detail", reason).toString()) }

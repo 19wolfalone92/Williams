@@ -40,7 +40,7 @@ BNBUSDT LONG 1.1, XRPUSDT LONG 312.1, SOLUSDT LONG 5.12 имеют подтве�
 ## Проверки при создании изменения
 
 - Полный Python: 996 passed, 2 skipped.
-- Настоящие coordinator, signed transport и книжные модули: 168 JUnit tests passed.
+- Настоящие coordinator, signed transport и книжные модули: 171 JUnit tests passed.
   Для этого JVM прогона из Android runtime без изменения извлечены чистые функции;
   это не полный Gradle build и не устройство.
 - Release contract, ruff undefined names/syntax, registry integrity, diff whitespace PASS.

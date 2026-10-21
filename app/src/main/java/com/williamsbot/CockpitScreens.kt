@@ -91,6 +91,7 @@ internal fun CockpitReadiness(status: Status) {
         CockpitField("Сопровождение", when {
             !status.running -> "Движок остановлен"
             r.optBoolean("position_management_ready") -> "Готово"
+            r.optBoolean("stop_only_management_ready") -> "Готово • только защитный SL"
             else -> "Требуется сверка"
         })
         Text(russianExecutionBlocker(r.optString("new_entries_reason", "Ожидание первого снимка")), style = MaterialTheme.typography.bodySmall)

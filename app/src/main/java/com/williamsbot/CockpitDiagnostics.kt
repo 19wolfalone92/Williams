@@ -95,7 +95,8 @@ internal object CockpitDiagnostics {
             .put("entry_risk_budget_remaining_pct", if (riskBudgetKnown) riskBudgetRemaining else JSONObject.NULL)
             .put("position_management_ready", monitoring && unprotected.isEmpty() && unmanaged.isEmpty())
             .put("stop_only_management_ready", status.optBoolean("running") && snapshotFresh &&
-                positions.isNotEmpty() && unprotected.isEmpty() && unmanaged.isEmpty())
+                positions.any { operatorManagementProven(it,coordinator,now) } &&
+                unprotected.isEmpty() && unmanaged.isEmpty())
             .put("positions_snapshot_fresh", snapshotFresh)
             .put("unprotected_positions", JSONArray(unprotected))
             .put("unmanaged_positions",JSONArray(unmanaged))

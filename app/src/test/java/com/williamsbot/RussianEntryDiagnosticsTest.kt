@@ -4,6 +4,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RussianEntryDiagnosticsTest {
+    @Test fun stopSupervisionExplainsItsOwnAuthorityAndFailuresInRussian() {
+        for((code,words) in mapOf(
+            "SOLUSDT has operator-approved stop-only supervision; new entries blocked" to "существующего SL",
+            "SOLUSDT has an exchange-protected position but no verified local campaign ownership" to "Биржевой SL подтверждён",
+            "OPERATOR_STOP_SUPERVISION_BLOCKED SOLUSDT: Other open orders on supervised symbol" to "другая заявка",
+            "Position changed during uncertain replacement; operator resolution required" to "изменились",
+            "New stop not exchange-confirmed; original retained; no POST retry" to "повторная отправка запрещена")) {
+            assertTrue(code,russianExecutionBlocker(code).contains(words))
+        }
+    }
     @Test fun knownEntryAndHistoryBlockersExplainTheCauseInRussian() {
         val samples=mapOf(
             "H1_FRACTAL_TEETH_INVALID_BEFORE_SUBMISSION: BTCUSDT" to "Зубов",

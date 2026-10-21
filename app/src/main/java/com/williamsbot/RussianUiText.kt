@@ -87,6 +87,18 @@ internal fun russianExecutionBlocker(value: String?): String {
             "TC2: обычный выход разрешён только через биржевой защитный SL."
         code=="EXIT_STRATEGY_OWNER_UNVERIFIED" ->
             "Владелец стратегии не подтверждён; автоматическое закрытие запрещено."
+        code.contains("operator-approved stop-only supervision") ->
+            "Одобрено сопровождение существующего SL. Новые входы ожидают подтверждения владельца кампании."
+        code.contains("exchange-protected position but no verified local campaign ownership") ->
+            "Биржевой SL подтверждён. Для переноса стопа позиции без исходного журнала нужно подключить отдельное сопровождение SL."
+        code.contains("Other open orders on supervised symbol") ->
+            "На этой паре появилась другая заявка. Перенос SL ожидает сверки; предыдущий стоп сохранён."
+        code.contains("Quantity, side or entry changed") || code.contains("Position changed during uncertain replacement") ->
+            "Количество, направление или цена входа изменились. Перенос SL заблокирован до проверки позиции."
+        code.contains("Original protective stop not uniquely confirmed") ->
+            "Не подтверждён единственный исходный SL. Перенос запрещён до сверки Binance."
+        code.contains("New stop not exchange-confirmed") ->
+            "Новый стоп пока не подтверждён Binance. Прежний стоп сохранён; повторная отправка запрещена."
         russianBlockerPrefixes.entries.firstOrNull { code.startsWith(it.key,ignoreCase=true) }!=null ->
             russianBlockerPrefixes.entries.first { code.startsWith(it.key,ignoreCase=true) }.value
         code.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") ->
