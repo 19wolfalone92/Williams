@@ -1024,4 +1024,67 @@ class NativeFuturesCoordinatorLifecycleTest {
             }.getString("exit_authority"))
         }
     }
+
+    @Test fun canceledPreviouslyConfirmedStopTriggersExactlyOneOwnedEmergencyExitLongAndShort() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator, exchange) = open(direction, prefix="W2H_")
+            val stop = exchange.algos.values.single {
+                it.optString("closePosition") == "true" && it.optString("algoStatus") == "NEW"
+            }
+            stop.put("algoStatus", "CANCELED")
+            val failed = coordinator.reconcile()
+            assertFalse(failed.toString(), failed.getBoolean("ok"))
+            assertEquals("POSITION_UNPROTECTED", coordinator.state.name)
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+            val requests = failed.getJSONArray("required_safety_exits")
+            assertEquals(failed.toString(), 1, requests.length())
+            val request = requests.getJSONObject(0)
+            assertEquals("UNPROTECTED_POSITION_GUARD", request.getString("reason"))
+            assertEquals(stop.getString("clientAlgoId"), request.getString("missing_protection_client_id"))
+            // A fake/stale caller cannot bypass binding of current source/side/qty.
+            val foreign = JSONObject(request.toString()).put("entry_client_id", "FOREIGN")
+            assertFalse(coordinator.executeRequiredUnprotectedSafetyExit(foreign).getBoolean("ok"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+            val closed = coordinator.executeRequiredUnprotectedSafetyExit(request)
+            assertTrue(closed.toString(), closed.getBoolean("ok"))
+            assertEquals(0.0, exchange.quantity, 0.0)
+            assertEquals(1, exchange.posts("/fapi/v1/order"))
+            assertFalse(coordinator.executeRequiredUnprotectedSafetyExit(request).getBoolean("ok"))
+            assertEquals(1, exchange.posts("/fapi/v1/order"))
+            assertEquals("VERIFIED_RISK_REDUCTION", coordinator.intentsSnapshot().let { intents ->
+                (0 until intents.length()).map { intents.getJSONObject(it) }
+                    .last { it.optString("intent_role")=="EXIT" }
+            }.getString("exit_authority"))
+        }
+    }
+
+    @Test fun unknownStopResponseNeverAuthorizesAnEmergencyMarketClose() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator, exchange) = open(direction)
+            // The order disappeared from the exchange mock, and querying
+            // its clientAlgoId returns -2013/unknown, NOT a terminal response.
+            val stopKey = exchange.algos.keys.single { key ->
+                exchange.algos.getValue(key).optString("closePosition") == "true"
+            }
+            exchange.algos.remove(stopKey)
+            val result = coordinator.reconcile()
+            assertFalse(result.getBoolean("ok"))
+            assertEquals(0, result.getJSONArray("required_safety_exits").length())
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
+    @Test fun foreignOrIncreasedPositionCannotUseMissingStopEmergencyCapability() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator, exchange) = open(direction)
+            exchange.quantity *= 2
+            val stop = exchange.algos.values.single { it.optString("closePosition")=="true" }
+            stop.put("algoStatus", "CANCELED")
+            val result = coordinator.reconcile()
+            assertFalse(result.getBoolean("ok"))
+            assertEquals(0, result.optJSONArray("required_safety_exits")?.length() ?: 0)
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
 }
