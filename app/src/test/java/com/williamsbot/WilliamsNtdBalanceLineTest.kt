@@ -28,20 +28,26 @@ class WilliamsNtdBalanceLineTest {
     }
 
     @Test fun buyBelowJawNeedsTwoReferenceHighs() {
-        val result=williamsNtdBalanceLine(bars(listOf(108.0,106.0,104.0,101.0,98.0)),"LONG",.1)
+        val input=bars(listOf(108.0,106.0,104.0,101.0,98.0)).toMutableList()
+        // Signal-reference at index 3 is BELOW historic Jaw=120 even
+        // though the current base is evaluated against Jaw=100.
+        input[3]=input[3].copy(jaw=120.0)
+        val result=williamsNtdBalanceLine(input,"LONG",.1)
         assertEquals("CANDIDATE",result.status)
         assertEquals(2,result.requiredSteps)
         assertEquals(104.1,result.triggerPrice,1e-8)
     }
 
     @Test fun redZoneDoublesRequirementsForBuy() {
-        val result=williamsNtdBalanceLine(
-            bars(listOf(115.0,110.0,107.0,104.0,102.0,98.0),zone="RED"),"LONG",.1)
+        val adverse=bars(listOf(115.0,110.0,107.0,104.0,102.0,98.0),zone="RED").toMutableList()
+        adverse[4]=adverse[4].copy(jaw=110.0)
+        val result=williamsNtdBalanceLine(adverse,"LONG",.1)
         assertEquals("CANDIDATE",result.status)
         assertEquals(4,result.requiredSteps)
         assertEquals(110.1,result.triggerPrice,1e-8)
-        assertEquals("INCOMPLETE",williamsNtdBalanceLine(
-            bars(listOf(106.0,104.0,102.0,98.0,98.0),zone="RED"),"LONG",.1).status)
+        val incomplete=bars(listOf(106.0,104.0,102.0,98.0,98.0),zone="RED").toMutableList()
+        incomplete[2]=incomplete[2].copy(jaw=120.0)
+        assertEquals("INCOMPLETE",williamsNtdBalanceLine(incomplete,"LONG",.1).status)
     }
 
     @Test fun sellBelowJawAndGreenZoneRule() {
@@ -77,9 +83,23 @@ class WilliamsNtdBalanceLineTest {
 
     @Test fun flatPricesAndMissingAoCannotProduceSignal() {
         val flat=bars(List(6){100.0})
-        assertEquals("INCOMPLETE",williamsNtdBalanceLine(flat,"LONG",.1).status)
+        assertEquals("BLOCKED",williamsNtdBalanceLine(flat,"LONG",.1).status)
+        assertEquals("NO_NEW_REFERENCE_EXTREME",williamsNtdBalanceLine(flat,"LONG",.1).reason)
         val invalid=flat.toMutableList()
         invalid[invalid.lastIndex]=invalid.last().copy(ao=Double.NaN)
         assertEquals("ZONE_NOT_READY",williamsNtdBalanceLine(invalid,"LONG",.1).reason)
+    }
+
+    @Test fun bookFigureSignalBarNotBaseJawDeterminesRequiredReferenceCount() {
+        val source=bars(listOf(108.0,106.0,104.0,101.0,98.0)).toMutableList()
+        val above=williamsNtdBalanceLine(source,"LONG",.1)
+        assertEquals(1,above.requiredSteps)
+        val below=source.toMutableList()
+        below[3]=below[3].copy(jaw=120.0)
+        val corrected=williamsNtdBalanceLine(below,"LONG",.1)
+        assertEquals(2,corrected.requiredSteps)
+        assertEquals("CANDIDATE",corrected.status)
+        assertEquals(104.1,corrected.triggerPrice,1e-8)
+        assertFalse(corrected.canPlaceOrders)
     }
 }
