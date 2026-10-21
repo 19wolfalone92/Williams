@@ -5245,8 +5245,9 @@ private class NativeEngine(
             }.singleOrNull { proof ->
                 val observedAt=proof.optLong("observed_at_ms")
                 val signedProof=proof.optString("quantity").toBigDecimalOrNull()
+                val signedLive=row.optString("positionAmt").toBigDecimalOrNull()
                 proof.optString("symbol")==symbol && proof.optString("direction")==direction &&
-                    signedProof?.compareTo(row.optString("positionAmt").toBigDecimalOrNull())==0 &&
+                    signedProof!=null && signedLive!=null && signedProof.compareTo(signedLive)==0 &&
                     observedAt>0L && snapshotAt>=observedAt && snapshotAt-observedAt<=60_000L &&
                     proof.optString("stop_proof") in setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED")
             }
