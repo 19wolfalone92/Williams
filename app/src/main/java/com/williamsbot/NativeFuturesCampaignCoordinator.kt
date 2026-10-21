@@ -3926,8 +3926,12 @@ internal class NativeFuturesCampaignCoordinator(
         check((0 until rows.length()).none { rows.optJSONObject(it)?.optString("symbol") == symbol }) {
             "Supervision already exists; review its current state before retrying"
         }
-        check(latestEntryIntentIndex(intents(), symbol) == null) {
-            "A durable campaign already exists; operator takeover is not allowed"
+        val formerEntry=latestEntryIntentIndex(intents(),symbol)?.let { intents().optJSONObject(it) }
+        check(formerEntry==null ||
+            campaignLifecycleStatus(formerEntry) in TERMINAL_CAMPAIGN_STATUSES ||
+            (formerEntry.optString("kind")=="RECOVERED_EXCHANGE_POSITION" &&
+                !formerEntry.optBoolean("strategy_ownership_verified",false))) {
+            "An active strategy-owned campaign already exists; operator takeover is not allowed"
         }
         val adapter = adapterFactory()
         adapter.requireOneWayMode()
