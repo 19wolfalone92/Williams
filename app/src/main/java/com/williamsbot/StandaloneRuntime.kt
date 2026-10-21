@@ -1281,6 +1281,9 @@ private class StandaloneServer(private val context: Context) {
                         ?: error("symbol is required")
                 ).toString()
 
+            method == "POST" && path == "/api/v1/control/positions/supervise" ->
+                x.approveExistingPositionSupervision(JSONObject(body)).toString()
+
             else ->
                 JSONObject().put("error", "Not found").toString()
         }
@@ -2819,6 +2822,27 @@ private class NativeEngine(
     /** Explicit operator exit; still uses the Futures Execution Door and exchange confirmation. */
     @Synchronized
     fun sell(symbol: String): JSONObject = sellFuturesPosition(symbol)
+
+    fun approveExistingPositionSupervision(payload:JSONObject):JSONObject {
+        val symbol=payload.getString("symbol").uppercase(Locale.US)
+        val result=withCampaignMutation(
+            symbol,"OPERATOR_APPROVE_EXISTING_STOP_ONLY",
+            allowPaused=true,allowStopped=true,allowKillLatched=true,
+            allowReconcileRequired=true,waitForDoorMs=15_000L
+        ) {
+            futuresCampaignCoordinator.approveOperatorStopSupervision(
+                symbol,payload.getString("quantity"),payload.getString("entry_price"),
+                payload.getString("stop"),payload.getString("confirmation"))
+        }
+        if(result.optBoolean("ok")) {
+            runCatching { auditStore.recordCockpitEvent(
+                "OPERATOR_SUPERVISION_APPROVED",symbol,state="STOP_ONLY",
+                detail="Original book ENTRY not restored; no entry, addition or market exit authorized."
+            ) }
+            scheduleNativePositionManagement()
+        }
+        return result
+    }
 
     /**
      * Testnet-only directional override. It does not bypass risk, reconciliation,
@@ -5679,6 +5703,15 @@ private class NativeEngine(
                     // until the next authoritative full Binance reconciliation.
                 }
             }
+            // Operator-approved stop-only rescue never unlocks entries.
+            if(futuresCampaignCoordinator.operatorSupervisionsSnapshot().length()>0) {
+                val now=System.currentTimeMillis()
+                if(lastOperatorSupervisionAttemptMs==0L ||
+                    now-lastOperatorSupervisionAttemptMs>=10_000L) {
+                    lastOperatorSupervisionAttemptMs=now
+                    manageOperatorSupervisedPositions()
+                }
+            }
             return false
         }
         // Never reopen entries if SQLite cannot confirm that the reconciliation
@@ -5996,6 +6029,75 @@ private class NativeEngine(
         if(replacement==null) check(executionStore.writeState("mtf_reanchor_"+symbol,"")) { "Cannot retire invalid M15 target" }
         auditStore.recordCockpitEvent("M15_ENTRY_CANCEL",symbol,pending.optString("direction"),"CANCEL_CONFIRMED",reason)
         return true
+    }
+
+    private var lastOperatorSupervisionAttemptMs:Long=0L
+
+    private fun manageOperatorSupervisedPositions() {
+        val records=futuresCampaignCoordinator.operatorSupervisionsSnapshot()
+        for(i in 0 until records.length()) {
+            val record=records.optJSONObject(i) ?: continue
+            val symbol=record.optString("symbol")
+            if(symbol !in coreSymbols) continue
+            if(record.optString("state")=="REPLACEMENT_UNRESOLVED") {
+                runCatching {
+                    val result=withCampaignMutation(
+                        symbol,"OPERATOR_STOP_ACK_RECOVERY",
+                        allowPaused=true,allowStopped=true,allowKillLatched=true,
+                        allowReconcileRequired=true,waitForDoorMs=15_000L
+                    ) { futuresCampaignCoordinator.recoverOperatorSupervisedStop(symbol) }
+                    if(!result.optBoolean("ok")) {
+                        lastError="STOP_REPLACEMENT_UNRESOLVED "+symbol+": "+
+                            result.optString("blocker","Binance proof incomplete")
+                    }
+                }.onFailure { lastError="STOP_RECOVERY_BLOCKED "+symbol+": "+
+                    (it.message ?: it.javaClass.simpleName) }
+                continue
+            }
+            if(record.optString("state")!="ACTIVE") continue
+            runCatching {
+                val direction=NativeFuturesCampaignCoordinator.Direction.valueOf(record.getString("direction"))
+                val bars=fetchCandles(symbol,"1h",180)
+                require(bars.size>=45) { "Need 45 H1 candles before supervised trailing" }
+                val rules=symbolFilters(symbol)
+                val mark=futuresMarketData.markPrice(symbol)
+                val plan=planWilliamsCampaignStop(
+                    direction=direction.name,
+                    oldStop=record.getDouble("stop"),
+                    actualEntry=record.getDouble("entry_price"),
+                    initialStop=record.optDouble("initial_stop",record.getDouble("stop")),
+                    markPrice=mark,
+                    tickSize=rules.tick,
+                    openedObservedAtMs=record.optLong("approved_at_ms",0L),
+                    bars=bars.map { FuturesTrailBar(it.t,it.h,it.l) },
+                    feeAllowance=2.0*feeBufferPerSidePct+maxSlippagePct
+                )
+                if(plan!=null) {
+                    val clientId=("W2T_"+symbol.take(8)+"_"+
+                        System.nanoTime().toString(36).takeLast(14)).take(36)
+                    val outcome=withCampaignMutation(
+                        symbol,"OPERATOR_EXISTING_STOP_ONLY_TRAIL",
+                        allowPaused=true,allowStopped=true,allowKillLatched=true,
+                        allowReconcileRequired=true,waitForDoorMs=15_000L
+                    ) {
+                        futuresCampaignCoordinator.trailOperatorSupervisedStop(
+                            symbol,direction,fmtPrice(plan.stop,rules.tick),clientId)
+                    }
+                    check(outcome.optBoolean("ok")) {
+                        outcome.optString("blocker","Operator stop replacement unresolved")
+                    }
+                    auditStore.recordCockpitEvent("OPERATOR_PROTECTION_TRAILED",
+                        symbol,state="EXCHANGE_CONFIRMED",
+                        detail="TC2 H1 only; "+plan.reason+"; new_stop="+plan.stop+"; no book ownership claimed")
+                }
+            }.onFailure {
+                val blocker="OPERATOR_STOP_SUPERVISION_BLOCKED "+symbol+": "+
+                    (it.message ?: it.javaClass.simpleName)
+                lastError=blocker
+                runCatching { auditStore.recordCockpitEvent(
+                    "OPERATOR_STOP_SUPERVISION",symbol,state="BLOCKED",detail=blocker) }
+            }
+        }
     }
 
     private fun manageVerifiedNativePositions(

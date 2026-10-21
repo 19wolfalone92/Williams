@@ -320,6 +320,7 @@ data class Status(
     val positionsSnapshotAtMs: Long = 0L,
     val accountSnapshotAtMs: Long = 0L,
     val futuresIntents: List<JSONObject> = emptyList(),
+    val operatorSupervisions: List<JSONObject> = emptyList(),
     val cockpitReadiness: JSONObject = JSONObject()
 )
 
@@ -455,7 +456,8 @@ data class PositionView(
     val pnlPct: Double = 0.0,
     val ocoListId: String = "",
     val ocoListClientId: String = "",
-    val direction: String = ""
+    val direction: String = "",
+    val stopVerificationStatus: String = "UNKNOWN"
 )
 
 private class LocalRuntimeApi(context: Context) {
@@ -505,6 +507,7 @@ fun WilliamsApp(context: Context) {
     var diagnosticsRunning by remember { mutableStateOf(false) }
     var historicalTrade by rememberSaveable { mutableStateOf<Trade?>(null) }
     var requestedCloseSymbol by remember { mutableStateOf<String?>(null) }
+    var requestedSupervisionSymbol by remember { mutableStateOf<String?>(null) }
     var criticalSetting by remember { mutableStateOf("") }
     val loadMutex = remember { Mutex() }
 
@@ -1111,10 +1114,44 @@ fun WilliamsApp(context: Context) {
                 interval = selectedChartInterval,
                 onIntervalChange = { selectedChartInterval = it },
                 onSelect = { selectedPositionSymbol = it },
-                onSell = { symbol ->
-                    requestedCloseSymbol = symbol
-                }
+                onSell = { symbol -> requestedCloseSymbol = symbol },
+                onSupervise = { symbol -> requestedSupervisionSymbol = symbol }
                 )
+                requestedSupervisionSymbol?.let { symbol ->
+                    val candidate=status.positions.firstOrNull { it.symbol==symbol }
+                    AlertDialog(
+                        onDismissRequest={ requestedSupervisionSymbol=null },
+                        title={ Text("Сопровождать стоп $symbol?") },
+                        text={ Text("Это позиция без доказанного первоначального входа TC2. Подключается ТОЛЬКО перенос существующего биржевого стопа по H1 Вильямса. Новых входов, добавлений и рыночных закрытий не будет. Биржа повторно проверит количество, цену входа и действующий стоп.") },
+                        dismissButton={ TextButton(onClick={ requestedSupervisionSymbol=null }) { Text("Отмена") } },
+                        confirmButton={ TextButton(onClick={
+                            requestedSupervisionSymbol=null
+                            if(candidate!=null && candidate.stop!=null) {
+                                scope.launch(Dispatchers.IO) {
+                                    try {
+                                        val body=JSONObject()
+                                            .put("symbol",symbol)
+                                            .put("quantity",kotlin.math.abs(candidate.qty).toString())
+                                            .put("entry_price",candidate.entry.toString())
+                                            .put("stop",candidate.stop.toString())
+                                            .put("confirmation","СОПРОВОЖДАТЬ ТОЛЬКО СТОП")
+                                        val answer=JSONObject(api.post("/api/v1/control/positions/supervise",body.toString()))
+                                        withContext(Dispatchers.Main) {
+                                            message=if(answer.optBoolean("ok"))
+                                                "Сопровождение стопа $symbol подключено. Новые входы по-прежнему заблокированы."
+                                            else "Сопровождение $symbol не подключено: "+answer.optString("blocker",answer.optString("error"))
+                                        }
+                                        loadAll(false)
+                                    } catch(e:Exception) {
+                                        withContext(Dispatchers.Main) {
+                                            message="Сопровождение $symbol НЕ подключено: "+(e.message ?: "ошибка биржевой проверки")
+                                        }
+                                    }
+                                }
+                            }
+                        }) { Text("Подключить только SL") } }
+                    )
+                }
                 requestedCloseSymbol?.let { symbol ->
                     AlertDialog(onDismissRequest = { requestedCloseSymbol = null },
                         title = { Text("Закрыть $symbol?") },
@@ -2693,7 +2730,8 @@ private fun PositionScreen(
     interval: String,
     onIntervalChange: (String) -> Unit,
     onSelect: (String) -> Unit,
-    onSell: (String) -> Unit
+    onSell: (String) -> Unit,
+    onSupervise: (String) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier
@@ -2818,13 +2856,38 @@ private fun PositionScreen(
                             "Тейк-профит",
                             fmt(p.take)
                         )
+                        val supervised=status.operatorSupervisions.firstOrNull {
+                            it.optString("symbol")==p.symbol
+                        }
+                        if(supervised!=null) {
+                            InfoRow("Отдельное сопровождение SL",
+                                if(supervised.optString("state")=="ACTIVE")
+                                    "Разрешено сопровождение • биржа проверяется перед переносом"
+                                else "Остановлено • требуется сверка Binance")
+                        } else if(p.stop!=null && p.stopVerificationStatus=="EXTERNAL_PROTECTED" &&
+                            status.positionsSnapshotOk &&
+                            CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,System.currentTimeMillis(),15_000L) &&
+                            status.futuresIntents.none { it.optString("symbol")==p.symbol &&
+                                it.optBoolean("strategy_ownership_verified",false) }) {
+                            OutlinedButton(onClick={ onSupervise(p.symbol) },
+                                modifier=Modifier.fillMaxWidth()) {
+                                Text("ПОДКЛЮЧИТЬ СОПРОВОЖДЕНИЕ SL")
+                            }
+                        }
                         InfoRow(
                             "Защита",
-                            if (status.positionsSnapshotOk && status.futuresIntents.any {
-                                it.optString("symbol") == p.symbol && it.optString("direction") == p.direction &&
-                                    CockpitDiagnostics.protectionProven(it, System.currentTimeMillis())
-                            }) "Подтверждена Binance"
-                            else "НЕ ПОДТВЕРЖДЕНА — требуется сверка"
+                            when {
+                                p.stopVerificationStatus=="EXTERNAL_PROTECTED" && status.positionsSnapshotOk &&
+                                    CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,System.currentTimeMillis(),15_000L) ->
+                                    "Биржевой SL подтверждён, владелец кампании не установлен"
+                                p.stopVerificationStatus=="EXTERNAL_PROTECTED" ->
+                                    "Биржевой SL обнаружен ранее • требуется свежая сверка"
+                                status.positionsSnapshotOk && status.futuresIntents.any {
+                                    it.optString("symbol") == p.symbol && it.optString("direction") == p.direction &&
+                                        CockpitDiagnostics.protectionProven(it, System.currentTimeMillis())
+                                } -> "Подтверждена Binance"
+                                else -> "НЕ ПОДТВЕРЖДЕНА — требуется сверка"
+                            }
                         )
                     }
                 }
@@ -3925,7 +3988,8 @@ internal fun parseStatus(json: JSONObject): Status {
                 pnlUsdt = unrealizedPnl,
                 pnlPct = pnlFraction,
                 ocoListId = item.optString("oco_list_id"),
-                ocoListClientId = item.optString("oco_list_client_id")
+                ocoListClientId = item.optString("oco_list_client_id"),
+                stopVerificationStatus = item.optString("stop_verification_status","UNKNOWN")
             )
         }
     }
@@ -4156,6 +4220,7 @@ internal fun parseStatus(json: JSONObject): Status {
         positionsSnapshotAtMs = json.optLong("positions_snapshot_at_ms"),
         accountSnapshotAtMs = json.optLong("account_snapshot_at_ms"),
         futuresIntents = CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")?.optJSONArray("pending_intent_details")),
+        operatorSupervisions = CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")?.optJSONArray("operator_supervised_positions")),
         cockpitReadiness = json.optJSONObject("cockpit_readiness") ?: JSONObject()
     )
 }
