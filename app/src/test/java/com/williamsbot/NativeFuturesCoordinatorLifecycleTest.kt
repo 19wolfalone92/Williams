@@ -1319,9 +1319,12 @@ class NativeFuturesCoordinatorLifecycleTest {
             }
             assertFalse(coordinator.reconcile().getBoolean("ok"))
             val owner=coordinator.intentsSnapshot().getJSONObject(0)
-            assertEquals("NOT_SUBMITTED",owner.getString("protection_status"))
+            // Updated P0 recovery persists proof immediately after the
+            // crossed-mark hazard; it must NOT create an unproven stop POST.
+            assertEquals("NEVER_SUBMITTED_PROVEN",owner.getString("protection_status"))
+            assertEquals("NEVER_SUBMITTED_PROVEN",owner.getString("unprotected_safety_guard_origin"))
             assertTrue(owner.optString("protection_client_id").isBlank())
-            assertFalse(owner.getBoolean("protection_post_attempted"))
+            assertFalse(owner.optBoolean("protection_post_attempted",false))
             assertEquals(1,exchange.posts("/fapi/v1/algoOrder")) // Only the initial entry was posted.
             val next=coordinator.reconcile()
             val request=next.getJSONArray("required_safety_exits").getJSONObject(0)
