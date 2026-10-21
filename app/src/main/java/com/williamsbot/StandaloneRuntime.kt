@@ -1007,6 +1007,15 @@ internal fun reflectedTc2SetupContext(
             if (!proof.isNull(key) && proof.has(key)) proof.put(key, -proof.getDouble(key))
         }
     }
+    // SHORT uses a reflected price/AO sequence. Convert the book-context
+    // oscillator colour back to the actual exchange candles; do not turn
+    // this observational evidence into an unapproved H1 entry veto.
+    if (signalType=="REVERSAL" && context.has("wm1_ao_color")) {
+        val color=context.optString("wm1_ao_color")
+        context.put("wm1_ao_color",when(color) {
+            "RED" -> "GREEN"; "GREEN" -> "RED"; else -> color
+        })
+    }
     if (context.has("risk_stop_at_price") && !context.isNull("risk_stop_at_price")) {
         val originalStop = context.getDouble("risk_stop_at_price")
         require(originalStop.isFinite()) { "TC2_SHORT_CONTEXT_STOP_INVALID" }
