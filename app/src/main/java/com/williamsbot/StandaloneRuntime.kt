@@ -8946,6 +8946,39 @@ private class NativeEngine(
         val trace=buildWilliamsDecisionTrace(candidate.symbol,williamsProfile,
             candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },futuresMarketData.exchangeNowMs(),
             indicators,traceSignals,candidate.waveHierarchy?.toJson() ?: JSONObject())
+        // Read-only independent passports. Cached SQL history may be missing,
+        // stale, or gapped; these are explicit states, never projected from H1.
+        // Does not authorize or veto trading, and does not require M15 entry.
+        val passports=JSONObject()
+        val passportObservedAt=futuresMarketData.exchangeNowMs()
+        val marketPhase=trace.getJSONObject("market_phase")
+        for (frame in listOf("1d","6h","4h","1h","15m")) {
+            val ms=williamsWaveFrames.getValue(frame)
+            val reading=runCatching {
+                val source=if(frame=="1h") candidate.candles.map {
+                    WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v)
+                } else historyStore.loadRecent(candidate.symbol,frame,160).map {
+                    WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+                }
+                val closed=source.filter { it.t>0L && it.t<=passportObservedAt-ms }.takeLast(160)
+                val result=williamsMarketReading(closed,marketPhase,frame)
+                    .put("closed_candle_count",closed.size)
+                    .put("source",if(frame=="1h") "H1_CLOSED_SCANNER" else "SQLITE_CLOSED_HISTORY")
+                val lastClose=closed.lastOrNull()?.t?.plus(ms) ?: 0L
+                if(result.optString("state")=="OBSERVED" &&
+                    (passportObservedAt<lastClose || passportObservedAt-lastClose>=ms*2)) {
+                    result.put("state","STALE_HISTORY")
+                }
+                result
+            }.getOrElse { failure ->
+                JSONObject().put("schema","WILLIAMS_CHART_READING_V1")
+                    .put("frame",frame).put("state","HISTORY_READ_FAILED")
+                    .put("error_type",failure.javaClass.simpleName)
+                    .put("can_place_orders",false).put("can_close",false)
+            }
+            passports.put(frame,reading)
+        }
+        trace.put("market_readings",passports)
         val observations=JSONArray(williamsSourceProfiles.mapNotNull { source ->
             executionStore.readState("edition_observation_"+candidate.symbol+"_"+source)
                 ?.let { runCatching { JSONObject(it) }.getOrNull() }
