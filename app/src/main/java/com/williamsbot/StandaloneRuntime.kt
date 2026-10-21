@@ -1468,6 +1468,7 @@ private class NativeEngine(
     @Volatile private var lastScanDailyRiskCheckAllowed = false
     @Volatile private var lastNativeManagementAttemptMs = 0L
     @Volatile private var lastProtectedRiskCapManagementAtMs = 0L
+    @Volatile private var lastExternalStopManagementAtMs = 0L
     private val deepWatchTopN = 10
     private val scannerUniverseLabel = "USD_M_FUTURES_TESTNET_10"
 
@@ -5210,6 +5211,12 @@ private class NativeEngine(
         if (key().isBlank() || secret().isBlank()) return out
         val positions = futuresCampaignCoordinator.positionsSnapshot()
         val intents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
+        // The persisted campaign STOP is only a planned value. A refreshed
+        // signed Binance protection observation is separate and authoritative
+        // even when a 4.52 upgrade lost the original local campaign journal.
+        val observedStops = futuresCampaignCoordinator.status()
+            .optJSONArray("exchange_protection_observations") ?: JSONArray()
+        val snapshotAt = System.currentTimeMillis()
         for (i in 0 until positions.length()) {
             val row = positions.optJSONObject(i)
                 ?: throw IllegalStateException("Malformed Binance Futures position row in position snapshot")
@@ -5234,10 +5241,29 @@ private class NativeEngine(
                 ?: runCatching { futuresMarketData.markPrice(symbol) }.getOrDefault(0.0)
             val qty = kotlin.math.abs(signedQty)
             val pnl = row.optString("unRealizedProfit").toDoubleOrNull() ?: 0.0
+            val exchangeStop=(0 until observedStops.length()).mapNotNull {
+                observedStops.optJSONObject(it)
+            }.singleOrNull { proof ->
+                val observedAt=proof.optLong("observed_at_ms")
+                val signedProof=proof.optString("quantity").toBigDecimalOrNull()
+                val signedLive=row.optString("positionAmt").toBigDecimalOrNull()
+                proof.optString("symbol")==symbol && proof.optString("direction")==direction &&
+                    signedProof!=null && signedLive!=null && signedProof.compareTo(signedLive)==0 &&
+                    observedAt>0L && snapshotAt>=observedAt && snapshotAt-observedAt<=60_000L &&
+                    proof.optString("stop_proof") in setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED")
+            }
+            // Do not mistake old journal stop level for an exchange-confirmed
+            // working protective order.
+            val stopProof=exchangeStop?.optString("stop_proof") ?: "UNVERIFIED_OR_STALE"
+            val stop=exchangeStop?.optString("stop")?.toDoubleOrNull()
+                ?.takeIf { it.isFinite() && it>0.0 } ?: JSONObject.NULL
             out.put(JSONObject()
                 .put("symbol", symbol).put("direction", direction).put("side", direction)
                 .put("positionAmt", signedQty).put("qty", qty).put("entry", entry).put("entryPrice", entry)
-                .put("mark_price", mark).put("stop", intent?.optString("protective_stop")?.toDoubleOrNull() ?: JSONObject.NULL)
+                .put("mark_price", mark).put("stop", stop)
+                .put("stop_verification_status",stopProof)
+                .put("stop_confirmed_at_ms",exchangeStop?.optLong("observed_at_ms") ?: JSONObject.NULL)
+                .put("stop_can_be_auto_trailed",stopProof=="OWNED_STOP_SEEN")
                 .put("risk_pct", intent?.optDouble("risk_pct", 0.0) ?: 0.0)
                 .put("unrealized_pnl_usdt", pnl).put("margin_type", row.optString("marginType"))
                 .put("leverage", row.optString("leverage")).put("exchange_confirmed", true))
@@ -5583,6 +5609,36 @@ private class NativeEngine(
                         "RISK_CAP_MANAGEMENT", state = "BLOCKED",
                         detail = lastError.orEmpty()
                     ) }
+                }
+            }
+            // An unrelated orphan/manual algo must not freeze stop tightening
+            // of a DIFFERENT fully identified live TC2 campaign. Coordinator
+            // grants a 30-second, per-symbol, non-exposure risk-only scope,
+            // verified by BOTH durable fill ownership and live protective stop.
+            val isolated=reconciliation.optJSONArray("verified_external_stop_management_symbols")
+                ?: JSONArray()
+            if(isolated.length()>0) {
+                val now=System.currentTimeMillis()
+                if(lastExternalStopManagementAtMs<=0L ||
+                    now-lastExternalStopManagementAtMs>=10_000L) {
+                    lastExternalStopManagementAtMs=now
+                    val authorized=(0 until isolated.length()).map {
+                        isolated.optString(it)
+                    }.filter { it.isNotBlank() }.toSet()
+                    runCatching {
+                        manageVerifiedNativePositions(
+                            futuresCampaignCoordinator.positionsSnapshot(),
+                            futuresCampaignCoordinator.intentsSnapshot(),
+                            riskOnly=true,eligibleSymbols=authorized
+                        )
+                    }.onFailure { error ->
+                        runCatching { auditStore.recordCockpitEvent(
+                            "EXTERNAL_ORDER_ISOLATED_TRAIL",state="BLOCKED",
+                            detail=error.message ?: error.javaClass.simpleName
+                        ) }
+                        lastError="OWNED_STOP_TRAILING_UNAVAILABLE: "+
+                            (error.message ?: error.javaClass.simpleName)
+                    }
                 }
             }
             if (scannerError?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:")==true) {
@@ -5945,13 +6001,14 @@ private class NativeEngine(
     private fun manageVerifiedNativePositions(
         positions: JSONArray,
         intents: JSONArray,
-        riskOnly: Boolean
+        riskOnly: Boolean,
+        eligibleSymbols: Set<String>? = null
     ) {
         for (i in 0 until positions.length()) {
             val row = positions.optJSONObject(i)
                 ?: throw IllegalStateException("Malformed Binance Futures position row during structural exit evaluation")
             val symbol = row.optString("symbol").uppercase(Locale.US)
-            if (symbol !in coreSymbols) continue
+            if (symbol !in coreSymbols || (eligibleSymbols!=null && symbol !in eligibleSymbols)) continue
             val signedQty = row.optString("positionAmt").toDoubleOrNull()
                 ?: throw IllegalStateException("Malformed Binance Futures position amount for $symbol during structural exit evaluation")
             if (signedQty == 0.0) continue
@@ -5976,6 +6033,10 @@ private class NativeEngine(
             } else null
             val boundaryExit = correctionProof != null && !williamsCorrectionPriceAllowed(correctionProof,mark)
             val profile=intent.optString("strategy_profile",williamsTc2Profile)
+            // Only TC2's exchange-protected structural trailing may operate
+            // in a partially reconciled account. Course/NTD exits have their
+            // own authorization lifecycle and are NOT generic risk-only stops.
+            if(eligibleSymbols!=null && profile!=williamsTc2Profile) continue
             require(profile in williamsEditionProfiles) { "Unknown durable strategy profile; retain protection" }
             val bars=candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
             var editionExit="";var editionStop:Double?=null

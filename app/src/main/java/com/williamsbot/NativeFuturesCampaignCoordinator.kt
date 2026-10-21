@@ -786,6 +786,12 @@ internal class NativeFuturesCampaignCoordinator(
     @Volatile private var reconciliationStartedAtMs = 0L
     @Volatile private var reconciliationFinishedAtMs = 0L
     @Volatile private var verifiedRiskCapManagementAtMs = 0L
+    /** Signed exchange observations; never infer strategy ownership from an order prefix. */
+    @Volatile private var externalOrderObservationsJson = "[]"
+    @Volatile private var externalProtectionObservationsJson = "[]"
+    /** Fresh read-only-scope proof; isolated risk-reducing stop moves only. */
+    @Volatile private var externalStopManagementSymbolsJson = "[]"
+    @Volatile private var externalStopManagementVerifiedAtMs = 0L
 
     private val lock = Any()
     @Volatile private var observationSink: ((JSONArray) -> Unit)? = null
@@ -936,6 +942,10 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     fun reconcile(): JSONObject = synchronized(lock) {
+        // A stale success cannot authorize a later stop mutation while the
+        // account is being refreshed or when a REST call fails halfway.
+        externalStopManagementSymbolsJson = "[]"
+        externalStopManagementVerifiedAtMs = 0L
         reconciliationRunning = true
         reconciliationStartedAtMs = clock()
         verifiedRiskCapManagementAtMs = 0L
@@ -1088,9 +1098,11 @@ internal class NativeFuturesCampaignCoordinator(
                     entryExecutions[cid] = execution
                 }
             }
-            // A manual or orphaned order can create exposure without any local intent.
-            // Block startup if any account-wide open order cannot be tied to this bot's
-            // durable intent journal; never silently adopt or duplicate it.
+            // A manual or orphaned order can create exposure without a local intent.
+            // Do NOT abort account-wide auditing on its first occurrence: doing
+            // so previously hid protection of the OTHER live symbols as well.
+            // Unknown orders still block new entries and are NEVER auto-adopted.
+            val externalOrders = JSONArray()
             val allOpenOrders = adapter.allOpenOrders()
             for (i in 0 until allOpenOrders.length()) {
                 val order = allOpenOrders.optJSONObject(i)
@@ -1103,12 +1115,67 @@ internal class NativeFuturesCampaignCoordinator(
                         !isOwnedClientOrderForSymbol(symbol, clientId, activeEntryClientIdsBySymbol) &&
                         !isOwnedClientOrderForSymbol(symbol, clientId, activeExitClientIdsBySymbol))
                 ) {
-                    throw IllegalStateException(
-                        "Unmanaged Futures open order detected ($symbol/$clientId); cancel/reconcile manually before trading"
-                    )
+                    externalOrders.put(JSONObject().put("symbol",symbol)
+                        .put("client_id",clientId).put("kind","EXTERNAL_OPEN_ORDER")
+                        .put("exchange_order_id",order.optString("orderId")))
+                
                 }
             }
             val allOpenAlgoOrders = adapter.allOpenAlgoOrders()
+            // Upgrade/restart recovery: a legacy W2PS stop can lose only its
+            // local protection binding even though the ENTRY ledger survives.
+            // Rebind ONLY a derived exact clientAlgoId to the same signed
+            // exchange entry fill, volume and average; never infer ownership
+            // from the W2PS prefix or an unrelated orphan Binance position.
+            for ((symbol, position) in openBySymbol) {
+                val owner = latestEntryIndexBySymbol[symbol]?.let { persisted.optJSONObject(it) }
+                    ?: continue
+                if (!owner.optBoolean("strategy_ownership_verified",false) ||
+                    campaignLifecycleStatus(owner) !in ACTIVE_CAMPAIGN_STATUSES) continue
+                val entryId=owner.optString("client_id")
+                if (listOf("W2E_","W2H_","W5E_","W2F_").none { entryId.startsWith(it) } ||
+                    owner.optString("protection_client_id").isNotBlank()) continue
+                // The simple 1-entry full-fill proof is intentionally strict:
+                // an ADD_ON or partial reduction must be reconciled using its
+                // full fill ledger before owner rebind is ever authorized.
+                val hasOtherFills=(0 until persisted.length()).mapNotNull { persisted.optJSONObject(it) }
+                    .any { it.optString("entry_client_id")==entryId &&
+                        it.optString("intent_role") in setOf("ADD_ON","EXIT") }
+                if(hasOtherFills) continue
+                val fill=entryExecutions[entryId] ?: continue
+                val amount=position.optString("positionAmt").toBigDecimalOrNull() ?: continue
+                if(amount.signum()==0 || owner.optString("direction") !=
+                    (if(amount.signum()>0) "LONG" else "SHORT") ||
+                    fill.optString("executedQty").toBigDecimalOrNull()?.compareTo(amount.abs())!=0)
+                    continue
+                val entry=position.optString("entryPrice").toDoubleOrNull() ?: continue
+                val average=fill.optString("avgPrice").toDoubleOrNull() ?: continue
+                if(!entry.isFinite() || entry<=0 || !average.isFinite() ||
+                    kotlin.math.abs(entry-average)>maxOf(1e-8,entry*1e-8)) continue
+                val mark=runCatching { adapter.markPrice(symbol) }.getOrNull() ?: continue
+                val stopId=stableProtectionId(symbol,entryId)
+                val matches=(0 until allOpenAlgoOrders.length()).mapNotNull {
+                    allOpenAlgoOrders.optJSONObject(it)
+                }.filter { it.optString("clientAlgoId")==stopId }
+                if(matches.size!=1 || !isFullPositionFuturesStop(matches.single(),symbol,
+                    owner.optString("direction"),amount.abs(),mark)) continue
+                val price=matches.single().optString("triggerPrice").ifBlank {
+                    matches.single().optString("stopPrice")
+                }.toDoubleOrNull() ?: continue
+                val old=owner.optString("protective_stop").toDoubleOrNull()
+                // Never silently widen a protective stop that survived in the
+                // journal. A manually tightened stop can still be recognized.
+                if(old!=null && old.isFinite() && old>0 &&
+                    (if(amount.signum()>0) price+1e-8<old else price-1e-8>old))
+                    continue
+                owner.put("protection_client_id",stopId)
+                    .put("protective_stop",price.toString())
+                    .put("protection_status","PROTECTED")
+                    .put("protection_rebound_from_exchange_at_ms",clock())
+                    .put("protection_rebound_proof","EXACT_DERIVED_W2PS_AND_AUTHENTICATED_FILL")
+                addOwner(activeProtectionClientIdsBySymbol,symbol,stopId)
+                saveIntents(persisted)
+            }
             for (i in 0 until allOpenAlgoOrders.length()) {
                 val order = allOpenAlgoOrders.optJSONObject(i)
                     ?: throw IllegalStateException("Malformed account-wide Futures algo-order row")
@@ -1118,11 +1185,14 @@ internal class NativeFuturesCampaignCoordinator(
                     (!isOwnedClientOrderForSymbol(symbol, clientId, activeEntryClientIdsBySymbol) &&
                         !isOwnedClientOrderForSymbol(symbol, clientId, activeProtectionClientIdsBySymbol))
                 ) {
-                    throw IllegalStateException(
-                        "Unmanaged Futures conditional/algo order detected ($symbol/$clientId); reconcile manually before trading"
-                    )
+                    externalOrders.put(JSONObject().put("symbol",symbol)
+                        .put("client_id",clientId).put("kind","EXTERNAL_ALGO_ORDER")
+                        .put("exchange_algo_id",order.optString("algoId")))
+                
                 }
             }
+            externalOrderObservationsJson=externalOrders.toString()
+            val protectionObservations=JSONArray()
             var hasPendingExit = false
             var hasPendingAddition = false
             var anyUnprotected = false
@@ -1483,6 +1553,12 @@ internal class NativeFuturesCampaignCoordinator(
                     ?: throw IllegalStateException("Binance returned a malformed position amount for $symbol during protection audit")
                 val direction = if (amount > 0.0) "LONG" else "SHORT"
                 val algos = protectiveOrdersBySymbol.getOrPut(symbol) { adapter.openAlgoOrders(symbol) }
+                val referenceMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                val signedFullStops=if(referenceMark!=null && referenceMark.isFinite() && referenceMark>0.0)
+                    (0 until algos.length()).mapNotNull { algos.optJSONObject(it) }.filter {
+                        isFullPositionFuturesStop(it,symbol,direction,
+                            position.getString("positionAmt").toBigDecimal().abs(),referenceMark)
+                    } else emptyList()
                 val latestIntentIndex = latestEntryIndexBySymbol[symbol]
                 var matchingIntent = latestIntentIndex?.let { persisted.optJSONObject(it) }
                     ?.takeIf { intent ->
@@ -1558,6 +1634,40 @@ internal class NativeFuturesCampaignCoordinator(
                     }
                     verifiedOwner.put("confirmed_position_qty", liveQuantity.toPlainString())
                         .put("actual_entry_price", positionPrice.toString())
+                }
+                // A complete exchange stop can protect a manually held or
+                // previous-install position while the bot cannot prove it OWNS
+                // that campaign. Record it, do not replace/cancel/trail it.
+                val observedOwnerId=matchingIntent?.optString("protection_client_id").orEmpty()
+                val ownedProtection=signedFullStops.size==1 &&
+                    matchingIntent?.optBoolean("strategy_ownership_verified",false)==true &&
+                    observedOwnerId.isNotBlank() &&
+                    signedFullStops.single().optString("clientAlgoId")==observedOwnerId
+                protectionObservations.put(JSONObject().put("symbol",symbol)
+                    .put("observed_at_ms",clock())
+                    .put("direction",direction)
+                    .put("quantity",position.optString("positionAmt"))
+                    .put("stop_proof",when {
+                        signedFullStops.size>1 -> "MULTIPLE_PROTECTIVE_ORDERS_UNRESOLVED"
+                        signedFullStops.size==1 -> if(ownedProtection) "OWNED_STOP_SEEN" else "EXTERNAL_PROTECTED"
+                        referenceMark==null -> "MARK_PRICE_UNAVAILABLE"
+                        else -> "STOP_UNCONFIRMED"
+                    })
+                    .put("stop",if(signedFullStops.size==1)
+                        signedFullStops.single().optString("triggerPrice",
+                            signedFullStops.single().optString("stopPrice")) else JSONObject.NULL)
+                    .put("protection_client_id",if(signedFullStops.size==1)
+                        signedFullStops.single().optString("clientAlgoId") else JSONObject.NULL)
+                    .put("strategy_ownership_verified",matchingIntent?.optBoolean(
+                        "strategy_ownership_verified",false)==true)
+                    .put("automatic_trailing_authorized",ownedProtection))
+                if (matchingIntent == null && signedFullStops.isNotEmpty()) {
+                    // A valid exchange stop is better than unprotected exposure.
+                    // Presence of W2PS_ alone does not prove which installation
+                    // owns the position, so never manufacture ENTRY/FILL state.
+                    actualRiskAuditBlocked=true
+                    actualRiskAuditBlocker="$symbol has an exchange-protected position but no verified local campaign ownership; no automatic trailing until ownership is restored"
+                    continue
                 }
                 if (matchingIntent == null && latestIntentIndex == null) {
                     // The exchange is authoritative, but an orphan position must not
@@ -2252,6 +2362,15 @@ internal class NativeFuturesCampaignCoordinator(
                 }
             }
             saveIntents(persisted)
+            externalProtectionObservationsJson=protectionObservations.toString()
+            // Existing unknown orders block NEW risk, but must not freeze
+            // stop-tightening for a DIFFERENT, completely verified campaign.
+            val otherRiskBlock=actualRiskAuditBlocked
+            if(externalOrders.length()>0) {
+                actualRiskAuditBlocked=true
+                if(actualRiskAuditBlocker==null)
+                    actualRiskAuditBlocker="Some open Futures orders have no verified campaign journal; review per-symbol exchange protection before resuming entries"
+            }
 
             val hasPendingEntry = hasPendingAddition || (0 until persisted.length()).any { index ->
                 val intent = persisted.optJSONObject(index) ?: return@any true
@@ -2262,6 +2381,20 @@ internal class NativeFuturesCampaignCoordinator(
             }
             // A strictly verified over-cap portfolio may continue risk-REDUCING
             // management. Failed reconciliation remains failed and entries stay locked.
+            // Allow only a narrowly scoped maintenance exception when the
+            // SOLE global reconciliation blocker is a foreign order on an
+            // unrelated symbol. A closed/read-only campaign gets no permission.
+            val eligibleExternalStopManagement=if(
+                externalOrders.length()>0 && !otherRiskBlock &&
+                !anyUnprotected && !hasPendingExit && !hasPendingAddition && !hasPendingEntry &&
+                requiredSafetyExits.length()==0
+            ) {
+                verifiedExternalStopManagementScope(
+                    protectionObservations,externalOrders,persisted
+                )
+            } else emptySet()
+            externalStopManagementSymbolsJson=JSONArray(eligibleExternalStopManagement.sorted()).toString()
+            externalStopManagementVerifiedAtMs=if(eligibleExternalStopManagement.isNotEmpty()) clock() else 0L
             val verifiedOverCap = !anyUnprotected && !hasPendingExit && !hasPendingAddition &&
                 !hasPendingEntry && requiredSafetyExits.length() == 0 &&
                 actualRiskAuditBlocked && verifiedProtectedRiskCapManagement(
@@ -2287,6 +2420,12 @@ internal class NativeFuturesCampaignCoordinator(
             }
             JSONObject()
                 .put("ok", !anyUnprotected && !actualRiskAuditBlocked && !hasPendingExit)
+                .put("external_open_orders",JSONArray(externalOrderObservationsJson))
+                .put("exchange_protection_observations",JSONArray(externalProtectionObservationsJson))
+                .put("verified_external_stop_management_symbols",
+                    JSONArray(externalStopManagementSymbolsJson))
+                .put("verified_external_stop_management_at_ms",
+                    externalStopManagementVerifiedAtMs)
                 .put("actual_risk_audit_blocked", actualRiskAuditBlocked)
                 .put("protected_over_cap_management_allowed", verifiedOverCap)
                 .put("actual_risk_audit_blocker", actualRiskAuditBlocker ?: JSONObject.NULL)
@@ -3090,11 +3229,20 @@ internal class NativeFuturesCampaignCoordinator(
         clientAlgoId: String,
         reason: String = "UNSPECIFIED_STRUCTURAL_TRAIL"
     ): JSONObject = synchronized(lock) {
+        val foreignOrderRiskOnly = state == State.RECONCILE_REQUIRED &&
+            clientAlgoId.startsWith("W2T_") &&
+            externalStopManagementVerifiedAtMs>0L &&
+            clock()>=externalStopManagementVerifiedAtMs &&
+            clock()-externalStopManagementVerifiedAtMs<=30_000L &&
+            (0 until JSONArray(externalStopManagementSymbolsJson).length()).any {
+                JSONArray(externalStopManagementSymbolsJson).optString(it)==symbol
+            }
         val cappedRiskOnly = state == State.RECONCILE_REQUIRED &&
             lastBlocker?.startsWith("ACTUAL_FUTURES_RISK_EXCEEDS_PORTFOLIO_CAP:") == true &&
             verifiedRiskCapManagementAtMs > 0L && clock() >= verifiedRiskCapManagementAtMs &&
             clock() - verifiedRiskCapManagementAtMs <= 30_000L
-        check(state == State.OPEN_PROTECTED || state == State.ENTRY_PENDING || cappedRiskOnly) {
+        check(state == State.OPEN_PROTECTED || state == State.ENTRY_PENDING ||
+            cappedRiskOnly || foreignOrderRiskOnly) {
             "Stop trail blocked while Futures state is $state"
         }
         require(symbol in allowedSymbols)
@@ -3724,6 +3872,10 @@ internal class NativeFuturesCampaignCoordinator(
             .put("reconciliation_running", reconciliationActive)
             .put("reconciliation_started_at_ms", reconciliationStartedAtMs)
             .put("reconciliation_finished_at_ms", reconciliationFinishedAtMs)
+            .put("external_open_orders",JSONArray(externalOrderObservationsJson))
+            .put("exchange_protection_observations",JSONArray(externalProtectionObservationsJson))
+            .put("verified_external_stop_management_symbols",JSONArray(externalStopManagementSymbolsJson))
+            .put("verified_external_stop_management_at_ms",externalStopManagementVerifiedAtMs)
             .put("pending_intents", pendingDetails.length())
             .put("pending_intent_details", pendingDetails)
             .put("testnet_only", true)
