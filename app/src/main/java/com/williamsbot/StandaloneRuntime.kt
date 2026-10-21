@@ -6037,9 +6037,24 @@ private class NativeEngine(
         val records=futuresCampaignCoordinator.operatorSupervisionsSnapshot()
         for(i in 0 until records.length()) {
             val record=records.optJSONObject(i) ?: continue
-            if(record.optString("state")!="ACTIVE") continue
             val symbol=record.optString("symbol")
             if(symbol !in coreSymbols) continue
+            if(record.optString("state")=="REPLACEMENT_UNRESOLVED") {
+                runCatching {
+                    val result=withCampaignMutation(
+                        symbol,"OPERATOR_STOP_ACK_RECOVERY",
+                        allowPaused=true,allowStopped=true,allowKillLatched=true,
+                        allowReconcileRequired=true,waitForDoorMs=15_000L
+                    ) { futuresCampaignCoordinator.recoverOperatorSupervisedStop(symbol) }
+                    if(!result.optBoolean("ok")) {
+                        lastError="STOP_REPLACEMENT_UNRESOLVED "+symbol+": "+
+                            result.optString("blocker","Binance proof incomplete")
+                    }
+                }.onFailure { lastError="STOP_RECOVERY_BLOCKED "+symbol+": "+
+                    (it.message ?: it.javaClass.simpleName) }
+                continue
+            }
+            if(record.optString("state")!="ACTIVE") continue
             runCatching {
                 val direction=NativeFuturesCampaignCoordinator.Direction.valueOf(record.getString("direction"))
                 val bars=fetchCandles(symbol,"1h",180)
