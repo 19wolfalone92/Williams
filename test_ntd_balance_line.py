@@ -8,7 +8,7 @@ from ntd_balance_line import ntd_balance_line_evidence
 from williams_signals import extract_ntd_balance_line_signal_specs
 
 
-def evidence(highs, *, lows=None, jaw=100.0, teeth=99.0, lips=101.0, side="LONG", zone="GRAY"):
+def evidence(highs, *, lows=None, jaw=100.0, jaw_values=None, teeth=99.0, lips=101.0, side="LONG", zone="GRAY"):
     lows = lows or [v - 2.0 for v in highs]
     n = len(highs)
     ao = [0.0] * n
@@ -20,7 +20,7 @@ def evidence(highs, *, lows=None, jaw=100.0, teeth=99.0, lips=101.0, side="LONG"
         ao[-2:] = [1.0, 2.0]
         ac[-2:] = [1.0, 2.0]
     return ntd_balance_line_evidence(
-        highs, lows, [jaw] * n, [teeth] * n, [lips] * n,
+        highs, lows, jaw_values if jaw_values is not None else [jaw] * n, [teeth] * n, [lips] * n,
         ao, ac, side=side, tick_size=0.1
     )
 
@@ -34,7 +34,7 @@ def test_buy_above_jaw_requires_one_more_high_read_right_to_left():
 
 
 def test_buy_below_jaw_requires_two_rising_highs():
-    e = evidence([108, 106, 104, 101, 98], jaw=100)
+    e = evidence([108, 106, 104, 101, 98], jaw_values=[100,100,100,120,100])
     assert e.status == "CANDIDATE"
     assert e.required_steps == 2
     assert e.reference_index == 2
@@ -42,11 +42,11 @@ def test_buy_below_jaw_requires_two_rising_highs():
 
 
 def test_red_zone_doubles_buy_uphill_requirement_to_four():
-    e = evidence([115, 110, 107, 104, 102, 98], jaw=100, zone="RED")
+    e = evidence([115, 110, 107, 104, 102, 98], jaw_values=[100,100,100,100,110,100], zone="RED")
     assert e.status == "CANDIDATE"
     assert e.required_steps == 4
     assert e.trigger_price == pytest.approx(110.1)
-    no_fourth = evidence([106, 104, 102, 98, 98], jaw=100, zone="RED")
+    no_fourth = evidence([106, 104, 102, 98, 98], jaw_values=[100,100,120,100,100], zone="RED")
     assert no_fourth.status == "INCOMPLETE"
 
 
@@ -121,5 +121,14 @@ def test_future_bar_cannot_resurrect_past_ntd_candidate():
 
 def test_no_synthetic_short_or_long_on_flat_price():
     flat = [100,100,100,100,100,100]
-    assert evidence(flat).status == "INCOMPLETE"
-    assert evidence([v+2 for v in flat],lows=flat,side="SHORT",jaw=110,teeth=111,lips=112).status == "INCOMPLETE"
+    assert evidence(flat).reason == "NO_NEW_REFERENCE_EXTREME"
+    assert evidence([v+2 for v in flat],lows=flat,side="SHORT",jaw=110,teeth=111,lips=112).reason == "NO_NEW_REFERENCE_EXTREME"
+
+def test_book_figure_signal_reference_location_overrides_base_jaw_location():
+    prices=[108,106,104,101,98]
+    away=evidence(prices,jaw=100)
+    uphill=evidence(prices,jaw_values=[100,100,100,120,100])
+    assert away.status=="CANDIDATE" and away.required_steps==1
+    assert uphill.status=="CANDIDATE" and uphill.required_steps==2
+    assert uphill.trigger_price==pytest.approx(104.1)
+    assert not uphill.can_place_orders
