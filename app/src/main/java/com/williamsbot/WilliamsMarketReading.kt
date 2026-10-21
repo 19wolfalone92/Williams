@@ -4,12 +4,16 @@ import org.json.JSONObject
 
 /** Diagnostic synthesis only. Profitunity MACD shares AO/AC components;
  * agreement is not three independent votes and never assigns a wave number. */
-internal fun williamsMarketReading(bars:List<WilliamsWaveBar>,phaseContext:JSONObject):JSONObject {
+internal fun williamsMarketReading(bars:List<WilliamsWaveBar>,phaseContext:JSONObject,frame:String="1h"):JSONObject {
+    val duration = williamsWaveFrames[frame]
+        ?: return JSONObject().put("schema","WILLIAMS_CHART_READING_V1")
+            .put("frame",frame).put("state","UNSUPPORTED_FRAME")
+            .put("can_place_orders",false).put("can_close",false)
     val result=JSONObject().put("schema","WILLIAMS_CHART_READING_V1").put("state","INSUFFICIENT_HISTORY")
-        .put("wave_phase","UNRESOLVED").put("can_place_orders",false).put("can_close",false)
+        .put("wave_phase","UNRESOLVED").put("frame",frame).put("can_place_orders",false).put("can_close",false)
         .put("numerical_interpretation",true)
     if(bars.size<39) return result
-    if(!validWilliamsEditionBars(bars) || bars.zipWithNext().any { (a,b) -> b.t-a.t!=3_600_000L })
+    if(!validWilliamsEditionBars(bars) || bars.zipWithNext().any { (a,b) -> b.t-a.t!=duration })
         return result.put("state","HISTORY_UNVERIFIED")
     val mids=bars.map { (it.h+it.l)/2 }
     fun mean(n:Int,i:Int)=mids.subList(i-n+1,i+1).average()
@@ -26,7 +30,7 @@ internal fun williamsMarketReading(bars:List<WilliamsWaveBar>,phaseContext:JSONO
     val jaw=line(13,8);val teeth=line(8,5);val lips=line(5,3)
     val phases=williamsAlligatorPhases(bars,jaw,teeth,lips)
     val frames=phaseContext.optJSONArray("frames")
-    val h1=frames?.let { (0 until it.length()).mapNotNull { n -> it.optJSONObject(n) }.firstOrNull { f -> f.optString("frame")=="1h" } } ?: JSONObject()
+    val h1=frames?.let { (0 until it.length()).mapNotNull { n -> it.optJSONObject(n) }.firstOrNull { f -> f.optString("frame")==frame } } ?: JSONObject()
     val hypotheses=h1.optJSONArray("hypotheses")
     val labels=hypotheses?.let { (0 until it.length()).mapNotNull { n -> it.optJSONObject(n) }
         .map { h -> h.optString("active_label") to h.optString("active_direction") }.distinct() }.orEmpty()
@@ -37,7 +41,7 @@ internal fun williamsMarketReading(bars:List<WilliamsWaveBar>,phaseContext:JSONO
         "W2","W4","A","B","C" -> "CORRECTION_CANDIDATE"
         else -> "UNRESOLVED"
     } else "UNRESOLVED"
-    return result.put("state","OBSERVED").put("as_of_close_ms",bars.last().t+3_600_000L)
+    return result.put("state","OBSERVED").put("as_of_close_ms",bars.last().t+duration)
         .put("alligator",JSONObject().put("state",phases.last()).put("previous_state",phases[i-1])
             .put("sleep_observed","SLEEPING" in phases).put("jaw",jaw.last()).put("teeth",teeth.last()).put("lips",lips.last()))
         .put("ao",current).put("ac",ac).put("ao_direction",momentum).put("ac_direction",acceleration)
