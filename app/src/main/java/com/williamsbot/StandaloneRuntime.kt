@@ -6096,8 +6096,8 @@ private class NativeEngine(
                 feeAllowance = 2.0 * feeBufferPerSidePct + maxSlippagePct
             )
             if (plan != null) {
-                // Different intra-H1 break-even/fractal improvements require distinct
-                // Binance client algo IDs. An H1 timestamp alone was not sufficient.
+                // Distinct structural H1/fractal improvements require unique Binance
+                // algo IDs; a timestamp alone cannot identify replacements.
                 val clientId = ("W2T_" + symbol.take(8) + "_" +
                     System.nanoTime().toString(36).takeLast(14)).take(36)
                 val result = withCampaignMutation(
@@ -10602,7 +10602,7 @@ private class NativeEngine(
             .put("take_profit_pct", 0.0)
             .put("legacy_spot_settings_active", false)
             .put("position_sizing_model", "STRUCTURAL_STOP_RISK_BUDGET")
-            .put("protective_stop_model", "CONFIRMED_H1_FRACTAL_PLUS_COST_BUFFERED_1R_BREAKEVEN")
+            .put("protective_stop_model", "TC2_3_OR_5_CLOSED_H1_BARS_AND_CONFIRMED_FRACTAL_NO_BREAKEVEN")
             .put("poll_seconds", 10)
             .put("scan_mode", "adaptive_parallel_cached")
             .put("wave_timeframes", analysisFrames.joinToString(","))
