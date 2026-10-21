@@ -3981,6 +3981,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("quantity",amount.abs().stripTrailingZeros().toPlainString())
             .put("entry_price",liveEntry.toString())
             .put("stop",liveStop.stripTrailingZeros().toPlainString())
+            .put("initial_stop",liveStop.stripTrailingZeros().toPlainString())
             .put("protection_client_id",stopClientId)
             .put("approved_at_ms",clock())
             .put("state","ACTIVE")
