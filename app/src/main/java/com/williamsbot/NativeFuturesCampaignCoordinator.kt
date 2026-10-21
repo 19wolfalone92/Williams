@@ -1708,7 +1708,34 @@ internal class NativeFuturesCampaignCoordinator(
                     isProtectiveStopOnCorrectSide(direction, liveMark.toString(), previousStopPrice)
                 if (matchingIntent != null && !currentStopSafe && !previousStopSafe) {
                     anyUnprotected = true
-                    lastBlocker = "$symbol neither the current stop nor its tracked predecessor is confirmed on the protective side of Binance mark price; entries and automatic closure are blocked pending reconciliation"
+                    // There has NEVER been a STOP POST for this campaign:
+                    // the original persisted lifecycle is NOT_SUBMITTED and
+                    // there is not even a durable protection client ID. Do
+                    // not fabricate a new stop across the mark. A verified
+                    // reduce-only risk exit is safer than silent exposure.
+                    // This proof is distinct from an unknown POST outcome.
+                    val neverSubmitted =
+                        matchingIntent.optBoolean("strategy_ownership_verified", false) &&
+                        matchingIntent.optString("protection_status", "NOT_SUBMITTED") == "NOT_SUBMITTED" &&
+                        matchingIntent.optString("protection_client_id").isBlank() &&
+                        previousProtectionId.isBlank() && algos.length() == 0 &&
+                        matchingIntent.optString("confirmed_position_qty").toBigDecimalOrNull()
+                            ?.compareTo(position.getString("positionAmt").toBigDecimal().abs()) == 0
+                    if (neverSubmitted) {
+                        val guard = JSONObject().put("symbol",symbol).put("direction",direction)
+                            .put("entry_client_id",matchingIntent.optString("client_id"))
+                            .put("quantity",matchingIntent.optString("confirmed_position_qty"))
+                            .put("missing_protection_client_id","")
+                            .put("guard_origin","NEVER_SUBMITTED_PROVEN")
+                            .put("reason","UNPROTECTED_POSITION_GUARD")
+                        requiredSafetyExits.put(guard)
+                        matchingIntent.put("protection_status","NEVER_SUBMITTED_PROVEN")
+                            .put("unprotected_safety_exit_required_at_ms",clock())
+                        saveIntents(persisted)
+                        lastBlocker="$symbol initial protective stop was never submitted and is now invalid relative to the mark; verified emergency reduction required"
+                    } else {
+                        lastBlocker = "$symbol neither the current stop nor its tracked predecessor is confirmed on the protective side of Binance mark price; entries and automatic closure are blocked pending reconciliation"
+                    }
                     continue
                 }
                 val unknownProtectiveStopExists = (0 until algos.length()).any { j ->
@@ -2250,14 +2277,19 @@ internal class NativeFuturesCampaignCoordinator(
         val owner = latestEntryIntentIndex(persisted, symbol)?.let { persisted.optJSONObject(it) }
             ?: return@synchronized blocked("Missing persisted campaign owner")
         val stopId = request.optString("missing_protection_client_id")
+        val noPost = request.optString("guard_origin")=="NEVER_SUBMITTED_PROVEN"
         val ownerBlocker = when {
             request.optString("entry_client_id") != owner.optString("client_id") -> "EMERGENCY_OWNER_ID_MISMATCH"
-            stopId.isBlank() || stopId != owner.optString("protection_client_id") -> "EMERGENCY_STOP_ID_MISMATCH"
+            noPost && (owner.optString("protection_status")!="NEVER_SUBMITTED_PROVEN" ||
+                stopId.isNotBlank() || owner.optString("protection_client_id").isNotBlank()) -> "EMERGENCY_NO_POST_PROOF_MISMATCH"
+            !noPost && (stopId.isBlank() || stopId != owner.optString("protection_client_id")) -> "EMERGENCY_STOP_ID_MISMATCH"
             owner.optString("previous_protection_client_id").isNotBlank() -> "EMERGENCY_PREDECESSOR_STOP_AMBIGUOUS"
             !owner.optBoolean("strategy_ownership_verified", false) -> "EMERGENCY_OWNER_UNVERIFIED"
             campaignLifecycleStatus(owner) !in setOf("POSITION_OPEN","OPEN_PROTECTED") -> "EMERGENCY_CAMPAIGN_NOT_LIVE"
             owner.optString("direction") != direction.name -> "EMERGENCY_POSITION_SIDE_CHANGED"
-            owner.optString("protection_status") != "SUBMISSION_UNKNOWN" -> "EMERGENCY_PROTECTION_STATE_CHANGED"
+            owner.optString("protection_status") !in
+                (if(noPost) setOf("NEVER_SUBMITTED_PROVEN") else setOf("SUBMISSION_UNKNOWN")) ->
+                    "EMERGENCY_PROTECTION_STATE_CHANGED"
             owner.optLong("unprotected_safety_exit_required_at_ms") <= 0L -> "EMERGENCY_MISSING_DURABLE_SAFETY_PROOF"
             else -> null
         }
@@ -2267,10 +2299,12 @@ internal class NativeFuturesCampaignCoordinator(
             adapter.requireOneWayMode()
             // Require a fresh, explicit terminal Algo response; missing/HTTP
             // failure or FINISHED (possibly already triggered) is NOT enough.
-            val detail = adapter.queryAlgoOrder(symbol, stopId)
-            val terminal = detail.optString("algoStatus").uppercase(Locale.US)
-            if (terminal !in setOf("CANCELED", "REJECTED", "EXPIRED"))
-                return@synchronized blocked("Protective Algo is not proven terminal")
+            if (!noPost) {
+                val detail = adapter.queryAlgoOrder(symbol, stopId)
+                val terminal = detail.optString("algoStatus").uppercase(Locale.US)
+                if (terminal !in setOf("CANCELED", "REJECTED", "EXPIRED"))
+                    return@synchronized blocked("Protective Algo is not proven terminal")
+            }
             if (adapter.openAlgoOrders(symbol).length() != 0 ||
                 adapter.openOrders(symbol).length() != 0)
                 return@synchronized blocked("Exchange has other live orders; reconcile before emergency exit")
@@ -2297,7 +2331,8 @@ internal class NativeFuturesCampaignCoordinator(
                 kotlin.math.abs(entry-recorded)>maxOf(1e-8, recorded*1e-8))
                 return@synchronized blocked("Exchange entry price no longer matches campaign")
             val digest = java.security.MessageDigest.getInstance("SHA-256")
-                .digest((symbol + ":" + owner.optString("client_id") + ":" + stopId)
+                .digest((symbol + ":" + owner.optString("client_id") + ":" +
+                    (if(noPost) "NEVER_SUBMITTED_PROVEN" else stopId))
                     .toByteArray(Charsets.UTF_8))
                 .joinToString("") { "%02x".format(it.toInt() and 0xff) }.take(20)
             closePositionInternal(symbol, direction, qty.toPlainString(),
@@ -3161,9 +3196,11 @@ internal class NativeFuturesCampaignCoordinator(
                         campaignLifecycleStatus(row) in setOf("POSITION_OPEN","OPEN_PROTECTED") &&
                             row.optBoolean("strategy_ownership_verified", false) &&
                             row.optString("direction") == direction.name &&
-                            row.optString("protection_status") == "SUBMISSION_UNKNOWN" &&
+                            row.optString("protection_status") in
+                                setOf("SUBMISSION_UNKNOWN","NEVER_SUBMITTED_PROVEN") &&
                             row.optLong("unprotected_safety_exit_required_at_ms") > 0L &&
-                            row.optString("protection_client_id").isNotBlank() &&
+                            (row.optString("protection_client_id").isNotBlank() ||
+                                row.optString("protection_status")=="NEVER_SUBMITTED_PROVEN") &&
                             row.optString("previous_protection_client_id").isBlank()
                     } else {
                         isManagedOpenPositionIntent(
@@ -3245,9 +3282,12 @@ internal class NativeFuturesCampaignCoordinator(
                 // Second read as close to POST as possible, because the
                 // previously missing STOP could have been replaced meanwhile.
                 val stopId = managedEntry!!.optString("protection_client_id")
-                val terminal = adapterPreflight.queryAlgoOrder(symbol, stopId)
-                    .optString("algoStatus").uppercase(Locale.US)
-                if (terminal !in setOf("CANCELED","REJECTED","EXPIRED") ||
+                val noPost = managedEntry!!.optString("protection_status")=="NEVER_SUBMITTED_PROVEN" &&
+                    stopId.isBlank()
+                val terminalConfirmed = if(noPost) true else adapterPreflight
+                    .queryAlgoOrder(symbol, stopId).optString("algoStatus")
+                    .uppercase(Locale.US) in setOf("CANCELED","REJECTED","EXPIRED")
+                if (!terminalConfirmed ||
                     adapterPreflight.openAlgoOrders(symbol).length() != 0 ||
                     adapterPreflight.openOrders(symbol).length() != 0) {
                     state = State.RECONCILE_REQUIRED
