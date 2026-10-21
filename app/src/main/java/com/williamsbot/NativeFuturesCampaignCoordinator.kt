@@ -786,6 +786,9 @@ internal class NativeFuturesCampaignCoordinator(
     @Volatile private var reconciliationStartedAtMs = 0L
     @Volatile private var reconciliationFinishedAtMs = 0L
     @Volatile private var verifiedRiskCapManagementAtMs = 0L
+    /** Signed exchange observations; never infer strategy ownership from an order prefix. */
+    @Volatile private var externalOrderObservationsJson = "[]"
+    @Volatile private var externalProtectionObservationsJson = "[]"
 
     private val lock = Any()
     @Volatile private var observationSink: ((JSONArray) -> Unit)? = null
@@ -1088,9 +1091,11 @@ internal class NativeFuturesCampaignCoordinator(
                     entryExecutions[cid] = execution
                 }
             }
-            // A manual or orphaned order can create exposure without any local intent.
-            // Block startup if any account-wide open order cannot be tied to this bot's
-            // durable intent journal; never silently adopt or duplicate it.
+            // A manual or orphaned order can create exposure without a local intent.
+            // Do NOT abort account-wide auditing on its first occurrence: doing
+            // so previously hid protection of the OTHER live symbols as well.
+            // Unknown orders still block new entries and are NEVER auto-adopted.
+            val externalOrders = JSONArray()
             val allOpenOrders = adapter.allOpenOrders()
             for (i in 0 until allOpenOrders.length()) {
                 val order = allOpenOrders.optJSONObject(i)
@@ -1103,9 +1108,10 @@ internal class NativeFuturesCampaignCoordinator(
                         !isOwnedClientOrderForSymbol(symbol, clientId, activeEntryClientIdsBySymbol) &&
                         !isOwnedClientOrderForSymbol(symbol, clientId, activeExitClientIdsBySymbol))
                 ) {
-                    throw IllegalStateException(
-                        "Unmanaged Futures open order detected ($symbol/$clientId); cancel/reconcile manually before trading"
-                    )
+                    externalOrders.put(JSONObject().put("symbol",symbol)
+                        .put("client_id",clientId).put("kind","EXTERNAL_OPEN_ORDER")
+                        .put("exchange_order_id",order.optString("orderId")))
+                
                 }
             }
             val allOpenAlgoOrders = adapter.allOpenAlgoOrders()
@@ -1118,11 +1124,14 @@ internal class NativeFuturesCampaignCoordinator(
                     (!isOwnedClientOrderForSymbol(symbol, clientId, activeEntryClientIdsBySymbol) &&
                         !isOwnedClientOrderForSymbol(symbol, clientId, activeProtectionClientIdsBySymbol))
                 ) {
-                    throw IllegalStateException(
-                        "Unmanaged Futures conditional/algo order detected ($symbol/$clientId); reconcile manually before trading"
-                    )
+                    externalOrders.put(JSONObject().put("symbol",symbol)
+                        .put("client_id",clientId).put("kind","EXTERNAL_ALGO_ORDER")
+                        .put("exchange_algo_id",order.optString("algoId")))
+                
                 }
             }
+            externalOrderObservationsJson=externalOrders.toString()
+            val protectionObservations=JSONArray()
             var hasPendingExit = false
             var hasPendingAddition = false
             var anyUnprotected = false
@@ -1483,6 +1492,12 @@ internal class NativeFuturesCampaignCoordinator(
                     ?: throw IllegalStateException("Binance returned a malformed position amount for $symbol during protection audit")
                 val direction = if (amount > 0.0) "LONG" else "SHORT"
                 val algos = protectiveOrdersBySymbol.getOrPut(symbol) { adapter.openAlgoOrders(symbol) }
+                val referenceMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                val signedFullStops=if(referenceMark!=null && referenceMark.isFinite() && referenceMark>0.0)
+                    (0 until algos.length()).mapNotNull { algos.optJSONObject(it) }.filter {
+                        isFullPositionFuturesStop(it,symbol,direction,
+                            position.getString("positionAmt").toBigDecimal().abs(),referenceMark)
+                    } else emptyList()
                 val latestIntentIndex = latestEntryIndexBySymbol[symbol]
                 var matchingIntent = latestIntentIndex?.let { persisted.optJSONObject(it) }
                     ?.takeIf { intent ->
@@ -1558,6 +1573,39 @@ internal class NativeFuturesCampaignCoordinator(
                     }
                     verifiedOwner.put("confirmed_position_qty", liveQuantity.toPlainString())
                         .put("actual_entry_price", positionPrice.toString())
+                }
+                // A complete exchange stop can protect a manually held or
+                // previous-install position while the bot cannot prove it OWNS
+                // that campaign. Record it, do not replace/cancel/trail it.
+                val observedOwnerId=matchingIntent?.optString("protection_client_id").orEmpty()
+                val ownedProtection=signedFullStops.size==1 &&
+                    matchingIntent?.optBoolean("strategy_ownership_verified",false)==true &&
+                    observedOwnerId.isNotBlank() &&
+                    signedFullStops.single().optString("clientAlgoId")==observedOwnerId
+                protectionObservations.put(JSONObject().put("symbol",symbol)
+                    .put("direction",direction)
+                    .put("quantity",position.optString("positionAmt"))
+                    .put("stop_proof",when {
+                        signedFullStops.size>1 -> "MULTIPLE_PROTECTIVE_ORDERS_UNRESOLVED"
+                        signedFullStops.size==1 -> if(ownedProtection) "OWNED_STOP_SEEN" else "EXTERNAL_PROTECTED"
+                        referenceMark==null -> "MARK_PRICE_UNAVAILABLE"
+                        else -> "STOP_UNCONFIRMED"
+                    })
+                    .put("stop",if(signedFullStops.size==1)
+                        signedFullStops.single().optString("triggerPrice",
+                            signedFullStops.single().optString("stopPrice")) else JSONObject.NULL)
+                    .put("protection_client_id",if(signedFullStops.size==1)
+                        signedFullStops.single().optString("clientAlgoId") else JSONObject.NULL)
+                    .put("strategy_ownership_verified",matchingIntent?.optBoolean(
+                        "strategy_ownership_verified",false)==true)
+                    .put("automatic_trailing_authorized",ownedProtection))
+                if (matchingIntent == null && signedFullStops.isNotEmpty()) {
+                    // A valid exchange stop is better than unprotected exposure.
+                    // Presence of W2PS_ alone does not prove which installation
+                    // owns the position, so never manufacture ENTRY/FILL state.
+                    actualRiskAuditBlocked=true
+                    actualRiskAuditBlocker="$symbol has an exchange-protected position but no verified local campaign ownership; no automatic trailing until ownership is restored"
+                    continue
                 }
                 if (matchingIntent == null && latestIntentIndex == null) {
                     // The exchange is authoritative, but an orphan position must not
@@ -2252,6 +2300,12 @@ internal class NativeFuturesCampaignCoordinator(
                 }
             }
             saveIntents(persisted)
+            externalProtectionObservationsJson=protectionObservations.toString()
+            if(externalOrders.length()>0) {
+                actualRiskAuditBlocked=true
+                if(actualRiskAuditBlocker==null)
+                    actualRiskAuditBlocker="Some open Futures orders have no verified campaign journal; review per-symbol exchange protection before resuming entries"
+            }
 
             val hasPendingEntry = hasPendingAddition || (0 until persisted.length()).any { index ->
                 val intent = persisted.optJSONObject(index) ?: return@any true
@@ -2287,6 +2341,8 @@ internal class NativeFuturesCampaignCoordinator(
             }
             JSONObject()
                 .put("ok", !anyUnprotected && !actualRiskAuditBlocked && !hasPendingExit)
+                .put("external_open_orders",JSONArray(externalOrderObservationsJson))
+                .put("exchange_protection_observations",JSONArray(externalProtectionObservationsJson))
                 .put("actual_risk_audit_blocked", actualRiskAuditBlocked)
                 .put("protected_over_cap_management_allowed", verifiedOverCap)
                 .put("actual_risk_audit_blocker", actualRiskAuditBlocker ?: JSONObject.NULL)
@@ -3724,6 +3780,8 @@ internal class NativeFuturesCampaignCoordinator(
             .put("reconciliation_running", reconciliationActive)
             .put("reconciliation_started_at_ms", reconciliationStartedAtMs)
             .put("reconciliation_finished_at_ms", reconciliationFinishedAtMs)
+            .put("external_open_orders",JSONArray(externalOrderObservationsJson))
+            .put("exchange_protection_observations",JSONArray(externalProtectionObservationsJson))
             .put("pending_intents", pendingDetails.length())
             .put("pending_intent_details", pendingDetails)
             .put("testnet_only", true)
