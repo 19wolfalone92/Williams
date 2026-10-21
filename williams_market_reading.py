@@ -17,12 +17,19 @@ def chart_lines(bars):
     return line(13,8),line(8,5),line(5,3)
 
 
-def market_reading(bars,phase_context):
+FRAME_MS={"1m":60_000,"5m":300_000,"15m":900_000,"1h":3_600_000,
+          "4h":14_400_000,"6h":21_600_000,"1d":86_400_000}
+
+def market_reading(bars,phase_context,frame="1h"):
+    duration=FRAME_MS.get(frame)
+    if duration is None:
+        return dict(schema="WILLIAMS_CHART_READING_V1",frame=frame,
+                    state="UNSUPPORTED_FRAME",can_place_orders=False,can_close=False)
     result=dict(schema="WILLIAMS_CHART_READING_V1",state="INSUFFICIENT_HISTORY",
-        wave_phase="UNRESOLVED",can_place_orders=False,can_close=False,numerical_interpretation=True)
+        wave_phase="UNRESOLVED",frame=frame,can_place_orders=False,can_close=False,numerical_interpretation=True)
     if len(bars)<39 or any(not all(isfinite(v) and v>0 for v in (b.h,b.l,b.c)) for b in bars):
         return result
-    if not valid_edition_bars(bars) or any(b.t-a.t!=3_600_000 for a,b in zip(bars,bars[1:])):
+    if not valid_edition_bars(bars) or any(b.t-a.t!=duration for a,b in zip(bars,bars[1:])):
         return result | {"state":"HISTORY_UNVERIFIED"}
     mids=[(b.h+b.l)/2 for b in bars]
     def mean(n,i):return sum(mids[i-n+1:i+1])/n
@@ -35,7 +42,7 @@ def market_reading(bars,phase_context):
     acceleration="UP" if ac>prior_ac else "DOWN" if ac<prior_ac else "NEUTRAL"
     rhythm="ALIGNED_ACCELERATION" if direction==momentum==acceleration and direction!="NEUTRAL" else "MIXED_OR_DECELERATING"
     jaw,teeth,lips=chart_lines(bars);phases=alligator_phases(bars,jaw,teeth,lips)
-    h1=next((f for f in phase_context.get("frames",[]) if f["frame"]=="1h"),{})
+    h1=next((f for f in phase_context.get("frames",[]) if f["frame"]==frame),{})
     labels={(h["active_label"],h["active_direction"]) for h in h1.get("hypotheses",[])}
     wave="UNRESOLVED"
     if h1.get("state")=="ALTERNATIVES":wave="ALTERNATIVES"
@@ -44,7 +51,7 @@ def market_reading(bars,phase_context):
         wave={"W1":"START_CANDIDATE","W2":"CORRECTION_CANDIDATE","W3":"CONTINUATION_CANDIDATE",
               "W4":"CORRECTION_CANDIDATE","W5":"LATE_IMPULSE_CANDIDATE",
               "A":"CORRECTION_CANDIDATE","B":"CORRECTION_CANDIDATE","C":"CORRECTION_CANDIDATE"}.get(label,"UNRESOLVED")
-    return result | dict(state="OBSERVED",as_of_close_ms=bars[-1].t+3_600_000,
+    return result | dict(state="OBSERVED",as_of_close_ms=bars[-1].t+duration,
         alligator=dict(state=phases[-1],previous_state=phases[-2],sleep_observed="SLEEPING" in phases,
                        jaw=jaw[-1],teeth=teeth[-1],lips=lips[-1]),
         ao=current,ac=ac,ao_direction=momentum,ac_direction=acceleration,
