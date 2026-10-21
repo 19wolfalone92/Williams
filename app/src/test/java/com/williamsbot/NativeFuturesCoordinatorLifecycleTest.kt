@@ -1406,4 +1406,52 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals(0,exchange.posts("/fapi/v1/order"))
         assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
     }
+
+    @Test fun resetProtectionBindingOnUpgradeRecoversOnlySameAuthenticatedFillAndStop() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal=Journal()
+            val exchange=Exchange(direction)
+            val old=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(old.reconcile().getBoolean("ok"))
+            assertTrue(old.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.fill()
+            assertTrue(old.reconcile().toString(),old.reconcile().getBoolean("ok"))
+            val before=old.intentsSnapshot().getJSONObject(0)
+            val legacyStopId=before.getString("protection_client_id")
+            val postsBefore=exchange.posts("/fapi/v1/algoOrder")
+            val rows=JSONArray(requireNotNull(journal.readState("futures_campaign_intents_v2")))
+            rows.getJSONObject(0).remove("protection_client_id")
+            rows.getJSONObject(0).put("protection_status","NOT_SUBMITTED")
+            journal.writeState("futures_campaign_intents_v2",rows.toString())
+            val upgraded=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val result=upgraded.reconcile()
+            assertTrue(result.toString(),result.getBoolean("ok"))
+            assertEquals(legacyStopId,upgraded.intentsSnapshot().getJSONObject(0).getString("protection_client_id"))
+            assertEquals("EXACT_DERIVED_W2PS_AND_AUTHENTICATED_FILL",
+                upgraded.intentsSnapshot().getJSONObject(0).getString("protection_rebound_proof"))
+            assertEquals("PROTECTED",upgraded.intentsSnapshot().getJSONObject(0).getString("protection_status"))
+            assertEquals(postsBefore,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun changedQuantityPreventsRebindingEvenWhenOldW2PSExists() {
+        val journal=Journal()
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val old=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        assertTrue(old.reconcile().getBoolean("ok"))
+        assertTrue(old.submitPendingEntry(plan(NativeFuturesCampaignCoordinator.Direction.LONG)).getBoolean("accepted"))
+        exchange.fill()
+        assertTrue(old.reconcile().getBoolean("ok"))
+        val rows=JSONArray(requireNotNull(journal.readState("futures_campaign_intents_v2")))
+        rows.getJSONObject(0).remove("protection_client_id")
+        rows.getJSONObject(0).put("protection_status","NOT_SUBMITTED")
+        journal.writeState("futures_campaign_intents_v2",rows.toString())
+        exchange.quantity*=2
+        val revived=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        val r=revived.reconcile()
+        assertFalse(r.getBoolean("ok"))
+        assertFalse(revived.intentsSnapshot().getJSONObject(0).has("protection_rebound_proof"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+    }
 }
