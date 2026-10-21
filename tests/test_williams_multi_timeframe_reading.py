@@ -25,3 +25,20 @@ def test_unsupported_frame_cannot_trade():
     result=market_reading([],{},"2d")
     assert result["state"]=="UNSUPPORTED_FRAME"
     assert not result["can_place_orders"]
+
+def test_h4_pivots_are_read_from_h4_closed_bars_without_execution_authority():
+    import json
+    from pathlib import Path
+    source=Path(__file__).resolve().parents[1]/"app/src/test/resources/williams_wave_contract.json"
+    first=json.loads(source.read_text())["cases"][0]["bars"]
+    bars=[WaveBar(row[0]*4,*row[1:]) for row in first]
+    output=market_reading(bars,{},"4h")
+    assert output["state"]=="OBSERVED"
+    assert output["wave_phase"]=="UNRESOLVED"
+    assert output["independent_wave_hypothesis_count"]>0
+    assert output["independent_wave_hypothesis_count"]==len(output["independent_wave_hypotheses"])
+    assert not output["wave_degree_confirmed"]
+    assert not output["probability_calibrated"]
+    for hypothesis in output["independent_wave_hypotheses"]:
+        assert hypothesis["last_pivot_known_at"]<=bars[-1].t+FRAME_MS["4h"]
+        assert not hypothesis["can_place_orders"] and not hypothesis["wave_degree_confirmed"]
