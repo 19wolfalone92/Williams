@@ -6065,10 +6065,10 @@ private class NativeEngine(
                     direction=direction.name,
                     oldStop=record.getDouble("stop"),
                     actualEntry=record.getDouble("entry_price"),
-                    initialStop=record.getDouble("stop"),
+                    initialStop=record.optDouble("initial_stop",record.getDouble("stop")),
                     markPrice=mark,
                     tickSize=rules.tick,
-                    openedObservedAtMs=0L,
+                    openedObservedAtMs=record.optLong("approved_at_ms",0L),
                     bars=bars.map { FuturesTrailBar(it.t,it.h,it.l) },
                     feeAllowance=2.0*feeBufferPerSidePct+maxSlippagePct
                 )
