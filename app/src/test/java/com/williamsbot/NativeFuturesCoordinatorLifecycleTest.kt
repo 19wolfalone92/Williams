@@ -1117,4 +1117,24 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals(1,exchange.posts("/fapi/v1/order"))
         }
     }
+
+    @Test fun lostEmergencyCloseAcknowledgementCannotCauseDuplicateReduceOnly() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator,exchange)=open(direction)
+            val stop=exchange.algos.values.single { it.optString("closePosition")=="true" }
+            stop.put("algoStatus","CANCELED")
+            val req=coordinator.reconcile().getJSONArray("required_safety_exits").getJSONObject(0)
+            exchange.loseCloseReply=true
+            val uncertain=coordinator.executeRequiredUnprotectedSafetyExit(req)
+            assertFalse(uncertain.toString(),uncertain.getBoolean("ok"))
+            assertEquals(1,exchange.posts("/fapi/v1/order"))
+            assertFalse(coordinator.executeRequiredUnprotectedSafetyExit(req).getBoolean("ok"))
+            assertEquals(1,exchange.posts("/fapi/v1/order"))
+            exchange.loseCloseReply=false
+            // Reconciliation must resolve the first exchange reduction,
+            // not send a second order with a new client ID.
+            coordinator.reconcile()
+            assertEquals(1,exchange.posts("/fapi/v1/order"))
+        }
+    }
 }
