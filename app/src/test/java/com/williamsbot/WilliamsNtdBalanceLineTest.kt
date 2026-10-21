@@ -102,4 +102,44 @@ class WilliamsNtdBalanceLineTest {
         assertEquals(104.1,corrected.triggerPrice,1e-8)
         assertFalse(corrected.canPlaceOrders)
     }
+
+    @Test fun ntdStandaloneAndSourceEditionBalanceSignalsAgreeOnBookFigExamples() {
+        val cases=org.json.JSONObject(requireNotNull(
+            javaClass.getResource("/williams_editions_contract.json")).readText()).getJSONArray("cases")
+        var compared=0
+        for(i in 0 until cases.length()) {
+            val sample=cases.getJSONObject(i)
+            if(sample.getString("operation")!="BALANCE") continue
+            val rows=sample.getJSONArray("bars")
+            val originals=(0 until rows.length()).map { j ->
+                val v=rows.getJSONArray(j)
+                WilliamsWaveBar(v.getLong(0),v.getDouble(1),v.getDouble(2),
+                    v.getDouble(3),v.getDouble(4),v.getDouble(5))
+            }
+            fun indicator(k:String)=(0 until sample.getJSONArray(k).length()).map { j ->
+                sample.getJSONArray(k).getDouble(j)
+            }
+            val jaw=indicator("jaw");val teeth=indicator("teeth");val lips=indicator("lips")
+            val ao=indicator("ao");val ac=indicator("ac")
+            val research=originals.indices.map { j ->
+                WilliamsNtdBar(originals[j].h,originals[j].l,jaw[j],teeth[j],
+                    lips[j],ao[j],ac[j])
+            }
+            val side=sample.getString("side")
+            val tick=sample.getDouble("tick")
+            val standalone=williamsNtdBalanceLine(research,side,tick)
+            val edition=williamsNtdBalanceLineSetup(side,originals,jaw,teeth,lips,
+                ao,ac,tick)
+            assertEquals(sample.toString(), "CANDIDATE", standalone.status)
+            assertTrue(sample.toString(),edition!=null)
+            assertEquals(sample.toString(),sample.getDouble("expected_trigger"),
+                standalone.triggerPrice,1e-8)
+            assertEquals(sample.toString(),edition!!.trigger,standalone.triggerPrice,1e-8)
+            // Different fields: one is a structural reference, the other
+            // is the native module's protective STOP one tick past the base.
+            assertFalse(standalone.canPlaceOrders)
+            compared++
+        }
+        assertEquals(8,compared)
+    }
 }
