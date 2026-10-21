@@ -1716,7 +1716,10 @@ internal class NativeFuturesCampaignCoordinator(
                     // This proof is distinct from an unknown POST outcome.
                     val neverSubmitted =
                         matchingIntent.optBoolean("strategy_ownership_verified", false) &&
-                        matchingIntent.optString("protection_status", "NOT_SUBMITTED") == "NOT_SUBMITTED" &&
+                        (matchingIntent.optString("protection_status", "NOT_SUBMITTED") == "NOT_SUBMITTED" ||
+                            (matchingIntent.optString("protection_status") == "NEVER_SUBMITTED_PROVEN" &&
+                                matchingIntent.optString("unprotected_safety_guard_origin")=="NEVER_SUBMITTED_PROVEN" &&
+                                matchingIntent.optLong("unprotected_safety_exit_required_at_ms")>0L)) &&
                         matchingIntent.optString("protection_client_id").isBlank() &&
                         previousProtectionId.isBlank() && algos.length() == 0 &&
                         matchingIntent.optString("confirmed_position_qty").toBigDecimalOrNull()
@@ -1730,7 +1733,10 @@ internal class NativeFuturesCampaignCoordinator(
                             .put("reason","UNPROTECTED_POSITION_GUARD")
                         requiredSafetyExits.put(guard)
                         matchingIntent.put("protection_status","NEVER_SUBMITTED_PROVEN")
-                            .put("unprotected_safety_exit_required_at_ms",clock())
+                            .put("unprotected_safety_guard_origin","NEVER_SUBMITTED_PROVEN")
+                            .put("unprotected_safety_exit_required_at_ms",
+                                matchingIntent.optLong("unprotected_safety_exit_required_at_ms")
+                                    .takeIf { it>0L } ?: clock())
                         saveIntents(persisted)
                         lastBlocker="$symbol initial protective stop was never submitted and is now invalid relative to the mark; verified emergency reduction required"
                     } else {
@@ -1819,7 +1825,10 @@ internal class NativeFuturesCampaignCoordinator(
                             val terminal = stopQuery?.optString("algoStatus", "")
                                 ?.uppercase(Locale.US)
                             val definitelyMissing =
-                                protectionStatus == "PROTECTED" &&
+                                (protectionStatus == "PROTECTED" ||
+                                    (protectionStatus == "SUBMISSION_UNKNOWN" &&
+                                        matchingIntent.optString("unprotected_safety_guard_origin")=="TERMINAL_PREVIOUSLY_CONFIRMED" &&
+                                        matchingIntent.optLong("unprotected_safety_exit_required_at_ms")>0L)) &&
                                 terminal in setOf("CANCELED", "REJECTED", "EXPIRED") &&
                                 refreshed.length() == 0 &&
                                 previousProtectionId.isBlank() &&
@@ -1836,7 +1845,10 @@ internal class NativeFuturesCampaignCoordinator(
                                     .put("last_stop_exchange_status", terminal)
                                 requiredSafetyExits.put(emergency)
                                 lastBlocker = "$symbol formerly confirmed protective stop is terminal ($terminal); verified emergency reduce-only exit required"
-                                matchingIntent.put("unprotected_safety_exit_required_at_ms", clock())
+                                matchingIntent.put("unprotected_safety_guard_origin","TERMINAL_PREVIOUSLY_CONFIRMED")
+                                    .put("unprotected_safety_exit_required_at_ms",
+                                        matchingIntent.optLong("unprotected_safety_exit_required_at_ms")
+                                            .takeIf { it>0L } ?: clock())
                             } else {
                                 lastBlocker = "$symbol protective-stop outcome is ambiguous; no retry performed"
                             }
@@ -2288,7 +2300,9 @@ internal class NativeFuturesCampaignCoordinator(
             campaignLifecycleStatus(owner) !in setOf("POSITION_OPEN","OPEN_PROTECTED") -> "EMERGENCY_CAMPAIGN_NOT_LIVE"
             owner.optString("direction") != direction.name -> "EMERGENCY_POSITION_SIDE_CHANGED"
             owner.optString("protection_status") !in
-                (if(noPost) setOf("NEVER_SUBMITTED_PROVEN") else setOf("SUBMISSION_UNKNOWN")) ->
+                (if(noPost) setOf("NEVER_SUBMITTED_PROVEN") else setOf("SUBMISSION_UNKNOWN")) ||
+                owner.optString("unprotected_safety_guard_origin") !=
+                    (if(noPost) "NEVER_SUBMITTED_PROVEN" else "TERMINAL_PREVIOUSLY_CONFIRMED") ->
                     "EMERGENCY_PROTECTION_STATE_CHANGED"
             owner.optLong("unprotected_safety_exit_required_at_ms") <= 0L -> "EMERGENCY_MISSING_DURABLE_SAFETY_PROOF"
             else -> null
@@ -3199,6 +3213,8 @@ internal class NativeFuturesCampaignCoordinator(
                             row.optString("protection_status") in
                                 setOf("SUBMISSION_UNKNOWN","NEVER_SUBMITTED_PROVEN") &&
                             row.optLong("unprotected_safety_exit_required_at_ms") > 0L &&
+                            row.optString("unprotected_safety_guard_origin") in
+                                setOf("NEVER_SUBMITTED_PROVEN","TERMINAL_PREVIOUSLY_CONFIRMED") &&
                             (row.optString("protection_client_id").isNotBlank() ||
                                 row.optString("protection_status")=="NEVER_SUBMITTED_PROVEN") &&
                             row.optString("previous_protection_client_id").isBlank()
