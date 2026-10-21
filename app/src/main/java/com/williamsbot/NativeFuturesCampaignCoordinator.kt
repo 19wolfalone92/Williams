@@ -1467,8 +1467,14 @@ internal class NativeFuturesCampaignCoordinator(
                             campaignLifecycleStatus(intent) in ACTIVE_CAMPAIGN_STATUSES &&
                             // Recovery is restricted to client IDs emitted by the
                             // Williams campaign runtime, never a manual/unknown position.
-                            (clientId.startsWith("W2E_") || clientId.startsWith("W5E_") ||
-                                clientId.startsWith("W2F_"))
+                            // BOOK_NATIVE_H1_TRIGGER emits W2H_, not legacy W2E_.
+                            // Without W2H_ a verified 1h WM3 fill became an orphan
+                            // here despite its durable structural stop; the bot
+                            // repeatedly refused to submit the protective Binance
+                            // STOP_MARKET. W2H_ still requires symbol, side, active
+                            // campaign, exchange-confirmed fill and owned intent.
+                            (clientId.startsWith("W2E_") || clientId.startsWith("W2H_") ||
+                                clientId.startsWith("W5E_") || clientId.startsWith("W2F_"))
                     }
                 var liveMark: Double? = null
                 if (matchingIntent?.optBoolean("strategy_ownership_verified", false) == true) {
