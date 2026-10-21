@@ -34,6 +34,26 @@ internal fun williamsMarketReading(bars:List<WilliamsWaveBar>,phaseContext:JSONO
     val hypotheses=h1.optJSONArray("hypotheses")
     val labels=hypotheses?.let { (0 until it.length()).mapNotNull { n -> it.optJSONObject(n) }
         .map { h -> h.optString("active_label") to h.optString("active_direction") }.distinct() }.orEmpty()
+    // Each actual timeframe receives an INDEPENDENT observation of pivots
+    // formed on that timeframe. This never alters TC2 H1 entry authorization
+    // and cannot elevate containment to a certified Elliott wave degree.
+    val local = if (bars.size>=40) {
+        val pivots=confirmedWilliamsWaveAnchors(bars,duration)
+        williamsHypothesesFromAnchors(frame,bars,pivots)
+            .filter { it.status=="PROVISIONAL" || it.status=="ALTERNATIVE" }
+            .takeLast(12)
+    } else emptyList()
+    val localWaveEvidence=org.json.JSONArray(local.map { candidate ->
+        JSONObject().put("scenario_id",candidate.id)
+            .put("last_confirmed_leg",candidate.label)
+            .put("active_label",candidate.activeLabel)
+            .put("active_direction",candidate.activeDirection)
+            .put("status",candidate.status)
+            .put("invalidation",candidate.invalidation)
+            .put("last_pivot_known_at",candidate.anchors.last().knownAt)
+            .put("wave_degree_confirmed",false)
+            .put("can_place_orders",false)
+    })
     val wave=if(h1.optString("state")=="ALTERNATIVES") "ALTERNATIVES" else if(labels.size==1) when(labels[0].first) {
         "W1" -> "START_CANDIDATE"
         "W3" -> "CONTINUATION_CANDIDATE"
@@ -51,6 +71,9 @@ internal fun williamsMarketReading(bars:List<WilliamsWaveBar>,phaseContext:JSONO
         .put("twr",JSONObject().put("fast_5",fast).put("medium_13",medium).put("slow_34",slow).put("direction",direction))
         .put("rhythm_condition",rhythm).put("wave_phase",wave).put("wave_state",h1.optString("state","UNRESOLVED"))
         .put("exhaustion_warning",h1.optBoolean("exhaustion_warning",false))
+        .put("independent_wave_hypotheses",localWaveEvidence)
+        .put("independent_wave_hypothesis_count",local.size)
+        .put("wave_degree_confirmed",false).put("probability_calibrated",false)
         .put("angulation",JSONObject().put("LONG",williamsAngulation("LONG",bars,jaw,teeth,lips).toJson())
             .put("SHORT",williamsAngulation("SHORT",bars,jaw,teeth,lips).toJson()))
 }
