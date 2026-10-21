@@ -4100,6 +4100,85 @@ internal class NativeFuturesCampaignCoordinator(
         }
     }
 
+
+    /** Reconcile a lost STOP replacement acknowledgement without another POST.
+     * Only the exactly recorded old/new stop identifiers may be inspected or
+     * canceled. A successfully confirmed new stop is required before old DELETE.
+     */
+    fun recoverOperatorSupervisedStop(symbol:String):JSONObject = synchronized(lock) {
+        val rows=operatorSupervisions()
+        val record=(0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+            .singleOrNull { it.optString("symbol")==symbol }
+            ?: error("Operator supervision journal absent")
+        require(record.optString("state")=="REPLACEMENT_UNRESOLVED") {
+            "No uncertain stop replacement to recover"
+        }
+        val direction=record.getString("direction")
+        val oldId=record.getString("previous_protection_client_id")
+        val newId=record.getString("pending_protection_client_id")
+        val oldStop=record.getString("stop").toBigDecimal()
+        val newStop=record.getString("pending_stop").toBigDecimal()
+        check(oldId.isNotBlank() && newId.isNotBlank() && oldId!=newId &&
+            (if(direction=="LONG") newStop>oldStop else newStop<oldStop)) {
+            "Uncertain stop journal is inconsistent"
+        }
+        val adapter=adapterFactory()
+        adapter.requireOneWayMode()
+        val open=adapter.positions()
+        val matching=(0 until open.length()).mapNotNull { open.optJSONObject(it) }
+            .filter { it.optString("symbol")==symbol &&
+                (it.optString("positionAmt").toBigDecimalOrNull()?.signum() ?: 0)!=0 }
+        check(matching.size==1) { "Cannot recover uncertain stop without unique live exposure" }
+        val p=matching.single()
+        val qty=p.getString("positionAmt").toBigDecimal()
+        val recordedQty=record.getString("quantity").toBigDecimal()
+        val liveEntry=p.getString("entryPrice").toDouble()
+        val priorEntry=record.getString("entry_price").toDouble()
+        check(p.optString("positionSide","BOTH")=="BOTH" && qty.abs().compareTo(recordedQty)==0 &&
+            (qty.signum()>0)==(direction=="LONG") &&
+            kotlin.math.abs(liveEntry-priorEntry)<=maxOf(1e-8,priorEntry*1e-8)) {
+            "Position changed during uncertain replacement; operator resolution required"
+        }
+        val mark=adapter.markPrice(symbol)
+        val algos=adapter.openAlgoOrders(symbol)
+        val list=(0 until algos.length()).mapNotNull { algos.optJSONObject(it) }
+        check(list.isNotEmpty() && list.size<=2 && list.all {
+            it.optString("clientAlgoId") in setOf(oldId,newId) &&
+                isFullPositionFuturesStop(it,symbol,direction,recordedQty,mark)
+        }) { "Unexpected or invalid Futures protection; no mutation allowed" }
+        val old=list.singleOrNull { it.optString("clientAlgoId")==oldId }
+        val replacement=list.singleOrNull { it.optString("clientAlgoId")==newId }
+            ?: return@synchronized JSONObject().put("ok",false)
+                .put("blocker","New stop not exchange-confirmed; original retained; no POST retry")
+        check(replacement.optString("triggerPrice").ifBlank {
+            replacement.optString("stopPrice")
+        }.toBigDecimalOrNull()?.compareTo(newStop)==0) { "Replacement stop price mismatch" }
+        if(old!=null) {
+            check(old.optString("triggerPrice").ifBlank {
+                old.optString("stopPrice")
+            }.toBigDecimalOrNull()?.compareTo(oldStop)==0) { "Prior stop trigger mismatch" }
+            val oldAlgo=old.getString("algoId")
+            check(oldAlgo.toLongOrNull()?.let { it>0L }==true) { "Old stop lacks exchange ID" }
+            adapter.cancelAlgoOrderById(symbol,oldAlgo)
+        }
+        val after=adapter.openAlgoOrders(symbol)
+        check(after.length()==1 && after.getJSONObject(0).optString("clientAlgoId")==newId &&
+            isFullPositionFuturesStop(after.getJSONObject(0),symbol,direction,recordedQty,adapter.markPrice(symbol))) {
+            "Replacement verification incomplete; unresolved journal preserved"
+        }
+        record.put("stop",newStop.stripTrailingZeros().toPlainString())
+            .put("protection_client_id",newId)
+            .put("state","ACTIVE")
+            .put("last_confirmed_trail_at_ms",clock())
+        record.remove("previous_protection_client_id")
+        record.remove("pending_protection_client_id")
+        record.remove("pending_stop")
+        saveOperatorSupervisions(rows)
+        JSONObject().put("ok",true).put("symbol",symbol)
+            .put("mode","OPERATOR_APPROVED_STOP_ONLY")
+            .put("stop",newStop.toPlainString())
+    }
+
     fun saveManagementState(symbol:String, clientId:String, state:JSONObject) = synchronized(lock) {
         val all=intents()
         val owner=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.singleOrNull {
