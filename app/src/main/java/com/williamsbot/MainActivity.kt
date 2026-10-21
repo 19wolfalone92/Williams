@@ -456,7 +456,8 @@ data class PositionView(
     val pnlPct: Double = 0.0,
     val ocoListId: String = "",
     val ocoListClientId: String = "",
-    val direction: String = ""
+    val direction: String = "",
+    val stopVerificationStatus: String = "UNKNOWN"
 )
 
 private class LocalRuntimeApi(context: Context) {
@@ -2861,9 +2862,10 @@ private fun PositionScreen(
                         if(supervised!=null) {
                             InfoRow("Отдельное сопровождение SL",
                                 if(supervised.optString("state")=="ACTIVE")
-                                    "Подключено вручную • только уменьшение риска"
+                                    "Разрешено сопровождение • биржа проверяется перед переносом"
                                 else "Остановлено • требуется сверка Binance")
-                        } else if(p.stop!=null && status.positionsSnapshotOk &&
+                        } else if(p.stop!=null && p.stopVerificationStatus=="EXTERNAL_PROTECTED" &&
+                            status.positionsSnapshotOk &&
                             CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,System.currentTimeMillis(),15_000L) &&
                             status.futuresIntents.none { it.optString("symbol")==p.symbol &&
                                 it.optBoolean("strategy_ownership_verified",false) }) {
@@ -2874,11 +2876,15 @@ private fun PositionScreen(
                         }
                         InfoRow(
                             "Защита",
-                            if (status.positionsSnapshotOk && status.futuresIntents.any {
-                                it.optString("symbol") == p.symbol && it.optString("direction") == p.direction &&
-                                    CockpitDiagnostics.protectionProven(it, System.currentTimeMillis())
-                            }) "Подтверждена Binance"
-                            else "НЕ ПОДТВЕРЖДЕНА — требуется сверка"
+                            when {
+                                p.stopVerificationStatus=="EXTERNAL_PROTECTED" ->
+                                    "Биржевой SL подтверждён, владелец кампании не установлен"
+                                status.positionsSnapshotOk && status.futuresIntents.any {
+                                    it.optString("symbol") == p.symbol && it.optString("direction") == p.direction &&
+                                        CockpitDiagnostics.protectionProven(it, System.currentTimeMillis())
+                                } -> "Подтверждена Binance"
+                                else -> "НЕ ПОДТВЕРЖДЕНА — требуется сверка"
+                            }
                         )
                     }
                 }
@@ -3979,7 +3985,8 @@ internal fun parseStatus(json: JSONObject): Status {
                 pnlUsdt = unrealizedPnl,
                 pnlPct = pnlFraction,
                 ocoListId = item.optString("oco_list_id"),
-                ocoListClientId = item.optString("oco_list_client_id")
+                ocoListClientId = item.optString("oco_list_client_id"),
+                stopVerificationStatus = item.optString("stop_verification_status","UNKNOWN")
             )
         }
     }
