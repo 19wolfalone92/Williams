@@ -117,15 +117,15 @@ def ntd_balance_line_evidence(
     # clear the complete *current* mouth, not just Jaw/Teeth in isolation.
     mouth = max(j[n-1],t[n-1],lip[n-1]) if is_long else min(j[n-1],t[n-1],lip[n-1])
     if not isfinite(mouth) or (trigger <= mouth if is_long else trigger >= mouth):
-        return BalanceLineEvidence(side, "BLOCKED", base, reference, required, count,
+        return BalanceLineEvidence(side, "BLOCKED", base, reference, needed, count,
                                    trigger, stop, zone, relation, "INSIDE_ALLIGATOR_MOUTH")
     # No resurrection after a gap / prior touch. The first possible execution
     # is strictly AFTER base closes, so only later completed bars are tested.
     crossed = any((h[i] >= trigger if is_long else l[i] <= trigger)
                   for i in range(base+1,n) if isfinite(h[i]) and isfinite(l[i]))
     if crossed:
-        return BalanceLineEvidence(side, "BLOCKED", base, reference, required, count,
+        return BalanceLineEvidence(side, "BLOCKED", base, reference, needed, count,
                                    trigger, stop, zone, relation, "TRIGGER_ALREADY_TOUCHED")
-    return BalanceLineEvidence(side, "CANDIDATE", base, reference, required, count,
+    return BalanceLineEvidence(side, "CANDIDATE", base, reference, needed, count,
                                trigger, stop, zone, relation,
                                "NTD_CH8_REFERENCE_FORMATION_RESEARCH_ONLY")
