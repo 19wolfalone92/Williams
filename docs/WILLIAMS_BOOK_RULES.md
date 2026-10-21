@@ -1,153 +1,66 @@
-# Книжные правила Williams: действующая спецификация 4.53.0
+# Williams sources and current edition boundaries
 
-Этот документ заменяет прежний общий список, смешивавший NTD и TC2.
-Проверяемый реестр: `docs/williams_book_rule_registry.json`.
-Проверка связей с исходниками и тестами: `python3 tools/audit_book_rule_registry.py`.
-Она не запускает тесты и не подтверждает соответствие всем книгам.
-`--require-complete` возвращает код 2, пока остаётся непроверенная область.
+Canonical collection: https://github.com/19wolfalone92/Williams-Trading-Books
+The six PDFs represent TC1, NTD, TC2 (three language/layout copies), and Course.
+See williams_book_rule_registry.json for exact hashes, source pages and open scope.
+This source router does not certify whole-book compliance.
 
-## Источники и границы доказательства
+## Active execution: TC2_THREE_WISE_MEN
 
-В работе использованы предоставленные PDF: TC1 (140 страниц), TC2 (224),
-NTD (156), Course (122) и памятка по волнам (6). Имена, количество страниц
-и SHA-256 конкретных файлов записаны в реестре. Номера ниже — страницы PDF;
-нумерация печатного издания может отличаться.
+1. Any first presenting valid WM1, WM2 or WM3 can initiate a campaign. Mandatory
+   preliminary fractals or a simultaneous conjunction of all Wise Men are not TC2.
+2. WM1: divergent bar outside the whole Alligator mouth, angling away from Jaw/Teeth
+   from the preceding mouth passage. Distance alone is insufficient. Entry beyond
+   the signal bar, initial SL beyond its opposite extreme. Expected AO colour is
+   context. Numerical slope interpretation still needs more chart-derived goldens.
+3. WM2: three consecutive directional AO colours; price trigger beyond the third
+   corresponding price bar. A first WM2 does not require an executed WM1. The
+   initial-stop choice is five closed bars, within the book's three-to-five range.
+4. WM3: two strict extrema on each side, including extended equal-extreme formations.
+   Confirmation requires the second right bar to close. The fractal must be on the
+   correct side of displaced Teeth when triggered, not just when discovered.
+   Full exchange/Teeth race acceptance remains open.
+5. H1 is the project's execution timeframe. Mandatory M15 confirmation is removed.
+   Independent D1/H6/H4/M15 context is not a mandatory veto on first WM2/WM3.
+6. Adds belong to the campaign owner. The illustrated reverse pyramid is quantities
+   1,5,4,3,2 anchored to actual fills. Profitable exposure and all-in risk caps are
+   independent gates. No averaging down.
+7. TC2 trails beyond three-to-five price bars or confirmed structural fractals.
+   Five closed H1 bars is this implementation's declared choice. Automatic 1R
+   and fee-buffered break-even are excluded.
+8. The user's ordinary-exit policy is exchange SL only. TC2 also describes
+   stop-and-reverse and discretionary partial exits. Those book behaviours are
+   intentionally not enabled. Verified emergency protection handling is separate.
 
-Course распознан целиком на английском языке. OCR не является доказательством
-прочтения каждого правила или точности рисунков. Критические страницы 69–71
-и 81 дополнительно просмотрены как изображения. Остальные спорные места
-сохраняют статус неполной проверки.
+TC2 English PDF pages: 139-152 WM1; 154-162 WM2; 165-173 WM3; 175-186 campaigns,
+allocation and exits. Page numbers differ in the 224-page Russian registry source.
 
-Реестр охватывает 39 выбранных пунктов. Это не полный перечень всех
-утверждений, рисунков и торговых решений книг. Семь пунктов имеют общие
-пограничные примеры Python/Kotlin; остальные статусы явно различают
-частичную реализацию, незавершённость и политики проекта. Отношение этих
-чисел не является процентом соответствия всей системе Вильямса.
+## Separate observation profiles
 
-## TC2 — Three Wise Men
+- NTD_FIVE_DIMENSIONS: first external fractal, AO Saucer/Zero Cross/Twin Peaks,
+  AC, Zone and Balance Line keep their own admission and management rules.
+  NTD Teeth/Lips exits must not silently enter TC2.
+- COURSE_PROFITUNITY: Hump/Thumb, higher-timeframe two-bar Air Bag, 5/13/34 rhythm,
+  nested waves and planned allocations are separate. Full corrective campaign
+  remains unfinished. Course is not TC2 plus three coloured candles.
+- TC1: fractal start/signal/leverage, tick-volume/MFI and wave/psychological material
+  is not a completed independent live profile. Base-asset volume is a labelled proxy.
 
-Источник исполнения — `TC2_THREE_WISE_MEN`, закрытые H1.
-WM1, WM2 либо WM3 могут стать первым появившимся Мудрецом. Предварительный
-внешний фрактал, одновременно направленный Alligator всех старших масштабов
-или обязательное M15-подтверждение не добавляются как универсальные условия TC2.
+NTD and Course remain OBSERVE for new exposure. Selected passing fixtures do not
+permit enabling an unverified live strategy.
 
-- WM1: новый минимум и закрытие в верхней половине бара для LONG, зеркально
-  для SHORT; положение вне пасти и ангуляция проверяются отдельно. Цвет AO
-  записывается как контекст. Численная модель ангуляции требует дальнейшей
-  сверки со всеми рисунками, она не доказывает «100%».
-- WM2: третье последовательное изменение цвета AO в сторону сделки; вход
-  на один тик за экстремумом соответствующего ценового бара. Если WM2
-  появляется первым, первоначальная защита использует пять закрытых баров —
-  явный выбор внутри книжного диапазона 3–5, без автоматического 1R.
-- WM3: подтверждённый фрактал с двумя строгими соседними экстремумами с
-  каждой стороны; равные вершины/основания могут удлинять конфигурацию.
-  При активации сам экстремум, без буфера входа, должен быть с нужной стороны
-  текущих отображаемых Teeth. Уже потреблённый триггер не возрождается.
+## Common evidence and execution boundaries
 
-### Обратная пирамида — объём, а не веса риска
+Closed real-timeframe candles; displaced Alligator; no look-ahead; independent
+per-timeframe passports; explicit wave alternatives. AO zero contact/crossing at
+the appropriate scale is a minimum W4 condition, not proof W4 has ended. Near-zero
+is labelled heuristic. Full nested complex-wave recognition is still unverified.
 
-TC2 PDF 164, печатная 149: пример на 15 контрактах даёт последовательность
-**1 → 5 → 4 → 3 → 2**. В новой автоматической кампании первый фактически
-исполненный объём становится единицей; следующие добавления имеют ровно
-5,4,3,2 таких единиц. Перед добавлением позиция должна иметь ценовую прибыль;
-условие повторяется по свежей позиции/цене непосредственно перед POST.
-После 15 единиц новый транш не допускается.
+Binance quantity/side/entry/stop identity, durable intent, one mutation Door,
+fresh signed evidence and risk limits govern every financial mutation. Unknown
+ACK remains UNKNOWN; no blind resubmission. Orphan positions can be exchange-protected
+without strategy ownership. Explicit stop-only consent authorizes tightening the
+exact existing position's stop, not new entries, adds, reversals or invented ownership.
 
-Неполное первое исполнение фиксирует меньшую фактическую единицу. Неполное
-добавление не считается полным книжным траншем: оно блокирует следующие
-добавления до отдельного разрешения состояния. Нулевое доказанно отменённое
-исполнение не расходует ступень. Неизвестный ACK не считается отменой.
-
-Политика закрепляется при создании новой кампании. Уже открытые кампании
-4.52 и ранее не пересчитываются задним числом под новые количества.
-
-Первоначальный риск ограничивается минимумом прежнего начального потолка,
-`campaignCap/15` и `entryCap/5`. При стандартных лимитах это 0,04% equity;
-это инженерный способ оставить номинальный бюджет для последовательности,
-**не книжная формула риска**. Изменившиеся цена, SL, комиссия, фильтры лота
-или маржа могут всё равно отклонить поздний транш. Риск и маржа не дают права
-незаметно уменьшить 5 единиц до другого количества и назвать его книжным.
-
-### Защита и выход
-
-Сохраняются структурные SL за 3/5 барами и за подтверждёнными поствходовыми
-фракталами. Только сокращение риска; никакого автоматического безубытка 1R.
-Длинные конфигурации с разделёнными равными экстремумами теперь одинаково
-распознаются входом и фрактальным сопровождением защиты.
-
-Ранее выбранная пользователем политика обычного TC2-выхода только через
-биржевой SL сохраняется. Книга также описывает stop-and-reverse и
-дискреционные выходы (PDF 155/165). Это **явное отличие проекта**, поэтому
-полное буквальное соответствие всем вариантам выхода не утверждается.
-Аварийное reduce-only закрытие доказанно незащищённой собственной позиции
-относится к отдельному контуру безопасности.
-
-## NTD — Five Dimensions, только наблюдение
-
-Правила этой редакции не должны превращаться в дополнительные запреты TC2.
-Первый внешний фрактал открывает цикл; затем рассматриваются AO Saucer,
-Zero Cross, Twin Peaks, AC, совместные зоны AO+AC и Balance Line.
-
-Баланс — Jaw; фрактальная проверка использует Teeth. Для Balance Line
-чтение идёт справа налево от локального базового бара. Первая подходящая
-опорная свеча относительно Jaw определяет 1/2 экстремума; неблагоприятная
-зона удваивает количество. Старый глобальный минимум/максимум не заменяет
-локальную конфигурацию. Оба анализатора теперь согласны по базе и триггеру.
-Их диагностический `protective_reference` не является самостоятельным
-разрешением поставить биржевой SL.
-
-Зона определяется цветами AO и AC, независимо от тела ценовой свечи.
-Добавления относятся к последовательным зональным барам 2–5 и прогрессу
-закрытия. Пятая зона активирует однобаровое подтягивание; смена цвета не
-сбрасывает уже активированную защиту. Teeth/Lips-выходы остаются правилами NTD.
-Численный выбор «быстрого движения» вместо угла на рисунке — помеченная
-эвристика, требующая окончательной приёмки, а не точная книжная норма.
-
-## Course — Profitunity, только наблюдение
-
-Hump, Thumb и Squat анализируются отдельно от TC2 и NTD.
-Thumb считает три последовательных пальца с HH+HL либо LL+LH; внутренние
-бары не считаются. Объём сравнивается с непосредственно предыдущим баром,
-даже если он внутренний, а не с предыдущим пальцем.
-
-PDF 69 допускает сочетания двух Squat/Green и прямо предлагает упрощённую
-проверку растущего объёма. На PDF 71 смешанный Squat+Green указан как
-идеальный; при отсутствии одного из цветов Thumb считается слабым.
-Поэтому слабая форма не удаляется как несуществующая. Диагностика различает
-`IDEAL_MIXED`, `WEAK` и `UNCONFIRMED_FLAT_MFI`; при равном MFI цвет не выдумывается.
-Вход по упрощённому условию явно помечен `COURSE_PDF 69_VOLUME_SHORTCUT`.
-Объём Binance остаётся proxy исходного tick volume.
-
-Пример позиционирования:3 →1 →6 →10 →3 →(6 либо 8) →0 единиц.
-Ступень 10 требует наблюдаемой W3 не короче 1,10×W1 (PDF 81), а не только новой
-формации. Для W5: W3/W1>1,62 даёт 6 единиц; <1,62 даёт 8. Неизвестное отношение
-и точное равенство 1,62 не получают придуманного решения. Предложение и fill
-связаны с кампанией, стороной, ревизией, временем и отношением длин.
-
-Это исправление количества не реализует автоматически все условия места
-входа, целевых зон, сокращений и дальнейшей кампании a–b–c. Полный Course
-остаётся незавершённым. Higher-frame Air Bag требует дальнейшей проверки
-тикового смещения по оригинальным рисункам; H1→H6 — инженерная адаптация
-к доступным биржевым таймфреймам.
-
-## Волны и межмасштабная структура
-
-Каждый доступный настоящий таймфрейм, включая H4, использует собственные
-закрытые свечи, AO/Alligator и подтверждённые опоры. H4 теперь участвует
-также в общей иерархии и проверках внутренних подразделений. Вставка H4
-между H6 и H1 не уничтожает наблюдаемую цепь обязательных масштабов.
-Нижний масштаб для подразделений выбирается из реально имеющихся данных.
-
-Временное и ценовое вложение помечается как containment, не как доказанная
-степень волны. Касание/пересечение/приближение AO к нулю не доказывает
-завершение W4. Диагональ, усечённая пятая, flat, zigzag, triangle и комбинации
-сохраняют альтернативы; полная вложенная классификация не доказана.
-
-## Приёмка
-
-Общие примеры: `app/src/test/resources/williams_book_rules_contract.json`.
-Они синтетические и проверяют граничные правила, а не воспроизводят все
-исторические рисунки книг. Полная приёмка требует всех источников и рисунков,
-причинного replay, паритета Python/Kotlin, точного HEAD CI, проверок ошибок
-биржи и реальной Binance Futures Demo на Android. Реестр сейчас явно
-возвращает `whole_book_certified=false`; зелёный CI это не переопределяет.
+Run python tools/audit_book_rule_registry.py --require-complete for remaining scope.
+Ordinary CI success does not mean all book charts or device execution are certified.

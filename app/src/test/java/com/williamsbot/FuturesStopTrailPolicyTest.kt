@@ -10,6 +10,17 @@ class FuturesStopTrailPolicyTest {
     private fun bars(highs: List<Double>, lows: List<Double>): List<FuturesTrailBar> =
         highs.indices.map { i -> FuturesTrailBar(i * 3_600_000L, highs[i], lows[i]) }
 
+    @Test fun adoptedPositionKeepsItsExistingStopUntilFirstPostApprovalClosedH1() {
+        val hour=3_600_000L
+        val approved=19*hour+47*60_000L
+        val history=(14..18).map { i -> FuturesTrailBar(i*hour,103.0+i-14,100.0+i-14) }
+        assertNull(planWilliamsCampaignStop("LONG",95.0,101.0,95.0,115.0,1.0,approved,history))
+        val next=history.drop(1)+FuturesTrailBar(19*hour,108.0,105.0)
+        val proposal=planWilliamsCampaignStop("LONG",95.0,101.0,95.0,115.0,1.0,approved,next)
+        assertEquals("TC2_LAST_5_CLOSED_BARS",proposal?.reason)
+        assertEquals(100.0,proposal!!.stop,1e-9)
+    }
+
     @Test fun confirmedDownFractalTrailsLongAfterEntryButBeforeOneR() {
         val result = planFuturesStopTrail(
             "LONG", oldStop = 90.0, actualEntry = 100.0, initialStop = 90.0,

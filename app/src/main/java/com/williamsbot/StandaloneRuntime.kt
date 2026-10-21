@@ -4750,6 +4750,12 @@ private class NativeEngine(
                 safetyExitResults.put(JSONObject().put("symbol", request.optString("symbol")).put("result", outcome))
             }
             if (safetyExitResults.length() > 0) result.put("safety_exit_results", safetyExitResults)
+            // The account Door is released, but this reconciliation still owns
+            // futuresReconciliationLock. Run approved stop-only maintenance here:
+            // a periodic management tick can be coalesced behind a continuous
+            // private-stream reconciliation and never reach its failure branch.
+            // Neither the reconciliation result nor entry authority is relaxed.
+            runOperatorStopSupervisionIfDue()
             if (result.optBoolean("ok", false)) {
                 lastRestReconcileMs = System.currentTimeMillis()
                 lastReconciliationResult = "SUCCESS"
@@ -5703,15 +5709,6 @@ private class NativeEngine(
                     // until the next authoritative full Binance reconciliation.
                 }
             }
-            // Operator-approved stop-only rescue never unlocks entries.
-            if(futuresCampaignCoordinator.operatorSupervisionsSnapshot().length()>0) {
-                val now=System.currentTimeMillis()
-                if(lastOperatorSupervisionAttemptMs==0L ||
-                    now-lastOperatorSupervisionAttemptMs>=10_000L) {
-                    lastOperatorSupervisionAttemptMs=now
-                    manageOperatorSupervisedPositions()
-                }
-            }
             return false
         }
         // Never reopen entries if SQLite cannot confirm that the reconciliation
@@ -6033,6 +6030,19 @@ private class NativeEngine(
 
     private var lastOperatorSupervisionAttemptMs:Long=0L
 
+    private fun runOperatorStopSupervisionIfDue() {
+        val now=System.currentTimeMillis()
+        if(lastOperatorSupervisionAttemptMs>0L &&
+            now>=lastOperatorSupervisionAttemptMs && now-lastOperatorSupervisionAttemptMs<10_000L) return
+        if(futuresCampaignCoordinator.operatorSupervisionsSnapshot().length()==0) return
+        lastOperatorSupervisionAttemptMs=now
+        // One failed maintenance observation must not erase the signed account
+        // reconciliation result. Every mutation still acquires its own Door.
+        runCatching { manageOperatorSupervisedPositions() }.onFailure {
+            lastError="OPERATOR_STOP_SUPERVISION_BLOCKED: "+(it.message ?: it.javaClass.simpleName)
+        }
+    }
+
     private fun manageOperatorSupervisedPositions() {
         val records=futuresCampaignCoordinator.operatorSupervisionsSnapshot()
         for(i in 0 until records.length()) {
@@ -6050,8 +6060,14 @@ private class NativeEngine(
                         lastError="STOP_REPLACEMENT_UNRESOLVED "+symbol+": "+
                             result.optString("blocker","Binance proof incomplete")
                     }
+                    futuresCampaignCoordinator.recordOperatorSupervisionObservation(symbol,
+                        if(result.optBoolean("ok")) "RECOVERED" else "BLOCKED",
+                        result.optString("blocker","Replacement confirmed by Binance"))
                 }.onFailure { lastError="STOP_RECOVERY_BLOCKED "+symbol+": "+
-                    (it.message ?: it.javaClass.simpleName) }
+                    (it.message ?: it.javaClass.simpleName)
+                    runCatching { futuresCampaignCoordinator.recordOperatorSupervisionObservation(
+                        symbol,"BLOCKED",lastError.orEmpty()) }
+                }
                 continue
             }
             if(record.optString("state")!="ACTIVE") continue
@@ -6072,6 +6088,14 @@ private class NativeEngine(
                     bars=bars.map { FuturesTrailBar(it.t,it.h,it.l) },
                     feeAllowance=2.0*feeBufferPerSidePct+maxSlippagePct
                 )
+                val awaitingFirstClose=bars.last().t+WILLIAMS_H1_MS<=record.optLong("approved_at_ms",0L)
+                futuresCampaignCoordinator.recordOperatorSupervisionObservation(symbol,
+                    if(plan!=null) "STOP_PROPOSED" else if(awaitingFirstClose)
+                        "WAITING_FOR_FIRST_CLOSED_H1" else "WAITING_FOR_STRUCTURE",
+                    plan?.reason ?: if(awaitingFirstClose)
+                        "No H1 candle has closed after operator approval; existing protection retained"
+                        else "No confirmed closed-H1 structure improves the current stop",
+                    bars.last().t+WILLIAMS_H1_MS,plan?.stop)
                 if(plan!=null) {
                     val clientId=("W2T_"+symbol.take(8)+"_"+
                         System.nanoTime().toString(36).takeLast(14)).take(36)
@@ -6089,11 +6113,15 @@ private class NativeEngine(
                     auditStore.recordCockpitEvent("OPERATOR_PROTECTION_TRAILED",
                         symbol,state="EXCHANGE_CONFIRMED",
                         detail="TC2 H1 only; "+plan.reason+"; new_stop="+plan.stop+"; no book ownership claimed")
+                    futuresCampaignCoordinator.recordOperatorSupervisionObservation(
+                        symbol,"TRAILED",plan.reason,bars.last().t+WILLIAMS_H1_MS,plan.stop)
                 }
             }.onFailure {
                 val blocker="OPERATOR_STOP_SUPERVISION_BLOCKED "+symbol+": "+
                     (it.message ?: it.javaClass.simpleName)
                 lastError=blocker
+                runCatching { futuresCampaignCoordinator.recordOperatorSupervisionObservation(
+                    symbol,"BLOCKED",blocker) }
                 runCatching { auditStore.recordCockpitEvent(
                     "OPERATOR_STOP_SUPERVISION",symbol,state="BLOCKED",detail=blocker) }
             }

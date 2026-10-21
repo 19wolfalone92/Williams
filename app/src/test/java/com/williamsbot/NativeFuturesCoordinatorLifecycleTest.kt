@@ -1593,4 +1593,71 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
         assertEquals(0,exchange.posts("/fapi/v1/order"))
     }
+
+    @Test fun supervisedStopRejectsReusedClientIdentityAndNewForeignOrdersBeforePost() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.quantity=1.0;exchange.entry=101.0;exchange.mark=100.0
+        val old=existingFullStop(exchange,NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+        coordinator.approveOperatorStopSupervision("BTCUSDT","1","101","95","СОПРОВОЖДАТЬ ТОЛЬКО СТОП")
+        assertThrows(Exception::class.java) {
+            coordinator.trailOperatorSupervisedStop("BTCUSDT",
+                NativeFuturesCampaignCoordinator.Direction.LONG,"96",old.getString("clientAlgoId"))
+        }
+        exchange.orders["foreign"]=JSONObject().put("symbol","BTCUSDT").put("status","NEW")
+        assertThrows(Exception::class.java) {
+            coordinator.trailOperatorSupervisedStop("BTCUSDT",
+                NativeFuturesCampaignCoordinator.Direction.LONG,"96","W2T_FOREIGN_ORDER")
+        }
+        assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals("NEW",old.getString("algoStatus"))
+        assertEquals("ACTIVE",coordinator.operatorSupervisionsSnapshot().getJSONObject(0).getString("state"))
+    }
+
+    @Test fun uncertainSupervisedReplacementRechecksExposureImmediatelyBeforeOldStopCancellation() {
+        for (foreignOrder in listOf(false,true)) {
+            val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+            exchange.quantity=1.0;exchange.entry=101.0;exchange.mark=100.0
+            val old=existingFullStop(exchange,NativeFuturesCampaignCoordinator.Direction.LONG)
+            val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            coordinator.approveOperatorStopSupervision("BTCUSDT","1","101","95","СОПРОВОЖДАТЬ ТОЛЬКО СТОП")
+            exchange.loseProtectionReply=true
+            assertFalse(coordinator.trailOperatorSupervisedStop("BTCUSDT",
+                NativeFuturesCampaignCoordinator.Direction.LONG,"96","W2T_LOST_RECHECK").getBoolean("ok"))
+            exchange.beforeMarkRead={
+                if(foreignOrder) exchange.orders["racing"]=JSONObject().put("symbol","BTCUSDT").put("status","NEW")
+                else exchange.quantity=2.0
+            }
+            assertThrows(Exception::class.java) { coordinator.recoverOperatorSupervisedStop("BTCUSDT") }
+            assertEquals("NEW",old.getString("algoStatus"))
+            assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0,exchange.requests.count { it.method=="DELETE" })
+            assertEquals("REPLACEMENT_UNRESOLVED",
+                coordinator.operatorSupervisionsSnapshot().getJSONObject(0).getString("state"))
+        }
+    }
+
+    @Test fun approvedSupervisionHasIndependentObservableAuthorityWithoutInventingEntryOwnership() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.quantity=1.0;exchange.entry=101.0;exchange.mark=100.0
+        existingFullStop(exchange,NativeFuturesCampaignCoordinator.Direction.LONG)
+        val store=Journal()
+        val coordinator=NativeFuturesCampaignCoordinator(store) { exchange.adapter() }
+        coordinator.approveOperatorStopSupervision("BTCUSDT","1","101","95","СОПРОВОЖДАТЬ ТОЛЬКО СТОП")
+        assertFalse(coordinator.reconcile().getBoolean("ok"))
+        val observation=coordinator.status().getJSONArray("exchange_protection_observations").getJSONObject(0)
+        assertEquals("EXTERNAL_PROTECTED",observation.getString("stop_proof"))
+        assertTrue(observation.getBoolean("automatic_trailing_authorized"))
+        assertEquals("OPERATOR_APPROVED_STOP_ONLY",observation.getString("management_mode"))
+        assertFalse(observation.getBoolean("strategy_ownership_verified"))
+        coordinator.recordOperatorSupervisionObservation("BTCUSDT","WAITING_FOR_STRUCTURE","No improvement",1234L)
+        val restored=NativeFuturesCampaignCoordinator(store) { exchange.adapter() }
+            .operatorSupervisionsSnapshot().getJSONObject(0)
+        assertEquals("WAITING_FOR_STRUCTURE",restored.getString("last_evaluation_status"))
+        assertEquals(1234L,restored.getLong("last_evaluated_closed_bar_at_ms"))
+        assertEquals("ACTIVE",restored.getString("state"))
+        assertEquals(0,coordinator.intentsSnapshot().length())
+        assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+    }
 }

@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 /** Observations are read-only. This contract never authorizes an exchange mutation. */
 internal object CockpitDiagnostics {
-    const val VERSION = 10
+    const val VERSION = 11
     const val POSITION_TTL_MS = 15_000L
     const val QUOTE_TTL_MS = 60_000L
 
@@ -47,7 +47,11 @@ internal object CockpitDiagnostics {
         val positions = rows(status.optJSONArray("futures_positions"))
         val intents = rows(coordinator.optJSONArray("pending_intent_details"))
         val unprotected = positions.filter { p ->
-            intents.none { i -> matchesPosition(i, p) && protectionProven(i, now) }
+            !positionProtectionProven(p, coordinator, intents, now)
+        }
+        val unmanaged=positions.filter { p ->
+            intents.none { i -> matchesPosition(i,p) && protectionProven(i,now) } &&
+                !operatorManagementProven(p,coordinator,now)
         }
         val monitoring = status.optBoolean("running") && snapshotFresh &&
             status.optBoolean("user_ws_connected") && !status.optBoolean("user_stream_sync_required", true)
@@ -89,9 +93,12 @@ internal object CockpitDiagnostics {
             .put("entry_reserved_risk_pct", if (riskBudgetKnown) reservedRisk else JSONObject.NULL)
             .put("entry_max_total_risk_pct", if (riskBudgetKnown) totalRiskLimit else JSONObject.NULL)
             .put("entry_risk_budget_remaining_pct", if (riskBudgetKnown) riskBudgetRemaining else JSONObject.NULL)
-            .put("position_management_ready", monitoring && unprotected.isEmpty())
+            .put("position_management_ready", monitoring && unprotected.isEmpty() && unmanaged.isEmpty())
+            .put("stop_only_management_ready", status.optBoolean("running") && snapshotFresh &&
+                positions.isNotEmpty() && unprotected.isEmpty() && unmanaged.isEmpty())
             .put("positions_snapshot_fresh", snapshotFresh)
             .put("unprotected_positions", JSONArray(unprotected))
+            .put("unmanaged_positions",JSONArray(unmanaged))
             .put("pending_orders", intents.count { it.optString("campaign_status") in
                 setOf("ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "EXIT_PENDING") })
             .put("new_entries_reason", reason)
@@ -118,6 +125,40 @@ internal object CockpitDiagnostics {
             intent.optBoolean("strategy_ownership_verified", false) &&
             intent.optString("protection_client_id_suffix").isNotBlank() &&
             fresh(intent.optLong("last_reconciled_ms"), now, 120_000L)
+
+    private fun matchingProtectionObservation(position:JSONObject, coordinator:JSONObject, now:Long):JSONObject? {
+        val quantity=position.optString("qty",position.optString("positionAmt"))
+            .toBigDecimalOrNull()?.abs()?.takeIf { it.signum()>0 } ?: return null
+        val stop=position.optString("stop").toBigDecimalOrNull()?.takeIf { it.signum()>0 } ?: return null
+        return rows(coordinator.optJSONArray("exchange_protection_observations")).singleOrNull { o ->
+            o.optString("symbol")==position.optString("symbol") &&
+                o.optString("direction")==position.optString("direction") &&
+                o.optString("stop_proof") in setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED") &&
+                o.optString("protection_client_id").isNotBlank() &&
+                o.optString("quantity").toBigDecimalOrNull()?.abs()?.compareTo(quantity)==0 &&
+                o.optString("stop").toBigDecimalOrNull()?.compareTo(stop)==0 &&
+                fresh(o.optLong("observed_at_ms"),now,POSITION_TTL_MS)
+        }
+    }
+
+    private fun positionProtectionProven(
+        position:JSONObject,coordinator:JSONObject,intents:List<JSONObject>,now:Long
+    ):Boolean = intents.any { matchesPosition(it,position) && protectionProven(it,now) } ||
+        matchingProtectionObservation(position,coordinator,now)!=null
+
+    private fun operatorManagementProven(position:JSONObject,coordinator:JSONObject,now:Long):Boolean {
+        val observation=matchingProtectionObservation(position,coordinator,now) ?: return false
+        if(!observation.optBoolean("automatic_trailing_authorized") ||
+            observation.optString("management_mode")!="OPERATOR_APPROVED_STOP_ONLY") return false
+        return rows(coordinator.optJSONArray("operator_supervised_positions")).any { r ->
+            r.optString("symbol")==position.optString("symbol") &&
+                r.optString("state")=="ACTIVE" &&
+                r.optString("protection_client_id")==observation.optString("protection_client_id") &&
+                r.optString("last_evaluation_status") in setOf("WAITING_FOR_FIRST_CLOSED_H1",
+                    "WAITING_FOR_STRUCTURE","TRAILED","RECOVERED") &&
+                fresh(r.optLong("last_evaluated_at_ms"),now,120_000L)
+        }
+    }
 
     fun checks(status: JSONObject, coordinator: JSONObject, scanner: JSONObject, now: Long): JSONArray {
         val result = JSONArray()
@@ -227,7 +268,7 @@ internal object CockpitDiagnostics {
             else -> "PASS"
         }, "Частично исполненных: ${partial.size}. Любая исполненная часть требует подтверждённой защиты.")
         val positions = rows(status.optJSONArray("futures_positions"))
-        val unprotected = positions.filter { p -> entries.none { matchesPosition(it, p) && protectionProven(it, now) } }
+        val unprotected = positions.filter { p -> !positionProtectionProven(p,coordinator,entries,now) }
         val filledUnprotected = entries.filter {
             (it.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
                 it.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) && !protectionProven(it, now)
@@ -243,7 +284,8 @@ internal object CockpitDiagnostics {
             "Открытых=${positions.size}; без свежего подтверждения=${unprotected.size}; " +
                 "исполненных кампаний без защиты=${filledUnprotected.size}.")
         check("EXE-04", "execution", "Подтверждение стопа Binance", protectionSeverity,
-            "Требуются OPEN_PROTECTED, PROTECTED, принадлежность кампании и свежая сверка; запись цены стопа сама по себе не является защитой.")
+            "Проверяются свежая биржевая защита, символ, направление, количество и уровень SL. " +
+                "Принадлежность стратегии и разрешение сопровождения проверяются отдельно; цена стопа сама по себе не доказывает защиту.")
         val trailed = entries.filter { it.optLong("trailing_at_ms") > 0L }
         check("EXE-05", "execution", "Перенос стопа", when {
             trailed.isEmpty() -> "NOT_VERIFIED"

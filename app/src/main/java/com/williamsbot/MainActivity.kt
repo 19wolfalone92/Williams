@@ -2864,6 +2864,22 @@ private fun PositionScreen(
                                 if(supervised.optString("state")=="ACTIVE")
                                     "Разрешено сопровождение • биржа проверяется перед переносом"
                                 else "Остановлено • требуется сверка Binance")
+                            InfoRow("Проверка сопровождения",when(supervised.optString("last_evaluation_status")) {
+                                "WAITING_FOR_FIRST_CLOSED_H1" -> "Ожидается первое закрытие H1 после подключения сопровождения"
+                                "WAITING_FOR_STRUCTURE" -> "Проверено • новый H1-стоп пока не улучшает текущий"
+                                "STOP_PROPOSED" -> "Найден новый уровень • проверяется Binance"
+                                "TRAILED" -> "Стоп перенесён и подтверждён Binance"
+                                "RECOVERED" -> "Подтверждение переноса восстановлено"
+                                "BLOCKED" -> "Перенос заблокирован • "+russianExecutionBlocker(
+                                    supervised.optString("last_evaluation_reason"))
+                                else -> "Ожидается первая проверка закрытых H1-свечей"
+                            })
+                            if(supervised.optLong("last_evaluated_closed_bar_at_ms")>0L) {
+                                InfoRow("Закрытие проверенной H1-свечи",
+                                    java.text.DateFormat.getDateTimeInstance(
+                                        java.text.DateFormat.SHORT,java.text.DateFormat.SHORT)
+                                        .format(java.util.Date(supervised.optLong("last_evaluated_closed_bar_at_ms"))))
+                            }
                         } else if(p.stop!=null && p.stopVerificationStatus=="EXTERNAL_PROTECTED" &&
                             status.positionsSnapshotOk &&
                             CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,System.currentTimeMillis(),15_000L) &&

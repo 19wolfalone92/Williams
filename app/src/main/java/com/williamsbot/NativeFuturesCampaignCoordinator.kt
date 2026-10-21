@@ -1548,6 +1548,7 @@ internal class NativeFuturesCampaignCoordinator(
             val actualRiskAccount = if (openBySymbol.isNotEmpty()) {
                 runCatching { parseFuturesAccountSnapshot(adapter.account()) }.getOrNull()
             } else null
+            val supervisionAudit=operatorSupervisions()
             for ((symbol, position) in openBySymbol) {
                 val amount = position.optString("positionAmt").toDoubleOrNull()
                     ?: throw IllegalStateException("Binance returned a malformed position amount for $symbol during protection audit")
@@ -1643,6 +1644,28 @@ internal class NativeFuturesCampaignCoordinator(
                     matchingIntent?.optBoolean("strategy_ownership_verified",false)==true &&
                     observedOwnerId.isNotBlank() &&
                     signedFullStops.single().optString("clientAlgoId")==observedOwnerId
+                val supervision=(0 until supervisionAudit.length()).mapNotNull {
+                    supervisionAudit.optJSONObject(it)
+                }.singleOrNull { it.optString("symbol")==symbol }
+                val liveEntry=position.optString("entryPrice").toBigDecimalOrNull()
+                val approvedEntry=supervision?.optString("entry_price")?.toBigDecimalOrNull()
+                val supervisedProtection=supervision!=null &&
+                    supervision.optString("state")=="ACTIVE" &&
+                    supervision.optString("mode")=="OPERATOR_APPROVED_STOP_ONLY" &&
+                    !supervision.optBoolean("strategy_ownership_verified",false) &&
+                    !supervision.optBoolean("market_close_authorized",true) &&
+                    !supervision.optBoolean("add_on_authorized",true) &&
+                    supervision.optString("direction")==direction &&
+                    supervision.optString("quantity").toBigDecimalOrNull()?.compareTo(
+                        position.getString("positionAmt").toBigDecimal().abs())==0 &&
+                    liveEntry!=null && approvedEntry!=null && liveEntry.compareTo(approvedEntry)==0 &&
+                    signedFullStops.size==1 && algos.length()==1 &&
+                    signedFullStops.single().optString("clientAlgoId")==supervision.optString("protection_client_id") &&
+                    signedFullStops.single().optString("triggerPrice").ifBlank {
+                        signedFullStops.single().optString("stopPrice")
+                    }.toBigDecimalOrNull()?.compareTo(supervision.optString("stop").toBigDecimal())==0 &&
+                    (0 until allOpenOrders.length()).mapNotNull { allOpenOrders.optJSONObject(it) }
+                        .none { it.optString("symbol")==symbol }
                 protectionObservations.put(JSONObject().put("symbol",symbol)
                     .put("observed_at_ms",clock())
                     .put("direction",direction)
@@ -1660,13 +1683,17 @@ internal class NativeFuturesCampaignCoordinator(
                         signedFullStops.single().optString("clientAlgoId") else JSONObject.NULL)
                     .put("strategy_ownership_verified",matchingIntent?.optBoolean(
                         "strategy_ownership_verified",false)==true)
-                    .put("automatic_trailing_authorized",ownedProtection))
+                    .put("automatic_trailing_authorized",ownedProtection || supervisedProtection)
+                    .put("management_mode",if(supervisedProtection) "OPERATOR_APPROVED_STOP_ONLY"
+                        else if(ownedProtection) "STRATEGY_OWNED" else "OBSERVE_ONLY"))
                 if (matchingIntent == null && signedFullStops.isNotEmpty()) {
                     // A valid exchange stop is better than unprotected exposure.
                     // Presence of W2PS_ alone does not prove which installation
                     // owns the position, so never manufacture ENTRY/FILL state.
                     actualRiskAuditBlocked=true
-                    actualRiskAuditBlocker="$symbol has an exchange-protected position but no verified local campaign ownership; no automatic trailing until ownership is restored"
+                    actualRiskAuditBlocker=if(supervisedProtection)
+                        "$symbol has operator-approved stop-only supervision; strategy ownership remains unknown, new entries blocked"
+                        else "$symbol has an exchange-protected position but no verified local campaign ownership; no automatic trailing until ownership is restored"
                     continue
                 }
                 if (matchingIntent == null && latestIntentIndex == null) {
@@ -3908,6 +3935,22 @@ internal class NativeFuturesCampaignCoordinator(
         JSONArray(operatorSupervisions().toString())
     }
 
+    fun recordOperatorSupervisionObservation(
+        symbol:String, status:String, reason:String, closedBarAtMs:Long=0L, proposedStop:Double?=null
+    ) = synchronized(lock) {
+        require(status in setOf("WAITING_FOR_FIRST_CLOSED_H1","WAITING_FOR_STRUCTURE",
+            "STOP_PROPOSED","TRAILED","RECOVERED","BLOCKED"))
+        val rows=operatorSupervisions()
+        val record=(0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+            .singleOrNull { it.optString("symbol")==symbol } ?: error("Supervision journal absent")
+        // Observation fields cannot authorize an order or alter the lifecycle.
+        record.put("last_evaluated_at_ms",clock()).put("last_evaluation_status",status)
+            .put("last_evaluation_reason",reason.take(1000))
+            .put("last_evaluated_closed_bar_at_ms",closedBarAtMs)
+            .put("last_proposed_stop",proposedStop?.takeIf { it.isFinite() && it>0 } ?: JSONObject.NULL)
+        saveOperatorSupervisions(rows)
+    }
+
     fun approveOperatorStopSupervision(
         symbol: String, quantity: String, entryPrice: String, stopPrice: String,
         confirmation: String
@@ -4050,6 +4093,7 @@ internal class NativeFuturesCampaignCoordinator(
         val prior=(0 until before.length()).mapNotNull { before.optJSONObject(it) }
             .filter { isFullPositionFuturesStop(it,symbol,direction.name,qty,mark) }
         val currentId=record.optString("protection_client_id")
+        require(newClientId!=currentId) { "Replacement stop must have a distinct client ID" }
         check(prior.size==1 && prior.single().optString("clientAlgoId")==currentId &&
             before.length()==1 &&
             prior.single().optString("triggerPrice").ifBlank {
@@ -4057,6 +4101,15 @@ internal class NativeFuturesCampaignCoordinator(
             }.toBigDecimalOrNull()?.compareTo(oldPrice)==0) {
             "Original protective stop not uniquely confirmed; no Binance mutation"
         }
+        fun verifyNoStandardOrders() {
+            val standard=adapter.allOpenOrders()
+            check((0 until standard.length()).mapNotNull { standard.optJSONObject(it) }
+                .none { it.optString("symbol")==symbol }) {
+                "Other open orders on supervised symbol; no stop cancellation authorized"
+            }
+        }
+        verifyNoStandardOrders()
+        verifyLivePosition()
         // A journal failure occurs BEFORE the Binance POST.
         record.put("state","REPLACEMENT_UNRESOLVED")
             .put("previous_protection_client_id",currentId)
@@ -4073,6 +4126,7 @@ internal class NativeFuturesCampaignCoordinator(
                         .toBigDecimalOrNull()?.compareTo(next)==0 }
                 ?: error("Replacement stop not uniquely confirmed")
             // No old-stop cancellation if exposure changed after placement.
+            verifyNoStandardOrders()
             verifyLivePosition()
             val oldAlgoId=prior.single().optString("algoId")
             check(oldAlgoId.toLongOrNull()?.let { it>0 }==true) { "Old stop lacks exact algo ID" }
@@ -4080,7 +4134,10 @@ internal class NativeFuturesCampaignCoordinator(
             val final=adapter.openAlgoOrders(symbol)
             check(final.length()==1 &&
                 final.optJSONObject(0)?.optString("clientAlgoId")==newClientId &&
-                isFullPositionFuturesStop(final.getJSONObject(0),symbol,direction.name,qty,adapter.markPrice(symbol))) {
+                isFullPositionFuturesStop(final.getJSONObject(0),symbol,direction.name,qty,adapter.markPrice(symbol)) &&
+                final.getJSONObject(0).optString("triggerPrice").ifBlank {
+                    final.getJSONObject(0).optString("stopPrice")
+                }.toBigDecimalOrNull()?.compareTo(next)==0) {
                 "Stop replacement requires manual reconciliation after exchange mutation"
             }
             record.put("state","ACTIVE")
@@ -4125,21 +4182,33 @@ internal class NativeFuturesCampaignCoordinator(
         }
         val adapter=adapterFactory()
         adapter.requireOneWayMode()
-        val open=adapter.positions()
-        val matching=(0 until open.length()).mapNotNull { open.optJSONObject(it) }
-            .filter { it.optString("symbol")==symbol &&
-                (it.optString("positionAmt").toBigDecimalOrNull()?.signum() ?: 0)!=0 }
-        check(matching.size==1) { "Cannot recover uncertain stop without unique live exposure" }
-        val p=matching.single()
-        val qty=p.getString("positionAmt").toBigDecimal()
-        val recordedQty=record.getString("quantity").toBigDecimal()
-        val liveEntry=p.getString("entryPrice").toDouble()
-        val priorEntry=record.getString("entry_price").toDouble()
-        check(p.optString("positionSide","BOTH")=="BOTH" && qty.abs().compareTo(recordedQty)==0 &&
-            (qty.signum()>0)==(direction=="LONG") &&
-            kotlin.math.abs(liveEntry-priorEntry)<=maxOf(1e-8,priorEntry*1e-8)) {
-            "Position changed during uncertain replacement; operator resolution required"
+        fun verifyLivePosition() {
+            val open=adapter.positions()
+            val matching=(0 until open.length()).mapNotNull { open.optJSONObject(it) }
+                .filter { it.optString("symbol")==symbol &&
+                    (it.optString("positionAmt").toBigDecimalOrNull()?.signum() ?: 0)!=0 }
+            check(matching.size==1) { "Cannot recover uncertain stop without unique live exposure" }
+            val p=matching.single()
+            val qty=p.getString("positionAmt").toBigDecimal()
+            val recordedQty=record.getString("quantity").toBigDecimal()
+            val liveEntry=p.getString("entryPrice").toDouble()
+            val priorEntry=record.getString("entry_price").toDouble()
+            check(p.optString("positionSide","BOTH")=="BOTH" && qty.abs().compareTo(recordedQty)==0 &&
+                (qty.signum()>0)==(direction=="LONG") &&
+                kotlin.math.abs(liveEntry-priorEntry)<=maxOf(1e-8,priorEntry*1e-8)) {
+                "Position changed during uncertain replacement; operator resolution required"
+            }
         }
+        verifyLivePosition()
+        val recordedQty=record.getString("quantity").toBigDecimal()
+        fun verifyNoStandardOrders() {
+            val standard=adapter.allOpenOrders()
+            check((0 until standard.length()).mapNotNull { standard.optJSONObject(it) }
+                .none { it.optString("symbol")==symbol }) {
+                "Other open orders on supervised symbol; uncertain replacement remains fenced"
+            }
+        }
+        verifyNoStandardOrders()
         val mark=adapter.markPrice(symbol)
         val algos=adapter.openAlgoOrders(symbol)
         val list=(0 until algos.length()).mapNotNull { algos.optJSONObject(it) }
@@ -4160,11 +4229,16 @@ internal class NativeFuturesCampaignCoordinator(
             }.toBigDecimalOrNull()?.compareTo(oldStop)==0) { "Prior stop trigger mismatch" }
             val oldAlgo=old.getString("algoId")
             check(oldAlgo.toLongOrNull()?.let { it>0L }==true) { "Old stop lacks exchange ID" }
+            verifyNoStandardOrders()
+            verifyLivePosition()
             adapter.cancelAlgoOrderById(symbol,oldAlgo)
         }
         val after=adapter.openAlgoOrders(symbol)
         check(after.length()==1 && after.getJSONObject(0).optString("clientAlgoId")==newId &&
-            isFullPositionFuturesStop(after.getJSONObject(0),symbol,direction,recordedQty,adapter.markPrice(symbol))) {
+            isFullPositionFuturesStop(after.getJSONObject(0),symbol,direction,recordedQty,adapter.markPrice(symbol)) &&
+            after.getJSONObject(0).optString("triggerPrice").ifBlank {
+                after.getJSONObject(0).optString("stopPrice")
+            }.toBigDecimalOrNull()?.compareTo(newStop)==0) {
             "Replacement verification incomplete; unresolved journal preserved"
         }
         record.put("stop",newStop.stripTrailingZeros().toPlainString())

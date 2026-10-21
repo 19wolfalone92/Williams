@@ -48,6 +48,54 @@ class CockpitDiagnosticsTest {
         assertFalse(r.getBoolean("new_entries_allowed"))
         assertTrue(r.getString("new_entries_reason").contains("база риска"))
     }
+
+    @Test fun externalStopProofIsSeparateFromStrategyOwnershipAndManagement() {
+        val position=JSONObject().put("symbol","SOLUSDT").put("direction","SHORT")
+            .put("qty",2).put("stop",105)
+        val observation=JSONObject().put("symbol","SOLUSDT").put("direction","SHORT")
+            .put("quantity","-2.0").put("stop","105.0").put("protection_client_id","external_stop")
+            .put("stop_proof","EXTERNAL_PROTECTED").put("observed_at_ms",now)
+        val s=healthy().put("futures_positions",JSONArray().put(position)).put("execution_enabled",false)
+        val c=coordinator().put("ready_for_new_entry",false)
+            .put("exchange_protection_observations",JSONArray().put(observation))
+        val r=CockpitDiagnostics.readiness(s,c,now)
+        assertEquals("PASS",r.getString("protection_state"))
+        assertEquals(0,r.getJSONArray("unprotected_positions").length())
+        assertEquals(1,r.getJSONArray("unmanaged_positions").length())
+        assertFalse(r.getBoolean("position_management_ready"))
+        assertFalse(r.getBoolean("new_entries_allowed"))
+        assertEquals("PASS",severity("EXE-03",s,c))
+        observation.put("automatic_trailing_authorized",true)
+            .put("management_mode","OPERATOR_APPROVED_STOP_ONLY")
+        val record=JSONObject().put("symbol","SOLUSDT").put("state","ACTIVE")
+            .put("protection_client_id","external_stop").put("last_evaluated_at_ms",now)
+            .put("last_evaluation_status","WAITING_FOR_STRUCTURE")
+        c.put("operator_supervised_positions",JSONArray().put(record))
+        assertTrue(CockpitDiagnostics.readiness(s,c,now).getBoolean("stop_only_management_ready"))
+        assertFalse(CockpitDiagnostics.readiness(s,c,now).getBoolean("new_entries_allowed"))
+        record.put("last_evaluation_status","BLOCKED")
+        assertFalse(CockpitDiagnostics.readiness(s,c,now).getBoolean("stop_only_management_ready"))
+        assertEquals("PASS",CockpitDiagnostics.readiness(s,c,now).getString("protection_state"))
+    }
+
+    @Test fun staleWrongQuantityOrAmbiguousExternalStopIsNotProtectionProof() {
+        val s=healthy().put("futures_positions",JSONArray().put(JSONObject()
+            .put("symbol","SOLUSDT").put("direction","LONG").put("qty",2).put("stop",95)))
+        val observation=JSONObject().put("symbol","SOLUSDT").put("direction","LONG")
+            .put("quantity","2").put("stop","95").put("protection_client_id","external_stop")
+            .put("stop_proof","EXTERNAL_PROTECTED").put("observed_at_ms",now)
+        val c=coordinator().put("exchange_protection_observations",JSONArray().put(observation))
+        for(change in listOf<Pair<String,Any>>(
+            "quantity" to "1", "direction" to "SHORT", "stop" to "94",
+            "observed_at_ms" to now-15_001L, "stop_proof" to "MULTIPLE_PROTECTIVE_ORDERS_UNRESOLVED")) {
+            val previous=observation.get(change.first)
+            observation.put(change.first,change.second)
+            assertEquals(change.toString(),"FAIL",CockpitDiagnostics.readiness(s,c,now).getString("protection_state"))
+            observation.put(change.first,previous)
+        }
+        c.put("exchange_protection_observations",JSONArray().put(observation).put(JSONObject(observation.toString())))
+        assertEquals("FAIL",CockpitDiagnostics.readiness(s,c,now).getString("protection_state"))
+    }
     @Test fun threePendingStopOrdersUseEntireRiskBudgetEvenWhenDailyLossReset() {
         val orders = JSONArray()
         for (symbol in listOf("ETHUSDT","BNBUSDT","BTCUSDT")) {
