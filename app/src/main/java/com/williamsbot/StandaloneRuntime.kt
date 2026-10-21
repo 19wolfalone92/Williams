@@ -4703,10 +4703,15 @@ private class NativeEngine(
             for (index in 0 until requiredExits.length()) {
                 val request = requiredExits.getJSONObject(index)
                 val outcome = runCatching {
-                    withCampaignMutation(symbol = request.getString("symbol"), purpose = "LIQUIDATION_GUARD_EXIT",
+                    val unprotected = request.optString("reason") == "UNPROTECTED_POSITION_GUARD"
+                    withCampaignMutation(symbol = request.getString("symbol"),
+                        purpose = if(unprotected) "UNPROTECTED_POSITION_GUARD_EXIT" else "LIQUIDATION_GUARD_EXIT",
                         allowPaused = true, allowStopped = true, allowKillLatched = true,
                         allowReconcileRequired = true, waitForDoorMs = waitForDoorMs
-                    ) { futuresCampaignCoordinator.executeRequiredSafetyExit(request) }
+                    ) {
+                        if(unprotected) futuresCampaignCoordinator.executeRequiredUnprotectedSafetyExit(request)
+                        else futuresCampaignCoordinator.executeRequiredSafetyExit(request)
+                    }
                 }.getOrElse { JSONObject().put("ok", false).put("blocker", it.message ?: it.javaClass.simpleName) }
                 safetyExitResults.put(JSONObject().put("symbol", request.optString("symbol")).put("result", outcome))
             }
