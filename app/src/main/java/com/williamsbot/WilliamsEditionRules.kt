@@ -278,7 +278,10 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
     val fractalKind=if (sign==1) "HIGH" else "LOW"
     confirmedWilliamsEditionFractals(bars).asReversed().firstOrNull { f ->
         f.kind==fractalKind && bars.last().t-bars[f.confirmation].t<18_000_000L &&
-            sign*(f.price-teeth.last())>0 && pending(f.confirmation,f.price+sign*tick)
+            // NTD ch4 / TC2 ch11: qualify the actual +1/-1 tick
+            // BREAKOUT beyond red Teeth, not the earlier pivot price.
+            sign*(f.price+sign*tick-teeth.last())>0 &&
+            pending(f.confirmation,f.price+sign*tick)
     }?.let { f ->
         val stop=if(sign==1) bars.subList(f.groupStart,f.center+1).minOf { it.l }-tick
             else bars.subList(f.groupStart,f.center+1).maxOf { it.h }+tick
