@@ -1921,6 +1921,18 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals("true", active.getString("closePosition"))
             assertFalse(active.has("quantity"))
             assertFalse(coordinator.intentsSnapshot().getJSONObject(0).has("native_stop_replacement"))
+            // No second account-wide reconciliation is needed to expose the
+            // exchange-confirmed NEW stop; the old stop must not remain in
+            // the cockpit's signed observations (Diagnostics 9).
+            val stopProof = coordinator.status().getJSONArray("exchange_protection_observations")
+            assertEquals(1, stopProof.length())
+            val proof = stopProof.getJSONObject(0)
+            assertEquals("OWNED_STOP_SEEN", proof.getString("stop_proof"))
+            assertEquals("W2T_NATIVE_${direction.name}", proof.getString("protection_client_id"))
+            assertEquals(0, proof.getString("stop").toBigDecimal().compareTo(next.toBigDecimal()))
+            assertEquals(0, proof.getString("quantity").toBigDecimal()
+                .compareTo(exchange.quantity.toString().toBigDecimal()))
+            assertTrue(proof.getLong("observed_at_ms") > 0L)
             assertTrue(coordinator.reconcile().getBoolean("ok"))
             assertEquals(0, exchange.posts("/fapi/v1/order"))
         }
