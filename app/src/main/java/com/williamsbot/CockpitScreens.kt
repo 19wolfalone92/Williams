@@ -336,6 +336,30 @@ internal fun CockpitAnalysis(padding: PaddingValues, status: Status, candidates:
                     }
                     if (selected == symbol) {
                         CockpitField("Контекст H4", c?.let { if (it.htfConfirmed) "Подтверждён для кандидата" else "Не подтверждён" } ?: "Не проверен")
+                        val phase=runCatching {
+                            JSONObject(status.decisionTracesJson).optJSONObject(symbol)
+                                ?.optJSONObject("market_phase")
+                        }.getOrNull()
+                        val story=phase?.optJSONObject("market_narrative")
+                        if(story!=null) {
+                            Text("Где находится рынок • проверенные ТФ",
+                                style=MaterialTheme.typography.titleSmall,fontWeight=FontWeight.SemiBold)
+                            val frames=story.optJSONArray("frames")
+                            if(frames!=null) for(i in 0 until frames.length()) {
+                                val view=frames.optJSONObject(i) ?: continue
+                                Text(view.optString("explanation_ru"),
+                                    style=MaterialTheme.typography.bodySmall,
+                                    color=if(view.optBoolean("chart_observed")) AppColors.textMuted else AppColors.amber)
+                            }
+                            Text(story.optString("cross_timeframe_caution_ru"),
+                                color=AppColors.amber,style=MaterialTheme.typography.bodySmall)
+                            Text("Волновая разметка — гипотеза. Эти показания НЕ открывают и НЕ закрывают сделки.",
+                                style=MaterialTheme.typography.labelSmall,color=AppColors.textMuted)
+                        } else {
+                            Text("Мультитаймфреймовый анализ ещё не подтверждён: проверь последнюю диагностику.",
+                                color=AppColors.amber,style=MaterialTheme.typography.bodySmall)
+                        }
+
                         CockpitField("H1: семейство сигнала", c?.entrySignalType?.ifBlank { "Нет" } ?: "Не проверено")
                         CockpitField("Триггер / стоп", cockpitNumber(c?.entryTriggerPrice, 4) + " / " + cockpitNumber(c?.entryProtectivePrice, 4))
                         CockpitField("Оценка сканера", c?.let { "Риск ${cockpitNumber(it.riskPct)}% • R/R ${cockpitNumber(it.riskReward)}" } ?: "Нет данных")
