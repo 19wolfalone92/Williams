@@ -1,4 +1,26 @@
 """Degree-scoped, competing market phase evidence; no order authority."""
+from williams_wave_hierarchy import FRAME_MS, REQUIRED_FRAMES, build_wave_hierarchy
+from williams_market_reading import market_reading
+
+OBSERVED_MARKET_FRAMES=("1d","6h","4h","1h","15m")
+
+
+def observed_market_context(history,as_of,read_errors=None):
+    """Bounded causal snapshot of already stored candles, without any network IO."""
+    read_errors=read_errors or {}
+    closed={frame:[b for b in history.get(frame,[]) if b.t+FRAME_MS[frame]<=as_of][-240:]
+            for frame in OBSERVED_MARKET_FRAMES}
+    result=build_wave_hierarchy(closed,as_of,analysis_frames=OBSERVED_MARKET_FRAMES).to_dict()
+    result.update(context_source="DEVICE_CLOSED_CANDLE_SNAPSHOT",scope="OBSERVATION_ONLY",
+                  can_close=False,can_reverse=False)
+    result["frame_errors"].update(read_errors)
+    phase=market_phase_context(result)
+    result["frame_readings"]=[]
+    for frame in OBSERVED_MARKET_FRAMES:
+        reading=market_reading(closed[frame],phase,frame,as_of)
+        if frame in read_errors:reading.update(state="HISTORY_READ_FAILED",history_error=read_errors[frame])
+        result["frame_readings"].append(reading)
+    return result
 
 
 def market_phase_context(hierarchy):
@@ -25,10 +47,15 @@ def market_phase_context(hierarchy):
             "w4_zero":h.get("w4_zero",""),"scale_frame":h.get("scale_frame",""),
             "scale_bars":h.get("scale_bars",0),"signs":[name for key,name in signs.items() if h.get(key,False)]}
             for h in usable]
-        state=("UNAVAILABLE" if frame in errors or (frame=="4h" and frame not in counts and not usable)
+        state=("NOT_ANALYSED" if as_of<=0 else "UNAVAILABLE" if frame in errors or (frame=="4h" and frame not in counts and not usable)
             else "UNRESOLVED" if not phases
             else "ALTERNATIVES" if len(phases)>1 else "PHASE_CANDIDATE")
-        frames.append({"frame":frame,"state":state,"history_error":errors.get(frame) or None,
+        frames.append({"frame":frame,"state":state,"history_error":"WAVE_ANALYSIS_NOT_RUN" if as_of<=0 else errors.get(frame) or None,
+            "reason":("WAVE_ANALYSIS_NOT_RUN" if as_of<=0 else errors[frame] if frame in errors else
+                "NO_UNAMBIGUOUS_CAUSAL_WAVE_COUNT" if not phases else "COMPETING_WAVE_COUNTS" if len(phases)>1 else "PROVISIONAL_COUNT_NOT_CERTAINTY"),
+            "closed_bar_count":counts.get(frame,0),
+            "examined_scenarios":sum(h.get("frame")==frame for h in hierarchy.get("scenarios",[])),
+            "market_reading":next((r for r in hierarchy.get("frame_readings",[]) if r["frame"]==frame),None),
             "hypotheses":hypotheses,"history_candle_count":counts.get(frame),
             "hypothesis_count":len(hypotheses),"wave_degree_confirmed":False,
             "probability_calibrated":False,"can_place_orders":False,"can_close":False,

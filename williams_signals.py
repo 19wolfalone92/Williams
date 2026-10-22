@@ -604,7 +604,9 @@ def extract_ntd_ac_signal_specs(
         count_ok = run == needed or (
             with_momentum and run in {2, 3} and crossed_with_trade
         )
-        if count_ok and j >= 0 and opposite[j]:
+        # NTD PDF89: once an unhit signal changes colour it is cancelled;
+        # a later recovery must build its own new formation and signal ID.
+        if count_ok and j >= 0 and opposite[j] and all(same[k] for k in range(i+1,len(ac))):
             candidates.append((i, needed))
 
     if not candidates:

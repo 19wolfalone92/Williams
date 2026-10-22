@@ -20,6 +20,50 @@ import java.util.Locale
 import android.content.Context
 import androidx.core.content.edit
 
+/**
+ * Human-readable Russian status labels. Raw exchange/diagnostic codes are still
+ * retained in the exported JSON for reproducibility and Binance support.
+ */
+internal fun williamsRuStatus(raw: String): String = when (raw.trim().uppercase(Locale.ROOT)) {
+    "RUNNING" -> "Выполняется"
+    "STOPPED" -> "Остановлено"
+    "READY" -> "Готово"
+    "READY_BLOCKED" -> "Анализ завершён, входы заблокированы"
+    "PARTIAL_BLOCKED" -> "Частичный анализ, входы заблокированы"
+    "PARTIAL", "INCOMPLETE_SCAN" -> "Анализ выполнен частично"
+    "FAILED", "FAIL" -> "Ошибка"
+    "PASS" -> "Успешно"
+    "WARNING", "WARN" -> "Предупреждение"
+    "NOT_VERIFIED", "NOT VERIFIED" -> "Не проверено"
+    "RECONCILE_REQUIRED", "BLOCKED_FUTURES_RECONCILIATION" -> "Требуется сверка с биржей"
+    "ENTRY_PENDING" -> "Ожидается исполнение входа"
+    "EXIT_PENDING" -> "Ожидается подтверждение выхода"
+    "OPEN_PROTECTED" -> "Позиция защищена стопом"
+    "POSITION_UNPROTECTED" -> "Защита позиции не подтверждена"
+    "PAUSED" -> "Новые входы на паузе"
+    "TRIGGERING", "TRIGGERED" -> "Условный ордер срабатывает; исполнение не подтверждено"
+    "NEW", "PENDING", "WORKING", "ACCEPTED" -> "Ордер ожидает исполнения"
+    "FILLED", "FINISHED" -> "Исполнено"
+    "CANCELED", "CANCELLED" -> "Отменено"
+    "REJECTED" -> "Отклонено"
+    "COMPLETE_OBSERVATION_ONLY" -> "Полный снимок наблюдений; не допуск к торговле"
+    "BLOCKED_ACCOUNT" -> "Ожидание данных счёта"
+    "WAITING_FOR_HISTORY" -> "Загрузка исторических свечей"
+    "WAITING_FOR_MARKET_DATA" -> "Ожидание котировок"
+    "BLOCKED_KILL", "KILL_SWITCH_LATCHED" -> "Аварийная блокировка"
+    else -> raw
+}
+
+internal fun williamsRuRuntimeMessage(raw: String): String = when {
+    raw.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN", ignoreCase = true) ->
+        "Не удалось подтвердить капитал на начало суток UTC. Новые входы запрещены; анализ рынка и защита позиций продолжаются. Требуется сверка истории доходов, позиций и ожидающих ордеров Binance."
+    raw.contains("exchange_confirmed_pending_entry_or_fill_not_yet_resolved", ignoreCase = true) ->
+        "Binance подтверждает ожидающий вход или ещё не завершённое исполнение. Новые заявки заблокированы до сверки."
+    raw.contains("Unable to resolve host", ignoreCase = true) ->
+        "Не удалось подключиться к Binance: ошибка DNS. Проверьте интернет и повторите сверку."
+    else -> williamsRuStatus(raw)
+}
+
 @Composable
 internal fun CockpitAppearanceCard(context: Context) {
     val preferences = remember { context.getSharedPreferences("cockpit_appearance", Context.MODE_PRIVATE) }
@@ -379,7 +423,7 @@ internal fun CockpitDiagnosticScreen(padding: PaddingValues, status: Status, rep
         if (engineering) {
             item { Text("Последние события перед ошибками сохраняются автоматически. ZIP содержит временную шкалу и снимок последнего инцидента.", style = MaterialTheme.typography.bodySmall) }
             items(CockpitDiagnostics.rows(report?.optJSONArray("event_timeline"))) { event ->
-                Text("${cockpitTime(event.optLong("E"))} • ${event.optString("symbol")} • ${event.optString("state")}\n${event.optString("detail")}", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+                Text("${cockpitTime(event.optLong("E"))} • ${event.optString("symbol")} • ${williamsRuStatus(event.optString("state"))}\n${williamsRuRuntimeMessage(event.optString("detail"))}", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
             }
             item { SelectionContainer { Text(report?.toString(2) ?: "Диагностика ещё не выполнена", style = MaterialTheme.typography.labelSmall) } }
         }

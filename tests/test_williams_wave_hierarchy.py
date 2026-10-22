@@ -324,3 +324,14 @@ def test_overlapping_fourth_keeps_non_executable_diagonal_hypothesis():
     assert "W4_BREACHES_W3_OR_W4_END" in invalid.invalid_reasons
     ordinary=count(points[:4]+[("LOW",125.,100)]+points[5:])
     assert ordinary.status=="PROVISIONAL"
+
+
+def test_observed_five_frame_chain_cannot_skip_requested_h4_evidence():
+    frames=("1d","6h","1h","15m")
+    scenarios=[WaveHypothesis(f,f,"UP","W1",[],100,1,90,110,80) for f in frames]
+    links=[dict(parent=a,child=b) for a,b in zip(frames,frames[1:])]
+    four=WaveHierarchy(100,scenarios,links,{},[],analysis_frames=frames).to_dict()
+    five=WaveHierarchy(100,scenarios,links,{},[],analysis_frames=("1d","6h","4h","1h","15m")).to_dict()
+    assert four["contained_chain_observed"] is True
+    assert five["contained_chain_observed"] is False
+    assert not five["can_place_orders"]

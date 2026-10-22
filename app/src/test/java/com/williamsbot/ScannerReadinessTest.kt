@@ -44,10 +44,11 @@ class ScannerReadinessTest {
         assertEquals(true, eligible(paused = false))
         assertEquals(false, eligible(running = false))
         assertEquals(false, eligible(killLatched = true))
-        assertEquals(false, eligible(reconcileRequired = true))
+        assertEquals(true, eligible(reconcileRequired = true))
         assertEquals(false, eligible(accountReady = false))
-        assertEquals(false, eligible(userStreamConnected = false))
-        assertEquals(false, eligible(userStreamSyncRequired = true))
+        assertEquals(true, eligible(userStreamConnected = false))
+        assertEquals(true, eligible(userStreamSyncRequired = true))
+        assertEquals(true, eligible(reconcileRequired = true, userStreamConnected = false, userStreamSyncRequired = true))
         assertEquals(false, eligible(baselineReady = true))
     }
 

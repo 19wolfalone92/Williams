@@ -183,4 +183,15 @@ class WilliamsWaveHierarchyTest {
         assertEquals(105.1,plan!!.stop,1e-8)
         assertNull(planWilliamsCampaignStop("LONG",99.0,100.0,90.0,104.0,.1,1,long))
     }
+    @Test fun observedFiveFrameChainCannotSkipRequestedH4Evidence() {
+        val frames=listOf("1d","6h","1h","15m")
+        val scenarios=frames.map { WilliamsWaveScenario(it,it,"UP","W1",emptyList(),100L,1L,90.0,110.0,80.0) }
+        val links=frames.zipWithNext().map { (a,b) -> WilliamsWaveLink(a,b,"W1","CONTAINED") }
+        val four=WilliamsWaveHierarchy(100L,scenarios,links,emptyMap(),emptyList(),analysisFrames=frames).toJson()
+        val five=WilliamsWaveHierarchy(100L,scenarios,links,emptyMap(),emptyList(),
+            analysisFrames=listOf("1d","6h","4h","1h","15m")).toJson()
+        assertTrue(four.getBoolean("contained_chain_observed"))
+        assertFalse(five.getBoolean("contained_chain_observed"))
+        assertFalse(five.getBoolean("can_place_orders"))
+    }
 }

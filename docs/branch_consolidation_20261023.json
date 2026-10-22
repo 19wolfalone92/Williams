@@ -1,0 +1,582 @@
+{
+  "schema": "WILLIAMS_BRANCH_CONSOLIDATION_V1",
+  "date": "2026-10-23",
+  "version": "4.57.0",
+  "repository": "19wolfalone92/Williams",
+  "original_main": "27e4053134494648a62c60bd1a15d3d20b6e038f",
+  "accepted_model": "6f6de1d8137a099ce7715c13775d9b528a85e3d0",
+  "original_branch_count": 71,
+  "branch_deletion": false,
+  "william_ai_accessed": false,
+  "execution_policy": "TC2_LIVE_EDITIONS_OBSERVE_V1",
+  "branches": [
+    {
+      "branch": "audit/api-contract-parity",
+      "sha": "d557ee20cceabeea1698f41528cba24d4633eb76",
+      "ahead_of_current": 42,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "audit/book-literal-zero-point-h1-causality-20261022",
+      "sha": "4e1f9b2708be9f7c003b75fec7b0f9932065cfcd",
+      "ahead_of_current": 0,
+      "behind_current": 106,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "audit/book-to-execution-chain-wm2-20261020",
+      "sha": "1655b9180e51f86fe984a6b5b73da603d8515553",
+      "ahead_of_current": 0,
+      "behind_current": 355,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "audit/causal-wave-archive-replay-20261020",
+      "sha": "53292140b9fedb862eba6454e4634ce7c6fb4b76",
+      "ahead_of_current": 5,
+      "behind_current": 265,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "audit/diagnostics10-book-contract-20261022",
+      "sha": "31331c6aed23b8f5c6211a71a570254832d946c8",
+      "ahead_of_current": 0,
+      "behind_current": 126,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "audit/futures-p0-20261016",
+      "sha": "5240e87bc35ecb2dc677790a3c82b59fed0952e0",
+      "ahead_of_current": 60,
+      "behind_current": 527,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "audit/task-0007-api-contract",
+      "sha": "939ceac0bf34ef10cb6551301be9b8758a4a4c59",
+      "ahead_of_current": 24,
+      "behind_current": 1650,
+      "resolution": "COVERED_BY_MERGED_BRANCH_HISTORY",
+      "reason": "Contained in one of the integrated branch heads; same conflict-resolution policy applies."
+    },
+    {
+      "branch": "audit/williams-2.1-futures-safety",
+      "sha": "f5b730840330894dfe5ca431ecd5c92fc1041ebc",
+      "ahead_of_current": 766,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "audit/williams-2.1-task-001-architecture",
+      "sha": "c599abaf4c4f345c6f113693d75dd732b282ab93",
+      "ahead_of_current": 164,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "audit/williams-2.1-task-002-release-contract",
+      "sha": "7fbe11b4ea1eb9b114f5ca8758ee2830877b5f0d",
+      "ahead_of_current": 43,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "audit/williams-2.1-task-003-execution-safety",
+      "sha": "cd22ddfe7931377fe168bdb5411a6b438e47a5b9",
+      "ahead_of_current": 185,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "audit/williams-2.1-task-004-williams-strategy",
+      "sha": "3394bff6d27773d0ea108c08808d872593ab27ad",
+      "ahead_of_current": 312,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "audit/williams-2.1-task-005-risk-management",
+      "sha": "799941744e1f0b822dc779a653441de828914bc3",
+      "ahead_of_current": 100,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "audit/williams-2.1-task-006-android-runtime",
+      "sha": "7c642e1f447e540819778ba0e3694b0d15377493",
+      "ahead_of_current": 225,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "audit/williams-2.1-task-009-integration",
+      "sha": "71ca512b0afd5b92b3ecbb26f34d05c36567ac78",
+      "ahead_of_current": 279,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "audit/williams-book-fidelity-no-breakeven-20261021",
+      "sha": "331d50b67b41ed7c1d7f3efe601c21174b45bc1d",
+      "ahead_of_current": 0,
+      "behind_current": 202,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "audit/williams-entry-contract-v1",
+      "sha": "0641b0452969405a87701a3ba45db99fbc8b7560",
+      "ahead_of_current": 22,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "canonical-v2-integration",
+      "sha": "df0a27052911846052fbb358c6d3aa38b6dafbfa",
+      "ahead_of_current": 161,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "codex/decision-trace-4.32",
+      "sha": "8bb6f11f4c1a6e5d4c71dba41480bf48e3b5363a",
+      "ahead_of_current": 2,
+      "behind_current": 455,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "codex/entry-policy-exact-reasons-4.33",
+      "sha": "97bb1a1f9239486549a78895d87b0d73417f8b66",
+      "ahead_of_current": 0,
+      "behind_current": 450,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "codex/entry-policy-trigger-history-4.33",
+      "sha": "ea2bf10235222d36b0f4c322c91e060a11e2fe99",
+      "ahead_of_current": 0,
+      "behind_current": 452,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "codex/h1-m15-fractal-triggering-20261019",
+      "sha": "2ed6f17994cd5586a2370eb0d59eb5f0665cc4aa",
+      "ahead_of_current": 0,
+      "behind_current": 415,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "codex/trading-wave-lifecycle-20261019",
+      "sha": "62d3c462b78c447f0f95031e618abb232122d911",
+      "ahead_of_current": 0,
+      "behind_current": 414,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "feature/adaptive-cockpit-stop-policy",
+      "sha": "d6efbb3f03199c04b8059eaef0450212301bdca7",
+      "ahead_of_current": 7,
+      "behind_current": 262,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "feature/entry-passport-h1-m15-audit",
+      "sha": "a9c04ea3b78d12ba87ce0151f3cabd6452028cd9",
+      "ahead_of_current": 11,
+      "behind_current": 264,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "feature/persistent-full-history-backfill-20261020",
+      "sha": "bb43fc9afbe76846171146eb7212021a70e65494",
+      "ahead_of_current": 0,
+      "behind_current": 296,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "feature/strategy-evidence-diagnostics-20261019",
+      "sha": "66789e47acbce6764c4acfee3a7ff758e135210d",
+      "ahead_of_current": 0,
+      "behind_current": 456,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "feature/unified-williams-books-20261018",
+      "sha": "fb7b0f4e12ec44f459e748991d223910131b93d0",
+      "ahead_of_current": 0,
+      "behind_current": 475,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "feature/445-wave-mtf-history-adaptive-zero-20261020",
+      "sha": "cf5668413d3a0d9f8448493969de0ecb43cdf044",
+      "ahead_of_current": 0,
+      "behind_current": 270,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/book-native-h1-entries-no-m15-20261019",
+      "sha": "28cffe4d75db5e0b8f410b1825af38d7300b8924",
+      "ahead_of_current": 0,
+      "behind_current": 403,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/diag13-signed-stop-identity-20261022",
+      "sha": "6f6de1d8137a099ce7715c13775d9b528a85e3d0",
+      "ahead_of_current": 0,
+      "behind_current": 0,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/diagnostics6-supervision-book-audit-20261021",
+      "sha": "26ab87ed984071a02782b27b887d0d785b43c7d4",
+      "ahead_of_current": 0,
+      "behind_current": 143,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/diagnostics9-stop-proof-20261022",
+      "sha": "ae77f4cf7443380718097905029a5091de918090",
+      "ahead_of_current": 0,
+      "behind_current": 137,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/execution-intent-persistence-fail-closed",
+      "sha": "877946a2e6a651e7fea6e3926ef970c0b10e50b2",
+      "ahead_of_current": 30,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "fix/futures-actual-risk-pending-remediation-20261019",
+      "sha": "7b8dc479d9d882c80373fe08306769710d4457ec",
+      "ahead_of_current": 0,
+      "behind_current": 425,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/futures-protected-risk-over-cap-management-20261019",
+      "sha": "6618909c273a265074baf3c96336ff153d9afae2",
+      "ahead_of_current": 0,
+      "behind_current": 417,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/h1-passport-audit-write-scope",
+      "sha": "74ce025abe7c6a1bf624e9241cadceb57d972a78",
+      "ahead_of_current": 1,
+      "behind_current": 263,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "fix/m15-wm1-context-confirmation-20261019",
+      "sha": "4cd2224f2c7f1a84920b959fcb417adc0974362c",
+      "ahead_of_current": 4,
+      "behind_current": 423,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "History retained; obsolete mandatory M15 gate and its standalone confirmation helper are not reintroduced. Current approved H1 book-entry policy is authoritative."
+    },
+    {
+      "branch": "fix/market-chart-quote-independent-of-reconcile-20261019",
+      "sha": "1887188c15e7c3891450b8d21468ac2b81586044",
+      "ahead_of_current": 2,
+      "behind_current": 424,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "fix/market-clock-probe-4332",
+      "sha": "2442eaa7a2dabb6e7a15761086729ba32e11bb89",
+      "ahead_of_current": 0,
+      "behind_current": 433,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/operator-approved-external-stop-supervision-20261021",
+      "sha": "2a007713e792d5616014d9dbf0024d9e9d3e57ad",
+      "ahead_of_current": 0,
+      "behind_current": 173,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/p0-w2h-live-position-unprotected-stop-20261021",
+      "sha": "51ae4ad02203b888618c0c8f04b7c2c438d55837",
+      "ahead_of_current": 3,
+      "behind_current": 260,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "fix/pytest-safe-collection",
+      "sha": "0007e79b1afde86b8c736128e6d09bfdd370106f",
+      "ahead_of_current": 30,
+      "behind_current": 1650,
+      "resolution": "COVERED_BY_MERGED_BRANCH_HISTORY",
+      "reason": "Contained in one of the integrated branch heads; same conflict-resolution policy applies."
+    },
+    {
+      "branch": "fix/reboot-autostart-credential-durability-20261022",
+      "sha": "39c1fc8e1f0e671078c17f190d0d98316f704ed2",
+      "ahead_of_current": 0,
+      "behind_current": 74,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/runtime-h1-readonly-recovery-and-chart-20261020",
+      "sha": "1d6f994ef416fb61cab7a90c7c7312f213159a8e",
+      "ahead_of_current": 0,
+      "behind_current": 327,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/scan-readonly-utc-loss-visibility-20261020",
+      "sha": "41420a0b6319924798dfbd4c168bf304abd7c82a",
+      "ahead_of_current": 10,
+      "behind_current": 341,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "fix/scanner-pending-admission-throttle-20261020",
+      "sha": "b0babd1be698b0152e1f58f9941efc69a44ebb05",
+      "ahead_of_current": 0,
+      "behind_current": 322,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/strategy-owner-shadow-evidence-4-39-20261020",
+      "sha": "da59200d217bc9098dd2e18339019e02701c0667",
+      "ahead_of_current": 0,
+      "behind_current": 381,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/task-007-risk-management",
+      "sha": "c4892b6ab08aafcf75485be2e548eb767cd571df",
+      "ahead_of_current": 32,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "fix/tc2-book-parity-20261016",
+      "sha": "f2e4548b6b0d7d14337983d331fe5e59ee804a85",
+      "ahead_of_current": 46,
+      "behind_current": 527,
+      "resolution": "COVERED_BY_MERGED_BRANCH_HISTORY",
+      "reason": "Contained in one of the integrated branch heads; same conflict-resolution policy applies."
+    },
+    {
+      "branch": "fix/tc2-initial-wise-man-direction-veto-20261020",
+      "sha": "8aa63db3c701b44a1c77ff2cc541a509282bcdbd",
+      "ahead_of_current": 0,
+      "behind_current": 342,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/tc2-live-independent-observers-4.38",
+      "sha": "da91ac04832f7e5117fc03a668df6fbaa0a2bc79",
+      "ahead_of_current": 0,
+      "behind_current": 396,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/tc2-pending-fractal-reanchor-20261019",
+      "sha": "3a62392085f51ee5886c44959d6df25e8a82aa38",
+      "ahead_of_current": 0,
+      "behind_current": 438,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/tc2-stop-exit-and-diagnostic-replay-20261020",
+      "sha": "b1e884132574ad70024b2afa1036389bbb426bec",
+      "ahead_of_current": 0,
+      "behind_current": 368,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/utc-risk-baseline-resume-preflight-20261020",
+      "sha": "d377711ccf58e3b59377abb4a04cf1f015c1371a",
+      "ahead_of_current": 0,
+      "behind_current": 317,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/utc-risk-reset-ru-ui-20261020",
+      "sha": "802f10d69e264af9676612abe815553d7f4c293f",
+      "ahead_of_current": 5,
+      "behind_current": 269,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "fix/williams-4.37-book-geometry-lifecycle",
+      "sha": "5125697d905477e3df3a5f2f65cb6ddc1c483ef4",
+      "ahead_of_current": 0,
+      "behind_current": 399,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/williams-fractal-stop-provenance-20261010",
+      "sha": "dbe755a942276ac3b369afd47d424fff48bbb608",
+      "ahead_of_current": 970,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "fix/447-utc-reset-risk-provenance-russian-ui-20261020",
+      "sha": "b4fb0a6a6d57b83d97530f70608a24581e65fd9e",
+      "ahead_of_current": 22,
+      "behind_current": 269,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "fix/4433-blank-futures-get-and-direct-demo-apk-release",
+      "sha": "de6a67271c05139fcf89bf8dcefa89ac5a534257",
+      "ahead_of_current": 0,
+      "behind_current": 306,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "fix/4471-russian-labels-20261020",
+      "sha": "ec50ac5d1e9c824e6163fa669d7094d915da3382",
+      "ahead_of_current": 3,
+      "behind_current": 268,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "fix/4472-h1-scanner-json-diagnostics-20261020",
+      "sha": "63dce61e5f5f325e3949acc9afff4f57183d5318",
+      "ahead_of_current": 6,
+      "behind_current": 267,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "fix/4480-entry-reconcile-scanner-decoupling-20261020",
+      "sha": "90ac8fa9492d01da25b3758bd98a6f20608f9459",
+      "ahead_of_current": 11,
+      "behind_current": 266,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "fix/4511-h1-replay-sql-risk-budget-20261020",
+      "sha": "4bcceac44a260cc61c0ca49ad58af905d4a719e5",
+      "ahead_of_current": 7,
+      "behind_current": 261,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Independent branch history included; current 4.56.1 execution contracts win overlapping changes; compatible observations and UTC repair retained."
+    },
+    {
+      "branch": "fix/4514-manual-stop-reconciliation-20261021",
+      "sha": "bdb74bf12ad714beea6f7db21b395b774e09cd96",
+      "ahead_of_current": 2,
+      "behind_current": 259,
+      "resolution": "MERGED_WITH_REVIEWED_CONFLICT_RESOLUTION",
+      "reason": "Real per-frame observations, known Alligator plot tail, Russian presentation and NTD AC cancellation are merged; older protection/recovery writer changes are superseded by 4.53-4.56 exact-identity STOP lifecycle."
+    },
+    {
+      "branch": "fix/4520-unmanaged-protection-observation-20261021",
+      "sha": "9a2714ec15b3f9247f6332647873b559d68d324b",
+      "ahead_of_current": 0,
+      "behind_current": 188,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "hardening/gate-0-5-final-pass",
+      "sha": "8c30933ab1641e3aef6a49cde3c6379ba4746536",
+      "ahead_of_current": 68,
+      "behind_current": 1671,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "main",
+      "sha": "27e4053134494648a62c60bd1a15d3d20b6e038f",
+      "ahead_of_current": 0,
+      "behind_current": 259,
+      "resolution": "ALREADY_INCLUDED_IN_4_56_1",
+      "reason": "Branch head is an ancestor of the accepted current model."
+    },
+    {
+      "branch": "night-shift-audit-20261012",
+      "sha": "b55437ac159c9d0bc716c4e9b041fb1478816543",
+      "ahead_of_current": 375,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    },
+    {
+      "branch": "refactor/step-1a-credentials-boundary",
+      "sha": "41a1b7f515f9a00efc8f1cb2332df4a69b6dcb71",
+      "ahead_of_current": 20,
+      "behind_current": 1671,
+      "resolution": "COVERED_BY_MERGED_BRANCH_HISTORY",
+      "reason": "Contained in one of the integrated branch heads; same conflict-resolution policy applies."
+    },
+    {
+      "branch": "task-003-cancel-replace-recovery-tests",
+      "sha": "a1ab0046e9d2d55b38d5c724a850058ffb03695f",
+      "ahead_of_current": 24,
+      "behind_current": 1650,
+      "resolution": "HISTORY_RETAINED_SUPERSEDED_RUNTIME",
+      "reason": "Earlier alternative/Spot or pre-current Futures architecture retained as history. Active execution remains the newer native Futures coordinator, encrypted key/reboot and signed-STOP contracts; old source assertions and alternate writers are not enabled."
+    }
+  ]
+}

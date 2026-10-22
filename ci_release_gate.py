@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-EXPECTED_VERSION = "4.25.0"
+EXPECTED_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 def read(path: str) -> str:
@@ -24,6 +25,13 @@ def must_not(text: str, needle: str, where: str) -> None:
 
 
 def main() -> None:
+    assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", EXPECTED_VERSION), "invalid release VERSION"
+    gradle_version = re.search(r'versionName\s*=\s*"([^"]+)"', read("app/build.gradle.kts"))
+    assert gradle_version and gradle_version.group(1) == EXPECTED_VERSION, "Android release version mismatch"
+    server_versions = [ast.literal_eval(node.value) for node in ast.parse(read("server.py")).body
+                       if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "VERSION"
+                                                               for t in node.targets)]
+    assert server_versions == [EXPECTED_VERSION], "Python API release version mismatch"
     core_files = (
         "trading_config.py",
         "campaign_model.py",
@@ -494,7 +502,7 @@ def main() -> None:
 
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
     for needle in (
-        f"Williams {EXPECTED_VERSION}",
+        "BuildConfig.VERSION_NAME",
         "class LocalRuntimeApi",
         "StandaloneRuntime.request",
         "TradingForegroundService.ACTION_START",

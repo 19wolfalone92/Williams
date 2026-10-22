@@ -1434,7 +1434,7 @@ private fun TestnetForceTradingCard(
                         !status.reconcileRequired && !status.executionKillLatched,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("ВКЛЮЧИТЬ ПРИНУДИТЕЛЬНУЮ ТОРГОВЛЮ")
+                    Text("ВКЛЮЧИТЬ РУЧНОЙ ТЕСТОВЫЙ ВХОД")
                 }
                 Text(
                     when {
@@ -1482,7 +1482,7 @@ private fun TestnetForceTradingCard(
                 Button(onClick = {
                     confirmEntry = false
                     onSubmitEntry(symbol, direction)
-                }) { Text("ПОДТВЕРДИТЬ DEMO-ОРДЕР") }
+                }) { Text("ПОДТВЕРДИТЬ ДЕМО-ЗАЯВКУ") }
             },
             dismissButton = {
                 TextButton(onClick = { confirmEntry = false }) { Text("ОТМЕНА") }
@@ -1765,7 +1765,7 @@ private fun ReconcileBarrierScreen(
                 status.pendingEntrySymbols.takeIf { it.isNotEmpty() }?.let {
                     InfoRow("Ожидающая заявка", it.joinToString(", "))
                 }
-                status.error?.takeIf { it.isNotBlank() }?.let { Text(it, color = AppColors.red) }
+                status.error?.takeIf { it.isNotBlank() }?.let { Text(williamsRuRuntimeMessage(it), color = AppColors.red) }
             }
         }
         Button(onClick = onRecover, modifier = Modifier.fillMaxWidth()) {
@@ -1941,7 +1941,7 @@ private fun HeroCard(status: Status, best: Candidate?) {
                 ) {
                     Text("Торговый центр", style = MaterialTheme.typography.labelLarge)
                     StatusDot(
-                        label = statusLabel(status),
+                        label = williamsRuStatus(statusLabel(status)),
                         color = runningColor
                     )
                 }
@@ -1952,7 +1952,7 @@ private fun HeroCard(status: Status, best: Candidate?) {
                 )
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    ModeChip("TESTNET", AppColors.green)
+                    ModeChip("ДЕМО", AppColors.green)
                     Spacer(Modifier.width(8.dp))
                     ModeChip(
                         if (status.binanceConfigured) "BINANCE НА СВЯЗИ" else "НЕТ КЛЮЧЕЙ",
@@ -2023,7 +2023,7 @@ private fun ScanSummaryCard(
                             status.scannerConfiguredSymbols + " H1-пар изучено. Новые входы заблокированы; анализ работает."
                         "READY" -> status.scannerSymbols.toString() + "/" +
                             status.scannerConfiguredSymbols + " пар проверено • LONG " +
-                            status.scannerLongCandidates + " / SHORT " +
+                            status.scannerLongCandidates + " / продажа SHORT " +
                             status.scannerShortCandidates + " • " + formatMs(status.scanDurationMs)
                         "PARTIAL", "PARTIAL_BLOCKED" -> "Проверено " + status.scannerSymbols + "/" +
                             status.scannerConfiguredSymbols + "; новые входы заблокированы"
@@ -2423,7 +2423,7 @@ private fun ScannerScreen(
                             "READY" ->
                                 status.scannerSymbols.toString() + "/" +
                                     status.scannerConfiguredSymbols + " утверждённых пар • LONG " +
-                                    status.scannerLongCandidates + " / SHORT " +
+                                    status.scannerLongCandidates + " / продажа SHORT " +
                                     status.scannerShortCandidates + " • кандидатов " +
                                     candidates.size
                             else -> "Состояние: " + status.scannerState
@@ -2619,7 +2619,7 @@ private fun MarketChartPanel(
                     style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
                 if (candidate.xaiTopFactor.isNotBlank()) Text("Главный фактор: " + candidate.xaiTopFactor,
                     style = MaterialTheme.typography.bodySmall, color = AppColors.violet)
-                if (candidate.reason.isNotBlank()) Text("Почему сканер так решил: " + candidate.reason,
+                if (candidate.reason.isNotBlank()) Text("Почему сканер так решил: " + williamsRuRuntimeMessage(candidate.reason),
                     style = MaterialTheme.typography.bodySmall)
                 if (candidate.wavePath.isNotBlank()) Text("Контекст волны: " + candidate.wavePath,
                     color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
@@ -3112,7 +3112,7 @@ private fun HistoryScreen(
                         color = AppColors.textMuted
                     )
                     if (it.reason.isNotBlank()) {
-                        Text("Почему открыли: " + it.reason, style = MaterialTheme.typography.bodySmall)
+                        Text("Почему открыли: " + williamsRuRuntimeMessage(it.reason), style = MaterialTheme.typography.bodySmall)
                     }
                     if (it.exitReason.isNotBlank()) Text("Почему вышли: " + it.exitReason, style = MaterialTheme.typography.bodySmall)
                     if(it.managementReason.isNotBlank()) Text("Сопровождение: "+russianExecutionBlocker(it.managementReason),
@@ -4570,13 +4570,13 @@ private fun statusLabel(status: Status): String =
     }
 
 private fun formatMs(value: Long): String =
-    if (value <= 0L) "ожидание" else (value / 1000L).toString() + "s"
+    if (value <= 0L) "ожидание" else (value / 1000L).toString() + " с"
 
 private fun commandLabel(path: String): String =
     when {
         path.endsWith("/start") -> "Двигатель запущен"
         path.endsWith("/pause") -> "Пауза включена"
-        path.endsWith("/panic") -> "PANIC STOP: новые входы остановлены"
+        path.endsWith("/panic") -> "Аварийная пауза: новые входы остановлены"
         path.endsWith("/kill") -> "Аварийное закрытие запрошено; результат требует подтверждения Binance"
         path.endsWith("/resume") -> "Сканирование возобновлено"
         path.endsWith("/stop") -> "Двигатель остановлен"

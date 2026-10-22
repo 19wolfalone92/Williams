@@ -1,0 +1,62 @@
+{
+  "schema": "WILLIAMS_BOOK_AUDIT_SOURCE_MANIFEST_V1",
+  "date": "2026-10-21",
+  "source_repository": "19wolfalone92/Williams-Trading-Books",
+  "distinct_sources": 4,
+  "pdf_files": [
+    {
+      "source_file": "1. Торговый Хаос - 1.pdf",
+      "edition": "TC1",
+      "pdf_pages": 140,
+      "bytes": 1667993,
+      "sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "git_blob_sha1": "674996f60037fdf602b84b452b68c98606744272",
+      "text_method": "PDF_TEXT_EXTRACTION"
+    },
+    {
+      "source_file": "Билл_Вильямс_Новые_измерения_в_биржевой_торговле_2_книга.pdf",
+      "edition": "NTD",
+      "pdf_pages": 156,
+      "bytes": 4383031,
+      "sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "git_blob_sha1": "cacbbb4e67f5a8da7350a7c0e5c2d20ea8fdd0d7",
+      "text_method": "PDF_TEXT_EXTRACTION"
+    },
+    {
+      "source_file": "Торговый Хаос 2 (3книга).pdf",
+      "edition": "TC2_RU",
+      "pdf_pages": 224,
+      "bytes": 6362767,
+      "sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+      "git_blob_sha1": "6746ec11ba11866fb2a0606876fb0e9734095063",
+      "text_method": "PDF_TEXT_EXTRACTION"
+    },
+    {
+      "source_file": "Bill Williams - Trading Chaos 2nd Ed.pdf",
+      "edition": "TC2_EN",
+      "pdf_pages": 257,
+      "bytes": 4577669,
+      "sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "git_blob_sha1": "189556203291e874af9e7f23ea2df8697503cabf",
+      "text_method": "PDF_TEXT_EXTRACTION"
+    },
+    {
+      "source_file": "Билл_Вильямс_Торговый_Хаос_2_3_книга.pdf",
+      "edition": "TC2_RU_ALTERNATE",
+      "pdf_pages": 314,
+      "bytes": 5203118,
+      "sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "git_blob_sha1": "4592352b791c5989671bc80d4f1c5ecba8f26832",
+      "text_method": "PDF_TEXT_EXTRACTION"
+    },
+    {
+      "source_file": "Bill Williams - Trading Chaos Course.pdf",
+      "edition": "COURSE",
+      "pdf_pages": 122,
+      "bytes": 17928626,
+      "sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "git_blob_sha1": "855b7d74580c867ea6f3e8a80f99c2d27d6a8d98",
+      "text_method": "TESSERACT_OCR_ALL_122_PAGES"
+    }
+  ]
+}

@@ -415,13 +415,12 @@ internal fun shouldRetryDailyRiskBaseline(
     running: Boolean,
     @Suppress("UNUSED_PARAMETER") paused: Boolean,
     killLatched: Boolean,
-    reconcileRequired: Boolean,
+    @Suppress("UNUSED_PARAMETER") reconcileRequired: Boolean,
     accountReady: Boolean,
-    userStreamConnected: Boolean,
-    userStreamSyncRequired: Boolean,
+    @Suppress("UNUSED_PARAMETER") userStreamConnected: Boolean,
+    @Suppress("UNUSED_PARAMETER") userStreamSyncRequired: Boolean,
     baselineReady: Boolean
-): Boolean = running && !killLatched && !reconcileRequired &&
-    accountReady && userStreamConnected && !userStreamSyncRequired && !baselineReady
+): Boolean = running && !killLatched && accountReady && !baselineReady
 
 /**
  * Read-only discovery has fewer prerequisites than order execution. A pause,
@@ -624,6 +623,32 @@ internal fun canInitializeDailyRiskBaseline(
     hasActiveExecution: Boolean,
     hasTradingIncome: Boolean
 ): Boolean = !hasOpenPosition && !hasActiveExecution && !hasTradingIncome
+
+internal fun unfilledPendingIntentsAllowFlatDailyBaseline(
+    intents: JSONArray,
+    exchangeNowMs: Long,
+    maximumReconciliationAgeMs: Long = 30_000L
+): Boolean {
+    if (exchangeNowMs <= 0L || maximumReconciliationAgeMs <= 0L) return false
+    for (i in 0 until intents.length()) {
+        val intent = intents.optJSONObject(i) ?: return false
+        if (!isEntryCampaignReserved(intent)) continue
+        if (intent.optString("intent_role", "ENTRY") != "ENTRY" ||
+            campaignLifecycleStatus(intent) != "ENTRY_PENDING"
+        ) return false
+        if (exchangeOrderStatus(intent) !in setOf("NEW", "PENDING", "WORKING", "ACCEPTED"))
+            return false
+        val confirmedAt = intent.optLong("last_reconciled_ms", 0L)
+        if (confirmedAt <= 0L || confirmedAt > exchangeNowMs ||
+            exchangeNowMs - confirmedAt > maximumReconciliationAgeMs
+        ) return false
+        val quantity = intent.optString("executed_qty").toBigDecimalOrNull() ?: return false
+        val actual = intent.optString("actual_entry_executed_qty", "0").toBigDecimalOrNull()
+            ?: return false
+        if (quantity.signum() != 0 || actual.signum() != 0) return false
+    }
+    return true
+}
 
 /** Read-only validation: entry readiness needs a durable UTC-day risk baseline and provenance. */
 internal fun futuresDailyRiskBaselineEstablished(baselineValue: String?, source: String?): Boolean {
@@ -4954,10 +4979,11 @@ private class NativeEngine(
                     amount == null || !amount.isFinite() || amount != 0.0
                 }
                 val intents = futuresCampaignCoordinator.intentsSnapshot()
-                val hasActiveExecution = (0 until intents.length()).any { index ->
-                    val row = intents.optJSONObject(index) ?: return@any true
-                    isEntryCampaignReserved(row)
-                }
+                // Resting, freshly reconciled ZERO-fill entries are not exposure.
+                // Unknown, partial, triggering and stale intents remain blockers.
+                val hasActiveExecution = !unfilledPendingIntentsAllowFlatDailyBaseline(
+                    intents, exchangeNowMs
+                )
                 val income = futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
                 incomeRowsForDay = income
                 val incomeSummary = summarizeFuturesDailyIncome(income)
@@ -9246,6 +9272,24 @@ private class NativeEngine(
 
     private fun toJson(candidate: BaseAnalysis): JSONObject {
         val wave = candidate.wave
+        // performCampaignScan deliberately does not call the old REST-heavy
+        // enrichWithMtf path. Build the displayed context from real local data
+        // here instead of serializing a null candidate.waveHierarchy as {}.
+        val observedAt=futuresMarketData.exchangeNowMs()
+        val contextErrors=linkedMapOf<String,String>()
+        val localFrames=williamsObservedMarketFrames.associateWith { frame ->
+            if(frame=="1h") candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+            else runCatching {
+                historyStore.loadRecent(candidate.symbol,frame,240,
+                    beforeMs=observedAt-williamsWaveFrames.getValue(frame)).map {
+                    WilliamsWaveBar(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+                }
+            }.getOrElse { error ->
+                contextErrors[frame]="HISTORY_READ_FAILED:"+error.javaClass.simpleName
+                emptyList()
+            }
+        }
+        val observedHierarchy=buildWilliamsObservedMarketContext(localFrames,observedAt,contextErrors)
         // Match the exact signal selected by execution, rather than displaying
         // the oldest item in the candidate list as if it were the pending entry.
         val primarySignal = campaignEntryCandidate(candidate)
@@ -9410,7 +9454,7 @@ private class NativeEngine(
             .put("directional_context_native", directionTrace)
             .put("wave4_zero_line_diagnostic", wave4Trace)
             .put("ntd_balance_line_diagnostics", ntdTrace)
-            .put("wave_hierarchy", candidate.waveHierarchy?.toJson() ?: JSONObject().put("state","NOT_ANALYSED"))
+            .put("wave_hierarchy",observedHierarchy)
              .put("execution_policy",williamsExecutionPolicySnapshot()).put("strategy_profile", williamsProfile)
             .put("wave_scores_calibrated", false)
             .put("symbol", candidate.symbol)

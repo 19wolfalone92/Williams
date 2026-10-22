@@ -306,6 +306,9 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
     }
     for (j in i downTo maxOf(1,n-10)) {
         if (!c[j].isFinite() || c[j]<=c[j-1]) continue
+        // NTD PDF89: an unhit AC signal is cancelled by an opposite colour.
+        // A later recovery cannot resurrect that old pending level.
+        if((j+1 until n).any { !c[it].isFinite() || !c[it-1].isFinite() || c[it]<=c[it-1] }) continue
         var start=j
         while(start>0 && c[start]>c[start-1]) start--
         val run=j-start;val needed=if(c[j]>0) 2 else 3
