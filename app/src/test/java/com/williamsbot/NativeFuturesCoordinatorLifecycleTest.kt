@@ -2039,6 +2039,10 @@ class NativeFuturesCoordinatorLifecycleTest {
             val result = coordinator.trailProtectiveStop("BTCUSDT", direction,
                 if (direction.name == "LONG") "96" else "104", cid)
             assertFalse(result.getBoolean("ok"))
+            // After the old close-all has been canceled, its earlier signed
+            // proof must not be advertised as current during bridge recovery.
+            assertEquals(0, coordinator.status()
+                .getJSONArray("exchange_protection_observations").length())
             val bridge = exchange.algos.values.single { it.optString("algoStatus") == "NEW" }
             assertEquals("true", bridge.getString("reduceOnly"))
             exchange.beforeRequest = null; exchange.rejectProtectionCode = null
