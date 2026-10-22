@@ -2166,7 +2166,7 @@ class FuturesWilliamsRuntime:
             proof_error=tc2_opposite_exit_evidence_blocker(
                 campaign.tags,reason,int(time.time()*1000)+
                 int(getattr(getattr(self,"client",None),"time_offset_ms",0)),
-                campaign.side)
+                campaign.side,campaign.symbol)
             if proof_error:
                 raise RuntimeError(proof_error)
         symbol = campaign.symbol
@@ -3273,7 +3273,7 @@ class FuturesWilliamsRuntime:
                             if ctx["allowed"]:
                                 reason="OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
                         tags["tc2_book_exit_proof"]={
-                            "reason":reason,"observed_at_ms":now,
+                            "reason":reason,"symbol":symbol,"observed_at_ms":now,
                             "opened_at_ms":int(tags.get("position_open_observed_at_ms",0) or 0),
                             "strategy_profile":TC2,
                             "direction":"SHORT" if campaign.side=="BUY" else "LONG",
