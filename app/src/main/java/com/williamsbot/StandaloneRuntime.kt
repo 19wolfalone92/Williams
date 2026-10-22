@@ -8133,6 +8133,24 @@ private class NativeEngine(
 
     private fun editionCampaignSignals(symbol:String,candles:List<CandleN>,frame:String,tick:Double,
         profile:String=williamsUnifiedProfile,exitMode:Boolean=false):List<CampaignSignalN> {
+        val bookSeriesBlocker = williamsEditionSignalSeriesBlocker(
+            candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }, frame
+        )
+        if(bookSeriesBlocker != null) {
+            // A gap across two supposed adjacent AO/fractal confirmation bars
+            // cannot become an apparently normal TC2 signal. Invalid history
+            // is NOT equivalent to a valid scan with no candidate.
+            if(profile==williamsUnifiedProfile && !exitMode) for(source in williamsSourceProfiles) {
+                executionStore.writeState("edition_observation_"+symbol+"_"+source,
+                    JSONObject().put("profile", source).put("execution_role",
+                        if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
+                        .put("state", "HISTORY_INVALID")
+                        .put("reason", bookSeriesBlocker)
+                        .put("as_of_close_ms", candles.lastOrNull()?.let { it.t+WILLIAMS_H1_MS } ?: 0L)
+                        .put("signal_count", 0).put("can_place_orders", false).toString())
+            }
+            return emptyList()
+        }
         if(profile==williamsUnifiedProfile) {
             // One causal H1 snapshot, three independent rule extractors. Preserve
             // each source on its own signal for replay, journal and risk controls.
