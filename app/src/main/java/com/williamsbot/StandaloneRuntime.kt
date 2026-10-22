@@ -10869,6 +10869,48 @@ private class NativeEngine(
         tests.put(JSONObject().put("id", "DB-01").put("name", "SQLite execution journal quick_check")
             .put("domain", "database").put("ok", sqliteHealth.optBoolean("ok"))
             .put("severity", if (sqliteHealth.optBoolean("ok")) "PASS" else "FAIL").put("detail", sqliteHealth.toString()))
+        // Diagnostic 12 captured a signed BNB STOP at 14:26:28Z while
+        // the position UI was still a snapshot from 14:26:17Z. Flag this
+        // explicitly: a more recent STOP observation is evidence that the
+        // cached UI must refresh, NOT fresh permission to trade.
+        val positionDisplayAt = statusSnapshot.optLong("positions_snapshot_at_ms")
+        val liveDisplayRows = CockpitDiagnostics.rows(statusSnapshot.optJSONArray("futures_positions"))
+        val signedProofRows = CockpitDiagnostics.rows(
+            coordinatorSnapshot.optJSONArray("exchange_protection_observations"))
+        val newerExchangeStopSymbols = liveDisplayRows.filter { display ->
+            signedProofRows.any { proof ->
+                proof.optString("symbol") == display.optString("symbol") &&
+                    proof.optString("direction") == display.optString("direction") &&
+                    proof.optString("quantity").toBigDecimalOrNull()
+                        ?.compareTo(display.optString("positionAmt").toBigDecimalOrNull() ?: return@any false) == 0 &&
+                    proof.optLong("observed_at_ms") > positionDisplayAt &&
+                    proof.optString("stop_proof") in setOf("OWNED_STOP_SEEN", "EXTERNAL_PROTECTED",
+                        "NATIVE_REPLACEMENT_PROTECTION_SEEN")
+            }
+        }.map { it.optString("symbol") }
+        tests.put(JSONObject().put("id", "EXE-10").put("domain", "execution")
+            .put("name", "Свежесть биржевого SL относительно экрана")
+            .put("severity", when {
+                positionDisplayAt <= 0L || liveDisplayRows.isEmpty() -> "NOT_VERIFIED"
+                newerExchangeStopSymbols.isNotEmpty() -> "WARNING"
+                !statusSnapshot.optBoolean("positions_snapshot_ok") -> "NOT_VERIFIED"
+                else -> "PASS"
+            }).put("detail", "Signed STOP более новый, чем снимок UI для: " +
+                newerExchangeStopSymbols.joinToString().ifBlank { "none" } +
+                "; снимок позиции=" + positionDisplayAt +
+                "; NEVER infer current protection from a stale cached screen."))
+        val unresolvedChecks = JSONArray().apply {
+            for (test in CockpitDiagnostics.rows(tests)) {
+                val severity = test.optString("severity")
+                if (severity in setOf("FAIL", "WARNING", "WARN", "NOT_VERIFIED")) {
+                    put(JSONObject()
+                        .put("id", test.optString("id", test.optString("name")))
+                        .put("domain", test.optString("domain"))
+                        .put("severity", severity)
+                        .put("name", test.optString("name")))
+                }
+            }
+        }
         val checkedSummary = CockpitDiagnostics.summary(tests)
         val failedTests = checkedSummary.optInt("failed_test_count")
         val warningTests = checkedSummary.optInt("warning_test_count")
@@ -10905,9 +10947,12 @@ private class NativeEngine(
             .put("tests", tests)
             .put("self_tests", tests)
             .put("diagnostic_findings", JSONArray(consistencyFindings))
+            .put("unresolved_diagnostic_checks", unresolvedChecks)
             .put("diagnostic_summary", JSONObject()
                 .put("overall", diagnosticOverall)
                 .put("finding_count", consistencyFindings.size)
+                .put("unresolved_check_count", unresolvedChecks.length())
+                .put("finding_count_scope", "INTERNAL_CONTRACT_CONTRADICTIONS_ONLY")
                 .put("failed_test_count", failedTests)
                 .put("warning_test_count", warningTests)
                 .put("not_verified_test_count", checkedSummary.optInt("not_verified_test_count"))
