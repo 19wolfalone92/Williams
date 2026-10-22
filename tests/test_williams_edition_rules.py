@@ -3,7 +3,7 @@ import pytest
 from williams_wave_hierarchy import WaveBar
 from williams_edition_rules import (
     ntd_balance_line_setup,course_hump_setup,course_thumb_setup,course_airbag_stop,
-    course_two_fractal_stop,edition_fractals,market_on_close_reason,
+    course_two_fractal_stop,course_squat_setup,edition_fractals,market_on_close_reason,
 )
 
 
@@ -80,6 +80,15 @@ def test_airbag_skips_inside_higher_frame_bars_and_uses_the_actual_older_low():
     series=bars([100,103,104,105],[90,93,96,95])
     assert course_airbag_stop("LONG",series,.1)==pytest.approx(93.1)
     assert course_airbag_stop("SHORT",mirror(series),.1)==pytest.approx(206.9)
+
+
+def test_airbag_tick_change_does_not_modify_course_squat_structural_stop():
+    series = bars([100.0, 100.5], [90.0, 95.0], [100, 200])
+    long = course_squat_setup("LONG", series, .1)
+    short = course_squat_setup("SHORT", mirror(series), .1)
+    assert long is not None and short is not None
+    assert long.stop == pytest.approx(94.9)  # Squat stays BELOW low.
+    assert short.stop == pytest.approx(205.1)  # Squat stays ABOVE high.
 
 
 def test_an_outside_fractal_is_not_deleted_but_cannot_establish_two_ordered_turns():
