@@ -517,7 +517,7 @@ def test_android_exit_keeps_account_state_open_protected_when_other_positions_re
     assert "val accountPositionsAfterExit = adapter.positions()" in close
     assert "remainingProtectedPositions++" in close
     assert "state = if (remainingProtectedPositions > 0) State.OPEN_PROTECTED else State.READY" in close
-    assert "findProtectiveStop(otherAlgos, otherDirection, ownerStopId, ownerStop)" in close
+    assert "findProtectiveStop(otherAlgos, otherDirection, ownerStopId, ownerStop, expectedSymbol = otherSymbol)" in close
 
 
 def test_android_configurable_entry_policy_blocks_new_exposure_and_cancels_resting_entries():
