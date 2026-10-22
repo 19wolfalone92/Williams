@@ -36,6 +36,7 @@ class TradingBootReceiver : BroadcastReceiver() {
             // Fail closed: do not resume trading if the persisted opt-in cannot be read.
             // Expose the Keystore/prefs error in the cockpit on next Activity
             // launch; never erase the encrypted file or create fake new keys.
+            RuntimeStartupEvidence.failure(appContext, "BOOT_SECURE_PREFS_UNREADABLE", it)
             RuntimeServiceState.lastError = "BOOT_SECURE_PREFS_UNREADABLE: " +
                 safeDiagnosticText(it.message ?: it.javaClass.simpleName)
             Log.e(TAG, "Could not verify persisted auto-run preference; service not resumed", it)
@@ -50,6 +51,7 @@ class TradingBootReceiver : BroadcastReceiver() {
                     .setAction(TradingForegroundService.ACTION_START)
             )
         }.onFailure {
+            RuntimeStartupEvidence.failure(appContext, "BOOT_FGS_START_BLOCKED", it)
             RuntimeServiceState.lastError = "BOOT_FGS_START_BLOCKED: " +
                 safeDiagnosticText(it.message ?: it.javaClass.simpleName)
             Log.e(TAG, "Could not restart local Futures service after $action", it)
