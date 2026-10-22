@@ -60,14 +60,14 @@ class WilliamsExecutionPolicyTest {
             JSONObject(old.toString()).put("fill_observed_at_ms",999)))
             assertNull(williamsBookH1RetryGeneration(JSONArray().put(change),"f"))
     }
-    @Test fun technicalExitReasonsNeverOverrideTc2StopOwnership() {
-        assertFalse(williamsStrategyCanMarketClose(williamsTc2Profile))
+    @Test fun tc2BookOppositeExitIsIndependentOfSourcePinnedNtdCourseExits() {
+        assertTrue(williamsStrategyCanMarketClose(williamsTc2Profile))
         assertFalse(williamsStrategyCanMarketClose("UNKNOWN"))
         assertTrue(williamsStrategyCanMarketClose(williamsNtdProfile))
         assertTrue(williamsStrategyCanMarketClose(williamsCourseProfile))
     }
-    @Test fun tc2OppositeH1TriggerIsAnAdvisoryNotAMarketExit() {
-        assertFalse(williamsOpposingSignalCanMarketClose(williamsTc2Profile))
+    @Test fun tc2ConfirmedOppositeH1TriggerMayAuthorizeRiskReducingExit() {
+        assertTrue(williamsOpposingSignalCanMarketClose(williamsTc2Profile))
         assertTrue(williamsOpposingSignalCanMarketClose(williamsNtdProfile))
         assertTrue(williamsOpposingSignalCanMarketClose(williamsCourseProfile))
         assertFalse(williamsOpposingSignalCanMarketClose("UNKNOWN"))
