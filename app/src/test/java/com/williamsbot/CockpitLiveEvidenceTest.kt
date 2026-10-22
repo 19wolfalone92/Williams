@@ -64,9 +64,9 @@ class CockpitLiveEvidenceTest {
         val staleOwner=status(positions=emptyList(),reportedCount=0).copy(
             futuresIntents=listOf(intent()))
         assertEquals("—",cockpitKnownOpenPositionsLabel(staleOwner,now))
-        assertTrue(cockpitKnownOpenPositionsDetail(staleOwner,now).contains("предыдущем снимке 1"))
+        assertTrue(cockpitKnownOpenPositionsDetail(staleOwner,now).contains("журнале открытых кампаний: 1"))
         assertTrue(cockpitKnownOpenPositionsDetail(status(positionsAt=now-30_000L),now)
-            .contains("предыдущем снимке 1"))
+            .contains("ранее учтено позиций: 1"))
         assertTrue(cockpitKnownOpenPositionsDetail(status(positions=emptyList(),reportedCount=0,
             positionsAt=now-30_000L),now).contains("НЕ подтверждено"))
     }
