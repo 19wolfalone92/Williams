@@ -255,7 +255,7 @@ internal fun cockpitKnownOpenPositionsLabel(status:Status,now:Long):String =
 
 internal fun cockpitKnownOpenPositionsDetail(status:Status,now:Long):String {
     if(cockpitKnownOpenPositionsLabel(status,now)!="—") return "Позиции Binance • подтверждены"
-    val lastCount=maxOf(status.openPositions,status.positions.count { it.qty>0.0 })
+    val lastCount=maxOf(status.openPositions,status.positions.count { kotlin.math.abs(it.qty)>0.0 })
     return if(lastCount>0) "Нет свежей сверки • в предыдущем снимке $lastCount" else
         "Нет свежей сверки • отсутствие позиций НЕ подтверждено"
 }
