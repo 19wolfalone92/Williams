@@ -5,6 +5,7 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Build
 import android.os.PowerManager
+import androidx.core.content.edit
 import org.json.JSONObject
 
 internal object RuntimeServiceState {
@@ -25,16 +26,21 @@ internal object RuntimeStartupEvidence {
         val safeCode = code.take(64).filter { it.isUpperCase() || it == '_' }
         runCatching {
             context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString("last_failure_code", safeCode)
-                .putString("last_failure_type", cause?.javaClass?.simpleName.orEmpty().take(64))
-                .putLong("last_failure_at_ms", System.currentTimeMillis()).commit()
+                .edit(commit = true) {
+                    putString("last_failure_code", safeCode)
+                    putString("last_failure_type", cause?.javaClass?.simpleName.orEmpty().take(64))
+                    putLong("last_failure_at_ms", System.currentTimeMillis())
+                }
         }
     }
     fun clear(context: Context) {
         runCatching {
             context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().remove("last_failure_code").remove("last_failure_type")
-                .remove("last_failure_at_ms").commit()
+                .edit(commit = true) {
+                    remove("last_failure_code")
+                    remove("last_failure_type")
+                    remove("last_failure_at_ms")
+                }
         }
     }
     fun snapshot(context: Context): JSONObject {
