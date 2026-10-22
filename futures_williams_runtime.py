@@ -42,7 +42,7 @@ from williams_signals import (
 from williams_decision_trace import build_decision_trace
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
-from williams_execution_policy import EXECUTION_PROFILE,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker
+from williams_execution_policy import EXECUTION_PROFILE,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
 from williams_course_campaign import course_active_context,course_next_stage,course_target,TARGETS as COURSE_TARGETS
 from williams_tc2_pyramid import (
     POLICY as TC2_PYRAMID_POLICY, initial_unit_risk_pct, require_profitable_position,
@@ -2251,6 +2251,23 @@ class FuturesWilliamsRuntime:
                 campaign.side,symbol,live_mark=current_mark)
             if blocker:
                 raise RuntimeError(blocker)
+            # The final signed exchange position (not the original hypothetical
+            # signal's price) defines actual break-even for this campaign.
+            try:
+                live_entry=float(position["entryPrice"])
+                owned_entry=float(campaign.average_entry_price)
+                fees=2*float(os.getenv("FEE_BUFFER_PER_SIDE_PCT","0.001"))
+                slippage=float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT","0.0015"))
+            except (KeyError,TypeError,ValueError,OverflowError,AttributeError) as exc:
+                raise RuntimeError("TC2_OPPOSITE_EXIT_PROFIT_EVIDENCE_UNVERIFIED") from exc
+            if not (math.isfinite(live_entry) and math.isfinite(owned_entry)
+                    and live_entry>0 and owned_entry>0 and
+                    math.isclose(live_entry,owned_entry,rel_tol=1e-8,abs_tol=1e-8)):
+                raise RuntimeError("TC2_OPPOSITE_EXIT_PROFIT_EVIDENCE_UNVERIFIED")
+            profit_blocker=tc2_opposite_exit_profit_blocker(
+                campaign.side,live_entry,current_mark,fees+slippage)
+            if profit_blocker:
+                raise RuntimeError(profit_blocker)
 
         is_partial=partial_quantity is not None
         if is_partial and (campaign.tags.get("strategy_profile")!=COURSE or reason!="COURSE_STAGE_TRIM"):
@@ -3305,7 +3322,12 @@ class FuturesWilliamsRuntime:
                         event.get("state")=="TRIGGERED" and
                         evidence.get("signal_id")==opposing.signal_id and
                         (current_price<=trigger if campaign.side=="BUY" else current_price>=trigger))
-                    if active:
+                    profit_blocker=tc2_opposite_exit_profit_blocker(
+                        campaign.side,getattr(campaign,"average_entry_price",None),
+                        current_price,
+                        2*float(os.getenv("FEE_BUFFER_PER_SIDE_PCT","0.001"))+
+                        float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT","0.0015")),tick)
+                    if active and profit_blocker is None:
                         reason="OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
                         if hasattr(self,"scanner"):
                             report=self.scanner.wave_hierarchy(symbol)
@@ -3324,7 +3346,8 @@ class FuturesWilliamsRuntime:
                             self.db.save_campaign(campaign)
                         return self._exit_market(campaign,reason)
                     tags["tc2_opposing_signal_advisory"]={
-                        "policy":"TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED",
+                        "policy":"TC2_PROTECTED_CAMPAIGN_OPPOSITION_IS_ADVISORY_WHEN_LOSING",
+                        "profit_exit_blocker":profit_blocker,
                         "signal_id":str(getattr(opposing,"signal_id","")),
                         "observed_at_ms":now,"market_close_authorized":False}
                     if hasattr(self,"db"):
