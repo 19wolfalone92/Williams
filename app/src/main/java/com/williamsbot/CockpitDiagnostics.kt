@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 /** Observations are read-only. This contract never authorizes an exchange mutation. */
 internal object CockpitDiagnostics {
-    const val VERSION = 11
+    const val VERSION = 12
     const val POSITION_TTL_MS = 15_000L
     const val QUOTE_TTL_MS = 60_000L
 
@@ -145,8 +145,14 @@ internal object CockpitDiagnostics {
 
     private fun positionProtectionProven(
         position:JSONObject,coordinator:JSONObject,intents:List<JSONObject>,now:Long
-    ):Boolean = intents.any { matchesPosition(it,position) && protectionProven(it,now) } ||
-        matchingProtectionObservation(position,coordinator,now)!=null
+    ):Boolean {
+        // A persisted OPEN_PROTECTED intent is a claim about the last signed
+        // observation, not proof that the STOP is still WORKING now. A new
+        // snapshot must be matched against ONE current signed Binance proof.
+        // Keep intents as ownership evidence only (not as a proof fallback).
+        @Suppress("UNUSED_VARIABLE") val ownership = intents.any { matchesPosition(it,position) }
+        return matchingProtectionObservation(position,coordinator,now)!=null
+    }
 
     private fun operatorManagementProven(position:JSONObject,coordinator:JSONObject,now:Long):Boolean {
         val observation=matchingProtectionObservation(position,coordinator,now) ?: return false
@@ -202,6 +208,30 @@ internal object CockpitDiagnostics {
         }, "Сверка позиций=${positionsFresh(status, now)}; sync_required=" +
             status.optBoolean("user_stream_sync_required", true) +
             ". Проверяется синхронизация счёта; ценовой базис REST/WS требует отдельного измерения.")
+        // Shape and signed side are independent of order/strategy journals.
+        // An incomplete row or duplicate symbol must never be diagnosed as an
+        // empty, healthy exchange account just because JSONArray.optJSONObject
+        // silently skipped malformed members.
+        val positionArray = status.optJSONArray("futures_positions")
+        val positionRows = rows(positionArray)
+        val invalidPositionRows = positionArray == null || positionRows.size != positionArray.length() ||
+            positionRows.map { it.optString("symbol") }.distinct().size != positionRows.size ||
+            positionRows.any { p ->
+                val qty = p.optString("positionAmt").toBigDecimalOrNull()
+                val absQty = p.optString("qty").toBigDecimalOrNull()
+                val direction = p.optString("direction")
+                p.optString("symbol") !in APPROVED_FUTURES_SYMBOLS ||
+                    direction !in setOf("LONG", "SHORT") ||
+                    qty == null || qty.signum() == 0 || absQty == null || absQty.signum() <= 0 ||
+                    qty.abs().compareTo(absQty) != 0 ||
+                    (qty.signum() > 0) != (direction == "LONG")
+            }
+        check("DATA-05", "binance", "Полнота и направление биржевых позиций", when {
+            !positionsFresh(status,now) -> "NOT_VERIFIED"
+            invalidPositionRows -> "FAIL"
+            else -> "PASS"
+        }, "Сверка формы и signed quantity: строк=${positionRows.size}; " +
+            "ожидаемые Binance one-way направления LONG/SHORT; ошибочный/дублированный символ не может означать FLAT.")
         val strategyNames = listOf("Alligator", "Фракталы: причинность", "AO и сигналы", "AC и подтверждения", "Три Мудреца", "Контекст LONG/SHORT")
         val observations = rows(status.optJSONArray("strategy_audit"))
         strategyNames.take(4).forEachIndexed { index, name ->
@@ -220,6 +250,18 @@ internal object CockpitDiagnostics {
         }
         val candidates = rows(scanner.optJSONArray("candidates"))
         val signals = candidates.flatMap { rows(it.optJSONArray("campaign_signals")) }
+        // The profiles are NOT interchangeable: TC1 Zero Point/stop-and-reverse,
+        // NTD dimension sequencing and TC2 Wise Men use different management
+        // contracts. NTD/Course remain observers, not sources of new exposure.
+        val unauthorizedNewExposure = rows(coordinator.optJSONArray("pending_intent_details"))
+            .filter { it.optString("role", "ENTRY") in setOf("ENTRY", "ADD_ON") &&
+                it.optString("campaign_status") in setOf("ENTRY_PENDING","FILL_CONFIRMATION_PENDING") &&
+                it.optString("strategy_profile") != williamsTc2Profile }
+        check("STR-10", "strategy", "Отсутствие новых NTD/Course ордеров", when {
+            unauthorizedNewExposure.isNotEmpty() -> "FAIL"
+            else -> "PASS"
+        }, "Запрещённых активных новых заявок=${unauthorizedNewExposure.size}; " +
+            "TC2 исполняет, NTD и Course наблюдают; прежние владельцы не меняются.")
         val invalidSignals = signals.filter { signal ->
             val side = campaignSignalDirection(signal.optString("type"))
             val trigger = signal.optDouble("trigger_price")
@@ -307,6 +349,57 @@ internal object CockpitDiagnostics {
             trailed.any { !protectionProven(it, now) || it.optBoolean("previous_protection_unresolved", true) } -> "FAIL"
             else -> "PASS"
         }, "Наблюдаемых подтверждённых переносов=${trailed.size}; проверяется текущая защита и отсутствие неразрешённого предшественника.")
+        val livePositions = rows(status.optJSONArray("futures_positions"))
+        val observedProofs = rows(coordinator.optJSONArray("exchange_protection_observations"))
+        val currentProofConflicts = livePositions.filter { p ->
+            val matching = matchingProtectionObservation(p,coordinator,now) ?: return@filter false
+            val owner = entries.lastOrNull { intent ->
+                matchesPosition(intent,p) && intent.optBoolean("strategy_ownership_verified") &&
+                    intent.optString("campaign_status") == "OPEN_PROTECTED" &&
+                    intent.isNull("native_stop_replacement")
+            }
+            val expectedSuffix = owner?.optString("protection_client_id_suffix").orEmpty()
+            (expectedSuffix.isNotBlank() &&
+                !matching.optString("protection_client_id").endsWith(expectedSuffix)) ||
+                (p.has("stop_verification_status") &&
+                    p.optString("stop_verification_status") != matching.optString("stop_proof")) ||
+                (p.has("stop_confirmed_at_ms") && !p.isNull("stop_confirmed_at_ms") &&
+                    p.optLong("stop_confirmed_at_ms") != matching.optLong("observed_at_ms"))
+        }
+        val duplicateProofs = observedProofs.groupBy { it.optString("symbol") }
+            .filter { (symbol, items) ->
+                symbol.isNotBlank() && items.count {
+                    it.optString("stop_proof") in setOf(
+                        "OWNED_STOP_SEEN","EXTERNAL_PROTECTED","NATIVE_REPLACEMENT_PROTECTION_SEEN")
+                } > 1
+            }.keys
+        check("EXE-08", "execution", "Согласованность Binance SL, журнала и экрана", when {
+            !positionsFresh(status,now) -> "NOT_VERIFIED"
+            currentProofConflicts.isNotEmpty() || duplicateProofs.isNotEmpty() -> "FAIL"
+            livePositions.isEmpty() || livePositions.any {
+                matchingProtectionObservation(it,coordinator,now) == null
+            } -> "NOT_VERIFIED"
+            else -> "PASS"
+        }, "Несовпадений идентификатора/уровня/времени=${currentProofConflicts.size}; " +
+            "дублированных подтверждений=${duplicateProofs.size}; сравнение ТОЛЬКО с подписанным Binance proof.")
+
+        val wrongSideStops = livePositions.filter { p ->
+            val proof = matchingProtectionObservation(p,coordinator,now) ?: return@filter false
+            val mark = p.optString("mark_price").toDoubleOrNull()
+            val stop = proof.optString("stop").toDoubleOrNull()
+            mark != null && mark.isFinite() && mark>0.0 && stop!=null && stop.isFinite() &&
+                (if(p.optString("direction")=="LONG") stop>=mark else stop<=mark)
+        }
+        check("EXE-09", "risk", "Действующий STOP относительно цены MARK", when {
+            !positionsFresh(status,now) -> "NOT_VERIFIED"
+            wrongSideStops.isNotEmpty() -> "FAIL"
+            livePositions.isEmpty() || livePositions.any { p ->
+                matchingProtectionObservation(p,coordinator,now)==null ||
+                    p.optString("mark_price").toDoubleOrNull()?.let { it.isFinite() && it>0.0 } != true
+            } -> "NOT_VERIFIED"
+            else -> "PASS"
+        }, "STOP уже пересечён ценой MARK у ${wrongSideStops.joinToString { it.optString("symbol") }}; " +
+            "перед торговым действием нужна НОВАЯ проверка Binance; это предупреждение, не команда закрытия.")
         val closedTrades = rows(status.optJSONArray("trade_observations")).filter { it.optString("status") == "CLOSED" }
         check("EXE-06", "execution", "Выход из позиции", when {
             closedTrades.isEmpty() -> "NOT_VERIFIED"
