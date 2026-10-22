@@ -10492,7 +10492,26 @@ private class NativeEngine(
                 "; warmup_running=" + historyWarmupRunning +
                 "; active_tasks=" + activeHistoryTasks.size
         )
-        test("credentials_state", "binance", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
+        val secureKeysPresent = key().isNotBlank() && secret().isNotBlank()
+        val androidStartupError = RuntimeServiceState.lastError
+        val rebootSeverity = when {
+            !androidStartupError.isNullOrBlank() -> "FAIL"
+            autoRunRequested && !secureKeysPresent -> "FAIL"
+            autoRunRequested && (!running || !workerAlive) -> "FAIL"
+            !autoRunRequested -> "NOT_VERIFIED"
+            else -> "PASS"
+        }
+        test("reboot_credentials_and_engine", "runtime", rebootSeverity == "PASS", rebootSeverity,
+            "app_id=" + context.packageName +
+                "; version=" + BuildConfig.VERSION_NAME +
+                "; auto_run_opt_in=" + autoRunRequested +
+                "; encrypted_credentials_present=" + secureKeysPresent +
+                "; engine_running=" + running + "; worker_alive=" + workerAlive +
+                "; service_startup_error=" + (androidStartupError ?: "none") +
+                "; NO raw Binance API credentials are exported")
+        test("credentials_state", "binance", secureKeysPresent, "WARN",
+            if (secureKeysPresent) "Binance credentials stored in encrypted app-private storage"
+            else "Binance credentials unavailable in this Android package; changing debug/release variant or reinstalling does not migrate keys")
         test("rest_market_data", "binance", restMarketReady, "FAIL", if (restMarketReady) "Ticker REST OK; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market failed: " + (restLastError ?: "pending"))
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT available=" + liveUsdtBalance + "; equity=" + liveFuturesEquity else "Account REST failed: " + (restAccountLastError ?: "pending"))
         test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market kline/aggTrade stream connected" else "Market stream disconnected")
