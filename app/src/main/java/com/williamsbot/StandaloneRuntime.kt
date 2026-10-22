@@ -3462,10 +3462,16 @@ private class NativeEngine(
                 }
             }
             if (!allowed) {
-                prefs.edit().putBoolean("auto_run", false).commit()
-                scannerState = "FAILED"
-                scannerError = "Automatic runtime recovery stopped after three failures in 15 minutes"
+                // A temporary network/Android service failure must not erase
+                // the user's explicit reboot auto-run opt-in. Recovery stays
+                // fail-closed and requires a subsequent explicit START or boot.
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+                scannerState = "BLOCKED_RUNTIME_RECOVERY"
+                scannerError = "Automatic recovery limited after three failures in 15 minutes; " +
+                    "auto-run preference preserved; use START to retry safe Binance reconciliation"
                 lastError = scannerError
+                RuntimeServiceState.lastError = scannerError
                 return@Thread
             }
 
@@ -3484,10 +3490,12 @@ private class NativeEngine(
                     ?: "Safe Runtime restart was rejected"
             }
             if (blocker != null) {
-                prefs.edit().putBoolean("auto_run", false).commit()
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
                 scannerState = "BLOCKED_RUNTIME_RECOVERY"
                 scannerError = blocker
                 lastError = "Runtime recovery blocked (" + reason + "): " + blocker
+                RuntimeServiceState.lastError = safeDiagnosticText(lastError.orEmpty())
             }
         }.apply {
             isDaemon = true
