@@ -34,14 +34,15 @@ internal fun williamsClosedH1HistoryBlocker(bars:List<WilliamsWaveBar>,now:Long)
     return if(now-(bars.last().t+WILLIAMS_H1_MS) in 0 until WILLIAMS_H1_MS) null else "H1_SNAPSHOT_STALE"
 }
 
-/** The active TC2 campaign exits by its exchange-protected stop, including
- * verified monotone stop trails. A fresh opposing H1 hypothesis is a diagnostic
- * warning, NOT a market-close instruction. This is an explicit project policy,
- * not a claim that every edition of Williams bans discretionary exits.
- * NTD/Course continue their independently pinned exit systems.
+/** Trading Chaos 2nd ed., ch.11-12: a validated opposite Wise-Man STOP
+ * breakout can close a campaign, alongside monotone protective stop trails.
+ * A bare contrary hypothesis, wave label or arbitrary strategy request CANNOT.
+ * Source-pinned NTD/Course retain their separate exits.
+ * Reversal into opposite NEW exposure is never implicit: it requires confirmed
+ * flat, a fresh entry candidate and all new-risk/exchange-protection gates.
  */
 internal fun williamsStrategyCanMarketClose(ownerProfile:String):Boolean =
-    ownerProfile==williamsNtdProfile || ownerProfile==williamsCourseProfile
+    ownerProfile in williamsSourceProfiles
 
 internal fun williamsOpposingSignalCanMarketClose(ownerProfile:String):Boolean =
     williamsStrategyCanMarketClose(ownerProfile)
@@ -95,13 +96,17 @@ internal fun williamsBookInitialContextRank(
 internal fun williamsInitialHigherFrameHistoryRequired(source:String):Boolean =
     source!=williamsTc2Profile
 
-/** Final market-close door. TC2 strategy observations never authorize flattening.
- * Actual liquidation remediation uses its separate revalidated safety path.
- * Operator/kill requests still pass live side/size/ownership checks below. */
+/** Reject discretionary TC2 closes that lack a book-authenticated opposite
+ * H1 price trigger. The coordinator independently binds this reason to the
+ * durable signal/exchange proof; a reason string alone is NOT authorization.
+ */
 internal fun williamsMarketExitBlocker(owner: String, reason: String): String? {
     if(reason=="MANUAL_EXIT" || reason=="KILL_SWITCH") return null
     return when(owner) {
-        williamsTc2Profile -> "TC2_PROTECTIVE_STOP_ONLY"
+        williamsTc2Profile -> if(reason in setOf(
+            "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+            "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
+        )) null else "TC2_EXIT_REQUIRES_BOOK_OPPOSITE_TRIGGER"
         williamsNtdProfile,williamsCourseProfile -> null
         else -> "EXIT_STRATEGY_OWNER_UNVERIFIED"
     }
