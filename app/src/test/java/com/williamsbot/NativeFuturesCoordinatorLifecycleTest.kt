@@ -1111,8 +1111,10 @@ class NativeFuturesCoordinatorLifecycleTest {
             val signalAt=time-2*h
             val observed=time-1_000L
             val opposite=if(direction.name=="LONG") "SHORT" else "LONG"
-            val trigger=if(direction.name=="LONG") 100.0 else 100.0
-            exchange.mark=if(direction.name=="LONG") 99.0 else 101.0
+            // Book-opposite signal can flatten only once old campaign is
+            // in genuine positive mark-to-entry territory after cost reserves.
+            val trigger=if(direction.name=="LONG") 110.0 else 90.0
+            exchange.mark=if(direction.name=="LONG") 108.0 else 92.0
             val signalId="BOOK:OPPOSITE:"+direction.name
             val event=JSONObject().put("state","TRIGGERED").put("known_at_ms",time-60_000L)
                 .put("basis","CLOSED_BAR_EXTREME")
