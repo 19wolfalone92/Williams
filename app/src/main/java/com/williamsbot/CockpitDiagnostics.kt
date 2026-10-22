@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 /** Observations are read-only. This contract never authorizes an exchange mutation. */
 internal object CockpitDiagnostics {
-    const val VERSION = 13
+    const val VERSION = 14
     const val POSITION_TTL_MS = 15_000L
     const val QUOTE_TTL_MS = 60_000L
 
