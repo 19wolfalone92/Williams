@@ -95,3 +95,11 @@ def test_ntd_diagnostic_and_edition_scanners_agree_on_local_base(case,mirror):
     assert evidence.reference_index==setup.context["signal_index"]==case["reference"]
     assert evidence.trigger_price==pytest.approx(trigger)
     assert setup.trigger==pytest.approx(trigger)
+
+def test_android_runtime_does_not_promote_observation_sources_to_live_new_risk():
+    from pathlib import Path
+    runtime = (Path(__file__).resolve().parents[1] /
+               "app/src/main/java/com/williamsbot/StandaloneRuntime.kt").read_text(encoding="utf-8")
+    assert 'if(!williamsVerifiedNewRiskSource(profile))' in runtime
+    assert 'if(williamsProfile !in setOf(williamsTc2Profile,williamsUnifiedProfile))' in runtime
+    assert 'williamsVerifiedNewRiskSource(it.strategyProfile)' in runtime
