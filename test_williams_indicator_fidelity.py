@@ -130,7 +130,10 @@ def test_wm3_consumers_use_actual_confirmation_and_whole_plateau_stop():
         rejected, side="LONG", current_teeth=10.5,
         current_close=9.0, tick_size=0.1
     ) is not None
+    # The one-tick breakout 12.1, not the 12.0 pivot, is filtered by Teeth.
     assert _latest_confirmed_fractal(rejected, side="LONG", current_teeth=12.05,
+        current_close=9.0, tick_size=0.1) is not None
+    assert _latest_confirmed_fractal(rejected, side="LONG", current_teeth=12.1,
         current_close=9.0, tick_size=0.1) is None
 
     specs = extract_ntd_fractal_signal_specs(
