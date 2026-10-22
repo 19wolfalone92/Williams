@@ -182,8 +182,11 @@ def main() -> None:
         "confirmed_up_center_index",
         "confirmed_up_group_start_index",
         "fractal_up_confirmed",
-        "trigger_base <= float(current_teeth)",
-        "trigger_base >= float(current_teeth)",
+        "trigger <= float(current_teeth)",
+        "trigger >= float(current_teeth)",
+        "current_trigger_valid = trigger > max(current_teeth, 0.0)",
+        "current_trigger_valid = current_teeth > 0 and trigger < current_teeth",
+        "trigger<=current_teeth if is_long else trigger>=current_teeth",
         "side=side",
     ):
         must(signals, needle, "williams_signals.py")
@@ -192,6 +195,11 @@ def main() -> None:
     for needle in ("def angulation_evidence", "def alligator_phases", "def ntd_initial_context",
                    "MOUTH_ANCHORED_EDGE_SLOPES", "PRICE_PATH_NOT_STEEPER"):
         must(geometry,needle,"williams_market_geometry.py")
+    # Original TC2/NTD texts compare the executed fractal STOP price against Teeth.
+    # Prevent a reintroduction of Python/Android false-blocking on the pivot alone.
+    must(geometry, "sign*(trigger-teeth[i])>0", "williams_market_geometry.py")
+    must_not(signals, "trigger_base <= float(current_teeth)", "williams_signals.py")
+    must_not(signals, "trigger_base >= float(current_teeth)", "williams_signals.py")
     futures = read("futures_williams_runtime.py")
     must(futures, "canonical_indicator_config_from_env()", "futures_williams_runtime.py")
     must(futures, "_signal_profile_entry_block_reason(profile)", "futures_williams_runtime.py")
