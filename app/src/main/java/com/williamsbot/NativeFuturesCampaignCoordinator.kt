@@ -3749,6 +3749,25 @@ internal class NativeFuturesCampaignCoordinator(
                     "$symbol automatic exit entry price no longer matches the confirmed campaign"
                 }
             }
+            // Do not trust the caller's TC2 exit reason: bind a recently
+            // durable closed-H1 opposite-signal proof to this exact owner,
+            // symbol/direction, and the exchange's CURRENT mark before POST.
+            // Unknown or stale evidence keeps the exchange-side STOP alive.
+            if(!riskEmergencyVerified &&
+                managedEntry?.optString("strategy_profile")==williamsTc2Profile &&
+                reason in setOf("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+                    "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION")) {
+                val markNow=adapterPreflight.markPrice(symbol)
+                val blocker=williamsTc2OppositeExitEvidenceBlocker(
+                    managedEntry,executionStore.readState("decision_h1_opposition_"+symbol),
+                    symbol,direction.name,reason,
+                    managedEntry.optLong("position_open_observed_at_ms"),clock(),markNow
+                )
+                if(blocker!=null)
+                    return@synchronized JSONObject().put("ok",false).put("state",state.name)
+                        .put("safe_rejection",true).put("mutation_attempted",false)
+                        .put("blocker",blocker).put("symbol",symbol)
+            }
             if (emergencyWithoutStop) {
                 // Second read as close to POST as possible, because the
                 // previously missing STOP could have been replaced meanwhile.
