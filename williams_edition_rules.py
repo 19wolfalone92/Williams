@@ -216,7 +216,9 @@ def course_squat_setup(side,bars,tick):
     if not (b.v>a.v>0 and (b.h-b.l)/b.v<(a.h-a.l)/a.v):return None
     sign=1 if side=="LONG" else -1
     trigger=b.h+tick if sign==1 else b.l-tick
-    stop=b.l-tick if sign==1 else b.h+tick
+    # Course Level III p.11: protective SELL at the low PLUS one tick;
+            # BUY is the mirrored high MINUS one tick (not outside the bar).
+            stop=b.l+tick if sign==1 else b.h-tick
     if min(trigger,stop)<=0:return None
     return EditionSetup("COURSE_SQUAT",side,len(bars)-1,trigger,stop,stop,
                         {"volume_input":"KLINE_VOLUME_PROXY"})
