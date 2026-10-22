@@ -48,6 +48,24 @@ def test_recoverable_missing_daily_risk_data_keeps_supervision_but_blocks_entrie
     assert "persistSafetyFlag(\"reconcile_required\", true)" in runtime
 
 
+def test_boot_failure_survives_process_death_without_storing_secrets():
+    health = source("AndroidRuntimeHealth.kt")
+    receiver = source("TradingBootReceiver.kt")
+    service = source("TradingForegroundService.kt")
+    runtime = source("StandaloneRuntime.kt")
+    activity = source("MainActivity.kt")
+    assert 'private const val PREFS = "williams_startup_health"' in health
+    assert 'putString("last_failure_code", safeCode)' in health
+    assert 'last_boot_startup_failure' in health
+    assert "BOOT_SECURE_PREFS_UNREADABLE" in receiver
+    assert "RuntimeStartupEvidence.failure" in receiver
+    assert "ENGINE_AUTOSTART_FAILED" in service
+    assert "RuntimeStartupEvidence.clear(context)" in runtime
+    assert "RuntimeStartupEvidence.snapshot(context)" in activity
+    assert 'putString("api_key"' not in health
+    assert 'putString("api_secret"' not in health
+
+
 def test_app_variant_identity_is_visible_without_leaking_api_secrets():
     health = source("AndroidRuntimeHealth.kt")
     main = source("MainActivity.kt")
