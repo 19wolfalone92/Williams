@@ -3516,10 +3516,51 @@ internal class NativeFuturesCampaignCoordinator(
         saveIntents(persisted)
         val engine = nativeStopReplacementEngine(adapter, persisted)
         val result = engine.resume(intent)
-        if (!result.optBoolean("ok")) {
+        if (result.optBoolean("ok")) {
+            // The final close-all STOP was queried and validated by resume().
+            // Publish THAT signed proof immediately; a status request must not
+            // reuse the pre-swap STOP observation while the next whole-account
+            // reconciliation is still running (Diagnostics 9 / BNB SHORT).
+            // This is read-only evidence, NOT an entry or management permission.
+            val confirmed = result.optJSONObject("stop")
+            val confirmedQty = intent.optString("confirmed_position_qty").toBigDecimalOrNull()
+            val confirmedPrice = confirmed?.optString("triggerPrice")
+                ?.toBigDecimalOrNull()
+            if (confirmed != null && confirmedQty != null && confirmedQty.signum() > 0 &&
+                confirmed.optString("clientAlgoId") == intent.optString("protection_client_id") &&
+                confirmedPrice != null && confirmedPrice.compareTo(proposed) == 0
+            ) {
+                val previous = JSONArray(externalProtectionObservationsJson)
+                val updated = JSONArray()
+                for (index in 0 until previous.length()) {
+                    val observation = previous.optJSONObject(index) ?: continue
+                    if (observation.optString("symbol") != symbol) updated.put(observation)
+                }
+                val signedQty = if (direction == Direction.SHORT) confirmedQty.negate() else confirmedQty
+                updated.put(JSONObject()
+                    .put("symbol", symbol).put("direction", direction.name)
+                    .put("quantity", signedQty.toPlainString())
+                    .put("observed_at_ms", clock()).put("stop_proof", "OWNED_STOP_SEEN")
+                    .put("stop", confirmedPrice.toPlainString())
+                    .put("protection_client_id", intent.optString("protection_client_id"))
+                    .put("strategy_ownership_verified", true)
+                    .put("automatic_trailing_authorized", true)
+                    .put("management_mode", "STRATEGY_OWNED"))
+                externalProtectionObservationsJson = updated.toString()
+            }
+        } else {
             if (intent.has("native_stop_replacement")) {
                 recordNativeReplacementProof(intent, engine.protection(intent))
                 saveIntents(persisted)
+                // The old close-all order may already have been cancelled.
+                // An earlier proof must NOT outlive an unresolved replacement.
+                val previous = JSONArray(externalProtectionObservationsJson)
+                val updated = JSONArray()
+                for (index in 0 until previous.length()) {
+                    val observation = previous.optJSONObject(index) ?: continue
+                    if (observation.optString("symbol") != symbol) updated.put(observation)
+                }
+                externalProtectionObservationsJson = updated.toString()
             }
             state = State.RECONCILE_REQUIRED
             lastBlocker = "$symbol native stop replacement: ${result.optString("blocker") }"
