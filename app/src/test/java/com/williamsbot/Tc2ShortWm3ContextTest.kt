@@ -74,11 +74,11 @@ class Tc2ShortWm3ContextTest {
     @Test fun wm1AoColourIsMirroredIntoRealShortEvidenceNotAHiddenVeto() {
         val source=JSONObject().put("wm1_ao_color","RED")
             .put("wm1_ao_opposite_color_observed",true)
-            .put("wm1_ao_color_is_evidence_not_new_execution_veto",true).toString()
+            .put("wm1_ao_color_is_mandatory",true).toString()
         val result=JSONObject(reflectedTc2SetupContext("REVERSAL",source,200.0))
         assertEquals("GREEN",result.getString("wm1_ao_color"))
         assertTrue(result.getBoolean("wm1_ao_opposite_color_observed"))
-        assertTrue(result.getBoolean("wm1_ao_color_is_evidence_not_new_execution_veto"))
+        assertTrue(result.getBoolean("wm1_ao_color_is_mandatory"))
     }
 
 }

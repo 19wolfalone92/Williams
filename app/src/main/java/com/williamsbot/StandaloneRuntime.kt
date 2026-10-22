@@ -1008,8 +1008,8 @@ internal fun reflectedTc2SetupContext(
         }
     }
     // SHORT uses a reflected price/AO sequence. Convert the book-context
-    // oscillator colour back to the actual exchange candles; do not turn
-    // this observational evidence into an unapproved H1 entry veto.
+    // oscillator colour back to the actual exchange candles. TC2 ch9
+    // requires colour opposite the NEW position side for countertrend WM1.
     if (signalType=="REVERSAL" && context.has("wm1_ao_color")) {
         val color=context.optString("wm1_ao_color")
         context.put("wm1_ao_color",when(color) {
@@ -6320,49 +6320,72 @@ private class NativeEngine(
                 }
                 editionStop=if(dir=="LONG") candidates.maxOrNull() else candidates.minOrNull()
             }
-            // A TC2 opposite H1 signal is NOT authorization to market-close
-            // an exchange-protected open campaign. The 19-Oct SOL/XRP losses
-            // were explicitly recorded as opposite-signal market exits.
-            // Detect/log the hypothesis independently while preserving stop
-            // protection and monotone trailing. Legacy NTD/Course keep their
-            // source-specific exits. A TC2 correction-boundary observation
-            // also remains advisory: structural protection owns its exit.
+            // TC2 ch11-12 (gold reversal, PDF154-157): a genuinely TRIGGERED
+            // opposite WM1/WM2/WM3 entry signal can close the older campaign.
+            // It must be the SAME TC2 source, after our entry, with causal H1
+            // evidence and price still across its breakout trigger. A correction
+            // wave hypothesis ALONE never orders a TC2 market exit. The broker
+            // protection remains armed until the reduce-only exit is confirmed.
             val opposing = if(profile==williamsTc2Profile) {
                 runCatching { triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile) }
-                    .onFailure { lastError="TC2_OPPOSITION_ADVISORY_UNAVAILABLE: $symbol: "+
+                    .onFailure { lastError="TC2_OPPOSITION_EVIDENCE_UNAVAILABLE: $symbol: "+
                         (it.message ?: it.javaClass.simpleName) }.getOrNull()
             } else triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile)
-            if(profile==williamsTc2Profile && opposing!=null) {
-                val advisory=JSONObject().put("policy","TC2_PROTECTIVE_STOP_ONLY")
-                    .put("signal_id",opposing.signalId).put("source",opposing.strategyProfile)
-                    .put("direction",campaignSignalDirection(opposing.type))
-                    .put("observed_at_ms",futuresMarketData.exchangeNowMs())
-                    .put("price_triggered",true).put("market_close_authorized",false)
-                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
-                    .put("tc2_opposing_signal_advisory",advisory)
-                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
-            }
             if(profile==williamsTc2Profile && boundaryExit) {
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
                     .put("tc2_correction_boundary_advisory",JSONObject()
-                        .put("policy","TC2_PROTECTIVE_STOP_ONLY")
+                        .put("policy","TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED")
                         .put("observed_at_ms",futuresMarketData.exchangeNowMs())
                         .put("mark_price",mark).put("market_close_authorized",false))
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
             }
-            val actionableOpposing = opposing?.takeIf { williamsOpposingSignalCanMarketClose(profile) }
+            val tc2TriggerNow = opposing!=null &&
+                opposing.strategyProfile==williamsTc2Profile &&
+                opposing.role=="ENTRY" && opposing.executionSemantics=="STOP_ENTRY" &&
+                opposing.type.removePrefix("SHORT_") in setOf("REVERSAL","SUPER_AO","FRACTAL") &&
+                campaignSignalDirection(opposing.type)!=dir &&
+                (if(dir=="LONG") mark<=opposing.triggerPrice else mark>=opposing.triggerPrice)
+            val exchangeEntryForExit=row.optString("entryPrice").toDoubleOrNull() ?: Double.NaN
+            val oppositeProfitBlocker=if(profile==williamsTc2Profile)
+                williamsTc2OppositeExitProfitBlocker(dir,exchangeEntryForExit,mark,
+                    2.0*feeBufferPerSidePct+maxSlippagePct,rules.tick) else null
+            val actionableOpposing = opposing?.takeIf {
+                williamsOpposingSignalCanMarketClose(profile) &&
+                    (profile!=williamsTc2Profile ||
+                        (!riskOnly && eligibleSymbols==null && tc2TriggerNow &&
+                            oppositeProfitBlocker==null))
+            }
+            if(profile==williamsTc2Profile && opposing!=null && actionableOpposing==null) {
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                    .put("tc2_opposing_signal_advisory",JSONObject()
+                        .put("policy","TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED")
+                        .put("signal_id",opposing.signalId).put("source",opposing.strategyProfile)
+                        .put("observed_at_ms",futuresMarketData.exchangeNowMs())
+                        .put("profit_exit_blocker",oppositeProfitBlocker ?: JSONObject.NULL)
+                        .put("policy_note","OPPOSITE_SETUP_IS_WARNING_UNTIL_PROFITABLE_BOOK_EXIT")
+                        .put("market_close_authorized",false))
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+            }
             if (williamsStrategyCanMarketClose(profile) &&
-                (actionableOpposing != null || boundaryExit || editionExit.isNotEmpty())) {
+                (actionableOpposing != null ||
+                    profile!=williamsTc2Profile && (boundaryExit || editionExit.isNotEmpty()))) {
                 val correction = if (actionableOpposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
                     if (dir == "LONG") "SHORT" else "LONG",actionableOpposing.signalBarTimeMs,actionableOpposing.type) else WilliamsCorrectionContext()
-                val exitReason = if(editionExit.isNotEmpty()) editionExit else if (boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
+                val exitReason = if(profile!=williamsTc2Profile && editionExit.isNotEmpty()) editionExit
+                    else if(profile!=williamsTc2Profile && boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
                     else if (correction.allowed) "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
                     else "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
+                val decision = if(profile==williamsTc2Profile)
+                    JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) else JSONObject()
+                val proofAt = if(profile==williamsTc2Profile)
+                    decision.optLong("observed_at_ms") else futuresMarketData.exchangeNowMs()
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
                 management.put("exit_evidence",JSONObject().put("reason",exitReason)
-                    .put("observed_at_ms",futuresMarketData.exchangeNowMs()).put("edition_exit",editionExit)
+                    .put("signal_id",actionableOpposing?.signalId ?: JSONObject.NULL)
+                    .put("observed_at_ms",proofAt).put("edition_exit",editionExit)
                     .put("correction_boundary_broken",boundaryExit).put("higher_correction",correction.toJson())
-                    .put("opposition_check",if(actionableOpposing!=null) JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) else JSONObject.NULL))
+                    .put("opposition_check",if(actionableOpposing!=null)
+                        JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) else JSONObject.NULL))
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
                 val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"),rules)
                 val clientId = ("W2O_"+symbol.take(8)+"_"+System.nanoTime().toString(16).takeLast(12)).take(36)
@@ -8317,8 +8340,11 @@ private class NativeEngine(
         val reversalStart = max(2, candles.lastIndex - 20)
         for (i in candles.lastIndex downTo reversalStart) {
             val priorLow = candles[i - 1].l
-            if (validWilliamsReversalBar("LONG",waveBars[i],priorLow,
-                listOf(jawS[i],teethS[i],lipsS[i]),angulationProof(i).score)) {
+            val wm1AoBlocker=williamsFirstWiseManAoBlocker(
+                "LONG",ao(candles,i),ao(candles,i-1))
+            if (wm1AoBlocker==null &&
+                validWilliamsReversalBar("LONG",waveBars[i],priorLow,
+                    listOf(jawS[i],teethS[i],lipsS[i]),angulationProof(i).score)) {
                 val trigger = candles[i].h + tick
                 if (triggerStillPending(i, trigger)) {
                     out += CampaignSignalN(
@@ -8342,7 +8368,8 @@ private class NativeEngine(
                             .put("wm1_ao_opposite_color_observed",
                                 ao(candles,i).isFinite() && ao(candles,i-1).isFinite() &&
                                 ao(candles,i)<ao(candles,i-1))
-                            .put("wm1_ao_color_is_evidence_not_new_execution_veto",true)
+                            .put("wm1_ao_qualifies_book_countertrend",true)
+                            .put("wm1_ao_color_is_mandatory",true)
                             .toString()
                     )
                 }
@@ -9051,6 +9078,7 @@ private class NativeEngine(
             .put("observed_at_ms",now).put("scope_started_at_ms",openedAt).put("direction",direction.name)
             .put("opposition",evidence?.toJson() ?: JSONObject.NULL)
             .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })).toString())) { "H1_EXIT_PROOF_NOT_DURABLE" }
+        if(profile==williamsTc2Profile && assessment.uncertain.isNotEmpty()) return null
         return candidates.firstOrNull { it.signalId==evidence?.signal?.id }
     }
 

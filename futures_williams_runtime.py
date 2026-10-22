@@ -42,7 +42,7 @@ from williams_signals import (
 from williams_decision_trace import build_decision_trace
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
-from williams_execution_policy import EXECUTION_PROFILE,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker
+from williams_execution_policy import EXECUTION_PROFILE,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
 from williams_course_campaign import course_active_context,course_next_stage,course_target,TARGETS as COURSE_TARGETS
 from williams_tc2_pyramid import (
     POLICY as TC2_PYRAMID_POLICY, initial_unit_risk_pct, require_profitable_position,
@@ -74,7 +74,7 @@ from williams_wave_hierarchy import (
     suggested_analytical_frames,
 )
 from williams_exit_policy import zone_trailing_activation, plan_williams_stop
-from williams_scenario_lifecycle import ScenarioSignal, scenario_opposition
+from williams_scenario_lifecycle import ScenarioSignal, scenario_opposition, assess_scenario_opposition
 
 
 def closed_strategy_frame(frame, interval, now_ms):
@@ -2158,9 +2158,27 @@ class FuturesWilliamsRuntime:
                                      risk_emergency=risk_emergency)
         if blocker:
             raise RuntimeError(blocker)
+        # TC2 book exit MUST have a fresh, pinned-source causal trigger before
+        # canceling resting additions or reading/mutating any exchange orders.
+        if (campaign.tags.get("strategy_profile",TC2)==TC2 and not risk_emergency
+                and reason in ("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+                               "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION")):
+            proof_error=tc2_opposite_exit_evidence_blocker(
+                campaign.tags,reason,int(time.time()*1000)+
+                int(getattr(getattr(self,"client",None),"time_offset_ms",0)),
+                campaign.side,campaign.symbol)
+            if proof_error:
+                raise RuntimeError(proof_error)
         symbol = campaign.symbol
         # An armed addition can reopen exposure after a successful market close.
         # Cancel/reconcile it first; a racing fill changes the quantity we must close.
+        if (campaign.state == CampaignState.ADD_ON_PENDING and not risk_emergency
+                and campaign.tags.get("strategy_profile",TC2)==TC2
+                and reason in ("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+                               "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION")):
+            # An opposite setup is advisory during unresolved addition fills.
+            # Do not mutate/cancel already authorized risk merely on that hint.
+            raise RuntimeError("TC2_OPPOSITE_EXIT_PENDING_ADDITION_NOT_RECONCILED")
         if campaign.state == CampaignState.ADD_ON_PENDING:
             cancelled = self.cancel_pending_entries(symbol)
             if not cancelled["ok"]:
@@ -2173,7 +2191,25 @@ class FuturesWilliamsRuntime:
             raise RuntimeError(f"{symbol}: exit already pending ({existing_exit})")
 
         position = self._position(symbol)
-        pos_qty = abs(self._signed_position_qty(position))
+        signed_pos_qty = self._signed_position_qty(position)
+        if not math.isfinite(signed_pos_qty):
+            self._set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(f"{symbol}: FUTURES_EXIT_POSITION_QUANTITY_NOT_FINITE")
+        pos_qty = abs(signed_pos_qty)
+        if pos_qty > 0 and not (
+                (campaign.side == "BUY" and signed_pos_qty > 0)
+                or (campaign.side == "SELL" and signed_pos_qty < 0)):
+            # A recovered/externally reversed position can no longer be closed
+            # under the original campaign's claimed side. Even reduceOnly must
+            # never claim an unknown Binance position belongs to this owner.
+            self._set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(f"{symbol}: FUTURES_EXIT_LIVE_SIDE_MISMATCH")
+        if pos_qty > 0 and reason not in ("MANUAL_EXIT", "KILL_SWITCH") and not risk_emergency:
+            owned_qty=float(getattr(campaign,"position_qty",0) or 0)
+            if not math.isfinite(owned_qty) or owned_qty <= 0 or not math.isclose(
+                    pos_qty,owned_qty,rel_tol=1e-9,abs_tol=1e-9):
+                self._set_state(symbol, "RECONCILE_REQUIRED")
+                raise RuntimeError(f"{symbol}: FUTURES_EXIT_LIVE_QUANTITY_OWNER_MISMATCH")
         if pos_qty <= 0:
             try:
                 orders = self.client.all_orders(symbol, limit=1000)
@@ -2199,6 +2235,46 @@ class FuturesWilliamsRuntime:
             raise RuntimeError(
                 f"{symbol}: position is flat without attributable campaign exit"
             )
+
+        # Last possible read-only check before persisting EXIT_PENDING.
+        # The mark observed while detecting an H1 opposite signal is NOT
+        # authorization hours later, nor if MARK diverged from CONTRACT.
+        # No live-mark proof => keep the Binance protective stop untouched.
+        if (campaign.tags.get("strategy_profile",TC2)==TC2 and not risk_emergency
+                and reason in ("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+                               "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION")):
+            try:
+                mark_row=self.client.mark_price(symbol)
+                if not isinstance(mark_row,dict) or mark_row.get("symbol")!=symbol:
+                    raise ValueError("symbol missing or does not match current campaign")
+                current_mark=float(mark_row["markPrice"])
+            except Exception as exc:
+                # Network outage, malformed payload or stale/missing mark:
+                # no strategy close, the existing exchange STOP remains.
+                raise RuntimeError("TC2_EXIT_LIVE_MARK_UNVERIFIED") from exc
+            blocker=tc2_opposite_exit_evidence_blocker(
+                campaign.tags,reason,int(time.time()*1000)+
+                int(getattr(self.client,"time_offset_ms",0)),
+                campaign.side,symbol,live_mark=current_mark)
+            if blocker:
+                raise RuntimeError(blocker)
+            # The final signed exchange position (not the original hypothetical
+            # signal's price) defines actual break-even for this campaign.
+            try:
+                live_entry=float(position["entryPrice"])
+                owned_entry=float(campaign.average_entry_price)
+                fees=2*float(os.getenv("FEE_BUFFER_PER_SIDE_PCT","0.001"))
+                slippage=float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT","0.0015"))
+            except (KeyError,TypeError,ValueError,OverflowError,AttributeError) as exc:
+                raise RuntimeError("TC2_OPPOSITE_EXIT_PROFIT_EVIDENCE_UNVERIFIED") from exc
+            if not (math.isfinite(live_entry) and math.isfinite(owned_entry)
+                    and live_entry>0 and owned_entry>0 and
+                    math.isclose(live_entry,owned_entry,rel_tol=1e-8,abs_tol=1e-8)):
+                raise RuntimeError("TC2_OPPOSITE_EXIT_PROFIT_EVIDENCE_UNVERIFIED")
+            profit_blocker=tc2_opposite_exit_profit_blocker(
+                campaign.side,live_entry,current_mark,fees+slippage)
+            if profit_blocker:
+                raise RuntimeError(profit_blocker)
 
         is_partial=partial_quantity is not None
         if is_partial and (campaign.tags.get("strategy_profile")!=COURSE or reason!="COURSE_STAGE_TRIM"):
@@ -3189,10 +3265,9 @@ class FuturesWilliamsRuntime:
             if not math.isfinite(current_price) or current_price <= 0:
                 raise RuntimeError("Invalid market price; retain confirmed protection")
 
-            # NTD exits must not leak into the TC2 Three Wise Men profile.
-            # They are edition-specific rules, not universal Williams filters.
-            # TC2 keeps structural stop ownership. Opposing hypotheses and
-            # correction boundaries remain diagnostic observations.
+            # NTD and Course exits remain source-specific. TC2 ch11-12
+            # permits a qualified contrary Wise-Man STOP breakout exit;
+            # a bare wave correction hypothesis remains NON-authoritative.
             profile = getattr(campaign,"tags",{}).get("strategy_profile",TC2)
             ntd_profile = profile == "NTD_FIVE_DIMENSIONS"
             tags = getattr(campaign,"tags",{})
@@ -3201,10 +3276,10 @@ class FuturesWilliamsRuntime:
                 if not correction_bounds_valid(proof):
                     raise RuntimeError("CORRECTION_PROOF_MISSING; retain exchange protection")
                 if not correction_price_allowed(proof,current_price):
-                    if strategy_market_close_allowed(profile):
+                    if profile!=TC2 and strategy_market_close_allowed(profile):
                         return self._exit_market(campaign,"CORRECTION_PARENT_PRICE_INVALIDATED")
                     tags["tc2_correction_boundary_advisory"] = {
-                        "policy": "TC2_PROTECTIVE_STOP_ONLY", "mark_price": current_price,
+                        "policy": "TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED", "mark_price": current_price,
                         "observed_at_ms": int(time.time()*1000), "market_close_authorized": False}
                     if hasattr(self, "db"):
                         self.db.save_campaign(campaign)
@@ -3242,20 +3317,56 @@ class FuturesWilliamsRuntime:
                         raise
                     opposing = None
                     tags["tc2_opposition_advisory_error"] = type(advisory_error).__name__
-                if opposing is not None and not strategy_market_close_allowed(profile):
-                    tags["tc2_opposing_signal_advisory"] = {
-                        "policy": "TC2_PROTECTIVE_STOP_ONLY",
-                        "signal_id": str(getattr(opposing, "signal_id", "")),
-                        "observed_at_ms": int(time.time()*1000), "market_close_authorized": False}
-                    if hasattr(self, "db"):
+                if opposing is not None and profile==TC2:
+                    evidence=tags.get("last_opposition_evidence") or {}
+                    event=evidence.get("event") or {}
+                    now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+                    trigger=float(getattr(opposing,"trigger_price",0) or 0)
+                    active=(getattr(opposing,"strategy_profile",TC2)==TC2 and
+                        getattr(opposing,"role",None)==SignalRole.ENTRY and
+                        getattr(getattr(opposing,"signal_type",None),"value","") in
+                            ("REVERSAL","SUPER_AO","FRACTAL") and
+                        event.get("state")=="TRIGGERED" and
+                        evidence.get("signal_id")==opposing.signal_id and
+                        (current_price<=trigger if campaign.side=="BUY" else current_price>=trigger))
+                    profit_blocker=tc2_opposite_exit_profit_blocker(
+                        campaign.side,getattr(campaign,"average_entry_price",None),
+                        current_price,
+                        2*float(os.getenv("FEE_BUFFER_PER_SIDE_PCT","0.001"))+
+                        float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT","0.0015")),tick)
+                    if active and profit_blocker is None:
+                        reason="OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
+                        if hasattr(self,"scanner"):
+                            report=self.scanner.wave_hierarchy(symbol)
+                            ctx=correction_entry_context(report,opposing.side,
+                                opposing.signal_bar_time_ms,opposing.signal_type.value)
+                            if ctx["allowed"]:
+                                reason="OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
+                        tags["tc2_book_exit_proof"]={
+                            "reason":reason,"symbol":symbol,"observed_at_ms":now,
+                            "opened_at_ms":int(tags.get("position_open_observed_at_ms",0) or 0),
+                            "strategy_profile":TC2,
+                            "direction":"SHORT" if campaign.side=="BUY" else "LONG",
+                            "signal_id":opposing.signal_id,"trigger":trigger,
+                            "mark":current_price,"event":event}
+                        if hasattr(self,"db"):
+                            self.db.save_campaign(campaign)
+                        return self._exit_market(campaign,reason)
+                    tags["tc2_opposing_signal_advisory"]={
+                        "policy":"TC2_PROTECTED_CAMPAIGN_OPPOSITION_IS_ADVISORY_WHEN_LOSING",
+                        "profit_exit_blocker":profit_blocker,
+                        "signal_id":str(getattr(opposing,"signal_id","")),
+                        "observed_at_ms":now,"market_close_authorized":False}
+                    if hasattr(self,"db"):
                         self.db.save_campaign(campaign)
-                if opposing is not None and strategy_market_close_allowed(profile):
-                    reason = "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
+                elif opposing is not None and profile!=TC2 and strategy_market_close_allowed(profile):
+                    reason="OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
                     if hasattr(self,"scanner"):
-                        report = self.scanner.wave_hierarchy(symbol)
-                        ctx = correction_entry_context(report,opposing.side,opposing.signal_bar_time_ms,opposing.signal_type.value)
+                        report=self.scanner.wave_hierarchy(symbol)
+                        ctx=correction_entry_context(report,opposing.side,
+                            opposing.signal_bar_time_ms,opposing.signal_type.value)
                         if ctx["allowed"]:
-                            reason = "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
+                            reason="OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
                     return self._exit_market(campaign,reason)
                 proposal = plan_williams_stop(campaign.side,campaign.current_stop_price,
                     float(getattr(campaign,"average_entry_price",0) or 0),
@@ -3320,11 +3431,17 @@ class FuturesWilliamsRuntime:
                 if signal.role != SignalRole.ENTRY or (signal.strategy_profile==NTD and signal.signal_type!=SignalType.FRACTAL):
                     continue  # NTD dimensions add; exits use management or a real external opposite fractal.
                 candidates[signal.signal_id]=signal
-        evidence=scenario_opposition("SHORT" if campaign.side=="SELL" else "LONG",opened,
+        assessment=assess_scenario_opposition("SHORT" if campaign.side=="SELL" else "LONG",opened,
             [ScenarioSignal(s.signal_id,"LONG" if s.side=="BUY" else "SHORT",s.strategy_profile,
                 s.execution_semantics,s.signal_bar_time_ms,s.trigger_price,
                 s.invalidation_price if s.invalidation_price>0 else None,s.expires_at_ms or now+FRAME_MS[interval])
                 for s in candidates.values()],wave_bars_from_dataframe(closed),mark,now,FRAME_MS[interval])
+        if profile==TC2 and assessment["uncertain"]:
+            # A same-bar trigger/invalidation or a gap cannot justify closing
+            # a verified protected campaign. Keep broker STOP live.
+            campaign.tags["tc2_opposition_advisory_error"]="AMBIGUOUS_OR_MISSING_H1_HISTORY"
+            return None
+        evidence=assessment["opposition"]
         if evidence is None:
             return None
         source,event=evidence

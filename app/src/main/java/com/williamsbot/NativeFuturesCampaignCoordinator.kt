@@ -40,10 +40,21 @@ internal fun matchesConfirmedFuturesProtectiveStop(
     order: JSONObject,
     direction: String,
     expectedClientId: String,
-    expectedStop: String
+    expectedStop: String,
+    expectedSymbol: String? = null
 ): Boolean {
     if (direction != "LONG" && direction != "SHORT") return false
     if (expectedClientId.isBlank()) return false
+    // A stop on another Binance symbol or in hedge/contract-price mode cannot
+    // prove protection of this one-way MARK_PRICE campaign. Absent optional
+    // exchange fields remain tolerated for legacy test doubles; supplied fields
+    // must never conflict with the signed contract.
+    if (expectedSymbol != null &&
+        (expectedSymbol.isBlank() || order.optString("symbol") != expectedSymbol)) return false
+    val actualPositionSide = order.optString("positionSide").uppercase(Locale.US)
+    if (actualPositionSide.isNotBlank() && actualPositionSide != "BOTH") return false
+    val actualWorkingType = order.optString("workingType").uppercase(Locale.US)
+    if (actualWorkingType.isNotBlank() && actualWorkingType != "MARK_PRICE") return false
     val expected = expectedStop.toBigDecimalOrNull() ?: return false
     val type = order.optString("type", order.optString("orderType")).uppercase(Locale.US)
     if (type != "STOP_MARKET") return false
@@ -1907,8 +1918,8 @@ internal class NativeFuturesCampaignCoordinator(
                     if (currentId.isNotBlank() && pendingId.isNotBlank() && currentId != pendingId &&
                         currentPrice != null && pendingPrice != null &&
                         (if (direction == "LONG") pendingPrice > currentPrice else pendingPrice < currentPrice) &&
-                        findProtectiveStop(algos, direction, currentId, currentPrice.toPlainString()) != null &&
-                        findProtectiveStop(algos, direction, pendingId, pendingPrice.toPlainString()) != null &&
+                        findProtectiveStop(algos, direction, currentId, currentPrice.toPlainString(), expectedSymbol = symbol) != null &&
+                        findProtectiveStop(algos, direction, pendingId, pendingPrice.toPlainString(), expectedSymbol = symbol) != null &&
                         referenceMark != null && isProtectiveStopOnCorrectSide(direction, referenceMark.toString(), pendingPrice.toPlainString())) {
                         verifyNativeTrailExposure(adapter, owner)
                         owner.put("protection_client_id", pendingId).put("protective_stop", pendingPrice.toPlainString())
@@ -2027,7 +2038,8 @@ internal class NativeFuturesCampaignCoordinator(
                     findProtectiveStop(
                         algos, direction,
                         matchingIntent?.optString("protection_client_id"),
-                        matchingIntent?.optString("protective_stop")
+                        matchingIntent?.optString("protective_stop"),
+                        expectedSymbol = symbol
                     )
                 } else null
 
@@ -2039,7 +2051,8 @@ internal class NativeFuturesCampaignCoordinator(
                     previousProtectionId.isNotBlank() && previousStopSafe
                 ) {
                     val predecessor = findProtectiveStop(
-                        algos, direction, previousProtectionId, previousStopPrice
+                        algos, direction, previousProtectionId, previousStopPrice,
+                        expectedSymbol = symbol
                     )
                     if (predecessor != null) {
                         val attemptedClientId = currentProtectionId
@@ -2082,7 +2095,8 @@ internal class NativeFuturesCampaignCoordinator(
                         val refreshed = adapter.openAlgoOrders(symbol)
                         protective = findProtectiveStop(
                             refreshed, direction, protectionClientId,
-                            matchingIntent.optString("protective_stop")
+                            matchingIntent.optString("protective_stop"),
+                            expectedSymbol = symbol
                         )
                         if (protective == null) {
                             anyUnprotected = true
@@ -2169,7 +2183,8 @@ internal class NativeFuturesCampaignCoordinator(
                         val refreshed = adapter.openAlgoOrders(symbol)
                         protective = findProtectiveStop(
                             refreshed, direction, protectionClientId,
-                            matchingIntent.optString("protective_stop")
+                            matchingIntent.optString("protective_stop"),
+                            expectedSymbol = symbol
                         )
                         if (protective == null) {
                             anyUnprotected = true
@@ -2350,7 +2365,7 @@ internal class NativeFuturesCampaignCoordinator(
                                 "Tracked predecessor attributes conflict with the durable stop identity"
                             }
                             verifyNativeTrailExposure(adapter, matchingIntent)
-                            check(findProtectiveStop(adapter.openAlgoOrders(symbol), direction, confirmedClientId, confirmedStop) != null)
+                            check(findProtectiveStop(adapter.openAlgoOrders(symbol), direction, confirmedClientId, confirmedStop, expectedSymbol = symbol) != null)
                             val oldAlgoId = old.optString("algoId")
                             if (oldAlgoId.isNotBlank()) adapter.cancelAlgoOrderById(symbol, oldAlgoId)
                             else if (oldClientId.isNotBlank()) adapter.cancelAlgoOrder(symbol, oldClientId)
@@ -2371,7 +2386,8 @@ internal class NativeFuturesCampaignCoordinator(
                         // tracked predecessor is no longer present before forgetting its id.
                         val afterCleanup = adapter.openAlgoOrders(symbol)
                         val primaryStillConfirmed = findProtectiveStop(
-                            afterCleanup, direction, confirmedClientId, confirmedStop
+                            afterCleanup, direction, confirmedClientId, confirmedStop,
+                            expectedSymbol = symbol
                         ) != null
                         val trackedPredecessorStillOpen = (0 until afterCleanup.length()).any { k ->
                             val row = afterCleanup.optJSONObject(k) ?: return@any true
@@ -2977,7 +2993,8 @@ internal class NativeFuturesCampaignCoordinator(
                 "Live Futures position $symbol stop is not on the protective side of the current mark"
             }
             check(findProtectiveStop(
-                preflightAdapter.openAlgoOrders(symbol), direction, ownerStopId, ownerStop
+                preflightAdapter.openAlgoOrders(symbol), direction, ownerStopId, ownerStop,
+                expectedSymbol = symbol
             ) != null) {
                 "Live Futures position $symbol protection is not exchange-confirmed at the persisted client id/trigger"
             }
@@ -3467,7 +3484,7 @@ internal class NativeFuturesCampaignCoordinator(
         }
         val before = adapter.openAlgoOrders(symbol)
         val currentProtectionId = intent.optString("protection_client_id")
-        val confirmedOld = findProtectiveStop(before, direction.name, currentProtectionId, oldStop.toPlainString())
+        val confirmedOld = findProtectiveStop(before, direction.name, currentProtectionId, oldStop.toPlainString(), expectedSymbol = symbol)
         val previousId = intent.optString("previous_protection_client_id")
         val previous = (0 until before.length()).mapNotNull { before.optJSONObject(it) }
             .filter { isProtectiveStop(it, direction.name) }
@@ -3603,6 +3620,15 @@ internal class NativeFuturesCampaignCoordinator(
         }
         if ((0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
                 it.optString("intent_role")=="ADD_ON" && it.optString("symbol")==symbol && exchangeOrderStatus(it) in activeStatuses }) {
+            // A contrary Wise-Man exit is OPTIONAL, unlike liquidation control.
+            // Never cancel a valid addition merely because a contrary setup
+            // appeared, especially while the protected campaign is losing.
+            if(!riskEmergencyVerified && reason in setOf(
+                "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED","OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION")) {
+                return@synchronized JSONObject().put("ok",false).put("state",state.name)
+                    .put("blocker","TC2_OPPOSITE_EXIT_PENDING_ADDITION_NOT_RECONCILED")
+                    .put("safe_rejection",true).put("mutation_attempted",false)
+            }
             val cancelled=cancelPendingEntries("POSITION_EXIT_CANCEL_ADDITIONS",symbol)
             state=State.RECONCILE_REQUIRED
             return@synchronized JSONObject().put("ok",false).put("blocker","Addition canceled before exit; reconcile possible racing fill")
@@ -3732,6 +3758,33 @@ internal class NativeFuturesCampaignCoordinator(
                     "$symbol automatic exit entry price no longer matches the confirmed campaign"
                 }
             }
+            // Do not trust the caller's TC2 exit reason: bind a recently
+            // durable closed-H1 opposite-signal proof to this exact owner,
+            // symbol/direction, and the exchange's CURRENT mark before POST.
+            // Unknown or stale evidence keeps the exchange-side STOP alive.
+            if(!riskEmergencyVerified &&
+                managedEntry?.optString("strategy_profile")==williamsTc2Profile &&
+                reason in setOf("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+                    "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION")) {
+                val markNow=adapterPreflight.markPrice(symbol)
+                val blocker=williamsTc2OppositeExitEvidenceBlocker(
+                    managedEntry,executionStore.readState("decision_h1_opposition_"+symbol),
+                    symbol,direction.name,reason,
+                    managedEntry.optLong("position_open_observed_at_ms"),clock(),markNow
+                )
+                if(blocker!=null)
+                    return@synchronized JSONObject().put("ok",false).put("state",state.name)
+                        .put("safe_rejection",true).put("mutation_attempted",false)
+                        .put("blocker",blocker).put("symbol",symbol)
+                val liveEntry=liveForSymbol.single().first.optString("entryPrice").toDoubleOrNull()
+                    ?: Double.NaN
+                val profitBlocker=williamsTc2OppositeExitProfitBlocker(
+                    direction.name,liveEntry,markNow)
+                if(profitBlocker!=null)
+                    return@synchronized JSONObject().put("ok",false).put("state",state.name)
+                        .put("safe_rejection",true).put("mutation_attempted",false)
+                        .put("blocker",profitBlocker).put("symbol",symbol)
+            }
             if (emergencyWithoutStop) {
                 // Second read as close to POST as possible, because the
                 // previously missing STOP could have been replaced meanwhile.
@@ -3753,7 +3806,7 @@ internal class NativeFuturesCampaignCoordinator(
                 val expectedProtectionId = managedEntry!!.optString("protection_client_id")
                 val expectedStop = managedEntry!!.optString("protective_stop")
                 val openAlgos = adapterPreflight.openAlgoOrders(symbol)
-                if (findProtectiveStop(openAlgos, direction.name, expectedProtectionId, expectedStop) == null) {
+                if (findProtectiveStop(openAlgos, direction.name, expectedProtectionId, expectedStop, expectedSymbol = symbol) == null) {
                     state = State.RECONCILE_REQUIRED
                     lastBlocker = "$symbol current campaign stop is not exchange-confirmed by exact client id and structural trigger; exit mutation blocked"
                     managedEntry!!.put("protection_status", "SUBMISSION_UNKNOWN")
@@ -3916,7 +3969,7 @@ internal class NativeFuturesCampaignCoordinator(
                         owner.optBoolean("strategy_ownership_verified", false)
                     ) ||
                     !isProtectiveStopOnCorrectSide(otherDirection, otherMark.toString(), ownerStop) ||
-                    findProtectiveStop(otherAlgos, otherDirection, ownerStopId, ownerStop) == null
+                    findProtectiveStop(otherAlgos, otherDirection, ownerStopId, ownerStop, expectedSymbol = otherSymbol) == null
                 ) {
                     throw IOException("$otherSymbol remaining exposure is not confirmed protected after closing $symbol")
                 }
@@ -4667,7 +4720,7 @@ internal class NativeFuturesCampaignCoordinator(
         if (clock() < first || clock() - first < 60_000L) return false
         verifyNativeTrailExposure(adapter, owner)
         check(findProtectiveStop(adapter.openAlgoOrders(symbol), owner.getString("direction"),
-            owner.getString("protection_client_id"), owner.getString("protective_stop")) != null)
+            owner.getString("protection_client_id"), owner.getString("protective_stop"), expectedSymbol = symbol) != null)
         owner.put("legacy_stop_fence_attempt_at_ms", clock()); saveIntents(rows)
         try { adapter.cancelAlgoOrder(symbol, id) }
         catch (failure: IOException) { if (!isDefinitiveBinanceOrderNotFound(failure)) throw failure }
@@ -4677,7 +4730,7 @@ internal class NativeFuturesCampaignCoordinator(
         if (!settled) return false
         verifyNativeTrailExposure(adapter, owner)
         check(findProtectiveStop(adapter.openAlgoOrders(symbol), owner.getString("direction"),
-            owner.getString("protection_client_id"), owner.getString("protective_stop")) != null)
+            owner.getString("protection_client_id"), owner.getString("protective_stop"), expectedSymbol = symbol) != null)
         owner.put("last_legacy_stop_resolution", JSONObject().put("at_ms", clock())
             .put("proof", "TWO_SIGNED_ABSENCE_READS_60S_APART_AND_EXACT_CANCEL_FENCE"))
         owner.remove("legacy_stop_absent_first_at_ms")
@@ -4699,7 +4752,8 @@ internal class NativeFuturesCampaignCoordinator(
         orders: JSONArray,
         direction: String,
         expectedClientId: String? = null,
-        expectedStop: String? = null
+        expectedStop: String? = null,
+        expectedSymbol: String? = null
     ): JSONObject? {
         if (expectedClientId.isNullOrBlank() || expectedStop.isNullOrBlank()) return null
         return (0 until orders.length()).mapNotNull { orders.optJSONObject(it) }
@@ -4708,7 +4762,8 @@ internal class NativeFuturesCampaignCoordinator(
                     order = row,
                     direction = direction,
                     expectedClientId = expectedClientId,
-                    expectedStop = expectedStop
+                    expectedStop = expectedStop,
+                    expectedSymbol = expectedSymbol
                 )
             }
     }

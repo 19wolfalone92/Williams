@@ -132,6 +132,13 @@ def _latest_reversal(
             score, valid = _angulation(ind, i, side=side)
             if not valid:
                 continue
+            from williams_market_geometry import first_wise_man_ao_blocker
+            # An AO oscillator colour is defined by this CLOSED bar minus its
+            # predecessor. Never infer RED/GREEN from AO above/below zero.
+            if "ao" not in ind or i<=0 or first_wise_man_ao_blocker(
+                side, row.get("ao"), ind.iloc[i-1].get("ao")
+            ) is not None:
+                continue
             extreme = float(row["low"] if side == "LONG" else row["high"])
             trigger_base = float(row["high"] if side == "LONG" else row["low"])
             return i, trigger_base, extreme
@@ -166,9 +173,23 @@ def _latest_super_ao(
             trigger_base = float(
                 signal_row["high"] if side == "LONG" else signal_row["low"]
             )
-            protective = float(
-                signal_row["low"] if side == "LONG" else signal_row["high"]
+            # TC2 chapter 12 (PDF pp.156-157): when Super AO presents first,
+            # the protective stop belongs beyond the lowest/highest of the
+            # previous 3-5 CLOSED price bars, not just the third AO bar.
+            # Use five bars when history permits (the warmed Android H1 path),
+            # otherwise 3-4 valid bars as allowed by TC2. Later bars must
+            # never change the original risk anchor (no look-ahead).
+            if third_i < 2:
+                continue
+            window = ind.iloc[max(0, third_i - 4):third_i + 1]
+            extremes = pd.to_numeric(
+                window["low" if side == "LONG" else "high"], errors="coerce"
             )
+            if len(extremes) not in (3, 4, 5) or not all(
+                math.isfinite(float(v)) and float(v) > 0 for v in extremes
+            ):
+                continue
+            protective = float(extremes.min() if side == "LONG" else extremes.max())
             return third_i, trigger_base, protective
     return None
 
@@ -260,8 +281,9 @@ def _latest_confirmed_fractal(
             continue
         center = ind.iloc[center_i]
         # NTD ch4 PDF52: an inside-mouth fractal may become valid later.
-        # Eligibility belongs to the unbroken EXTREME versus current Teeth,
-        # not Teeth at the pivot. Keep the original confirmation timestamp.
+        # TC2 ch11 PDF147-149: eligibility belongs to the actual STOP TRIGGER
+        # (one tick beyond the extremum), not the pivot itself or its Teeth.
+        # Keep the original confirmation timestamp; never backdate a signal.
         group_start_value = row.get(group_start_col)
         group_start_i = (
             int(group_start_value)
@@ -287,9 +309,9 @@ def _latest_confirmed_fractal(
         teeth = float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0)
 
         if current_teeth is not None:
-            if direction == "LONG" and trigger_base <= float(current_teeth):
+            if direction == "LONG" and trigger <= float(current_teeth):
                 continue
-            if direction == "SHORT" and trigger_base >= float(current_teeth):
+            if direction == "SHORT" and trigger >= float(current_teeth):
                 continue
         # A confirmed fractal can only be acted on after its two right-hand
         # bars close. If any bar from confirmation onward already touched the
@@ -768,7 +790,7 @@ def extract_ntd_fractal_signal_specs(
         trigger = level + tick if is_long else level - tick
         current_teeth=float(ind.iloc[-1].get("teeth_current",ind.iloc[-1].get("teeth_shifted",0.0)) or 0.0)
         if not math.isfinite(current_teeth) or current_teeth<=0 or (
-            level<=current_teeth if is_long else level>=current_teeth
+            trigger<=current_teeth if is_long else trigger>=current_teeth
         ):
             continue
         if trigger <= 0:
@@ -968,7 +990,7 @@ def extract_long_signal_specs(
         # Formation can be anywhere; trigger validity belongs to current
         # price/Teeth.  At arm time the trigger must still be above Teeth.
         trigger = trigger_base + tick
-        current_trigger_valid = trigger_base > max(current_teeth, 0.0)
+        current_trigger_valid = trigger > max(current_teeth, 0.0)
         if current_close < trigger and current_trigger_valid:
             row = ind.iloc[center_i]
             confirmation_time = _row_time_ms(ind.iloc[confirmation_i])
@@ -1068,7 +1090,7 @@ def extract_short_signal_specs(
                     context_versions=versions,
                     reason="WM1 bearish reversal + increasing angulation; SELL STOP below signal bar",
                     source_candle_index=i,
-                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 20),
+                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, max_reversal_age_bars),
                 )
             )
 
@@ -1136,7 +1158,7 @@ def extract_short_signal_specs(
     if fractal is not None:
         confirmation_i, center_i, trigger_base, protective, teeth = fractal
         trigger = trigger_base - tick
-        current_trigger_valid = current_teeth > 0 and trigger_base < current_teeth
+        current_trigger_valid = current_teeth > 0 and trigger < current_teeth
         if current_close > trigger and current_trigger_valid:
             row = ind.iloc[center_i]
             confirmation_time = _row_time_ms(ind.iloc[confirmation_i])

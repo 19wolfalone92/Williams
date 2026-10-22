@@ -6,6 +6,16 @@ import org.junit.Test
 class WilliamsMarketGeometryTest {
     private fun bars(highs:List<Double>)=highs.mapIndexed { i,h -> WilliamsWaveBar((i+1)*3_600_000L,h-1,h,h-3,h-1,10.0) }
     private fun mirror(b:List<WilliamsWaveBar>)=b.map { it.copy(o=250-it.o,h=250-it.l,l=250-it.h,c=250-it.c) }
+    @Test fun tc2Wm1AoMustStillRunAgainstTheCountertrendEntryForBothSides() {
+        assertNull(williamsFirstWiseManAoBlocker("LONG",-2.0,-1.5))
+        assertNull(williamsFirstWiseManAoBlocker("LONG",3.0,3.5))
+        assertNull(williamsFirstWiseManAoBlocker("SHORT",-1.0,-2.0))
+        assertNull(williamsFirstWiseManAoBlocker("SHORT",4.0,3.0))
+        assertEquals("WM1_AO_NOT_RED",williamsFirstWiseManAoBlocker("LONG",3.5,3.0))
+        assertEquals("WM1_AO_NOT_GREEN",williamsFirstWiseManAoBlocker("SHORT",1.0,1.5))
+        assertEquals("WM1_AO_UNVERIFIED",williamsFirstWiseManAoBlocker("LONG",Double.NaN,1.0))
+        assertEquals("WM1_AO_UNVERIFIED",williamsFirstWiseManAoBlocker("SHORT",1.0,Double.POSITIVE_INFINITY))
+    }
     @Test fun mouthAnchoredPriceEdgesAreComparedWithTheSameAlligatorPath() {
         val b=bars(listOf(101.0,98.0,94.0,89.0,84.0));val j=listOf(100.0,99.0,98.0,97.0,96.0)
         val t=listOf(100.0,99.2,98.4,97.6,96.8);val l=listOf(100.0,99.5,99.0,98.5,98.0)

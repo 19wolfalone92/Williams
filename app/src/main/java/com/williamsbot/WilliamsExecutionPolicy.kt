@@ -34,14 +34,15 @@ internal fun williamsClosedH1HistoryBlocker(bars:List<WilliamsWaveBar>,now:Long)
     return if(now-(bars.last().t+WILLIAMS_H1_MS) in 0 until WILLIAMS_H1_MS) null else "H1_SNAPSHOT_STALE"
 }
 
-/** The active TC2 campaign exits by its exchange-protected stop, including
- * verified monotone stop trails. A fresh opposing H1 hypothesis is a diagnostic
- * warning, NOT a market-close instruction. This is an explicit project policy,
- * not a claim that every edition of Williams bans discretionary exits.
- * NTD/Course continue their independently pinned exit systems.
+/** Trading Chaos 2nd ed., ch.11-12: a validated opposite Wise-Man STOP
+ * breakout can close a campaign, alongside monotone protective stop trails.
+ * A bare contrary hypothesis, wave label or arbitrary strategy request CANNOT.
+ * Source-pinned NTD/Course retain their separate exits.
+ * Reversal into opposite NEW exposure is never implicit: it requires confirmed
+ * flat, a fresh entry candidate and all new-risk/exchange-protection gates.
  */
 internal fun williamsStrategyCanMarketClose(ownerProfile:String):Boolean =
-    ownerProfile==williamsNtdProfile || ownerProfile==williamsCourseProfile
+    ownerProfile in williamsSourceProfiles
 
 internal fun williamsOpposingSignalCanMarketClose(ownerProfile:String):Boolean =
     williamsStrategyCanMarketClose(ownerProfile)
@@ -95,16 +96,109 @@ internal fun williamsBookInitialContextRank(
 internal fun williamsInitialHigherFrameHistoryRequired(source:String):Boolean =
     source!=williamsTc2Profile
 
-/** Final market-close door. TC2 strategy observations never authorize flattening.
- * Actual liquidation remediation uses its separate revalidated safety path.
- * Operator/kill requests still pass live side/size/ownership checks below. */
+/** Reject discretionary TC2 closes that lack a book-authenticated opposite
+ * H1 price trigger. The coordinator independently binds this reason to the
+ * durable signal/exchange proof; a reason string alone is NOT authorization.
+ */
 internal fun williamsMarketExitBlocker(owner: String, reason: String): String? {
     if(reason=="MANUAL_EXIT" || reason=="KILL_SWITCH") return null
     return when(owner) {
-        williamsTc2Profile -> "TC2_PROTECTIVE_STOP_ONLY"
+        williamsTc2Profile -> if(reason in setOf(
+            "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+            "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
+        )) null else "TC2_EXIT_REQUIRES_BOOK_OPPOSITE_TRIGGER"
         williamsNtdProfile,williamsCourseProfile -> null
         else -> "EXIT_STRATEGY_OWNER_UNVERIFIED"
     }
+}
+
+/** TC2 ch12 + NTD ch9: an opposing Wise-Man setup is NOT an obligation
+ * to realize a loss. Opposing-signal discretionary exits are admitted only
+ * while there is a conservative, exchange-confirmed positive mark-to-entry
+ * buffer after estimated round-trip fees and slippage. The project uses 0.35%
+ * (2 * 0.10% per-side fee reserve + 0.15% execution slippage); it is NOT a
+ * statement that Binance can guarantee this fill or book-prescribed fee rate.
+ *
+ * This gate only affects strategy-initiated OPPOSITE exits. It NEVER disables
+ * protective STOP_MARKET, operator risk reduction, or proven emergency exits.
+ * There is deliberately no cap on how long a valid campaign may stay protected.
+ */
+internal const val WILLIAMS_TC2_OPPOSITE_EXIT_COST_BUFFER = 0.0035
+
+internal fun williamsTc2OppositeExitProfitBlocker(
+    side:String, liveEntry:Double, freshMark:Double,
+    costBuffer:Double=WILLIAMS_TC2_OPPOSITE_EXIT_COST_BUFFER,
+    tick:Double=0.0
+):String? {
+    if(side !in setOf("LONG","SHORT") || !liveEntry.isFinite() || liveEntry<=0 ||
+        !freshMark.isFinite() || freshMark<=0 || !costBuffer.isFinite() ||
+        costBuffer<0 || !tick.isFinite() || tick<0)
+        return "TC2_OPPOSITE_EXIT_PROFIT_EVIDENCE_UNVERIFIED"
+    val grossReturn=if(side=="LONG") (freshMark-liveEntry)/liveEntry
+        else (liveEntry-freshMark)/liveEntry
+    // At equality we do not have a positive expected net outcome. One tick
+    // makes the classification conservative at a round-off boundary.
+    return if(grossReturn>costBuffer+tick/liveEntry) null
+        else "TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE"
+}
+
+/** Durable exchange-mutation fence for the TC2 ch11-12 opposite Wise-Man exit.
+ * A caller-supplied reason is not proof: require exactly the closed H1 signal
+ * persisted by the causal scenario scanner after entry, recently observed, and
+ * a fresh Binance MARK price STILL beyond that signal's stop trigger.
+ * No reverse entry is authorized by a close. Ambiguous history never passes.
+ */
+internal fun williamsTc2OppositeExitEvidenceBlocker(
+    owner:JSONObject?, signedDecision:String?, symbol:String, currentDirection:String,
+    reason:String, openedAt:Long, now:Long, mark:Double
+):String? {
+    if(williamsMarketExitBlocker(williamsTc2Profile,reason)!=null)
+        return "TC2_EXIT_REASON_NOT_BOOK_APPROVED"
+    if(owner==null || owner.optString("symbol")!=symbol ||
+        owner.optString("direction")!=currentDirection ||
+        owner.optString("strategy_profile")!=williamsTc2Profile ||
+        openedAt<=0L || now<=0L || !mark.isFinite() || mark<=0)
+        return "TC2_OPPOSITE_EXIT_OWNER_OR_MARK_UNVERIFIED"
+    val decision=runCatching { JSONObject(signedDecision.orEmpty()) }.getOrNull()
+        ?: return "TC2_OPPOSITE_EXIT_DECISION_NOT_DURABLE"
+    val opposite=decision.optJSONObject("opposition")
+        ?: return "TC2_OPPOSITE_EXIT_NO_CONFIRMED_TRIGGER"
+    val event=opposite.optJSONObject("event")
+        ?: return "TC2_OPPOSITE_EXIT_EVENT_UNVERIFIED"
+    val uncertainty=decision.optJSONArray("uncertain")
+        ?: return "TC2_OPPOSITE_EXIT_UNCERTAINTY_NOT_RECORDED"
+    if(uncertainty.length()>0) return "TC2_OPPOSITE_EXIT_AMBIGUOUS_OR_INCOMPLETE_HISTORY"
+    val examinedAt=decision.optLong("observed_at_ms")
+    val signalAt=opposite.optLong("signal_bar_time_ms")
+    val eventAt=event.optLong("known_at_ms")
+    val level=opposite.optDouble("trigger",Double.NaN)
+    val side=opposite.optString("direction")
+    val signalId=opposite.optString("signal_id")
+    if(decision.optString("direction")!=currentDirection ||
+        decision.optLong("scope_started_at_ms")!=openedAt ||
+        opposite.optString("strategy_profile")!=williamsTc2Profile ||
+        opposite.optString("execution_semantics")!="STOP_ENTRY" ||
+        event.optString("state")!="TRIGGERED" ||
+        signalId.isBlank() || signalAt<=0L ||
+        signalAt>Long.MAX_VALUE-WILLIAMS_H1_MS ||
+        eventAt<signalAt+WILLIAMS_H1_MS || eventAt<=openedAt ||
+        eventAt>examinedAt || examinedAt>now ||
+        now-examinedAt !in 0L..120_000L ||
+        !level.isFinite() || level<=0 ||
+        !(currentDirection=="LONG" && side=="SHORT" && mark<=level ||
+          currentDirection=="SHORT" && side=="LONG" && mark>=level))
+        return "TC2_OPPOSITE_EXIT_TRIGGER_NOT_CURRENT_AND_PROVEN"
+    // This record is persisted by management before requesting a mutation,
+    // and is bound to this exact durable signal (not a guessed wave count).
+    val proof=owner.optJSONObject("edition_management")?.optJSONObject("exit_evidence")
+        ?: return "TC2_OPPOSITE_EXIT_MANAGEMENT_PROOF_MISSING"
+    if(proof.optString("reason")!=reason ||
+        proof.optString("signal_id")!=signalId ||
+        proof.optLong("observed_at_ms")!=examinedAt ||
+        proof.optJSONObject("opposition_check")?.optJSONObject("opposition")
+            ?.optString("signal_id")!=signalId)
+        return "TC2_OPPOSITE_EXIT_MANAGEMENT_PROOF_MISMATCH"
+    return null
 }
 
 internal fun williamsStopMoveLabel(reason: String): String = when(reason) {

@@ -517,7 +517,7 @@ def test_android_exit_keeps_account_state_open_protected_when_other_positions_re
     assert "val accountPositionsAfterExit = adapter.positions()" in close
     assert "remainingProtectedPositions++" in close
     assert "state = if (remainingProtectedPositions > 0) State.OPEN_PROTECTED else State.READY" in close
-    assert "findProtectiveStop(otherAlgos, otherDirection, ownerStopId, ownerStop)" in close
+    assert "findProtectiveStop(otherAlgos, otherDirection, ownerStopId, ownerStop, expectedSymbol = otherSymbol)" in close
 
 
 def test_android_configurable_entry_policy_blocks_new_exposure_and_cancels_resting_entries():
@@ -917,19 +917,27 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
     assert 'p?.activeLabel == "W5" && c?.activeLabel == "W3"' in enrich
 
 
-def test_tc2_opposing_h1_signal_is_an_advisory_not_an_automatic_market_exit():
+def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_mark():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     policy = _read(ANDROID / "java/com/williamsbot/WilliamsExecutionPolicy.kt")
+    coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     manage = runtime.split("private fun manageVerifiedNativePositions(", 1)[1].split(
         "private fun submitNativeFuturesAddition(", 1
     )[0]
-    assert "val actionableOpposing = opposing?.takeIf { williamsOpposingSignalCanMarketClose(profile) }" in manage
-    assert "if (williamsStrategyCanMarketClose(profile) &&" in manage
-    assert "(actionableOpposing != null || boundaryExit || editionExit.isNotEmpty()))" in manage
+    assert "val actionableOpposing = opposing?.takeIf {" in manage
+    assert "(!riskOnly && eligibleSymbols==null && tc2TriggerNow &&" in manage
+    assert "oppositeProfitBlocker==null" in manage
+    assert "williamsTc2OppositeExitProfitBlocker(" in policy
+    assert "williamsTc2OppositeExitProfitBlocker(" in coordinator
+    assert 'profile!=williamsTc2Profile && (boundaryExit || editionExit.isNotEmpty())' in manage
     assert '"tc2_correction_boundary_advisory"' in manage
     assert 'market_close_authorized",false' in manage
+    assert 'williamsTc2OppositeExitEvidenceBlocker(' in policy
+    assert 'williamsTc2OppositeExitEvidenceBlocker(' in coordinator
+    assert 'managedEntry.optLong("position_open_observed_at_ms"),clock(),markNow' in coordinator
+    assert 'adapterPreflight.markPrice(symbol)' in coordinator
     assert "futuresCampaignCoordinator.saveManagementState(" in manage
     assert "planWilliamsCampaignStop(" in manage
-    assert 'ownerProfile==williamsNtdProfile || ownerProfile==williamsCourseProfile' in policy
+    assert 'ownerProfile in williamsSourceProfiles' in policy
     assert 'williamsStrategyCanMarketClose(ownerProfile)' in policy
     assert "futuresCampaignCoordinator.trailProtectiveStop(" in manage

@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from williams_market_geometry import angulation_evidence, alligator_phases, ntd_initial_context
-from williams_signals import _latest_confirmed_fractal
+from williams_market_geometry import angulation_evidence, alligator_phases, ntd_initial_context, first_wise_man_ao_blocker
+from williams_signals import _latest_confirmed_fractal, _latest_super_ao
 from williams_wave_hierarchy import WaveBar
 
 H=3_600_000
@@ -74,9 +74,13 @@ def test_fractal_inside_at_formation_can_become_valid_without_backdating(short):
     f=_latest_confirmed_fractal(df,side="SHORT" if short else "LONG",current_teeth=teeth[-1],
         current_close=series[-1].c,tick_size=.1)
     assert f is not None and f[:2]==(4,2)
-    # The extra entry tick must not push an inside-mouth extreme outside Teeth.
+    # NTD/TC2: the ACTUAL trigger (pivot +/- one tick) must break beyond Teeth.
+    # A level inside Teeth remains legal if the one-tick STOP activation is outside.
     inside=145-.05 if short else 105+.05
     assert _latest_confirmed_fractal(df,side="SHORT" if short else "LONG",current_teeth=inside,
+        current_close=series[-1].c,tick_size=.1) is not None
+    at_stop=144.9 if short else 105.1
+    assert _latest_confirmed_fractal(df,side="SHORT" if short else "LONG",current_teeth=at_stop,
         current_close=series[-1].c,tick_size=.1) is None
     assert _latest_confirmed_fractal(df,side="SHORT" if short else "LONG",current_teeth=float("nan"),
         current_close=series[-1].c,tick_size=.1) is None
@@ -126,3 +130,101 @@ def test_course_momentum_uses_signal_line_even_when_ao_colour_disagrees(short):
     proof=course_rhythm(series)
     assert proof["momentum"]==("UP" if short else "DOWN")
     assert proof["momentum_basis"]=="OSCILLATOR_VS_SIGNAL_SMA5"
+
+
+@pytest.mark.parametrize("short",[False,True])
+def test_ntd_first_fractal_consumed_when_tick_trigger_not_pivot_clears_teeth(short):
+    # NTD ch4 pp.42,52-53: first executable breakout is the STOP price, not the pivot.
+    # Sleeping phase precedes the known fractal; later H1 bar touches only +1 tick.
+    highs=[100.0,100.0,101.0,100.0,105.0,103.0,102.0,105.1,103.0]
+    series=bars(highs)
+    jaw=[90.0]*len(series);teeth=[90.0]*len(series);lips=[90.0]*len(series)
+    teeth[7]=105.05
+    if short:
+        series=mirror(series)
+        jaw,teeth,lips=([250-v for v in x] for x in (jaw,teeth,lips))
+    proof=ntd_initial_context(series,jaw,teeth,lips,4,.1)
+    assert not proof["eligible"]
+    assert proof["reason"]=="NTD_FIRST_BREAKOUT_ALREADY_OCCURRED"
+    assert proof["first_breakout_at_ms"]==series[7].t
+
+
+@pytest.mark.parametrize("short",[False,True])
+def test_python_tc2_wm2_stop_uses_five_closed_price_bars_like_android(short):
+    # TC2 ch12 PDF pp.156-157. Third AO bar is index 5; older price bar
+    # index 2 has a more protective extreme than the third AO bar itself.
+    highs=[110,112,120,115,117,118,119,119]
+    lows=[100,99,90,102,101,103,70,65]
+    if short:
+        highs,lows=([250-x for x in lows],[250-x for x in highs])
+    df=pd.DataFrame({
+        "high":highs,"low":lows,
+        ("ao_red_streak" if short else "ao_green_streak"):[0,0,0,1,2,3,4,5],
+    })
+    wm2=_latest_super_ao(df,side="SHORT" if short else "LONG",max_age_bars=8)
+    assert wm2 is not None and wm2[0]==5
+    assert wm2[1]==(lows[5] if short else highs[5])
+    assert wm2[2]==(max(highs[1:6]) if short else min(lows[1:6]))
+    # A later bar's extreme, even one much worse, cannot move initial STOP.
+    assert wm2[2] != (max(highs[6:]) if short else min(lows[6:]))
+
+
+@pytest.mark.parametrize("side,now,previous,expected",[
+    ("LONG",-2.0,-1.5,None),  # red AO, even if below zero
+    ("LONG",3.0,3.5,None),    # red AO, even if above zero
+    ("SHORT",-1.0,-2.0,None),# green AO, even if below zero
+    ("SHORT",4.0,3.0,None),  # green AO, even if above zero
+    ("LONG",3.5,3.0,"WM1_AO_NOT_RED"),
+    ("SHORT",1.0,1.5,"WM1_AO_NOT_GREEN"),
+    ("LONG",4.0,4.0,"WM1_AO_NOT_RED"),
+    ("SHORT",4.0,4.0,"WM1_AO_NOT_GREEN"),
+    ("LONG",float("nan"),1.0,"WM1_AO_UNVERIFIED"),
+    ("SHORT",1.0,float("inf"),"WM1_AO_UNVERIFIED"),
+    ("LONG",None,1.0,"WM1_AO_UNVERIFIED"),
+])
+def test_tc2_first_wise_man_ao_colour_must_oppose_prior_trend(side,now,previous,expected):
+    # TC2 ch9 Russian PDF pp.125, 131-132: momentum is still of old trend.
+    assert first_wise_man_ao_blocker(side,now,previous)==expected
+
+
+def test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao(monkeypatch):
+    import williams_signals as signals
+    monkeypatch.setattr(signals, "_angulation", lambda *args,**kwargs:(.3,True))
+    ind=pd.DataFrame({
+        "bullish_reversal_bar":[False,False,True,False],
+        "bearish_reversal_bar":[False,False,True,False],
+        "ao":[0.0,2.0,3.0,3.5],
+        "high":[100.,102.,104.,105.],
+        "low":[98.,100.,101.,102.],
+    })
+    assert signals._latest_reversal(ind,side="SHORT") is not None
+    assert signals._latest_reversal(ind,side="LONG") is None
+    ind.loc[2,"ao"]=1.0
+    assert signals._latest_reversal(ind,side="LONG") is not None
+    assert signals._latest_reversal(ind,side="SHORT") is None
+    ind.loc[2,"ao"]=float("nan")
+    assert signals._latest_reversal(ind,side="LONG") is None
+    assert signals._latest_reversal(ind,side="SHORT") is None
+
+
+
+def test_short_wm1_signal_uses_same_configured_horizon_as_long_wm1(monkeypatch):
+    """A custom closed-H1 reversal lifetime may not silently become 20 bars for SELL."""
+    import pandas as pd
+    import williams_signals as signals
+    from campaign_model import SignalType
+    at=1_795_000_000_000
+    frame=pd.DataFrame([{"open_time_ms":at,"high":101.0,"low":99.0,
+                         "open":100.0,"close":100.0,"teeth_current":102.0}])
+    monkeypatch.setattr(signals,"_latest_reversal",lambda *a,**kw:(0,99.0,101.0))
+    monkeypatch.setattr(signals,"_angulation",lambda *a,**kw:(1.0,True))
+    monkeypatch.setattr(signals,"_trigger_still_pending",lambda *a,**kw:True)
+    monkeypatch.setattr(signals,"_latest_super_ao",lambda *a,**kw:None)
+    monkeypatch.setattr(signals,"_latest_three_price_bar_signal",lambda *a,**kw:None)
+    monkeypatch.setattr(signals,"_latest_confirmed_fractal",lambda *a,**kw:None)
+    specs=signals.extract_short_signal_specs(
+        "BTCUSDT",frame,timeframe="1h",tick_size=0.1,max_reversal_age_bars=6)
+    first=[spec for spec in specs if spec.signal_type==SignalType.REVERSAL]
+    assert len(first)==1
+    assert first[0].expires_at_ms==signals._expiry(at,"1h",6)
+    assert first[0].expires_at_ms!=signals._expiry(at,"1h",20)

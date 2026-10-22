@@ -9,6 +9,23 @@ NTD ch3/ch10: sleep is intertwined lines, not merely a narrowing trend.
 from math import isfinite
 
 
+def first_wise_man_ao_blocker(side, ao_now, ao_before):
+    """TC2 ch9: countertrend WM1 requires falling AO for bullish reversal,
+    rising AO for bearish reversal; value versus zero does not determine color.
+    """
+    if side not in {"LONG", "SHORT"}:
+        return "WM1_AO_SIDE_INVALID"
+    try:
+        now, before = float(ao_now), float(ao_before)
+    except (TypeError, ValueError, OverflowError):
+        return "WM1_AO_UNVERIFIED"
+    if not isfinite(now) or not isfinite(before):
+        return "WM1_AO_UNVERIFIED"
+    if side == "LONG":
+        return None if now < before else "WM1_AO_NOT_RED"
+    return None if now > before else "WM1_AO_NOT_GREEN"
+
+
 def _slope(values):
     n = len(values)
     x = (n - 1) / 2
@@ -110,7 +127,7 @@ def ntd_initial_context(bars,jaw,teeth,lips,formation, tick):
         for i in range(f.confirmation+1,len(bars)):
             if sign*((bars[i].h if sign==1 else bars[i].l)-trigger)>=0:
                 # An earlier touch consumes this formation even when invalid.
-                if isfinite(teeth[i]) and sign*(f.price-teeth[i])>0:
+                if isfinite(teeth[i]) and sign*(trigger-teeth[i])>0:
                     return proof | {"reason":"NTD_FIRST_BREAKOUT_ALREADY_OCCURRED", "first_breakout_at_ms":bars[i].t}
                 break
     return proof | {"eligible":True,"reason":"NTD_SLEEP_AND_UNCONSUMED_FIRST_FRACTAL"}

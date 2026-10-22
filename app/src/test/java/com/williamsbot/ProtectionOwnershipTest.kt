@@ -162,9 +162,33 @@ class ProtectionOwnershipTest {
             .put("closePosition", true)
             .put("algoStatus", "NEW")
             .put("clientAlgoId", "W2PS_BTC_current")
+            .put("symbol", "BTCUSDT")
+            .put("positionSide", "BOTH")
+            .put("workingType", "MARK_PRICE")
             .put("triggerPrice", "95.00")
         assertTrue(matchesConfirmedFuturesProtectiveStop(
             validLong, "LONG", "W2PS_BTC_current", "95"
+        ))
+        // The same client/level/side on a different symbol is NOT proof that
+        // BTCUSDT is protected. Wrong one-way or trigger-price basis also fails.
+        assertTrue(matchesConfirmedFuturesProtectiveStop(
+            validLong, "LONG", "W2PS_BTC_current", "95", "BTCUSDT"
+        ))
+        assertFalse(matchesConfirmedFuturesProtectiveStop(
+            JSONObject(validLong.toString()).put("symbol", "ETHUSDT"),
+            "LONG", "W2PS_BTC_current", "95", "BTCUSDT"
+        ))
+        assertFalse(matchesConfirmedFuturesProtectiveStop(
+            JSONObject(validLong.toString()).apply { remove("symbol") },
+            "LONG", "W2PS_BTC_current", "95", "BTCUSDT"
+        ))
+        assertFalse(matchesConfirmedFuturesProtectiveStop(
+            JSONObject(validLong.toString()).put("positionSide", "LONG"),
+            "LONG", "W2PS_BTC_current", "95", "BTCUSDT"
+        ))
+        assertFalse(matchesConfirmedFuturesProtectiveStop(
+            JSONObject(validLong.toString()).put("workingType", "CONTRACT_PRICE"),
+            "LONG", "W2PS_BTC_current", "95", "BTCUSDT"
         ))
         assertFalse(matchesConfirmedFuturesProtectiveStop(
             JSONObject(validLong.toString()).put("side", "BUY"),
