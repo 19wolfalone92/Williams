@@ -2184,7 +2184,25 @@ class FuturesWilliamsRuntime:
             raise RuntimeError(f"{symbol}: exit already pending ({existing_exit})")
 
         position = self._position(symbol)
-        pos_qty = abs(self._signed_position_qty(position))
+        signed_pos_qty = self._signed_position_qty(position)
+        if not math.isfinite(signed_pos_qty):
+            self._set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(f"{symbol}: FUTURES_EXIT_POSITION_QUANTITY_NOT_FINITE")
+        pos_qty = abs(signed_pos_qty)
+        if pos_qty > 0 and not (
+                (campaign.side == "BUY" and signed_pos_qty > 0)
+                or (campaign.side == "SELL" and signed_pos_qty < 0)):
+            # A recovered/externally reversed position can no longer be closed
+            # under the original campaign's claimed side. Even reduceOnly must
+            # never claim an unknown Binance position belongs to this owner.
+            self._set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(f"{symbol}: FUTURES_EXIT_LIVE_SIDE_MISMATCH")
+        if pos_qty > 0 and reason not in ("MANUAL_EXIT", "KILL_SWITCH") and not risk_emergency:
+            owned_qty=float(getattr(campaign,"position_qty",0) or 0)
+            if not math.isfinite(owned_qty) or owned_qty <= 0 or not math.isclose(
+                    pos_qty,owned_qty,rel_tol=1e-9,abs_tol=1e-9):
+                self._set_state(symbol, "RECONCILE_REQUIRED")
+                raise RuntimeError(f"{symbol}: FUTURES_EXIT_LIVE_QUANTITY_OWNER_MISMATCH")
         if pos_qty <= 0:
             try:
                 orders = self.client.all_orders(symbol, limit=1000)
