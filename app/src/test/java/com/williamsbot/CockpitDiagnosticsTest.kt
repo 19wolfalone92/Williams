@@ -228,6 +228,26 @@ class CockpitDiagnosticsTest {
         assertEquals("FAIL", severity("EXE-05", stale, c))
     }
 
+    @Test fun fractalDetectionUsesTwoClosedRightBarsAndNeverFutureInformation() {
+        val confirmedAt = now - 3_600_000L
+        fun scanner(fractalFormationAt: Long) = JSONObject().put("candidates", JSONArray().apply {
+            for(symbol in APPROVED_FUTURES_SYMBOLS) {
+                val signal = JSONObject().put("type", "LONG_FRACTAL")
+                    .put("signal_bar_time_ms", confirmedAt)
+                    .put("known_at_ms", now)
+                    .put("formation_at_ms", fractalFormationAt)
+                put(JSONObject().put("symbol", symbol).put("decision_trace",
+                    JSONObject().put("signals", JSONArray().put(signal))))
+            }
+        })
+        fun causal(s: JSONObject) = CockpitDiagnostics.rows(
+            CockpitDiagnostics.checks(healthy(),coordinator(),s,now))
+            .single { it.optString("id")=="STR-13" }.getString("severity")
+        assertEquals("PASS",causal(scanner(confirmedAt - 2*3_600_000L)))
+        assertEquals("FAIL",causal(scanner(confirmedAt - 3_600_000L)))
+        assertEquals("FAIL",causal(scanner(confirmedAt + 3_600_000L)))
+    }
+
     @Test fun journalProtectedWithoutCurrentSignedStopCannotPass() {
         val position = JSONObject().put("symbol","SOLUSDT").put("direction","LONG")
             .put("positionAmt","1").put("qty",1).put("stop",95)
