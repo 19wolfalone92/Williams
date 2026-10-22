@@ -61,6 +61,10 @@ class CockpitLiveEvidenceTest {
         assertEquals("—",cockpitKnownOpenPositionsLabel(status(positionsAt=now-30_000L),now))
         assertEquals("—",cockpitKnownOpenPositionsLabel(status(snapshotOk=false),now))
         assertEquals("—",cockpitKnownOpenPositionsLabel(status(reportedCount=0),now))
+        val staleOwner=status(positions=emptyList(),reportedCount=0).copy(
+            futuresIntents=listOf(intent()))
+        assertEquals("—",cockpitKnownOpenPositionsLabel(staleOwner,now))
+        assertTrue(cockpitKnownOpenPositionsDetail(staleOwner,now).contains("предыдущем снимке 1"))
         assertTrue(cockpitKnownOpenPositionsDetail(status(positionsAt=now-30_000L),now)
             .contains("предыдущем снимке 1"))
         assertTrue(cockpitKnownOpenPositionsDetail(status(positions=emptyList(),reportedCount=0,
