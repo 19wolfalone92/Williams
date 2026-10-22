@@ -51,3 +51,16 @@ def test_lingering_exchange_pending_order_must_remain_execution_blocked():
     assert "campaignCoordinatorReadyForEntry()" in runtime
     assert "campaignReady" in runtime
     assert "STOP_ENTRY" in runtime
+
+
+def test_unresolved_diagnostic_findings_not_suppressed_by_zero_contract_conflicts():
+    runtime = (K / "StandaloneRuntime.kt").read_text()
+    archive = (K / "DiagnosticsArchive.kt").read_text()
+    diagnostic = (K / "CockpitDiagnostics.kt").read_text()
+    assert '"EXE-10"' in runtime
+    assert 'newerExchangeStopSymbols' in runtime
+    assert 'unresolved_diagnostic_checks' in runtime
+    assert 'unresolved_check_count' in runtime
+    assert 'INTERNAL_CONTRACT_CONTRADICTIONS_ONLY' in runtime
+    assert '"unresolved_diagnostic_checks.json"' in archive
+    assert 'const val VERSION = 15' in diagnostic
