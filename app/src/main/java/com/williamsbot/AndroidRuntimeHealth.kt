@@ -22,6 +22,9 @@ object AndroidRuntimeHealth {
         val ignoring = pm.isIgnoringBatteryOptimizations(context.packageName)
 
         val result = JSONObject()
+            .put("application_id", context.packageName)
+            .put("app_version", BuildConfig.VERSION_NAME)
+            .put("credential_storage_policy", "ANDROID_KEYSTORE_ENCRYPTED_APP_PRIVATE_NO_BACKUP")
             .put("foreground_service_active", RuntimeServiceState.active)
             .put("foreground_service_confirmed_at_ms", RuntimeServiceState.confirmedAtMs)
             .put("foreground_service_error", RuntimeServiceState.lastError ?: JSONObject.NULL)
