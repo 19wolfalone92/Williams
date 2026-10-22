@@ -56,8 +56,18 @@ def test_authorized_exit_still_reaches_existing_live_preflight(source, reason, e
     def position(_):
         raise ReachedLivePreflight()
     runtime._position = position
-    campaign = SimpleNamespace(symbol="BTCUSDT", state=CampaignState.TREND_ACTIVE,
-                               tags={"strategy_profile": source})
+    import time
+    now=int(time.time()*1000)
+    tags={"strategy_profile":source}
+    if source==TC2 and reason.startswith("OPPOSITE_WILLIAMS_"):
+        tags["tc2_book_exit_proof"]={
+            "reason":reason, "observed_at_ms":now-1000,
+            "opened_at_ms":now-2*3_600_000, "strategy_profile":TC2,
+            "direction":"SHORT","signal_id":"book_opposite_1",
+            "trigger":96.0,"mark":95.0,
+            "event":{"state":"TRIGGERED","known_at_ms":now-60_000}}
+    campaign = SimpleNamespace(symbol="BTCUSDT",side="BUY",state=CampaignState.TREND_ACTIVE,
+                               tags=tags)
     with pytest.raises(ReachedLivePreflight):
         runtime._exit_market(campaign, reason, risk_emergency=emergency)
 
@@ -77,3 +87,29 @@ def test_tc2_bar_stop_requires_known_opening_time_and_contiguous_h1(side):
     gapped = [SimpleNamespace(t=b.t+(hour if i>=2 else 0), h=b.h, l=b.l)
               for i,b in enumerate(bars)]
     assert plan_williams_stop(*args, hour, gapped) is None
+
+
+@pytest.mark.parametrize("bad",["missing","stale","wrong_direction","wrong_book","untriggered","price_recovered"])
+def test_tc2_opposite_close_cannot_reach_cancel_or_exchange_without_current_book_proof(exit_runtime,bad):
+    import time
+    now=int(time.time()*1000)
+    runtime=exit_runtime
+    calls=[]
+    runtime.cancel_pending_entries=lambda *a:calls.append("cancel")
+    runtime._position=lambda *a:calls.append("position")
+    runtime.client=SimpleNamespace(time_offset_ms=0)
+    proof={"reason":"OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+           "observed_at_ms":now-1000,"opened_at_ms":now-2*3_600_000,
+           "strategy_profile":TC2,"direction":"SHORT","signal_id":"wm1_short",
+           "trigger":96.0,"mark":95.0,"event":{"state":"TRIGGERED","known_at_ms":now-60_000}}
+    if bad=="stale":proof["observed_at_ms"]=now-130_000
+    if bad=="wrong_direction":proof["direction"]="LONG"
+    if bad=="wrong_book":proof["strategy_profile"]=NTD
+    if bad=="untriggered":proof["event"]["state"]="WAITING"
+    if bad=="price_recovered":proof["mark"]=99.0
+    tags={"strategy_profile":TC2}
+    if bad!="missing":tags["tc2_book_exit_proof"]=proof
+    campaign=SimpleNamespace(symbol="BTCUSDT",side="BUY",state=CampaignState.ADD_ON_PENDING,tags=tags)
+    with pytest.raises(RuntimeError,match="TC2_EXIT_BOOK"):
+        runtime._exit_market(campaign,"OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
+    assert calls==[]
