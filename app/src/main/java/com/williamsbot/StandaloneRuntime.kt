@@ -2176,42 +2176,71 @@ private class NativeEngine(
 
         val oldKey = key()
         val oldSecret = secret()
-        prefs.edit()
-            .putString("api_key", newKey)
-            .putString("api_secret", newSecret)
-            .apply()
+        val changed = oldKey != newKey || oldSecret != newSecret
 
-        return try {
-            // Validate credentials against USDⓈ-M Futures Testnet, never Spot /api/v3.
+        // Existing working identity must never be silently replaced by a
+        // possibly incorrect or offline key. With an EMPTY vault, however,
+        // the operator must be able to save a new encrypted credential even
+        // when Binance is temporarily unreachable after phone reboot.
+        val existingIdentity = oldKey.isNotBlank() && oldSecret.isNotBlank()
+        var account: JSONObject? = null
+        var validationError: String? = null
+        try {
             val futures = BinanceUsdMFuturesTestnetAdapter(newKey, newSecret, http)
             futures.serverTime()
-            val account = futures.account()
+            account = futures.account()
             futures.requireOneWayMode()
-            check(updateCachedFuturesAccount(account)) {
-                "Futures Testnet account returned invalid or incomplete equity/balance values"
+        } catch (x: Exception) {
+            validationError = safeDiagnosticText(x.message ?: x.javaClass.simpleName)
+            if (existingIdentity && changed) {
+                throw IllegalStateException(
+                    "Existing Binance credentials kept; replacement could not be verified. " +
+                        "Futures Demo: $validationError", x
+                )
+            }
+        }
+
+        // A single durable commit replaces the asynchronous apply()/rollback
+        // race, where a failed REST request could erase freshly typed keys.
+        check(prefs.edit().putString("api_key", newKey)
+            .putString("api_secret", newSecret).commit()) {
+            "Encrypted Binance credentials could not be written to device storage"
+        }
+        val persisted = key() == newKey && secret() == newSecret
+        check(persisted) {
+            "Encrypted Binance credentials did not survive immediate read-back"
+        }
+        if (validationError != null) {
+            restAccountReady = false
+            restAccountLastError = "Credentials stored; exchange verification pending: $validationError"
+            // New exposure remains blocked until signed account and position
+            // reconciliation succeeds. Do not erase the only saved credentials.
+            reconcileRequired = true
+            check(persistSafetyFlag("reconcile_required", true)) {
+                "Credentials saved but SQLite reconciliation fence could not be written"
+            }
+        } else {
+            val authenticatedAccount = checkNotNull(account)
+            check(updateCachedFuturesAccount(authenticatedAccount)) {
+                "Credentials saved; Futures account balance/equity is incomplete. Start requires reconciliation"
             }
             restLastError = null
-            JSONObject()
-                .put("configured", true)
-                .put("testnet", true)
-                .put("standalone", true)
-                .put("account_type", "USD_M_FUTURES")
-                .put("validation", "FUTURES_CREDENTIALS_AND_ONE_WAY_MODE_PASS")
-                .put("read_back_verified", key() == newKey && secret() == newSecret)
-                .put("execution_enabled", false)
-                .put("execution_blocker", "start_required_for_local_Futures_reconciliation_and_scanner")
-        } catch (x: Exception) {
-            prefs.edit()
-                .putString("api_key", oldKey)
-                .putString("api_secret", oldSecret)
-                .apply()
-            restAccountReady = false
-            throw IllegalStateException(
-                "Binance USDⓈ-M Futures Testnet credentials validation failed: " +
-                    (x.message ?: x.javaClass.simpleName),
-                x
-            )
         }
+        return JSONObject()
+            .put("configured", true)
+            .put("saved_to_encrypted_storage", true)
+            .put("testnet", true)
+            .put("standalone", true)
+            .put("account_type", "USD_M_FUTURES")
+            .put("validation", if (validationError == null)
+                "FUTURES_CREDENTIALS_AND_ONE_WAY_MODE_PASS"
+                else "PENDING_EXCHANGE_VERIFICATION")
+            .put("validation_detail", validationError ?: JSONObject.NULL)
+            .put("read_back_verified", persisted)
+            .put("execution_enabled", false)
+            .put("execution_blocker", if (validationError == null)
+                "start_required_for_local_Futures_reconciliation_and_scanner"
+                else "CREDENTIALS_SAVED_BUT_EXCHANGE_RECONCILIATION_REQUIRED")
     }
 
     fun clear(): JSONObject {
