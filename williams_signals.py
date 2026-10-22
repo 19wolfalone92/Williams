@@ -1090,7 +1090,7 @@ def extract_short_signal_specs(
                     context_versions=versions,
                     reason="WM1 bearish reversal + increasing angulation; SELL STOP below signal bar",
                     source_candle_index=i,
-                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 20),
+                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, max_reversal_age_bars),
                 )
             )
 
