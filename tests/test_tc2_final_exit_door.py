@@ -283,3 +283,21 @@ def test_tc2_valid_opposite_setup_does_not_cancel_unsettled_addition(exit_runtim
         runtime._exit_market(campaign,"OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
     assert calls==[]
     assert campaign.state==CampaignState.ADD_ON_PENDING
+
+
+
+@pytest.mark.parametrize("symbol,side,entry,exit_mark",[
+    ("ETHUSDT","SELL",2429.20,2441.01),
+    ("SOLUSDT","SELL",105.57,105.89),
+    ("XRPUSDT","SELL",1.31270,1.31180),
+])
+def test_19_oct_2026_short_campaigns_cannot_be_closed_at_net_loss_by_opposite_wm(
+        symbol,side,entry,exit_mark):
+    """Historical diagnostic 4.34: 19 Oct SOL and XRP had opposite EXIT intents.
+
+    ETH's EXCHANGE_RECONCILED_CLOSE remains unclassified (possibly a real SL)
+    and must not be equated with a discretionary WM exit.
+    """
+    from williams_execution_policy import tc2_opposite_exit_profit_blocker
+    assert tc2_opposite_exit_profit_blocker(side,entry,exit_mark)==(
+        "TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE")
