@@ -1297,6 +1297,14 @@ private class NativeEngine(
     private val executionStore: FuturesExecutionStore
 ) {
     private val baseUrl = "https://demo-fapi.binance.com"
+    // The diagnostic 12 archive records repeated "sent ping but didn't
+    // receive pong within 30000ms" while Binance's actual market stream
+    // was needed for trading. Use payload freshness + bounded reconnect
+    // for PUBLIC market streams instead of the client's active 30s PING.
+    // Keep the existing 30s PING on the private USER stream and REST client;
+    // fresh public market and bookTicker data remain mandatory to enter.
+    private val publicMarketWebSocketClient = http.newBuilder()
+        .pingInterval(0, TimeUnit.SECONDS).build()
     // All REST transport in this Android runtime is anchored to USD-M Futures Testnet.
     // Spot-shaped signed routes are rejected; legacy public reads are translated only
     // to their Futures market-data equivalents by getBody().
@@ -1633,12 +1641,15 @@ private class NativeEngine(
             (prefs.getString("execution_gate_symbol", "") ?: "")
                 .ifBlank { executionStore.readState("execution_gate_symbol").orEmpty() }
         if (interruptedGateSymbol.isNotBlank()) {
+            // An interrupted financial mutation must fence EVERY new entry,
+            // but must not silently opt the operator out of read-only market
+            // supervision after reboot. The exchange owns the truth and safe
+            // START will reconcile open positions/STOPs before any new risk.
             reconcileRequired = true
             persistSafetyFlag("reconcile_required", true)
-            prefs.edit().putBoolean("auto_run", false).commit()
             lastError =
                 "Execution gate interrupted for " + interruptedGateSymbol +
-                    "; REST reconciliation required"
+                    "; REST reconciliation required; background monitoring opt-in retained"
         }
         stateMachine.force(
             when {
@@ -2176,42 +2187,78 @@ private class NativeEngine(
 
         val oldKey = key()
         val oldSecret = secret()
-        prefs.edit()
-            .putString("api_key", newKey)
-            .putString("api_secret", newSecret)
-            .apply()
+        val changed = oldKey != newKey || oldSecret != newSecret
 
-        return try {
-            // Validate credentials against USDⓈ-M Futures Testnet, never Spot /api/v3.
+        // Existing working identity must never be silently replaced by a
+        // possibly incorrect or offline key. With an EMPTY vault, however,
+        // the operator must be able to save a new encrypted credential even
+        // when Binance is temporarily unreachable after phone reboot.
+        val existingIdentity = oldKey.isNotBlank() && oldSecret.isNotBlank()
+        var account: JSONObject? = null
+        var validationError: String? = null
+        try {
             val futures = BinanceUsdMFuturesTestnetAdapter(newKey, newSecret, http)
             futures.serverTime()
-            val account = futures.account()
+            account = futures.account()
             futures.requireOneWayMode()
-            check(updateCachedFuturesAccount(account)) {
-                "Futures Testnet account returned invalid or incomplete equity/balance values"
-            }
-            restLastError = null
-            JSONObject()
-                .put("configured", true)
-                .put("testnet", true)
-                .put("standalone", true)
-                .put("account_type", "USD_M_FUTURES")
-                .put("validation", "FUTURES_CREDENTIALS_AND_ONE_WAY_MODE_PASS")
-                .put("read_back_verified", key() == newKey && secret() == newSecret)
-                .put("execution_enabled", false)
-                .put("execution_blocker", "start_required_for_local_Futures_reconciliation_and_scanner")
         } catch (x: Exception) {
-            prefs.edit()
-                .putString("api_key", oldKey)
-                .putString("api_secret", oldSecret)
-                .apply()
-            restAccountReady = false
-            throw IllegalStateException(
-                "Binance USDⓈ-M Futures Testnet credentials validation failed: " +
-                    (x.message ?: x.javaClass.simpleName),
-                x
-            )
+            validationError = safeDiagnosticText(x.message ?: x.javaClass.simpleName)
+            if (existingIdentity && changed) {
+                throw IllegalStateException(
+                    "Existing Binance credentials kept; replacement could not be verified. " +
+                        "Futures Demo: $validationError", x
+                )
+            }
         }
+
+        // A single durable commit replaces the asynchronous apply()/rollback
+        // race, where a failed REST request could erase freshly typed keys.
+        check(prefs.edit().putString("api_key", newKey)
+            .putString("api_secret", newSecret).commit()) {
+            "Encrypted Binance credentials could not be written to device storage"
+        }
+        val persisted = key() == newKey && secret() == newSecret
+        check(persisted) {
+            "Encrypted Binance credentials did not survive immediate read-back"
+        }
+        if (validationError != null) {
+            restAccountReady = false
+            restAccountLastError = "Credentials stored; exchange verification pending: $validationError"
+            // New exposure remains blocked until signed account and position
+            // reconciliation succeeds. Do not erase the only saved credentials.
+            reconcileRequired = true
+            check(persistSafetyFlag("reconcile_required", true)) {
+                "Credentials saved but SQLite reconciliation fence could not be written"
+            }
+        } else {
+            val authenticatedAccount = checkNotNull(account)
+            if (!updateCachedFuturesAccount(authenticatedAccount)) {
+                // A malformed/temporarily incomplete signed account response
+                // is a failed TRADING preflight, not evidence that encrypted
+                // credential persistence failed after a verified commit.
+                validationError = "Signed Futures account balances are incomplete"
+                restAccountReady = false
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+            } else {
+                restLastError = null
+            }
+        }
+        return JSONObject()
+            .put("configured", true)
+            .put("saved_to_encrypted_storage", true)
+            .put("testnet", true)
+            .put("standalone", true)
+            .put("account_type", "USD_M_FUTURES")
+            .put("validation", if (validationError == null)
+                "FUTURES_CREDENTIALS_AND_ONE_WAY_MODE_PASS"
+                else "PENDING_EXCHANGE_VERIFICATION")
+            .put("validation_detail", validationError ?: JSONObject.NULL)
+            .put("read_back_verified", persisted)
+            .put("execution_enabled", false)
+            .put("execution_blocker", if (validationError == null)
+                "start_required_for_local_Futures_reconciliation_and_scanner"
+                else "CREDENTIALS_SAVED_BUT_EXCHANGE_RECONCILIATION_REQUIRED")
     }
 
     fun clear(): JSONObject {
@@ -2381,7 +2428,8 @@ private class NativeEngine(
         startDeviceWaveReplay(generation)
         // Independent reconciliation/account gates block entries. Only an explicit
         // kill latch needs to force the pause flag during safe monitoring.
-        paused = killLatched || prefs.getBoolean("operator_entries_paused", false)
+        paused = killLatched || prefs.getBoolean("operator_entries_paused", false) ||
+            prefs.getBoolean("risk_daily_baseline_auto_paused", false)
         // The Futures Demo market stream is a live execution prerequisite. REST remains
         // authoritative for recovery and account/position reconciliation.
         marketSocket?.close(1000, "Restart USD-M Futures market stream")
@@ -2496,6 +2544,9 @@ private class NativeEngine(
             name = "williams-futures-native-engine"
             start()
         }
+        // A newly started monitoring worker proves the Android runtime can
+        // initialize again. Execution gates remain separate and fail-closed.
+        RuntimeStartupEvidence.clear(context)
         return JSONObject()
             .put("started", true)
             .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
@@ -3285,7 +3336,7 @@ private class NativeEngine(
         marketSocketStartedMs = System.currentTimeMillis()
         marketReconnectRequested = false
         val request = Request.Builder().url(wsStreamUrl()).build()
-        marketSocket = http.newWebSocket(request, object : WebSocketListener() {
+        marketSocket = publicMarketWebSocketClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (marketSocket !== webSocket) {
                     webSocket.close(1000, "superseded market stream")
@@ -3348,7 +3399,7 @@ private class NativeEngine(
         publicSocketStartedMs = System.currentTimeMillis()
         publicReconnectRequested = false
         val request = Request.Builder().url(publicStreamUrl()).build()
-        publicSocket = http.newWebSocket(request, object : WebSocketListener() {
+        publicSocket = publicMarketWebSocketClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (publicSocket !== webSocket) {
                     webSocket.close(1000, "superseded public stream")
@@ -3433,10 +3484,16 @@ private class NativeEngine(
                 }
             }
             if (!allowed) {
-                prefs.edit().putBoolean("auto_run", false).commit()
-                scannerState = "FAILED"
-                scannerError = "Automatic runtime recovery stopped after three failures in 15 minutes"
+                // A temporary network/Android service failure must not erase
+                // the user's explicit reboot auto-run opt-in. Recovery stays
+                // fail-closed and requires a subsequent explicit START or boot.
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+                scannerState = "BLOCKED_RUNTIME_RECOVERY"
+                scannerError = "Automatic recovery limited after three failures in 15 minutes; " +
+                    "auto-run preference preserved; use START to retry safe Binance reconciliation"
                 lastError = scannerError
+                RuntimeServiceState.lastError = scannerError
                 return@Thread
             }
 
@@ -3455,10 +3512,12 @@ private class NativeEngine(
                     ?: "Safe Runtime restart was rejected"
             }
             if (blocker != null) {
-                prefs.edit().putBoolean("auto_run", false).commit()
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
                 scannerState = "BLOCKED_RUNTIME_RECOVERY"
                 scannerError = blocker
                 lastError = "Runtime recovery blocked (" + reason + "): " + blocker
+                RuntimeServiceState.lastError = safeDiagnosticText(lastError.orEmpty())
             }
         }.apply {
             isDaemon = true
@@ -4762,6 +4821,20 @@ private class NativeEngine(
             if (result.optBoolean("ok", false)) {
                 lastRestReconcileMs = System.currentTimeMillis()
                 lastReconciliationResult = "SUCCESS"
+                // Diagnostic 12: the BNBUSDT STOP was observed by signed REST
+                // after the dashboard cached its older unverified row. Each
+                // successful signed reconciliation invalidates only the
+                // DISPLAY cache, so the next cockpit refresh recomputes from
+                // current positions and protective order observations. Never
+                // use this cache to authorize trading or label a stale STOP
+                // exchange-confirmed. Epoch prevents in-flight old snapshots
+                // from resurrecting stale protection after this invalidation.
+                synchronized(this) {
+                    futuresPositionSnapshotEpoch++
+                    cachedFuturesPositionEnvelope = null
+                    futuresPositionSnapshotLastAttemptMs = 0L
+                    futuresPositionSnapshotRefreshError = null
+                }
             } else {
                 lastReconciliationResult = "BLOCKED: " +
                     result.optString("blocker", result.optString("error", "unknown"))
@@ -4922,8 +4995,9 @@ private class NativeEngine(
                 // Distinguish an automatic, recoverable daily-baseline pause
                 // from the operator's explicit pause. Never erase either risk
                 // evidence or the original 3% daily loss limit.
-                prefs.edit().putBoolean("auto_run", false)
-                    .putBoolean("risk_daily_baseline_auto_paused", true).commit()
+                check(prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()) {
+                    "Could not durably pause trades while the UTC baseline is unknown"
+                }
                 lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: unable to reconstruct UTC-day equity safely: " +
                     (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 3% and entries stay blocked"
                 return false
@@ -4964,14 +5038,14 @@ private class NativeEngine(
             futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
         }.getOrElse { failure ->
             paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
             lastError = "FUTURES_DAILY_INCOME_UNKNOWN: cannot verify the UTC-day PnL ledger: " +
                 (failure.message ?: failure.javaClass.simpleName)
             return false
         }
         val dailyIncome = summarizeFuturesDailyIncome(dailyIncomeRows) ?: run {
             paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
             lastError = "FUTURES_DAILY_INCOME_UNKNOWN: income rows are malformed or truncated; entries remain blocked"
             return false
         }
@@ -4989,7 +5063,7 @@ private class NativeEngine(
                 ?: throw IllegalStateException("Invalid aggregate Futures unrealized PnL")
         }.getOrElse { failure ->
             paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
             lastError = "FUTURES_DAILY_UNREALIZED_PNL_UNKNOWN: " +
                 (failure.message ?: failure.javaClass.simpleName)
             return false
@@ -5000,7 +5074,7 @@ private class NativeEngine(
         val riskAdjustedEquity = baseline + dailyPnlQuote
         if (!dailyPnlQuote.isFinite() || !riskAdjustedEquity.isFinite() || riskAdjustedEquity <= 0.0) {
             paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
             lastError = "FUTURES_DAILY_PNL_INVALID: risk-adjusted equity is not finite and positive"
             return false
         }
@@ -10453,7 +10527,26 @@ private class NativeEngine(
                 "; warmup_running=" + historyWarmupRunning +
                 "; active_tasks=" + activeHistoryTasks.size
         )
-        test("credentials_state", "binance", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
+        val secureKeysPresent = key().isNotBlank() && secret().isNotBlank()
+        val androidStartupError = RuntimeServiceState.lastError
+        val rebootSeverity = when {
+            !androidStartupError.isNullOrBlank() -> "FAIL"
+            autoRunRequested && !secureKeysPresent -> "FAIL"
+            autoRunRequested && (!running || !workerAlive) -> "FAIL"
+            !autoRunRequested -> "NOT_VERIFIED"
+            else -> "PASS"
+        }
+        test("reboot_credentials_and_engine", "runtime", rebootSeverity == "PASS", rebootSeverity,
+            "app_id=" + context.packageName +
+                "; version=" + BuildConfig.VERSION_NAME +
+                "; auto_run_opt_in=" + autoRunRequested +
+                "; encrypted_credentials_present=" + secureKeysPresent +
+                "; engine_running=" + running + "; worker_alive=" + workerAlive +
+                "; service_startup_error=" + (androidStartupError ?: "none") +
+                "; NO raw Binance API credentials are exported")
+        test("credentials_state", "binance", secureKeysPresent, "WARN",
+            if (secureKeysPresent) "Binance credentials stored in encrypted app-private storage"
+            else "Binance credentials unavailable in this Android package; changing debug/release variant or reinstalling does not migrate keys")
         test("rest_market_data", "binance", restMarketReady, "FAIL", if (restMarketReady) "Ticker REST OK; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market failed: " + (restLastError ?: "pending"))
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT available=" + liveUsdtBalance + "; equity=" + liveFuturesEquity else "Account REST failed: " + (restAccountLastError ?: "pending"))
         test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market kline/aggTrade stream connected" else "Market stream disconnected")
@@ -10776,6 +10869,48 @@ private class NativeEngine(
         tests.put(JSONObject().put("id", "DB-01").put("name", "SQLite execution journal quick_check")
             .put("domain", "database").put("ok", sqliteHealth.optBoolean("ok"))
             .put("severity", if (sqliteHealth.optBoolean("ok")) "PASS" else "FAIL").put("detail", sqliteHealth.toString()))
+        // Diagnostic 12 captured a signed BNB STOP at 14:26:28Z while
+        // the position UI was still a snapshot from 14:26:17Z. Flag this
+        // explicitly: a more recent STOP observation is evidence that the
+        // cached UI must refresh, NOT fresh permission to trade.
+        val positionDisplayAt = statusSnapshot.optLong("positions_snapshot_at_ms")
+        val liveDisplayRows = CockpitDiagnostics.rows(statusSnapshot.optJSONArray("futures_positions"))
+        val signedProofRows = CockpitDiagnostics.rows(
+            coordinatorSnapshot.optJSONArray("exchange_protection_observations"))
+        val newerExchangeStopSymbols = liveDisplayRows.filter { display ->
+            signedProofRows.any { proof ->
+                proof.optString("symbol") == display.optString("symbol") &&
+                    proof.optString("direction") == display.optString("direction") &&
+                    proof.optString("quantity").toBigDecimalOrNull()
+                        ?.compareTo(display.optString("positionAmt").toBigDecimalOrNull() ?: return@any false) == 0 &&
+                    proof.optLong("observed_at_ms") > positionDisplayAt &&
+                    proof.optString("stop_proof") in setOf("OWNED_STOP_SEEN", "EXTERNAL_PROTECTED",
+                        "NATIVE_REPLACEMENT_PROTECTION_SEEN")
+            }
+        }.map { it.optString("symbol") }
+        tests.put(JSONObject().put("id", "EXE-10").put("domain", "execution")
+            .put("name", "Свежесть биржевого SL относительно экрана")
+            .put("severity", when {
+                positionDisplayAt <= 0L || liveDisplayRows.isEmpty() -> "NOT_VERIFIED"
+                newerExchangeStopSymbols.isNotEmpty() -> "WARNING"
+                !statusSnapshot.optBoolean("positions_snapshot_ok") -> "NOT_VERIFIED"
+                else -> "PASS"
+            }).put("detail", "Signed STOP более новый, чем снимок UI для: " +
+                newerExchangeStopSymbols.joinToString().ifBlank { "none" } +
+                "; снимок позиции=" + positionDisplayAt +
+                "; NEVER infer current protection from a stale cached screen."))
+        val unresolvedChecks = JSONArray().apply {
+            for (test in CockpitDiagnostics.rows(tests)) {
+                val severity = test.optString("severity")
+                if (severity in setOf("FAIL", "WARNING", "WARN", "NOT_VERIFIED")) {
+                    put(JSONObject()
+                        .put("id", test.optString("id", test.optString("name")))
+                        .put("domain", test.optString("domain"))
+                        .put("severity", severity)
+                        .put("name", test.optString("name")))
+                }
+            }
+        }
         val checkedSummary = CockpitDiagnostics.summary(tests)
         val failedTests = checkedSummary.optInt("failed_test_count")
         val warningTests = checkedSummary.optInt("warning_test_count")
@@ -10812,9 +10947,12 @@ private class NativeEngine(
             .put("tests", tests)
             .put("self_tests", tests)
             .put("diagnostic_findings", JSONArray(consistencyFindings))
+            .put("unresolved_diagnostic_checks", unresolvedChecks)
             .put("diagnostic_summary", JSONObject()
                 .put("overall", diagnosticOverall)
                 .put("finding_count", consistencyFindings.size)
+                .put("unresolved_check_count", unresolvedChecks.length())
+                .put("finding_count_scope", "INTERNAL_CONTRACT_CONTRADICTIONS_ONLY")
                 .put("failed_test_count", failedTests)
                 .put("warning_test_count", warningTests)
                 .put("not_verified_test_count", checkedSummary.optInt("not_verified_test_count"))

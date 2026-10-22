@@ -72,7 +72,9 @@ class TradingForegroundService : Service() {
         )
         RuntimeServiceState.active = true
         RuntimeServiceState.confirmedAtMs = System.currentTimeMillis()
-        RuntimeServiceState.lastError = null
+        // Do not clear a BOOT_SECURE_PREFS_UNREADABLE/BOOT_FGS_START_BLOCKED
+        // failure yet: foreground-service creation proves nothing about
+        // Keystore access or successful NativeEngine reconciliation.
     }
 
     override fun onStartCommand(
@@ -95,7 +97,17 @@ class TradingForegroundService : Service() {
                 runCatching {
                     StandaloneRuntime.start(applicationContext)
                     StandaloneRuntime.autostart(applicationContext)
+                }.onSuccess {
+                    // Foreground notification is not proof the trading engine
+                    // actually started. Clear only prior service startup errors.
+                    RuntimeServiceState.lastError = null
                 }.onFailure {
+                    // Previously swallowed: UI showed a running Android service
+                    // while Binance engine had never started after reboot.
+                    RuntimeStartupEvidence.failure(applicationContext, "ENGINE_AUTOSTART_FAILED", it)
+                    RuntimeServiceState.lastError = safeDiagnosticText(
+                        "Futures runtime autostart failed: " + (it.message ?: it.javaClass.simpleName)
+                    )
                     android.util.Log.e("WilliamsFutures", "Local Futures runtime startup failed", it)
                 }
             }

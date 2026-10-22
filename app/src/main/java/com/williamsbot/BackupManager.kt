@@ -19,14 +19,15 @@ import kotlin.math.max
 /**
  * Device-independent encrypted backup.
  *
- * Android Keystore protects the backend connection on the current phone.
- * A portable backup therefore uses a user-supplied password instead of
- * exporting the Keystore-bound ciphertext.
- * Binance API credentials are NEVER included in the backup because they belong
- * exclusively to the remote Williams backend.
+ * Android Keystore protects native Binance credentials in a distinct,
+ * app-private vault ("williams_native_secure"), as well as the optional
+ * legacy backend connection in this separate preference store.
+ * A portable backup uses a user-supplied password; it deliberately excludes
+ * Binance API key/secret and ALL signed Futures order/campaign state.
  *
- * Trade state is intentionally NOT included. After import, Binance remains
- * the source of truth and the backend must reconcile open positions/orders.
+ * Restoring this backup on a new installation does NOT restore Binance keys.
+ * The operator must re-enter them and the native Futures coordinator must
+ * reconcile exchange positions, stops and journal ownership before new risk.
  */
 object BackupManager {
     private const val MAGIC = "WILLIAMS_BACKUP_V1"
