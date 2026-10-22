@@ -205,3 +205,26 @@ def test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao(monkeypatc
     ind.loc[2,"ao"]=float("nan")
     assert signals._latest_reversal(ind,side="LONG") is None
     assert signals._latest_reversal(ind,side="SHORT") is None
+
+
+
+def test_short_wm1_signal_uses_same_configured_horizon_as_long_wm1(monkeypatch):
+    """A custom closed-H1 reversal lifetime may not silently become 20 bars for SELL."""
+    import pandas as pd
+    import williams_signals as signals
+    from campaign_model import SignalType
+    at=1_795_000_000_000
+    frame=pd.DataFrame([{"open_time_ms":at,"high":101.0,"low":99.0,
+                         "open":100.0,"close":100.0,"teeth_current":102.0}])
+    monkeypatch.setattr(signals,"_latest_reversal",lambda *a,**kw:(0,99.0,101.0))
+    monkeypatch.setattr(signals,"_angulation",lambda *a,**kw:(1.0,True))
+    monkeypatch.setattr(signals,"_trigger_still_pending",lambda *a,**kw:True)
+    monkeypatch.setattr(signals,"_latest_super_ao",lambda *a,**kw:None)
+    monkeypatch.setattr(signals,"_latest_three_price_bar_signal",lambda *a,**kw:None)
+    monkeypatch.setattr(signals,"_latest_confirmed_fractal",lambda *a,**kw:None)
+    specs=signals.extract_short_signal_specs(
+        "BTCUSDT",frame,timeframe="1h",tick_size=0.1,max_reversal_age_bars=6)
+    first=[spec for spec in specs if spec.signal_type==SignalType.REVERSAL]
+    assert len(first)==1
+    assert first[0].expires_at_ms==signals._expiry(at,"1h",6)
+    assert first[0].expires_at_ms!=signals._expiry(at,"1h",20)
