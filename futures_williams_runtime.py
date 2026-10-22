@@ -74,7 +74,7 @@ from williams_wave_hierarchy import (
     suggested_analytical_frames,
 )
 from williams_exit_policy import zone_trailing_activation, plan_williams_stop
-from williams_scenario_lifecycle import ScenarioSignal, scenario_opposition
+from williams_scenario_lifecycle import ScenarioSignal, scenario_opposition, assess_scenario_opposition
 
 
 def closed_strategy_frame(frame, interval, now_ms):
@@ -3360,11 +3360,17 @@ class FuturesWilliamsRuntime:
                 if signal.role != SignalRole.ENTRY or (signal.strategy_profile==NTD and signal.signal_type!=SignalType.FRACTAL):
                     continue  # NTD dimensions add; exits use management or a real external opposite fractal.
                 candidates[signal.signal_id]=signal
-        evidence=scenario_opposition("SHORT" if campaign.side=="SELL" else "LONG",opened,
+        assessment=assess_scenario_opposition("SHORT" if campaign.side=="SELL" else "LONG",opened,
             [ScenarioSignal(s.signal_id,"LONG" if s.side=="BUY" else "SHORT",s.strategy_profile,
                 s.execution_semantics,s.signal_bar_time_ms,s.trigger_price,
                 s.invalidation_price if s.invalidation_price>0 else None,s.expires_at_ms or now+FRAME_MS[interval])
                 for s in candidates.values()],wave_bars_from_dataframe(closed),mark,now,FRAME_MS[interval])
+        if profile==TC2 and assessment["uncertain"]:
+            # A same-bar trigger/invalidation or a gap cannot justify closing
+            # a verified protected campaign. Keep broker STOP live.
+            campaign.tags["tc2_opposition_advisory_error"]="AMBIGUOUS_OR_MISSING_H1_HISTORY"
+            return None
+        evidence=assessment["opposition"]
         if evidence is None:
             return None
         source,event=evidence
