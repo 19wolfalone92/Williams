@@ -72,7 +72,9 @@ class TradingForegroundService : Service() {
         )
         RuntimeServiceState.active = true
         RuntimeServiceState.confirmedAtMs = System.currentTimeMillis()
-        RuntimeServiceState.lastError = null
+        // Do not clear a BOOT_SECURE_PREFS_UNREADABLE/BOOT_FGS_START_BLOCKED
+        // failure yet: foreground-service creation proves nothing about
+        // Keystore access or successful NativeEngine reconciliation.
     }
 
     override fun onStartCommand(
