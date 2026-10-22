@@ -3302,6 +3302,13 @@ private fun SettingsScreen(
                         Spacer(Modifier.width(8.dp))
                         Text("Binance Futures Demo • секретный ключ не выводится", style = MaterialTheme.typography.titleMedium)
                     }
+                    Text(
+                        "Установлено: ${BuildConfig.VERSION_NAME} · ${context.packageName}. " +
+                            "Версии debug и release имеют разные хранилища Android. " +
+                            "Не удаляй приложение и не очищай его данные для восстановления ключей.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.textMuted
+                    )
 
                     OutlinedTextField(
                         value = apiKey,
