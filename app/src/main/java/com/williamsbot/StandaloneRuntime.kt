@@ -1553,6 +1553,9 @@ private class NativeEngine(
     @Volatile private var futuresAccountSnapshotRefreshError: String? = null
     // Publish bytes and their confirmation time together; a later refresh cannot relabel old rows as fresh.
     @Volatile private var cachedFuturesPositionEnvelope: Pair<String, Long>? = null
+    // An in-flight display REST read must not republish a pre-mutation STOP
+    // snapshot after an exchange-confirmed structural stop replacement.
+    @Volatile private var futuresPositionSnapshotEpoch = 0L
     @Volatile private var futuresPositionSnapshotRefreshRunning = false
     @Volatile private var futuresPositionSnapshotLastAttemptMs = 0L
     @Volatile private var futuresPositionSnapshotRefreshError: String? = null
@@ -5237,6 +5240,7 @@ private class NativeEngine(
     }
 
     private fun futuresPositionSnapshot(): JSONArray {
+        val snapshotEpoch = futuresPositionSnapshotEpoch
         val out = JSONArray()
         if (key().isBlank() || secret().isBlank()) return out
         val positions = futuresCampaignCoordinator.positionsSnapshot()
@@ -5301,8 +5305,12 @@ private class NativeEngine(
                 .put("leverage", row.optString("leverage")).put("exchange_confirmed", true))
         }
         val snapshotNow = System.currentTimeMillis()
-        cachedFuturesPositionEnvelope = out.toString() to snapshotNow
-        futuresPositionSnapshotRefreshError = null
+        synchronized(this) {
+            if (futuresPositionSnapshotEpoch == snapshotEpoch) {
+                cachedFuturesPositionEnvelope = out.toString() to snapshotNow
+                futuresPositionSnapshotRefreshError = null
+            }
+        }
         return out
     }
 
@@ -6324,6 +6332,11 @@ private class NativeEngine(
                 }
                 if (!result.optBoolean("ok", false)) {
                     throw IllegalStateException(result.optString("blocker", result.optString("error")))
+                }
+                synchronized(this) {
+                    futuresPositionSnapshotEpoch++
+                    cachedFuturesPositionEnvelope = null
+                    futuresPositionSnapshotLastAttemptMs = 0L
                 }
                 runCatching {
                     auditStore.recordCockpitEvent(
