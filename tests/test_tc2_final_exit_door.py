@@ -157,7 +157,8 @@ def test_tc2_exit_rereads_exact_futures_mark_before_exit_intent(
             else str(recovered if exchange_mark=="price_recovered" else first_mark))}
     runtime.client=SimpleNamespace(time_offset_ms=0,mark_price=mark)
     runtime._position=lambda symbol: (calls.append(("position",symbol)), object())[1]
-    runtime._signed_position_qty=lambda pos: 1.0
+    runtime._signed_position_qty=lambda pos: 1.0 if side=="BUY" else -1.0
+    runtime._set_state=lambda *args: calls.append(("state",*args))
     runtime._full_market_close_qty=lambda *args: (_ for _ in ()).throw(ValidatedLiveMark())
     proof={"reason":reason,"symbol":"BTCUSDT","observed_at_ms":now-1000,
            "opened_at_ms":now-2*3_600_000,"strategy_profile":TC2,
@@ -166,7 +167,7 @@ def test_tc2_exit_rereads_exact_futures_mark_before_exit_intent(
            "event":{"state":"TRIGGERED","known_at_ms":now-60_000}}
     tags={"strategy_profile":TC2,"tc2_book_exit_proof":proof,
           "last_opposition_evidence":{"signal_id":"book_exit_case","event":proof["event"].copy()}}
-    campaign=SimpleNamespace(symbol="BTCUSDT",side=side,
+    campaign=SimpleNamespace(symbol="BTCUSDT",side=side,position_qty=1.0,
                              state=CampaignState.TREND_ACTIVE,tags=tags)
     if exchange_mark=="still_triggered":
         with pytest.raises(ValidatedLiveMark):
@@ -175,5 +176,33 @@ def test_tc2_exit_rereads_exact_futures_mark_before_exit_intent(
         with pytest.raises(RuntimeError,match=expected):
             runtime._exit_market(campaign,reason)
     assert ("mark","BTCUSDT") in calls
+    assert campaign.state==CampaignState.TREND_ACTIVE
+    assert "pending_exit_client_id" not in campaign.tags
+
+
+
+@pytest.mark.parametrize("side,live_signed,recorded_qty,expected",[
+    ("BUY",-1.0,1.0,"FUTURES_EXIT_LIVE_SIDE_MISMATCH"),
+    ("SELL", 1.0,1.0,"FUTURES_EXIT_LIVE_SIDE_MISMATCH"),
+    ("BUY", 1.4,1.0,"FUTURES_EXIT_LIVE_QUANTITY_OWNER_MISMATCH"),
+    ("SELL",-1.4,1.0,"FUTURES_EXIT_LIVE_QUANTITY_OWNER_MISMATCH"),
+    ("BUY",float("nan"),1.0,"FUTURES_EXIT_POSITION_QUANTITY_NOT_FINITE"),
+])
+def test_exit_never_claims_wrong_binance_signed_position(
+        exit_runtime,side,live_signed,recorded_qty,expected):
+    """No TC2/NTD/Course strategy close may mutate a different owner's exposure."""
+    runtime=exit_runtime
+    calls=[]
+    runtime._position=lambda symbol: (calls.append("position"),object())[1]
+    runtime._signed_position_qty=lambda obj: live_signed
+    runtime._set_state=lambda symbol,state: calls.append("reconcile_required")
+    runtime._full_market_close_qty=lambda *args: calls.append("close_qty")
+    runtime.client=SimpleNamespace(time_offset_ms=0)
+    campaign=SimpleNamespace(symbol="BTCUSDT",side=side,
+        position_qty=recorded_qty,state=CampaignState.TREND_ACTIVE,
+        tags={"strategy_profile":NTD})
+    with pytest.raises(RuntimeError,match=expected):
+        runtime._exit_market(campaign,"TEETH_CLOSE_EXIT")
+    assert calls==["position","reconcile_required"]
     assert campaign.state==CampaignState.TREND_ACTIVE
     assert "pending_exit_client_id" not in campaign.tags
