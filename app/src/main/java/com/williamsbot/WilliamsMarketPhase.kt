@@ -97,9 +97,10 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
         warns("15m") -> "M15_ONLY_WARNING"
         else -> "NONE"
     }
-    return JSONObject().put("schema","WILLIAMS_MARKET_PHASE_V1").put("as_of",asOf)
+    val phase=JSONObject().put("schema","WILLIAMS_MARKET_PHASE_V1").put("as_of",asOf)
         .put("frames",JSONArray(frames)).put("warning_scope",scope)
         .put("wave_genealogy_confirmed",false).put("probability_calibrated",false)
         .put("action_policy","SOURCE_SIGNAL_AND_PRICE_TRIGGER_REQUIRED")
         .put("can_place_orders",false).put("can_close",false).put("can_reverse",false)
+    return phase.put("market_narrative",williamsMarketNarrative(phase))
 }
