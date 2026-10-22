@@ -59,6 +59,9 @@ internal fun buildWilliamsDecisionTrace(symbol:String,profile:String,input:List<
         .put("wave_state",if(active.size==1) "PROVISIONAL" else if(active.isEmpty()) "UNRESOLVED" else "ALTERNATIVES")
         .put("wave_hypotheses",JSONArray(active)).put("books",books).put("signals",signals)
         .put("market_phase",williamsMarketPhaseContext(hierarchy))
+        // TC1 is a separate historical book profile. Its Zero Point five-sign
+        // observations are NEVER an entry/exit gate for the pinned TC2 campaign.
+        .put("tc1_zero_point_observation",williamsTc1ZeroPointObservations(bars,now))
         .put("market_reading",williamsMarketReading(bars,williamsMarketPhaseContext(hierarchy)))
         .put("candles",JSONArray(bars.takeLast(150).map { JSONArray(listOf(it.t,it.o,it.h,it.l,it.c,it.v)) }))
         .put("decision",JSONObject().put("stage","CLOSED_BAR_ANALYSIS")

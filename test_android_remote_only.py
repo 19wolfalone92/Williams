@@ -298,8 +298,11 @@ def test_android_williams_indicator_decisions_use_chart_aligned_alligator_and_ca
     assert "priorFractalValid" not in runtime
     setups=_read(ANDROID / "java/com/williamsbot/WilliamsSetupRules.kt")
     assert 'selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)' in runtime
-    assert "p<=teeth.last()" in setups
-    assert "p<=teeth.last()" in setups
+    # TC2 ch. 11: check the actual fractal BREAKOUT beyond the current red Teeth;
+    # requiring the original pivot to be beyond Teeth was a non-book extra veto.
+    assert "trigger<=teeth.last()" in setups
+    assert "trigger>=teeth.last()" in setups
+    assert "p<=teeth.last()" not in setups
     assert "if (value==p) start=j" in setups
     assert ".minOf { bars[it].l }-tick" in setups
     assert "bar.h<mouth.min()" in setups

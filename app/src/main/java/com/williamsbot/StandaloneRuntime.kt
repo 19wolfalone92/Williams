@@ -8133,6 +8133,24 @@ private class NativeEngine(
 
     private fun editionCampaignSignals(symbol:String,candles:List<CandleN>,frame:String,tick:Double,
         profile:String=williamsUnifiedProfile,exitMode:Boolean=false):List<CampaignSignalN> {
+        val bookSeriesBlocker = williamsEditionSignalSeriesBlocker(
+            candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }, frame
+        )
+        if(bookSeriesBlocker != null) {
+            // A gap across two supposed adjacent AO/fractal confirmation bars
+            // cannot become an apparently normal TC2 signal. Invalid history
+            // is NOT equivalent to a valid scan with no candidate.
+            if(profile==williamsUnifiedProfile && !exitMode) for(source in williamsSourceProfiles) {
+                executionStore.writeState("edition_observation_"+symbol+"_"+source,
+                    JSONObject().put("profile", source).put("execution_role",
+                        if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
+                        .put("state", "HISTORY_INVALID")
+                        .put("reason", bookSeriesBlocker)
+                        .put("as_of_close_ms", candles.lastOrNull()?.let { it.t+WILLIAMS_H1_MS } ?: 0L)
+                        .put("signal_count", 0).put("can_place_orders", false).toString())
+            }
+            return emptyList()
+        }
         if(profile==williamsUnifiedProfile) {
             // One causal H1 snapshot, three independent rule extractors. Preserve
             // each source on its own signal for replay, journal and risk controls.
@@ -10646,11 +10664,21 @@ private class NativeEngine(
             .count { it.optString("state") == "OBSERVED" }
         val inspectedChartSymbols = CockpitDiagnostics.rows(scannerEvidenceSnapshot.optJSONArray("candidates"))
             .map { it.optString("symbol") }.toSet()
+        // The Zero Point five-sign evidence comes from genuine closed H1
+        // decisions; do not synthesize it from current price/other timeframes.
+        val tc1ZeroPointAudit = JSONArray().apply {
+            CockpitDiagnostics.rows(scannerEvidenceSnapshot.optJSONArray("candidates")).forEach { c ->
+                val e = c.optJSONObject("decision_trace")?.optJSONObject("tc1_zero_point_observation")
+                put(JSONObject().put("symbol", c.optString("symbol"))
+                    .put("evidence", e ?: JSONObject().put("state", "NO_CAUSAL_TC1_EVIDENCE")))
+            }
+        }
         val bookRuleCoverage = JSONArray().apply {
             put(JSONObject().put("rule", "TC1_ZERO_POINT_FIVE_EVIDENCE")
                 .put("source", "Trading Chaos 1st ed., chapter 9, PDF pp.82-84")
-                .put("status", "NOT_VERIFIED")
-                .put("detail", "Wave 3/5 divergence, target zone, fractal, squat, 5/34/5 momentum; " +
+                .put("status", "PARTIAL_CAUSAL_EVIDENCE_NOT_BOOK_CERTIFIED")
+                .put("detail", "Read-only actual H1 candidates now include Wave 3/5 divergence, " +
+                    "target zone gap, confirmed fractal, squat volume proxy, 5/34/5 momentum; " +
                     "100-140 bar wave scale and lower-TF Wave-2 50-62% entry require causal historical replay. " +
                     "TC1 stop-and-reverse is NOT a TC2 automatic exit."))
             put(JSONObject().put("rule", "NTD_FRACTAL_TEETH_AT_ACTIVATION")
@@ -10685,6 +10713,23 @@ private class NativeEngine(
                 "достоверных источников=3; необработанных ошибок=$badSourceEvidence; " +
                 "сигналов=${unifiedEvidence.optInt("observed_signal_count")}. " +
                 "PASS подтверждает только происхождение сигналов в полном снимке сканера, не корректность книг."))
+        val tc1Evidence = CockpitDiagnostics.rows(tc1ZeroPointAudit)
+            .mapNotNull { it.optJSONObject("evidence") }
+        val tc1AuthorityViolation = tc1Evidence.any {
+            it.optBoolean("can_place_orders") || it.optBoolean("can_close_positions") ||
+                it.optBoolean("zero_point_confirmed") || it.optBoolean("wave_degree_certified")
+        }
+        tests.put(JSONObject().put("id", "STR-15").put("domain", "strategy")
+            .put("name", "TC1 Zero Point: пять признаков без заглядывания вперёд")
+            .put("severity", when {
+                tc1AuthorityViolation -> "FAIL"
+                tc1Evidence.size != coreSymbols.size -> "NOT_VERIFIED"
+                tc1Evidence.any { it.optString("state") != "OBSERVATIONAL_PARTIAL_NOT_EXECUTABLE" } ->
+                    "NOT_VERIFIED"
+                else -> "PASS"
+            }).put("detail", "Рассмотрено пар=${tc1Evidence.size}; " +
+                "книжная целевая зона, MFI tick-volume и степень W3/W5 остаются " +
+                "НЕПОДТВЕРЖДЁННЫМИ; это PASS только наблюдаемости, НЕ торгового сигнала."))
         tests.put(JSONObject().put("id", "STR-08").put("domain", "strategy")
             .put("name", "Причинные отказы входа на всех этапах")
             .put("severity", "NOT_VERIFIED")
@@ -10747,6 +10792,7 @@ private class NativeEngine(
             .put("unified_strategy_evidence", unifiedEvidence)
             .put("scanner_snapshot", scannerEvidenceSnapshot)
             .put("chart_reading_audit", chartReadingAudit)
+            .put("tc1_zero_point_audit", tc1ZeroPointAudit)
             .put("book_rule_coverage", bookRuleCoverage)
             .put("signal_decision_history",decisionTraceSnapshot(fullHistory=true))
             .put("device_local_api", "in-process://williams-runtime")

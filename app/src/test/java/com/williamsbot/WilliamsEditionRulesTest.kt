@@ -5,6 +5,23 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsEditionRulesTest {
+    @Test fun allThreeBookSignalEnginesRequireUnbrokenGenuineCandleIntervals() {
+        val bars=(1..50).map { i ->
+            WilliamsWaveBar(i*WILLIAMS_H1_MS,100.0,103.0,97.0,100.0,10.0)
+        }
+        assertNull(williamsEditionSignalSeriesBlocker(bars,"1h"))
+        assertEquals("BOOK_SIGNAL_CANDLE_GAP",
+            williamsEditionSignalSeriesBlocker(bars.take(24)+bars.drop(25),"1h"))
+        assertEquals("BOOK_SIGNAL_BAR_TIME_MISALIGNED",
+            williamsEditionSignalSeriesBlocker(bars.mapIndexed { i,b ->
+                if(i==10) b.copy(t=b.t+5_000L) else b
+            },"1h"))
+        assertEquals("BOOK_SIGNAL_OHLCV_UNVERIFIED",
+            williamsEditionSignalSeriesBlocker(bars.take(43),"1h"))
+        assertEquals("UNSUPPORTED_BOOK_SIGNAL_FRAME",
+            williamsEditionSignalSeriesBlocker(bars,"unknown_frame"))
+    }
+
     @Test fun unifiedBooksAllowEveryVerifiedSourceWithoutChangingItsIdentity() {
         assertEquals(4,williamsEditionProfiles.size)
         assertEquals(3,williamsSourceProfiles.size)
@@ -123,6 +140,25 @@ class WilliamsEditionRulesTest {
         for (side in listOf("LONG", "SHORT")) {
             assertEquals(listOf("AO_TWIN_PEAKS"), editionAoSignals(values, side))
         }
+    }
+
+    @Test fun ntdFirstFractalQualificationUsesActualBreakoutNotPivotForBothDirections() {
+        val n=50
+        val b=(0 until n).map { i ->
+            val h=if(i==46)105.0 else if(i>=47)102.0 else 100.0
+            WilliamsWaveBar((i+1)*WILLIAMS_H1_MS,99.0,h,98.0,99.0,100.0)
+        }
+        val ao=List(n){0.0};val ac=List(n){0.0}
+        fun setups(side:String, bars:List<WilliamsWaveBar>, teeth:Double,
+            jaw:Double, lips:Double) = williamsNtdSetups(
+            side,bars,List(n){jaw},List(n){teeth},List(n){lips},ao,ac,.1)
+                .filter { it.kind=="FRACTAL" }
+        assertEquals(1,setups("LONG",b,105.05,99.0,99.0).size)
+        assertTrue(setups("LONG",b,105.1,99.0,99.0).isEmpty())
+        val inverted=b.map { it.copy(o=250.0-it.o,h=250.0-it.l,
+            l=250.0-it.h,c=250.0-it.c) }
+        assertEquals(1,setups("SHORT",inverted,144.95,151.0,151.0).size)
+        assertTrue(setups("SHORT",inverted,144.9,151.0,151.0).isEmpty())
     }
 
     @Test fun bothOutsideFractalsRemainVisibleWithoutInventingTheirIntrabarOrder() {

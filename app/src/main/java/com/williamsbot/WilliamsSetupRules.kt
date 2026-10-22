@@ -42,10 +42,11 @@ internal fun selectWilliamsPendingFractal(
         }
         if (count<2 || !(i+1..i+2).all { if (long) extreme(it)<p else extreme(it)>p }) continue
         val trigger=if (long) p+tick else p-tick
-        // Eligibility may change after formation; compare the unbuffered
-        // fractal extreme with the current displaced Teeth (NTD PDF52).
-        if (trigger<=0 || (if (long) p<=teeth.last() || bars.last().c>=trigger
-                else p>=teeth.last() || bars.last().c<=trigger)) continue
+        // TC2 ch11 PDF pp.147-149 and NTD ch4: the live BREAKOUT level,
+        // not the historic pivot extreme, must be beyond Teeth. Evaluate
+        // the still-untriggered order against the current displaced red line.
+        if (trigger<=0 || (if (long) trigger<=teeth.last() || bars.last().c>=trigger
+                else trigger>=teeth.last() || bars.last().c<=trigger)) continue
         if ((i+2..bars.lastIndex).any { if (long) bars[it].h>=trigger else bars[it].l<=trigger }) continue
         val stopStart=minOf(start,maxOf(0,i+2-4))
         val protective=if (long) (stopStart..i+2).minOf { bars[it].l }-tick

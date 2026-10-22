@@ -86,7 +86,7 @@ internal fun williamsNtdInitialContext(bars:List<WilliamsWaveBar>,jaw:List<Doubl
         val sign=if(f.kind=="HIGH") 1 else -1;val trigger=f.price+sign*tick
         for(i in f.confirmation+1 until bars.size) {
             if(sign*((if(sign==1) bars[i].h else bars[i].l)-trigger)>=0) {
-                if(teeth[i].isFinite() && sign*(f.price-teeth[i])>0)
+                if(teeth[i].isFinite() && sign*(trigger-teeth[i])>0)
                     return proof.put("reason","NTD_FIRST_BREAKOUT_ALREADY_OCCURRED").put("first_breakout_at_ms",bars[i].t)
                 break
             }

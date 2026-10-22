@@ -125,10 +125,13 @@ internal fun williamsBookFractalTeethBlocker(
     if(signalType.removePrefix("SHORT_").removePrefix("LONG_")!="FRACTAL") return null
     if(!entry.isFinite() || entry<=0 || !teeth.isFinite() || teeth<=0 || !tick.isFinite() || tick<0)
         return "H1_FRACTAL_TEETH_UNVERIFIED"
-    val extreme=if(direction=="LONG") entry-tick else entry+tick
+    // TC2 chapter 11, PDF pp. 147-149: the breakout itself must occur
+    // beyond the RED Teeth at activation, not the formation-time pivot.
+    // The older rule (entry -/+ tick vs Teeth) silently imposed a stricter,
+    // non-book filter and rejected genuine one-tick breakouts.
     return when(direction) {
-        "LONG" -> if(extreme>teeth) null else "H1_FRACTAL_NOT_ABOVE_TEETH"
-        "SHORT" -> if(extreme<teeth) null else "H1_FRACTAL_NOT_BELOW_TEETH"
+        "LONG" -> if(entry>teeth) null else "H1_FRACTAL_NOT_ABOVE_TEETH"
+        "SHORT" -> if(entry<teeth) null else "H1_FRACTAL_NOT_BELOW_TEETH"
         else -> "H1_FRACTAL_DIRECTION_INVALID"
     }
 }

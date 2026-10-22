@@ -114,6 +114,20 @@ class WilliamsBookH1EntryPolicyTest {
         assertTrue(williamsBookH1TriggerConsumed("LONG",t,105.0,t+2*WILLIAMS_H1_MS+1,listOf(late)))
     }
 
+    @Test fun tc2BreakoutPriceRatherThanHistoricFractalExtremeControlsActivation() {
+        // The red Teeth is between the center-bar pivot and the exact
+        // one-tick-stop ENTRY. The book says activation occurs above/below
+        // Teeth; adding a non-book pivot-margin discards a valid setup.
+        assertNull(williamsBookFractalTeethBlocker("FRACTAL","LONG",
+            105.10,105.05,.10))
+        assertNotNull(williamsBookFractalTeethBlocker("FRACTAL","LONG",
+            105.10,105.10,.10))
+        assertNull(williamsBookFractalTeethBlocker("SHORT_FRACTAL","SHORT",
+            94.90,94.95,.10))
+        assertNotNull(williamsBookFractalTeethBlocker("SHORT_FRACTAL","SHORT",
+            94.90,94.90,.10))
+    }
+
     @Test fun activationTeethUsesCurrentDisplayedLineFromClosedPricesOnly() {
         val bars=(0 until 50).map { index ->
             val price=100.0+index

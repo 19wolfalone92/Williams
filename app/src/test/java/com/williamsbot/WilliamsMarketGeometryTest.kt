@@ -32,15 +32,22 @@ class WilliamsMarketGeometryTest {
         assertEquals(listOf("UNKNOWN","SLEEPING","SLEEPING","AWAKENING","EATING"),williamsAlligatorPhases(b,
             listOf(100.0,100.0,100.0,101.0,102.0),listOf(100.0,100.0,100.0,102.0,104.0),listOf(100.0,100.0,100.0,103.0,106.0)))
     }
-    @Test fun insideFractalMayBecomeValidLaterButEntryBufferCannotQualifyIt() {
+    @Test fun tc2FractalMustBreakBeyondCurrentTeethEvenWhenPivotWasInside() {
         val b=bars(listOf(101.0,102.0,105.0,103.0,102.0,103.0))
         val t=listOf(106.0,106.0,106.0,106.0,106.0,104.0)
         val f=selectWilliamsPendingFractal("LONG",b,t,.1)!!
         assertEquals(2,f.center);assertEquals(4,f.confirmation)
-        assertNull(selectWilliamsPendingFractal("LONG",b,List(6){105.05},.1))
-        assertNotNull(williamsBookFractalTeethBlocker("FRACTAL","LONG",105.1,105.05,.1))
+        // TC2 ch.11 pp.147-149: the breakout, not the formation pivot,
+        // must be above Teeth. 105.1 > 105.05 is a textbook-valid level.
+        assertNotNull(selectWilliamsPendingFractal("LONG",b,List(6){105.05},.1))
+        assertNull(williamsBookFractalTeethBlocker("FRACTAL","LONG",105.1,105.05,.1))
+        assertNull(selectWilliamsPendingFractal("LONG",b,List(6){105.1},.1))
+        assertNotNull(williamsBookFractalTeethBlocker("FRACTAL","LONG",105.1,105.1,.1))
         val short=selectWilliamsPendingFractal("SHORT",mirror(b),t.map { 250-it },.1)!!
         assertEquals(250-f.trigger,short.trigger,1e-8)
+        assertNotNull(selectWilliamsPendingFractal("SHORT",mirror(b),List(6){144.95},.1))
+        assertNull(williamsBookFractalTeethBlocker("SHORT_FRACTAL","SHORT",144.9,144.95,.1))
+        assertNotNull(williamsBookFractalTeethBlocker("SHORT_FRACTAL","SHORT",144.9,144.9,.1))
     }
     @Test fun courseSignalLineSideIsIndependentOfLastAoColour() {
         val b=bars((0 until 47).map { 101+it*.2+5*kotlin.math.sin(it*.4) })
