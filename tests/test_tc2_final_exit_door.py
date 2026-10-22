@@ -23,8 +23,8 @@ def exit_runtime(tmp_path):
 
 @pytest.mark.parametrize("side", ["BUY", "SELL"])
 @pytest.mark.parametrize("reason", [
-    "STRATEGY_EXIT", "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
-    "CORRECTION_PARENT_PRICE_INVALIDATED", "TAKE_PROFIT", "LIQUIDATION_GUARD",
+    "STRATEGY_EXIT", "CORRECTION_PARENT_PRICE_INVALIDATED",
+    "TAKE_PROFIT", "LIQUIDATION_GUARD",
 ])
 def test_tc2_direct_exit_is_blocked_before_cancel_or_position_read(side, reason, exit_runtime):
     runtime = exit_runtime
@@ -34,7 +34,7 @@ def test_tc2_direct_exit_is_blocked_before_cancel_or_position_read(side, reason,
     campaign = SimpleNamespace(symbol="BTCUSDT", side=side,
                                state=CampaignState.ADD_ON_PENDING,
                                tags={"strategy_profile": TC2})
-    with pytest.raises(RuntimeError, match="TC2_PROTECTIVE_STOP_ONLY"):
+    with pytest.raises(RuntimeError, match="TC2_EXIT_REQUIRES_BOOK_OPPOSITE_TRIGGER"):
         runtime._exit_market(campaign, reason)
     assert calls == []
     assert campaign.state == CampaignState.ADD_ON_PENDING
@@ -43,6 +43,8 @@ def test_tc2_direct_exit_is_blocked_before_cancel_or_position_read(side, reason,
 
 @pytest.mark.parametrize("source,reason,emergency", [
     (TC2, "MANUAL_EXIT", False), (TC2, "KILL_SWITCH", False),
+    (TC2, "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED", False),
+    (TC2, "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION", False),
     (TC2, "LIQUIDATION_GUARD_TEST", True),
     (NTD, "TEETH_CLOSE_EXIT", False),
     (COURSE, "COURSE_STAGE_TRIM", False),
