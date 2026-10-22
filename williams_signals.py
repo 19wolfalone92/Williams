@@ -451,10 +451,14 @@ def extract_ntd_ao_signal_specs(
             ]
             if peaks and peaks[-1] == current_i - 1:
                 second = peaks[-1]
-                prior = [i for i in peaks[:-1] if ao[i] < ao[second]]
-                if prior:
-                    first = prior[-1]
-                    if all(v < 0 for v in ao[first:second + 1]) and ao[second] > ao[first]:
+                # The previous AO trough must be the immediately preceding
+                # confirmed trough. Skipping a disqualifying middle trough
+                # manufactures a Twin Peaks formation that never existed.
+                first = peaks[-2] if len(peaks) >= 2 else None
+                if first is not None and ao[first] < ao[second]:
+                    # A green signal bar crossing zero is a ZERO-LINE CROSS,
+                    # not a Twin Peaks. Keep the entire formation below zero.
+                    if all(math.isfinite(v) and v < 0 for v in ao[first:current_i + 1]):
                         matches.append((SignalType.AO_TWIN_PEAKS, "NTD bullish AO Twin Peaks below zero; BUY STOP above signal-bar high"))
     else:
         if (
@@ -475,10 +479,13 @@ def extract_ntd_ao_signal_specs(
             ]
             if peaks and peaks[-1] == current_i - 1:
                 second = peaks[-1]
-                prior = [i for i in peaks[:-1] if ao[i] > ao[second]]
-                if prior:
-                    first = prior[-1]
-                    if all(v > 0 for v in ao[first:second + 1]) and ao[second] < ao[first]:
+                # Only the immediately preceding confirmed AO crest qualifies;
+                # an earlier higher crest cannot bypass an unsuitable middle one.
+                first = peaks[-2] if len(peaks) >= 2 else None
+                if first is not None and ao[first] > ao[second]:
+                    # The red signal bar must remain ABOVE zero, otherwise the
+                    # current formation is a zero-line crossing.
+                    if all(math.isfinite(v) and v > 0 for v in ao[first:current_i + 1]):
                         matches.append((SignalType.AO_TWIN_PEAKS, "NTD bearish AO Twin Peaks above zero; SELL STOP below signal-bar low"))
 
     # One candle cannot authorize duplicate entries from multiple AO families.
