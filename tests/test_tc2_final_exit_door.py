@@ -156,7 +156,8 @@ def test_tc2_exit_rereads_exact_futures_mark_before_exit_intent(
             "nan" if exchange_mark=="nan"
             else str(recovered if exchange_mark=="price_recovered" else first_mark))}
     runtime.client=SimpleNamespace(time_offset_ms=0,mark_price=mark)
-    runtime._position=lambda symbol: (calls.append(("position",symbol)), object())[1]
+    live_entry=90.0 if side=="BUY" else 110.0
+    runtime._position=lambda symbol: (calls.append(("position",symbol)), {"entryPrice":str(live_entry)})[1]
     runtime._signed_position_qty=lambda pos: 1.0 if side=="BUY" else -1.0
     runtime._set_state=lambda *args: calls.append(("state",*args))
     runtime._full_market_close_qty=lambda *args: (_ for _ in ()).throw(ValidatedLiveMark())
@@ -168,6 +169,7 @@ def test_tc2_exit_rereads_exact_futures_mark_before_exit_intent(
     tags={"strategy_profile":TC2,"tc2_book_exit_proof":proof,
           "last_opposition_evidence":{"signal_id":"book_exit_case","event":proof["event"].copy()}}
     campaign=SimpleNamespace(symbol="BTCUSDT",side=side,position_qty=1.0,
+                             average_entry_price=live_entry,
                              state=CampaignState.TREND_ACTIVE,tags=tags)
     if exchange_mark=="still_triggered":
         with pytest.raises(ValidatedLiveMark):
@@ -204,5 +206,57 @@ def test_exit_never_claims_wrong_binance_signed_position(
     with pytest.raises(RuntimeError,match=expected):
         runtime._exit_market(campaign,"TEETH_CLOSE_EXIT")
     assert calls==["position","reconcile_required"]
+    assert campaign.state==CampaignState.TREND_ACTIVE
+    assert "pending_exit_client_id" not in campaign.tags
+
+
+
+@pytest.mark.parametrize("side,entry,mark,buffer,expected", [
+    ("BUY",100.0,95.0,.0035,"TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE"),
+    ("SELL",100.0,105.0,.0035,"TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE"),
+    ("BUY",100.0,100.34,.0035,"TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE"),
+    ("SELL",100.0,99.66,.0035,"TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE"),
+    ("BUY",100.0,100.36,.0035,None),
+    ("SELL",100.0,99.64,.0035,None),
+    ("BUY",100.0,float("nan"),.0035,"TC2_OPPOSITE_EXIT_PROFIT_EVIDENCE_UNVERIFIED"),
+    ("SELL",0.0,98.0,.0035,"TC2_OPPOSITE_EXIT_PROFIT_EVIDENCE_UNVERIFIED"),
+])
+def test_tc2_contrary_wise_man_never_forces_a_losing_strategy_exit(
+        side,entry,mark,buffer,expected):
+    from williams_execution_policy import tc2_opposite_exit_profit_blocker
+    assert tc2_opposite_exit_profit_blocker(side,entry,mark,buffer)==expected
+
+
+@pytest.mark.parametrize("side,live_entry,live_mark,trigger",[
+    ("BUY",100.0,95.0,96.0),("SELL",100.0,105.0,104.0),
+])
+def test_tc2_real_exit_door_keeps_stop_and_does_not_post_on_opposite_signal_at_loss(
+        exit_runtime,side,live_entry,live_mark,trigger):
+    """Same-bar evidence may be valid, but a red campaign stays exchange-protected."""
+    import time
+    now=int(time.time()*1000)
+    runtime=exit_runtime
+    calls=[]
+    reason="OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
+    runtime.client=SimpleNamespace(time_offset_ms=0,
+        mark_price=lambda symbol: (calls.append(("mark",symbol)),
+                                   {"symbol":symbol,"markPrice":str(live_mark)})[1])
+    runtime._position=lambda symbol: (calls.append(("position",symbol)),
+                                      {"entryPrice":str(live_entry)})[1]
+    runtime._signed_position_qty=lambda pos: 1.0 if side=="BUY" else -1.0
+    runtime._set_state=lambda *args: calls.append("state")
+    runtime._full_market_close_qty=lambda *args: calls.append("exit_quantity")
+    event={"state":"TRIGGERED","known_at_ms":now-60_000}
+    proof={"reason":reason,"symbol":"BTCUSDT","observed_at_ms":now-1000,
+        "opened_at_ms":now-2*3_600_000,"strategy_profile":TC2,
+        "direction":"SHORT" if side=="BUY" else "LONG",
+        "signal_id":"proof","trigger":trigger,"mark":live_mark,"event":event}
+    tags={"strategy_profile":TC2,"tc2_book_exit_proof":proof,
+          "last_opposition_evidence":{"signal_id":"proof","event":event.copy()}}
+    campaign=SimpleNamespace(symbol="BTCUSDT",side=side,position_qty=1.0,
+        average_entry_price=live_entry, state=CampaignState.TREND_ACTIVE,tags=tags)
+    with pytest.raises(RuntimeError,match="TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE"):
+        runtime._exit_market(campaign,reason)
+    assert calls==[("position","BTCUSDT"),("mark","BTCUSDT")]
     assert campaign.state==CampaignState.TREND_ACTIVE
     assert "pending_exit_client_id" not in campaign.tags
