@@ -61,11 +61,13 @@ def test_authorized_exit_still_reaches_existing_live_preflight(source, reason, e
     tags={"strategy_profile":source}
     if source==TC2 and reason.startswith("OPPOSITE_WILLIAMS_"):
         tags["tc2_book_exit_proof"]={
-            "reason":reason, "observed_at_ms":now-1000,
+            "reason":reason, "symbol":"BTCUSDT", "observed_at_ms":now-1000,
             "opened_at_ms":now-2*3_600_000, "strategy_profile":TC2,
             "direction":"SHORT","signal_id":"book_opposite_1",
             "trigger":96.0,"mark":95.0,
             "event":{"state":"TRIGGERED","known_at_ms":now-60_000}}
+        tags["last_opposition_evidence"]={
+            "signal_id":"book_opposite_1","event":tags["tc2_book_exit_proof"]["event"]}
     campaign = SimpleNamespace(symbol="BTCUSDT",side="BUY",state=CampaignState.TREND_ACTIVE,
                                tags=tags)
     with pytest.raises(ReachedLivePreflight):
@@ -99,7 +101,7 @@ def test_tc2_opposite_close_cannot_reach_cancel_or_exchange_without_current_book
     runtime._position=lambda *a:calls.append("position")
     runtime.client=SimpleNamespace(time_offset_ms=0)
     proof={"reason":"OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
-           "observed_at_ms":now-1000,"opened_at_ms":now-2*3_600_000,
+           "symbol":"BTCUSDT","observed_at_ms":now-1000,"opened_at_ms":now-2*3_600_000,
            "strategy_profile":TC2,"direction":"SHORT","signal_id":"wm1_short",
            "trigger":96.0,"mark":95.0,"event":{"state":"TRIGGERED","known_at_ms":now-60_000}}
     if bad=="stale":proof["observed_at_ms"]=now-130_000
@@ -108,7 +110,9 @@ def test_tc2_opposite_close_cannot_reach_cancel_or_exchange_without_current_book
     if bad=="untriggered":proof["event"]["state"]="WAITING"
     if bad=="price_recovered":proof["mark"]=99.0
     tags={"strategy_profile":TC2}
-    if bad!="missing":tags["tc2_book_exit_proof"]=proof
+    if bad!="missing":
+        tags["tc2_book_exit_proof"]=proof
+        tags["last_opposition_evidence"]={"signal_id":"wm1_short","event":proof["event"].copy()}
     campaign=SimpleNamespace(symbol="BTCUSDT",side="BUY",state=CampaignState.ADD_ON_PENDING,tags=tags)
     with pytest.raises(RuntimeError,match="TC2_EXIT_BOOK"):
         runtime._exit_market(campaign,"OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
