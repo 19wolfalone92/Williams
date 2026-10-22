@@ -2038,8 +2038,9 @@ internal class NativeFuturesCampaignCoordinator(
                     findProtectiveStop(
                         algos, direction,
                         matchingIntent?.optString("protection_client_id"),
-                        matchingIntent?.optString("protective_stop")
-                    , expectedSymbol = symbol)
+                        matchingIntent?.optString("protective_stop"),
+                        expectedSymbol = symbol
+                    )
                 } else null
 
                 // Recover a crash between journaling a new trailing-stop id and
@@ -2050,8 +2051,9 @@ internal class NativeFuturesCampaignCoordinator(
                     previousProtectionId.isNotBlank() && previousStopSafe
                 ) {
                     val predecessor = findProtectiveStop(
-                        algos, direction, previousProtectionId, previousStopPrice
-                    , expectedSymbol = symbol)
+                        algos, direction, previousProtectionId, previousStopPrice,
+                        expectedSymbol = symbol
+                    )
                     if (predecessor != null) {
                         val attemptedClientId = currentProtectionId
                         val attemptedStop = matchingIntent.optString("protective_stop")
@@ -2093,8 +2095,9 @@ internal class NativeFuturesCampaignCoordinator(
                         val refreshed = adapter.openAlgoOrders(symbol)
                         protective = findProtectiveStop(
                             refreshed, direction, protectionClientId,
-                            matchingIntent.optString("protective_stop")
-                        , expectedSymbol = symbol)
+                            matchingIntent.optString("protective_stop"),
+                            expectedSymbol = symbol
+                        )
                         if (protective == null) {
                             anyUnprotected = true
                             // A known formerly confirmed stop is now explicitly
@@ -2180,8 +2183,9 @@ internal class NativeFuturesCampaignCoordinator(
                         val refreshed = adapter.openAlgoOrders(symbol)
                         protective = findProtectiveStop(
                             refreshed, direction, protectionClientId,
-                            matchingIntent.optString("protective_stop")
-                        , expectedSymbol = symbol)
+                            matchingIntent.optString("protective_stop"),
+                            expectedSymbol = symbol
+                        )
                         if (protective == null) {
                             anyUnprotected = true
                             lastBlocker = "$symbol protective stop was submitted but its exact client id/structural trigger is not confirmed in open algo orders"
@@ -2382,8 +2386,9 @@ internal class NativeFuturesCampaignCoordinator(
                         // tracked predecessor is no longer present before forgetting its id.
                         val afterCleanup = adapter.openAlgoOrders(symbol)
                         val primaryStillConfirmed = findProtectiveStop(
-                            afterCleanup, direction, confirmedClientId, confirmedStop
-                        , expectedSymbol = symbol) != null
+                            afterCleanup, direction, confirmedClientId, confirmedStop,
+                            expectedSymbol = symbol
+                        ) != null
                         val trackedPredecessorStillOpen = (0 until afterCleanup.length()).any { k ->
                             val row = afterCleanup.optJSONObject(k) ?: return@any true
                             isProtectiveStop(row, direction) &&
@@ -2988,8 +2993,9 @@ internal class NativeFuturesCampaignCoordinator(
                 "Live Futures position $symbol stop is not on the protective side of the current mark"
             }
             check(findProtectiveStop(
-                preflightAdapter.openAlgoOrders(symbol), direction, ownerStopId, ownerStop
-            , expectedSymbol = symbol) != null) {
+                preflightAdapter.openAlgoOrders(symbol), direction, ownerStopId, ownerStop,
+                expectedSymbol = symbol
+            ) != null) {
                 "Live Futures position $symbol protection is not exchange-confirmed at the persisted client id/trigger"
             }
             openPositionRows[symbol] = row
