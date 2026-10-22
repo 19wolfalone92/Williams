@@ -51,6 +51,33 @@ def strategy_market_close_allowed(source):
     return source in (TC2, NTD, COURSE)
 
 
+def tc2_opposite_exit_profit_blocker(side, entry_price, current_mark,
+                                     cost_buffer=0.0035, tick=0.0):
+    """Opposite Wise-Man setup is not an instruction to realize a loss.
+
+    TC2 ch12 mainly exits using trailing structural STOP; NTD ch9 warns that
+    opposite-direction signals are its LEAST favored profit-taking method.
+    Source policy: a TC2 contrary signal may authorize optional reduce-only
+    MARKET exit only if gross mark-to-entry return exceeds a *conservative*
+    fee+slippage reserve. It does not constrain the existing protective SL,
+    an operator close, or confirmed liquidation remediation. A positive mark
+    is not a guaranteed positive fill (latency, funding, actual commission).
+    """
+    from math import isfinite
+    try:
+        entry,mark,cost,minimum_tick=(float(v) for v in
+            (entry_price,current_mark,cost_buffer,tick))
+    except (TypeError,ValueError,OverflowError):
+        return "TC2_OPPOSITE_EXIT_PROFIT_EVIDENCE_UNVERIFIED"
+    if (side not in ("BUY","SELL") or
+            not all(isfinite(v) for v in (entry,mark,cost,minimum_tick)) or
+            entry<=0 or mark<=0 or cost<0 or minimum_tick<0):
+        return "TC2_OPPOSITE_EXIT_PROFIT_EVIDENCE_UNVERIFIED"
+    gross=((mark-entry) if side=="BUY" else (entry-mark))/entry
+    return (None if gross>cost+minimum_tick/entry
+            else "TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE")
+
+
 def tc2_opposite_exit_evidence_blocker(tags, reason, now, current_side, symbol, *, live_mark=None):
     """Final reason+evidence fence, prior to any mutation/entry cancellation.
 
