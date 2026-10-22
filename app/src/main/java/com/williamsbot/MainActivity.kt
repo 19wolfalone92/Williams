@@ -814,35 +814,44 @@ fun WilliamsApp(context: Context) {
                     .put("api_key", apiKey.trim())
                     .put("api_secret", apiSecret.trim())
                     .put("testnet", true)
-                api.post("/api/v1/config/binance", payload.toString())
-
-                val verified = JSONObject(api.get("/api/v1/status?fast=true"))
-                val configured = verified.optBoolean(
-                    "binance_configured",
-                    verified.optBoolean("auth_configured", false)
-                )
-                val testnet = verified.optBoolean("testnet", false)
-                val executionEnabled = verified.optBoolean("execution_enabled", false)
-
+                val saved = JSONObject(api.post("/api/v1/config/binance", payload.toString()))
+                check(saved.optBoolean("saved_to_encrypted_storage") &&
+                    saved.optBoolean("read_back_verified")) {
+                    "Локальное зашифрованное сохранение Binance ключей не подтверждено"
+                }
+                // REST may be offline just after a phone restart. Successful
+                // durable save must never be displayed as "key not saved"
+                // merely because a SECOND status/network refresh failed.
+                val verified = runCatching {
+                    JSONObject(api.get("/api/v1/status?fast=true"))
+                }.getOrNull()
+                val onlineValidated = saved.optString("validation") ==
+                    "FUTURES_CREDENTIALS_AND_ONE_WAY_MODE_PASS"
                 withContext(Dispatchers.Main) {
                     apiKey = ""
                     apiSecret = ""
-                    status = parseStatus(verified)
+                    if (verified != null) status = parseStatus(verified)
                     diagnosticsMessage = ""
                     message = when {
-                        configured && testnet && verified.optBoolean("running", false) && executionEnabled ->
-                            "Binance Futures Testnet подтверждён; локальный Runtime и Execution Gate готовы"
-                        configured && testnet && !verified.optBoolean("running", false) ->
-                            "Ключи Futures Testnet проверены. Runtime остановлен: нажми START для сверки биржи, загрузки H1-истории и запуска сканера."
-                        configured && testnet ->
-                            "Futures Testnet подтверждён; входы пока заблокированы проверками безопасности, данных или сверки"
-                        configured ->
-                            "Ключи сохранены, но runtime не подтвердил TESTNET"
+                        !onlineValidated ->
+                            "✅ Ключи ЗАШИФРОВАНЫ И СОХРАНЕНЫ на телефоне. " +
+                            "Binance Futures Demo пока не подтвердил их: " +
+                            saved.optString("validation_detail", "недоступна проверка").take(220) +
+                            ". Торговля заблокирована до сверки; повтори START при доступной бирже."
+                        verified == null ->
+                            "✅ Ключи сохранены и проверены Binance. Не удалось обновить экран состояния; " +
+                            "проверь диагностику и нажми START для безопасной сверки."
+                        verified.optBoolean("running", false) &&
+                            verified.optBoolean("execution_enabled", false) ->
+                            "Binance Futures Demo подтверждён; Runtime работает и проверки безопасности пройдены."
+                        verified.optBoolean("running", false) ->
+                            "Ключи сохранены и проверены; Runtime работает, новые входы ожидают проверок риска и Binance."
                         else ->
-                            "Ключи сохранены, но Binance ещё не подтвердил конфигурацию"
+                            "✅ Ключи сохранены и проверены Binance Futures Demo. " +
+                            "Нажми START для сверки ордеров, защитных SL и запуска сканера."
                     }
                 }
-                refresh(false)
+                if (verified != null) refresh(false)
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     message = e.message ?: "Не удалось сохранить ключи"
