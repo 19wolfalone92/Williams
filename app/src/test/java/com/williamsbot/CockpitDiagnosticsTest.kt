@@ -16,8 +16,8 @@ class CockpitDiagnosticsTest {
         .put("reserved_risk_pct", 0.002).put("max_total_risk_pct", 0.006)
         .put("daily_risk_baseline_source", "VERIFIED_TEST_BASELINE").put("daily_loss_pct", 0.0)
         .put("futures_positions", JSONArray())
-    private fun coordinator() = JSONObject().put("ready_for_new_entry", true)
-        .put("pending_intent_details", JSONArray())
+    private fun coordinator() = JSONObject().put("engine", "USD_M_FUTURES_TESTNET")
+        .put("ready_for_new_entry", true).put("pending_intent_details", JSONArray())
     private fun entry(direction: String = "LONG") = JSONObject().put("symbol", "SOLUSDT")
         .put("direction", direction).put("role", "ENTRY").put("kind", "STOP")
         .put("entry_price", 100.0).put("persisted_protective_stop", if (direction == "LONG") 95.0 else 105.0)
@@ -226,6 +226,93 @@ class CockpitDiagnosticsTest {
         e.put("protection_status", "SUBMISSION_UNKNOWN")
         assertEquals("FAIL", severity("EXE-03", stale, c))
         assertEquals("FAIL", severity("EXE-05", stale, c))
+    }
+
+    @Test fun fractalDetectionUsesTwoClosedRightBarsAndNeverFutureInformation() {
+        val confirmedAt = now - 3_600_000L
+        fun scanner(fractalFormationAt: Long) = JSONObject().put("candidates", JSONArray().apply {
+            for(symbol in APPROVED_FUTURES_SYMBOLS) {
+                val signal = JSONObject().put("type", "LONG_FRACTAL")
+                    .put("signal_bar_time_ms", confirmedAt)
+                    .put("known_at_ms", now)
+                    .put("formation_at_ms", fractalFormationAt)
+                put(JSONObject().put("symbol", symbol).put("decision_trace",
+                    JSONObject().put("signals", JSONArray().put(signal))))
+            }
+        })
+        fun causal(s: JSONObject) = CockpitDiagnostics.rows(
+            CockpitDiagnostics.checks(healthy(),coordinator(),s,now))
+            .single { it.optString("id")=="STR-13" }.getString("severity")
+        assertEquals("PASS",causal(scanner(confirmedAt - 2*3_600_000L)))
+        assertEquals("FAIL",causal(scanner(confirmedAt - 3_600_000L)))
+        assertEquals("FAIL",causal(scanner(confirmedAt + 3_600_000L)))
+    }
+
+    @Test fun journalProtectedWithoutCurrentSignedStopCannotPass() {
+        val position = JSONObject().put("symbol","SOLUSDT").put("direction","LONG")
+            .put("positionAmt","1").put("qty",1).put("stop",95)
+            .put("mark_price",102).put("stop_verification_status","UNVERIFIED_OR_STALE")
+        val e = entry().put("order_status","FILLED").put("campaign_status","OPEN_PROTECTED")
+            .put("protection_status","PROTECTED").put("protection_client_id_suffix","old")
+            .put("strategy_ownership_verified",true).put("last_reconciled_ms",now)
+        val s=healthy().put("futures_positions",JSONArray().put(position))
+        val c=coordinator().put("pending_intent_details",JSONArray().put(e))
+        assertEquals("FAIL", severity("EXE-03",s,c))
+        assertEquals("FAIL", severity("EXE-04",s,c))
+        assertEquals("NOT_VERIFIED", severity("EXE-08",s,c))
+        assertEquals("NOT_VERIFIED", severity("EXE-09",s,c))
+        assertEquals("PASS", severity("DATA-05",s,c))
+    }
+
+    @Test fun signedStopProofMustMatchDashboardOwnershipTimestampAndMark() {
+        val p=JSONObject().put("symbol","SOLUSDT").put("direction","SHORT")
+            .put("positionAmt","-2").put("qty",2).put("stop",105)
+            .put("mark_price",100).put("stop_verification_status","OWNED_STOP_SEEN")
+            .put("stop_confirmed_at_ms",now)
+        val proof=JSONObject().put("symbol","SOLUSDT").put("direction","SHORT")
+            .put("quantity","-2").put("stop","105")
+            .put("stop_proof","OWNED_STOP_SEEN").put("protection_client_id","exchange_new")
+            .put("observed_at_ms",now)
+        val s=healthy().put("futures_positions",JSONArray().put(p))
+        val e=entry("SHORT").put("campaign_status","OPEN_PROTECTED")
+            .put("strategy_ownership_verified",true)
+            .put("protection_client_id_suffix","exchange_new")
+        val c=coordinator().put("pending_intent_details",JSONArray().put(e))
+            .put("exchange_protection_observations",JSONArray().put(proof))
+        assertEquals("PASS",severity("EXE-08",s,c))
+        assertEquals("PASS",severity("EXE-09",s,c))
+        p.put("mark_price",106)
+        assertEquals("FAIL",severity("EXE-09",s,c))
+        p.put("mark_price",100).put("stop_confirmed_at_ms",now-1)
+        assertEquals("FAIL",severity("EXE-08",s,c))
+        p.put("stop_confirmed_at_ms",now)
+        e.put("protection_client_id_suffix","wrong")
+        assertEquals("FAIL",severity("EXE-08",s,c))
+        e.put("protection_client_id_suffix","exchange_new")
+        c.put("exchange_protection_observations",JSONArray().put(proof).put(JSONObject(proof.toString())))
+        assertEquals("FAIL",severity("EXE-08",s,c))
+        assertEquals("FAIL",severity("EXE-03",s,c))
+    }
+
+    @Test fun malformedOrDuplicatedSignedPositionSnapshotIsDetected() {
+        val p=JSONObject().put("symbol","SOLUSDT").put("direction","LONG")
+            .put("positionAmt","-1").put("qty",1)
+        val s=healthy().put("futures_positions",JSONArray().put(p))
+        assertEquals("FAIL",severity("DATA-05",s))
+        p.put("positionAmt","1")
+        assertEquals("PASS",severity("DATA-05",s))
+        s.put("futures_positions",JSONArray().put(p).put(JSONObject(p.toString())))
+        assertEquals("FAIL",severity("DATA-05",s))
+    }
+
+    @Test fun independentNtdCourseObserversMayNotCreatePendingExposure() {
+        val foreign=entry().put("strategy_profile","NTD")
+        val c=coordinator().put("pending_intent_details",JSONArray().put(foreign))
+        assertEquals("FAIL",severity("STR-10",healthy(),c))
+        foreign.put("strategy_profile",williamsTc2Profile)
+        assertEquals("PASS",severity("STR-10",healthy(),c))
+        foreign.put("campaign_status","OPEN_PROTECTED").put("strategy_profile","COURSE")
+        assertEquals("PASS",severity("STR-10",healthy(),c))
     }
 
     @Test fun stopPriceAloneNeverCountsAsExchangeProtection() {

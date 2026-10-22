@@ -84,6 +84,26 @@ object DiagnosticsArchive {
                 report.optJSONObject("unified_strategy_evidence")?.toString(2) ?: "{}")
             add(zip, "event_compaction.json",
                 report.optJSONObject("event_compaction")?.toString(2) ?: "{}")
+            // Dedicated forensic evidence: keep scanner, current signed STOP
+            // observations, position snapshots and timeframe coverage together
+            // with their original timestamps. Never derive a fresh proof from
+            // a persisted campaign stop or from an older UI snapshot.
+            add(zip, "scanner_snapshot.json",
+                report.optJSONObject("scanner_snapshot")?.toString(2) ?: "{}")
+            add(zip, "chart_reading_audit.json",
+                report.optJSONArray("chart_reading_audit")?.toString(2) ?: "[]")
+            add(zip, "book_rule_coverage.json",
+                report.optJSONArray("book_rule_coverage")?.toString(2) ?: "[]")
+            add(zip, "futures_positions_signed_snapshot.json",
+                report.optJSONObject("status")?.optJSONArray("futures_positions")?.toString(2) ?: "[]")
+            add(zip, "futures_exchange_stop_proofs.json",
+                report.optJSONObject("futures_campaign_coordinator")
+                    ?.optJSONArray("exchange_protection_observations")?.toString(2) ?: "[]")
+            add(zip, "futures_intent_stop_lifecycle.json",
+                report.optJSONObject("futures_campaign_coordinator")
+                    ?.optJSONArray("pending_intent_details")?.toString(2) ?: "[]")
+            add(zip, "signal_decision_history.json",
+                report.opt("signal_decision_history")?.toString() ?: "null")
         }
         java.nio.file.Files.move(temporary.toPath(), output.toPath(),
             java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)

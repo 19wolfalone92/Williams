@@ -10625,6 +10625,51 @@ private class NativeEngine(
         val observedAtMs = System.currentTimeMillis()
         val scannerEvidenceSnapshot = scannerSnapshot()
         val unifiedEvidence = buildWilliamsUnifiedEvidence(scannerEvidenceSnapshot, statusSnapshot, observedAtMs)
+        val chartReadingAudit = JSONArray().apply {
+            val inspected = CockpitDiagnostics.rows(scannerEvidenceSnapshot.optJSONArray("candidates"))
+            for (candidate in inspected) {
+                val symbol = candidate.optString("symbol")
+                val readings = candidate.optJSONObject("decision_trace")
+                    ?.optJSONObject("market_readings")
+                for (frame in listOf("1d", "6h", "4h", "1h", "15m")) {
+                    val reading = readings?.optJSONObject(frame)
+                    put(JSONObject().put("symbol", symbol).put("interval", frame)
+                        .put("state", reading?.optString("state") ?: "NOT_OBSERVED")
+                        .put("closed_candle_count", reading?.optInt("closed_candle_count") ?: 0)
+                        .put("as_of_close_ms", reading?.optLong("as_of_close_ms") ?: 0L)
+                        .put("source", reading?.optString("source") ?: "UNKNOWN")
+                        .put("can_place_orders", false).put("can_close", false))
+                }
+            }
+        }
+        val observedChartReadings = CockpitDiagnostics.rows(chartReadingAudit)
+            .count { it.optString("state") == "OBSERVED" }
+        val inspectedChartSymbols = CockpitDiagnostics.rows(scannerEvidenceSnapshot.optJSONArray("candidates"))
+            .map { it.optString("symbol") }.toSet()
+        val bookRuleCoverage = JSONArray().apply {
+            put(JSONObject().put("rule", "TC1_ZERO_POINT_FIVE_EVIDENCE")
+                .put("source", "Trading Chaos 1st ed., chapter 9, PDF pp.82-84")
+                .put("status", "NOT_VERIFIED")
+                .put("detail", "Wave 3/5 divergence, target zone, fractal, squat, 5/34/5 momentum; " +
+                    "100-140 bar wave scale and lower-TF Wave-2 50-62% entry require causal historical replay. " +
+                    "TC1 stop-and-reverse is NOT a TC2 automatic exit."))
+            put(JSONObject().put("rule", "NTD_FRACTAL_TEETH_AT_ACTIVATION")
+                .put("source", "New Trading Dimensions, chapter 4, PDF pp.48,52-53")
+                .put("status", "CODE_PRESENT_REPLAY_NOT_VERIFIED")
+                .put("detail", "Confirm confirmed fractal, Teeth position at actual breakout, first-fractal " +
+                    "campaign sequence; never authorize fresh risk from NTD observation alone."))
+            put(JSONObject().put("rule", "TC2_WM1_ANGULATION_FOUR_RULES")
+                .put("source", "Trading Chaos 2nd ed., chapter 9, PDF pp.122-125")
+                .put("status", "NUMERICAL_PROXY_NOT_BOOK_CERTIFIED")
+                .put("detail", "Opening angle from crossing of Alligator mouth, jaw/teeth and price extremes; " +
+                    "visual examples must be matched before declaring full conformance."))
+            put(JSONObject().put("rule", "COURSE_RHYTHM_HUMP_THUMB_AIR_BAG_AND_STAGES")
+                .put("source", "Trading Chaos Course, Level III, PDF pp.87-90")
+                .put("status", "NOT_VERIFIED_ON_EXCHANGE")
+                .put("detail", "The Level III worksheet sequences Two-Bar Reversal, 5/13/34 Rhythm, " +
+                    "Hump Fractal and Thumb Trade before a documented executive decision; " +
+                    "Air Bag trigger and stage manager need independent replay. Course remains OBSERVE."))
+        }
         val cockpitTests = CockpitDiagnostics.checks(statusSnapshot, coordinatorSnapshot, scannerEvidenceSnapshot, observedAtMs)
         for (item in CockpitDiagnostics.rows(cockpitTests)) tests.put(item)
         val badSourceEvidence = unifiedEvidence.optJSONArray("source_contract_errors")?.length() ?: 0
@@ -10646,6 +10691,24 @@ private class NativeEngine(
             .put("detail", "Снимок сканера не хранит причины отклонения каждого несформированного " +
                 "сигнала и окончательное решение D1/H4, риска и Binance. " +
                 "Разбивка по книгам — наблюдаемость кандидатов, не доказательство допуска ордеров."))
+        tests.put(JSONObject().put("id", "DATA-06").put("domain", "strategy")
+            .put("name", "Что бот видит на D1/H6/H4/H1/M15 по 10 парам")
+            .put("severity", when {
+                inspectedChartSymbols.size != coreSymbols.size -> "NOT_VERIFIED"
+                chartReadingAudit.length() != coreSymbols.size * 5 -> "NOT_VERIFIED"
+                observedChartReadings == coreSymbols.size * 5 -> "PASS"
+                else -> "WARNING"
+            })
+            .put("detail", "Реальные самостоятельные свечи: ${observedChartReadings}/${coreSymbols.size * 5}; " +
+                "отсутствие истории/фазы не заменять анализом H1. Сведения в chart_reading_audit. " +
+                "PASS свидетельствует о наличии данных, не о верном прогнозе."))
+        tests.put(JSONObject().put("id", "STR-12").put("domain", "strategy")
+            .put("name", "Историческая приёмка книжных правил по редакциям")
+            .put("severity", "NOT_VERIFIED")
+            .put("detail", "TC1 Zero Point 5 условий и коррекция Wave-2; NTD Teeth на пробое; " +
+                "TC2 WM1 визуальная ангуляция; Course Rhythm/Hump/Thumb/Air Bag и стадии. " +
+                "Нужны независимые эталоны, no-look-ahead replay и Binance Futures Demo; " +
+                "обнаруженный аналитический сигнал не означает разрешение сделки."))
         for (item in CockpitDiagnostics.rows(tests)) {
             if (item.optString("severity") == "WARN") item.put("severity", "WARNING")
         }
@@ -10682,6 +10745,9 @@ private class NativeEngine(
             .put("last_incident", auditStore.lastCockpitIncident() ?: JSONObject.NULL)
             .put("sqlite_health", sqliteHealth)
             .put("unified_strategy_evidence", unifiedEvidence)
+            .put("scanner_snapshot", scannerEvidenceSnapshot)
+            .put("chart_reading_audit", chartReadingAudit)
+            .put("book_rule_coverage", bookRuleCoverage)
             .put("signal_decision_history",decisionTraceSnapshot(fullHistory=true))
             .put("device_local_api", "in-process://williams-runtime")
             .put("binance_testnet", true)
