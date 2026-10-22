@@ -135,6 +135,9 @@ internal fun williamsTc2OppositeExitEvidenceBlocker(
         ?: return "TC2_OPPOSITE_EXIT_NO_CONFIRMED_TRIGGER"
     val event=opposite.optJSONObject("event")
         ?: return "TC2_OPPOSITE_EXIT_EVENT_UNVERIFIED"
+    val uncertainty=decision.optJSONArray("uncertain")
+        ?: return "TC2_OPPOSITE_EXIT_UNCERTAINTY_NOT_RECORDED"
+    if(uncertainty.length()>0) return "TC2_OPPOSITE_EXIT_AMBIGUOUS_OR_INCOMPLETE_HISTORY"
     val examinedAt=decision.optLong("observed_at_ms")
     val signalAt=opposite.optLong("signal_bar_time_ms")
     val eventAt=event.optLong("known_at_ms")
