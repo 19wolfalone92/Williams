@@ -6338,6 +6338,12 @@ private class NativeEngine(
 
     private fun submitNativeFuturesAddition(candidate:BaseAnalysis,owner:JSONObject) {
         val symbol=candidate.symbol;val profile=owner.optString("strategy_profile",williamsTc2Profile)
+        // A verified old NTD/Course owner can retain exchange protection and
+        // recovery, but observation-only sources must not create add-on risk.
+        if(!williamsVerifiedNewRiskSource(profile)) {
+            rejectDecision(symbol,"SOURCE_OBSERVATION_ONLY: no NTD/Course LIVE add-ons before Demo acceptance")
+            return
+        }
         if(!williamsProfileAllowsSource(williamsProfile,profile) || !executionReady()) return
         val all=futuresCampaignCoordinator.intentsSnapshot()
         val parentId=owner.getString("client_id")
@@ -6499,6 +6505,9 @@ private class NativeEngine(
             submitNativeFuturesAddition(candidate,owned)
             return
         }
+        if(williamsProfile !in setOf(williamsTc2Profile,williamsUnifiedProfile)) {
+            return rejectDecision(symbol,"SOURCE_OBSERVATION_ONLY: TC2 is the only verified automated entry source")
+        }
         // Keep both directional hypotheses until D1/H4 context is known. Picking
         // the newest signal before applying the directional macro veto caused a
         // valid opposite-side alternative to be discarded prematurely.
@@ -6506,7 +6515,9 @@ private class NativeEngine(
         fun profitReentry(signal:CampaignSignalN)=signal.strategyProfile==williamsNtdProfile &&
             williamsNtdReentryEligible(owned,symbol,campaignSignalDirection(signal.type).orEmpty(),signal.signalBarTimeMs)
         val freshSignals = candidate.campaignSignals.filter {
-            williamsProfileAllowsSource(williamsProfile,it.strategyProfile) && (it.role=="ENTRY" || profitReentry(it)) &&
+            williamsVerifiedNewRiskSource(it.strategyProfile) &&
+                williamsProfileAllowsSource(williamsProfile,it.strategyProfile) &&
+                (it.role=="ENTRY" || profitReentry(it)) &&
                 (it.executionSemantics=="STOP_ENTRY" || profitReentry(it) && it.executionSemantics=="MARKET_ON_CLOSE" &&
                     williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,contextNow,it.triggerPrice,futuresMarketData.markPrice(symbol))==null) &&
                 williamsH1SignalTimeEligible(it.signalBarTimeMs,it.type,it.strategyProfile,contextNow) &&
