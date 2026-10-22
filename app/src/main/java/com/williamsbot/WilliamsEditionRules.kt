@@ -264,9 +264,12 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
     if (a.takeLast(3).all { it.isFinite() }) {
         val peaks=(maxOf(1,i-30) until i).filter { a[it]<0 && a[it]<a[it-1] && a[it]<a[it+1] }
         val second=peaks.lastOrNull()
-        val first=if(second==i-1) peaks.dropLast(1).lastOrNull { a[it]<a[second] } else null
+        // Do not skip an intervening unsuitable AO trough: the two peaks
+        // must be consecutive confirmed extremes of this same negative wave.
+        val first=if(second==i-1) peaks.dropLast(1).lastOrNull() else null
         when {
-            first!=null && second!=null && a[i]>a[i-1] && (first..second).all { a[it]<0 } -> add("AO_TWIN_PEAKS",i)
+            first!=null && second!=null && a[first]<a[second] && a[i]>a[i-1] &&
+                (first..i).all { a[it].isFinite() && a[it]<0 } -> add("AO_TWIN_PEAKS",i)
             a[i-2]>0 && a[i-1]>0 && a[i]>0 && a[i-2]>a[i-1] && a[i]>a[i-1] -> add("AO_SAUCER",i)
             a[i-1]<=0 && a[i]>0 -> add("AO_ZERO_LINE",i)
         }
