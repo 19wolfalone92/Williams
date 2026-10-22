@@ -1066,22 +1066,32 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals("credential store unavailable", failing.status().getString("blocker"))
     }
 
-    @Test fun tc2StrategyExitIsRejectedBeforeAnyExchangeRequestAndRetainsProtection() {
+    @Test fun tc2RejectsArbitraryExitAndForgedOppositionBeforeAnyOrderMutation() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val (coordinator,exchange)=open(direction)
             val beforeRequests=exchange.requests.size
             val before=coordinator.intentsSnapshot().getJSONObject(0)
             val stopId=before.getString("protection_client_id")
-            for(reason in listOf("STRATEGY_EXIT","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED","CORRECTION_PARENT_PRICE_INVALIDATED","LIQUIDATION_GUARD")) {
+            for(reason in listOf("STRATEGY_EXIT","CORRECTION_PARENT_PRICE_INVALIDATED","LIQUIDATION_GUARD","TAKE_PROFIT")) {
                 val result=coordinator.closePosition("BTCUSDT",direction,"1","W2X_BLOCK_"+direction.name,reason)
                 assertFalse(result.getBoolean("ok"))
-                assertEquals("TC2_PROTECTIVE_STOP_ONLY",result.getString("blocker"))
+                assertEquals("TC2_EXIT_REQUIRES_BOOK_OPPOSITE_TRIGGER",result.getString("blocker"))
                 assertFalse(result.getBoolean("mutation_attempted"))
                 assertEquals(beforeRequests,exchange.requests.size)
                 assertEquals("OPEN_PROTECTED",coordinator.state.name)
-                assertEquals(stopId,coordinator.intentsSnapshot().getJSONObject(0).getString("protection_client_id"))
-                assertTrue(CockpitDiagnostics.rows(coordinator.intentsSnapshot()).none {it.optString("intent_role")=="EXIT"})
             }
+            // A label claiming book opposition is not an authorization token.
+            // The signed STOP/mark may be read but no reduce-only POST is sent
+            // without the matching durable closed-H1 decision and owner evidence.
+            val postsBefore=exchange.posts("/fapi/v1/order")
+            val forged=coordinator.closePosition("BTCUSDT",direction,"1","W2X_FORGED_"+direction.name,
+                "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
+            assertFalse(forged.getBoolean("ok"))
+            assertTrue(forged.getString("blocker").startsWith("TC2_OPPOSITE_EXIT_"))
+            assertEquals(postsBefore,exchange.posts("/fapi/v1/order"))
+            assertEquals("OPEN_PROTECTED",coordinator.state.name)
+            assertEquals(stopId,coordinator.intentsSnapshot().getJSONObject(0).getString("protection_client_id"))
+            assertTrue(CockpitDiagnostics.rows(coordinator.intentsSnapshot()).none {it.optString("intent_role")=="EXIT"})
         }
     }
 
