@@ -198,6 +198,36 @@ class CockpitDiagnosticsTest {
         val c = coordinator().put("pending_intent_details", JSONArray().put(entry().put("order_status", "FILLED")))
         assertEquals("FAIL", severity("EXE-03", healthy(), c))
     }
+    @Test fun diagnostics9InFlightSwapWithStaleRestIsUnverifiedNotFalselyUnprotected() {
+        // Journal has a Binance-confirmed new STOP, but the UI still has the
+        // pre-swap stop and reconciliation is running (BNB SHORT, 4.53.7).
+        val stale = healthy()
+            .put("positions_snapshot_ok", false)
+            .put("positions_snapshot_at_ms", now - 25_000)
+            .put("futures_positions", JSONArray().put(JSONObject()
+                .put("symbol", "SOLUSDT").put("direction", "SHORT")
+                .put("qty", 1).put("stop", 105)))
+        val e = entry("SHORT").put("order_status", "TRIGGERING")
+            .put("campaign_status", "POSITION_OPEN")
+            .put("protection_status", "PROTECTED")
+            .put("protection_client_id_suffix", "newstop")
+            .put("strategy_ownership_verified", true)
+            .put("last_reconciled_ms", now - 25_000)
+            .put("trailing_at_ms", now - 2_000)
+            .put("previous_protection_unresolved", false)
+        val c = coordinator().put("ready_for_new_entry", false)
+            .put("reconciliation_running", true)
+            .put("pending_intent_details", JSONArray().put(e))
+        assertEquals("NOT_VERIFIED", severity("EXE-03", stale, c))
+        assertEquals("NOT_VERIFIED", severity("EXE-04", stale, c))
+        assertEquals("NOT_VERIFIED", severity("EXE-05", stale, c))
+        assertFalse(CockpitDiagnostics.readiness(stale, c, now).getBoolean("position_management_ready"))
+        // A genuinely unconfirmed stop must never get the same lenient result.
+        e.put("protection_status", "SUBMISSION_UNKNOWN")
+        assertEquals("FAIL", severity("EXE-03", stale, c))
+        assertEquals("FAIL", severity("EXE-05", stale, c))
+    }
+
     @Test fun stopPriceAloneNeverCountsAsExchangeProtection() {
         val s = healthy().put("futures_positions", JSONArray().put(JSONObject().put("symbol", "SOLUSDT").put("direction", "LONG").put("stop", 95)))
         assertEquals("FAIL", severity("EXE-04", s))
