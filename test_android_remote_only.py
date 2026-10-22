@@ -925,7 +925,10 @@ def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_mark
         "private fun submitNativeFuturesAddition(", 1
     )[0]
     assert "val actionableOpposing = opposing?.takeIf {" in manage
-    assert "(!riskOnly && eligibleSymbols==null && tc2TriggerNow)" in manage
+    assert "(!riskOnly && eligibleSymbols==null && tc2TriggerNow &&" in manage
+    assert "oppositeProfitBlocker==null" in manage
+    assert "williamsTc2OppositeExitProfitBlocker(" in policy
+    assert "williamsTc2OppositeExitProfitBlocker(" in coordinator
     assert 'profile!=williamsTc2Profile && (boundaryExit || editionExit.isNotEmpty())' in manage
     assert '"tc2_correction_boundary_advisory"' in manage
     assert 'market_close_authorized",false' in manage
