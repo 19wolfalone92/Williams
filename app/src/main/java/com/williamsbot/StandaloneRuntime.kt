@@ -2536,6 +2536,9 @@ private class NativeEngine(
             name = "williams-futures-native-engine"
             start()
         }
+        // A newly started monitoring worker proves the Android runtime can
+        // initialize again. Execution gates remain separate and fail-closed.
+        RuntimeStartupEvidence.clear(context)
         return JSONObject()
             .put("started", true)
             .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
