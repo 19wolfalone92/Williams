@@ -142,6 +142,25 @@ class WilliamsEditionRulesTest {
         }
     }
 
+    @Test fun ntdFirstFractalQualificationUsesActualBreakoutNotPivotForBothDirections() {
+        val n=50
+        val b=(0 until n).map { i ->
+            val h=if(i==46)105.0 else if(i>=47)102.0 else 100.0
+            WilliamsWaveBar((i+1)*WILLIAMS_H1_MS,99.0,h,98.0,99.0,100.0)
+        }
+        val ao=List(n){0.0};val ac=List(n){0.0}
+        fun setups(side:String, bars:List<WilliamsWaveBar>, teeth:Double,
+            jaw:Double, lips:Double) = williamsNtdSetups(
+            side,bars,List(n){jaw},List(n){teeth},List(n){lips},ao,ac,.1)
+                .filter { it.kind=="FRACTAL" }
+        assertEquals(1,setups("LONG",b,105.05,99.0,99.0).size)
+        assertTrue(setups("LONG",b,105.1,99.0,99.0).isEmpty())
+        val inverted=b.map { it.copy(o=250.0-it.o,h=250.0-it.l,
+            l=250.0-it.h,c=250.0-it.c) }
+        assertEquals(1,setups("SHORT",inverted,144.95,151.0,151.0).size)
+        assertTrue(setups("SHORT",inverted,144.9,151.0,151.0).isEmpty())
+    }
+
     @Test fun bothOutsideFractalsRemainVisibleWithoutInventingTheirIntrabarOrder() {
         val highs=listOf(10.0,11.0,15.0,11.0,10.0);val lows=listOf(8.0,7.0,3.0,7.0,8.0)
         val bars=highs.indices.map { i -> WilliamsWaveBar((i+1)*3_600_000L,(highs[i]+lows[i])/2,highs[i],lows[i],(highs[i]+lows[i])/2,100.0) }
