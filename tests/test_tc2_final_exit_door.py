@@ -260,3 +260,26 @@ def test_tc2_real_exit_door_keeps_stop_and_does_not_post_on_opposite_signal_at_l
     assert calls==[("position","BTCUSDT"),("mark","BTCUSDT")]
     assert campaign.state==CampaignState.TREND_ACTIVE
     assert "pending_exit_client_id" not in campaign.tags
+
+
+
+def test_tc2_valid_opposite_setup_does_not_cancel_unsettled_addition(exit_runtime):
+    import time
+    runtime=exit_runtime
+    calls=[]
+    runtime.cancel_pending_entries=lambda *a: calls.append("cancel")
+    runtime._position=lambda *a: calls.append("position")
+    now=int(time.time()*1000)
+    event={"state":"TRIGGERED","known_at_ms":now-60_000}
+    proof={"reason":"OPPOSITE_WILLIAMS_LEVEL_TRIGGERED","symbol":"BTCUSDT",
+           "observed_at_ms":now-1000,"opened_at_ms":now-2*3_600_000,
+           "strategy_profile":TC2,"direction":"SHORT","signal_id":"book_short",
+           "trigger":96.0,"mark":95.0,"event":event}
+    tags={"strategy_profile":TC2,"tc2_book_exit_proof":proof,
+          "last_opposition_evidence":{"signal_id":"book_short","event":event.copy()}}
+    campaign=SimpleNamespace(symbol="BTCUSDT",side="BUY",
+        state=CampaignState.ADD_ON_PENDING,tags=tags)
+    with pytest.raises(RuntimeError,match="TC2_OPPOSITE_EXIT_PENDING_ADDITION_NOT_RECONCILED"):
+        runtime._exit_market(campaign,"OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
+    assert calls==[]
+    assert campaign.state==CampaignState.ADD_ON_PENDING
