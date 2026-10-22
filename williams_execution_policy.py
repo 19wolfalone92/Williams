@@ -51,7 +51,7 @@ def strategy_market_close_allowed(source):
     return source in (TC2, NTD, COURSE)
 
 
-def tc2_opposite_exit_evidence_blocker(tags, reason, now, current_side):
+def tc2_opposite_exit_evidence_blocker(tags, reason, now, current_side, symbol):
     """Final reason+evidence fence, prior to any mutation/entry cancellation.
 
     Trading Chaos 2 ch11-12: only a causally triggered opposite Wise-Man
@@ -72,7 +72,11 @@ def tc2_opposite_exit_evidence_blocker(tags, reason, now, current_side):
     except (TypeError, ValueError, OverflowError):
         return "TC2_EXIT_BOOK_EVIDENCE_MALFORMED"
     from math import isfinite
+    last = (tags or {}).get("last_opposition_evidence") or {}
     if (proof.get("reason") != reason
+            or proof.get("symbol") != symbol
+            or last.get("signal_id") != signal_id
+            or (last.get("event") or {}) != (proof.get("event") or {})
             or proof.get("strategy_profile") != TC2
             or proof.get("event", {}).get("state") != "TRIGGERED"
             or not signal_id or opened <= 0 or known <= opened
