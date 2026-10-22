@@ -4821,6 +4821,20 @@ private class NativeEngine(
             if (result.optBoolean("ok", false)) {
                 lastRestReconcileMs = System.currentTimeMillis()
                 lastReconciliationResult = "SUCCESS"
+                // Diagnostic 12: the BNBUSDT STOP was observed by signed REST
+                // after the dashboard cached its older unverified row. Each
+                // successful signed reconciliation invalidates only the
+                // DISPLAY cache, so the next cockpit refresh recomputes from
+                // current positions and protective order observations. Never
+                // use this cache to authorize trading or label a stale STOP
+                // exchange-confirmed. Epoch prevents in-flight old snapshots
+                // from resurrecting stale protection after this invalidation.
+                synchronized(this) {
+                    futuresPositionSnapshotEpoch++
+                    cachedFuturesPositionEnvelope = null
+                    futuresPositionSnapshotLastAttemptMs = 0L
+                    futuresPositionSnapshotRefreshError = null
+                }
             } else {
                 lastReconciliationResult = "BLOCKED: " +
                     result.optString("blocker", result.optString("error", "unknown"))
