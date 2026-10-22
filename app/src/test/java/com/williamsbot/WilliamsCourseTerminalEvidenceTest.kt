@@ -36,9 +36,9 @@ class WilliamsCourseTerminalEvidenceTest {
             // Make an actual extreme qualifying bar squat against the
             // immediately preceding candle, without using future data.
             val corrected=rows.toMutableList()
-            corrected[120]=corrected[120].copy(v=300.0,
-                l=if(side=="UP") 154.6 else corrected[120].l,
-                h=if(side=="DOWN") 145.4 else corrected[120].h)
+            corrected[120]=if(side=="UP")
+                corrected[120].copy(o=154.8,h=155.0,l=154.6,c=154.8,v=300.0)
+                else corrected[120].copy(o=145.2,h=145.4,l=145.0,c=145.2,v=300.0)
             assertTrue(williamsTerminalSquatVolumeProxy(corrected,side,100,130))
             assertFalse(williamsTerminalSquatVolumeProxy(corrected,side,100,119))
             assertFalse(williamsTerminalSquatVolumeProxy(corrected,side,130,130))
@@ -47,7 +47,7 @@ class WilliamsCourseTerminalEvidenceTest {
 
     @Test fun missingInvalidOrZeroVolumeCannotInventTheSquat() {
         val rows=upwardBars().toMutableList()
-        rows[120]=rows[120].copy(l=154.6,v=300.0)
+        rows[120]=rows[120].copy(o=154.8,l=154.6,c=154.8,v=300.0)
         assertTrue(williamsTerminalSquatVolumeProxy(rows,"UP",100,130))
         rows[120]=rows[120].copy(v=Double.NaN)
         assertFalse(williamsTerminalSquatVolumeProxy(rows,"UP",100,130))
