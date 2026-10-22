@@ -18,6 +18,17 @@ class WilliamsEditionRulesTest {
         assertFalse(williamsProfileAllowsSource(williamsUnifiedProfile,williamsUnifiedProfile))
     }
 
+    @Test fun researchSourcesNeverReceiveNewAutomatedRiskEvenInUnifiedMode() {
+        assertTrue(williamsVerifiedNewRiskSource(williamsTc2Profile))
+        assertFalse(williamsVerifiedNewRiskSource(williamsNtdProfile))
+        assertFalse(williamsVerifiedNewRiskSource(williamsCourseProfile))
+        assertFalse(williamsVerifiedNewRiskSource(williamsUnifiedProfile))
+        // The same disabled sources must remain available for independent
+        // analysis; scanning visibility is not financial mutation authority.
+        assertTrue(williamsProfileAllowsSource(williamsUnifiedProfile,williamsNtdProfile))
+        assertTrue(williamsProfileAllowsSource(williamsUnifiedProfile,williamsCourseProfile))
+    }
+
     @Test fun unifiedBooksBlockOppositeDirectionsButNotSameDirectionEvidence() {
         assertFalse(williamsUnifiedDirectionsConflict(listOf("LONG","LONG","LONG")))
         assertFalse(williamsUnifiedDirectionsConflict(listOf("SHORT","SHORT")))
