@@ -2410,7 +2410,8 @@ private class NativeEngine(
         startDeviceWaveReplay(generation)
         // Independent reconciliation/account gates block entries. Only an explicit
         // kill latch needs to force the pause flag during safe monitoring.
-        paused = killLatched || prefs.getBoolean("operator_entries_paused", false)
+        paused = killLatched || prefs.getBoolean("operator_entries_paused", false) ||
+            prefs.getBoolean("risk_daily_baseline_auto_paused", false)
         // The Futures Demo market stream is a live execution prerequisite. REST remains
         // authoritative for recovery and account/position reconciliation.
         marketSocket?.close(1000, "Restart USD-M Futures market stream")
@@ -4959,8 +4960,9 @@ private class NativeEngine(
                 // Distinguish an automatic, recoverable daily-baseline pause
                 // from the operator's explicit pause. Never erase either risk
                 // evidence or the original 3% daily loss limit.
-                prefs.edit().putBoolean("auto_run", false)
-                    .putBoolean("risk_daily_baseline_auto_paused", true).commit()
+                check(prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()) {
+                    "Could not durably pause trades while the UTC baseline is unknown"
+                }
                 lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: unable to reconstruct UTC-day equity safely: " +
                     (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 3% and entries stay blocked"
                 return false
@@ -5001,14 +5003,14 @@ private class NativeEngine(
             futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
         }.getOrElse { failure ->
             paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
             lastError = "FUTURES_DAILY_INCOME_UNKNOWN: cannot verify the UTC-day PnL ledger: " +
                 (failure.message ?: failure.javaClass.simpleName)
             return false
         }
         val dailyIncome = summarizeFuturesDailyIncome(dailyIncomeRows) ?: run {
             paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
             lastError = "FUTURES_DAILY_INCOME_UNKNOWN: income rows are malformed or truncated; entries remain blocked"
             return false
         }
@@ -5026,7 +5028,7 @@ private class NativeEngine(
                 ?: throw IllegalStateException("Invalid aggregate Futures unrealized PnL")
         }.getOrElse { failure ->
             paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
             lastError = "FUTURES_DAILY_UNREALIZED_PNL_UNKNOWN: " +
                 (failure.message ?: failure.javaClass.simpleName)
             return false
@@ -5037,7 +5039,7 @@ private class NativeEngine(
         val riskAdjustedEquity = baseline + dailyPnlQuote
         if (!dailyPnlQuote.isFinite() || !riskAdjustedEquity.isFinite() || riskAdjustedEquity <= 0.0) {
             paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
             lastError = "FUTURES_DAILY_PNL_INVALID: risk-adjusted equity is not finite and positive"
             return false
         }
