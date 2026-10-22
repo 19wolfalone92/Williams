@@ -40,6 +40,24 @@ internal fun validWilliamsEditionBars(bars:List<WilliamsWaveBar>):Boolean = bars
         minOf(b.o,b.l,b.c)>0 && b.h>=maxOf(b.o,b.l,b.c) && b.l<=minOf(b.o,b.c) && b.v>=0 } &&
     bars.zipWithNext().all { (a,b) -> a.t<b.t }
 
+/** No book permits treating candles separated by an unobserved H1 interval
+ * as consecutive confirmation bars, AO bars or an Alligator path. In the past
+ * the TC2 generator had no local gap check (unlike NTD/Course and the final
+ * execution door). Keep the scanner itself causally truthful, too.
+ */
+internal fun williamsEditionSignalSeriesBlocker(
+    bars: List<WilliamsWaveBar>, frame: String
+): String? {
+    val step = williamsWaveFrames[frame] ?: return "UNSUPPORTED_BOOK_SIGNAL_FRAME"
+    if (bars.size < 45 || !validWilliamsEditionBars(bars))
+        return "BOOK_SIGNAL_OHLCV_UNVERIFIED"
+    if (bars.any { it.t <= 0L || it.t % step != 0L })
+        return "BOOK_SIGNAL_BAR_TIME_MISALIGNED"
+    if (bars.zipWithNext().any { (a, b) -> b.t - a.t != step })
+        return "BOOK_SIGNAL_CANDLE_GAP"
+    return null
+}
+
 /** NTD PDF42 and Course PDF61-72. Outside bars keep both genuine fractals;
  * simultaneous extremes cannot establish an ordered Hump start/signal. */
 internal fun confirmedWilliamsEditionFractals(bars:List<WilliamsWaveBar>):List<WilliamsEditionFractal> {
