@@ -3,6 +3,21 @@ package com.williamsbot
 import org.json.JSONObject
 import kotlin.math.abs
 
+/** TC2 ch9, PDF pp.124-132: the FIRST Wise Man is a countertrend
+ * divergent/reversal bar. AO must still be moving in the PRIOR direction
+ * at that bar: red for bullish reversal, green for bearish reversal.
+ * Treat unavailable AO as UNKNOWN, never substitute trend alignment.
+ * The oscillator level relative to zero is NOT this color test.
+ */
+internal fun williamsFirstWiseManAoBlocker(side:String,aoNow:Double,aoBefore:Double):String? {
+    if(side !in listOf("LONG","SHORT")) return "WM1_AO_SIDE_INVALID"
+    if(!aoNow.isFinite() || !aoBefore.isFinite()) return "WM1_AO_UNVERIFIED"
+    return when(side) {
+        "LONG" -> if(aoNow<aoBefore) null else "WM1_AO_NOT_RED"
+        else -> if(aoNow>aoBefore) null else "WM1_AO_NOT_GREEN"
+    }
+}
+
 /** TC2 PDF122-124: last mouth passage, highs on a downward path and lows
  * on an upward path, compared with Jaw/Teeth over the same interval.
  * Regression is an explicit numerical interpretation of the visual rule. */
