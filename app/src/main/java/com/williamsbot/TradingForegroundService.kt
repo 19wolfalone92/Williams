@@ -95,7 +95,16 @@ class TradingForegroundService : Service() {
                 runCatching {
                     StandaloneRuntime.start(applicationContext)
                     StandaloneRuntime.autostart(applicationContext)
+                }.onSuccess {
+                    // Foreground notification is not proof the trading engine
+                    // actually started. Clear only prior service startup errors.
+                    RuntimeServiceState.lastError = null
                 }.onFailure {
+                    // Previously swallowed: UI showed a running Android service
+                    // while Binance engine had never started after reboot.
+                    RuntimeServiceState.lastError = safeDiagnosticText(
+                        "Futures runtime autostart failed: " + (it.message ?: it.javaClass.simpleName)
+                    )
                     android.util.Log.e("WilliamsFutures", "Local Futures runtime startup failed", it)
                 }
             }
