@@ -172,8 +172,12 @@ internal fun CockpitDashboard(
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(Modifier.weight(1f)) { CockpitCard("Открытые позиции") {
-                    Text(status.openPositions.toString(), style = MaterialTheme.typography.headlineSmall)
-                    Text(if (status.positionsSnapshotOk) "Последний снимок Binance" else "Снимок устарел", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
+                    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+                    LaunchedEffect(Unit) { while(true) { kotlinx.coroutines.delay(1000); now=System.currentTimeMillis() } }
+                    Text(cockpitKnownOpenPositionsLabel(status,now), style = MaterialTheme.typography.headlineSmall)
+                    Text(cockpitKnownOpenPositionsDetail(status,now),
+                        color = if(cockpitKnownOpenPositionsLabel(status,now)=="—") AppColors.amber else AppColors.textMuted,
+                        style = MaterialTheme.typography.labelSmall)
                 } }
                 Box(Modifier.weight(1f)) { CockpitCard("Резерв риска", AppColors.amber) {
                     Text(cockpitNumber(status.reservedRiskPct * 100, 2) + "%", style = MaterialTheme.typography.headlineSmall)
@@ -183,7 +187,7 @@ internal fun CockpitDashboard(
         }
         item { Text("Активность бота", style = MaterialTheme.typography.titleLarge) }
         items(status.futuresIntents.take(4)) { intent ->
-            CockpitIntentCard(intent, onMarket)
+            CockpitIntentCard(intent, status, onMarket)
         }
         if (status.futuresIntents.isEmpty()) item {
             CockpitCard("Наблюдение за рынком") {
@@ -202,24 +206,95 @@ internal fun CockpitDashboard(
     }
 }
 
+/**
+ * A persisted OPEN_PROTECTED campaign and a last reconciled stop are NOT live
+ * Binance proof. A green UI badge requires a fresh signed positions snapshot
+ * containing the exact exchange stop for the same owned symbol and direction.
+ * UI-only: never place, cancel or replace an exchange order.
+ */
+internal fun cockpitSignedStopVerified(
+    intent:JSONObject,status:Status,now:Long
+):Boolean {
+    if (!status.positionsSnapshotOk ||
+        !CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,now,CockpitDiagnostics.POSITION_TTL_MS) ||
+        !CockpitDiagnostics.fresh(status.snapshotAtMs,now,30_000L) ||
+        intent.optString("campaign_status")!="OPEN_PROTECTED" ||
+        intent.optString("protection_status")!="PROTECTED" ||
+        !intent.optBoolean("strategy_ownership_verified",false) ||
+        intent.optString("protection_client_id_suffix").isBlank()) return false
+    val expected=intent.optString("persisted_protective_stop").toDoubleOrNull()
+        ?.takeIf { it.isFinite() && it>0 } ?: return false
+    return status.positions.count { position ->
+        position.symbol==intent.optString("symbol") &&
+        position.direction==intent.optString("direction") &&
+        position.qty>0.0 &&
+        position.stopVerificationStatus in setOf(
+            "OWNED_STOP_SEEN","NATIVE_REPLACEMENT_PROTECTION_SEEN","EXTERNAL_PROTECTED"
+        ) && position.stop?.let { actual ->
+            actual.isFinite() && kotlin.math.abs(actual-expected)<=
+                maxOf(1e-8,kotlin.math.abs(expected)*1e-8)
+        }==true
+    }==1
+}
+
+internal fun cockpitKnownOpenPositionsLabel(status:Status,now:Long):String =
+    if(status.positionsSnapshotOk &&
+        CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,now,CockpitDiagnostics.POSITION_TTL_MS) &&
+        CockpitDiagnostics.fresh(status.snapshotAtMs,now,30_000L))
+        status.openPositions.toString() else "—"
+
+internal fun cockpitKnownOpenPositionsDetail(status:Status,now:Long):String {
+    if(cockpitKnownOpenPositionsLabel(status,now)!="—") return "Позиции Binance • подтверждены"
+    val lastCount=maxOf(status.openPositions,status.positions.count { it.qty>0.0 })
+    return if(lastCount>0) "Нет свежей сверки • в предыдущем снимке $lastCount" else
+        "Нет свежей сверки • отсутствие позиций НЕ подтверждено"
+}
+
+internal fun cockpitBookSignalRu(raw:String):String=when {
+    raw.startsWith("BOOK H1 WM3",ignoreCase=true) ->
+        "TC2, третий Мудрец: подтверждённый фрактал H1 и проверка линии Teeth. " +
+        "Условный вход при пробое уровня H1; подтверждение M15 не требуется."
+    raw.startsWith("BOOK H1 WM2",ignoreCase=true) ->
+        "TC2, второй Мудрец: последовательность трёх баров AO на H1; " +
+        "условный вход после проверки фактического сигнала и риска."
+    raw.startsWith("BOOK H1 WM1",ignoreCase=true) ->
+        "TC2, первый Мудрец: разворотный бар и ангуляция к Аллигатору. " +
+        "Условный вход требует подтверждения цены."
+    else -> russianExecutionBlocker(raw)
+}
+
 @Composable
-internal fun CockpitIntentCard(intent: JSONObject, onMarket: (String) -> Unit) {
+internal fun CockpitIntentCard(intent: JSONObject, status:Status, onMarket: (String) -> Unit) {
     val symbol = intent.optString("symbol")
     val direction = intent.optString("direction")
     var expanded by remember(symbol, intent.optString("client_id_suffix")) { mutableStateOf(false) }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(symbol,intent.optString("client_id_suffix")) {
+        while(true) { kotlinx.coroutines.delay(1000); now=System.currentTimeMillis() }
+    }
+    val hasFilledExposure=intent.optString("confirmed_position_qty").toDoubleOrNull()?.let { it>0.0 }==true
+    val protected=cockpitSignedStopVerified(intent,status,now)
     CockpitCard("$symbol • $direction", if (direction == "SHORT") AppColors.red else AppColors.green) {
-        Text(russianStatus(intent.optString("campaign_status")), fontWeight = FontWeight.SemiBold)
-        CockpitField("Binance", intent.optString("order_status", "не подтверждено"))
-        Text(russianExecutionBlocker(intent.optString("signal_reason")).ifBlank { "Причина сигнала для этой кампании не записана" },
-            color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
+        Text(if(intent.optString("campaign_status")=="OPEN_PROTECTED" && !protected)
+            "Позиция учтена • защита сейчас не подтверждена"
+            else russianStatus(intent.optString("campaign_status")), fontWeight = FontWeight.SemiBold,
+            color=if(hasFilledExposure && !protected) AppColors.amber else AppColors.text)
+        CockpitField(if(hasFilledExposure) "Исходная заявка Binance" else "Binance",
+            intent.optString("order_status","не подтверждено") +
+            if(hasFilledExposure) " • исполнение позиции учтено отдельно" else "")
+        Text(cockpitBookSignalRu(intent.optString("signal_reason")).ifBlank {
+            "Причина сигнала для этой кампании не записана"
+        }, color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
         CockpitField("Вход / стоп", formatChartPrice(intent.optDouble("entry_price")) + " / " +
             formatChartPrice(intent.optDouble("persisted_protective_stop")))
         CockpitLastStopMove(intent)
         CockpitField("Защита", when {
-            CockpitDiagnostics.protectionProven(intent, System.currentTimeMillis()) -> "Подтверждена Binance"
-            intent.optString("campaign_status") == "ENTRY_PENDING" && intent.optString("order_status") != "PARTIALLY_FILLED" -> "Выставляется после исполнения"
-            else -> "НЕ ПОДТВЕРЖДЕНА"
-        }, if (CockpitDiagnostics.protectionProven(intent, System.currentTimeMillis())) AppColors.green else AppColors.amber)
+            protected -> "Подтверждена свежим снимком Binance"
+            hasFilledExposure -> "НЕ ПОДТВЕРЖДЕНА СЕЙЧАС • проверить Binance"
+            intent.optString("campaign_status")=="ENTRY_PENDING" &&
+                intent.optString("order_status")!="PARTIALLY_FILLED" -> "Ожидает исполнения входа"
+            else -> "НЕ ПОДТВЕРЖДЕНА СЕЙЧАС"
+        }, if(protected) AppColors.green else if(hasFilledExposure) AppColors.red else AppColors.amber)
         TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Скрыть детали" else "Риск, время и сверка") }
         if (expanded) {
             CockpitField("Плановый резерв", cockpitNumber(intent.optDouble("risk_pct") * 100) + "%")
@@ -292,7 +367,7 @@ internal fun CockpitTrades(
                 1 -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     val pending = status.futuresIntents.filter { it.optString("campaign_status") in setOf("ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "EXIT_PENDING") }
                     if (pending.isEmpty()) item { Text("Ожидающих заявок в последнем снимке нет.", color = AppColors.textMuted) }
-                    items(pending) { CockpitIntentCard(it, onMarket) }
+                    items(pending) { CockpitIntentCard(it, status, onMarket) }
                 }
                 else -> Column {
                     Box(Modifier.weight(1f)) { history() }
