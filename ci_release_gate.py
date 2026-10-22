@@ -386,9 +386,16 @@ def main() -> None:
     must_not(runtime_source, "getOrElse { candles }", "StandaloneRuntime.kt H1 fallback")
     must(runtime_source, '.put("take_profit_pct", 0.0)', "StandaloneRuntime.kt canonical Futures settings")
     setup_source=read("app/src/main/java/com/williamsbot/WilliamsSetupRules.kt")
-    for needle in ("p<=teeth.last()", "p<=teeth.last()", "if (value==p) start=j",
+    # TC2 chapter 11 (PDF pp.147-149): validate the triggered price beyond
+    # red Teeth, not the raw pivot before its +1/-1 tick breakout buffer.
+    # The older pivot-based release string check incorrectly forbade this fix.
+    for needle in ("trigger<=teeth.last()", "trigger>=teeth.last()", "if (value==p) start=j",
                    ".minOf { bars[it].l }-tick", "bars[it].h>=trigger", "bar.h<mouth.min()"):
         must(setup_source,needle,"WilliamsSetupRules.kt confirmed book setup")
+    must_not(setup_source, "p<=teeth.last()", "TC2 breakout-vs-formation book contract")
+    teeth_source=read("app/src/main/java/com/williamsbot/WilliamsBookH1EntryPolicy.kt")
+    must(teeth_source, "if(entry>teeth)", "WM3 actual LONG breakout beyond current Teeth")
+    must(teeth_source, "if(entry<teeth)", "WM3 actual SHORT breakout beyond current Teeth")
     must(runtime_source, "val slowValues = medianPrices.subList(index - 33, index + 1)", "StandaloneRuntime.kt")
     must_not(runtime_source, "medians.subList(index - 34, index + 1).average()", "StandaloneRuntime.kt")
     indicator_test = read("app/src/test/java/com/williamsbot/WilliamsIndicatorParityTest.kt")
