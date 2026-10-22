@@ -21,7 +21,7 @@ internal fun williamsProfileAllowsSource(selected:String,source:String):Boolean 
  * of legacy exposure, but cannot create new automated risk until exchange E2E.
  */
 internal fun williamsVerifiedNewRiskSource(source:String):Boolean =
-    source==williamsTc2Profile
+    williamsNewExposureBlocker(source)==null
 
 /** Contradictory fresh H1 entry hypotheses must not choose a side by chance. */
 internal fun williamsUnifiedDirectionsConflict(directions:Iterable<String>):Boolean =
