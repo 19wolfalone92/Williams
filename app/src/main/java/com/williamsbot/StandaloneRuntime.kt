@@ -8333,8 +8333,11 @@ private class NativeEngine(
         val reversalStart = max(2, candles.lastIndex - 20)
         for (i in candles.lastIndex downTo reversalStart) {
             val priorLow = candles[i - 1].l
-            if (validWilliamsReversalBar("LONG",waveBars[i],priorLow,
-                listOf(jawS[i],teethS[i],lipsS[i]),angulationProof(i).score)) {
+            val wm1AoBlocker=williamsFirstWiseManAoBlocker(
+                "LONG",ao(candles,i),ao(candles,i-1))
+            if (wm1AoBlocker==null &&
+                validWilliamsReversalBar("LONG",waveBars[i],priorLow,
+                    listOf(jawS[i],teethS[i],lipsS[i]),angulationProof(i).score)) {
                 val trigger = candles[i].h + tick
                 if (triggerStillPending(i, trigger)) {
                     out += CampaignSignalN(
@@ -8358,7 +8361,8 @@ private class NativeEngine(
                             .put("wm1_ao_opposite_color_observed",
                                 ao(candles,i).isFinite() && ao(candles,i-1).isFinite() &&
                                 ao(candles,i)<ao(candles,i-1))
-                            .put("wm1_ao_color_is_evidence_not_new_execution_veto",true)
+                            .put("wm1_ao_qualifies_book_countertrend",true)
+                            .put("wm1_ao_color_is_mandatory",true)
                             .toString()
                     )
                 }
