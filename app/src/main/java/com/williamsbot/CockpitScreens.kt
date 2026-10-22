@@ -268,8 +268,12 @@ internal fun cockpitKnownOpenPositionsDetail(status:Status,now:Long):String {
         intent.optString("confirmed_position_qty").toDoubleOrNull()?.let { it>0.0 }==true
     }
     val lastCount=maxOf(status.openPositions,status.positions.count { kotlin.math.abs(it.qty)>0.0 },journalCount)
-    return if(lastCount>0) "Нет свежей сверки • в предыдущем снимке $lastCount" else
-        "Нет свежей сверки • отсутствие позиций НЕ подтверждено"
+    return when {
+        status.positions.any { kotlin.math.abs(it.qty)>0.0 } || status.openPositions>0 ->
+            "Нет свежей сверки • ранее учтено позиций: $lastCount"
+        journalCount>0 -> "Нет свежей сверки • в журнале открытых кампаний: $journalCount"
+        else -> "Нет свежей сверки • отсутствие позиций НЕ подтверждено"
+    }
 }
 
 internal fun cockpitBookSignalRu(raw:String):String=when {
