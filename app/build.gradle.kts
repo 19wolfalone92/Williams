@@ -17,7 +17,7 @@ if (keystorePropertiesFile.exists()) {
 
 val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 // Local builds must not downgrade an installed CI build (the previous APK was code 3503).
-val resolvedVersionCode = maxOf(45308, ciRunNumber ?: 45308)
+val resolvedVersionCode = maxOf(45309, ciRunNumber ?: 45309)
 val cockpitPreview = providers.gradleProperty("williamsCockpitPreview").orNull == "true"
 
 val debugKeystoreFile = rootProject.file("build/williams-debug.p12")
