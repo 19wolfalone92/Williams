@@ -104,6 +104,7 @@ class TradingForegroundService : Service() {
                 }.onFailure {
                     // Previously swallowed: UI showed a running Android service
                     // while Binance engine had never started after reboot.
+                    RuntimeStartupEvidence.failure(applicationContext, "ENGINE_AUTOSTART_FAILED", it)
                     RuntimeServiceState.lastError = safeDiagnosticText(
                         "Futures runtime autostart failed: " + (it.message ?: it.javaClass.simpleName)
                     )
