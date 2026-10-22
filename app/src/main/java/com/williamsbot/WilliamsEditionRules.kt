@@ -186,7 +186,9 @@ internal fun williamsCourseAirbagStop(side:String,higher:List<WilliamsWaveBar>,t
     if (side !in listOf("LONG","SHORT") || higher.size<2 || !validWilliamsEditionBars(higher) || !tick.isFinite() || tick<=0) return null
     val sign=if (side=="LONG") 1 else -1;val current=higher.last()
     val bar=higher.dropLast(1).lastOrNull { sign*(current.h-it.h)>0 && sign*(current.l-it.l)>0 }?:return null
-    val stop=if (sign==1) bar.l-tick else bar.h+tick
+    // Course Level III p.11 specifies the lower low PLUS one tick for LONG.
+    // The SHORT buy stop is symmetrically the higher high MINUS one tick.
+    val stop=if (sign==1) bar.l+tick else bar.h-tick
     return stop.takeIf { it>0 }
 }
 
