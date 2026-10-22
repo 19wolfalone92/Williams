@@ -820,8 +820,8 @@
         "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
       ],
       "tests": [
-        "tests/test_tc2_final_exit_door.py",
-        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt"
+        "tests/test_tc2_final_exit_door.py::test_tc2_exit_rereads_exact_futures_mark_before_exit_intent",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::confirmedBookOppositeExitFlattensOnlyOwnedPositionWithStopHeldUntilFill"
       ],
       "fixtures": [],
       "remaining_evidence": "Prior SL-only override was explicitly rescinded on 2026-10-22. Risk-reducing opposite H1 Wise-Man exit implemented with mark/owner guards; the book's subsequent reverse entry and deterministic two-leg Binance Demo lifecycle (partial fill, crash, idempotence) are not yet implemented or accepted.",
