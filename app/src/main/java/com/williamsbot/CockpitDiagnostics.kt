@@ -47,7 +47,7 @@ internal object CockpitDiagnostics {
         val positions = rows(status.optJSONArray("futures_positions"))
         val intents = rows(coordinator.optJSONArray("pending_intent_details"))
         val unprotected = positions.filter { p ->
-            !positionProtectionProven(p, coordinator, intents, now)
+            !positionProtectionProven(p, coordinator, now)
         }
         val unmanaged=positions.filter { p ->
             intents.none { i -> matchesPosition(i,p) && protectionProven(i,now) } &&
@@ -144,13 +144,11 @@ internal object CockpitDiagnostics {
     }
 
     private fun positionProtectionProven(
-        position:JSONObject,coordinator:JSONObject,intents:List<JSONObject>,now:Long
+        position:JSONObject,coordinator:JSONObject,now:Long
     ):Boolean {
-        // A persisted OPEN_PROTECTED intent is a claim about the last signed
-        // observation, not proof that the STOP is still WORKING now. A new
-        // snapshot must be matched against ONE current signed Binance proof.
-        // Keep intents as ownership evidence only (not as a proof fallback).
-        @Suppress("UNUSED_VARIABLE") val ownership = intents.any { matchesPosition(it,position) }
+        // Persisted OPEN_PROTECTED is ownership history, not current protection.
+        // Require an exact signed exchange STOP observation. In particular a
+        // working STOP canceled during a swap cannot be resurrected by a journal.
         return matchingProtectionObservation(position,coordinator,now)!=null
     }
 
@@ -312,7 +310,7 @@ internal object CockpitDiagnostics {
             else -> "PASS"
         }, "Частично исполненных: ${partial.size}. Любая исполненная часть требует подтверждённой защиты.")
         val positions = rows(status.optJSONArray("futures_positions"))
-        val unprotected = positions.filter { p -> !positionProtectionProven(p,coordinator,entries,now) }
+        val unprotected = positions.filter { p -> !positionProtectionProven(p,coordinator,now) }
         val filledUnprotected = entries.filter {
             (it.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
                 it.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) && !protectionProven(it, now)
