@@ -69,6 +69,18 @@ class WilliamsEditionRulesTest {
         assertFalse(williamsAdditionTimeEligible(williamsNtdProfile,99,"AC_SIGNAL",100,"FRACTAL",100))
         assertFalse(williamsAdditionTimeEligible(williamsTc2Profile,100,"SUPER_AO",100,"FRACTAL",100))
     }
+    @Test fun courseSquatStructuralStopIsUnaffectedByTheAirbagBookCorrection() {
+        val bars = listOf(
+            WilliamsWaveBar(3_600_000L, 95.0, 100.0, 90.0, 95.0, 100.0),
+            WilliamsWaveBar(7_200_000L, 97.75, 100.5, 95.0, 97.75, 200.0)
+        )
+        val mirrored = bars.map { b ->
+            WilliamsWaveBar(b.t, 300.0-b.o, 300.0-b.l, 300.0-b.h, 300.0-b.c, b.v)
+        }
+        assertEquals(94.9, requireNotNull(williamsCourseSquatSetup("LONG", bars, .1)).stop, 1e-9)
+        assertEquals(205.1, requireNotNull(williamsCourseSquatSetup("SHORT", mirrored, .1)).stop, 1e-9)
+    }
+
     private fun editionAoSignals(normalized: List<Double>, side: String): List<String> {
         val n = normalized.size
         val bars = (0 until n).map { i ->
