@@ -10663,11 +10663,12 @@ private class NativeEngine(
                 .put("status", "NUMERICAL_PROXY_NOT_BOOK_CERTIFIED")
                 .put("detail", "Opening angle from crossing of Alligator mouth, jaw/teeth and price extremes; " +
                     "visual examples must be matched before declaring full conformance."))
-            put(JSONObject().put("rule", "COURSE_AIR_BAG_AND_STAGE_MANAGEMENT")
-                .put("source", "Trading Chaos Course, Level III")
+            put(JSONObject().put("rule", "COURSE_RHYTHM_HUMP_THUMB_AIR_BAG_AND_STAGES")
+                .put("source", "Trading Chaos Course, Level III, PDF pp.87-90")
                 .put("status", "NOT_VERIFIED_ON_EXCHANGE")
-                .put("detail", "Edition-specific triggers and management must be replay-tested separately; " +
-                    "Course remains OBSERVE."))
+                .put("detail", "The Level III worksheet sequences Two-Bar Reversal, 5/13/34 Rhythm, " +
+                    "Hump Fractal and Thumb Trade before a documented executive decision; " +
+                    "Air Bag trigger and stage manager need independent replay. Course remains OBSERVE."))
         }
         val cockpitTests = CockpitDiagnostics.checks(statusSnapshot, coordinatorSnapshot, scannerEvidenceSnapshot, observedAtMs)
         for (item in CockpitDiagnostics.rows(cockpitTests)) tests.put(item)
@@ -10705,7 +10706,7 @@ private class NativeEngine(
             .put("name", "Историческая приёмка книжных правил по редакциям")
             .put("severity", "NOT_VERIFIED")
             .put("detail", "TC1 Zero Point 5 условий и коррекция Wave-2; NTD Teeth на пробое; " +
-                "TC2 WM1 визуальная ангуляция; Course Air Bag и менеджер стадий. " +
+                "TC2 WM1 визуальная ангуляция; Course Rhythm/Hump/Thumb/Air Bag и стадии. " +
                 "Нужны независимые эталоны, no-look-ahead replay и Binance Futures Demo; " +
                 "обнаруженный аналитический сигнал не означает разрешение сделки."))
         for (item in CockpitDiagnostics.rows(tests)) {
