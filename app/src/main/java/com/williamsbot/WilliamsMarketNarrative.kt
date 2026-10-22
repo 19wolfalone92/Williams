@@ -15,7 +15,9 @@ import org.json.JSONObject
  */
 internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
     val asOf=phase.optLong("as_of",0L)
-    val rows=CockpitDiagnostics.rows(phase.optJSONArray("frames"))
+    fun rows(array:JSONArray?):List<JSONObject> = if(array==null) emptyList() else
+        (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+    val rows=rows(phase.optJSONArray("frames"))
         .associateBy { it.optString("frame") }
     val order=listOf("1d","6h","4h","1h","15m")
     val names=mapOf("1d" to "D1","6h" to "H6","4h" to "H4","1h" to "H1","15m" to "M15")
@@ -25,8 +27,8 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
     for(frame in order) {
         val row=rows[frame]
         val reading=row?.optJSONObject("market_reading")
-        val readingReady=asOf>0 && row!=null &&
-            reading?.optString("state")=="OBSERVED" &&
+        val readingReady=asOf>0L && row!=null && reading!=null &&
+            reading.optString("state")=="OBSERVED" &&
             reading.optLong("as_of_close_ms") in 1L..asOf
         val phaseState=if(asOf<=0) "NOT_ANALYSED" else row?.optString("state") ?: "UNAVAILABLE"
         val bias=if(readingReady) reading!!.optString("observed_bias") else "UNKNOWN"
@@ -39,7 +41,7 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
             .put("ao_direction",reading.optString("ao_direction","UNKNOWN"))
             .put("ac_direction",reading.optString("ac_direction","UNKNOWN"))
         else JSONObject().put("status","NOT_VERIFIED")
-        val hypotheses=CockpitDiagnostics.rows(row?.optJSONArray("hypotheses"))
+        val hypotheses=rows(row?.optJSONArray("hypotheses"))
         val unique=hypotheses.map { it.optString("active_label") to it.optString("active_direction") }
             .distinct()
         val wave=if(phaseState=="PHASE_CANDIDATE" && unique.size==1)
