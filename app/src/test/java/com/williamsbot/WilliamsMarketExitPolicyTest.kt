@@ -57,6 +57,24 @@ class WilliamsMarketExitPolicyTest {
         assertNotNull(williamsTc2OppositeExitEvidenceBlocker(owner,decision.toString(),
             "BTCUSDT","LONG","TAKE_PROFIT",opened,now,95.0))
     }
+    @Test fun tc2BookContrarySignalsRemainAdvisoryUntilPositiveAfterExecutionReserve() {
+        // Falling price with an existing SHORT campaign is NOT an opposite-loss exit.
+        for(side in listOf("LONG","SHORT")) {
+            val losingMark=if(side=="LONG") 95.0 else 105.0
+            assertEquals("TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE",
+                williamsTc2OppositeExitProfitBlocker(side,100.0,losingMark))
+            val closeButStillNotNet=if(side=="LONG") 100.34 else 99.66
+            assertEquals("TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE",
+                williamsTc2OppositeExitProfitBlocker(side,100.0,closeButStillNotNet))
+            val beyondReserve=if(side=="LONG") 100.40 else 99.60
+            assertNull(williamsTc2OppositeExitProfitBlocker(side,100.0,beyondReserve))
+            assertEquals("TC2_OPPOSITE_EXIT_PROFIT_EVIDENCE_UNVERIFIED",
+                williamsTc2OppositeExitProfitBlocker(side,Double.NaN,beyondReserve))
+            assertEquals("TC2_OPPOSITE_EXIT_PROFIT_EVIDENCE_UNVERIFIED",
+                williamsTc2OppositeExitProfitBlocker(side,0.0,beyondReserve))
+        }
+        assertNull(williamsMarketExitBlocker(williamsTc2Profile,"MANUAL_EXIT"))
+    }
     @Test fun stopMoveLabelsSeparateTheProjectOverlayFromBookStops() {
         assertTrue(williamsStopMoveLabel("TC2_LAST_5_CLOSED_BARS").contains("5 закрытыми H1"))
         assertTrue(williamsStopMoveLabel("COST_BUFFERED_BREAKEVEN_1R").contains("правило проекта"))
