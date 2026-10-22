@@ -16,6 +16,13 @@ internal val williamsEditionProfiles=williamsSourceProfiles+williamsUnifiedProfi
 internal fun williamsProfileAllowsSource(selected:String,source:String):Boolean =
     source in williamsSourceProfiles && (selected==williamsUnifiedProfile || selected==source)
 
+/** Live new exposure is deliberately narrower than signal-source visibility.
+ * NTD and Course continue independent OBSERVE analysis and stop-only ownership
+ * of legacy exposure, but cannot create new automated risk until exchange E2E.
+ */
+internal fun williamsVerifiedNewRiskSource(source:String):Boolean =
+    source==williamsTc2Profile
+
 /** Contradictory fresh H1 entry hypotheses must not choose a side by chance. */
 internal fun williamsUnifiedDirectionsConflict(directions:Iterable<String>):Boolean =
     directions.filter { it=="LONG" || it=="SHORT" }.toSet().size>1
