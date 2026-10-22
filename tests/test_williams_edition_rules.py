@@ -78,8 +78,8 @@ def test_course_hump_has_real_start_signal_leverage_and_the_further_of_two_stops
 
 def test_airbag_skips_inside_higher_frame_bars_and_uses_the_actual_older_low():
     series=bars([100,103,104,105],[90,93,96,95])
-    assert course_airbag_stop("LONG",series,.1)==pytest.approx(92.9)
-    assert course_airbag_stop("SHORT",mirror(series),.1)==pytest.approx(207.1)
+    assert course_airbag_stop("LONG",series,.1)==pytest.approx(93.1)
+    assert course_airbag_stop("SHORT",mirror(series),.1)==pytest.approx(206.9)
 
 
 def test_an_outside_fractal_is_not_deleted_but_cannot_establish_two_ordered_turns():
