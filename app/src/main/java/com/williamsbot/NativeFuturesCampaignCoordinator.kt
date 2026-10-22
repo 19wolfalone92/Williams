@@ -1895,6 +1895,34 @@ internal class NativeFuturesCampaignCoordinator(
                         continue
                     }
                 }
+                // A legacy lost POST reply could retain OLD as current and the
+                // accepted, tighter NEW as previous. Never cancel the tighter
+                // stop as a predecessor: commit its promotion before cleanup.
+                if (matchingIntent?.optBoolean("strategy_ownership_verified", false) == true) {
+                    val owner = checkNotNull(matchingIntent)
+                    val currentId = owner.optString("protection_client_id")
+                    val pendingId = owner.optString("previous_protection_client_id")
+                    val currentPrice = owner.optString("protective_stop").toBigDecimalOrNull()
+                    val pendingPrice = owner.optString("previous_protective_stop").toBigDecimalOrNull()
+                    if (currentId.isNotBlank() && pendingId.isNotBlank() && currentId != pendingId &&
+                        currentPrice != null && pendingPrice != null &&
+                        (if (direction == "LONG") pendingPrice > currentPrice else pendingPrice < currentPrice) &&
+                        findProtectiveStop(algos, direction, currentId, currentPrice.toPlainString()) != null &&
+                        findProtectiveStop(algos, direction, pendingId, pendingPrice.toPlainString()) != null &&
+                        referenceMark != null && isProtectiveStopOnCorrectSide(direction, referenceMark.toString(), pendingPrice.toPlainString())) {
+                        verifyNativeTrailExposure(adapter, owner)
+                        owner.put("protection_client_id", pendingId).put("protective_stop", pendingPrice.toPlainString())
+                            .put("previous_protection_client_id", currentId).put("previous_protective_stop", currentPrice.toPlainString())
+                            .put("protection_status", "PROTECTED").put("trail_recovery_at_ms", clock())
+                            .put("trailing_at_ms", clock()).put("last_confirmed_trail", JSONObject()
+                                .put("reason", owner.optString("trail_attempt_reason", "RECOVERED_CONFIRMED_TIGHTER_STOP"))
+                                .put("old_stop", currentPrice.toPlainString()).put("new_stop", pendingPrice.toPlainString())
+                                .put("client_id", pendingId).put("strategy_profile", owner.optString("strategy_profile"))
+                                .put("observed_at_ms", clock()))
+                        owner.remove("legacy_stop_absent_first_at_ms")
+                        saveIntents(persisted)
+                    }
+                }
                 val currentProtectionId = matchingIntent?.optString("protection_client_id").orEmpty()
                 val previousProtectionId = matchingIntent?.optString("previous_protection_client_id").orEmpty()
                 val knownProtectionIds = setOf(currentProtectionId, previousProtectionId).filter { it.isNotBlank() }.toSet()
@@ -2364,6 +2392,15 @@ internal class NativeFuturesCampaignCoordinator(
                         }
                         matchingIntent.remove("previous_protection_client_id")
                         matchingIntent.remove("previous_protective_stop")
+                        matchingIntent.remove("legacy_stop_absent_first_at_ms")
+                        (0 until protectionObservations.length()).map { protectionObservations.getJSONObject(it) }
+                            .singleOrNull { it.optString("symbol") == symbol &&
+                                matchingIntent.optBoolean("strategy_ownership_verified", false) }?.apply {
+                                put("stop_proof", "OWNED_STOP_SEEN"); put("stop", confirmedStop)
+                                put("protection_client_id", confirmedClientId); put("observed_at_ms", clock())
+                                put("automatic_trailing_authorized", matchingIntent.optBoolean("strategy_ownership_verified"))
+                                put("management_mode", "STRATEGY_OWNED")
+                            }
                     }
                 }
             }

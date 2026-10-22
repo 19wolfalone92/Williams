@@ -2240,4 +2240,42 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertTrue(restarted.reconcile().getBoolean("ok"))
     }
 
+
+    @Test fun aDelayedAcceptedTighterLegacyStopIsPromotedBeforeOnlyTheWiderStopIsCancelled() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal = Journal()
+            val (_, exchange) = open(direction, journal = journal)
+            val old = exchange.algos.values.single { it.optString("closePosition") == "true" }
+            val next = if (direction.name == "LONG") "96" else "104"
+            val accepted = JSONObject(old.toString()).put("algoId", "901").put("clientAlgoId", "W2T_DELAYED_ACCEPTED")
+                .put("triggerPrice", next)
+            exchange.algos["901"] = accepted
+            val rows = JSONArray(requireNotNull(journal.readState("futures_campaign_intents_v2")))
+            rows.getJSONObject(0).put("previous_protection_client_id", "W2T_DELAYED_ACCEPTED")
+                .put("previous_protective_stop", next).put("trail_attempt_reason", "TC2_LAST_5_CLOSED_BARS")
+            journal.writeState("futures_campaign_intents_v2", rows.toString())
+            val posts = exchange.posts("/fapi/v1/algoOrder")
+            exchange.afterAlgoMutation = { _, _ ->
+                assertEquals("Never remove the tighter accepted stop", "NEW", accepted.getString("algoStatus"))
+                val persisted = JSONArray(requireNotNull(journal.readState("futures_campaign_intents_v2"))).getJSONObject(0)
+                assertEquals("W2T_DELAYED_ACCEPTED", persisted.getString("protection_client_id"))
+            }
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val recovered = restarted.reconcile()
+            assertTrue(recovered.toString(), recovered.getBoolean("ok"))
+            assertEquals("CANCELED", old.getString("algoStatus"))
+            assertEquals("NEW", accepted.getString("algoStatus"))
+            val owner = restarted.intentsSnapshot().getJSONObject(0)
+            assertEquals("W2T_DELAYED_ACCEPTED", owner.getString("protection_client_id"))
+            assertEquals(next, owner.getString("protective_stop"))
+            assertEquals(next, owner.getJSONObject("last_confirmed_trail").getString("new_stop"))
+            assertFalse(owner.has("previous_protection_client_id"))
+            val proof = recovered.getJSONArray("exchange_protection_observations").getJSONObject(0)
+            assertEquals(next, proof.getString("stop"))
+            assertEquals("OWNED_STOP_SEEN", proof.getString("stop_proof"))
+            assertEquals(posts, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
 }
