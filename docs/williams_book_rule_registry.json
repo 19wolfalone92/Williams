@@ -811,15 +811,20 @@
         155,
         165
       ],
-      "rule": "Text includes stop-and-reverse/discretionary exits; project owner selected ordinary TC2 exit only through exchange SL.",
-      "status": "USER_POLICY",
+      "rule": "TC2 includes stop-and-reverse exits: opposing confirmed Wise-Man breakout may flatten current ownership; automatic reverse entry is a distinct, not yet accepted financial action.",
+      "status": "PENDING",
       "modules": [
         "williams_execution_policy.py",
-        "app/src/main/java/com/williamsbot/WilliamsExecutionPolicy.kt"
+        "app/src/main/java/com/williamsbot/WilliamsExecutionPolicy.kt",
+        "futures_williams_runtime.py",
+        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_tc2_final_exit_door.py",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Explicit project deviation; broad book-alignment request does not silently enable financial reversals against prior SL-only constraint.",
+      "remaining_evidence": "Prior SL-only override was explicitly rescinded on 2026-10-22. Risk-reducing opposite H1 Wise-Man exit implemented with mark/owner guards; the book's subsequent reverse entry and deterministic two-leg Binance Demo lifecycle (partial fill, crash, idempotence) are not yet implemented or accepted.",
       "can_place_orders_from_registry": false
     },
     {
@@ -886,7 +891,7 @@
     "Independent digitization of all relevant historical book figures",
     "Finish Air Bag tick-offset and higher-frame illustration review",
     "Complete nested wave/context and Course corrective campaign specification",
-    "Preserve or explicitly revise prior TC2 SL-only user policy",
+    "Verify user-approved TC2 book stop-and-reverse: protected reduce-only flatten followed by separately risk-authorized opposite entry with verified protective STOP, including outage and partial-fill acceptance",
     "Physical Android Binance Futures Demo LONG/SHORT fills, partial fills, protection, restart and offline recovery"
   ]
 }
