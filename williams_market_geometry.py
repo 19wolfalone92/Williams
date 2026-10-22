@@ -9,6 +9,23 @@ NTD ch3/ch10: sleep is intertwined lines, not merely a narrowing trend.
 from math import isfinite
 
 
+def first_wise_man_ao_blocker(side, ao_now, ao_before):
+    """TC2 ch9: countertrend WM1 requires falling AO for bullish reversal,
+    rising AO for bearish reversal; value versus zero does not determine color.
+    """
+    if side not in {"LONG", "SHORT"}:
+        return "WM1_AO_SIDE_INVALID"
+    try:
+        now, before = float(ao_now), float(ao_before)
+    except (TypeError, ValueError, OverflowError):
+        return "WM1_AO_UNVERIFIED"
+    if not isfinite(now) or not isfinite(before):
+        return "WM1_AO_UNVERIFIED"
+    if side == "LONG":
+        return None if now < before else "WM1_AO_NOT_RED"
+    return None if now > before else "WM1_AO_NOT_GREEN"
+
+
 def _slope(values):
     n = len(values)
     x = (n - 1) / 2
