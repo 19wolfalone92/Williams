@@ -73,17 +73,6 @@ def tc2_opposite_exit_evidence_blocker(tags, reason, now, current_side, symbol, 
         return "TC2_EXIT_BOOK_EVIDENCE_MALFORMED"
     from math import isfinite
     last = (tags or {}).get("last_opposition_evidence") or {}
-    # Trading signals are detected from CONTRACT candle extrema, while the
-    # broker's protective STOP_MARKET is MARK_PRICE-based. The initial signal
-    # mark is only an observation. Just before admitting a reduce-only exit,
-    # require a fresh Binance Futures MARK still beyond the opposite trigger.
-    # A failed/malformed mark read is UNKNOWN, never authority to flatten.
-    try:
-        actual_mark = float(live_mark) if live_mark is not None else mark
-    except (TypeError, ValueError, OverflowError):
-        return "TC2_EXIT_LIVE_MARK_UNVERIFIED"
-    if not isfinite(actual_mark) or actual_mark <= 0:
-        return "TC2_EXIT_LIVE_MARK_UNVERIFIED"
     if (proof.get("reason") != reason
             or proof.get("symbol") != symbol
             or last.get("signal_id") != signal_id
@@ -98,6 +87,17 @@ def tc2_opposite_exit_evidence_blocker(tags, reason, now, current_side, symbol, 
             or not ((current_side == "BUY" and direction == "SHORT" and mark <= trigger)
                 or (current_side == "SELL" and direction == "LONG" and mark >= trigger))):
         return "TC2_EXIT_BOOK_OPPOSITE_TRIGGER_UNVERIFIED"
+    # Trading signals are detected from CONTRACT candle extrema, while the
+    # broker's protective STOP_MARKET is MARK_PRICE-based. The initial signal
+    # mark is only an observation. Just before admitting a reduce-only exit,
+    # require a fresh Binance Futures MARK still beyond the opposite trigger.
+    # A failed/malformed mark read is UNKNOWN, never authority to flatten.
+    try:
+        actual_mark = float(live_mark) if live_mark is not None else mark
+    except (TypeError, ValueError, OverflowError):
+        return "TC2_EXIT_LIVE_MARK_UNVERIFIED"
+    if not isfinite(actual_mark) or actual_mark <= 0:
+        return "TC2_EXIT_LIVE_MARK_UNVERIFIED"
     if not ((current_side == "BUY" and direction == "SHORT" and actual_mark <= trigger)
             or (current_side == "SELL" and direction == "LONG" and actual_mark >= trigger)):
         return "TC2_EXIT_LIVE_MARK_NO_LONGER_TRIGGERED"
