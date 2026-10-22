@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from williams_market_geometry import angulation_evidence, alligator_phases, ntd_initial_context
+from williams_market_geometry import angulation_evidence, alligator_phases, ntd_initial_context, first_wise_man_ao_blocker
 from williams_signals import _latest_confirmed_fractal, _latest_super_ao
 from williams_wave_hierarchy import WaveBar
 
@@ -167,3 +167,41 @@ def test_python_tc2_wm2_stop_uses_five_closed_price_bars_like_android(short):
     assert wm2[2]==(max(highs[1:6]) if short else min(lows[1:6]))
     # A later bar's extreme, even one much worse, cannot move initial STOP.
     assert wm2[2] != (max(highs[6:]) if short else min(lows[6:]))
+
+
+@pytest.mark.parametrize("side,now,previous,expected",[
+    ("LONG",-2.0,-1.5,None),  # red AO, even if below zero
+    ("LONG",3.0,3.5,None),    # red AO, even if above zero
+    ("SHORT",-1.0,-2.0,None),# green AO, even if below zero
+    ("SHORT",4.0,3.0,None),  # green AO, even if above zero
+    ("LONG",3.5,3.0,"WM1_AO_NOT_RED"),
+    ("SHORT",1.0,1.5,"WM1_AO_NOT_GREEN"),
+    ("LONG",4.0,4.0,"WM1_AO_NOT_RED"),
+    ("SHORT",4.0,4.0,"WM1_AO_NOT_GREEN"),
+    ("LONG",float("nan"),1.0,"WM1_AO_UNVERIFIED"),
+    ("SHORT",1.0,float("inf"),"WM1_AO_UNVERIFIED"),
+    ("LONG",None,1.0,"WM1_AO_UNVERIFIED"),
+])
+def test_tc2_first_wise_man_ao_colour_must_oppose_prior_trend(side,now,previous,expected):
+    # TC2 ch9 Russian PDF pp.125, 131-132: momentum is still of old trend.
+    assert first_wise_man_ao_blocker(side,now,previous)==expected
+
+
+def test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao(monkeypatch):
+    import williams_signals as signals
+    monkeypatch.setattr(signals, "_angulation", lambda *args,**kwargs:(.3,True))
+    ind=pd.DataFrame({
+        "bullish_reversal_bar":[False,False,True,False],
+        "bearish_reversal_bar":[False,False,True,False],
+        "ao":[0.0,2.0,3.0,3.5],
+        "high":[100.,102.,104.,105.],
+        "low":[98.,100.,101.,102.],
+    })
+    assert signals._latest_reversal(ind,side="SHORT") is not None
+    assert signals._latest_reversal(ind,side="LONG") is None
+    ind.loc[2,"ao"]=1.0
+    assert signals._latest_reversal(ind,side="LONG") is not None
+    assert signals._latest_reversal(ind,side="SHORT") is None
+    ind.loc[2,"ao"]=float("nan")
+    assert signals._latest_reversal(ind,side="LONG") is None
+    assert signals._latest_reversal(ind,side="SHORT") is None
