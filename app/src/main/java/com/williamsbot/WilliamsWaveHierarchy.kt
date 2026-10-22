@@ -234,8 +234,8 @@ internal fun williamsTerminalSquatVolumeProxy(
     val indices=(w5StartIndex..w5EndIndex).toList()
     if(indices.any { i ->
         val b=bars[i]
-        !b.h.isFinite() || !b.l.isFinite() || !b.v.isFinite() ||
-            b.h<b.l || b.l<=0 || b.v<0 ||
+        listOf(b.o,b.h,b.l,b.c,b.v).any { !it.isFinite() } ||
+            b.h<maxOf(b.o,b.l,b.c) || b.l>minOf(b.o,b.c) || b.l<=0 || b.v<0 ||
             i>0 && (!bars[i-1].v.isFinite() || bars[i-1].v<0)
     }) return false
     fun ranked(i:Int)=if(direction=="UP") bars[i].h else -bars[i].l
