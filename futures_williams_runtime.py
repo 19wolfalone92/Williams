@@ -2172,6 +2172,13 @@ class FuturesWilliamsRuntime:
         symbol = campaign.symbol
         # An armed addition can reopen exposure after a successful market close.
         # Cancel/reconcile it first; a racing fill changes the quantity we must close.
+        if (campaign.state == CampaignState.ADD_ON_PENDING and not risk_emergency
+                and campaign.tags.get("strategy_profile",TC2)==TC2
+                and reason in ("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+                               "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION")):
+            # An opposite setup is advisory during unresolved addition fills.
+            # Do not mutate/cancel already authorized risk merely on that hint.
+            raise RuntimeError("TC2_OPPOSITE_EXIT_PENDING_ADDITION_NOT_RECONCILED")
         if campaign.state == CampaignState.ADD_ON_PENDING:
             cancelled = self.cancel_pending_entries(symbol)
             if not cancelled["ok"]:
