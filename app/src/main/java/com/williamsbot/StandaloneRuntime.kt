@@ -9067,6 +9067,7 @@ private class NativeEngine(
             .put("observed_at_ms",now).put("scope_started_at_ms",openedAt).put("direction",direction.name)
             .put("opposition",evidence?.toJson() ?: JSONObject.NULL)
             .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })).toString())) { "H1_EXIT_PROOF_NOT_DURABLE" }
+        if(profile==williamsTc2Profile && assessment.uncertain.isNotEmpty()) return null
         return candidates.firstOrNull { it.signalId==evidence?.signal?.id }
     }
 
