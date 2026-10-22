@@ -1095,6 +1095,58 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun confirmedBookOppositeExitFlattensOnlyOwnedPositionWithStopHeldUntilFill() {
+        val h=3_600_000L
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            var time=System.currentTimeMillis()-4*h
+            val journal=Journal()
+            val (coordinator,exchange)=open(direction,journal=journal,clock={time})
+            val owner=coordinator.intentsSnapshot().getJSONObject(0)
+            val opened=owner.getLong("position_open_observed_at_ms")
+            val clientId=owner.getString("client_id")
+            val protectionId=owner.getString("protection_client_id")
+            // The mock exchange retains its authenticated open stop until
+            // the reduce-only close is confirmed FLAT.
+            time+=4*h
+            val signalAt=time-2*h
+            val observed=time-1_000L
+            val opposite=if(direction.name=="LONG") "SHORT" else "LONG"
+            val trigger=if(direction.name=="LONG") 100.0 else 100.0
+            exchange.mark=if(direction.name=="LONG") 99.0 else 101.0
+            val signalId="BOOK:OPPOSITE:"+direction.name
+            val event=JSONObject().put("state","TRIGGERED").put("known_at_ms",time-60_000L)
+                .put("basis","CLOSED_BAR_EXTREME")
+            val detected=JSONObject().put("signal_id",signalId).put("direction",opposite)
+                .put("strategy_profile",williamsTc2Profile)
+                .put("execution_semantics","STOP_ENTRY")
+                .put("signal_bar_time_ms",signalAt).put("trigger",trigger).put("event",event)
+            val decision=JSONObject().put("observed_at_ms",observed)
+                .put("scope_started_at_ms",opened).put("direction",direction.name)
+                .put("opposition",detected).put("uncertain",JSONArray())
+            assertTrue(journal.writeState("decision_h1_opposition_BTCUSDT",decision.toString()))
+            val reason="OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
+            val management=JSONObject().put("exit_evidence",JSONObject()
+                .put("reason",reason).put("signal_id",signalId)
+                .put("observed_at_ms",observed).put("opposition_check",decision))
+            coordinator.saveManagementState("BTCUSDT",clientId,management)
+            val postsBefore=exchange.posts("/fapi/v1/order")
+            val result=coordinator.closePosition("BTCUSDT",direction,"1",
+                "W2X_BOOK_"+direction.name,reason)
+            assertTrue(result.toString(),result.optBoolean("ok",false))
+            assertEquals(postsBefore+1,exchange.posts("/fapi/v1/order"))
+            assertEquals(0.0,exchange.quantity,0.0)
+            assertFalse(exchange.algos.values.any {
+                it.optString("clientAlgoId")==protectionId && it.optString("algoStatus")=="NEW"
+            })
+            assertTrue(coordinator.intentsSnapshot().let { rows->
+                (0 until rows.length()).map { rows.getJSONObject(it) }.any {
+                    it.optString("intent_role")=="EXIT" &&
+                    it.optString("reason")==reason && it.optString("exit_authority")=="PINNED_EDITION_RULE"
+                }
+            })
+        }
+    }
+
     @Test fun confirmedStopMoveRetainsItsBookReasonAndExactPrices() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val (coordinator,exchange)=open(direction)
