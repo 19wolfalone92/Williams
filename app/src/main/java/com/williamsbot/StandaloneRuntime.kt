@@ -1297,6 +1297,14 @@ private class NativeEngine(
     private val executionStore: FuturesExecutionStore
 ) {
     private val baseUrl = "https://demo-fapi.binance.com"
+    // The diagnostic 12 archive records repeated "sent ping but didn't
+    // receive pong within 30000ms" while Binance's actual market stream
+    // was needed for trading. Use payload freshness + bounded reconnect
+    // for PUBLIC market streams instead of the client's active 30s PING.
+    // Keep the existing 30s PING on the private USER stream and REST client;
+    // fresh public market and bookTicker data remain mandatory to enter.
+    private val publicMarketWebSocketClient = http.newBuilder()
+        .pingInterval(0, TimeUnit.SECONDS).build()
     // All REST transport in this Android runtime is anchored to USD-M Futures Testnet.
     // Spot-shaped signed routes are rejected; legacy public reads are translated only
     // to their Futures market-data equivalents by getBody().
@@ -3328,7 +3336,7 @@ private class NativeEngine(
         marketSocketStartedMs = System.currentTimeMillis()
         marketReconnectRequested = false
         val request = Request.Builder().url(wsStreamUrl()).build()
-        marketSocket = http.newWebSocket(request, object : WebSocketListener() {
+        marketSocket = publicMarketWebSocketClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (marketSocket !== webSocket) {
                     webSocket.close(1000, "superseded market stream")
@@ -3391,7 +3399,7 @@ private class NativeEngine(
         publicSocketStartedMs = System.currentTimeMillis()
         publicReconnectRequested = false
         val request = Request.Builder().url(publicStreamUrl()).build()
-        publicSocket = http.newWebSocket(request, object : WebSocketListener() {
+        publicSocket = publicMarketWebSocketClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (publicSocket !== webSocket) {
                     webSocket.close(1000, "superseded public stream")
