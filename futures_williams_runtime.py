@@ -2223,7 +2223,9 @@ class FuturesWilliamsRuntime:
                 if not isinstance(mark_row,dict) or mark_row.get("symbol")!=symbol:
                     raise ValueError("symbol missing or does not match current campaign")
                 current_mark=float(mark_row["markPrice"])
-            except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
+            except Exception as exc:
+                # Network outage, malformed payload or stale/missing mark:
+                # no strategy close, the existing exchange STOP remains.
                 raise RuntimeError("TC2_EXIT_LIVE_MARK_UNVERIFIED") from exc
             blocker=tc2_opposite_exit_evidence_blocker(
                 campaign.tags,reason,int(time.time()*1000)+
