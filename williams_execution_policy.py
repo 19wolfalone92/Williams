@@ -51,6 +51,41 @@ def strategy_market_close_allowed(source):
     return source in (TC2, NTD, COURSE)
 
 
+def tc2_opposite_exit_evidence_blocker(tags, reason, now, current_side):
+    """Final reason+evidence fence, prior to any mutation/entry cancellation.
+
+    Trading Chaos 2 ch11-12: only a causally triggered opposite Wise-Man
+    STOP may close TC2. A generic contrary hypothesis or risk-mode flag cannot.
+    """
+    if market_exit_blocker(TC2, reason):
+        return "TC2_EXIT_REASON_NOT_BOOK_APPROVED"
+    proof = (tags or {}).get("tc2_book_exit_proof") or {}
+    try:
+        observed = int(proof.get("observed_at_ms", 0))
+        opened = int(proof.get("opened_at_ms", 0))
+        known = int((proof.get("event") or {}).get("known_at_ms", 0))
+        trigger = float(proof.get("trigger", 0))
+        mark = float(proof.get("mark", 0))
+        checked_now = int(now)
+        direction = str(proof.get("direction", ""))
+        signal_id = str(proof.get("signal_id", ""))
+    except (TypeError, ValueError, OverflowError):
+        return "TC2_EXIT_BOOK_EVIDENCE_MALFORMED"
+    from math import isfinite
+    if (proof.get("reason") != reason
+            or proof.get("strategy_profile") != TC2
+            or proof.get("event", {}).get("state") != "TRIGGERED"
+            or not signal_id or opened <= 0 or known <= opened
+            or observed < known or checked_now < observed
+            or checked_now-observed > 120_000
+            or not isfinite(trigger) or trigger <= 0
+            or not isfinite(mark) or mark <= 0
+            or not ((current_side == "BUY" and direction == "SHORT" and mark <= trigger)
+                or (current_side == "SELL" and direction == "LONG" and mark >= trigger))):
+        return "TC2_EXIT_BOOK_OPPOSITE_TRIGGER_UNVERIFIED"
+    return None
+
+
 def market_exit_blocker(source, reason, *, risk_emergency=False):
     """Final TC2 close gate, independent of the scanner's current hypothesis.
 
