@@ -2222,6 +2222,58 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun orphanStopCleanupOnFlatCancelsOnlyExactVerifiedProtectiveIdentity() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator, exchange) = open(direction)
+            val original = exchange.algos.values.single { it.optString("closePosition") == "true" }
+            exchange.quantity = 0.0
+            val result = coordinator.reconcile()
+            assertTrue(result.toString(), result.getBoolean("ok"))
+            assertEquals("CANCELED", original.getString("algoStatus"))
+            assertEquals(1, exchange.requests.count {
+                it.method == "DELETE" && it.url.encodedPath == "/fapi/v1/algoOrder"
+            })
+        }
+    }
+
+    @Test fun orphanStopCleanupNeverCancelsAnUnexpectedSideOrTriggerOnAFlatSymbol() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator, exchange) = open(direction)
+            val original = exchange.algos.values.single { it.optString("closePosition") == "true" }
+            original.put("side", if (direction.name == "LONG") "BUY" else "SELL")
+            exchange.quantity = 0.0
+            coordinator.reconcile()
+            assertEquals("NEW", original.getString("algoStatus"))
+            assertEquals(0, exchange.requests.count { it.method == "DELETE" &&
+                it.url.encodedPath == "/fapi/v1/algoOrder" })
+        }
+    }
+
+    @Test fun orphanStopCleanupCannotCancelAfterPositionReopensBetweenSignedReads() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator, exchange) = open(direction)
+            val original = exchange.algos.values.single { it.optString("closePosition") == "true" }
+            exchange.quantity = 0.0
+            var flatSnapshotWasRead = false
+            var positionReopened = false
+            exchange.beforeRequest = { request, _ ->
+                when (request.url.encodedPath) {
+                    "/fapi/v3/positionRisk" -> if (!positionReopened) flatSnapshotWasRead = true
+                    "/fapi/v1/openAlgoOrders" -> if (flatSnapshotWasRead && !positionReopened) {
+                        exchange.quantity = if (direction.name == "LONG") 1.0 else -1.0
+                        positionReopened = true
+                    }
+                }
+            }
+            coordinator.reconcile()
+            assertTrue("Expected a race after the first signed flat snapshot", positionReopened)
+            assertEquals("NEW", original.getString("algoStatus"))
+            assertEquals(0, exchange.requests.count {
+                it.method == "DELETE" && it.url.encodedPath == "/fapi/v1/algoOrder"
+            })
+        }
+    }
+
     @Test fun legacyNativeUnknownQueryTimeoutCannotBecomeProofOfOrderAbsence() {
         var now = System.currentTimeMillis()
         val journal = Journal()
