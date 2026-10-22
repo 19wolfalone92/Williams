@@ -94,6 +94,8 @@ object DiagnosticsArchive {
                 report.optJSONArray("chart_reading_audit")?.toString(2) ?: "[]")
             add(zip, "book_rule_coverage.json",
                 report.optJSONArray("book_rule_coverage")?.toString(2) ?: "[]")
+            add(zip, "tc1_zero_point_audit.json",
+                report.optJSONArray("tc1_zero_point_audit")?.toString(2) ?: "[]")
             add(zip, "futures_positions_signed_snapshot.json",
                 report.optJSONObject("status")?.optJSONArray("futures_positions")?.toString(2) ?: "[]")
             add(zip, "futures_exchange_stop_proofs.json",
