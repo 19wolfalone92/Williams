@@ -275,9 +275,20 @@ internal object CockpitDiagnostics {
             (it.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
                 it.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) && !protectionProven(it, now)
         }
+        // While a new exchange snapshot is loading, a persisted POSITION_OPEN
+        // plus PROTECTED journal is *not* independent evidence that Binance
+        // rejected protection. Mark it NOT_VERIFIED, never PASS. Explicitly
+        // unprotected filled exposure must still FAIL even before the next read.
+        val explicitlyUnprotected = entries.any { intent ->
+            (intent.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
+                intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) &&
+                (intent.optString("protection_status") != "PROTECTED" ||
+                    intent.optString("actual_risk_audit_status") == "BLOCKED")
+        }
         val protectionSeverity = when {
-            filledUnprotected.isNotEmpty() -> "FAIL"
+            explicitlyUnprotected -> "FAIL"
             !positionsFresh(status, now) -> "NOT_VERIFIED"
+            filledUnprotected.isNotEmpty() -> "FAIL"
             unprotected.isNotEmpty() -> "FAIL"
             positions.isEmpty() -> "NOT_VERIFIED"
             else -> "PASS"
@@ -291,8 +302,9 @@ internal object CockpitDiagnostics {
         val trailed = entries.filter { it.optLong("trailing_at_ms") > 0L }
         check("EXE-05", "execution", "Перенос стопа", when {
             trailed.isEmpty() -> "NOT_VERIFIED"
-            trailed.any { !protectionProven(it, now) || it.optBoolean("previous_protection_unresolved", true) } -> "FAIL"
+            trailed.any { it.optString("protection_status") != "PROTECTED" } -> "FAIL"
             !positionsFresh(status, now) -> "NOT_VERIFIED"
+            trailed.any { !protectionProven(it, now) || it.optBoolean("previous_protection_unresolved", true) } -> "FAIL"
             else -> "PASS"
         }, "Наблюдаемых подтверждённых переносов=${trailed.size}; проверяется текущая защита и отсутствие неразрешённого предшественника.")
         val closedTrades = rows(status.optJSONArray("trade_observations")).filter { it.optString("status") == "CLOSED" }
