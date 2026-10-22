@@ -260,8 +260,9 @@ def _latest_confirmed_fractal(
             continue
         center = ind.iloc[center_i]
         # NTD ch4 PDF52: an inside-mouth fractal may become valid later.
-        # Eligibility belongs to the unbroken EXTREME versus current Teeth,
-        # not Teeth at the pivot. Keep the original confirmation timestamp.
+        # TC2 ch11 PDF147-149: eligibility belongs to the actual STOP TRIGGER
+        # (one tick beyond the extremum), not the pivot itself or its Teeth.
+        # Keep the original confirmation timestamp; never backdate a signal.
         group_start_value = row.get(group_start_col)
         group_start_i = (
             int(group_start_value)
@@ -287,9 +288,9 @@ def _latest_confirmed_fractal(
         teeth = float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0)
 
         if current_teeth is not None:
-            if direction == "LONG" and trigger_base <= float(current_teeth):
+            if direction == "LONG" and trigger <= float(current_teeth):
                 continue
-            if direction == "SHORT" and trigger_base >= float(current_teeth):
+            if direction == "SHORT" and trigger >= float(current_teeth):
                 continue
         # A confirmed fractal can only be acted on after its two right-hand
         # bars close. If any bar from confirmation onward already touched the
@@ -768,7 +769,7 @@ def extract_ntd_fractal_signal_specs(
         trigger = level + tick if is_long else level - tick
         current_teeth=float(ind.iloc[-1].get("teeth_current",ind.iloc[-1].get("teeth_shifted",0.0)) or 0.0)
         if not math.isfinite(current_teeth) or current_teeth<=0 or (
-            level<=current_teeth if is_long else level>=current_teeth
+            trigger<=current_teeth if is_long else trigger>=current_teeth
         ):
             continue
         if trigger <= 0:
@@ -968,7 +969,7 @@ def extract_long_signal_specs(
         # Formation can be anywhere; trigger validity belongs to current
         # price/Teeth.  At arm time the trigger must still be above Teeth.
         trigger = trigger_base + tick
-        current_trigger_valid = trigger_base > max(current_teeth, 0.0)
+        current_trigger_valid = trigger > max(current_teeth, 0.0)
         if current_close < trigger and current_trigger_valid:
             row = ind.iloc[center_i]
             confirmation_time = _row_time_ms(ind.iloc[confirmation_i])
@@ -1136,7 +1137,7 @@ def extract_short_signal_specs(
     if fractal is not None:
         confirmation_i, center_i, trigger_base, protective, teeth = fractal
         trigger = trigger_base - tick
-        current_trigger_valid = current_teeth > 0 and trigger_base < current_teeth
+        current_trigger_valid = current_teeth > 0 and trigger < current_teeth
         if current_close > trigger and current_trigger_valid:
             row = ind.iloc[center_i]
             confirmation_time = _row_time_ms(ind.iloc[confirmation_i])
