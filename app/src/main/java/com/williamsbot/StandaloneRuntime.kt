@@ -2221,10 +2221,17 @@ private class NativeEngine(
             }
         } else {
             val authenticatedAccount = checkNotNull(account)
-            check(updateCachedFuturesAccount(authenticatedAccount)) {
-                "Credentials saved; Futures account balance/equity is incomplete. Start requires reconciliation"
+            if (!updateCachedFuturesAccount(authenticatedAccount)) {
+                // A malformed/temporarily incomplete signed account response
+                // is a failed TRADING preflight, not evidence that encrypted
+                // credential persistence failed after a verified commit.
+                validationError = "Signed Futures account balances are incomplete"
+                restAccountReady = false
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+            } else {
+                restLastError = null
             }
-            restLastError = null
         }
         return JSONObject()
             .put("configured", true)
