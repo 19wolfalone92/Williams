@@ -3202,6 +3202,17 @@ private fun SettingsScreen(
         item {
             Text("Настройки", style = MaterialTheme.typography.headlineSmall)
         }
+        val bootFailure = RuntimeServiceState.lastError
+        if (!bootFailure.isNullOrBlank()) {
+            item {
+                Text("⛔ Ошибка автозапуска/хранилища после перезагрузки: " +
+                    bootFailure.take(240) +
+                    ". Не удаляй данные приложения; экспортируй диагностику.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AppColors.red
+                )
+            }
+        }
 
         item { FuturesLeverageSettingsCard(status, onSaveLeverage) }
 
