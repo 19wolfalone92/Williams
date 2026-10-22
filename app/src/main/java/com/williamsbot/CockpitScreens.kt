@@ -227,7 +227,7 @@ internal fun cockpitSignedStopVerified(
     return status.positions.count { position ->
         position.symbol==intent.optString("symbol") &&
         position.direction==intent.optString("direction") &&
-        position.qty>0.0 &&
+        kotlin.math.abs(position.qty)>0.0 &&
         position.stopVerificationStatus in setOf(
             "OWNED_STOP_SEEN","NATIVE_REPLACEMENT_PROTECTION_SEEN","EXTERNAL_PROTECTED"
         ) && position.stop?.let { actual ->
@@ -239,6 +239,7 @@ internal fun cockpitSignedStopVerified(
 
 internal fun cockpitKnownOpenPositionsLabel(status:Status,now:Long):String =
     if(status.positionsSnapshotOk &&
+        status.openPositions==status.positions.count { kotlin.math.abs(it.qty)>0.0 } &&
         CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,now,CockpitDiagnostics.POSITION_TTL_MS) &&
         CockpitDiagnostics.fresh(status.snapshotAtMs,now,30_000L))
         status.openPositions.toString() else "—"
