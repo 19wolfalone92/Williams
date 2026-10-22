@@ -260,6 +260,32 @@ internal object CockpitDiagnostics {
             else -> "PASS"
         }, "Запрещённых активных новых заявок=${unauthorizedNewExposure.size}; " +
             "TC2 исполняет, NTD и Course наблюдают; прежние владельцы не меняются.")
+        val causalTraces = candidates.flatMap { candidate ->
+            rows(candidate.optJSONObject("decision_trace")?.optJSONArray("signals"))
+                .map { candidate.optString("symbol") to it }
+        }
+        val causalViolations = causalTraces.filter { (_, signal) ->
+            val barAt = signal.optLong("signal_bar_time_ms")
+            val formationAt = signal.optLong("formation_at_ms")
+            val knownAt = signal.optLong("known_at_ms")
+            val normalizedType = signal.optString("type").removePrefix("LONG_").removePrefix("SHORT_")
+            val isFractal = normalizedType == "FRACTAL"
+            barAt <= 0L || barAt > now-3_600_000L ||
+                formationAt <= 0L || formationAt > barAt ||
+                knownAt != barAt+3_600_000L || knownAt>now ||
+                (isFractal && barAt-formationAt < 2*3_600_000L)
+        }
+        check("STR-13", "strategy", "Причинное подтверждение H1 и фракталов t+2", when {
+            causalViolations.isNotEmpty() -> "FAIL"
+            candidates.size != APPROVED_FUTURES_SYMBOLS.size ||
+                candidates.any { it.optJSONObject("decision_trace")?.optJSONArray("signals") == null } ->
+                "NOT_VERIFIED"
+            causalTraces.isEmpty() -> "NOT_VERIFIED"
+            else -> "PASS"
+        }, "Сигналов с подтверждённым доступным временем=${causalTraces.size}; " +
+            "нарушений времени сигнала/t+2=${causalViolations.size}; " +
+            "проблемные пары=${causalViolations.map { it.first }.distinct().joinToString()}; " +
+            "формирующаяся свеча не считается источником входа.")
         val invalidSignals = signals.filter { signal ->
             val side = campaignSignalDirection(signal.optString("type"))
             val trigger = signal.optDouble("trigger_price")
