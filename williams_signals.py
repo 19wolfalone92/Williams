@@ -169,15 +169,16 @@ def _latest_super_ao(
             # TC2 chapter 12 (PDF pp.156-157): when Super AO presents first,
             # the protective stop belongs beyond the lowest/highest of the
             # previous 3-5 CLOSED price bars, not just the third AO bar.
-            # Use five bars as in the Android TC2 H1 implementation. Later bars
-            # must never change the original risk anchor (no look-ahead).
-            if third_i < 4:
+            # Use five bars when history permits (the warmed Android H1 path),
+            # otherwise 3-4 valid bars as allowed by TC2. Later bars must
+            # never change the original risk anchor (no look-ahead).
+            if third_i < 2:
                 continue
-            window = ind.iloc[third_i - 4:third_i + 1]
+            window = ind.iloc[max(0, third_i - 4):third_i + 1]
             extremes = pd.to_numeric(
                 window["low" if side == "LONG" else "high"], errors="coerce"
             )
-            if len(extremes) != 5 or not all(
+            if len(extremes) not in (3, 4, 5) or not all(
                 math.isfinite(float(v)) and float(v) > 0 for v in extremes
             ):
                 continue
