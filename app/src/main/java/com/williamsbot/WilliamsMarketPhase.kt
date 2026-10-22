@@ -28,6 +28,42 @@ internal fun buildWilliamsObservedMarketContext(history:Map<String,List<Williams
     return result
 }
 
+/**
+ * Profitunity Trading Chaos Course, Level III p2 (PDF p77):
+ * expected five-wave terminal formation should have a target zone,
+ * W3/W5 oscillator divergence on an approximately 100-140-bar scale,
+ * a terminal fractal and a squat among the three most extreme bars.
+ *
+ * Inputs are provisional wave labels and a Binance volume proxy, so four
+ * matching flags are NOT proof of a finished wave or authority to exit.
+ */
+internal fun williamsCourseFourSignEvidence(scenario:JSONObject):JSONObject {
+    val completedProvisionalFifth=scenario.optString("label")=="W5"
+    val bars=scenario.optInt("scale_bars",0)
+    val scaleObserved=bars in 100..140
+    val checks=JSONObject()
+        .put("target_zone",scenario.optBoolean("target_zone"))
+        .put("w3_w5_ao_divergence",scenario.optBoolean("divergence"))
+        .put("terminal_fractal",scenario.optBoolean("terminal_fractal"))
+        .put("squat_top_three_volume_proxy",scenario.optBoolean("squat"))
+    val n=listOf("target_zone","w3_w5_ao_divergence","terminal_fractal",
+        "squat_top_three_volume_proxy").count { checks.optBoolean(it) }
+    val status=when {
+        !completedProvisionalFifth -> "NO_COMPLETED_W5_PIVOT_HYPOTHESIS"
+        !scaleObserved -> "W3_W5_DIVERGENCE_SCALE_UNVERIFIED"
+        n<4 -> "COURSE_TERMINAL_CRITERIA_INCOMPLETE"
+        else -> "FOUR_PROXY_FLAGS_OBSERVED_NOT_CERTIFIED"
+    }
+    return JSONObject().put("source","COURSE_LEVEL_III_P2_PDF77")
+        .put("status",status).put("criteria",checks).put("observed_count",n)
+        .put("required_count",4).put("wave_scale_bars",if(bars>0) bars else JSONObject.NULL)
+        .put("scale_100_140_observed",scaleObserved)
+        .put("candidate_wave_5_complete",completedProvisionalFifth)
+        .put("corpus_limit","VOLUME_PROXY_AND_PROVISIONAL_ELLIOTT_DEGREE")
+        .put("wave_degree_confirmed",false)
+        .put("can_place_orders",false).put("can_close",false).put("can_reverse",false)
+}
+
 /** Keep evidence at its observed degree and with its own competing count.
  * Five booleans are not a calibrated score or a new entry/exit rule. */
 internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
@@ -58,7 +94,8 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
             .put("impulse_direction",h.optString("direction")).put("invalidation",h.opt("invalidation") ?: JSONObject.NULL)
             .put("w4_zero",h.optString("w4_zero")).put("scale_frame",h.optString("scale_frame"))
             .put("scale_bars",h.optInt("scale_bars"))
-            .put("signs",JSONArray(signs.filterKeys { h.optBoolean(it) }.values.toList())) }
+            .put("signs",JSONArray(signs.filterKeys { h.optBoolean(it) }.values.toList()))
+            .put("course_four_signs",williamsCourseFourSignEvidence(h)) }
         val frameScenarios=all.filter { it.optString("frame")==frame }
         JSONObject().put("frame",frame).put("state",when {
             asOf<=0L -> "NOT_ANALYSED"

@@ -216,6 +216,39 @@ private fun enrichWaveRhythm(h: WilliamsWaveScenario, frames: Map<String, List<W
     if (h.w4Zero != "MINIMUM_ONLY") h.alternatives += "W3_EXTENSION_OR_WRONG_DEGREE"
 }
 
+/**
+ * TC1 ch7 p53 and Profitunity Course Level III p2 (PDF77): one of the
+ * THREE most extreme price bars of the proposed final fifth wave must
+ * show a squat (rising volume and falling Range/Volume).
+ *
+ * Exchange klines provide base-asset volume, not canonical tick volume.
+ * This is therefore explicitly proxy evidence, never a trade/exit trigger.
+ * A bar merely adjacent to the terminal pivot does not qualify if it is
+ * outside the top/bottom three price bars of that observed leg.
+ */
+internal fun williamsTerminalSquatVolumeProxy(
+    bars:List<WilliamsWaveBar>,direction:String,w5StartIndex:Int,w5EndIndex:Int
+):Boolean {
+    if(direction !in listOf("UP","DOWN") || w5StartIndex !in bars.indices ||
+        w5EndIndex !in bars.indices || w5EndIndex-w5StartIndex<2) return false
+    val indices=(w5StartIndex..w5EndIndex).toList()
+    if(indices.any { i ->
+        val b=bars[i]
+        listOf(b.o,b.h,b.l,b.c,b.v).any { !it.isFinite() } ||
+            b.h<maxOf(b.o,b.l,b.c) || b.l>minOf(b.o,b.c) || b.l<=0 || b.v<0 ||
+            i>0 && (!bars[i-1].v.isFinite() || bars[i-1].v<0)
+    }) return false
+    fun ranked(i:Int)=if(direction=="UP") bars[i].h else -bars[i].l
+    val thirdExtreme=indices.map(::ranked).sortedDescending()[2]
+    return indices.any { i ->
+        if(i==0 || ranked(i)<thirdExtreme) false else {
+            val previous=bars[i-1];val current=bars[i]
+            previous.v>0 && current.v>previous.v &&
+                (current.h-current.l)/current.v < (previous.h-previous.l)/previous.v
+        }
+    }
+}
+
 internal fun williamsHypothesesFromAnchors(
     frame: String, bars: List<WilliamsWaveBar>, anchors: List<WilliamsWaveAnchor>
 ): List<WilliamsWaveScenario> {
@@ -272,9 +305,11 @@ internal fun williamsHypothesesFromAnchors(
         h.momentumShift = lastAo.size == 5 && sign * lastAo.last() < sign * lastAo.average() &&
             sign * lastAo.last() < sign * lastAo[lastAo.lastIndex-1]
         val terminal = p[minOf(5,n-1)].index
-        for (j in maxOf(1,terminal-1)..minOf(bars.lastIndex,terminal+1)) {
-            val a = bars[j-1]; val b = bars[j]
-            if (a.v > 0 && b.v > a.v && (b.h-b.l)/b.v < (a.h-a.l)/a.v) h.squat = true
+        h.squat = if (n>=6) williamsTerminalSquatVolumeProxy(
+            bars,direction,p[4].index,terminal
+        ) else (maxOf(1,terminal-1)..minOf(bars.lastIndex,terminal+1)).any { j ->
+            val a=bars[j-1];val b=bars[j]
+            a.v>0 && b.v>a.v && (b.h-b.l)/b.v < (a.h-a.l)/a.v
         }
         out += h
     }
