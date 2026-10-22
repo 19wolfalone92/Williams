@@ -110,7 +110,7 @@ def ntd_initial_context(bars,jaw,teeth,lips,formation, tick):
         for i in range(f.confirmation+1,len(bars)):
             if sign*((bars[i].h if sign==1 else bars[i].l)-trigger)>=0:
                 # An earlier touch consumes this formation even when invalid.
-                if isfinite(teeth[i]) and sign*(f.price-teeth[i])>0:
+                if isfinite(teeth[i]) and sign*(trigger-teeth[i])>0:
                     return proof | {"reason":"NTD_FIRST_BREAKOUT_ALREADY_OCCURRED", "first_breakout_at_ms":bars[i].t}
                 break
     return proof | {"eligible":True,"reason":"NTD_SLEEP_AND_UNCONSUMED_FIRST_FRACTAL"}
