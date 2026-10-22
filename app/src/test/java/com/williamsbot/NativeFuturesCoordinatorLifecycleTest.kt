@@ -1114,7 +1114,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             // Book-opposite signal can flatten only once old campaign is
             // in genuine positive mark-to-entry territory after cost reserves.
             val trigger=if(direction.name=="LONG") 110.0 else 90.0
-            exchange.mark=if(direction.name=="LONG") 108.0 else 92.0
+            exchange.mark=if(direction.name=="LONG") 99.0 else 101.0
             val signalId="BOOK:OPPOSITE:"+direction.name
             val event=JSONObject().put("state","TRIGGERED").put("known_at_ms",time-60_000L)
                 .put("basis","CLOSED_BAR_EXTREME")
@@ -1132,6 +1132,19 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("observed_at_ms",observed).put("opposition_check",decision))
             coordinator.saveManagementState("BTCUSDT",clientId,management)
             val postsBefore=exchange.posts("/fapi/v1/order")
+            // Even a fully confirmed opposite Wise-Man breakout cannot
+            // cause an early loss-taking market exit. Keep the exchange SL.
+            val premature=coordinator.closePosition("BTCUSDT",direction,"1",
+                "W2X_PREMATURE_"+direction.name,reason)
+            assertFalse(premature.toString(),premature.optBoolean("ok",false))
+            assertEquals("TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE",
+                premature.optString("blocker"))
+            assertEquals(postsBefore,exchange.posts("/fapi/v1/order"))
+            assertEquals("OPEN_PROTECTED",coordinator.state.name)
+            assertTrue(exchange.algos.values.any {
+                it.optString("clientAlgoId")==protectionId && it.optString("algoStatus")=="NEW"
+            })
+            exchange.mark=if(direction.name=="LONG") 108.0 else 92.0
             val result=coordinator.closePosition("BTCUSDT",direction,"1",
                 "W2X_BOOK_"+direction.name,reason)
             assertTrue(result.toString(),result.optBoolean("ok",false))
