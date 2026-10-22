@@ -3202,7 +3202,9 @@ private fun SettingsScreen(
         item {
             Text("Настройки", style = MaterialTheme.typography.headlineSmall)
         }
-        val bootFailure = RuntimeServiceState.lastError
+        val savedBootFailure = RuntimeStartupEvidence.snapshot(context)
+        val bootFailure = RuntimeServiceState.lastError?.takeIf { it.isNotBlank() }
+            ?: savedBootFailure.optString("code").takeIf { it.isNotBlank() }
         if (!bootFailure.isNullOrBlank()) {
             item {
                 Text("⛔ Ошибка автозапуска/хранилища после перезагрузки: " +
