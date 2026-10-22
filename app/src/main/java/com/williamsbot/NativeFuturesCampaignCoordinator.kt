@@ -2473,8 +2473,8 @@ internal class NativeFuturesCampaignCoordinator(
                                     fresh.getString("positionAmt").toBigDecimal().signum() != 0
                             }) { "$symbol reopened before orphan STOP cleanup; do not cancel protection" }
                             val expectedStop = when (clientAlgoId) {
-                                tx?.optString("old_id") -> tx.optString("old_stop")
-                                tx?.optString("bridge_id"), tx?.optString("new_id") -> tx.optString("new_stop")
+                                tx?.optString("old_id") -> tx?.optString("old_stop").orEmpty()
+                                tx?.optString("bridge_id"), tx?.optString("new_id") -> tx?.optString("new_stop").orEmpty()
                                 intent.optString("previous_protection_client_id") -> intent.optString("previous_protective_stop")
                                 intent.optString("protection_client_id") -> intent.optString("protective_stop")
                                 else -> ""
@@ -2482,15 +2482,16 @@ internal class NativeFuturesCampaignCoordinator(
                             val actualStop = order.optString("triggerPrice", order.optString("stopPrice"))
                                 .toBigDecimalOrNull()
                             val isBridge = clientAlgoId == tx?.optString("bridge_id")
+                            val bridgeQty = tx?.optString("quantity")?.toBigDecimalOrNull()
                             val correctCoverage = if (isBridge) {
-                                !order.optString("closePosition").equals("true", true) &&
+                                bridgeQty != null &&
+                                    !order.optString("closePosition").equals("true", true) &&
                                     order.optString("reduceOnly").equals("true", true) &&
-                                    order.optString("quantity").toBigDecimalOrNull()
-                                        ?.compareTo(tx?.optString("quantity")?.toBigDecimalOrNull()) == 0
+                                    order.optString("quantity").toBigDecimalOrNull()?.compareTo(bridgeQty) == 0
                             } else order.optString("closePosition").equals("true", true)
                             check(expectedStop != null && actualStop?.compareTo(expectedStop) == 0 &&
                                 order.optString("symbol") == symbol &&
-                                order.optString("side") == if (intent.optString("direction") == "LONG") "SELL" else "BUY" &&
+                                order.optString("side") == (if (intent.optString("direction") == "LONG") "SELL" else "BUY") &&
                                 order.optString("positionSide", "BOTH") == "BOTH" &&
                                 order.optString("workingType") == "MARK_PRICE" &&
                                 order.optString("orderType", order.optString("type")) == "STOP_MARKET" &&
