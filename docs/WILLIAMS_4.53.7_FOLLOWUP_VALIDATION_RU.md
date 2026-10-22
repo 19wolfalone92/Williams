@@ -66,13 +66,16 @@
 
 ## Дополнительная P0-сверка активной стратегии
 
-Обнаружено важное несоответствие опубликованной политике проекта:
-Python already использует `new_exposure_blocker` с TC2-only, но
-Android `StandaloneRuntime` при выборе NTD, Course или Unified
-допускал автоматические первичные заявки и добавления от непроверенных
-источников. Все три источника могли анализироваться параллельно, но
-у NTD/Course ещё нет полной exchange E2E приёмки, поэтому это опасное
-расхождение. Исправлена именно **автоматическая новая экспозиция**:
+Обнаружена избыточная, но вводящая в заблуждение маршрутизация:
+Python `new_exposure_blocker` и Android `NativeFuturesCampaignCoordinator
+.validatePlan` **уже запрещали** новую NTD/Course экспозицию до биржевого
+POST. Однако Android `StandaloneRuntime` при выборе NTD/Course или
+Unified продолжал отбирать такие сигналы как исполнительные и пытался
+передать их координатору, где они затем отвергались. Это объясняет
+непрозрачные отказы и лишние попытки, но **не доказывает факт открытия
+неразрешённой сделки**: конечный execution gate уже существовал.
+Добавлен более ранний согласованный барьер **новой автоматической
+экспозиции**:
 
 - `williamsVerifiedNewRiskSource` разрешает только TC2;
 - initial-entry filter даже в Unified выбирает только TC2;
@@ -84,10 +87,12 @@ Android `StandaloneRuntime` при выборе NTD, Course или Unified
   разрешёнными.
 - независимый NTD/Course анализ и экран наблюдений продолжают работать.
 
-Аналогичная политика уже существовала в Python
-`williams_execution_policy.py` (`EXECUTION_PROFILE=TC2`,
-`new_exposure_blocker`). Добавлены JVM-тесты границы источников и
-Python static contract защищающий оба новых Android admission-пути.
+Авторитетная политика уже существовала в Python
+`williams_execution_policy.py` и Android
+`WilliamsExecutionPolicy.kt` (`williamsNewExposureBlocker`).
+Новый Android prefilter использует тот же источник решения,
+не создавая конкурирующую политику. Добавлены JVM-тесты границы
+источников и Python static contract двух ранних Android admission-путей.
 
 Проверка токенного рефакторинга: специальный стоп Course Squat
 **не** получил поправку Air Bag и по-прежнему расположен за
