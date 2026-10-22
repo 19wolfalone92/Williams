@@ -246,16 +246,28 @@ internal fun cockpitSignedStopVerified(
     }==1
 }
 
-internal fun cockpitKnownOpenPositionsLabel(status:Status,now:Long):String =
-    if(status.positionsSnapshotOk &&
-        status.openPositions==status.positions.count { kotlin.math.abs(it.qty)>0.0 } &&
+internal fun cockpitKnownOpenPositionsLabel(status:Status,now:Long):String {
+    val archivedOpenExposure=status.futuresIntents.any { intent ->
+        intent.optString("role","ENTRY")=="ENTRY" &&
+        intent.optString("campaign_status") in setOf("POSITION_OPEN","OPEN_PROTECTED","EXIT_PENDING") &&
+        intent.optString("confirmed_position_qty").toDoubleOrNull()?.let { it>0.0 }==true
+    }
+    val counted=status.positions.count { kotlin.math.abs(it.qty)>0.0 }
+    return if(status.positionsSnapshotOk &&
+        status.openPositions==counted && (!archivedOpenExposure || counted>0) &&
         CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,now,CockpitDiagnostics.POSITION_TTL_MS) &&
         CockpitDiagnostics.fresh(status.snapshotAtMs,now,30_000L))
         status.openPositions.toString() else "—"
+}
 
 internal fun cockpitKnownOpenPositionsDetail(status:Status,now:Long):String {
     if(cockpitKnownOpenPositionsLabel(status,now)!="—") return "Позиции Binance • подтверждены"
-    val lastCount=maxOf(status.openPositions,status.positions.count { kotlin.math.abs(it.qty)>0.0 })
+    val journalCount=status.futuresIntents.count { intent ->
+        intent.optString("role","ENTRY")=="ENTRY" &&
+        intent.optString("campaign_status") in setOf("POSITION_OPEN","OPEN_PROTECTED","EXIT_PENDING") &&
+        intent.optString("confirmed_position_qty").toDoubleOrNull()?.let { it>0.0 }==true
+    }
+    val lastCount=maxOf(status.openPositions,status.positions.count { kotlin.math.abs(it.qty)>0.0 },journalCount)
     return if(lastCount>0) "Нет свежей сверки • в предыдущем снимке $lastCount" else
         "Нет свежей сверки • отсутствие позиций НЕ подтверждено"
 }
