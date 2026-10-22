@@ -2463,10 +2463,46 @@ internal class NativeFuturesCampaignCoordinator(
                                 ?: throw IOException("Binance returned a malformed algo-order row during orphan-stop cleanup for $symbol")
                             val clientAlgoId = order.optString("clientAlgoId")
                             if (clientAlgoId !in knownProtectionIds) continue
+                            // An earlier account-wide flat snapshot is NOT authority to
+                            // cancel protection now: exposure may have reappeared between
+                            // the snapshot and the per-symbol cleanup pass.
+                            val freshPositions = validateFuturesPositionSnapshot(adapter.positions())
+                            check((0 until freshPositions.length()).none { n ->
+                                val fresh = freshPositions.getJSONObject(n)
+                                fresh.optString("symbol") == symbol &&
+                                    fresh.getString("positionAmt").toBigDecimal().signum() != 0
+                            }) { "$symbol reopened before orphan STOP cleanup; do not cancel protection" }
+                            val expectedStop = when (clientAlgoId) {
+                                tx?.optString("old_id") -> tx.optString("old_stop")
+                                tx?.optString("bridge_id"), tx?.optString("new_id") -> tx.optString("new_stop")
+                                intent.optString("previous_protection_client_id") -> intent.optString("previous_protective_stop")
+                                intent.optString("protection_client_id") -> intent.optString("protective_stop")
+                                else -> ""
+                            }.toBigDecimalOrNull()
+                            val actualStop = order.optString("triggerPrice", order.optString("stopPrice"))
+                                .toBigDecimalOrNull()
+                            val isBridge = clientAlgoId == tx?.optString("bridge_id")
+                            val correctCoverage = if (isBridge) {
+                                !order.optString("closePosition").equals("true", true) &&
+                                    order.optString("reduceOnly").equals("true", true) &&
+                                    order.optString("quantity").toBigDecimalOrNull()
+                                        ?.compareTo(tx?.optString("quantity")?.toBigDecimalOrNull()) == 0
+                            } else order.optString("closePosition").equals("true", true)
+                            check(expectedStop != null && actualStop?.compareTo(expectedStop) == 0 &&
+                                order.optString("symbol") == symbol &&
+                                order.optString("side") == if (intent.optString("direction") == "LONG") "SELL" else "BUY" &&
+                                order.optString("positionSide", "BOTH") == "BOTH" &&
+                                order.optString("workingType") == "MARK_PRICE" &&
+                                order.optString("orderType", order.optString("type")) == "STOP_MARKET" &&
+                                isActiveFuturesProtectionStatus(order.optString("algoStatus")) &&
+                                correctCoverage) {
+                                "$symbol stored STOP identity/side/price/coverage mismatches Binance; manual reconciliation required"
+                            }
                             val algoId = order.optString("algoId")
-                            if (algoId.isNotBlank()) adapter.cancelAlgoOrderById(symbol, algoId)
-                            else if (clientAlgoId.isNotBlank()) adapter.cancelAlgoOrder(symbol, clientAlgoId)
-                            else throw IOException("Cannot identify orphaned protective Futures algo for $symbol")
+                            check(algoId.toLongOrNull()?.let { it > 0 } == true) {
+                                "$symbol missing positive Binance algoId; cancellation blocked"
+                            }
+                            adapter.cancelAlgoOrderById(symbol, algoId)
                         }
                         val remaining = adapter.openAlgoOrders(symbol)
                         if ((0 until remaining.length()).any { j ->
