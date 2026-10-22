@@ -35,6 +35,7 @@ class WilliamsMarketExitPolicyTest {
                 .put("basis","CLOSED_BAR_EXTREME"))
         val decision=JSONObject().put("direction","LONG").put("scope_started_at_ms",opened)
             .put("observed_at_ms",observed).put("opposition",opposite)
+            .put("uncertain",org.json.JSONArray())
         val proof=JSONObject().put("reason","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
             .put("signal_id","BOOK:WM1:SELL").put("observed_at_ms",observed)
             .put("opposition_check",decision)
@@ -44,6 +45,8 @@ class WilliamsMarketExitPolicyTest {
             williamsTc2OppositeExitEvidenceBlocker(o,d.toString(),"BTCUSDT",
                 "LONG","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",opened,at,mark)
         assertNull(blocked())
+        assertNotNull(blocked(d=JSONObject(decision.toString())
+            .put("uncertain",org.json.JSONArray().put(JSONObject().put("state","AMBIGUOUS")))))
         assertNotNull(blocked(mark=100.0))
         assertNotNull(blocked(at=now+121_000L))
         assertNotNull(blocked(d=JSONObject(decision.toString()).put("direction","SHORT")))
