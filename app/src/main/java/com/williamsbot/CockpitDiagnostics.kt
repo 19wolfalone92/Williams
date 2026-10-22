@@ -257,8 +257,12 @@ internal object CockpitDiagnostics {
                 it.optString("strategy_profile") != williamsTc2Profile }
         check("STR-10", "strategy", "Отсутствие новых NTD/Course ордеров", when {
             unauthorizedNewExposure.isNotEmpty() -> "FAIL"
+            coordinator.optJSONArray("pending_intent_details") == null ||
+                coordinator.optString("engine") !in setOf("USD_M_FUTURES_TESTNET", "USD_M_FUTURES") ->
+                "NOT_VERIFIED"
             else -> "PASS"
         }, "Запрещённых активных новых заявок=${unauthorizedNewExposure.size}; " +
+            "подтверждённая область координатора=${coordinator.optString("engine")}; " +
             "TC2 исполняет, NTD и Course наблюдают; прежние владельцы не меняются.")
         val causalTraces = candidates.flatMap { candidate ->
             rows(candidate.optJSONObject("decision_trace")?.optJSONArray("signals"))
