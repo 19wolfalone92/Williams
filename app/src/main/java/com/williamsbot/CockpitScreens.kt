@@ -278,7 +278,7 @@ internal fun CockpitIntentCard(intent: JSONObject, status:Status, onMarket: (Str
         Text(if(intent.optString("campaign_status")=="OPEN_PROTECTED" && !protected)
             "Позиция учтена • защита сейчас не подтверждена"
             else russianStatus(intent.optString("campaign_status")), fontWeight = FontWeight.SemiBold,
-            color=if(hasFilledExposure && !protected) AppColors.amber else AppColors.text)
+            color=if(hasFilledExposure && !protected) AppColors.amber else MaterialTheme.colorScheme.onSurface)
         CockpitField(if(hasFilledExposure) "Исходная заявка Binance" else "Binance",
             intent.optString("order_status","не подтверждено") +
             if(hasFilledExposure) " • исполнение позиции учтено отдельно" else "")
