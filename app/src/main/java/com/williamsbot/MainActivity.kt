@@ -386,6 +386,8 @@ data class Candidate(
     val entryProtectivePrice: Double? = null
 )
 
+data class TradeManagementEvent(val atMs:Long,val detail:String,val stop:Double?) : java.io.Serializable
+
 data class Trade(
     val id: String,
     val symbol: String,
@@ -413,7 +415,20 @@ data class Trade(
     val openedAtMs: Long = 0L,
     val closedAtMs: Long = 0L,
     val stopPrice: Double? = null,
-    val exitReason: String = ""
+    val exitReason: String = "",
+    val historyStatus:String="",
+    val quantity:Double?=null,
+    val lastStop:Double?=null,
+    val grossPnl:Double?=null,
+    val exitFee:Double?=null,
+    val supervisionStartedAtMs:Long=0L,
+    val closureObservedAtMs:Long=0L,
+    val entryTimeKnown:Boolean=true,
+    val statisticsNote:String="",
+    val managementReason:String="",
+    val historyRecoveryDetail:String="",
+    val excursionKnown:Boolean=false,
+    val managementHistory:List<TradeManagementEvent> = emptyList()
 ) : java.io.Serializable
 
 data class MarketPair(
@@ -605,7 +620,9 @@ fun WilliamsApp(context: Context) {
                     val raw = api.get("/api/v1/market/klines?symbol=" + requestSymbol +
                         "&interval=" + requestInterval + "&bars=6000" +
                         (historicalTrade?.let {
-                            "&until=" + ((it.closedAtMs.takeIf { t -> t > 0L } ?: it.openedAtMs) + 14_400_000L)
+                            "&until=" + (maxOf(it.closedAtMs,it.closureObservedAtMs,it.openedAtMs,
+                                it.supervisionStartedAtMs,System.currentTimeMillis().takeIf { _ ->
+                                    it.historyStatus=="OPEN" } ?: 0L) + 14_400_000L)
                         } ?: ""))
                     val payload = JSONObject(raw)
                     payload.optString("error").takeIf { it.isNotBlank() && it != "null" }?.let {
@@ -2418,7 +2435,8 @@ private fun ScannerScreen(
 
         if (historicalTrade != null) item {
             CockpitCard("Исторический график • ${historicalTrade.symbol}", AppColors.violet) {
-                Text("Вход: ${cockpitTime(historicalTrade.openedAtMs)} • выход: ${cockpitTime(historicalTrade.closedAtMs)}", style = MaterialTheme.typography.bodySmall)
+                Text((if(historicalTrade.entryTimeKnown) "Вход: " else "Первое наблюдение: ")+
+                    cockpitTime(historicalTrade.openedAtMs)+" • выход: "+cockpitTime(historicalTrade.closedAtMs), style = MaterialTheme.typography.bodySmall)
                 Text(historicalTrade.reason.ifBlank { "Причина входа не записана" }, style = MaterialTheme.typography.bodySmall)
                 Text("Выход: " + russianExecutionBlocker(historicalTrade.exitReason).ifBlank { "Причина не записана" }, style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = onLive) { Text("Вернуться к прямому эфиру") }
@@ -2858,7 +2876,8 @@ private fun PositionScreen(
                             fmt(p.take)
                         )
                         val supervised=status.operatorSupervisions.firstOrNull {
-                            it.optString("symbol")==p.symbol
+                            it.optString("symbol")==p.symbol && it.optString("direction")==p.direction &&
+                                it.optString("state") in setOf("ACTIVE","REPLACEMENT_UNRESOLVED")
                         }
                         if(supervised!=null) {
                             InfoRow("Отдельное сопровождение SL",
@@ -2962,7 +2981,7 @@ private fun HistoryScreen(
                     Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val closed = trades.count { it.exit != null }
+                    val closed = trades.count { it.historyStatus in setOf("CLOSED","CLOSED_UNVERIFIED") || it.exit != null }
                     val complete = trades.filter { it.exit != null && it.pnlComplete }
                     val incomplete = closed - complete.size
                     val wins = complete.count { it.outcome == "WIN" }
@@ -2982,8 +3001,8 @@ private fun HistoryScreen(
             item {
                 EmptyState(
                     icon = Icons.Filled.History,
-                    title = "Сделок пока нет",
-                    subtitle = "После первой Testnet сделки здесь сохранятся причина входа, волна, риск, MFE/MAE и разбор результата."
+                    title = "Записи сделок пока не получены",
+                    subtitle = "Здесь показываются подтверждённые позиции и сохранённое сопровождение. Отсутствие записей не доказывает отсутствие сделок на Binance."
                 )
             }
         }
@@ -2999,14 +3018,39 @@ private fun HistoryScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(it.symbol + " • " + it.direction + " • " + it.outcome, style = MaterialTheme.typography.titleMedium)
+                        val label=when(it.outcome) {
+                            "OPEN" -> "Открыта"
+                            "CLOSED_UNVERIFIED" -> "Позиции нет • закрытие уточняется"
+                            "CLOSED" -> "Закрыта"
+                            "SUSPENDED" -> "Позиция изменена • сопровождение приостановлено"
+                            "WIN" -> "Прибыль"
+                            "LOSS" -> "Убыток"
+                            "BREAKEVEN" -> "Безубыток"
+                            "UNKNOWN_FEES" -> "Закрыта • комиссии уточняются"
+                            else -> russianStatus(it.outcome)
+                        }
+                        Text(it.symbol + " • " + it.direction + " • " + label, style = MaterialTheme.typography.titleMedium,
+                            modifier=Modifier.weight(1f))
                         Text(
                             fmt(it.pnl, 2) + " USDT",
-                            color = if ((it.pnl ?: 0.0) >= 0.0) AppColors.green else AppColors.red,
+                            color = if(it.pnl==null) AppColors.textMuted else if (it.pnl >= 0.0) AppColors.green else AppColors.red,
                             fontWeight = FontWeight.Bold
                         )
                     }
                     Text("Вход " + fmt(it.entry) + " → выход " + fmt(it.exit), color = AppColors.textMuted)
+                    if(it.quantity!=null) Text("Объём "+fmt(it.quantity,6))
+                    if(it.stopPrice!=null) Text("Первоначальный SL "+fmt(it.stopPrice))
+                    if(it.lastStop!=null) Text("Последний подтверждённый SL "+fmt(it.lastStop))
+                    fun eventTime(ms:Long):String=java.text.DateFormat.getDateTimeInstance(
+                        java.text.DateFormat.SHORT,java.text.DateFormat.SHORT).format(java.util.Date(ms))
+                    if(it.openedAtMs>0L) Text((if(it.entryTimeKnown) "Открыта " else "Позиция замечена ")+eventTime(it.openedAtMs))
+                    else Text("Время открытия не сохранено",color=AppColors.textMuted,style=MaterialTheme.typography.bodySmall)
+                    if(it.supervisionStartedAtMs>0L) Text("Сопровождение подключено "+eventTime(it.supervisionStartedAtMs))
+                    if(it.closedAtMs>0L) Text("Закрыта "+eventTime(it.closedAtMs))
+                    else if(it.closureObservedAtMs>0L) Text("Отсутствие позиции замечено "+eventTime(it.closureObservedAtMs),
+                        color=AppColors.amber,style=MaterialTheme.typography.bodySmall)
+                    if(it.grossPnl!=null) Text("Биржевой результат до комиссий и финансирования "+fmt(it.grossPnl,4)+" USDT")
+                    if(it.exitFee!=null) Text("Комиссия закрытия "+fmt(it.exitFee,4)+" USDT")
                     if (it.initialRiskUsdt != null) {
                         Text("Первоначальный риск " + fmt(it.initialRiskUsdt, 2) + " USDT")
                     }
@@ -3028,17 +3072,17 @@ private fun HistoryScreen(
                     }
                     if (!it.pnlComplete) {
                         Text(
-                            "Чистый результат не включён в общий итог: комиссия Binance не пересчитана точно.",
+                            it.statisticsNote.ifBlank { "Чистый результат не включён в общий итог: комиссии не восстановлены полностью." },
                             color = AppColors.amber,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
-                    Text(
+                    if(it.wavePosition>0) Text(
                         "Волна W" + it.wavePosition + " • " + it.wavePhase +
                             " • Оценка " + fmt(it.score, 1) +
                             " • R " + fmt(it.rMultiple, 2)
                     )
-                    Text(
+                    if(it.excursionKnown) Text(
                         "Лучший ход " + fmt(it.mfeR, 2) + "R • Худший ход " + fmt(it.maeR, 2) + "R",
                         color = AppColors.textMuted
                     )
@@ -3046,6 +3090,22 @@ private fun HistoryScreen(
                         Text("Почему открыли: " + it.reason, style = MaterialTheme.typography.bodySmall)
                     }
                     if (it.exitReason.isNotBlank()) Text("Почему вышли: " + it.exitReason, style = MaterialTheme.typography.bodySmall)
+                    if(it.managementReason.isNotBlank()) Text("Сопровождение: "+russianExecutionBlocker(it.managementReason),
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                    if(it.historyRecoveryDetail.isNotBlank()) Text("Сверка истории: "+russianExecutionBlocker(it.historyRecoveryDetail),
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                    if(it.managementHistory.isNotEmpty()) {
+                        var shown by remember(it.id) { mutableIntStateOf(6) }
+                        Text("События сопровождения",fontWeight=FontWeight.Bold)
+                        it.managementHistory.asReversed().take(shown).forEach { event ->
+                            Text(eventTime(event.atMs)+" · "+event.detail+
+                                (event.stop?.let { stop -> " · SL "+fmt(stop) } ?: ""),
+                                style=MaterialTheme.typography.bodySmall)
+                        }
+                        if(shown<it.managementHistory.size) TextButton(onClick={shown+=20}) {
+                            Text("Показать ещё события (всего "+it.managementHistory.size+")")
+                        }
+                    }
                     TextButton(onClick = { onTradeChart(it) }) { Text("Открыть график сделки") }
                     if (it.classification.isNotBlank()) {
                         Text(
@@ -3781,7 +3841,8 @@ private fun TradingChart(
                 label(text,x(index),y(price)-8.dp.toPx(),color)
             }
             historicalTrade?.let {trade->
-                tradeMarker(trade.openedAtMs,trade.entry,"ВХОД "+russianDirection(trade.direction),AppColors.primary)
+                tradeMarker(trade.openedAtMs,trade.entry,(if(trade.entryTimeKnown) "ВХОД " else "НАБЛЮДЕНИЕ ")+
+                    russianDirection(trade.direction),AppColors.primary)
                 tradeMarker(trade.closedAtMs,trade.exit,"ВЫХОД",AppColors.violet)
             }
             if(selectedBar>=0) drawLine(AppColors.textMuted,Offset(x(selectedBar),plot.top),Offset(x(selectedBar),plot.bottom),1f)
@@ -4373,7 +4434,23 @@ private fun parseTrades(array: JSONArray): List<Trade> =
             openedAtMs = x.optLong("opened_at"),
             closedAtMs = x.optLong("closed_at"),
             stopPrice = x.optDouble("stop_price").takeIf { it.isFinite() && it > 0.0 },
-            exitReason = x.optString("exit_reason")
+            exitReason = x.optString("exit_reason"),
+            historyStatus=x.optString("status"),
+            quantity=x.optDouble("qty").takeIf { it.isFinite() && it>0 },
+            lastStop=x.optDouble("last_stop").takeIf { it.isFinite() && it>0 },
+            grossPnl=x.optDouble("gross_pnl_usdt").takeIf { it.isFinite() },
+            exitFee=x.optDouble("exit_fee_usdt").takeIf { it.isFinite() },
+            supervisionStartedAtMs=x.optLong("supervision_started_at"),
+            closureObservedAtMs=x.optLong("closure_observed_at"),
+            entryTimeKnown=x.optBoolean("entry_time_known",true),
+            statisticsNote=x.optString("statistics_note"),
+            managementReason=x.optString("management_reason"),
+            historyRecoveryDetail=x.optString("history_recovery_detail"),
+            excursionKnown=x.has("mfe_r") && x.has("mae_r"),
+            managementHistory=CockpitDiagnostics.rows(x.optJSONArray("management_history")).map { event ->
+                TradeManagementEvent(event.optLong("at_ms"),event.optString("detail"),
+                    event.optDouble("stop").takeIf { it.isFinite() && it>0 })
+            }
         )
     }
 

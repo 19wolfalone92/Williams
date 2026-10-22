@@ -980,6 +980,12 @@ internal class NativeFuturesCampaignCoordinator(
                 openBySymbol[symbol] = row
             }
 
+            // A former LONG must not stay ACTIVE after it disappears, including
+            // when a new, independently owned SHORT now exists on the same pair.
+            val supervisionBefore=operatorSupervisions()
+            val supervisionAfter=reconcileSupervisionHistory(supervisionBefore,exchangePositions,clock())
+            if(supervisionBefore.toString()!=supervisionAfter.toString()) saveOperatorSupervisions(supervisionAfter)
+
             val persisted = intents()
             // Migrate legacy snapshots conservatively. Actual order state and campaign
             // lifecycle must be stored separately: FILLED does not mean a campaign is flat.
@@ -1646,7 +1652,7 @@ internal class NativeFuturesCampaignCoordinator(
                     signedFullStops.single().optString("clientAlgoId")==observedOwnerId
                 val supervision=(0 until supervisionAudit.length()).mapNotNull {
                     supervisionAudit.optJSONObject(it)
-                }.singleOrNull { it.optString("symbol")==symbol }
+                }.singleOrNull { it.optString("symbol")==symbol && it.optString("state")=="ACTIVE" }
                 val liveEntry=position.optString("entryPrice").toBigDecimalOrNull()
                 val approvedEntry=supervision?.optString("entry_price")?.toBigDecimalOrNull()
                 val supervisedProtection=supervision!=null &&
@@ -3935,6 +3941,49 @@ internal class NativeFuturesCampaignCoordinator(
         JSONArray(operatorSupervisions().toString())
     }
 
+    /** GET-only closure backfill. Its evidence never grants trade ownership or
+     * authorizes an exchange mutation. Unknown history remains visible as unknown. */
+    fun refreshOperatorClosedTradeHistory() = synchronized(lock) {
+        val rows=operatorSupervisions()
+        if((0 until rows.length()).none { rows.getJSONObject(it).optString("state")=="CLOSED_PENDING_EVIDENCE" })
+            return@synchronized
+        val adapter=adapterFactory()
+        for(i in 0 until rows.length()) {
+            val record=rows.getJSONObject(i)
+            if(record.optString("state")!="CLOSED_PENDING_EVIDENCE") continue
+            val now=clock();val attempted=record.optLong("closure_history_checked_at_ms")
+            if(attempted>0L && now>=attempted && now-attempted<60_000L) continue
+            record.put("closure_history_checked_at_ms",now)
+            try {
+                val symbol=record.getString("symbol")
+                val ids=listOf(record.optString("protection_client_id"),record.optString("pending_protection_client_id"))
+                    .filter { it.isNotBlank() }.distinct()
+                val proofs=mutableListOf<JSONObject>()
+                for(id in ids) {
+                    val algo=adapter.queryAlgoOrder(symbol,id)
+                    if(algo.optString("algoStatus")!="FINISHED") continue
+                    val childId=algo.optString("actualOrderId")
+                    if(childId.toLongOrNull()?.let { it>0L }!=true) continue
+                    val child=adapter.orderById(symbol,childId)
+                    val fills=adapter.userTradesByOrder(symbol,childId)
+                    verifiedSupervisedStopClosure(record,algo,child,fills)?.let { proofs+=it }
+                }
+                check(proofs.distinctBy { it.getString("exit_order_id") }.size==1) {
+                    "Биржа ещё не подтвердила полное исполнение точного SL; цена, время и PnL закрытия неизвестны"
+                }
+                val proof=proofs.first()
+                record.put("confirmed_closure",proof).put("state","CLOSED_EXCHANGE_CONFIRMED")
+                    .put("closure_history_detail","Закрытие подтверждено точным стопом и его биржевыми исполнениями")
+                    .put("last_evaluation_reason",proof.getString("exit_reason"))
+                appendSupervisionHistory(record,"STOP_FILLED",proof.getLong("closed_at"),
+                    "Стоп исполнен; цена "+proof.getDouble("exit_price")+"; orderId="+proof.getString("exit_order_id"))
+            } catch(failure:Exception) {
+                record.put("closure_history_detail",safeDiagnosticText(failure.message ?: failure.javaClass.simpleName).take(700))
+            }
+            saveOperatorSupervisions(rows)
+        }
+    }
+
     fun recordOperatorSupervisionObservation(
         symbol:String, status:String, reason:String, closedBarAtMs:Long=0L, proposedStop:Double?=null
     ) = synchronized(lock) {
@@ -3942,7 +3991,8 @@ internal class NativeFuturesCampaignCoordinator(
             "STOP_PROPOSED","TRAILED","RECOVERED","BLOCKED"))
         val rows=operatorSupervisions()
         val record=(0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
-            .singleOrNull { it.optString("symbol")==symbol } ?: error("Supervision journal absent")
+            .lastOrNull { it.optString("symbol")==symbol &&
+                it.optString("state") in setOf("ACTIVE","REPLACEMENT_UNRESOLVED") } ?: error("Supervision journal absent")
         // Observation fields cannot authorize an order or alter the lifecycle.
         record.put("last_evaluated_at_ms",clock()).put("last_evaluation_status",status)
             .put("last_evaluation_reason",reason.take(1000))
@@ -3969,7 +4019,8 @@ internal class NativeFuturesCampaignCoordinator(
             requestedEntry != null && requestedEntry.isFinite() && requestedEntry > 0 &&
             requestedStop != null && requestedStop.signum() > 0) { "Invalid operator snapshot" }
         val rows = operatorSupervisions()
-        check((0 until rows.length()).none { rows.optJSONObject(it)?.optString("symbol") == symbol }) {
+        check((0 until rows.length()).none { rows.optJSONObject(it)?.let { row -> row.optString("symbol") == symbol &&
+            row.optString("state") !in setOf("CLOSED_PENDING_EVIDENCE","CLOSED_EXCHANGE_CONFIRMED") }==true }) {
             "Supervision already exists; review its current state before retrying"
         }
         val formerEntry=latestEntryIntentIndex(intents(),symbol)?.let { intents().optJSONObject(it) }
@@ -4035,6 +4086,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("strategy_ownership_verified",false)
             .put("market_close_authorized",false)
             .put("add_on_authorized",false))
+        ensureSupervisionHistory(rows.getJSONObject(rows.length()-1))
         saveOperatorSupervisions(rows)
         JSONObject().put("ok",true).put("symbol",symbol)
             .put("mode","OPERATOR_APPROVED_STOP_ONLY")
@@ -4054,7 +4106,7 @@ internal class NativeFuturesCampaignCoordinator(
             newClientId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
         val rows = operatorSupervisions()
         val record=(0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
-            .singleOrNull { it.optString("symbol")==symbol }
+            .singleOrNull { it.optString("symbol")==symbol && it.optString("state")=="ACTIVE" }
             ?: error("No operator-approved supervision for $symbol")
         check(record.optString("state")=="ACTIVE" &&
             record.optString("direction")==direction.name &&
@@ -4158,6 +4210,8 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("stop",next.stripTrailingZeros().toPlainString())
                 .put("protection_client_id",newClientId)
                 .put("last_confirmed_trail_at_ms",clock())
+            ensureSupervisionHistory(record)
+            appendSupervisionHistory(record,"STOP_TRAILED",clock(),"Новый SL подтверждён Binance",next.toPlainString())
             clearPendingOperatorReplacement(record)
             saveOperatorSupervisions(rows)
             JSONObject().put("ok",true).put("symbol",symbol).put("stop",next.toPlainString())
@@ -4203,7 +4257,7 @@ internal class NativeFuturesCampaignCoordinator(
     fun recoverOperatorSupervisedStop(symbol:String):JSONObject = synchronized(lock) {
         val rows=operatorSupervisions()
         val record=(0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
-            .singleOrNull { it.optString("symbol")==symbol }
+            .singleOrNull { it.optString("symbol")==symbol && it.optString("state")=="REPLACEMENT_UNRESOLVED" }
             ?: error("Operator supervision journal absent")
         require(record.optString("state")=="REPLACEMENT_UNRESOLVED") {
             "No uncertain stop replacement to recover"
@@ -4365,6 +4419,8 @@ internal class NativeFuturesCampaignCoordinator(
             .put("protection_client_id",newId)
             .put("state","ACTIVE")
             .put("last_confirmed_trail_at_ms",clock())
+        ensureSupervisionHistory(record)
+        appendSupervisionHistory(record,"STOP_RECOVERED",clock(),"Подтверждение переноса SL восстановлено",newStop.toPlainString())
         clearPendingOperatorReplacement(record)
         saveOperatorSupervisions(rows)
         JSONObject().put("ok",true).put("symbol",symbol)

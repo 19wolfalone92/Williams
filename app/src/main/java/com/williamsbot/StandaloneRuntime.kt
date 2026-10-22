@@ -6038,6 +6038,7 @@ private class NativeEngine(
         lastOperatorSupervisionAttemptMs=now
         // One failed maintenance observation must not erase the signed account
         // reconciliation result. Every mutation still acquires its own Door.
+        runCatching { futuresCampaignCoordinator.refreshOperatorClosedTradeHistory() }
         runCatching { manageOperatorSupervisedPositions() }.onFailure {
             lastError="OPERATOR_STOP_SUPERVISION_BLOCKED: "+(it.message ?: it.javaClass.simpleName)
         }
@@ -10291,7 +10292,8 @@ private class NativeEngine(
             .put("assets", assets).put("positions", positions)
     }
 
-    fun trades(): JSONArray = TradeJournal.trades(prefs)
+    fun trades(): JSONArray = futuresVisibleTradeHistory(TradeJournal.trades(prefs),
+        futuresCampaignCoordinator.operatorSupervisionsSnapshot(),futuresCampaignCoordinator.intentsSnapshot())
 
     fun tradeStats(): JSONObject = TradeJournal.stats(prefs)
 

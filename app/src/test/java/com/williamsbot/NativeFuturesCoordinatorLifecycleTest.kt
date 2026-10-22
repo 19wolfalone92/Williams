@@ -33,6 +33,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         val requests = mutableListOf<Request>()
         val algos = linkedMapOf<String, JSONObject>()
         val orders = linkedMapOf<String, JSONObject>()
+        val tradeFills = JSONArray()
         var quantity = 0.0
         var entry = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) 101.0 else 99.0
         var mark = 100.0
@@ -86,6 +87,8 @@ class NativeFuturesCoordinatorLifecycleTest {
                     .put("marginType", "ISOLATED").put("leverage", leverage).put("maxNotionalValue", "1000000"))
                 }
                 "/fapi/v1/openOrders" -> JSONArray(orders.values.filter { it.optString("status") in setOf("NEW", "PARTIALLY_FILLED") })
+                "/fapi/v1/userTrades" -> JSONArray((0 until tradeFills.length()).map { tradeFills.getJSONObject(it) }
+                    .filter { p["orderId"]==null || it.optString("orderId")==p["orderId"] })
                 "/fapi/v1/openAlgoOrders" -> JSONArray(algos.values.filter { it.optString("algoStatus") == "NEW" })
                 "/fapi/v1/algoOrder" -> when (request.method) {
                     "POST" -> {
@@ -1820,5 +1823,58 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals("NEW",old.getString("algoStatus"))
             assertEquals(0,exchange.requests.count { it.method=="DELETE" || it.method=="POST" })
         }
+    }
+
+    @Test fun formerSupervisedPositionClosureSurvivesRestartWithExactExchangeHistoryAndNoMutations() {
+        val direction=NativeFuturesCampaignCoordinator.Direction.LONG
+        val exchange=Exchange(direction)
+        exchange.quantity=1.0;exchange.entry=101.0;exchange.mark=100.0
+        val old=existingFullStop(exchange,direction)
+        val journal=Journal();var now=100_000L
+        val coordinator=NativeFuturesCampaignCoordinator(journal,{now}) { exchange.adapter() }
+        coordinator.approveOperatorStopSupervision("BTCUSDT","1","101","95","СОПРОВОЖДАТЬ ТОЛЬКО СТОП")
+        old.put("algoStatus","FINISHED").put("actualOrderId",42L)
+        exchange.quantity=0.0;now=102_000L
+        exchange.orders["42"]=JSONObject().put("symbol","BTCUSDT").put("orderId",42L)
+            .put("side","SELL").put("positionSide","BOTH").put("status","FILLED").put("executedQty","1")
+        exchange.tradeFills.put(JSONObject().put("symbol","BTCUSDT").put("orderId",42L).put("id",777L)
+            .put("side","SELL").put("positionSide","BOTH").put("qty","1").put("price","95.1")
+            .put("realizedPnl","-5.9").put("commission","0.04").put("commissionAsset","USDT").put("time",101_000L))
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+        assertEquals("CLOSED_PENDING_EVIDENCE",coordinator.operatorSupervisionsSnapshot().getJSONObject(0).getString("state"))
+        coordinator.refreshOperatorClosedTradeHistory()
+        val restored=NativeFuturesCampaignCoordinator(journal,{now}) { exchange.adapter() }
+        val r=restored.operatorSupervisionsSnapshot().getJSONObject(0)
+        assertEquals("CLOSED_EXCHANGE_CONFIRMED",r.getString("state"))
+        assertEquals(95.1,r.getJSONObject("confirmed_closure").getDouble("exit_price"),0.0)
+        assertEquals(101_000L,r.getJSONObject("confirmed_closure").getLong("closed_at"))
+        val requestsBefore=exchange.requests.size
+        restored.refreshOperatorClosedTradeHistory()
+        assertEquals(requestsBefore,exchange.requests.size)
+        assertEquals(0,exchange.requests.count { it.method!="GET" })
+        assertEquals(0,restored.intentsSnapshot().length())
+    }
+
+    @Test fun missingClosureEvidenceRemainsVisibleAndDoesNotHammerTheExchangeOrCancelTheStop() {
+        val direction=NativeFuturesCampaignCoordinator.Direction.LONG
+        val exchange=Exchange(direction)
+        exchange.quantity=1.0;exchange.entry=101.0;exchange.mark=100.0
+        val old=existingFullStop(exchange,direction)
+        val journal=Journal();var now=100_000L
+        val coordinator=NativeFuturesCampaignCoordinator(journal,{now}) { exchange.adapter() }
+        coordinator.approveOperatorStopSupervision("BTCUSDT","1","101","95","СОПРОВОЖДАТЬ ТОЛЬКО СТОП")
+        exchange.quantity=0.0;now=102_000L
+        coordinator.reconcile()
+        coordinator.refreshOperatorClosedTradeHistory()
+        val checked=exchange.requests.size
+        coordinator.refreshOperatorClosedTradeHistory()
+        assertEquals(checked,exchange.requests.size)
+        val r=coordinator.operatorSupervisionsSnapshot().getJSONObject(0)
+        assertEquals("CLOSED_PENDING_EVIDENCE",r.getString("state"))
+        assertTrue(r.getString("closure_history_detail").isNotBlank())
+        val rows=futuresVisibleTradeHistory(JSONArray(),coordinator.operatorSupervisionsSnapshot(),JSONArray())
+        assertEquals(1,rows.length());assertTrue(rows.getJSONObject(0).isNull("exit_price"))
+        assertEquals("NEW",old.getString("algoStatus"))
+        assertEquals(0,exchange.requests.count { it.method!="GET" })
     }
 }

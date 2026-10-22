@@ -243,6 +243,15 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         ))
     }
 
+    /** Exact child-order history; do not mix a later opposite campaign into a close. */
+    fun userTradesByOrder(symbol:String,orderId:String):JSONArray {
+        requireSymbol(symbol)
+        require(orderId.toLongOrNull()?.let { it>0L }==true)
+        return JSONArray(requestRaw("GET","/fapi/v1/userTrades",mapOf(
+            "symbol" to symbol,"orderId" to orderId,"limit" to "1000"
+        ),signed=true))
+    }
+
     fun incomeHistory(startTime: Long, endTime: Long = System.currentTimeMillis()): JSONArray {
         require(startTime >= 0L && endTime >= startTime)
         val budget = IncomeHistoryReadBudget()
