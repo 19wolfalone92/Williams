@@ -28,9 +28,16 @@ This source router does not certify whole-book compliance.
 7. TC2 trails beyond three-to-five price bars or confirmed structural fractals.
    Five closed H1 bars is this implementation's declared choice. Automatic 1R
    and fee-buffered break-even are excluded.
-8. The user's ordinary-exit policy is exchange SL only. TC2 also describes
-   stop-and-reverse and discretionary partial exits. Those book behaviours are
-   intentionally not enabled. Verified emergency protection handling is separate.
+8. Updated 22 Oct 2026: the user rescinded the prior TC2 "exchange SL only"
+   override in favor of book-aligned exits. In addition to verified structural
+   STOP fills, the implemented risk-reducing leg accepts an opposite WM1/WM2/WM3
+   H1 STOP breakout only with closed-bar evidence, durable source ownership,
+   matching exchange position/quantity and fresh Futures MARK validation.
+   A wave/correction opinion without a qualifying price trigger cannot close.
+   The book's subsequent REVERSE ENTRY is still unimplemented and MUST NOT
+   bypass verified FLAT, a fresh entry, risk reservation or protective STOP.
+   Course/NTD partial closures remain separately source-pinned. Emergency stop
+   recovery and liquidation management are distinct risk-reducing capabilities.
 
 TC2 English PDF pages: 139-152 WM1; 154-162 WM2; 165-173 WM3; 175-186 campaigns,
 allocation and exits. Page numbers differ in the 224-page Russian registry source.
