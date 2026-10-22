@@ -112,6 +112,36 @@ internal fun williamsMarketExitBlocker(owner: String, reason: String): String? {
     }
 }
 
+/** TC2 ch12 + NTD ch9: an opposing Wise-Man setup is NOT an obligation
+ * to realize a loss. Opposing-signal discretionary exits are admitted only
+ * while there is a conservative, exchange-confirmed positive mark-to-entry
+ * buffer after estimated round-trip fees and slippage. The project uses 0.35%
+ * (2 * 0.10% per-side fee reserve + 0.15% execution slippage); it is NOT a
+ * statement that Binance can guarantee this fill or book-prescribed fee rate.
+ *
+ * This gate only affects strategy-initiated OPPOSITE exits. It NEVER disables
+ * protective STOP_MARKET, operator risk reduction, or proven emergency exits.
+ * There is deliberately no cap on how long a valid campaign may stay protected.
+ */
+internal const val WILLIAMS_TC2_OPPOSITE_EXIT_COST_BUFFER = 0.0035
+
+internal fun williamsTc2OppositeExitProfitBlocker(
+    side:String, liveEntry:Double, freshMark:Double,
+    costBuffer:Double=WILLIAMS_TC2_OPPOSITE_EXIT_COST_BUFFER,
+    tick:Double=0.0
+):String? {
+    if(side !in setOf("LONG","SHORT") || !liveEntry.isFinite() || liveEntry<=0 ||
+        !freshMark.isFinite() || freshMark<=0 || !costBuffer.isFinite() ||
+        costBuffer<0 || !tick.isFinite() || tick<0)
+        return "TC2_OPPOSITE_EXIT_PROFIT_EVIDENCE_UNVERIFIED"
+    val grossReturn=if(side=="LONG") (freshMark-liveEntry)/liveEntry
+        else (liveEntry-freshMark)/liveEntry
+    // At equality we do not have a positive expected net outcome. One tick
+    // makes the classification conservative at a round-off boundary.
+    return if(grossReturn>costBuffer+tick/liveEntry) null
+        else "TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE"
+}
+
 /** Durable exchange-mutation fence for the TC2 ch11-12 opposite Wise-Man exit.
  * A caller-supplied reason is not proof: require exactly the closed H1 signal
  * persisted by the causal scenario scanner after entry, recently observed, and
