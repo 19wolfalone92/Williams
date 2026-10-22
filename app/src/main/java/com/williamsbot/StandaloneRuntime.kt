@@ -1008,8 +1008,8 @@ internal fun reflectedTc2SetupContext(
         }
     }
     // SHORT uses a reflected price/AO sequence. Convert the book-context
-    // oscillator colour back to the actual exchange candles; do not turn
-    // this observational evidence into an unapproved H1 entry veto.
+    // oscillator colour back to the actual exchange candles. TC2 ch9
+    // requires colour opposite the NEW position side for countertrend WM1.
     if (signalType=="REVERSAL" && context.has("wm1_ao_color")) {
         val color=context.optString("wm1_ao_color")
         context.put("wm1_ao_color",when(color) {
