@@ -2211,6 +2211,27 @@ class FuturesWilliamsRuntime:
                 f"{symbol}: position is flat without attributable campaign exit"
             )
 
+        # Last possible read-only check before persisting EXIT_PENDING.
+        # The mark observed while detecting an H1 opposite signal is NOT
+        # authorization hours later, nor if MARK diverged from CONTRACT.
+        # No live-mark proof => keep the Binance protective stop untouched.
+        if (campaign.tags.get("strategy_profile",TC2)==TC2 and not risk_emergency
+                and reason in ("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+                               "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION")):
+            try:
+                mark_row=self.client.mark_price(symbol)
+                if not isinstance(mark_row,dict) or mark_row.get("symbol")!=symbol:
+                    raise ValueError("symbol missing or does not match current campaign")
+                current_mark=float(mark_row["markPrice"])
+            except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise RuntimeError("TC2_EXIT_LIVE_MARK_UNVERIFIED") from exc
+            blocker=tc2_opposite_exit_evidence_blocker(
+                campaign.tags,reason,int(time.time()*1000)+
+                int(getattr(self.client,"time_offset_ms",0)),
+                campaign.side,symbol,live_mark=current_mark)
+            if blocker:
+                raise RuntimeError(blocker)
+
         is_partial=partial_quantity is not None
         if is_partial and (campaign.tags.get("strategy_profile")!=COURSE or reason!="COURSE_STAGE_TRIM"):
             raise RuntimeError("Partial reduction requires an owned Course campaign stage")
