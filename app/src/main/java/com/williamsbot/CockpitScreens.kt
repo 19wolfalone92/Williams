@@ -145,6 +145,15 @@ internal fun CockpitReadiness(status: Status) {
             Text("⚠️ Дневная база риска не подтверждена. 00:00 UTC не снимает этот независимый блок.",
                 style = MaterialTheme.typography.bodySmall, color = AppColors.red)
         }
+        val exposed=r.optJSONArray("unprotected_positions")
+        if(exposed!=null && exposed.length()>0) {
+            val names=(0 until exposed.length()).mapNotNull { i ->
+                exposed.optJSONObject(i)?.optString("symbol")?.takeIf { it.isNotBlank() }
+            }.distinct().joinToString(", ")
+            Text("⚠️ КРИТИЧНО: для $names сейчас нет свежего доказательства защитного SL Binance. " +
+                "Это НЕ означает, что ордер отсутствует; до сверки считать защиту неподтверждённой.",
+                color=AppColors.red,style=MaterialTheme.typography.bodySmall)
+        }
         CockpitFreshness(status)
     }
 }
