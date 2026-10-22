@@ -310,4 +310,25 @@ class CockpitDiagnosticsTest {
             .put("exchange_status", "EXIT_CONFIRMED")
         assertEquals("FAIL", CockpitDiagnostics.lifecycleAudit(malformedRole).optString("severity"))
     }
+
+    @Test fun nativeSwapShowsSignedTemporaryProtectionWithoutEnablingManagementOrNewRisk() {
+        val position = JSONObject().put("symbol", "SOLUSDT").put("direction", "SHORT").put("qty", 2).put("stop", 104)
+        val observation = JSONObject().put("symbol", "SOLUSDT").put("direction", "SHORT")
+            .put("quantity", "-2").put("stop", "104").put("protection_client_id", "W2B_TEMP")
+            .put("stop_proof", "NATIVE_REPLACEMENT_PROTECTION_SEEN").put("observed_at_ms", now)
+            .put("automatic_trailing_authorized", false).put("management_mode", "NATIVE_REPLACEMENT_PENDING")
+        val state = healthy().put("futures_positions", JSONArray().put(position)).put("reconcile_required", true)
+            .put("execution_enabled", false)
+        val c = coordinator().put("ready_for_new_entry", false)
+            .put("blocker", "SOLUSDT native stop replacement pending")
+            .put("exchange_protection_observations", JSONArray().put(observation))
+        val r = CockpitDiagnostics.readiness(state, c, now)
+        assertEquals("PASS", r.getString("protection_state"))
+        assertEquals(0, r.getJSONArray("unprotected_positions").length())
+        assertFalse(r.getBoolean("new_entries_allowed"))
+        assertFalse(r.getBoolean("position_management_ready"))
+        observation.put("quantity", "-1")
+        assertEquals("FAIL", CockpitDiagnostics.readiness(state, c, now).getString("protection_state"))
+    }
+
 }

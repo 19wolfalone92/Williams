@@ -1043,6 +1043,10 @@ internal class NativeFuturesCampaignCoordinator(
                 if (protectionStillNeedsOwnership) {
                     addOwner(activeProtectionClientIdsBySymbol, symbol, item.optString("protection_client_id"))
                     addOwner(activeProtectionClientIdsBySymbol, symbol, item.optString("previous_protection_client_id"))
+                    item.optJSONObject("native_stop_replacement")?.let { tx ->
+                        for (key in listOf("old_id", "new_id", "bridge_id"))
+                            addOwner(activeProtectionClientIdsBySymbol, symbol, tx.optString(key))
+                    }
                 }
             }
             // A triggered conditional's matching-engine child has its own client id.
@@ -1559,9 +1563,9 @@ internal class NativeFuturesCampaignCoordinator(
                 val amount = position.optString("positionAmt").toDoubleOrNull()
                     ?: throw IllegalStateException("Binance returned a malformed position amount for $symbol during protection audit")
                 val direction = if (amount > 0.0) "LONG" else "SHORT"
-                val algos = protectiveOrdersBySymbol.getOrPut(symbol) { adapter.openAlgoOrders(symbol) }
-                val referenceMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
-                val signedFullStops=if(referenceMark!=null && referenceMark.isFinite() && referenceMark>0.0)
+                var algos = protectiveOrdersBySymbol.getOrPut(symbol) { adapter.openAlgoOrders(symbol) }
+                var referenceMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                var signedFullStops=if(referenceMark!=null && referenceMark.isFinite() && referenceMark>0.0)
                     (0 until algos.length()).mapNotNull { algos.optJSONObject(it) }.filter {
                         isFullPositionFuturesStop(it,symbol,direction,
                             position.getString("positionAmt").toBigDecimal().abs(),referenceMark)
@@ -1641,6 +1645,36 @@ internal class NativeFuturesCampaignCoordinator(
                     }
                     verifiedOwner.put("confirmed_position_qty", liveQuantity.toPlainString())
                         .put("actual_entry_price", positionPrice.toString())
+                }
+                if (matchingIntent?.has("native_stop_replacement") == true) {
+                    val owner = checkNotNull(matchingIntent)
+                    val engine = nativeStopReplacementEngine(adapter, persisted)
+                    val recovered = engine.resume(owner)
+                    if (owner.has("native_stop_replacement")) {
+                        val proof = engine.protection(owner)
+                        recordNativeReplacementProof(owner, proof)
+                        saveIntents(persisted)
+                        actualRiskAuditBlocked = true
+                        actualRiskAuditBlocker = "$symbol native stop replacement pending: ${recovered.optString("blocker") }"
+                        if (proof == null) { anyUnprotected = true; lastBlocker = actualRiskAuditBlocker }
+                        protectionObservations.put(JSONObject().put("symbol", symbol).put("direction", direction)
+                            .put("quantity", position.optString("positionAmt"))
+                            .put("observed_at_ms", clock()).put("stop_proof", if (proof == null)
+                                "STOP_UNCONFIRMED" else "NATIVE_REPLACEMENT_PROTECTION_SEEN")
+                            .put("stop", proof?.optString("triggerPrice") ?: JSONObject.NULL)
+                            .put("protection_client_id", proof?.optString("clientAlgoId") ?: JSONObject.NULL)
+                            .put("automatic_trailing_authorized", false).put("strategy_ownership_verified", true)
+                            .put("management_mode", "NATIVE_REPLACEMENT_PENDING"))
+                        continue
+                    }
+                    algos = adapter.openAlgoOrders(symbol)
+                    protectiveOrdersBySymbol[symbol] = algos
+                    referenceMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                    signedFullStops = if (referenceMark != null && referenceMark.isFinite() && referenceMark > 0.0)
+                        (0 until algos.length()).mapNotNull { algos.optJSONObject(it) }.filter {
+                            isFullPositionFuturesStop(it, symbol, direction,
+                                position.getString("positionAmt").toBigDecimal().abs(), referenceMark)
+                        } else emptyList()
                 }
                 // A complete exchange stop can protect a manually held or
                 // previous-install position while the bot cannot prove it OWNS
@@ -2283,6 +2317,12 @@ internal class NativeFuturesCampaignCoordinator(
                         val oldClientId = old.optString("clientAlgoId")
                         if (oldClientId == confirmedClientId) continue
                         if (previousClientId.isNotBlank() && oldClientId == previousClientId) {
+                            check(matchesConfirmedFuturesProtectiveStop(old, direction, previousClientId,
+                                matchingIntent.optString("previous_protective_stop"))) {
+                                "Tracked predecessor attributes conflict with the durable stop identity"
+                            }
+                            verifyNativeTrailExposure(adapter, matchingIntent)
+                            check(findProtectiveStop(adapter.openAlgoOrders(symbol), direction, confirmedClientId, confirmedStop) != null)
                             val oldAlgoId = old.optString("algoId")
                             if (oldAlgoId.isNotBlank()) adapter.cancelAlgoOrderById(symbol, oldAlgoId)
                             else if (oldClientId.isNotBlank()) adapter.cancelAlgoOrder(symbol, oldClientId)
@@ -2314,6 +2354,12 @@ internal class NativeFuturesCampaignCoordinator(
                             anyUnprotected = true
                             lastBlocker = "$symbol protective-stop replacement/cancellation has not been exchange-confirmed; prior and attempted ids remain journaled"
                             matchingIntent.put("protection_status", "SUBMISSION_UNKNOWN")
+                            continue
+                        }
+                        if (!settleLegacyNativeStop(adapter, persisted, matchingIntent)) {
+                            actualRiskAuditBlocked = true
+                            actualRiskAuditBlocker = "$symbol uncertain legacy stop identity awaits signed history/cancellation fence; confirmed current stop retained"
+                            saveIntents(persisted)
                             continue
                         }
                         matchingIntent.remove("previous_protection_client_id")
@@ -2367,9 +2413,11 @@ internal class NativeFuturesCampaignCoordinator(
                     saveIntents(persisted)
                     // A stop-triggered or manually closed position must not leave a
                     // closePosition algo armed to affect a future campaign on this symbol.
+                    val tx = intent.optJSONObject("native_stop_replacement")
                     val knownProtectionIds = listOf(
-                        intent.optString("protection_client_id"),
-                        intent.optString("previous_protection_client_id")
+                        intent.optString("protection_client_id"), intent.optString("previous_protection_client_id"),
+                        tx?.optString("old_id").orEmpty(), tx?.optString("new_id").orEmpty(),
+                        tx?.optString("bridge_id").orEmpty()
                     ).filter { it.isNotBlank() }.toSet()
                     if (knownProtectionIds.isNotEmpty()) {
                         val algos = adapter.openAlgoOrders(symbol)
@@ -2391,6 +2439,11 @@ internal class NativeFuturesCampaignCoordinator(
                         }
                         intent.remove("previous_protection_client_id")
                         intent.remove("previous_protective_stop")
+                        if (intent.has("native_stop_replacement") &&
+                            !nativeStopReplacementEngine(adapter, persisted).settleFlat(intent)) {
+                            actualRiskAuditBlocked = true
+                            actualRiskAuditBlocker = "$symbol flat position has an unresolved native STOP submission identity"
+                        }
                     }
                 }
             }
@@ -2688,6 +2741,8 @@ internal class NativeFuturesCampaignCoordinator(
     }
     private fun submitPendingEntryLocked(plan: EntryPlan): JSONObject = synchronized(lock) {
         val currentIntents = intents()
+        if ((0 until currentIntents.length()).any { currentIntents.getJSONObject(it).has("native_stop_replacement") })
+            return@synchronized safePreflightRejection("NATIVE_STOP_REPLACEMENT_PENDING: reconcile all STOP identities before new exposure")
         if(hasUnresolvedTriggeringEntry(currentIntents))
             return@synchronized safePreflightRejection("CONDITIONAL_TRIGGER_IN_PROGRESS: reconcile child order and position before new exposure")
         if(requireM15FractalForAutomatedEntries && plan.entryClientId.isBlank() &&
@@ -2840,6 +2895,7 @@ internal class NativeFuturesCampaignCoordinator(
             // Local PROTECTED metadata alone is not sufficient for admission:
             // confirm the exact closePosition stop still exists on Binance and
             // remains on the protective side of the current mark before adding risk.
+            check(!owner.has("native_stop_replacement")) { "Native STOP replacement blocks new risk" }
             val ownerStop = owner.optString("protective_stop")
             val ownerStopId = owner.optString("protection_client_id")
             val currentMark = preflightAdapter.markPrice(symbol)
@@ -3303,6 +3359,12 @@ internal class NativeFuturesCampaignCoordinator(
                 "Trailing cannot use a historical campaign"
             }
             adapter.requireOneWayMode()
+            check((0 until persisted.length()).map { persisted.getJSONObject(it) }.none {
+                it.optString("entry_client_id") == intent.optString("client_id") &&
+                    (it.optString("intent_role") == "ADD_ON" && exchangeOrderStatus(it) !in ENTRY_ORDER_TERMINAL_STATUSES ||
+                        it.optString("intent_role") == "EXIT" && it.optString("exchange_status") != "EXIT_CONFIRMED")
+            }) { "Unresolved addition/exit blocks stop replacement" }
+            check(adapter.openOrders(symbol).length() == 0) { "Pending ordinary order blocks stop replacement" }
             val snapshot = adapter.positions()
             val live = (0 until snapshot.length()).map { snapshot.getJSONObject(it) }
                 .filter { it.optString("symbol") == symbol && it.getString("positionAmt").toBigDecimal().signum() != 0 }
@@ -3339,7 +3401,10 @@ internal class NativeFuturesCampaignCoordinator(
             it.optString("clientAlgoId") != currentProtectionId &&
                 (previousId.isBlank() || it.optString("clientAlgoId") != previousId)
         }
-        if (confirmedOld == null || unknownStops.isNotEmpty()) {
+        if (confirmedOld == null || unknownStops.isNotEmpty() ||
+            (0 until before.length()).any {
+                before.getJSONObject(it).optString("clientAlgoId") !in setOf(currentProtectionId, previousId)
+            }) {
             state = State.RECONCILE_REQUIRED
             lastBlocker = "$symbol current structural stop is not uniquely exchange-confirmed; trailing blocked"
             intent.put("protection_status", "SUBMISSION_UNKNOWN")
@@ -3353,88 +3418,39 @@ internal class NativeFuturesCampaignCoordinator(
             lastBlocker = "$symbol has a tracked predecessor or uncertain replacement id; reconcile it before trailing again"
             return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
         }
-        intent.put("previous_protective_stop", oldStop.toPlainString())
-            .put("previous_protection_client_id", intent.optString("protection_client_id"))
-            .put("protective_stop", proposed.stripTrailingZeros().toPlainString())
-            .put("protection_client_id", clientAlgoId)
-            .put("protection_status", "SUBMISSION_UNKNOWN")
-            .put("trail_attempt_at_ms", clock())
-            .put("trail_attempt_reason", safeDiagnosticText(reason).take(240))
+        if (intent.has("native_stop_replacement") || clock() < intent.optLong("trail_retry_after_ms", 0L)) {
+            state = State.RECONCILE_REQUIRED
+            lastBlocker = "$symbol native stop replacement is pending or cooling down"
+            return@synchronized JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
+        }
+        check(clientAlgoId != currentProtectionId && (0 until persisted.length()).none {
+            val row = persisted.getJSONObject(it)
+            clientAlgoId in setOf(row.optString("client_id"), row.optString("protection_client_id"),
+                row.optString("previous_protection_client_id"))
+        }) { "Native replacement requires a new, distinct client id" }
+        val bridgeHash = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(clientAlgoId.toByteArray(Charsets.UTF_8)).take(8).joinToString("") { "%02x".format(it) }
+        val bridgeId = "W2B_${symbol}_${bridgeHash}".take(36)
+        intent.put("native_stop_replacement", JSONObject()
+            .put("phase", "PREPARED").put("old_id", currentProtectionId).put("old_stop", oldStop.toPlainString())
+            .put("new_id", clientAlgoId).put("new_stop", proposed.stripTrailingZeros().toPlainString())
+            .put("bridge_id", bridgeId).put("quantity", intent.getString("confirmed_position_qty"))
+            .put("entry_price", intent.getString("actual_entry_price"))
+            .put("bridge_outcome", "NOT_SUBMITTED").put("final_outcome", "NOT_SUBMITTED")
+            .put("reason", safeDiagnosticText(reason).take(240)).put("created_at_ms", clock()))
+            .put("trail_attempt_at_ms", clock()).put("trail_attempt_reason", safeDiagnosticText(reason).take(240))
         saveIntents(persisted)
-
-        try {
-            adapter.placeProtectiveStop(symbol, direction.name, proposed.toPlainString(), clientAlgoId)
-            val afterCreate = adapter.openAlgoOrders(symbol)
-            val confirmed = findProtectiveStop(afterCreate, direction.name, clientAlgoId, proposed.toPlainString())
-                ?: throw IOException("New trailing stop id and exact trigger were not confirmed by exchange")
-            for (old in previous) {
-                if (old.optString("clientAlgoId") == clientAlgoId) continue
-                val algoId = old.optString("algoId")
-                val oldClientId = old.optString("clientAlgoId")
-                if (algoId.isNotBlank()) adapter.cancelAlgoOrderById(symbol, algoId)
-                else if (oldClientId.isNotBlank()) adapter.cancelAlgoOrder(symbol, oldClientId)
-                else throw IOException("Cannot safely identify replaced protective stop")
-            }
-            val finalOrders = adapter.openAlgoOrders(symbol)
-            val finalStop = findProtectiveStop(finalOrders, direction.name, clientAlgoId, proposed.toPlainString())
-                ?: throw IOException("Replacement stop is no longer open at the requested trigger")
-            val untrackedRemainder = (0 until finalOrders.length()).mapNotNull { finalOrders.optJSONObject(it) }
-                .any { isProtectiveStop(it, direction.name) && it.optString("clientAlgoId") != clientAlgoId }
-            if (untrackedRemainder) {
-                throw IOException("A predecessor or unrecognized protective stop remains after trailing replacement")
-            }
-            intent.put("protection_status", "PROTECTED")
-                .put("protective_stop", finalStop.optString("triggerPrice", proposed.toPlainString()))
-                .put("trailing_at_ms", clock())
-                .put("last_confirmed_trail", JSONObject()
-                    .put("reason",safeDiagnosticText(reason).take(240))
-                    .put("old_stop",oldStop.toPlainString()).put("new_stop",finalStop.optString("triggerPrice",proposed.toPlainString()))
-                    .put("client_id",clientAlgoId).put("strategy_profile",intent.optString("strategy_profile"))
-                    .put("observed_at_ms",clock()))
-            intent.remove("previous_protection_client_id")
-            intent.remove("previous_protective_stop")
-            saveIntents(persisted)
-            JSONObject().put("ok", true).put("state", state.name).put("stop", finalStop)
-        } catch (failure: Exception) {
-            val failureText = failure.message ?: failure.javaClass.simpleName
-            val refreshed = runCatching { adapter.openAlgoOrders(symbol) }.getOrNull()
-            val visibleStops = refreshed?.let { orders ->
-                (0 until orders.length()).mapNotNull { orders.optJSONObject(it) }
-                    .filter { isProtectiveStop(it, direction.name) }
-            }.orEmpty()
-            val oldStopStillConfirmed = refreshed?.let {
-                findProtectiveStop(it, direction.name, currentProtectionId, oldStop.toPlainString())
-            }
-            val replacementConfirmed = refreshed?.let {
-                findProtectiveStop(it, direction.name, clientAlgoId, proposed.toPlainString())
-            }
-            val noUnownedStop = visibleStops.all { it.optString("clientAlgoId") == currentProtectionId }
-            if (oldStopStillConfirmed != null && replacementConfirmed == null && noUnownedStop) {
-                // If the replacement was not found, keep the last confirmed stop as
-                // the campaign's current protection. Track the uncertain new id as a
-                // possible predecessor so a delayed Binance acknowledgement cannot
-                // turn it into an unowned order on the next reconciliation.
-                intent.put("protective_stop", oldStop.toPlainString())
-                    .put("protection_client_id", currentProtectionId)
-                    .put("previous_protective_stop", proposed.toPlainString())
-                    .put("previous_protection_client_id", clientAlgoId)
-                    .put("protection_status", "PROTECTED")
-                    .put("campaign_status", "OPEN_PROTECTED")
-                    .put("trail_error", failureText)
+        val engine = nativeStopReplacementEngine(adapter, persisted)
+        val result = engine.resume(intent)
+        if (!result.optBoolean("ok")) {
+            if (intent.has("native_stop_replacement")) {
+                recordNativeReplacementProof(intent, engine.protection(intent))
                 saveIntents(persisted)
-                state = State.RECONCILE_REQUIRED
-                lastBlocker = "$symbol stop trail was not confirmed; prior stop is still exchange-confirmed and the uncertain replacement remains tracked pending reconciliation"
-                return@synchronized JSONObject().put("ok", false).put("state", state.name)
-                    .put("blocker", lastBlocker).put("retained_stop", oldStop.toPlainString())
             }
             state = State.RECONCILE_REQUIRED
-            lastBlocker = "ambiguous_trailing_stop_replacement_manual_reconciliation_required"
-            intent.put("protection_status", "SUBMISSION_UNKNOWN")
-                .put("trail_error", failureText)
-            saveIntents(persisted)
-            JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
-                .put("error", failureText)
+            lastBlocker = "$symbol native stop replacement: ${result.optString("blocker") }"
         }
+        result.put("state", state.name)
     }
 
     /** Exchange-confirmed reduce-only exit; it can never reverse the one-way position. */
@@ -3861,6 +3877,8 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("liquidation_stop_gap_pct", item.opt("liquidation_stop_gap_pct") ?: JSONObject.NULL)
                     .put("liquidation_guard_audited_at_ms", item.opt("liquidation_guard_audited_at_ms") ?: JSONObject.NULL)
                     .put("executed_qty", item.opt("executed_qty") ?: JSONObject.NULL)
+                    .put("confirmed_position_qty", item.opt("confirmed_position_qty") ?: JSONObject.NULL)
+                    .put("actual_entry_price", item.opt("actual_entry_price") ?: JSONObject.NULL)
                     .put("client_id_suffix", item.optString("client_id").takeLast(8))
                     .put("order_status", orderStatus)
                     .put("campaign_status", lifecycle)
@@ -3889,12 +3907,20 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("last_confirmed_trail",item.optJSONObject("last_confirmed_trail")?.let {
                         JSONObject(it.toString()).apply { remove("client_id") }
                     } ?: JSONObject.NULL)
-                    .put("previous_protection_unresolved", item.optString("previous_protection_client_id").isNotBlank())
+                    .put("previous_protection_unresolved", item.optString("previous_protection_client_id").isNotBlank() ||
+                        item.has("native_stop_replacement"))
+                    .put("native_stop_replacement", publicNativeStopReplacement(item.optJSONObject("native_stop_replacement")))
+                    .put("last_native_stop_replacement", publicNativeStopReplacement(item.optJSONObject("last_native_stop_replacement")))
+                    .put("last_native_stop_failure", item.optJSONObject("last_native_stop_failure") ?: JSONObject.NULL)
+                    .put("native_replacement_protection", item.optJSONObject("native_replacement_protection") ?: JSONObject.NULL)
+                    .put("trail_error", safeDiagnosticText(item.optString("trail_error")).take(1000))
                     .put("risk_reservation_adjusted_at_ms", item.opt("risk_reservation_adjusted_at_ms") ?: JSONObject.NULL)
                     .put("risk_reservation_adjustment_reason", item.opt("risk_reservation_adjustment_reason") ?: JSONObject.NULL)
             )
         }
-        val readyForNewEntry = !reconciliationActive && !hasUnresolvedTriggeringEntry(persisted) && (observedState == State.READY || observedState == State.OPEN_PROTECTED ||
+        val readyForNewEntry = !reconciliationActive &&
+            (0 until persisted.length()).none { persisted.getJSONObject(it).has("native_stop_replacement") } &&
+            !hasUnresolvedTriggeringEntry(persisted) && (observedState == State.READY || observedState == State.OPEN_PROTECTED ||
             (observedState == State.ENTRY_PENDING &&
                 confirmedPendingEntriesAllowConcurrentAdmission(persisted)))
         return JSONObject()
@@ -4477,6 +4503,82 @@ internal class NativeFuturesCampaignCoordinator(
         }
         require(plan.clientId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client order ID" }
     }
+
+    private fun recordNativeReplacementProof(owner: JSONObject, proof: JSONObject?) {
+        owner.put("protection_status", if (proof == null) "SUBMISSION_UNKNOWN" else "REPLACEMENT_PENDING_PROTECTED")
+            .put("native_replacement_protection", JSONObject().put("observed_at_ms", clock())
+                .put("confirmed", proof != null)
+                .put("stop", proof?.optString("triggerPrice") ?: JSONObject.NULL)
+                .put("mode", if (proof == null) "UNKNOWN" else if (proof.optString("closePosition").equals("true", true))
+                    "CLOSE_ALL" else "FIXED_QUANTITY_REDUCE_ONLY"))
+    }
+
+    private fun verifyNativeTrailExposure(adapter: BinanceUsdMFuturesTestnetAdapter, owner: JSONObject) {
+        val rows = validateFuturesPositionSnapshot(adapter.positions())
+        val live = (0 until rows.length()).map { rows.getJSONObject(it) }.filter {
+            it.optString("symbol") == owner.optString("symbol") && it.getString("positionAmt").toBigDecimal().signum() != 0
+        }
+        check(live.size == 1)
+        val p = live.single()
+        val amount = p.getString("positionAmt").toBigDecimal()
+        val entry = p.optString("entryPrice").toDoubleOrNull()
+        val expectedEntry = owner.optString("actual_entry_price").toDoubleOrNull()
+        check(p.optString("positionSide", "BOTH") == "BOTH" &&
+            (amount.signum() > 0) == (owner.optString("direction") == "LONG") &&
+            amount.abs().compareTo(owner.getString("confirmed_position_qty").toBigDecimal()) == 0 &&
+            entry != null && entry.isFinite() && expectedEntry != null && expectedEntry.isFinite() &&
+            expectedEntry > 0 && kotlin.math.abs(entry - expectedEntry) <= maxOf(1e-8, expectedEntry * 1e-8)) {
+            "Native STOP cleanup exposure changed"
+        }
+    }
+
+    /** Old builds did not export whether the failed POST was actually sent.
+     * Open-order absence is insufficient: two signed reads a minute apart,
+     * an exact cancellation fence and a final signed query are required.
+     */
+    private fun settleLegacyNativeStop(adapter: BinanceUsdMFuturesTestnetAdapter, rows: JSONArray, owner: JSONObject): Boolean {
+        val symbol = owner.getString("symbol")
+        val id = owner.getString("previous_protection_client_id")
+        val stop = owner.getString("previous_protective_stop")
+        val observed = conditionalOrderOrNull(adapter, symbol, id)
+        if (observed != null) return matchesTerminalUntriggeredFuturesProtectiveStop(
+            observed, symbol, owner.getString("direction"), id, stop)
+        val first = owner.optLong("legacy_stop_absent_first_at_ms", 0L)
+        if (first <= 0L) {
+            owner.put("legacy_stop_absent_first_at_ms", clock())
+            saveIntents(rows)
+            return false
+        }
+        if (clock() < first || clock() - first < 60_000L) return false
+        verifyNativeTrailExposure(adapter, owner)
+        check(findProtectiveStop(adapter.openAlgoOrders(symbol), owner.getString("direction"),
+            owner.getString("protection_client_id"), owner.getString("protective_stop")) != null)
+        owner.put("legacy_stop_fence_attempt_at_ms", clock()); saveIntents(rows)
+        try { adapter.cancelAlgoOrder(symbol, id) }
+        catch (failure: IOException) { if (!isDefinitiveBinanceOrderNotFound(failure)) throw failure }
+        val after = conditionalOrderOrNull(adapter, symbol, id)
+        val settled = after == null || matchesTerminalUntriggeredFuturesProtectiveStop(
+            after, symbol, owner.getString("direction"), id, stop)
+        if (!settled) return false
+        verifyNativeTrailExposure(adapter, owner)
+        check(findProtectiveStop(adapter.openAlgoOrders(symbol), owner.getString("direction"),
+            owner.getString("protection_client_id"), owner.getString("protective_stop")) != null)
+        owner.put("last_legacy_stop_resolution", JSONObject().put("at_ms", clock())
+            .put("proof", "TWO_SIGNED_ABSENCE_READS_60S_APART_AND_EXACT_CANCEL_FENCE"))
+        owner.remove("legacy_stop_absent_first_at_ms")
+        return true
+    }
+
+    private fun nativeStopReplacementEngine(adapter: BinanceUsdMFuturesTestnetAdapter, rows: JSONArray) =
+        FuturesNativeStopReplacement(adapter, clock, { owner ->
+            check((0 until rows.length()).map { rows.getJSONObject(it) }.none {
+                it.optString("entry_client_id") == owner.optString("client_id") &&
+                    (it.optString("intent_role") == "ADD_ON" && exchangeOrderStatus(it) !in ENTRY_ORDER_TERMINAL_STATUSES ||
+                        it.optString("intent_role") == "EXIT" && it.optString("exchange_status") != "EXIT_CONFIRMED")
+            }) { "Unresolved campaign addition/exit blocks native STOP replacement" }
+        }) {
+            saveIntents(rows)
+        }
 
     private fun findProtectiveStop(
         orders: JSONArray,

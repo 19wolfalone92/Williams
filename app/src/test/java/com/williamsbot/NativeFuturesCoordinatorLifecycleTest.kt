@@ -21,10 +21,12 @@ class NativeFuturesCoordinatorLifecycleTest {
         private val values = mutableMapOf<String, String>()
         var rejectWrites = false
         var rejectDecisionWrites = false
+        var afterWrite: ((String, String) -> Unit)? = null
         @Synchronized override fun readState(key: String): String? = values[key]
         @Synchronized override fun writeState(key: String, value: String): Boolean {
             if (rejectWrites || rejectDecisionWrites && key.startsWith("decision_execution_")) return false
             values[key] = value
+            afterWrite?.invoke(key, value)
             return true
         }
     }
@@ -51,6 +53,8 @@ class NativeFuturesCoordinatorLifecycleTest {
         var rejectProtectionCode:Int?=null
         var rejectSecondCloseAll=false
         var failPendingQueries=false
+        var beforeRequest: ((Request, Map<String, String>) -> Unit)? = null
+        var afterAlgoMutation: ((Request, JSONObject) -> Unit)? = null
         var additionFraction = 1.0
         var closeFraction = 1.0
         var closeStatus = "FILLED"
@@ -59,6 +63,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             val request = chain.request()
             requests += request
             val p = params(request)
+            beforeRequest?.invoke(request, p)
             var code = 200
             val response: Any = when (request.url.encodedPath) {
                 "/fapi/v1/time" -> JSONObject().put("serverTime", System.currentTimeMillis())
@@ -86,10 +91,15 @@ class NativeFuturesCoordinatorLifecycleTest {
                 "/fapi/v1/symbolConfig" -> { afterSymbolConfig?.invoke(); JSONArray().put(JSONObject().put("symbol", "BTCUSDT")
                     .put("marginType", "ISOLATED").put("leverage", leverage).put("maxNotionalValue", "1000000"))
                 }
-                "/fapi/v1/openOrders" -> JSONArray(orders.values.filter { it.optString("status") in setOf("NEW", "PARTIALLY_FILLED") })
+                "/fapi/v1/openOrders" -> JSONArray(orders.values.filter {
+                    it.optString("status") in setOf("NEW", "PARTIALLY_FILLED") &&
+                        (p["symbol"] == null || it.optString("symbol") == p["symbol"])
+                })
                 "/fapi/v1/userTrades" -> JSONArray((0 until tradeFills.length()).map { tradeFills.getJSONObject(it) }
                     .filter { p["orderId"]==null || it.optString("orderId")==p["orderId"] })
-                "/fapi/v1/openAlgoOrders" -> JSONArray(algos.values.filter { it.optString("algoStatus") == "NEW" })
+                "/fapi/v1/openAlgoOrders" -> JSONArray(algos.values.filter {
+                    it.optString("algoStatus") == "NEW" && (p["symbol"] == null || it.optString("symbol") == p["symbol"])
+                })
                 "/fapi/v1/algoOrder" -> when (request.method) {
                     "POST" -> {
                         val protective=p["closePosition"]=="true" || p["reduceOnly"]=="true"
@@ -105,6 +115,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                             val row = JSONObject(p).put("algoId", id).put("algoStatus", "NEW")
                                 .put("orderType", p.getValue("type")).put("actualOrderId", "")
                             algos[id] = row
+                            afterAlgoMutation?.invoke(request, row)
                             if(loseProtectionReply && protective) {
                                 code=503;JSONObject().put("code",-1000).put("msg","lost protection reply")
                             } else row
@@ -117,7 +128,10 @@ class NativeFuturesCoordinatorLifecycleTest {
                             code=400;JSONObject().put("code",-1007).put("msg","query execution status unknown")
                         }
                         else if (row == null) { code = 400; JSONObject().put("code", -2013).put("msg", "Order does not exist.") }
-                        else { if (request.method == "DELETE") row.put("algoStatus", "CANCELED")
+                        else { if (request.method == "DELETE") {
+                                row.put("algoStatus", "CANCELED")
+                                afterAlgoMutation?.invoke(request, row)
+                            }
                             if(request.method=="DELETE" && loseCancelReply) { code=503;JSONObject().put("code",-1000).put("msg","lost cancellation reply") }
                             else if(request.method=="GET" && row.optString("closePosition")=="true")
                                 queriedStopTransform?.invoke(JSONObject(row.toString())) ?: row
@@ -206,11 +220,11 @@ class NativeFuturesCoordinatorLifecycleTest {
             "1", if (direction.name == "LONG") "101" else "99", if (direction.name == "LONG") "95" else "105",
             "${prefix}BTC_${direction.name}_$leverage", 0.002, leverage = leverage)
 
-    private fun open(direction: NativeFuturesCampaignCoordinator.Direction, leverage: Int = 5, prefix: String = "W2E_"):
+    private fun open(direction: NativeFuturesCampaignCoordinator.Direction, leverage: Int = 5, prefix: String = "W2E_",
+        journal: Journal = Journal(), clock: () -> Long = System::currentTimeMillis):
         Pair<NativeFuturesCampaignCoordinator, Exchange> {
         val exchange = Exchange(direction)
-        val journal=Journal()
-        val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        val coordinator = NativeFuturesCampaignCoordinator(journal, clock = clock) { exchange.adapter() }
         assertTrue(coordinator.reconcile().toString(), coordinator.status().optBoolean("ready_for_new_entry"))
         val accepted = coordinator.submitPendingEntry(plan(direction, leverage, prefix))
         assertTrue(accepted.toString(), accepted.getBoolean("accepted"))
@@ -1877,4 +1891,353 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals("NEW",old.getString("algoStatus"))
         assertEquals(0,exchange.requests.count { it.method!="GET" })
     }
+
+    private class SimulatedProcessDeath : Error("simulated process death")
+
+    @Test fun nativeSwapBridgesProtectionAndNeverPostsTwoCloseAllStopsLongAndShort() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator, exchange) = open(direction)
+            exchange.rejectSecondCloseAll = true
+            val operations = mutableListOf<String>()
+            exchange.afterAlgoMutation = { request, row ->
+                operations += "${request.method}:${row.optString("clientAlgoId")}"
+                val active = exchange.algos.values.filter { it.optString("algoStatus") == "NEW" }
+                assertTrue("Protection gap at $operations", active.any {
+                    isFullPositionFuturesStop(it, "BTCUSDT", direction.name,
+                        kotlin.math.abs(exchange.quantity).toString().toBigDecimal(), exchange.mark)
+                })
+                assertTrue(active.count { it.optString("closePosition") == "true" } <= 1)
+            }
+            val oldId = coordinator.intentsSnapshot().getJSONObject(0).getString("protection_client_id")
+            val next = if (direction.name == "LONG") "96" else "104"
+            val result = coordinator.trailProtectiveStop("BTCUSDT", direction, next, "W2T_NATIVE_${direction.name}")
+            assertTrue(result.toString(), result.getBoolean("ok"))
+            assertEquals(4, operations.size)
+            assertTrue(operations[0].startsWith("POST:W2B_"))
+            assertEquals("DELETE:$oldId", operations[1])
+            assertEquals("POST:W2T_NATIVE_${direction.name}", operations[2])
+            assertTrue(operations[3].startsWith("DELETE:W2B_"))
+            val active = exchange.algos.values.single { it.optString("algoStatus") == "NEW" }
+            assertEquals("true", active.getString("closePosition"))
+            assertFalse(active.has("quantity"))
+            assertFalse(coordinator.intentsSnapshot().getJSONObject(0).has("native_stop_replacement"))
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun nativeSwapRecoversProcessDeathAfterEveryMutationWithoutDuplicatePosts() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) for (deathAfter in 1..4) {
+            val journal = Journal()
+            val (coordinator, exchange) = open(direction, journal = journal)
+            exchange.rejectSecondCloseAll = true
+            var mutations = 0
+            exchange.afterAlgoMutation = { _, _ -> if (++mutations == deathAfter) throw SimulatedProcessDeath() }
+            val cid = "W2T_CRASH_${direction.name}_$deathAfter"
+            assertThrows(SimulatedProcessDeath::class.java) {
+                coordinator.trailProtectiveStop("BTCUSDT", direction,
+                    if (direction.name == "LONG") "96" else "104", cid)
+            }
+            assertTrue(coordinator.intentsSnapshot().getJSONObject(0).has("native_stop_replacement"))
+            exchange.afterAlgoMutation = null
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val recovered = restarted.reconcile()
+            assertTrue("$direction/$deathAfter: $recovered", recovered.getBoolean("ok"))
+            val posts = exchange.requests.filter { it.method == "POST" && it.url.encodedPath == "/fapi/v1/algoOrder" }
+                .map { Exchange.params(it) }
+            assertEquals(1, posts.count { it["clientAlgoId"] == cid })
+            assertEquals(1, posts.count { it["clientAlgoId"]?.startsWith("W2B_") == true })
+            assertEquals(1, exchange.algos.values.count { it.optString("algoStatus") == "NEW" })
+            assertEquals(cid, restarted.intentsSnapshot().getJSONObject(0).getString("protection_client_id"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun nativeSwapLostRepliesAtAllFourStagesAreResolvedByExactQueries() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) for (lostStage in 1..4) {
+            val journal = Journal()
+            val (coordinator, exchange) = open(direction, journal = journal)
+            val oldId = coordinator.intentsSnapshot().getJSONObject(0).getString("protection_client_id")
+            val cid = "W2T_LOST_${direction.name}_$lostStage"
+            exchange.rejectSecondCloseAll = true
+            exchange.beforeRequest = { request, params ->
+                val id = params["clientAlgoId"].orEmpty()
+                exchange.loseProtectionReply = request.method == "POST" &&
+                    (lostStage == 1 && id.startsWith("W2B_") || lostStage == 3 && id == cid)
+                exchange.loseCancelReply = request.method == "DELETE" &&
+                    (lostStage == 2 && id == oldId || lostStage == 4 && id.startsWith("W2B_"))
+            }
+            val result = coordinator.trailProtectiveStop("BTCUSDT", direction,
+                if (direction.name == "LONG") "96" else "104", cid)
+            assertFalse("$direction/$lostStage: $result", result.getBoolean("ok"))
+            assertTrue(exchange.algos.values.any { it.optString("algoStatus") == "NEW" })
+            val failure = coordinator.status().getJSONArray("pending_intent_details").getJSONObject(0)
+                .getJSONObject("last_native_stop_failure")
+            assertEquals(503, failure.getInt("http_status"))
+            exchange.beforeRequest = null; exchange.loseProtectionReply = false; exchange.loseCancelReply = false
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val recovered = restarted.reconcile()
+            assertTrue("$direction/$lostStage: $recovered", recovered.getBoolean("ok"))
+            assertEquals(1, exchange.requests.count { it.method == "POST" && Exchange.params(it)["clientAlgoId"] == cid })
+            assertEquals(1, exchange.requests.count { it.method == "POST" &&
+                Exchange.params(it)["clientAlgoId"]?.startsWith("W2B_") == true })
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun nativeBridgeRejectionRetainsOldStopAndExportsFailureWithoutPostLoop() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            var now = System.currentTimeMillis()
+            val journal = Journal()
+            val (coordinator, exchange) = open(direction, journal = journal, clock = { now })
+            val old = exchange.algos.values.single { it.optString("closePosition") == "true" }
+            exchange.rejectProtectionCode = -2022
+            val result = coordinator.trailProtectiveStop("BTCUSDT", direction,
+                if (direction.name == "LONG") "96" else "104", "W2T_REJECT_NATIVE")
+            assertFalse(result.getBoolean("ok"))
+            assertEquals("NEW", old.getString("algoStatus"))
+            val tx = coordinator.intentsSnapshot().getJSONObject(0).getJSONObject("native_stop_replacement")
+            assertEquals("REJECTED", tx.getString("bridge_outcome"))
+            assertEquals(-2022, tx.getJSONObject("first_failure").getInt("exchange_code"))
+            val posts = exchange.posts("/fapi/v1/algoOrder")
+            exchange.rejectProtectionCode = null
+            val restarted = NativeFuturesCampaignCoordinator(journal, clock = { now }) { exchange.adapter() }
+            val retained = restarted.reconcile()
+            assertTrue(retained.toString(), retained.getBoolean("ok"))
+            assertFalse(restarted.intentsSnapshot().getJSONObject(0).has("native_stop_replacement"))
+            assertFalse(restarted.trailProtectiveStop("BTCUSDT", direction,
+                if (direction.name == "LONG") "96" else "104", "W2T_COOLDOWN").getBoolean("ok"))
+            assertEquals(posts, exchange.posts("/fapi/v1/algoOrder"))
+            now += 61_000L
+            assertTrue(restarted.reconcile().getBoolean("ok"))
+            assertTrue(restarted.trailProtectiveStop("BTCUSDT", direction,
+                if (direction.name == "LONG") "96" else "104", "W2T_AFTER_COOLDOWN").getBoolean("ok"))
+        }
+    }
+
+    @Test fun nativeFinalRejectionKeepsBridgeAndOnlyRetriesDefiniteFailureAfterCooldown() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            var now = System.currentTimeMillis()
+            val journal = Journal()
+            val (coordinator, exchange) = open(direction, journal = journal, clock = { now })
+            val cid = "W2T_FINAL_REJECT_${direction.name}"
+            exchange.beforeRequest = { request, params ->
+                exchange.rejectProtectionCode = if (request.method == "POST" && params["clientAlgoId"] == cid) -2022 else null
+            }
+            val result = coordinator.trailProtectiveStop("BTCUSDT", direction,
+                if (direction.name == "LONG") "96" else "104", cid)
+            assertFalse(result.getBoolean("ok"))
+            val bridge = exchange.algos.values.single { it.optString("algoStatus") == "NEW" }
+            assertEquals("true", bridge.getString("reduceOnly"))
+            exchange.beforeRequest = null; exchange.rejectProtectionCode = null
+            val restarted = NativeFuturesCampaignCoordinator(journal, clock = { now }) { exchange.adapter() }
+            val posts = exchange.posts("/fapi/v1/algoOrder")
+            assertFalse(restarted.reconcile().getBoolean("ok"))
+            assertEquals(posts, exchange.posts("/fapi/v1/algoOrder"))
+            assertFalse(restarted.status().getBoolean("ready_for_new_entry"))
+            now += 61_000L
+            val recovered = restarted.reconcile()
+            assertTrue(recovered.toString(), recovered.getBoolean("ok"))
+            assertEquals("CANCELED", bridge.getString("algoStatus"))
+            assertEquals(1, exchange.algos.values.count { it.optString("algoStatus") == "NEW" })
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun nativeSwapNeverReplaysUnknownPostThatHasNoExchangeRow() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) for (stage in listOf("bridge", "final")) {
+            val journal = Journal()
+            val (coordinator, exchange) = open(direction, journal = journal)
+            journal.afterWrite = { key, value ->
+                if (key == "futures_campaign_intents_v2" && JSONArray(value).getJSONObject(0)
+                        .optJSONObject("native_stop_replacement")?.optString("phase") ==
+                    if (stage == "bridge") "SUBMIT_BRIDGE" else "SUBMIT_FINAL") throw SimulatedProcessDeath()
+            }
+            assertThrows(SimulatedProcessDeath::class.java) {
+                coordinator.trailProtectiveStop("BTCUSDT", direction,
+                    if (direction.name == "LONG") "96" else "104", "W2T_NOT_SENT_$stage")
+            }
+            journal.afterWrite = null
+            val posts = exchange.posts("/fapi/v1/algoOrder")
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            repeat(2) { assertFalse(restarted.reconcile().getBoolean("ok")) }
+            assertEquals(posts, exchange.posts("/fapi/v1/algoOrder"))
+            assertFalse(restarted.submitPendingEntry(plan(direction).copy(clientId = "W2H_BLOCKED_BY_UNKNOWN")).getBoolean("accepted"))
+            assertTrue(exchange.algos.values.any { it.optString("algoStatus") == "NEW" })
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun nativeSwapRechecksQuantityEntryAndForeignOrdersBeforeDeletingOriginal() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) for (change in listOf("quantity", "entry", "ordinary", "algo")) {
+            val (coordinator, exchange) = open(direction)
+            val old = exchange.algos.values.single { it.optString("closePosition") == "true" }
+            exchange.afterAlgoMutation = { request, row ->
+                if (request.method == "POST" && row.optString("reduceOnly") == "true") when (change) {
+                    "quantity" -> exchange.quantity *= 2
+                    "entry" -> exchange.entry += 1
+                    "ordinary" -> exchange.orders["foreign"] = JSONObject().put("symbol", "BTCUSDT")
+                        .put("status", "NEW").put("clientOrderId", "USER_PENDING")
+                    "algo" -> exchange.algos["foreign"] = JSONObject().put("symbol", "BTCUSDT")
+                        .put("algoStatus", "NEW").put("clientAlgoId", "USER_PENDING_ALGO")
+                }
+            }
+            val result = coordinator.trailProtectiveStop("BTCUSDT", direction,
+                if (direction.name == "LONG") "96" else "104", "W2T_EXPOSURE_CHANGED")
+            assertFalse("$direction/$change: $result", result.getBoolean("ok"))
+            assertEquals("NEW", old.getString("algoStatus"))
+            assertEquals(0, exchange.requests.count { it.method == "DELETE" })
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun legacyUnknownNativeReplacementRequiresSpacedSignedQueriesAndCancellationFence() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            var now = System.currentTimeMillis()
+            val journal = Journal()
+            val (_, exchange) = open(direction, journal = journal, clock = { now })
+            val rows = JSONArray(requireNotNull(journal.readState("futures_campaign_intents_v2")))
+            rows.getJSONObject(0).put("previous_protection_client_id", "W2T_LEGACY_UNKNOWN")
+                .put("previous_protective_stop", if (direction.name == "LONG") "96" else "104")
+            journal.writeState("futures_campaign_intents_v2", rows.toString())
+            val restarted = NativeFuturesCampaignCoordinator(journal, clock = { now }) { exchange.adapter() }
+            val posts = exchange.posts("/fapi/v1/algoOrder")
+            assertFalse(restarted.reconcile().getBoolean("ok"))
+            assertTrue(restarted.intentsSnapshot().getJSONObject(0).has("previous_protection_client_id"))
+            now += 59_999L
+            assertFalse(restarted.reconcile().getBoolean("ok"))
+            assertEquals(0, exchange.requests.count { it.method == "DELETE" })
+            now += 1L
+            val recovered = restarted.reconcile()
+            assertTrue(recovered.toString(), recovered.getBoolean("ok"))
+            assertFalse(restarted.intentsSnapshot().getJSONObject(0).has("previous_protection_client_id"))
+            assertEquals(1, exchange.requests.count { it.method == "DELETE" && Exchange.params(it)["clientAlgoId"] == "W2T_LEGACY_UNKNOWN" })
+            assertEquals(posts, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+
+    @Test fun nativeBridgeCannotBeConfirmedWithChangedQuantitySideTriggerOrWorkingType() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) for (field in listOf("quantity", "side", "triggerPrice", "workingType", "algoStatus")) {
+            val (coordinator, exchange) = open(direction)
+            val old = exchange.algos.values.single { it.optString("closePosition") == "true" }
+            exchange.afterAlgoMutation = { request, row ->
+                if (request.method == "POST" && row.optString("reduceOnly") == "true") row.put(field, when (field) {
+                    "quantity" -> "0.1"
+                    "side" -> if (direction.name == "LONG") "BUY" else "SELL"
+                    "triggerPrice" -> if (direction.name == "LONG") "95.9" else "104.1"
+                    "workingType" -> "CONTRACT_PRICE"
+                    else -> "TRIGGERING"
+                })
+            }
+            val result = coordinator.trailProtectiveStop("BTCUSDT", direction,
+                if (direction.name == "LONG") "96" else "104", "W2T_BAD_BRIDGE")
+            assertFalse("$direction/$field: $result", result.getBoolean("ok"))
+            assertEquals("NEW", old.getString("algoStatus"))
+            assertEquals(0, exchange.requests.count { it.method == "DELETE" })
+        }
+    }
+
+    @Test fun nativeSwapRejectsAnUnresolvedDurableAdditionEvenWhenNoOpenRowIsVisible() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal = Journal()
+            val (coordinator, exchange) = open(direction, journal = journal)
+            val rows = JSONArray(requireNotNull(journal.readState("futures_campaign_intents_v2")))
+            rows.put(JSONObject().put("intent_role", "ADD_ON").put("symbol", "BTCUSDT")
+                .put("entry_client_id", rows.getJSONObject(0).getString("client_id"))
+                .put("client_id", "W2A_UNCERTAIN").put("exchange_status", "SUBMISSION_UNKNOWN")
+                .put("order_status", "SUBMISSION_UNKNOWN"))
+            journal.writeState("futures_campaign_intents_v2", rows.toString())
+            val before = exchange.posts("/fapi/v1/algoOrder")
+            assertFalse(coordinator.trailProtectiveStop("BTCUSDT", direction,
+                if (direction.name == "LONG") "96" else "104", "W2T_BLOCK_PENDING_ADD").getBoolean("ok"))
+            assertEquals(before, exchange.posts("/fapi/v1/algoOrder"))
+            assertFalse(coordinator.intentsSnapshot().getJSONObject(0).has("native_stop_replacement"))
+        }
+    }
+
+    @Test fun finalNativeCloseAllStillCoversANewlyFilledTc2PyramidAddition() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange = Exchange(direction)
+            var now = System.currentTimeMillis()
+            val coordinator = NativeFuturesCampaignCoordinator(Journal(), clock = { now }) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val initial = plan(direction).copy(strategyProfile = williamsTc2Profile,
+                signalType = "FRACTAL", signalBarTimeMs = now - 7_200_000L)
+            assertTrue(coordinator.submitPendingEntry(initial).getBoolean("accepted"))
+            exchange.fill(); assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val next = if (direction.name == "LONG") "96" else "104"
+            exchange.rejectSecondCloseAll = true
+            assertTrue(coordinator.trailProtectiveStop("BTCUSDT", direction, next, "W2T_BEFORE_ADD").getBoolean("ok"))
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            now += 3_600_000L
+            val addition = initial.copy(quantity = "0.1", protectiveStop = next,
+                entryPrice = (exchange.mark + if (direction.name == "LONG") 1 else -1).toString(),
+                clientId = "W2A_AFTER_SWAP", riskPct = .001, entryClientId = initial.clientId,
+                signalType = "SUPER_AO", executionSemantics = "STOP_ENTRY",
+                referenceClose = exchange.mark, signalBarTimeMs = now - 3_601_000L)
+            val accepted = coordinator.submitPendingEntry(addition)
+            assertTrue(accepted.toString(), accepted.getBoolean("accepted"))
+            exchange.fillAddition(addition.clientId)
+            val reconciled = coordinator.reconcile()
+            assertTrue(reconciled.toString(), reconciled.getBoolean("ok"))
+            val stop = exchange.algos.values.single { it.optString("algoStatus") == "NEW" }
+            assertEquals("true", stop.getString("closePosition"))
+            assertTrue(isFullPositionFuturesStop(stop, "BTCUSDT", direction.name, "1.1".toBigDecimal(), exchange.mark))
+            assertEquals("1.1", coordinator.intentsSnapshot().getJSONObject(0).getString("confirmed_position_qty"))
+        }
+    }
+
+    @Test fun aTriggeredTemporaryStopClosesThroughExchangeAndLeavesNoArmedOrphan() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            var now = System.currentTimeMillis()
+            val journal = Journal()
+            val (coordinator, exchange) = open(direction, journal = journal, clock = { now })
+            exchange.afterAlgoMutation = { request, row ->
+                if (request.method == "POST" && row.optString("reduceOnly") == "true") throw SimulatedProcessDeath()
+            }
+            assertThrows(SimulatedProcessDeath::class.java) {
+                coordinator.trailProtectiveStop("BTCUSDT", direction,
+                    if (direction.name == "LONG") "96" else "104", "W2T_STOP_TRIGGERED")
+            }
+            exchange.afterAlgoMutation = null
+            val bridge = exchange.algos.values.single { it.optString("reduceOnly") == "true" }
+            bridge.put("algoStatus", "FINISHED").put("actualOrderId", "701")
+            exchange.orders["701"] = JSONObject().put("symbol", "BTCUSDT").put("orderId", "701")
+                .put("status", "FILLED").put("side", bridge.getString("side"))
+                .put("executedQty", "1").put("origQty", "1").put("avgPrice", bridge.getString("triggerPrice"))
+            exchange.quantity = 0.0
+            val before = exchange.posts("/fapi/v1/algoOrder")
+            val restarted = NativeFuturesCampaignCoordinator(journal, clock = { now }) { exchange.adapter() }
+            restarted.reconcile(); now += 61_000L
+            val closed = restarted.reconcile()
+            assertTrue(closed.toString(), closed.getBoolean("ok"))
+            assertEquals("CLOSED_OR_STOPPED", restarted.intentsSnapshot().getJSONObject(0).getString("campaign_status"))
+            assertFalse(restarted.intentsSnapshot().getJSONObject(0).has("native_stop_replacement"))
+            assertTrue(exchange.algos.values.none { it.optString("algoStatus") == "NEW" })
+            assertEquals(before, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+            assertEquals(1, futuresVisibleTradeHistory(JSONArray(), JSONArray(), restarted.intentsSnapshot()).length())
+        }
+    }
+
+    @Test fun legacyNativeUnknownQueryTimeoutCannotBecomeProofOfOrderAbsence() {
+        var now = System.currentTimeMillis()
+        val journal = Journal()
+        val (_, exchange) = open(NativeFuturesCampaignCoordinator.Direction.SHORT, journal = journal, clock = { now })
+        val rows = JSONArray(requireNotNull(journal.readState("futures_campaign_intents_v2")))
+        rows.getJSONObject(0).put("previous_protection_client_id", "W2T_TIMEOUT_UNKNOWN")
+            .put("previous_protective_stop", "104")
+        journal.writeState("futures_campaign_intents_v2", rows.toString())
+        val restarted = NativeFuturesCampaignCoordinator(journal, clock = { now }) { exchange.adapter() }
+        assertFalse(restarted.reconcile().getBoolean("ok"))
+        now += 61_000L; exchange.failPendingQueries = true
+        assertFalse(restarted.reconcile().getBoolean("ok"))
+        assertTrue(restarted.intentsSnapshot().getJSONObject(0).has("previous_protection_client_id"))
+        assertEquals(0, exchange.requests.count { it.method == "DELETE" })
+        exchange.failPendingQueries = false
+        assertTrue(restarted.reconcile().getBoolean("ok"))
+    }
+
 }

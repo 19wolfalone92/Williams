@@ -2910,9 +2910,25 @@ private fun PositionScreen(
                                 Text("ПОДКЛЮЧИТЬ СОПРОВОЖДЕНИЕ SL")
                             }
                         }
+                        val nativeReplacement=status.futuresIntents.firstOrNull {
+                            it.optString("symbol")==p.symbol && it.optString("direction")==p.direction &&
+                                it.optJSONObject("native_stop_replacement")!=null
+                        }
+                        nativeReplacement?.optJSONObject("native_stop_replacement")?.let { replacement ->
+                            InfoRow("Перенос SL",russianStatus(replacement.optString("phase")))
+                            InfoRow("Предложенный SL",fmt(replacement.optString("new_stop").toDoubleOrNull()))
+                            InfoRow("Новые входы и доливы","Ожидают завершения замены SL")
+                            val proof=nativeReplacement.optJSONObject("native_replacement_protection")
+                            if(proof?.optBoolean("confirmed")==true)
+                                InfoRow("Тип подтверждённой защиты",russianStatus(proof.optString("mode")))
+                        }
                         InfoRow(
                             "Защита",
                             when {
+                                p.stopVerificationStatus=="NATIVE_REPLACEMENT_PROTECTION_SEEN" && p.stop!=null &&
+                                    status.positionsSnapshotOk && CockpitDiagnostics.fresh(
+                                        status.positionsSnapshotAtMs,System.currentTimeMillis(),15_000L) ->
+                                    "SL подтверждён Binance • замена сверяется"
                                 p.stopVerificationStatus=="EXTERNAL_PROTECTED" && status.positionsSnapshotOk &&
                                     CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,System.currentTimeMillis(),15_000L) ->
                                     "Биржевой SL подтверждён, владелец кампании не установлен"

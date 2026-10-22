@@ -134,7 +134,8 @@ internal object CockpitDiagnostics {
         return rows(coordinator.optJSONArray("exchange_protection_observations")).singleOrNull { o ->
             o.optString("symbol")==position.optString("symbol") &&
                 o.optString("direction")==position.optString("direction") &&
-                o.optString("stop_proof") in setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED") &&
+                o.optString("stop_proof") in setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED",
+                    "NATIVE_REPLACEMENT_PROTECTION_SEEN") &&
                 o.optString("protection_client_id").isNotBlank() &&
                 o.optString("quantity").toBigDecimalOrNull()?.abs()?.compareTo(quantity)==0 &&
                 o.optString("stop").toBigDecimalOrNull()?.compareTo(stop)==0 &&

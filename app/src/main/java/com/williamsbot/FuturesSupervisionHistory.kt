@@ -156,7 +156,10 @@ internal fun futuresVisibleTradeHistory(journal:JSONArray, supervisions:JSONArra
             r.optString("client_id").isBlank()) continue
         val qty=r.optString("confirmed_position_qty").toDoubleOrNull()?.takeIf { it>0 } ?: continue
         val closed=campaignLifecycleStatus(r)=="CLOSED_OR_STOPPED"
-        val confirmedStop=if(r.optString("protection_status")=="PROTECTED")
+        val replacementProof=r.optJSONObject("native_replacement_protection")
+        val confirmedStop=if(r.has("native_stop_replacement") && replacementProof?.optBoolean("confirmed")==true)
+            replacementProof.optString("stop").toDoubleOrNull()
+            else if(r.optString("protection_status")=="PROTECTED")
             r.optString("protective_stop").toDoubleOrNull()
             else r.optString("previous_protective_stop").toDoubleOrNull()
         val row=JSONObject().put("id","FUTURES:"+r.getString("client_id"))
@@ -171,7 +174,9 @@ internal fun futuresVisibleTradeHistory(journal:JSONArray, supervisions:JSONArra
             .put("entry_time_known",false).put("closed_at",0L)
             .put("closure_observed_at",r.optLong("closed_observed_at_ms"))
             .put("entry_reason",r.optString("signal_reason"))
-            .put("management_reason",r.optString("trail_error").ifBlank { r.optString("trade_journal_detail") })
+            .put("management_reason",if(r.has("native_stop_replacement"))
+                "Перенос SL сверяется с Binance; новые входы и доливы ожидают подтверждения. "+r.optString("trail_error")
+                else r.optString("trail_error").ifBlank { r.optString("trade_journal_detail") })
             .put("pnl",JSONObject.NULL).put("pnl_complete",false).put("fee_known",false)
             .put("statistics_note",if(closed) "Ожидается восстановление биржевых исполнений и комиссий" else "Сделка открыта; итоговый результат ещё не сформирован")
             .put("trade_audit_source","FUTURES_CAMPAIGN_SNAPSHOT")

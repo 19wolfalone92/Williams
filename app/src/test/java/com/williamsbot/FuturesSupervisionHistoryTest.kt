@@ -134,4 +134,21 @@ class FuturesSupervisionHistoryTest {
         rows=futuresVisibleTradeHistory(JSONArray(),JSONArray(),JSONArray().put(intent))
         assertTrue(rows.getJSONObject(0).isNull("last_stop"))
     }
+
+    @Test fun pendingNativeSwapHistoryUsesTheObservedStopAndDoesNotPromoteTheProposal() {
+        val owner = JSONObject().put("client_id", "W2H_BNB").put("symbol", "BNBUSDT").put("direction", "SHORT")
+            .put("campaign_status", "OPEN_PROTECTED").put("actual_entry_price", "744.32")
+            .put("confirmed_position_qty", "0.19").put("protective_stop", "751.95")
+            .put("protection_status", "REPLACEMENT_PENDING_PROTECTED")
+            .put("native_stop_replacement", JSONObject().put("new_stop", "751.22"))
+            .put("native_replacement_protection", JSONObject().put("confirmed", true).put("stop", "751.95"))
+        fun history() = futuresVisibleTradeHistory(JSONArray(), JSONArray(), JSONArray().put(owner)).getJSONObject(0)
+        assertEquals(751.95, history().getDouble("last_stop"), 0.0)
+        owner.getJSONObject("native_replacement_protection").put("stop", "751.22")
+        assertEquals(751.22, history().getDouble("last_stop"), 0.0)
+        owner.getJSONObject("native_replacement_protection").put("confirmed", false)
+        assertTrue(history().isNull("last_stop"))
+        assertTrue(history().isNull("pnl"))
+    }
+
 }

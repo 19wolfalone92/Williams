@@ -5279,8 +5279,10 @@ private class NativeEngine(
                 val signedLive=row.optString("positionAmt").toBigDecimalOrNull()
                 proof.optString("symbol")==symbol && proof.optString("direction")==direction &&
                     signedProof!=null && signedLive!=null && signedProof.compareTo(signedLive)==0 &&
-                    observedAt>0L && snapshotAt>=observedAt && snapshotAt-observedAt<=60_000L &&
-                    proof.optString("stop_proof") in setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED")
+                    observedAt>0L && snapshotAt>=observedAt && snapshotAt-observedAt<=
+                        (if(proof.optString("stop_proof")=="NATIVE_REPLACEMENT_PROTECTION_SEEN") 15_000L else 60_000L) &&
+                    proof.optString("stop_proof") in setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED",
+                        "NATIVE_REPLACEMENT_PROTECTION_SEEN")
             }
             // Do not mistake old journal stop level for an exchange-confirmed
             // working protective order.

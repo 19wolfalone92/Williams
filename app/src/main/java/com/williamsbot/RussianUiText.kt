@@ -57,6 +57,14 @@ internal fun russianStatus(value: String?): String {
         "NOT_SUBMITTED", "NOT_YET_VERIFIED" -> "Защита ещё не подтверждена"
         "SUBMISSION_UNKNOWN", "RESULT_REQUIRES_RECONCILIATION" -> "Результат отправки требует сверки"
         "UNRESOLVED_EXTRA_ORDER" -> "Обнаружена неразрешённая дополнительная заявка"
+        "REPLACEMENT_PENDING_PROTECTED", "NATIVE_REPLACEMENT_PROTECTION_SEEN" -> "SL подтверждён · замена ожидает завершения"
+        "PREPARED", "SUBMIT_BRIDGE" -> "Проверяется временная защита"
+        "CANCEL_OLD" -> "Подтверждается отмена прежнего SL"
+        "SUBMIT_FINAL" -> "Проверяется новый SL на всю позицию"
+        "CANCEL_BRIDGE" -> "Подтверждается удаление временного SL"
+        "COMPLETED", "FLAT_CLEANUP_COMPLETED" -> "Завершено"
+        "CLOSE_ALL" -> "Защищена вся текущая позиция"
+        "FIXED_QUANTITY_REDUCE_ONLY" -> "Временный SL на подтверждённый объём"
         "TRIGGERED" -> "Триггер сработал · исполнение уточняется"
         "EXPIRED", "EXPIRED_IN_MATCH" -> "Срок заявки истёк"
         "REJECTED" -> "Отклонено"
@@ -83,6 +91,10 @@ internal fun russianExecutionBlocker(value: String?): String {
     val code=value?.trim().orEmpty()
     return when {
         code.isEmpty() -> ""
+        code.contains("native stop replacement", ignoreCase=true) ||
+            code.startsWith("NATIVE_STOP_REPLACEMENT_PENDING") ||
+            code.contains("uncertain legacy stop identity") ->
+            "Замена SL сверяется с Binance. Новые входы и доливы ожидают подтверждения; текущий SL показан отдельно."
         code=="TC2_PROTECTIVE_STOP_ONLY" ->
             "TC2: обычный выход разрешён только через биржевой защитный SL."
         code=="EXIT_STRATEGY_OWNER_UNVERIFIED" ->

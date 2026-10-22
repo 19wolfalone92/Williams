@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent
 ANDROID = ROOT / "app" / "src" / "main"
 
@@ -581,17 +580,30 @@ def test_android_protection_must_match_owner_id_exact_trigger_direction_and_acti
 
 def test_android_trailing_stop_retains_confirmed_protection_after_ambiguous_replacement():
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
-    assert "oldStopStillConfirmed" in coordinator
-    assert "replacementConfirmed == null" in coordinator
-    assert '.put("previous_protection_client_id", clientAlgoId)' in coordinator
-    assert 'state = State.RECONCILE_REQUIRED' in coordinator
-    assert "untrackedRemainder" in coordinator
-    assert '.remove("previous_protection_client_id")' in coordinator
-    assert "val predecessor = findProtectiveStop(" in coordinator
-    assert '.put("trail_recovery_at_ms", clock())' in coordinator
-    assert "val afterCleanup = adapter.openAlgoOrders(symbol)" in coordinator
-    assert "trackedPredecessorStillOpen" in coordinator
-    assert "if (currentStopSafe)" in coordinator
+    replacement = _read(ANDROID / "java/com/williamsbot/FuturesNativeStopReplacement.kt")
+    integration = _read(ROOT / "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt")
+    trail = coordinator.split("fun trailProtectiveStop(", 1)[1].split("fun closePosition(", 1)[0]
+    assert 'intent.put("native_stop_replacement", JSONObject()' in trail
+    assert 'saveIntents(persisted)' in trail
+    assert 'engine.resume(intent)' in trail
+    assert 'adapter.placeProtectiveStop(' not in trail
+    assert 'adapter.placeReplacementProtectiveStop(' in replacement
+    assert '"SUBMISSION_UNKNOWN"' in replacement
+    assert '"CANCEL_OLD"' in replacement
+    assert '"CANCEL_BRIDGE"' in replacement
+    assert 'matchesTerminalUntriggeredFuturesProtectiveStop(' in replacement
+    assert 'owner.remove("native_stop_replacement")' in replacement
+    assert 'settleLegacyNativeStop(adapter, persisted, matchingIntent)' in coordinator
+    assert 'NATIVE_STOP_REPLACEMENT_PENDING' in coordinator
+    for regression in (
+        "nativeSwapBridgesProtectionAndNeverPostsTwoCloseAllStopsLongAndShort",
+        "nativeSwapRecoversProcessDeathAfterEveryMutationWithoutDuplicatePosts",
+        "nativeSwapLostRepliesAtAllFourStagesAreResolvedByExactQueries",
+        "nativeSwapNeverReplaysUnknownPostThatHasNoExchangeRow",
+        "nativeSwapRechecksQuantityEntryAndForeignOrdersBeforeDeletingOriginal",
+        "legacyUnknownNativeReplacementRequiresSpacedSignedQueriesAndCancellationFence",
+    ):
+        assert regression in integration
 
 
 def test_android_trailing_stops_are_mark_relative_not_entry_relative():
