@@ -5,6 +5,23 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsEditionRulesTest {
+    @Test fun allThreeBookSignalEnginesRequireUnbrokenGenuineCandleIntervals() {
+        val bars=(1..50).map { i ->
+            WilliamsWaveBar(i*WILLIAMS_H1_MS,100.0,103.0,97.0,100.0,10.0)
+        }
+        assertNull(williamsEditionSignalSeriesBlocker(bars,"1h"))
+        assertEquals("BOOK_SIGNAL_CANDLE_GAP",
+            williamsEditionSignalSeriesBlocker(bars.take(24)+bars.drop(25),"1h"))
+        assertEquals("BOOK_SIGNAL_BAR_TIME_MISALIGNED",
+            williamsEditionSignalSeriesBlocker(bars.mapIndexed { i,b ->
+                if(i==10) b.copy(t=b.t+5_000L) else b
+            },"1h"))
+        assertEquals("BOOK_SIGNAL_OHLCV_UNVERIFIED",
+            williamsEditionSignalSeriesBlocker(bars.take(43),"1h"))
+        assertEquals("UNSUPPORTED_BOOK_SIGNAL_FRAME",
+            williamsEditionSignalSeriesBlocker(bars,"unknown_frame"))
+    }
+
     @Test fun unifiedBooksAllowEveryVerifiedSourceWithoutChangingItsIdentity() {
         assertEquals(4,williamsEditionProfiles.size)
         assertEquals(3,williamsSourceProfiles.size)
