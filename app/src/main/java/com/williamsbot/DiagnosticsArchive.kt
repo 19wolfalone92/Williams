@@ -84,6 +84,8 @@ object DiagnosticsArchive {
                 report.optJSONObject("unified_strategy_evidence")?.toString(2) ?: "{}")
             add(zip, "event_compaction.json",
                 report.optJSONObject("event_compaction")?.toString(2) ?: "{}")
+            add(zip, "unresolved_diagnostic_checks.json",
+                report.optJSONArray("unresolved_diagnostic_checks")?.toString(2) ?: "[]")
             // Dedicated forensic evidence: keep scanner, current signed STOP
             // observations, position snapshots and timeframe coverage together
             // with their original timestamps. Never derive a fresh proof from
