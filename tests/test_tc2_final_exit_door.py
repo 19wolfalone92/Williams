@@ -117,3 +117,63 @@ def test_tc2_opposite_close_cannot_reach_cancel_or_exchange_without_current_book
     with pytest.raises(RuntimeError,match="TC2_EXIT_BOOK"):
         runtime._exit_market(campaign,"OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
     assert calls==[]
+
+
+
+@pytest.mark.parametrize("side", ["BUY", "SELL"])
+@pytest.mark.parametrize("exchange_mark,expected", [
+    (None, "TC2_EXIT_LIVE_MARK_UNVERIFIED"),
+    ("nan", "TC2_EXIT_LIVE_MARK_UNVERIFIED"),
+    ("wrong_symbol", "TC2_EXIT_LIVE_MARK_UNVERIFIED"),
+    ("price_recovered", "TC2_EXIT_LIVE_MARK_NO_LONGER_TRIGGERED"),
+    ("still_triggered", "VALIDATED_LIVE_MARK"),
+])
+def test_tc2_exit_rereads_exact_futures_mark_before_exit_intent(
+        exit_runtime, side, exchange_mark, expected):
+    """BOOK price trigger cannot authorize a later market exit from an old mark.
+
+    This test executes the real _exit_market preflight with an exchange
+    observation; no pending order, EXIT_PENDING state or Binance POST is
+    allowed if MARK_PRICE has moved back across the trigger.
+    """
+    import time
+    class ValidatedLiveMark(Exception):
+        pass
+    runtime=exit_runtime
+    now=int(time.time()*1000)
+    reason="OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
+    level=96.0 if side=="BUY" else 104.0
+    first_mark=95.0 if side=="BUY" else 105.0
+    recovered=99.0 if side=="BUY" else 101.0
+    calls=[]
+    def mark(symbol):
+        calls.append(("mark",symbol))
+        if exchange_mark is None:
+            raise OSError("Binance unavailable")
+        if exchange_mark=="wrong_symbol":
+            return {"symbol":"ETHUSDT","markPrice":str(first_mark)}
+        return {"symbol":"BTCUSDT","markPrice":(
+            "nan" if exchange_mark=="nan"
+            else str(recovered if exchange_mark=="price_recovered" else first_mark))}
+    runtime.client=SimpleNamespace(time_offset_ms=0,mark_price=mark)
+    runtime._position=lambda symbol: (calls.append(("position",symbol)), object())[1]
+    runtime._signed_position_qty=lambda pos: 1.0
+    runtime._full_market_close_qty=lambda *args: (_ for _ in ()).throw(ValidatedLiveMark())
+    proof={"reason":reason,"symbol":"BTCUSDT","observed_at_ms":now-1000,
+           "opened_at_ms":now-2*3_600_000,"strategy_profile":TC2,
+           "direction":"SHORT" if side=="BUY" else "LONG",
+           "signal_id":"book_exit_case","trigger":level,"mark":first_mark,
+           "event":{"state":"TRIGGERED","known_at_ms":now-60_000}}
+    tags={"strategy_profile":TC2,"tc2_book_exit_proof":proof,
+          "last_opposition_evidence":{"signal_id":"book_exit_case","event":proof["event"].copy()}}
+    campaign=SimpleNamespace(symbol="BTCUSDT",side=side,
+                             state=CampaignState.TREND_ACTIVE,tags=tags)
+    if exchange_mark=="still_triggered":
+        with pytest.raises(ValidatedLiveMark):
+            runtime._exit_market(campaign,reason)
+    else:
+        with pytest.raises(RuntimeError,match=expected):
+            runtime._exit_market(campaign,reason)
+    assert ("mark","BTCUSDT") in calls
+    assert campaign.state==CampaignState.TREND_ACTIVE
+    assert "pending_exit_client_id" not in campaign.tags
