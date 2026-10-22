@@ -3321,6 +3321,13 @@ private fun SettingsScreen(
                         color = AppColors.textMuted
                     )
 
+                    Text(
+                        "Поля API Key и Secret всегда пустые при повторном открытии " +
+                            "для безопасности. Это НЕ означает потерю ключей. " +
+                            "Смотри статус хранения ниже.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.textMuted
+                    )
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = onApiKey,
