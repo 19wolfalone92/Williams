@@ -38,6 +38,31 @@ This source router does not certify whole-book compliance.
    bypass verified FLAT, a fresh entry, risk reservation or protective STOP.
    Course/NTD partial closures remain separately source-pinned. Emergency stop
    recovery and liquidation management are distinct risk-reducing capabilities.
+9. Update 22 Oct 2026, after revisiting the originals: a contrary Wise-Man
+   appearance must NOT be treated as a loss-cutting order for an otherwise
+   exchange-protected TC2 position. TC2 Russian PDF pp.155-156 and 165:
+   structural 3-5 price-bar trailing is the common exit; an opposite trigger
+   may also reverse, but is less common. NTD Russian PDF pp.119-120 explicitly
+   ranks opposite-direction exit as its LEAST preferred profit-taking method:
+   early exits can forfeit the continuing trend. This does NOT abolish the
+   genuinely filled protective STOP, manual exit or emergency liquidation guard.
+10. **Project execution safety overlay, NOT a universal word-for-word book
+    command:** a TC2 opposite-WM strategy MARKET reduction requires that
+    fresh exchange MARK vs exact signed campaign average entry already clears
+    a conservative round-trip fee/slippage reserve (2 x 0.10% + 0.15% = 0.35%).
+    Same rule in Android scanner, FINAL Binance coordinator, Python scan and
+    final signed exchange preflight, LONG and SHORT. Negative, flat, near-net-
+    zero, stale or unverifiable positions remain OPEN_PROTECTED and the WM
+    becomes ADVISORY. This reserve cannot guarantee a profitable realized fill:
+    latency, gap, commission and funding are uncertain. Exact exchange net
+    profit/loss must be computed from fills after settlement.
+11. Historical 19 Oct 2026 archive (Android 4.34, prior audit
+    WILLIAMS_BOOK_CHAIN_AUDIT_2026-10-20.md): SOLUSDT and XRPUSDT closed
+    with OPPOSITE_WILLIAMS_LEVEL_TRIGGERED, without verified protective-stop
+    fills. ETHUSDT exit reason EXCHANGE_RECONCILED_CLOSE is NOT evidence of
+    either a stop fill or a contrary-WM close. Recorded aggregate realized
+    result was -11.63395884 USDT; later hypothetical WM2 continuation
+    levels are retrospective, NOT guaranteed executable profits.
 
 TC2 English PDF pages: 139-152 WM1; 154-162 WM2; 165-173 WM3; 175-186 campaigns,
 allocation and exits. Page numbers differ in the 224-page Russian registry source.
