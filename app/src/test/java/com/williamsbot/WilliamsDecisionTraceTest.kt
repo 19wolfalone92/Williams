@@ -33,7 +33,9 @@ class WilliamsDecisionTraceTest {
         assertEquals(5,frames.length())
         val h4=(0 until frames.length()).map { frames.getJSONObject(it) }
             .single { it.getString("frame")=="4h" }
-        assertEquals("UNAVAILABLE",h4.getString("state"))
+        assertEquals("NOT_ANALYSED",h4.getString("state"))
+        assertEquals("WAVE_ANALYSIS_NOT_RUN",h4.getString("history_error"))
+        assertEquals("WAVE_ANALYSIS_NOT_RUN",h4.getString("reason"))
         assertEquals(0,h4.getInt("hypothesis_count"))
         assertFalse(h4.getBoolean("wave_degree_confirmed"))
         assertFalse(h4.getBoolean("probability_calibrated"))
