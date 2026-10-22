@@ -166,9 +166,22 @@ def _latest_super_ao(
             trigger_base = float(
                 signal_row["high"] if side == "LONG" else signal_row["low"]
             )
-            protective = float(
-                signal_row["low"] if side == "LONG" else signal_row["high"]
+            # TC2 chapter 12 (PDF pp.156-157): when Super AO presents first,
+            # the protective stop belongs beyond the lowest/highest of the
+            # previous 3-5 CLOSED price bars, not just the third AO bar.
+            # Use five bars as in the Android TC2 H1 implementation. Later bars
+            # must never change the original risk anchor (no look-ahead).
+            if third_i < 4:
+                continue
+            window = ind.iloc[third_i - 4:third_i + 1]
+            extremes = pd.to_numeric(
+                window["low" if side == "LONG" else "high"], errors="coerce"
             )
+            if len(extremes) != 5 or not all(
+                math.isfinite(float(v)) and float(v) > 0 for v in extremes
+            ):
+                continue
+            protective = float(extremes.min() if side == "LONG" else extremes.max())
             return third_i, trigger_base, protective
     return None
 
