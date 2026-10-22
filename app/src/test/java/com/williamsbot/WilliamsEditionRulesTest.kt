@@ -69,6 +69,39 @@ class WilliamsEditionRulesTest {
         assertFalse(williamsAdditionTimeEligible(williamsNtdProfile,99,"AC_SIGNAL",100,"FRACTAL",100))
         assertFalse(williamsAdditionTimeEligible(williamsTc2Profile,100,"SUPER_AO",100,"FRACTAL",100))
     }
+    private fun editionAoSignals(normalized: List<Double>, side: String): List<String> {
+        val n = normalized.size
+        val bars = (0 until n).map { i ->
+            WilliamsWaveBar((i + 1) * 3_600_000L, 100.0, 101.0, 99.0, 100.0, 100.0)
+        }
+        val ao = if (side == "LONG") normalized else normalized.map { -it }
+        val jaw = List(n) { 100.0 }
+        val ac = List(n) { 0.0 }
+        return williamsNtdSetups(side, bars, jaw, jaw, jaw, ao, ac, .1)
+            .map { it.kind }.filter { it.startsWith("AO_") }
+    }
+
+    @Test fun ntdAoTwoPeaksRejectSkippedIntermediatePivotOnBothSides() {
+        val values = List(45) { -1.0 } + listOf(-1.0, -5.0, -1.0, -2.0, -1.0, -3.0, -2.0)
+        for (side in listOf("LONG", "SHORT")) {
+            assertFalse(editionAoSignals(values, side).contains("AO_TWIN_PEAKS"))
+        }
+    }
+
+    @Test fun ntdAoZeroCrossCannotBeMislabelledTwinPeaksOnBothSides() {
+        val values = List(45) { -1.0 } + listOf(-1.0, -5.0, -1.0, -3.0, 1.0)
+        for (side in listOf("LONG", "SHORT")) {
+            assertEquals(listOf("AO_ZERO_LINE"), editionAoSignals(values, side))
+        }
+    }
+
+    @Test fun ntdAoConsecutiveValidTwinPeaksRetainBothDirections() {
+        val values = List(45) { -1.0 } + listOf(-1.0, -5.0, -1.0, -3.0, -2.0)
+        for (side in listOf("LONG", "SHORT")) {
+            assertEquals(listOf("AO_TWIN_PEAKS"), editionAoSignals(values, side))
+        }
+    }
+
     @Test fun bothOutsideFractalsRemainVisibleWithoutInventingTheirIntrabarOrder() {
         val highs=listOf(10.0,11.0,15.0,11.0,10.0);val lows=listOf(8.0,7.0,3.0,7.0,8.0)
         val bars=highs.indices.map { i -> WilliamsWaveBar((i+1)*3_600_000L,(highs[i]+lows[i])/2,highs[i],lows[i],(highs[i]+lows[i])/2,100.0) }
