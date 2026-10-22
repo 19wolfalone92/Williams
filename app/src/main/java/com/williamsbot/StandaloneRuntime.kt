@@ -1633,12 +1633,15 @@ private class NativeEngine(
             (prefs.getString("execution_gate_symbol", "") ?: "")
                 .ifBlank { executionStore.readState("execution_gate_symbol").orEmpty() }
         if (interruptedGateSymbol.isNotBlank()) {
+            // An interrupted financial mutation must fence EVERY new entry,
+            // but must not silently opt the operator out of read-only market
+            // supervision after reboot. The exchange owns the truth and safe
+            // START will reconcile open positions/STOPs before any new risk.
             reconcileRequired = true
             persistSafetyFlag("reconcile_required", true)
-            prefs.edit().putBoolean("auto_run", false).commit()
             lastError =
                 "Execution gate interrupted for " + interruptedGateSymbol +
-                    "; REST reconciliation required"
+                    "; REST reconciliation required; background monitoring opt-in retained"
         }
         stateMachine.force(
             when {
