@@ -6345,10 +6345,15 @@ private class NativeEngine(
                 opposing.type.removePrefix("SHORT_") in setOf("REVERSAL","SUPER_AO","FRACTAL") &&
                 campaignSignalDirection(opposing.type)!=dir &&
                 (if(dir=="LONG") mark<=opposing.triggerPrice else mark>=opposing.triggerPrice)
+            val exchangeEntryForExit=row.optString("entryPrice").toDoubleOrNull() ?: Double.NaN
+            val oppositeProfitBlocker=if(profile==williamsTc2Profile)
+                williamsTc2OppositeExitProfitBlocker(dir,exchangeEntryForExit,mark,
+                    2.0*feeBufferPerSidePct+maxSlippagePct,rules.tick) else null
             val actionableOpposing = opposing?.takeIf {
                 williamsOpposingSignalCanMarketClose(profile) &&
                     (profile!=williamsTc2Profile ||
-                        (!riskOnly && eligibleSymbols==null && tc2TriggerNow))
+                        (!riskOnly && eligibleSymbols==null && tc2TriggerNow &&
+                            oppositeProfitBlocker==null))
             }
             if(profile==williamsTc2Profile && opposing!=null && actionableOpposing==null) {
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
@@ -6356,6 +6361,8 @@ private class NativeEngine(
                         .put("policy","TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED")
                         .put("signal_id",opposing.signalId).put("source",opposing.strategyProfile)
                         .put("observed_at_ms",futuresMarketData.exchangeNowMs())
+                        .put("profit_exit_blocker",oppositeProfitBlocker ?: JSONObject.NULL)
+                        .put("policy_note","OPPOSITE_SETUP_IS_WARNING_UNTIL_PROFITABLE_BOOK_EXIT")
                         .put("market_close_authorized",false))
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
             }
