@@ -112,6 +112,62 @@ internal fun williamsMarketExitBlocker(owner: String, reason: String): String? {
     }
 }
 
+/** Durable exchange-mutation fence for the TC2 ch11-12 opposite Wise-Man exit.
+ * A caller-supplied reason is not proof: require exactly the closed H1 signal
+ * persisted by the causal scenario scanner after entry, recently observed, and
+ * a fresh Binance MARK price STILL beyond that signal's stop trigger.
+ * No reverse entry is authorized by a close. Ambiguous history never passes.
+ */
+internal fun williamsTc2OppositeExitEvidenceBlocker(
+    owner:JSONObject?, signedDecision:String?, symbol:String, currentDirection:String,
+    reason:String, openedAt:Long, now:Long, mark:Double
+):String? {
+    if(williamsMarketExitBlocker(williamsTc2Profile,reason)!=null)
+        return "TC2_EXIT_REASON_NOT_BOOK_APPROVED"
+    if(owner==null || owner.optString("symbol")!=symbol ||
+        owner.optString("direction")!=currentDirection ||
+        owner.optString("strategy_profile")!=williamsTc2Profile ||
+        openedAt<=0L || now<=0L || !mark.isFinite() || mark<=0)
+        return "TC2_OPPOSITE_EXIT_OWNER_OR_MARK_UNVERIFIED"
+    val decision=runCatching { JSONObject(signedDecision.orEmpty()) }.getOrNull()
+        ?: return "TC2_OPPOSITE_EXIT_DECISION_NOT_DURABLE"
+    val opposite=decision.optJSONObject("opposition")
+        ?: return "TC2_OPPOSITE_EXIT_NO_CONFIRMED_TRIGGER"
+    val event=opposite.optJSONObject("event")
+        ?: return "TC2_OPPOSITE_EXIT_EVENT_UNVERIFIED"
+    val examinedAt=decision.optLong("observed_at_ms")
+    val signalAt=opposite.optLong("signal_bar_time_ms")
+    val eventAt=event.optLong("known_at_ms")
+    val level=opposite.optDouble("trigger",Double.NaN)
+    val side=opposite.optString("direction")
+    val signalId=opposite.optString("signal_id")
+    if(decision.optString("direction")!=currentDirection ||
+        decision.optLong("scope_started_at_ms")!=openedAt ||
+        opposite.optString("strategy_profile")!=williamsTc2Profile ||
+        opposite.optString("execution_semantics")!="STOP_ENTRY" ||
+        event.optString("state")!="TRIGGERED" ||
+        signalId.isBlank() || signalAt<=0L ||
+        signalAt>Long.MAX_VALUE-WILLIAMS_H1_MS ||
+        eventAt<signalAt+WILLIAMS_H1_MS || eventAt<=openedAt ||
+        eventAt>examinedAt || examinedAt>now ||
+        now-examinedAt !in 0L..120_000L ||
+        !level.isFinite() || level<=0 ||
+        !(currentDirection=="LONG" && side=="SHORT" && mark<=level ||
+          currentDirection=="SHORT" && side=="LONG" && mark>=level))
+        return "TC2_OPPOSITE_EXIT_TRIGGER_NOT_CURRENT_AND_PROVEN"
+    // This record is persisted by management before requesting a mutation,
+    // and is bound to this exact durable signal (not a guessed wave count).
+    val proof=owner.optJSONObject("edition_management")?.optJSONObject("exit_evidence")
+        ?: return "TC2_OPPOSITE_EXIT_MANAGEMENT_PROOF_MISSING"
+    if(proof.optString("reason")!=reason ||
+        proof.optString("signal_id")!=signalId ||
+        proof.optLong("observed_at_ms")!=examinedAt ||
+        proof.optJSONObject("opposition_check")?.optJSONObject("opposition")
+            ?.optString("signal_id")!=signalId)
+        return "TC2_OPPOSITE_EXIT_MANAGEMENT_PROOF_MISMATCH"
+    return null
+}
+
 internal fun williamsStopMoveLabel(reason: String): String = when(reason) {
     "TC2_LAST_5_CLOSED_BARS" -> "TC2: защита за последними 5 закрытыми H1-барами"
     "TC2_LAST_3_CLOSED_BARS" -> "TC2: защита за последними 3 закрытыми H1-барами"
