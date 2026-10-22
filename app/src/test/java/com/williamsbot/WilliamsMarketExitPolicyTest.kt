@@ -4,11 +4,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsMarketExitPolicyTest {
-    @Test fun tc2CannotMarketCloseOnArbitraryOrOpposingStrategyReasons() {
-        for(reason in listOf("STRATEGY_EXIT","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
-            "CORRECTION_PARENT_PRICE_INVALIDATED","", "TAKE_PROFIT")) {
-            assertEquals("TC2_PROTECTIVE_STOP_ONLY",williamsMarketExitBlocker(williamsTc2Profile,reason))
+    @Test fun tc2AcceptsOnlyBookQualifiedOppositeExitReasonAtFinalDoor() {
+        for(reason in listOf("STRATEGY_EXIT","CORRECTION_PARENT_PRICE_INVALIDATED",
+            "", "TAKE_PROFIT","LIPS_CLOSE_EXIT","LIQUIDATION_GUARD")) {
+            assertEquals("TC2_EXIT_REQUIRES_BOOK_OPPOSITE_TRIGGER",williamsMarketExitBlocker(williamsTc2Profile,reason))
         }
+        for(reason in listOf("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+            "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"))
+            assertNull(williamsMarketExitBlocker(williamsTc2Profile,reason))
         assertEquals("EXIT_STRATEGY_OWNER_UNVERIFIED",williamsMarketExitBlocker("UNKNOWN","STRATEGY_EXIT"))
     }
     @Test fun explicitOperatorAndKillPathsRemainSubjectToCoordinatorPreflight() {
