@@ -132,6 +132,13 @@ def _latest_reversal(
             score, valid = _angulation(ind, i, side=side)
             if not valid:
                 continue
+            from williams_market_geometry import first_wise_man_ao_blocker
+            # An AO oscillator colour is defined by this CLOSED bar minus its
+            # predecessor. Never infer RED/GREEN from AO above/below zero.
+            if "ao" not in ind or i<=0 or first_wise_man_ao_blocker(
+                side, row.get("ao"), ind.iloc[i-1].get("ao")
+            ) is not None:
+                continue
             extreme = float(row["low"] if side == "LONG" else row["high"])
             trigger_base = float(row["high"] if side == "LONG" else row["low"])
             return i, trigger_base, extreme
