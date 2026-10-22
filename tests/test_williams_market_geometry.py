@@ -74,9 +74,13 @@ def test_fractal_inside_at_formation_can_become_valid_without_backdating(short):
     f=_latest_confirmed_fractal(df,side="SHORT" if short else "LONG",current_teeth=teeth[-1],
         current_close=series[-1].c,tick_size=.1)
     assert f is not None and f[:2]==(4,2)
-    # The extra entry tick must not push an inside-mouth extreme outside Teeth.
+    # NTD/TC2: the ACTUAL trigger (pivot +/- one tick) must break beyond Teeth.
+    # A level inside Teeth remains legal if the one-tick STOP activation is outside.
     inside=145-.05 if short else 105+.05
     assert _latest_confirmed_fractal(df,side="SHORT" if short else "LONG",current_teeth=inside,
+        current_close=series[-1].c,tick_size=.1) is not None
+    at_stop=144.9 if short else 105.1
+    assert _latest_confirmed_fractal(df,side="SHORT" if short else "LONG",current_teeth=at_stop,
         current_close=series[-1].c,tick_size=.1) is None
     assert _latest_confirmed_fractal(df,side="SHORT" if short else "LONG",current_teeth=float("nan"),
         current_close=series[-1].c,tick_size=.1) is None
@@ -126,3 +130,20 @@ def test_course_momentum_uses_signal_line_even_when_ao_colour_disagrees(short):
     proof=course_rhythm(series)
     assert proof["momentum"]==("UP" if short else "DOWN")
     assert proof["momentum_basis"]=="OSCILLATOR_VS_SIGNAL_SMA5"
+
+
+@pytest.mark.parametrize("short",[False,True])
+def test_ntd_first_fractal_consumed_when_tick_trigger_not_pivot_clears_teeth(short):
+    # NTD ch4 pp.42,52-53: first executable breakout is the STOP price, not the pivot.
+    # Sleeping phase precedes the known fractal; later H1 bar touches only +1 tick.
+    highs=[100.0,100.0,101.0,100.0,105.0,103.0,102.0,105.1,103.0]
+    series=bars(highs)
+    jaw=[90.0]*len(series);teeth=[90.0]*len(series);lips=[90.0]*len(series)
+    teeth[7]=105.05
+    if short:
+        series=mirror(series)
+        jaw,teeth,lips=([250-v for v in x] for x in (jaw,teeth,lips))
+    proof=ntd_initial_context(series,jaw,teeth,lips,4,.1)
+    assert not proof["eligible"]
+    assert proof["reason"]=="NTD_FIRST_BREAKOUT_ALREADY_OCCURRED"
+    assert proof["first_breakout_at_ms"]==series[7].t
