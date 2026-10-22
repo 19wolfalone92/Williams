@@ -43,12 +43,12 @@ def closed_h1_history_blocker(bars, now):
 
 
 def strategy_market_close_allowed(source):
-    """Project SL-only TC2 policy covers opposition AND correction boundaries.
+    """TC2 ch11-12 authorizes EXIT on a real opposite Wise-Man breakout.
 
-    Manual closure and exchange/account emergency actions have their own gates.
-    Filled legacy NTD/Course campaigns retain their pinned management rules.
+    NTD/Course retain source-specific rules. Reopening the reverse side needs
+    a fresh entry/risk/exchange gate after exchange-confirmed FLAT.
     """
-    return source in (NTD, COURSE)
+    return source in (TC2, NTD, COURSE)
 
 
 def market_exit_blocker(source, reason, *, risk_emergency=False):
@@ -60,5 +60,8 @@ def market_exit_blocker(source, reason, *, risk_emergency=False):
     if reason in ("MANUAL_EXIT", "KILL_SWITCH") or risk_emergency:
         return None
     if source == TC2:
-        return "TC2_PROTECTIVE_STOP_ONLY"
+        return (None if reason in {
+            "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+            "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION",
+        } else "TC2_EXIT_REQUIRES_BOOK_OPPOSITE_TRIGGER")
     return None if source in (NTD, COURSE) else "EXIT_STRATEGY_OWNER_UNVERIFIED"
