@@ -3620,6 +3620,15 @@ internal class NativeFuturesCampaignCoordinator(
         }
         if ((0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
                 it.optString("intent_role")=="ADD_ON" && it.optString("symbol")==symbol && exchangeOrderStatus(it) in activeStatuses }) {
+            // A contrary Wise-Man exit is OPTIONAL, unlike liquidation control.
+            // Never cancel a valid addition merely because a contrary setup
+            // appeared, especially while the protected campaign is losing.
+            if(!riskEmergencyVerified && reason in setOf(
+                "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED","OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION")) {
+                return@synchronized JSONObject().put("ok",false).put("state",state.name)
+                    .put("blocker","TC2_OPPOSITE_EXIT_PENDING_ADDITION_NOT_RECONCILED")
+                    .put("safe_rejection",true).put("mutation_attempted",false)
+            }
             val cancelled=cancelPendingEntries("POSITION_EXIT_CANCEL_ADDITIONS",symbol)
             state=State.RECONCILE_REQUIRED
             return@synchronized JSONObject().put("ok",false).put("blocker","Addition canceled before exit; reconcile possible racing fill")
@@ -3767,6 +3776,14 @@ internal class NativeFuturesCampaignCoordinator(
                     return@synchronized JSONObject().put("ok",false).put("state",state.name)
                         .put("safe_rejection",true).put("mutation_attempted",false)
                         .put("blocker",blocker).put("symbol",symbol)
+                val liveEntry=liveForSymbol.single().first.optString("entryPrice").toDoubleOrNull()
+                    ?: Double.NaN
+                val profitBlocker=williamsTc2OppositeExitProfitBlocker(
+                    direction.name,liveEntry,markNow)
+                if(profitBlocker!=null)
+                    return@synchronized JSONObject().put("ok",false).put("state",state.name)
+                        .put("safe_rejection",true).put("mutation_attempted",false)
+                        .put("blocker",profitBlocker).put("symbol",symbol)
             }
             if (emergencyWithoutStop) {
                 // Second read as close to POST as possible, because the
