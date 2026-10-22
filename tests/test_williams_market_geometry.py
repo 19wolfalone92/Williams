@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from williams_market_geometry import angulation_evidence, alligator_phases, ntd_initial_context
-from williams_signals import _latest_confirmed_fractal
+from williams_signals import _latest_confirmed_fractal, _latest_super_ao
 from williams_wave_hierarchy import WaveBar
 
 H=3_600_000
@@ -147,3 +147,23 @@ def test_ntd_first_fractal_consumed_when_tick_trigger_not_pivot_clears_teeth(sho
     assert not proof["eligible"]
     assert proof["reason"]=="NTD_FIRST_BREAKOUT_ALREADY_OCCURRED"
     assert proof["first_breakout_at_ms"]==series[7].t
+
+
+@pytest.mark.parametrize("short",[False,True])
+def test_python_tc2_wm2_stop_uses_five_closed_price_bars_like_android(short):
+    # TC2 ch12 PDF pp.156-157. Third AO bar is index 5; older price bar
+    # index 2 has a more protective extreme than the third AO bar itself.
+    highs=[110,112,120,115,117,118,119,119]
+    lows=[100,99,90,102,101,103,70,65]
+    if short:
+        highs,lows=([250-x for x in lows],[250-x for x in highs])
+    df=pd.DataFrame({
+        "high":highs,"low":lows,
+        ("ao_red_streak" if short else "ao_green_streak"):[0,0,0,1,2,3,4,5],
+    })
+    wm2=_latest_super_ao(df,side="SHORT" if short else "LONG",max_age_bars=8)
+    assert wm2 is not None and wm2[0]==5
+    assert wm2[1]==(lows[5] if short else highs[5])
+    assert wm2[2]==(max(highs[1:6]) if short else min(lows[1:6]))
+    # A later bar's extreme, even one much worse, cannot move initial STOP.
+    assert wm2[2] != (max(highs[6:]) if short else min(lows[6:]))
