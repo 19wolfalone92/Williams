@@ -472,7 +472,8 @@ data class PositionView(
     val ocoListId: String = "",
     val ocoListClientId: String = "",
     val direction: String = "",
-    val stopVerificationStatus: String = "UNKNOWN"
+    val stopVerificationStatus: String = "UNKNOWN",
+    val stopConfirmedAtMs: Long = 0L
 )
 
 private class LocalRuntimeApi(context: Context) {
@@ -3375,10 +3376,7 @@ private fun SettingsScreen(
                     }
 
                     Text(
-                        if (status.binanceConfigured)
-                            "Статус: Binance подключён. Secret не возвращается в приложение."
-                        else
-                            "Статус: API ключи ещё не заданы.",
+                        cockpitCredentialTruth(status),
                         color = if (status.binanceConfigured)
                             AppColors.green else AppColors.amber
                     )
@@ -4119,7 +4117,8 @@ internal fun parseStatus(json: JSONObject): Status {
                 pnlPct = pnlFraction,
                 ocoListId = item.optString("oco_list_id"),
                 ocoListClientId = item.optString("oco_list_client_id"),
-                stopVerificationStatus = item.optString("stop_verification_status","UNKNOWN")
+                stopVerificationStatus = item.optString("stop_verification_status","UNKNOWN"),
+                stopConfirmedAtMs = item.optLong("stop_confirmed_at_ms",0L)
             )
         }
     }

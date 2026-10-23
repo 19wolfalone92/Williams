@@ -108,6 +108,25 @@ internal fun CockpitField(label: String, value: String, color: Color = AppColors
     ResponsiveCockpitField(label, value, color)
 }
 
+/**
+ * Never mistake a stale UI envelope for loss of encrypted credentials.
+ * Diagnostic 17: the signed Demo account was readable with 4 live positions
+ * although a settings screen showed "keys not set". An old balance alone
+ * does NOT prove currently stored credentials, so call out the conflict.
+ */
+internal fun cockpitCredentialTruth(status:Status):String = when {
+    status.binanceConfigured ->
+        "Ключи сохранены в защищённом хранилище Runtime. Secret не отображается."
+    status.accountSnapshotAtMs>0L || status.balance!=null || status.running ->
+        "⚠️ Сведения противоречивы: раньше получен баланс Binance или работал движок, " +
+        "но текущий экран не подтверждает наличие ключей. Не удаляй приложение и ключи; " +
+        "обнови статус и экспортируй диагностику. Торговая готовность НЕ доказана."
+    status.snapshotAtMs<=0L ->
+        "Статус ключей ещё не получен от Runtime. Это НЕ доказательство их потери."
+    else ->
+        "Runtime сообщает, что API-ключи не настроены в этом экземпляре приложения."
+}
+
 @Composable
 internal fun CockpitFreshness(status: Status) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -117,7 +136,7 @@ internal fun CockpitFreshness(status: Status) {
     Text(
         when {
             !screenFresh -> "Данные экрана не подтверждены • последнее обновление ${cockpitTime(status.snapshotAtMs)}"
-            !fresh -> "Снимок позиций обновляется • последнее подтверждение ${cockpitTime(status.positionsSnapshotAtMs)}"
+            !fresh -> "Нет свежей сверки позиций • предыдущий снимок ${cockpitTime(status.positionsSnapshotAtMs)}; текущая защита неизвестна"
             else -> "Binance подтвердил позиции ${cockpitTime(status.positionsSnapshotAtMs)}"
         }, color = if (fresh && screenFresh) AppColors.textMuted else AppColors.amber,
         style = MaterialTheme.typography.labelSmall
@@ -246,6 +265,25 @@ internal fun cockpitSignedStopVerified(
     }==1
 }
 
+/**
+ * Show a stale historical STOP observation in amber only, never as a current
+ * protective order. This is informational; no trading authorization results.
+ */
+internal fun cockpitPreviousStopEvidence(intent:JSONObject,status:Status,now:Long):String? {
+    if (cockpitSignedStopVerified(intent,status,now)) return null
+    val previous=status.positions.singleOrNull { p ->
+        p.symbol==intent.optString("symbol") &&
+        p.direction==intent.optString("direction") &&
+        kotlin.math.abs(p.qty)>0.0 && p.stop!=null &&
+        p.stopVerificationStatus in setOf("OWNED_STOP_SEEN","NATIVE_REPLACEMENT_PROTECTION_SEEN","EXTERNAL_PROTECTED") &&
+        p.stopConfirmedAtMs>0L
+    } ?: return null
+    return "Последнее известное биржевое подтверждение SL " +
+        formatChartPrice(previous.stop ?: return null) + " • " +
+        cockpitTime(previous.stopConfirmedAtMs) +
+        ". СВЕДЕНИЯ УСТАРЕЛИ, действующий ордер нужно подтвердить заново."
+}
+
 internal fun cockpitKnownOpenPositionsLabel(status:Status,now:Long):String {
     val archivedOpenExposure=status.futuresIntents.any { intent ->
         intent.optString("role","ENTRY")=="ENTRY" &&
@@ -321,6 +359,9 @@ internal fun CockpitIntentCard(intent: JSONObject, status:Status, onMarket: (Str
                 intent.optString("order_status")!="PARTIALLY_FILLED" -> "Ожидает исполнения входа"
             else -> "НЕ ПОДТВЕРЖДЕНА СЕЙЧАС"
         }, if(protected) AppColors.green else if(hasFilledExposure) AppColors.red else AppColors.amber)
+        cockpitPreviousStopEvidence(intent,status,now)?.let { previous ->
+            Text(previous,color=AppColors.amber,style=MaterialTheme.typography.bodySmall)
+        }
         TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Скрыть детали" else "Риск, время и сверка") }
         if (expanded) {
             CockpitField("Плановый резерв", cockpitNumber(intent.optDouble("risk_pct") * 100) + "%")

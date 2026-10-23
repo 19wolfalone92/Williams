@@ -77,4 +77,30 @@ class CockpitLiveEvidenceTest {
         assertFalse(explanation.contains("BOOK H1"))
         assertTrue(explanation.contains("M15"))
     }
+
+    @Test fun diagnostics17DisagreedCredentialScreenMustNotClaimMissingKeys() {
+        val stale=Status(binanceConfigured=false,running=true,
+            balance=4911.02,accountSnapshotAtMs=now-20_000L,snapshotAtMs=now)
+        val label=cockpitCredentialTruth(stale)
+        assertTrue(label.contains("противоречивы"))
+        assertFalse(label.contains("ещё не заданы"))
+        assertTrue(label.contains("Не удаляй"))
+        assertTrue(cockpitCredentialTruth(Status()).contains("ещё не получен"))
+        assertTrue(cockpitCredentialTruth(stale.copy(binanceConfigured=true))
+            .contains("защищённом хранилище"))
+    }
+
+    @Test fun diagnostics17FourPreviouslyProtectedPositionsRemainUnverifiedWhenCacheIsStale() {
+        val old=status(snapshotOk=false,positionsAt=now-70_000L).copy(
+            positions=listOf(position().copy(stopConfirmedAtMs=now-80_000L)))
+        assertFalse(cockpitSignedStopVerified(intent(),old,now))
+        val note=cockpitPreviousStopEvidence(intent(),old,now)
+        assertNotNull(note)
+        assertTrue(note!!.contains("СВЕДЕНИЯ УСТАРЕЛИ"))
+        assertTrue(note.contains("104.02"))
+        assertNull(cockpitPreviousStopEvidence(intent(),status(
+            positions=listOf(position().copy(stopConfirmedAtMs=now-1_000L))),now))
+        assertNull(cockpitPreviousStopEvidence(intent(),status(snapshotOk=false,
+            positions=listOf(position(null,"UNVERIFIED_OR_STALE"))),now))
+    }
 }
