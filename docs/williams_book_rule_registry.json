@@ -790,12 +790,28 @@
         84
       ],
       "rule": "Full example also trades corrective a,b,c after motive sequence.",
-      "status": "PENDING",
-      "modules": [],
-      "tests": [],
-      "fixtures": [],
-      "remaining_evidence": "Current stage planner ends at EXIT; complete corrective campaign is not implemented.",
-      "can_place_orders_from_registry": false
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_course_correction.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseCorrection.kt",
+        "williams_market_phase.py",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt"
+      ],
+      "tests": [
+        "tests/test_williams_course_correction.py::test_source_correction_zones_require_causal_evidence_and_distinct_flat_owner",
+        "tests/test_williams_course_correction.py::test_corrective_lifecycle_requires_exact_fills_and_rejects_foreign_or_partial_replays",
+        "app/src/test/java/com/williamsbot/WilliamsCourseCorrectionTest.kt::sharedSourceZonesRequireCausalEvidenceAndDistinctFlatOwner",
+        "app/src/test/java/com/williamsbot/WilliamsCourseCorrectionTest.kt::correctiveLifecycleRequiresExactFillsRejectsForeignOwnersAndIsIdempotent"
+      ],
+      "fixtures": [
+        "cases/a-entry-lower",
+        "cases/b-upper",
+        "cases/motive-not-flat",
+        "cases/future-evidence"
+      ],
+      "remaining_evidence": "Read-only mirrored corrective planner now separates flat motive ownership and 3->1->4->0 abstract units, 50-62% first A retracement, 38-50% B retracement, causal wave proof and exact fill transitions. PDF84 leaving 1 long contradicts the short-sale arithmetic and diagram; discrepancy is explicit. Dynamic first-leg/terminal target identification, stop-and-reverse execution, independent historical source labels and full Demo lifecycle remain unaccepted.",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_course_correction_contract.json"
     },
     {
       "id": "WAVE.FULL_NESTED_GENEALOGY",
@@ -832,11 +848,11 @@
         "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
       ],
       "tests": [
-        "tests/test_tc2_final_exit_door.py::test_tc2_exit_rereads_exact_futures_mark_before_exit_intent",
+        "tests/test_tc2_final_exit_door.py::test_tc2_exit_rereads_exact_futures_contract_before_exit_intent",
         "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::confirmedBookOppositeExitFlattensOnlyOwnedPositionWithStopHeldUntilFill"
       ],
       "fixtures": [],
-      "remaining_evidence": "Prior SL-only override was explicitly rescinded on 2026-10-22. Risk-reducing opposite H1 Wise-Man exit implemented with mark/owner guards; the book's subsequent reverse entry and deterministic two-leg Binance Demo lifecycle (partial fill, crash, idempotence) are not yet implemented or accepted.",
+      "remaining_evidence": "Prior SL-only override was explicitly rescinded on 2026-10-22. Risk-reducing opposite H1 Wise-Man exit implemented with CONTRACT_PRICE trigger plus separate mark-profit/owner guards; the book's subsequent reverse entry and deterministic two-leg Binance Demo lifecycle (partial fill, crash, idempotence) are not yet implemented or accepted.",
       "can_place_orders_from_registry": false
     },
     {
@@ -1113,7 +1129,7 @@
   "required_remaining_evidence": [
     "Independent digitization of all relevant historical book figures",
     "Finish Air Bag tick-offset and higher-frame illustration review",
-    "Complete nested wave/context and Course corrective campaign specification",
+    "Complete nested wave/context proof, dynamic Course corrective targets and execution acceptance",
     "Verify user-approved TC2 book stop-and-reverse: protected reduce-only flatten followed by separately risk-authorized opposite entry with verified protective STOP, including outage and partial-fill acceptance",
     "Physical Android Binance Futures Demo LONG/SHORT fills, partial fills, protection, restart and offline recovery"
   ],

@@ -3,6 +3,7 @@ from williams_wave_hierarchy import FRAME_MS, REQUIRED_FRAMES, build_wave_hierar
 from williams_market_reading import market_reading
 from williams_wave_interpretation import wave_interpretation
 from williams_tc1_terminal_evidence import tc1_five_bullet_evidence
+from williams_course_correction import correction_policy_snapshot
 
 OBSERVED_MARKET_FRAMES=("1d","6h","4h","1h","15m")
 
@@ -87,6 +88,7 @@ def market_phase_context(hierarchy):
         if len(recursive)>=16:
             break
     return {"schema":"WILLIAMS_MARKET_PHASE_V1","as_of":as_of,"frames":frames,"warning_scope":scope,
+        "course_correction_policy":correction_policy_snapshot(),
         "recursive_degree_evidence":recursive,
         "wave_interpretation":wave_interpretation(hierarchy),
         "wave_genealogy_confirmed":False,"probability_calibrated":False,

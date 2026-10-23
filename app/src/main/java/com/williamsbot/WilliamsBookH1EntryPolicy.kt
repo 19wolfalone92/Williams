@@ -54,6 +54,7 @@ internal fun williamsBookH1Proof(
     .put("mode",WILLIAMS_BOOK_H1_ENTRY_MODE).put("frame","1h")
     .put("signal_id",signalId).put("direction",direction)
     .put("signal_type",signalType).put("source",source)
+    .put("trigger_price_basis","CONTRACT_PRICE")
     .put("signal_bar_time_ms",signalAtMs)
     .put("known_at_ms",signalAtMs+WILLIAMS_H1_MS)
     .put("expires_at_ms",williamsH1SignalExpiry(signalAtMs,signalType,source))
@@ -90,6 +91,7 @@ internal fun williamsBookH1ProofBlocker(
             abs(proof.optDouble("campaign_stop")-stop)>tick*.11))
         return "H1_BOOK_CAMPAIGN_PROOF_MISMATCH"
     if(proof.optString("mode")!=WILLIAMS_BOOK_H1_ENTRY_MODE ||
+        proof.optString("trigger_price_basis")!="CONTRACT_PRICE" ||
         proof.optString("frame")!="1h" ||
         proof.optString("signal_id")!=signalId || signalId.isBlank() ||
         proofDirection!=direction || direction !in setOf("LONG","SHORT") ||

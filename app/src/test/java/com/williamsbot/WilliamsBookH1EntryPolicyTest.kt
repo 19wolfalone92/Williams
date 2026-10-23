@@ -38,6 +38,7 @@ class WilliamsBookH1EntryPolicyTest {
         assertNotNull(williamsBookH1ProofBlocker("{}","SHORT",p.getString("signal_id"),
             "SHORT_REVERSAL",williamsTc2Profile,95.0,101.0,now))
         assertNotNull(blocker("LONG",p,95.0,101.0))
+        assertNotNull(blocker("SHORT",JSONObject(p.toString()).apply { remove("trigger_price_basis") },95.0,101.0))
         assertNotNull(blocker("SHORT",p,94.9,101.0))
         assertNotNull(blocker("SHORT",p,95.0,101.0,"NTD_FIVE_DIMENSIONS"))
         assertNotNull(blocker("SHORT",p,95.0,101.0,at=t+5*WILLIAMS_H1_MS))

@@ -2237,12 +2237,24 @@ class FuturesWilliamsRuntime:
             )
 
         # Last possible read-only check before persisting EXIT_PENDING.
-        # The mark observed while detecting an H1 opposite signal is NOT
-        # authorization hours later, nor if MARK diverged from CONTRACT.
-        # No live-mark proof => keep the Binance protective stop untouched.
+        # A prior contract quote cannot authorize a later H1 book exit.
+        # Recheck its original price basis; retain MARK for risk/profit only.
         if (campaign.tags.get("strategy_profile",TC2)==TC2 and not risk_emergency
                 and reason in ("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
                                "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION")):
+            try:
+                contract_row=self.client.ticker_price(symbol)
+                if not isinstance(contract_row,dict) or contract_row.get("symbol")!=symbol:
+                    raise ValueError("contract quote symbol mismatch")
+                current_contract=float(contract_row["price"])
+            except Exception as exc:
+                raise RuntimeError("TC2_EXIT_LIVE_CONTRACT_UNVERIFIED") from exc
+            blocker=tc2_opposite_exit_evidence_blocker(
+                campaign.tags,reason,int(time.time()*1000)+
+                int(getattr(self.client,"time_offset_ms",0)),
+                campaign.side,symbol,live_contract=current_contract)
+            if blocker:
+                raise RuntimeError(blocker)
             try:
                 mark_row=self.client.mark_price(symbol)
                 if not isinstance(mark_row,dict) or mark_row.get("symbol")!=symbol:
@@ -2252,12 +2264,6 @@ class FuturesWilliamsRuntime:
                 # Network outage, malformed payload or stale/missing mark:
                 # no strategy close, the existing exchange STOP remains.
                 raise RuntimeError("TC2_EXIT_LIVE_MARK_UNVERIFIED") from exc
-            blocker=tc2_opposite_exit_evidence_blocker(
-                campaign.tags,reason,int(time.time()*1000)+
-                int(getattr(self.client,"time_offset_ms",0)),
-                campaign.side,symbol,live_mark=current_mark)
-            if blocker:
-                raise RuntimeError(blocker)
             # The final signed exchange position (not the original hypothetical
             # signal's price) defines actual break-even for this campaign.
             try:
@@ -3348,7 +3354,8 @@ class FuturesWilliamsRuntime:
                             "strategy_profile":TC2,
                             "direction":"SHORT" if campaign.side=="BUY" else "LONG",
                             "signal_id":opposing.signal_id,"trigger":trigger,
-                            "mark":current_price,"event":event}
+                            "trigger_price_basis":"CONTRACT_PRICE",
+                            "contract_price":current_price,"event":event}
                         if hasattr(self,"db"):
                             self.db.save_campaign(campaign)
                         return self._exit_market(campaign,reason)

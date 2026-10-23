@@ -11,6 +11,7 @@ import os
 import time
 import hmac
 import hashlib
+import math
 import re
 from decimal import Decimal, ROUND_DOWN
 from urllib.parse import urlencode, urlparse
@@ -271,8 +272,16 @@ class BinanceFuturesClient:
         return payload
 
     def ticker_price(self, symbol):
-        row = self._request("GET", "/fapi/v1/ticker/price", {"symbol": symbol})
-        return {"symbol": symbol, "price": row.get("price", "0")}
+        row = self._require_object(self._request("GET", "/fapi/v2/ticker/price", {"symbol": symbol}))
+        if row.get("symbol") != symbol:
+            raise BinanceAPIError("Binance Futures contract quote symbol mismatch", payload=row)
+        try:
+            price = float(row["price"])
+            if not math.isfinite(price) or price <= 0:
+                raise ValueError("invalid contract price")
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise BinanceAPIError("Binance Futures contract price unverified", payload=row) from exc
+        return row
 
     def ticker_prices(self):
         return self._request("GET", "/fapi/v1/ticker/price")

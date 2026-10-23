@@ -145,20 +145,20 @@ internal fun williamsTc2OppositeExitProfitBlocker(
 /** Durable exchange-mutation fence for the TC2 ch11-12 opposite Wise-Man exit.
  * A caller-supplied reason is not proof: require exactly the closed H1 signal
  * persisted by the causal scenario scanner after entry, recently observed, and
- * a fresh Binance MARK price STILL beyond that signal's stop trigger.
+ * a fresh Binance CONTRACT price STILL beyond that signal's stop trigger.
  * No reverse entry is authorized by a close. Ambiguous history never passes.
  */
 internal fun williamsTc2OppositeExitEvidenceBlocker(
     owner:JSONObject?, signedDecision:String?, symbol:String, currentDirection:String,
-    reason:String, openedAt:Long, now:Long, mark:Double
+    reason:String, openedAt:Long, now:Long, contractPrice:Double
 ):String? {
     if(williamsMarketExitBlocker(williamsTc2Profile,reason)!=null)
         return "TC2_EXIT_REASON_NOT_BOOK_APPROVED"
     if(owner==null || owner.optString("symbol")!=symbol ||
         owner.optString("direction")!=currentDirection ||
         owner.optString("strategy_profile")!=williamsTc2Profile ||
-        openedAt<=0L || now<=0L || !mark.isFinite() || mark<=0)
-        return "TC2_OPPOSITE_EXIT_OWNER_OR_MARK_UNVERIFIED"
+        openedAt<=0L || now<=0L || !contractPrice.isFinite() || contractPrice<=0)
+        return "TC2_OPPOSITE_EXIT_OWNER_OR_CONTRACT_UNVERIFIED"
     val decision=runCatching { JSONObject(signedDecision.orEmpty()) }.getOrNull()
         ?: return "TC2_OPPOSITE_EXIT_DECISION_NOT_DURABLE"
     val opposite=decision.optJSONObject("opposition")
@@ -174,7 +174,8 @@ internal fun williamsTc2OppositeExitEvidenceBlocker(
     val level=opposite.optDouble("trigger",Double.NaN)
     val side=opposite.optString("direction")
     val signalId=opposite.optString("signal_id")
-    if(decision.optString("direction")!=currentDirection ||
+    if(decision.optString("trigger_price_basis")!="CONTRACT_PRICE" ||
+        decision.optString("direction")!=currentDirection ||
         decision.optLong("scope_started_at_ms")!=openedAt ||
         opposite.optString("strategy_profile")!=williamsTc2Profile ||
         opposite.optString("execution_semantics")!="STOP_ENTRY" ||
@@ -185,8 +186,8 @@ internal fun williamsTc2OppositeExitEvidenceBlocker(
         eventAt>examinedAt || examinedAt>now ||
         now-examinedAt !in 0L..120_000L ||
         !level.isFinite() || level<=0 ||
-        !(currentDirection=="LONG" && side=="SHORT" && mark<=level ||
-          currentDirection=="SHORT" && side=="LONG" && mark>=level))
+        !(currentDirection=="LONG" && side=="SHORT" && contractPrice<=level ||
+          currentDirection=="SHORT" && side=="LONG" && contractPrice>=level))
         return "TC2_OPPOSITE_EXIT_TRIGGER_NOT_CURRENT_AND_PROVEN"
     // This record is persisted by management before requesting a mutation,
     // and is bound to this exact durable signal (not a guessed wave count).

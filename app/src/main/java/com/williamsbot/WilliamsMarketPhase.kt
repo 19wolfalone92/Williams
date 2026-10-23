@@ -162,6 +162,7 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
         if(recursive.length()>=16) break
     }
     val phase=JSONObject().put("schema","WILLIAMS_MARKET_PHASE_V1").put("as_of",asOf)
+        .put("course_correction_policy",williamsCourseCorrectionPolicySnapshot())
         .put("frames",JSONArray(frames)).put("warning_scope",scope)
         .put("recursive_degree_evidence",recursive)
         .put("wave_interpretation",williamsWaveInterpretation(hierarchy))

@@ -1093,6 +1093,12 @@ internal class NativeFuturesCampaignCoordinator(
                     standardOrderOrNull(adapter, symbol, cid)
                 } else {
                     val parent = conditionalOrderOrNull(adapter, symbol, cid)
+                    if(parent!=null && owner.optString("entry_trigger_basis")=="CONTRACT_PRICE") {
+                        check(parent.optString("symbol")==symbol && parent.optString("clientAlgoId")==cid &&
+                            parent.optString("workingType")=="CONTRACT_PRICE") {
+                            "Conditional entry contract-price basis or identity mismatch"
+                        }
+                    }
                     val actualId = parent?.optString("actualOrderId").orEmpty()
                     if(parent!=null) owner.put("conditional_parent_status",parent.optString("algoStatus"))
                         .put("conditional_actual_order_id",actualId)
@@ -2840,7 +2846,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("blocker", blocker)
 
     private fun tc2AdditionBookBlocker(plan:EntryPlan,owner:JSONObject,ledger:JSONArray,
-        live:JSONObject,mark:Double):String? {
+        live:JSONObject,mark:Double,contractPrice:Double):String? {
         val amount=live.optString("positionAmt").toBigDecimalOrNull()
             ?: return "TC2_ADDITION_POSITION_UNPROVEN"
         if(live.optString("positionSide","BOTH")!="BOTH" || amount.signum()==0 ||
@@ -2850,7 +2856,8 @@ internal class NativeFuturesCampaignCoordinator(
         if(!recorded.isFinite() || !entry.isFinite() || recorded<=0 || entry<=0 ||
             kotlin.math.abs(entry-recorded)>maxOf(1e-8,recorded*1e-8)) return "TC2_ADDITION_ENTRY_OWNERSHIP_CHANGED"
         williamsTc2ProfitBlocker(plan.direction.name,entry,mark,plan.entryPrice.toDouble())?.let { return it }
-        if(if(plan.direction==Direction.LONG) mark>=plan.entryPrice.toDouble() else mark<=plan.entryPrice.toDouble())
+        if(!contractPrice.isFinite() || contractPrice<=0) return "TC2_ADDITION_CONTRACT_PRICE_UNVERIFIED"
+        if(if(plan.direction==Direction.LONG) contractPrice>=plan.entryPrice.toDouble() else contractPrice<=plan.entryPrice.toDouble())
             return "TC2_ADDITION_TRIGGER_CONSUMED_BEFORE_SUBMISSION"
         // Existing campaigns keep their persisted allocation semantics. Only
         // newly pinned campaigns may claim the book's exact quantity sequence.
@@ -3090,7 +3097,8 @@ internal class NativeFuturesCampaignCoordinator(
             if (live.optString("positionAmt").toBigDecimal().abs().compareTo(primary!!.getString("confirmed_position_qty").toBigDecimal())!=0)
                 return@synchronized safePreflightRejection("Position changed since ownership reconciliation")
             if(plan.strategyProfile==williamsTc2Profile) {
-                val blocker=tc2AdditionBookBlocker(plan,primary,currentIntents,live,preflightAdapter.markPrice(plan.symbol))
+                val blocker=tc2AdditionBookBlocker(plan,primary,currentIntents,live,
+                    preflightAdapter.markPrice(plan.symbol),preflightAdapter.contractPrice(plan.symbol))
                 if(blocker!=null) return@synchronized safePreflightRejection(blocker)
             }
         }
@@ -3120,6 +3128,8 @@ internal class NativeFuturesCampaignCoordinator(
             .put("symbol", plan.symbol)
             .put("direction", plan.direction.name)
             .put("kind", plan.kind.name)
+            .put("entry_trigger_basis",if(plan.kind in setOf(EntryKind.STOP,EntryKind.TAKE_PROFIT))
+                "CONTRACT_PRICE" else "ORDER_BOOK_EXECUTION")
             .put("quantity", plan.quantity)
             .put("entry_price", plan.entryPrice)
             .put("protective_stop", plan.protectiveStop)
@@ -3215,7 +3225,8 @@ internal class NativeFuturesCampaignCoordinator(
                     .compareTo(primary!!.getString("confirmed_position_qty").toBigDecimal())==0) {
                     "TC2_PYRAMID_OWNED_QUANTITY_CHANGED_BEFORE_SUBMISSION"
                 }
-                tc2AdditionBookBlocker(plan,primary,currentIntents,live,adapter.markPrice(plan.symbol))?.let { error(it) }
+                tc2AdditionBookBlocker(plan,primary,currentIntents,live,
+                    adapter.markPrice(plan.symbol),adapter.contractPrice(plan.symbol))?.let { error(it) }
             }
             if(plan.kind==EntryKind.MARKET) check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
                 plan.referenceClose,adapter.markPrice(plan.symbol))==null) { "NTD close-event expired or moved before mutation" }
@@ -3837,17 +3848,18 @@ internal class NativeFuturesCampaignCoordinator(
             }
             // Do not trust the caller's TC2 exit reason: bind a recently
             // durable closed-H1 opposite-signal proof to this exact owner,
-            // symbol/direction, and the exchange's CURRENT mark before POST.
+            // symbol/direction, and the exchange's CURRENT contract price before POST.
             // Unknown or stale evidence keeps the exchange-side STOP alive.
             if(!riskEmergencyVerified &&
                 managedEntry?.optString("strategy_profile")==williamsTc2Profile &&
                 reason in setOf("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
                     "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION")) {
                 val markNow=adapterPreflight.markPrice(symbol)
+                val contractNow=adapterPreflight.contractPrice(symbol)
                 val blocker=williamsTc2OppositeExitEvidenceBlocker(
                     managedEntry,executionStore.readState("decision_h1_opposition_"+symbol),
                     symbol,direction.name,reason,
-                    managedEntry.optLong("position_open_observed_at_ms"),clock(),markNow
+                    managedEntry.optLong("position_open_observed_at_ms"),clock(),contractNow
                 )
                 if(blocker!=null)
                     return@synchronized JSONObject().put("ok",false).put("state",state.name)

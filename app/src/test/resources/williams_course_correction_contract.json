@@ -1,0 +1,24 @@
+{
+  "source": "COURSE_PDF83_84",
+  "fixture_kind": "SYNTHETIC_SOURCE_BOUNDARIES_NOT_HISTORICAL_BOOK_OHLC",
+  "cases": [
+    {"id":"a-entry-lower", "stage":"A_ENTRY", "previous":"", "units":0, "price":110, "expected":"PROPOSED"},
+    {"id":"a-entry-upper", "stage":"A_ENTRY", "previous":"", "units":0, "price":112.4, "expected":"PROPOSED"},
+    {"id":"a-entry-too-shallow", "stage":"A_ENTRY", "previous":"", "units":0, "price":109.8, "expected":"A_ENTRY_OUTSIDE_50_62_RETRACEMENT"},
+    {"id":"a-entry-too-deep", "stage":"A_ENTRY", "previous":"", "units":0, "price":112.6, "expected":"A_ENTRY_OUTSIDE_50_62_RETRACEMENT"},
+    {"id":"a-reduce", "stage":"A_REDUCE", "previous":"A_ENTRY", "units":3, "price":80, "expected":"PROPOSED"},
+    {"id":"a-unconfirmed", "stage":"A_REDUCE", "previous":"A_ENTRY", "units":3, "price":80, "a_complete":false, "expected":"A_END_NOT_CONFIRMED"},
+    {"id":"b-lower", "stage":"C_ADD", "previous":"A_REDUCE", "units":1, "price":95.2, "expected":"PROPOSED"},
+    {"id":"b-upper", "stage":"C_ADD", "previous":"A_REDUCE", "units":1, "price":100, "expected":"PROPOSED"},
+    {"id":"b-too-shallow", "stage":"C_ADD", "previous":"A_REDUCE", "units":1, "price":94.8, "expected":"B_OUTSIDE_38_50_RETRACEMENT_OF_A"},
+    {"id":"b-too-deep", "stage":"C_ADD", "previous":"A_REDUCE", "units":1, "price":100.4, "expected":"B_OUTSIDE_38_50_RETRACEMENT_OF_A"},
+    {"id":"c-fifth-exit", "stage":"CORRECTION_EXIT", "previous":"C_ADD", "units":4, "price":60, "expected":"PROPOSED"},
+    {"id":"c-unconfirmed", "stage":"CORRECTION_EXIT", "previous":"C_ADD", "units":4, "price":60, "c_complete":false, "expected":"C_FIFTH_NOT_CONFIRMED"},
+    {"id":"degree-unconfirmed", "stage":"A_ENTRY", "previous":"", "units":0, "price":110, "degree":false, "expected":"CORRECTION_WAVE_DEGREE_UNCONFIRMED"},
+    {"id":"motive-not-flat", "stage":"A_ENTRY", "previous":"", "units":0, "price":110, "flat":false, "expected":"MOTIVE_FLAT_NOT_CONFIRMED_BEFORE_NEW_CAMPAIGN"},
+    {"id":"future-evidence", "stage":"A_ENTRY", "previous":"", "units":0, "price":110, "known_at":301, "expected":"CORRECTION_EVIDENCE_NOT_CAUSAL_FRESH_AND_NEW"},
+    {"id":"risk-denied", "stage":"C_ADD", "previous":"A_REDUCE", "units":1, "price":100, "risk":false, "expected":"RISK_GATE_BLOCKS_NEW_EXPOSURE"},
+    {"id":"stop-unverified", "stage":"A_ENTRY", "previous":"", "units":0, "price":110, "protected":false, "expected":"PROTECTIVE_STOP_NOT_VERIFIED"},
+    {"id":"skip-a-reduction", "stage":"C_ADD", "previous":"A_ENTRY", "units":3, "price":100, "expected":"NON_SEQUENTIAL_CORRECTIVE_STAGE"}
+  ]
+}

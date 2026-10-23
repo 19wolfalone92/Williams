@@ -918,7 +918,7 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
     assert 'p?.activeLabel == "W5" && c?.activeLabel == "W3"' in enrich
 
 
-def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_mark():
+def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_contract():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     policy = _read(ANDROID / "java/com/williamsbot/WilliamsExecutionPolicy.kt")
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
@@ -935,8 +935,10 @@ def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_mark
     assert 'market_close_authorized",false' in manage
     assert 'williamsTc2OppositeExitEvidenceBlocker(' in policy
     assert 'williamsTc2OppositeExitEvidenceBlocker(' in coordinator
-    assert 'managedEntry.optLong("position_open_observed_at_ms"),clock(),markNow' in coordinator
+    assert 'managedEntry.optLong("position_open_observed_at_ms"),clock(),contractNow' in coordinator
     assert 'adapterPreflight.markPrice(symbol)' in coordinator
+    assert 'adapterPreflight.contractPrice(symbol)' in coordinator
+    assert 'decision.optString("trigger_price_basis")!="CONTRACT_PRICE"' in policy
     assert "futuresCampaignCoordinator.saveManagementState(" in manage
     assert "planWilliamsCampaignStop(" in manage
     assert 'ownerProfile in williamsSourceProfiles' in policy

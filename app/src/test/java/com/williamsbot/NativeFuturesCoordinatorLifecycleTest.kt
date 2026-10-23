@@ -39,6 +39,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         var quantity = 0.0
         var entry = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) 101.0 else 99.0
         var mark = 100.0
+        var contract: Double? = null
         var liquidation = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) "50" else "200"
         var leverage = 2
         var badConfirmation = false
@@ -75,6 +76,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 "/fapi/v3/positionRisk" -> positions()
                 "/fapi/v1/premiumIndex" -> { beforeMarkRead?.invoke()
                     JSONObject().put("symbol", "BTCUSDT").put("markPrice", mark.toString()) }
+                "/fapi/v2/ticker/price" -> JSONObject().put("symbol","BTCUSDT").put("price",(contract ?: mark).toString())
                 "/fapi/v1/exchangeInfo" -> JSONObject("""{"symbols":[{"symbol":"BTCUSDT","status":"TRADING","filters":[
                     {"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
                     {"filterType":"MARKET_LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
@@ -1124,6 +1126,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("execution_semantics","STOP_ENTRY")
                 .put("signal_bar_time_ms",signalAt).put("trigger",trigger).put("event",event)
             val decision=JSONObject().put("observed_at_ms",observed)
+                .put("trigger_price_basis","CONTRACT_PRICE")
                 .put("scope_started_at_ms",opened).put("direction",direction.name)
                 .put("opposition",detected).put("uncertain",JSONArray())
             assertTrue(journal.writeState("decision_h1_opposition_BTCUSDT",decision.toString()))
@@ -1146,6 +1149,12 @@ class NativeFuturesCoordinatorLifecycleTest {
                 it.optString("clientAlgoId")==protectionId && it.optString("algoStatus")=="NEW"
             })
             exchange.mark=if(direction.name=="LONG") 108.0 else 92.0
+            exchange.contract=if(direction.name=="LONG") 111.0 else 89.0
+            val markOnly=coordinator.closePosition("BTCUSDT",direction,"1",
+                "W2X_MARK_ONLY_"+direction.name,reason)
+            assertFalse(markOnly.toString(),markOnly.optBoolean("ok",false))
+            assertEquals(postsBefore,exchange.posts("/fapi/v1/order"))
+            exchange.contract=if(direction.name=="LONG") 108.0 else 92.0
             val result=coordinator.closePosition("BTCUSDT",direction,"1",
                 "W2X_BOOK_"+direction.name,reason)
             assertTrue(result.toString(),result.optBoolean("ok",false))
@@ -1160,6 +1169,22 @@ class NativeFuturesCoordinatorLifecycleTest {
                     it.optString("reason")==reason && it.optString("exit_authority")=="PINNED_EDITION_RULE"
                 }
             })
+        }
+    }
+
+    @Test fun newlySubmittedBookEntryCannotReconcileAgainstAnotherPriceBasis() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            val owner=coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("CONTRACT_PRICE",owner.getString("entry_trigger_basis"))
+            exchange.algos.values.single().put("workingType","MARK_PRICE")
+            assertFalse(coordinator.reconcile().getBoolean("ok"))
+            assertEquals("RECONCILE_REQUIRED",coordinator.state.name)
+            assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
         }
     }
 

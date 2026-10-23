@@ -21,7 +21,7 @@ class WilliamsMarketExitPolicyTest {
         assertNull(williamsMarketExitBlocker(williamsNtdProfile,"TEETH_CLOSE_EXIT"))
         assertNull(williamsMarketExitBlocker(williamsCourseProfile,"COURSE_STAGE_TRIM"))
     }
-    @Test fun tc2BookExitRequiresActualPersistedSignalAndCurrentExchangeMark() {
+    @Test fun tc2BookExitRequiresActualPersistedSignalAndCurrentExchangeContract() {
         val now=10_000L*3_600_000L
         val opened=now-3*3_600_000L
         val signalAt=now-2*3_600_000L
@@ -34,6 +34,7 @@ class WilliamsMarketExitPolicyTest {
             .put("event",JSONObject().put("state","TRIGGERED").put("known_at_ms",triggered)
                 .put("basis","CLOSED_BAR_EXTREME"))
         val decision=JSONObject().put("direction","LONG").put("scope_started_at_ms",opened)
+            .put("trigger_price_basis","CONTRACT_PRICE")
             .put("observed_at_ms",observed).put("opposition",opposite)
             .put("uncertain",org.json.JSONArray())
         val proof=JSONObject().put("reason","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
@@ -48,6 +49,7 @@ class WilliamsMarketExitPolicyTest {
         assertNotNull(blocked(d=JSONObject(decision.toString())
             .put("uncertain",org.json.JSONArray().put(JSONObject().put("state","AMBIGUOUS")))))
         assertNotNull(blocked(mark=100.0))
+        assertNotNull(blocked(d=JSONObject(decision.toString()).put("trigger_price_basis","MARK_PRICE")))
         assertNotNull(blocked(at=now+121_000L))
         assertNotNull(blocked(d=JSONObject(decision.toString()).put("direction","SHORT")))
         assertNotNull(blocked(d=JSONObject(decision.toString()).put("opposition",

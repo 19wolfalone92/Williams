@@ -3111,11 +3111,12 @@ private class NativeEngine(
             normalizeTriggerPrice(levels.protectiveStop, rules.tick)
         }
         val mark = futuresMarketData.markPrice(symbol)
+        val contractPrice = futuresMarketData.price(symbol)
         require(
-            if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) mark < trigger
-            else mark > trigger
+            if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) contractPrice < trigger
+            else contractPrice > trigger
         ) {
-            "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED: mark=$mark, trigger=$trigger; no market-order substitution"
+            "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED: contract=$contractPrice, trigger=$trigger; no market-order substitution"
         }
         require(
             if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) stop < trigger
@@ -6373,10 +6374,10 @@ private class NativeEngine(
             // wave hypothesis ALONE never orders a TC2 market exit. The broker
             // protection remains armed until the reduce-only exit is confirmed.
             val opposing = if(profile==williamsTc2Profile) {
-                runCatching { triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile) }
+                runCatching { triggeredOpposingSignal(symbol,direction,candles,rules.tick,futuresMarketData.price(symbol),openedAt,profile) }
                     .onFailure { lastError="TC2_OPPOSITION_EVIDENCE_UNAVAILABLE: $symbol: "+
                         (it.message ?: it.javaClass.simpleName) }.getOrNull()
-            } else triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile)
+            } else triggeredOpposingSignal(symbol,direction,candles,rules.tick,futuresMarketData.price(symbol),openedAt,profile)
             if(profile==williamsTc2Profile && boundaryExit) {
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
                     .put("tc2_correction_boundary_advisory",JSONObject()
@@ -6390,7 +6391,11 @@ private class NativeEngine(
                 opposing.role=="ENTRY" && opposing.executionSemantics=="STOP_ENTRY" &&
                 opposing.type.removePrefix("SHORT_") in setOf("REVERSAL","SUPER_AO","FRACTAL") &&
                 campaignSignalDirection(opposing.type)!=dir &&
-                (if(dir=="LONG") mark<=opposing.triggerPrice else mark>=opposing.triggerPrice)
+                (executionStore.readState("decision_h1_opposition_"+symbol)?.let {
+                    val quote=JSONObject(it).optDouble("contract_price",Double.NaN)
+                    quote.isFinite() && quote>0 &&
+                        (if(dir=="LONG") quote<=opposing.triggerPrice else quote>=opposing.triggerPrice)
+                }==true)
             val exchangeEntryForExit=row.optString("entryPrice").toDoubleOrNull() ?: Double.NaN
             val oppositeProfitBlocker=if(profile==williamsTc2Profile)
                 williamsTc2OppositeExitProfitBlocker(dir,exchangeEntryForExit,mark,
@@ -6514,6 +6519,7 @@ private class NativeEngine(
             return "W2A_${symbol.take(7)}_$digest"
         }
         val rules=symbolFilters(symbol);val mark=futuresMarketData.markPrice(symbol)
+        val contractPrice=futuresMarketData.price(symbol)
         val signal=candidate.campaignSignals.filter { it.strategyProfile==profile &&
             campaignSignalDirection(it.type)==direction && williamsAdditionTimeEligible(profile,it.signalBarTimeMs,it.type,
                 owner.optLong("signal_bar_time_ms"),owner.optString("signal_type"),latest) &&
@@ -6526,7 +6532,7 @@ private class NativeEngine(
             williamsMarketOnCloseReason(signal.signalBarTimeMs,3_600_000L,now,signal.triggerPrice,mark)!=null)) return
         val price=if(market) mark else signal.triggerPrice
         val stop=owner.getString("protective_stop").toDouble()
-        if((if(direction=="LONG") stop>=price || !market && price<=mark else stop<=price || !market && price>=mark)) return
+        if((if(direction=="LONG") stop>=price || !market && price<=contractPrice else stop<=price || !market && price>=contractPrice)) return
         if(profile==williamsTc2Profile) {
             williamsTc2ProfitBlocker(direction,owner.optString("actual_entry_price").toDoubleOrNull() ?: Double.NaN,mark,price)
                 ?.let { return rejectDecision(symbol,it) }
@@ -6903,6 +6909,7 @@ private class NativeEngine(
         if (!futuresAccountFundedForEntry(available, equity)) return rejectDecision(symbol,"ACCOUNT_FUNDS_NOT_PROVEN")
         val mark = futuresMarketData.markPrice(symbol)
         val rules = symbolFilters(symbol)
+        val contractPrice = futuresMarketData.price(symbol)
         // TC2 WM1 / WM2 / WM3 and NTD / Course preserve their H1 book
         // signal bar trigger, independent of any junior execution fractal.
         val marketReentry=false
@@ -6921,9 +6928,9 @@ private class NativeEngine(
         }
         if (trigger <= 0.0 || stop <= 0.0) return rejectDecision(symbol,"INVALID_TRIGGER_OR_STOP")
         if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-            if (!marketReentry && trigger <= mark || stop >= trigger) return rejectDecision(symbol,"LONG_TRIGGER_CONSUMED_OR_STOP_INVALID: mark=$mark; trigger=$trigger; stop=$stop")
+            if (!marketReentry && trigger <= contractPrice || stop >= trigger) return rejectDecision(symbol,"LONG_TRIGGER_CONSUMED_OR_STOP_INVALID: contract=$contractPrice; trigger=$trigger; stop=$stop")
         } else {
-            if (!marketReentry && trigger >= mark || stop <= trigger) return rejectDecision(symbol,"SHORT_TRIGGER_CONSUMED_OR_STOP_INVALID: mark=$mark; trigger=$trigger; stop=$stop")
+            if (!marketReentry && trigger >= contractPrice || stop <= trigger) return rejectDecision(symbol,"SHORT_TRIGGER_CONSUMED_OR_STOP_INVALID: contract=$contractPrice; trigger=$trigger; stop=$stop")
         }
         val stopFraction = kotlin.math.abs(trigger - stop) / trigger
         if (!stopFraction.isFinite() || stopFraction <= 0.0) return rejectDecision(symbol,"INVALID_STRUCTURAL_RISK_DISTANCE")
@@ -7041,16 +7048,17 @@ private class NativeEngine(
                     "CORRECTION_PARENT_PRICE_INVALIDATED: mark crossed parent boundary"
                 }
             }
-            // Revalidate the actual H1 trigger against the latest Futures mark
+            // Revalidate the H1 trade-price trigger against CONTRACT_PRICE
             // after network/door waits. Never convert a consumed stop-entry into a late
             // entry at the current market price.
             val submitMark = futuresMarketData.markPrice(symbol)
+            val submitContractPrice = futuresMarketData.price(symbol)
             require(
                 if(marketReentry) williamsMarketOnCloseReason(signal.signalBarTimeMs,3_600_000L,submitNow,signal.triggerPrice,submitMark)==null
-                else if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
-                else submitMark > trigger
+                else if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitContractPrice < trigger
+                else submitContractPrice > trigger
             ) {
-                "H1_BOOK_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
+                "H1_BOOK_TRIGGER_ALREADY_CROSSED: $symbol contract=$submitContractPrice trigger=$trigger; pending entry not submitted"
             }
             check(williamsBookH1ProofBlocker(plan.setupContext,direction.name,signal.signalId,
                 signal.type,signal.strategyProfile,trigger,stop,submitNow)==null) {
@@ -8627,8 +8635,8 @@ private class NativeEngine(
         check(williamsBookFractalTeethBlocker(plan.signalType,plan.direction.name,target,teeth,tick)==null) {
             "H1_BOOK_FRACTAL_NO_LONGER_OUTSIDE_TEETH"
         }
-        val mark=futuresMarketData.markPrice(plan.symbol)
-        check(if(plan.direction.name=="LONG") mark<target else mark>target) {
+        val contractPrice=futuresMarketData.price(plan.symbol)
+        check(if(plan.direction.name=="LONG") contractPrice<target else contractPrice>target) {
             "H1_BOOK_PENDING_BREAKOUT_ALREADY_CROSSED"
         }
     }
@@ -9111,17 +9119,18 @@ private class NativeEngine(
 
     private fun triggeredOpposingSignal(
         symbol: String, direction: NativeFuturesCampaignCoordinator.Direction,
-        candles: List<CandleN>, tick: Double, mark: Double, openedAt: Long, profile:String=williamsTc2Profile
+        candles: List<CandleN>, tick: Double, contractPrice: Double, openedAt: Long, profile:String=williamsTc2Profile
     ): CampaignSignalN? {
         if(openedAt<=0L) return null
         val now = futuresMarketData.exchangeNowMs()
         val closed=candles.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
         val candidates=h1OppositionCandidates(symbol,closed,tick,profile)
         val assessment=assessWilliamsScenarioOpposition(direction.name,openedAt,candidates.map { scenarioSignal(it) },
-            closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },mark,now)
+            closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },contractPrice,now)
         val evidence=assessment.opposition
         check(executionStore.writeState("decision_h1_opposition_"+symbol,JSONObject()
             .put("observed_at_ms",now).put("scope_started_at_ms",openedAt).put("direction",direction.name)
+            .put("trigger_price_basis","CONTRACT_PRICE").put("contract_price",contractPrice)
             .put("opposition",evidence?.toJson() ?: JSONObject.NULL)
             .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })).toString())) { "H1_EXIT_PROOF_NOT_DURABLE" }
         if(profile==williamsTc2Profile && assessment.uncertain.isNotEmpty()) return null
