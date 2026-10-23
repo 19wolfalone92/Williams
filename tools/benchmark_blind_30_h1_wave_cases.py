@@ -120,19 +120,42 @@ def run(output,charts=False):
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
+            from matplotlib.patches import Rectangle
         except ImportError as exc:
             raise RuntimeError("matplotlib required to render blind review charts") from exc
         for c in reference_export:
             full,_=load_source(c["symbol"])
             rows=[r for r in full if r[0]+3_600_000<=c["as_of"]][-160:]
-            fig,ax=plt.subplots(figsize=(11,3.6))
-            ax.plot(range(len(rows)),[float(x[4]) for x in rows],lw=1.4)
-            ax.set_title(f"BLIND {c['symbol']} H1, closed through {datetime.fromtimestamp(c['as_of']/1000,timezone.utc).isoformat()} | 160 bars")
-            ax.set_xlabel("Closed H1 bar index; no future bars or model labels")
-            ax.set_ylabel("USDT")
+            assert len(rows)==160 and rows[-1][0]+3_600_000<=c["as_of"]
+            o=[float(r[1]) for r in rows];hi=[float(r[2]) for r in rows]
+            lo=[float(r[3]) for r in rows];close=[float(r[4]) for r in rows]
+            vol=[float(r[5]) for r in rows]
+            mid=[(h+l)/2 for h,l in zip(hi,lo)]
+            ao=[sum(mid[i-4:i+1])/5-sum(mid[i-33:i+1])/34 if i>=33 else None
+                for i in range(len(rows))]
+            fig,(ax,aox,vax)=plt.subplots(3,1,figsize=(12,6.6),sharex=True,
+                                      gridspec_kw={"height_ratios":[4.1,1.4,1.1]})
+            for i,(oo,hh,ll,cc) in enumerate(zip(o,hi,lo,close)):
+                # Hollow/filled candles allow monochrome printed review.
+                ax.vlines(i,ll,hh,linewidth=.7)
+                body=max(abs(cc-oo),1e-8)
+                ax.add_patch(Rectangle((i-.29,min(oo,cc)),.58,body,
+                  facecolor="white" if cc>=oo else "black",edgecolor="black",linewidth=.5))
+            aox.axhline(0,linewidth=.6)
+            aox.bar(range(33,len(ao)),[x for x in ao[33:]],width=.65)
+            vax.bar(range(len(vol)),vol,width=.65)
+            ax.set_ylabel("Price (USDT)")
+            aox.set_ylabel("AO 5/34")
+            vax.set_ylabel("Volume\\n(base units)")
+            vax.set_xlabel("Closed H1 bars 0–159 (UTC). Future candles are hidden.")
+            ax.set_title(f"BLIND REVIEW \\u2022 {c['symbol']} H1 \\u2022 "
+                f"{datetime.fromtimestamp(c['as_of']/1000,timezone.utc):%Y-%m-%d %H:%M} UTC\\n"
+                "No future price, model labels, reference proxy or trade orders")
+            for plot in (ax,aox,vax):
+                plot.set_xlim(-1,161);plot.grid(alpha=.14,linewidth=.4)
             fig.tight_layout()
             name=f"{c['symbol']}_{c['as_of']}.png"
-            fig.savefig(output/name,dpi=115)
+            fig.savefig(output/name,dpi=125)
             plt.close(fig)
     return metrics
 
