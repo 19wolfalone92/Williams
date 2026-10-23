@@ -796,14 +796,14 @@ class NativeFuturesCoordinatorLifecycleTest {
             val initial=ntdBookPlan(plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL"),now-WILLIAMS_H1_MS)
             assertTrue(c.submitPendingEntry(initial).getBoolean("accepted"));exchange.fill();assertTrue(c.reconcile().getBoolean("ok"))
             val sign=if(direction.name=="LONG") 1 else -1
-            for(family in listOf("AO_SAUCER","AO_ZERO_LINE","AC_SIGNAL")) {
+            for(family in listOf("AO_SAUCER","AO_ZERO_LINE","AC_SIGNAL","AO_TWIN_PEAKS")) {
                 val add=ntdBookPlan(initial.copy(signalType=family,quantity="0.1",riskPct=.001,
                     entryPrice=(exchange.mark+sign).toString(),entryClientId=initial.clientId,clientId="W2A_CAP_${direction.name}_$family"),now)
                 val admitted=c.submitPendingEntry(add);assertTrue(admitted.toString(),admitted.getBoolean("accepted"))
                 exchange.fillAddition(add.clientId);assertTrue(c.reconcile().getBoolean("ok"))
             }
             val ledger=c.intentsSnapshot()
-            assertEquals(.0055,futuresCampaignReservedRisk(ledger.getJSONObject(0),ledger),1e-9)
+            assertEquals(.006,futuresCampaignReservedRisk(ledger.getJSONObject(0),ledger),1e-9)
             val last=ntdBookPlan(initial.copy(signalType="BALANCE_LINE",quantity="0.1",riskPct=.001,
                 entryPrice=(exchange.mark+sign).toString(),entryClientId=initial.clientId,clientId="W2A_CAP_LAST_${direction.name}"),now)
             val before=exchange.posts("/fapi/v1/algoOrder");val blocked=c.submitPendingEntry(last)
@@ -816,11 +816,16 @@ class NativeFuturesCoordinatorLifecycleTest {
 
     @Test fun oldNtdSourceLabelAloneCannotAcquireAdditionAuthority() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
-            val journal=Journal();val (c,exchange)=open(direction,journal=journal)
+            val journal=Journal();val exchange=Exchange(direction)
+            val c=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            c.reconcile()
+            val initial=plan(direction).copy(signalBarTimeMs=System.currentTimeMillis()-7_200_000L)
+            assertTrue(c.submitPendingEntry(initial).getBoolean("accepted"));exchange.fill()
+            assertTrue(c.reconcile().getBoolean("ok"))
             markLegacySource(journal,c,williamsNtdProfile,"FRACTAL")
             val base=plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="AO_SAUCER",quantity="0.1",riskPct=.001,
                 entryPrice=(exchange.mark+if(direction.name=="LONG") 1 else -1).toString(),
-                entryClientId=plan(direction).clientId,clientId="W2A_OLD_NTD_${direction.name}",signalBarTimeMs=System.currentTimeMillis()-1000)
+                entryClientId=plan(direction).clientId,clientId="W2A_OLD_NTD_${direction.name}",signalBarTimeMs=(System.currentTimeMillis()/WILLIAMS_H1_MS-1)*WILLIAMS_H1_MS)
             val before=exchange.posts("/fapi/v1/algoOrder");val blocked=c.submitPendingEntry(base)
             assertFalse(blocked.getBoolean("accepted"))
             assertTrue(blocked.getString("blocker").contains("CYCLE_NOT_PROVEN"))

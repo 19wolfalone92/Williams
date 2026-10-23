@@ -90,7 +90,10 @@ NTD zone events are bounded MARKET orders within 90 seconds of the H1 close;
 additions require a profitable owned position. Teeth/Lips exits use a close
 AFTER entry; five-zone trailing persists. Book exits are revalidated at the
 exchange door. An opposite-signal exit also retains the user's positive
-profit-after-cost-reserve constraint. D1/H4 do not replace NTD's own Alligator.
+profit-after-cost-reserve constraint. D1/H4 do not replace NTD's own Alligator. Unhit AO formations survive later
+same-colour candles within the explicit project age window; opposite/unknown
+colour or an observed breakout cancels them permanently. Optional blue-light
+price reanchoring is not implied by preserving the original level.
 
 Course remains OBSERVE for new exposure. Transport-model tests do not certify
 all book figures, subjective chart angles or physical Android/Futures Demo

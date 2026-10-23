@@ -422,9 +422,12 @@
         "williams_ntd_execution.py",
         "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_ntd_execution.py::test_shared_ao_stop_lifetime",
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels"
+      ],
       "fixtures": [],
-      "remaining_evidence": "All figure and zero/flat-colour variants not completely digitized.",
+      "remaining_evidence": "All figure and zero/flat-colour variants not completely digitized. Unhit AO lifecycle is covered by 24 mirrored shared cases (NTD PDF63-67); discretionary blue-light price reanchoring remains separate and unimplemented.",
       "can_place_orders_from_registry": false
     },
     {
@@ -443,9 +446,12 @@
         "williams_ntd_execution.py",
         "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_ntd_execution.py::test_shared_ao_stop_lifetime",
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Exact zero touches and edition-specific conventions need full source matrix.",
+      "remaining_evidence": "Exact zero touches and edition-specific conventions need full source matrix. Unhit AO lifecycle is covered by 24 mirrored shared cases (NTD PDF63-67); discretionary blue-light price reanchoring remains separate and unimplemented.",
       "can_place_orders_from_registry": false
     },
     {
@@ -470,9 +476,12 @@
         "williams_ntd_execution.py",
         "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_ntd_execution.py::test_shared_ao_stop_lifetime",
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Every plateau/zero timing example still pending independent figure fixtures.",
+      "remaining_evidence": "Every plateau/zero timing example still pending independent figure fixtures. Unhit AO lifecycle is covered by 24 mirrored shared cases (NTD PDF63-67); discretionary blue-light price reanchoring remains separate and unimplemented.",
       "can_place_orders_from_registry": false
     },
     {

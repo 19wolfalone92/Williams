@@ -5,6 +5,24 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsNtdExecutionTest {
+    @Test fun sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels() {
+        val cases=JSONObject(javaClass.getResourceAsStream("/williams_ntd_ao_lifetime_contract.json")!!
+            .bufferedReader().use { it.readText() }).getJSONArray("cases")
+        for(i in 0 until cases.length()) {
+            val c=cases.getJSONObject(i);val osc=c.getJSONArray("ao")
+            val ao=(0 until osc.length()).map { osc.getDouble(it) };val short=c.getString("side")=="SHORT"
+            val original=ao.indices.map { j ->
+                val high=if(j==44 || j==45 && c.getBoolean("crossed")) (if(j==45) 111.0 else 110.0)
+                    else if(j>44) 109.0 else 105.0
+                WilliamsWaveBar((480000L+j)*WILLIAMS_H1_MS,100.0,high,if(j>=44) 90.0 else 95.0,100.0,10.0)
+            }
+            val bars=if(short) original.map { it.copy(o=200-it.o,h=200-it.l,l=200-it.h,c=200-it.c) } else original
+            val found=williamsNtdSetups(c.getString("side"),bars,List(ao.size){if(short) 105.0 else 95.0},
+                List(ao.size){if(short) 104.0 else 96.0},List(ao.size){if(short) 103.0 else 97.0},ao,List(ao.size){0.0},.1)
+                .any { it.kind==c.getString("family") && it.knownIndex==44 }
+            assertEquals(c.getString("id"),c.getBoolean("valid"),found)
+        }
+    }
     @Test fun sharedClosedEventContractChecksActualExecutionQuotesAndDeadline() {
         val resource=javaClass.getResourceAsStream("/williams_ntd_execution_contract.json")!!
         val cases=JSONObject(resource.bufferedReader().use { it.readText() }).getJSONArray("cases")

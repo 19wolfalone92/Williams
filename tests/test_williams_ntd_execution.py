@@ -1,13 +1,29 @@
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
-from williams_edition_rules import ntd_management_plan
+from williams_edition_rules import NTD, ntd_management_plan
 from williams_ntd_execution import close_entry_bound, require_close_entry
+from williams_profiles import extract_profile_signals
 from williams_wave_hierarchy import WaveBar
 
 CONTRACT=json.loads((Path(__file__).resolve().parents[1]/"app/src/test/resources/williams_ntd_execution_contract.json").read_text())
+AO_CONTRACT=json.loads((Path(__file__).resolve().parents[1]/"app/src/test/resources/williams_ntd_ao_lifetime_contract.json").read_text())
+
+@pytest.mark.parametrize("c",AO_CONTRACT["cases"],ids=lambda c:c["id"])
+def test_shared_ao_stop_lifetime(c):
+    short=c["side"]=="SHORT";ao=c["ao"];rows=[];h=3_600_000
+    for j,value in enumerate(ao):
+        high=111. if j==45 and c["crossed"] else 110. if j==44 else 109. if j>44 else 105.
+        low=90. if j>=44 else 95.
+        rows.append(dict(open_time_ms=(480000+j)*h,open=100.,high=200-low if short else high,
+            low=200-high if short else low,close=100.,volume=10.,ao=value,
+            ao_green=j>0 and value>ao[j-1],ao_red=j>0 and value<ao[j-1],ac=0.,
+            jaw_current=105. if short else 95.,teeth_current=104. if short else 96.,lips_current=103. if short else 97.))
+    found=extract_profile_signals("BTCUSDT",pd.DataFrame(rows),profile=NTD,side=c["side"],timeframe="1h",tick_size=.1)
+    assert any(s.signal_type.value==c["family"] and s.signal_bar_time_ms==(480000+44)*h for s in found)==c["valid"]
 
 @pytest.mark.parametrize("c",CONTRACT["cases"],ids=lambda c:c["name"])
 def test_shared_closed_event_contract(c):

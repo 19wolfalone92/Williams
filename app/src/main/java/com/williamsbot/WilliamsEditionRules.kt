@@ -267,7 +267,8 @@ internal fun williamsMarketOnCloseReason(
 
 /** Five independent NTD dimensions; only the external fractal initiates a cycle. */
 internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<Double>,teeth:List<Double>,
-    lips:List<Double>,ao:List<Double>,ac:List<Double>,tick:Double,exitMode:Boolean=false):List<WilliamsEditionSetup> {
+    lips:List<Double>,ao:List<Double>,ac:List<Double>,tick:Double,exitMode:Boolean=false,
+    includePendingAo:Boolean=true):List<WilliamsEditionSetup> {
     val n=bars.size
     if (side !in listOf("LONG","SHORT") || n<45 || !validWilliamsEditionBars(bars) || tick<=0 ||
         listOf(jaw,teeth,lips,ao,ac).any { it.size!=n }) return emptyList()
@@ -310,6 +311,18 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
                 (first..i).all { a[it].isFinite() && a[it]<0 } -> add("AO_TWIN_PEAKS",i)
             a[i-2]>0 && a[i-1]>0 && a[i]>0 && a[i-2]>a[i-1] && a[i]>a[i-1] -> add("AO_SAUCER",i)
             a[i-1]<=0 && a[i]>0 -> add("AO_ZERO_LINE",i)
+        }
+    }
+    // NTD PDF63-67: failure to break the signal bar on the very next
+    // candle does not delete the AO stop. Preserve the original causal
+    // formation while its AO colour continues and its level is unconsumed.
+    // A recovered colour must never resurrect a previously cancelled signal.
+    if(includePendingAo) for(end in n-1 downTo maxOf(45,n-4)) {
+        val prior=williamsNtdSetups(side,bars.take(end),jaw.take(end),teeth.take(end),lips.take(end),
+            ao.take(end),ac.take(end),tick,exitMode,includePendingAo=false)
+        for(setup in prior.filter { it.kind in setOf("AO_SAUCER","AO_ZERO_LINE","AO_TWIN_PEAKS") }) {
+            if((setup.knownIndex+1 until n).all { j -> ao[j].isFinite() && ao[j-1].isFinite() &&
+                sign*(ao[j]-ao[j-1])>0 } && pending(setup.knownIndex,setup.trigger)) out+=setup
         }
     }
     for (j in i downTo maxOf(1,n-10)) {
