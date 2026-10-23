@@ -1,0 +1,609 @@
+{
+  "schema": "WILLIAMS_ASSISTANT_VISUAL_30_CHART_OBSERVATIONS_V1",
+  "source": "BLIND_H1_EXPERT_ANNOTATION_PACKET_20261023",
+  "method": "30 real H1 160-bar candlestick+AO+volume panels visually reviewed as separate pictures; no per-case model/proxy labels used",
+  "observational_not_certified": true,
+  "independent_human_annotations": 0,
+  "records": [
+    {
+      "symbol": "BTCUSDT",
+      "frame": "1h",
+      "as_of": 1731931200000,
+      "blind_chart_file": "BTCUSDT_1731931200000.png",
+      "visual_phase_candidate": "RANGE_WITH_COMPETING_DEGREES",
+      "review_ru": "На последнем участке возврат к середине диапазона после локальных скачков; AO вновь положителен. Не видна доказанная терминальная W5.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "BTCUSDT",
+      "frame": "1h",
+      "as_of": 1732104000000,
+      "blind_chart_file": "BTCUSDT_1732104000000.png",
+      "visual_phase_candidate": "UPWARD_MOVE_IN_PROGRESS",
+      "review_ru": "Цена обновляет локальные максимумы после сжатия, AO положителен; нельзя считать весь импульс завершённым.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "BTCUSDT",
+      "frame": "1h",
+      "as_of": 1732276800000,
+      "blind_chart_file": "BTCUSDT_1732276800000.png",
+      "visual_phase_candidate": "UPWARD_MOVE_IN_PROGRESS",
+      "review_ru": "Сильный восходящий шаг и новые максимумы на правом краю; AO положителен, но спад гистограммы не доказывает W5.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "BTCUSDT",
+      "frame": "1h",
+      "as_of": 1732449600000,
+      "blind_chart_file": "BTCUSDT_1732449600000.png",
+      "visual_phase_candidate": "SIDEWAYS_AFTER_RALLY",
+      "review_ru": "После большого импульса цена стоит у максимумов, AO от экстремума снижается к нулю. Альтернатива: внутриволновая W4 или старшая коррекция.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "BTCUSDT",
+      "frame": "1h",
+      "as_of": 1732622400000,
+      "blind_chart_file": "BTCUSDT_1732622400000.png",
+      "visual_phase_candidate": "DOWNWARD_MOVE_IN_PROGRESS",
+      "review_ru": "Видимое падение после вершины, AO отрицателен; старший разворот не доказан этим окном.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "BTCUSDT",
+      "frame": "1h",
+      "as_of": 1732795200000,
+      "blind_chart_file": "BTCUSDT_1732795200000.png",
+      "visual_phase_candidate": "REBOUND_WITHIN_DOWN_MOVE",
+      "review_ru": "После снижения формируется отскок, AO становится положительным; корректирующий отскок нельзя приравнивать к новому старшему импульсу.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "ETHUSDT",
+      "frame": "1h",
+      "as_of": 1731931200000,
+      "blind_chart_file": "ETHUSDT_1731931200000.png",
+      "visual_phase_candidate": "DOWNWARD_MOVE_IN_PROGRESS",
+      "review_ru": "Восходящие отскоки чередуются с нисходящими максимумами после падения, AO смешанный. Альтернативная боковая коррекция возможна.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "ETHUSDT",
+      "frame": "1h",
+      "as_of": 1732104000000,
+      "blind_chart_file": "ETHUSDT_1732104000000.png",
+      "visual_phase_candidate": "RANGE_WITH_COMPETING_DEGREES",
+      "review_ru": "Цена колеблется после нисходящего движения, AO пересекает ноль; завершение последовательности волн не определено.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "ETHUSDT",
+      "frame": "1h",
+      "as_of": 1732276800000,
+      "blind_chart_file": "ETHUSDT_1732276800000.png",
+      "visual_phase_candidate": "UPWARD_BREAKOUT_IN_PROGRESS",
+      "review_ru": "Последние десятки H1 показывают скачок наверх из диапазона, AO существенно положителен.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "ETHUSDT",
+      "frame": "1h",
+      "as_of": 1732449600000,
+      "blind_chart_file": "ETHUSDT_1732449600000.png",
+      "visual_phase_candidate": "SIDEWAYS_AFTER_RALLY",
+      "review_ru": "После восходящего выхода цена боковая, AO положителен и ослабевает; возможны W4 или A/B разметки.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "ETHUSDT",
+      "frame": "1h",
+      "as_of": 1732622400000,
+      "blind_chart_file": "ETHUSDT_1732622400000.png",
+      "visual_phase_candidate": "CORRECTION_AFTER_RALLY",
+      "review_ru": "Рывок вверх сменился снижением, AO откатывается к нулю и отрицательному значению.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "ETHUSDT",
+      "frame": "1h",
+      "as_of": 1732795200000,
+      "blind_chart_file": "ETHUSDT_1732795200000.png",
+      "visual_phase_candidate": "UPWARD_MOVE_IN_PROGRESS",
+      "review_ru": "Цена повторно идёт к максимумам после коррекции, AO положителен с убывающим пиком; W5 лишь альтернатива.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "BNBUSDT",
+      "frame": "1h",
+      "as_of": 1731931200000,
+      "blind_chart_file": "BNBUSDT_1731931200000.png",
+      "visual_phase_candidate": "RANGE_WITH_COMPETING_DEGREES",
+      "review_ru": "Серия перекрывающихся нисходящих и восходящих колебаний, AO вокруг нуля. Невозможна единственная доказанная импульсная пятёрка.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "BNBUSDT",
+      "frame": "1h",
+      "as_of": 1732104000000,
+      "blind_chart_file": "BNBUSDT_1732104000000.png",
+      "visual_phase_candidate": "SIDEWAYS_AFTER_DECLINE",
+      "review_ru": "Узкая консолидация после падения, AO слабый отрицательный.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "BNBUSDT",
+      "frame": "1h",
+      "as_of": 1732276800000,
+      "blind_chart_file": "BNBUSDT_1732276800000.png",
+      "visual_phase_candidate": "RECOVERY_UPWARD_MOVE",
+      "review_ru": "Восходящий откат после локального минимума и положительный AO на правом краю; степень W1/A неясна.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "BNBUSDT",
+      "frame": "1h",
+      "as_of": 1732449600000,
+      "blind_chart_file": "BNBUSDT_1732449600000.png",
+      "visual_phase_candidate": "UPWARD_MOVE_IN_PROGRESS",
+      "review_ru": "Рост от базы к новым верхним локальным ценам, AO положителен, хотя последние H1 показывают откат.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "BNBUSDT",
+      "frame": "1h",
+      "as_of": 1732622400000,
+      "blind_chart_file": "BNBUSDT_1732622400000.png",
+      "visual_phase_candidate": "CORRECTION_AFTER_RALLY",
+      "review_ru": "После нового максимума формируется снижение и отрицательный AO; старший медвежий импульс не подтверждён.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "BNBUSDT",
+      "frame": "1h",
+      "as_of": 1732795200000,
+      "blind_chart_file": "BNBUSDT_1732795200000.png",
+      "visual_phase_candidate": "REBOUND_AFTER_CORRECTION",
+      "review_ru": "После глубокой коррекции цена восстанавливается и AO позитивен, направление старшей волны остаётся альтернативным.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "SOLUSDT",
+      "frame": "1h",
+      "as_of": 1731931200000,
+      "blind_chart_file": "SOLUSDT_1731931200000.png",
+      "visual_phase_candidate": "UPWARD_BREAKOUT_IN_PROGRESS",
+      "review_ru": "После длительного диапазона цена резко ускорилась вверх, AO положителен, но на срезе не завершена структура W5.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "SOLUSDT",
+      "frame": "1h",
+      "as_of": 1732104000000,
+      "blind_chart_file": "SOLUSDT_1732104000000.png",
+      "visual_phase_candidate": "SIDEWAYS_AFTER_RALLY",
+      "review_ru": "После ралли цена консолидируется ниже вершины, AO на правом краю слегка отрицателен.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "SOLUSDT",
+      "frame": "1h",
+      "as_of": 1732276800000,
+      "blind_chart_file": "SOLUSDT_1732276800000.png",
+      "visual_phase_candidate": "UPWARD_MOVE_IN_PROGRESS",
+      "review_ru": "Новый восходящий участок к локальным максимумам, AO положителен; возможность пятой волны требует младших степеней.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "SOLUSDT",
+      "frame": "1h",
+      "as_of": 1732449600000,
+      "blind_chart_file": "SOLUSDT_1732449600000.png",
+      "visual_phase_candidate": "POTENTIAL_CORRECTION",
+      "review_ru": "После восходящего движения локальное снижение на правом краю, AO близок к нулю; уровень коррекции не определён.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "SOLUSDT",
+      "frame": "1h",
+      "as_of": 1732622400000,
+      "blind_chart_file": "SOLUSDT_1732622400000.png",
+      "visual_phase_candidate": "DOWNWARD_MOVE_IN_PROGRESS",
+      "review_ru": "После распределения у максимумов цена снижается ускоренно, AO отрицателен.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "SOLUSDT",
+      "frame": "1h",
+      "as_of": 1732795200000,
+      "blind_chart_file": "SOLUSDT_1732795200000.png",
+      "visual_phase_candidate": "REBOUND_WITHIN_DOWN_MOVE",
+      "review_ru": "После падения движение от минимума вверх теряет моментум, AO положителен, но исходный нисходящий контекст не отменён.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "XRPUSDT",
+      "frame": "1h",
+      "as_of": 1731931200000,
+      "blind_chart_file": "XRPUSDT_1731931200000.png",
+      "visual_phase_candidate": "RALLY_EXHAUSTION_POSSIBLE",
+      "review_ru": "Сильное ралли с пиком и откатом, затем удержание повышенных уровней; AO положителен, но W5 не подтверждена.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "XRPUSDT",
+      "frame": "1h",
+      "as_of": 1732104000000,
+      "blind_chart_file": "XRPUSDT_1732104000000.png",
+      "visual_phase_candidate": "SIDEWAYS_AFTER_RALLY",
+      "review_ru": "После мощного восходящего импульса цена в горизонтальном диапазоне, AO около нуля.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "XRPUSDT",
+      "frame": "1h",
+      "as_of": 1732276800000,
+      "blind_chart_file": "XRPUSDT_1732276800000.png",
+      "visual_phase_candidate": "UPWARD_BREAKOUT_IN_PROGRESS",
+      "review_ru": "Новый мощный прорыв из диапазона на правом краю, AO резко положителен.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "XRPUSDT",
+      "frame": "1h",
+      "as_of": 1732449600000,
+      "blind_chart_file": "XRPUSDT_1732449600000.png",
+      "visual_phase_candidate": "CORRECTION_AFTER_RALLY",
+      "review_ru": "После вертикального роста вершина и коррекция; AO ослаблен и становится отрицательным.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "XRPUSDT",
+      "frame": "1h",
+      "as_of": 1732622400000,
+      "blind_chart_file": "XRPUSDT_1732622400000.png",
+      "visual_phase_candidate": "CORRECTION_AFTER_RALLY",
+      "review_ru": "Снижение от вершины с попытками отскока, AO около нуля/отрицателен.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    },
+    {
+      "symbol": "XRPUSDT",
+      "frame": "1h",
+      "as_of": 1732795200000,
+      "blind_chart_file": "XRPUSDT_1732795200000.png",
+      "visual_phase_candidate": "RANGE_WITH_COMPETING_DEGREES",
+      "review_ru": "После сильных движений широкий диапазон, AO положителен, но затухает. Доказанного завершённого мотива нет.",
+      "need_for_wave_certification": [
+        "MANUALLY_VERIFIED_WAVE_DEGREE",
+        "CONFIRMED_PIVOT_SEQUENCE",
+        "INDEPENDENT_SECOND_REVIEWER"
+      ],
+      "completed_w5_proven": false,
+      "confidence_on_unique_elliott_count": "LOW",
+      "annotation_origin": "ASSISTANT_VISUAL_READING_NOT_HUMAN_EXPERT",
+      "eligible_for_independent_expert_accuracy": false,
+      "can_place_orders": false,
+      "can_close": false,
+      "can_reverse": false
+    }
+  ]
+}
