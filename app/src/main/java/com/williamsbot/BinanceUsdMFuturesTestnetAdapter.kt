@@ -57,6 +57,23 @@ internal fun validateFuturesPositionSnapshot(rows: JSONArray): JSONArray {
     return rows
 }
 
+/**
+ * Sync against Binance using a monotonic clock. Expire samples after 30s and
+ * whenever the Android wall clock and elapsed time diverge (sleep/manual clock
+ * adjustments). Neither a cached offset nor a wide recvWindow authorizes trades.
+ */
+internal fun futuresClockSyncNeeded(
+    synchronized: Boolean, anchorWallMs: Long, anchorMonoNs: Long,
+    wallNowMs: Long, monoNowNs: Long
+): Boolean {
+    if (!synchronized || anchorWallMs <= 0L || anchorMonoNs <= 0L ||
+        monoNowNs < anchorMonoNs || wallNowMs < anchorWallMs) return true
+    val elapsedMs = (monoNowNs - anchorMonoNs) / 1_000_000L
+    val wallElapsedMs = wallNowMs - anchorWallMs
+    return elapsedMs > 30_000L ||
+        kotlin.math.abs(wallElapsedMs - elapsedMs) > 1_000L
+}
+
 internal class BinanceUsdMFuturesTestnetAdapter(
     private val apiKey: String,
     apiSecret: String,
@@ -77,24 +94,54 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         .build()
     private val secret = apiSecret.toByteArray(Charsets.UTF_8)
     private val base = "https://demo-fapi.binance.com"
-    @Volatile private var serverOffsetMs: Long = 0L
+    private val clockLock = Any()
     @Volatile private var timeSynced: Boolean = false
+    @Volatile private var serverAnchorMs: Long = 0L
+    @Volatile private var anchorMonoNs: Long = 0L
+    @Volatile private var anchorWallMs: Long = 0L
+
+    private fun ensureFreshServerClock(): Long = synchronized(clockLock) {
+        val wall = System.currentTimeMillis()
+        val mono = System.nanoTime()
+        if (futuresClockSyncNeeded(timeSynced,anchorWallMs,anchorMonoNs,wall,mono)) {
+            serverTime()
+        }
+        check(timeSynced && anchorMonoNs > 0L) {
+            "Binance Futures server time is not confirmed; signed request blocked"
+        }
+        val age = (System.nanoTime()-anchorMonoNs)/1_000_000L
+        check(age in 0L..30_000L) { "Signed Futures timestamp is stale; request blocked" }
+        serverAnchorMs + age
+    }
 
     init {
         require(apiKey.isNotBlank()) { "Futures Testnet API key is missing" }
         require(apiSecret.isNotBlank()) { "Futures Testnet API secret is missing" }
     }
 
-    fun serverTime(): JSONObject {
-        val before = System.currentTimeMillis()
+    fun serverTime(): JSONObject = synchronized(clockLock) {
+        // A single clock lock prevents N overlapping signed reads/mutations
+        // racing to overwrite each other's skew corrections.
+        timeSynced = false
+        val beforeMono = System.nanoTime()
+        val beforeWall = System.currentTimeMillis()
         val response = request("GET", "/fapi/v1/time", emptyMap(), signed = false)
-        val after = System.currentTimeMillis()
+        val afterMono = System.nanoTime()
+        val afterWall = System.currentTimeMillis()
+        val durationNs = afterMono-beforeMono
+        val roundTripMs = durationNs/1_000_000L
         val exchangeTime = response.optLong("serverTime", 0L)
-        if (exchangeTime <= 0L) throw IOException("Futures server time response is invalid")
-        // Midpoint estimation avoids bias from the request's one-way network latency.
-        serverOffsetMs = exchangeTime - (before + (after - before) / 2L)
+        // Very delayed network samples cannot safely calibrate a 5s order
+        // recvWindow; prefer a blocked mutation to using guessed exchange time.
+        if (exchangeTime <= 0L || roundTripMs !in 0L..3_000L ||
+            kotlin.math.abs((afterWall-beforeWall)-roundTripMs)>1_000L) {
+            throw IOException("Futures server time sample is invalid, delayed, or device clock changed")
+        }
+        serverAnchorMs = exchangeTime
+        anchorMonoNs = beforeMono + durationNs/2L
+        anchorWallMs = beforeWall+(afterWall-beforeWall)/2L
         timeSynced = true
-        return response
+        response
     }
 
     fun exchangeInfo(): JSONObject =
@@ -643,8 +690,8 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                     error is FuturesHttpException && error.exchangeCode == -1021
                 ) {
                     timestampResynced = true
-                    timeSynced = false
-                    serverTime()
+                    synchronized(clockLock) { timeSynced = false }
+                    serverTime() // only an explicit rejection allows one mutation retry
                     continue
                 }
                 // Reads are idempotent. Retry transient transport/5xx failures only for GET;
@@ -688,13 +735,21 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             "Only canonical USD-M Futures endpoints are allowed"
         }
         val orderMutation = isOrderMutation(method, path)
-        // A rate-limit cooldown can exceed recvWindow. Sign only after admission.
+        // P0: the exposure-gate preflight used to run AFTER signing. If it
+        // waited behind reconciliation the signed timestamp could expire
+        // BEFORE the HTTP request left the device. Run it first.
+        if (method == "POST" && path in setOf("/fapi/v1/order", "/fapi/v1/algoOrder") &&
+            params["reduceOnly"] != "true" && params["closePosition"] != "true") {
+            beforeExposureMutation()
+        }
+        // Rate limit admission may sleep: also finish it BEFORE signing.
         rateGuard?.beforeRequest(isOrder = orderMutation)
         val all = LinkedHashMap(params)
         if (signed) {
-            if (!timeSynced) serverTime()
-            all["timestamp"] = (System.currentTimeMillis() + serverOffsetMs).toString()
-            all["recvWindow"] = "5000"
+            all["timestamp"] = ensureFreshServerClock().toString()
+            // Reads may tolerate RTT jitter; financial mutations retain the
+            // strict 5s exchange rejection window and never retry ambiguously.
+            all["recvWindow"] = if (method == "GET") "10000" else "5000"
             all["signature"] = sign(encode(all))
         }
         val url = (base + path).toHttpUrl().newBuilder()
@@ -714,10 +769,6 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             "POST" -> builder.post(body!!)
             "DELETE" -> builder.delete(body)
             else -> throw IllegalArgumentException("Unsupported HTTP method")
-        }
-        if (method == "POST" && path in setOf("/fapi/v1/order", "/fapi/v1/algoOrder") &&
-            params["reduceOnly"] != "true" && params["closePosition"] != "true") {
-            beforeExposureMutation()
         }
         http.newCall(builder.build()).execute().use { response ->
             rateGuard?.observe(response.headers, response.code, isOrder = orderMutation)
