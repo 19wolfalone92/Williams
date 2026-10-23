@@ -410,4 +410,103 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         BinanceUsdMFuturesTestnetAdapter.entrySide("FLAT")
     }
 
+
+    @Test fun staleSyncOrAndroidWallClockJumpAlwaysRequiresServerRefresh() {
+        val wall=1_800_000_000_000L
+        val mono=900_000_000_000L
+        assertTrue(futuresClockSyncNeeded(false,wall,mono,wall,mono))
+        assertTrue(!futuresClockSyncNeeded(true,wall,mono,wall+29_999L,mono+29_999_000_000L))
+        assertTrue(futuresClockSyncNeeded(true,wall,mono,wall+30_001L,mono+30_001_000_000L))
+        assertTrue(futuresClockSyncNeeded(true,wall,mono,wall+2_500L,mono+1_000_000_000L))
+        assertTrue(futuresClockSyncNeeded(true,wall,mono,wall+1_000L,mono-1))
+    }
+
+    @Test fun signatureIsGeneratedAfterPotentiallySlowExposurePreflight() {
+        var preflightCompleted=0L
+        var submitted=0L
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request=chain.request()
+            val body=when(request.url.encodedPath) {
+                "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
+                "/fapi/v1/order" -> {
+                    submitted=(request.body as FormBody).let { b ->
+                        (0 until b.size).first { b.name(it)=="timestamp" }.let { b.value(it).toLong() }
+                    }
+                    """{"orderId":222,"status":"NEW"}"""
+                }
+                else -> "{}"
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val adapter=BinanceUsdMFuturesTestnetAdapter("key","secret",client,
+            beforeExposureMutation={
+                Thread.sleep(220L)
+                preflightCompleted=System.currentTimeMillis()
+            })
+        adapter.newOrder("BTCUSDT","BUY","0.01",false,"CLOCK_PREFLIGHT_ORDER")
+        assertTrue("Timestamp must be created after slow preflight; old version signed first",
+            submitted >= preflightCompleted-30L)
+    }
+
+    @Test fun monotonicExchangeTimestampTracksSkewAndConcurrentSignedReadsShareOneSync() {
+        val calls=java.util.concurrent.atomic.AtomicInteger()
+        val skew=25_000L
+        val stamps=java.util.concurrent.CopyOnWriteArrayList<Long>()
+        val client=OkHttpClient.Builder().addInterceptor { chain ->
+            val request=chain.request()
+            val body=if(request.url.encodedPath=="/fapi/v1/time") {
+                calls.incrementAndGet()
+                """{"serverTime":${System.currentTimeMillis()+skew}}"""
+            } else {
+                val timestamp=request.url.queryParameter("timestamp")!!.toLong()
+                stamps.add(timestamp-System.currentTimeMillis())
+                "{}"
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val adapter=BinanceUsdMFuturesTestnetAdapter("key","secret",client)
+        val pool=java.util.concurrent.Executors.newFixedThreadPool(6)
+        try {
+            val tasks=(1..12).map { pool.submit(java.util.concurrent.Callable<Boolean> {
+                adapter.account();true
+            }) }
+            tasks.forEach { assertTrue(it.get(20,java.util.concurrent.TimeUnit.SECONDS)) }
+        } finally { pool.shutdownNow() }
+        assertEquals(1,calls.get())
+        assertEquals(12,stamps.size)
+        assertTrue(stamps.all { it in 23_500L..26_500L })
+    }
+
+    @Test fun persistentExplicitTimestampRejectionNeverRetriesFinancialPostMoreThanOnce() {
+        var posts=0
+        var syncs=0
+        val client=OkHttpClient.Builder().addInterceptor { chain ->
+            val r=chain.request()
+            val isPost=r.url.encodedPath=="/fapi/v1/order"
+            if(isPost)posts++
+            if(r.url.encodedPath=="/fapi/v1/time")syncs++
+            val body=when(r.url.encodedPath) {
+                "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
+                else -> """{"code":-1021,"msg":"Timestamp outside recvWindow"}"""
+            }
+            Response.Builder().request(r).protocol(Protocol.HTTP_1_1)
+                .code(if(isPost)400 else 200).message("test")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            BinanceUsdMFuturesTestnetAdapter("key","secret",client)
+                .newOrder("BTCUSDT","BUY","0.01",false,"NO_BLIND_RETRY")
+            throw AssertionError("A second -1021 must block execution")
+        } catch(e:FuturesHttpException) {
+            assertEquals(-1021,e.exchangeCode)
+        }
+        assertEquals(2,posts)
+        assertEquals(2,syncs)
+    }
 }
