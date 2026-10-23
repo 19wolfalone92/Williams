@@ -137,6 +137,7 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
     }
     val phase=JSONObject().put("schema","WILLIAMS_MARKET_PHASE_V1").put("as_of",asOf)
         .put("frames",JSONArray(frames)).put("warning_scope",scope)
+        .put("wave_interpretation",williamsWaveInterpretation(hierarchy))
         .put("wave_genealogy_confirmed",false).put("probability_calibrated",false)
         .put("action_policy","SOURCE_SIGNAL_AND_PRICE_TRIGGER_REQUIRED")
         .put("can_place_orders",false).put("can_close",false).put("can_reverse",false)

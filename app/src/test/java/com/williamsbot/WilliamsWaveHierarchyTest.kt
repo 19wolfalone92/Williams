@@ -84,6 +84,41 @@ class WilliamsWaveHierarchyTest {
             assertEquals(prefix.toJson().toString(),full.toJson().toString())
         }
     }
+    @Test fun aDeepPostFifthCorrectionDoesNotEraseTheHistoricalMotiveInEitherDirection() {
+        for(mirror in listOf(false,true)) {
+            val bars=fixtureBars(fixtureCases().getJSONObject(0)).toMutableList()
+            for(i in 1..15) {
+                val price=154.0-i*4.5
+                bars+=WilliamsWaveBar(bars.size*hour,price,price+.1,price-.1,price,1000.0)
+            }
+            val source=if(mirror) bars.map { it.copy(o=300-it.o,h=300-it.l,l=300-it.h,c=300-it.c) } else bars
+            val report=buildWilliamsWaveHierarchy(mapOf("1h" to source),source.size*hour)
+            val fifth=report.scenarios.single { it.anchors.size==6 && it.anchors.first().extremeAt==50*hour }
+            assertEquals("W5",fifth.label)
+            assertEquals("A",fifth.activeLabel)
+            assertEquals("PROVISIONAL",fifth.status)
+            assertFalse("LIVE_PRICE_INVALIDATED_COUNT" in fifth.invalidReasons)
+            assertFalse("LOWER_FRAME_OBSERVED_INVALIDATION" in fifth.invalidReasons)
+            assertEquals("HISTORICAL_REFERENCE_NOT_ACTIVE_INVALIDATION",fifth.toJson().getString("invalidation_scope"))
+        }
+    }
+    @Test fun anUnfinishedFifthStillInvalidatesOnAWickWhenTheCloseHolds() {
+        for(mirror in listOf(false,true)) {
+            val original=fixtureBars(fixtureCases().getJSONObject(0)).take(150)
+            val bars=(if(mirror) original.map { it.copy(o=300-it.o,h=300-it.l,l=300-it.h,c=300-it.c) } else original).toMutableList()
+            fun target(rows:List<WilliamsWaveBar>)=buildWilliamsWaveHierarchy(mapOf("1h" to rows),rows.size*hour)
+                .scenarios.single { it.anchors.size==5 && it.anchors.first().extremeAt==50*hour }
+            val initial=target(bars)
+            assertEquals("PROVISIONAL",initial.status)
+            val b=bars.last()
+            bars[bars.lastIndex]=if(mirror) b.copy(h=maxOf(b.h,initial.invalidation+.01))
+                else b.copy(l=minOf(b.l,initial.invalidation-.01))
+            val broken=target(bars)
+            assertEquals("INVALIDATED",broken.status)
+            assertTrue("LOWER_FRAME_OBSERVED_INVALIDATION" in broken.invalidReasons)
+            assertFalse("LIVE_PRICE_INVALIDATED_COUNT" in broken.invalidReasons)
+        }
+    }
     @Test fun gapsDuplicatesNonFiniteAndStaleHistoryCannotAuthorizeWaves() {
         val original=fixtureBars(fixtureCases().getJSONObject(0))
         val gap=original.filterIndexed { i,_ -> i!=60 }

@@ -1,0 +1,4214 @@
+{
+  "schema": "WILLIAMS_WAVE_INTERPRETATION_CONTRACT_V1",
+  "provenance": "RULE_DERIVED_SYNTHETIC_SCENARIOS_NOT_DIGITIZED_BOOK_CHARTS",
+  "sources": [
+    {
+      "book": "TC1",
+      "pdf_pages": [
+        61,
+        62,
+        63,
+        64,
+        65
+      ],
+      "figures": [
+        "7-18",
+        "7-19",
+        "7-20"
+      ]
+    },
+    {
+      "book": "COURSE",
+      "pdf_pages": [
+        34,
+        35,
+        36,
+        42,
+        43,
+        44,
+        45,
+        46
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "junior-w4-within-parent-w3",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 160,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 148,
+            "leg_high": 160,
+            "invalidation": 135,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "JUNIOR_CORRECTION_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "junior-w3-continues-parent",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1224000000,
+                "known_at": 1234800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1224000000,
+            "leg_observation_start": 1227600000,
+            "leg_low": 125,
+            "leg_high": 170,
+            "invalidation": 115,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "IMPULSE_CONTINUATION_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "junior-impulse-inside-parent-w4",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 360000000,
+                "known_at": 403200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 576000000,
+                "known_at": 619200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 190,
+                "index": 3,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 125,
+            "leg_high": 190,
+            "invalidation": 120,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 185,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 150,
+                "index": 1,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 170,
+                "index": 2,
+                "extreme_at": 1260000000,
+                "known_at": 1270800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1260000000,
+            "leg_observation_start": 1263600000,
+            "leg_low": 128,
+            "leg_high": 170,
+            "invalidation": 185,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "opposing-impulse-does-not-prove-reversal",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 185,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 130,
+                "index": 1,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 150,
+                "index": 2,
+                "extreme_at": 1260000000,
+                "known_at": 1270800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1260000000,
+            "leg_observation_start": 1263600000,
+            "leg_low": 115,
+            "leg_high": 150,
+            "invalidation": 185,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "OPPOSING_IMPULSE_UNRESOLVED",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "own-degree-structural-break-plus-opposite-impulse",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 90,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "INVALIDATED",
+            "invalid_reasons": [
+              "LOWER_FRAME_OBSERVED_INVALIDATION"
+            ],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 185,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 130,
+                "index": 1,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 150,
+                "index": 2,
+                "extreme_at": 1260000000,
+                "known_at": 1270800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1260000000,
+            "leg_observation_start": 1263600000,
+            "leg_low": 92,
+            "leg_high": 150,
+            "invalidation": 185,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "SENIOR_REVERSAL_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "deep-a-corrects-whole-historical-motive",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W5",
+            "active_label": "A",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 72000000,
+                "known_at": 115200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 252000000,
+                "known_at": 295200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 432000000,
+                "known_at": 475200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 170,
+                "index": 3,
+                "extreme_at": 648000000,
+                "known_at": 691200000
+              },
+              {
+                "kind": "LOW",
+                "price": 130,
+                "index": 4,
+                "extreme_at": 828000000,
+                "known_at": 871200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 190,
+                "index": 5,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 80,
+            "leg_high": 190,
+            "invalidation": 120,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 185,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 150,
+                "index": 2,
+                "extreme_at": 1260000000,
+                "known_at": 1270800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1260000000,
+            "leg_observation_start": 1263600000,
+            "leg_low": 90,
+            "leg_high": 150,
+            "invalidation": 185,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "stale-junior-reading",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 160,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 148,
+            "leg_high": 160,
+            "invalidation": 135,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1436400000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "HISTORY_UNVERIFIED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "future-pivot-confirmation-is-not-known",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 160,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1440000001
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 148,
+            "leg_high": 160,
+            "invalidation": 135,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "UNRESOLVED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "child-active-range-escapes-parent-despite-contained-anchors",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 160,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 109,
+            "leg_high": 160,
+            "invalidation": 135,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "UNRESOLVED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "conflicting-counts-have-no-majority-winner",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 160,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 148,
+            "leg_high": 160,
+            "invalidation": 135,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child-alternative",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1224000000,
+                "known_at": 1234800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1224000000,
+            "leg_observation_start": 1227600000,
+            "leg_low": 125,
+            "leg_high": 170,
+            "invalidation": 115,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "ALTERNATIVES",
+        "relation_count": 2
+      }
+    },
+    {
+      "id": "active-leg-is-not-completed-motive-direction",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 160,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 148,
+            "leg_high": 160,
+            "invalidation": 135,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "UNRESOLVED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "intrabar-order-not-established",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1015200000,
+                "known_at": 1026000000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 160,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 148,
+            "leg_high": 160,
+            "invalidation": 135,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "UNRESOLVED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "ao-minimum-is-not-w4-completion",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 360000000,
+                "known_at": 403200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 576000000,
+                "known_at": 619200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 190,
+                "index": 3,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 125,
+            "leg_high": 190,
+            "invalidation": 120,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 185,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 150,
+                "index": 1,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 170,
+                "index": 2,
+                "extreme_at": 1260000000,
+                "known_at": 1270800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1260000000,
+            "leg_observation_start": 1263600000,
+            "leg_low": 128,
+            "leg_high": 170,
+            "invalidation": 185,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "status-string-alone-is-not-a-price-break",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "INVALIDATED",
+            "invalid_reasons": [
+              "LOWER_FRAME_OBSERVED_INVALIDATION"
+            ],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 185,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 130,
+                "index": 1,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 150,
+                "index": 2,
+                "extreme_at": 1260000000,
+                "known_at": 1270800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1260000000,
+            "leg_observation_start": 1263600000,
+            "leg_low": 115,
+            "leg_high": 150,
+            "invalidation": 185,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "UNRESOLVED",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "failed-source-frame-has-no-interpretation",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 160,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 148,
+            "leg_high": 160,
+            "invalidation": 135,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {
+          "4h": "HISTORY_READ_FAILED"
+        },
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "HISTORY_UNVERIFIED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "duplicate-scenario-identities-rejected",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 160,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 148,
+            "leg_high": 160,
+            "invalidation": 135,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 160,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 148,
+            "leg_high": 160,
+            "invalidation": 135,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "UNRESOLVED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "junior-divergence-not-parent-wave-five-proof",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 100,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 120,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "LOW",
+                "price": 110,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 110,
+            "leg_high": 190,
+            "invalidation": 100,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 115,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 135,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "LOW",
+                "price": 125,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 160,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 148,
+            "leg_high": 160,
+            "invalidation": 135,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": true
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "JUNIOR_CORRECTION_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "junior-w4-within-parent-w3-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 240,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 240,
+            "leg_high": 252,
+            "invalidation": 265,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "JUNIOR_CORRECTION_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "junior-w3-continues-parent-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1224000000,
+                "known_at": 1234800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1224000000,
+            "leg_observation_start": 1227600000,
+            "leg_low": 230,
+            "leg_high": 275,
+            "invalidation": 285,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "IMPULSE_CONTINUATION_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "junior-impulse-inside-parent-w4-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 360000000,
+                "known_at": 403200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 576000000,
+                "known_at": 619200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 210,
+                "index": 3,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 275,
+            "invalidation": 280,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 215,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 250,
+                "index": 1,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 230,
+                "index": 2,
+                "extreme_at": 1260000000,
+                "known_at": 1270800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1260000000,
+            "leg_observation_start": 1263600000,
+            "leg_low": 230,
+            "leg_high": 272,
+            "invalidation": 215,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "opposing-impulse-does-not-prove-reversal-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 215,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 270,
+                "index": 1,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 250,
+                "index": 2,
+                "extreme_at": 1260000000,
+                "known_at": 1270800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1260000000,
+            "leg_observation_start": 1263600000,
+            "leg_low": 250,
+            "leg_high": 285,
+            "invalidation": 215,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "OPPOSING_IMPULSE_UNRESOLVED",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "own-degree-structural-break-plus-opposite-impulse-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 310,
+            "invalidation": 300,
+            "status": "INVALIDATED",
+            "invalid_reasons": [
+              "LOWER_FRAME_OBSERVED_INVALIDATION"
+            ],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 215,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 270,
+                "index": 1,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 250,
+                "index": 2,
+                "extreme_at": 1260000000,
+                "known_at": 1270800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1260000000,
+            "leg_observation_start": 1263600000,
+            "leg_low": 250,
+            "leg_high": 308,
+            "invalidation": 215,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "SENIOR_REVERSAL_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "deep-a-corrects-whole-historical-motive-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W5",
+            "active_label": "A",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 72000000,
+                "known_at": 115200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 252000000,
+                "known_at": 295200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 432000000,
+                "known_at": 475200000
+              },
+              {
+                "kind": "LOW",
+                "price": 230,
+                "index": 3,
+                "extreme_at": 648000000,
+                "known_at": 691200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 270,
+                "index": 4,
+                "extreme_at": 828000000,
+                "known_at": 871200000
+              },
+              {
+                "kind": "LOW",
+                "price": 210,
+                "index": 5,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 320,
+            "invalidation": 280,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 215,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 250,
+                "index": 2,
+                "extreme_at": 1260000000,
+                "known_at": 1270800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1260000000,
+            "leg_observation_start": 1263600000,
+            "leg_low": 250,
+            "leg_high": 310,
+            "invalidation": 215,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "stale-junior-reading-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 240,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 240,
+            "leg_high": 252,
+            "invalidation": 265,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1436400000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "HISTORY_UNVERIFIED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "future-pivot-confirmation-is-not-known-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 240,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1440000001
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 240,
+            "leg_high": 252,
+            "invalidation": 265,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "UNRESOLVED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "child-active-range-escapes-parent-despite-contained-anchors-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 240,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 240,
+            "leg_high": 291,
+            "invalidation": 265,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "UNRESOLVED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "conflicting-counts-have-no-majority-winner-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 240,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 240,
+            "leg_high": 252,
+            "invalidation": 265,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child-alternative",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1224000000,
+                "known_at": 1234800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1224000000,
+            "leg_observation_start": 1227600000,
+            "leg_low": 230,
+            "leg_high": 275,
+            "invalidation": 285,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "ALTERNATIVES",
+        "relation_count": 2
+      }
+    },
+    {
+      "id": "active-leg-is-not-completed-motive-direction-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 240,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 240,
+            "leg_high": 252,
+            "invalidation": 265,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "UNRESOLVED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "intrabar-order-not-established-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1015200000,
+                "known_at": 1026000000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 240,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 240,
+            "leg_high": 252,
+            "invalidation": 265,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "UNRESOLVED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "ao-minimum-is-not-w4-completion-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 360000000,
+                "known_at": 403200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 576000000,
+                "known_at": 619200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 210,
+                "index": 3,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 275,
+            "invalidation": 280,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "MINIMUM_ONLY",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 215,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 250,
+                "index": 1,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 230,
+                "index": 2,
+                "extreme_at": 1260000000,
+                "known_at": 1270800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1260000000,
+            "leg_observation_start": 1263600000,
+            "leg_low": 230,
+            "leg_high": 272,
+            "invalidation": 215,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "status-string-alone-is-not-a-price-break-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "INVALIDATED",
+            "invalid_reasons": [
+              "LOWER_FRAME_OBSERVED_INVALIDATION"
+            ],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "UP",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "LOW",
+                "price": 215,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 270,
+                "index": 1,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 250,
+                "index": 2,
+                "extreme_at": 1260000000,
+                "known_at": 1270800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1260000000,
+            "leg_observation_start": 1263600000,
+            "leg_low": 250,
+            "leg_high": 285,
+            "invalidation": 215,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "UNRESOLVED",
+        "relation_count": 1
+      }
+    },
+    {
+      "id": "failed-source-frame-has-no-interpretation-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 240,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 240,
+            "leg_high": 252,
+            "invalidation": 265,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {
+          "4h": "HISTORY_READ_FAILED"
+        },
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "HISTORY_UNVERIFIED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "duplicate-scenario-identities-rejected-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 240,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 240,
+            "leg_high": 252,
+            "invalidation": 265,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 240,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 240,
+            "leg_high": 252,
+            "invalidation": 265,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "UNRESOLVED",
+        "relation_count": 0
+      }
+    },
+    {
+      "id": "junior-divergence-not-parent-wave-five-proof-mirror",
+      "input": {
+        "as_of": 1440000000,
+        "scenarios": [
+          {
+            "scenario_id": "parent",
+            "frame": "4h",
+            "direction": "DOWN",
+            "label": "W2",
+            "active_label": "W3",
+            "active_direction": "DOWN",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 300,
+                "index": 0,
+                "extreme_at": 720000000,
+                "known_at": 763200000
+              },
+              {
+                "kind": "LOW",
+                "price": 280,
+                "index": 1,
+                "extreme_at": 864000000,
+                "known_at": 907200000
+              },
+              {
+                "kind": "HIGH",
+                "price": 290,
+                "index": 2,
+                "extreme_at": 1008000000,
+                "known_at": 1051200000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1008000000,
+            "leg_observation_start": 1022400000,
+            "leg_low": 210,
+            "leg_high": 290,
+            "invalidation": 300,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": false
+          },
+          {
+            "scenario_id": "child",
+            "frame": "1h",
+            "direction": "DOWN",
+            "label": "W3",
+            "active_label": "W4",
+            "active_direction": "UP",
+            "anchors": [
+              {
+                "kind": "HIGH",
+                "price": 285,
+                "index": 0,
+                "extreme_at": 1080000000,
+                "known_at": 1090800000
+              },
+              {
+                "kind": "LOW",
+                "price": 265,
+                "index": 1,
+                "extreme_at": 1116000000,
+                "known_at": 1126800000
+              },
+              {
+                "kind": "HIGH",
+                "price": 275,
+                "index": 2,
+                "extreme_at": 1152000000,
+                "known_at": 1162800000
+              },
+              {
+                "kind": "LOW",
+                "price": 240,
+                "index": 3,
+                "extreme_at": 1296000000,
+                "known_at": 1306800000
+              }
+            ],
+            "observed_at": 1440000000,
+            "leg_start": 1296000000,
+            "leg_observation_start": 1299600000,
+            "leg_low": 240,
+            "leg_high": 252,
+            "invalidation": 265,
+            "status": "PROVISIONAL",
+            "invalid_reasons": [],
+            "w4_zero": "UNCONFIRMED",
+            "scale_bars": 120,
+            "divergence": true
+          }
+        ],
+        "frame_errors": {},
+        "frame_readings": [
+          {
+            "frame": "4h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          },
+          {
+            "frame": "1h",
+            "state": "OBSERVED",
+            "as_of_close_ms": 1440000000
+          }
+        ]
+      },
+      "expected": {
+        "parent_frame": "4h",
+        "child_frame": "1h",
+        "state": "JUNIOR_CORRECTION_CANDIDATE",
+        "relation_count": 1
+      }
+    }
+  ]
+}

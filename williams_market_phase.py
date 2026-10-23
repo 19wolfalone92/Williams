@@ -1,6 +1,7 @@
 """Degree-scoped, competing market phase evidence; no order authority."""
 from williams_wave_hierarchy import FRAME_MS, REQUIRED_FRAMES, build_wave_hierarchy
 from williams_market_reading import market_reading
+from williams_wave_interpretation import wave_interpretation
 
 OBSERVED_MARKET_FRAMES=("1d","6h","4h","1h","15m")
 
@@ -65,6 +66,7 @@ def market_phase_context(hierarchy):
     scope=("SENIOR_WARNING" if warns("1d") or warns("6h") or warns("4h") else "H1_WARNING" if warns("1h")
         else "M15_ONLY_WARNING" if warns("15m") else "NONE")
     return {"schema":"WILLIAMS_MARKET_PHASE_V1","as_of":as_of,"frames":frames,"warning_scope":scope,
+        "wave_interpretation":wave_interpretation(hierarchy),
         "wave_genealogy_confirmed":False,"probability_calibrated":False,
         "action_policy":"SOURCE_SIGNAL_AND_PRICE_TRIGGER_REQUIRED",
         "can_place_orders":False,"can_close":False,"can_reverse":False}

@@ -378,6 +378,12 @@ internal fun CockpitAnalysis(padding: PaddingValues, status: Status, candidates:
                             }
                             Text(story.optString("cross_timeframe_caution_ru"),
                                 color=AppColors.amber,style=MaterialTheme.typography.bodySmall)
+                            val structure=story.optJSONArray("structural_relations")
+                            if(structure!=null) for(i in 0 until structure.length()) {
+                                val relation=structure.optJSONObject(i) ?: continue
+                                Text(relation.optString("explanation_ru"),style=MaterialTheme.typography.bodySmall,
+                                    color=AppColors.textMuted)
+                            }
                             Text("Волновая разметка — гипотеза. Эти показания НЕ открывают и НЕ закрывают сделки.",
                                 style=MaterialTheme.typography.labelSmall,color=AppColors.textMuted)
                         } else {

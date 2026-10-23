@@ -46,6 +46,7 @@ internal data class WilliamsWaveScenario(
         .put("leg_start", legStart).put("leg_low", legLow).put("leg_high", legHigh)
         .put("leg_observation_start",legObservationStart)
         .put("invalidation", invalidation).put("status", status)
+        .put("invalidation_scope",if(anchors.size<6) "DEVELOPING_MOTIVE" else "HISTORICAL_REFERENCE_NOT_ACTIVE_INVALIDATION")
         .put("invalid_reasons", JSONArray(invalidReasons)).put("scale_frame", scaleFrame)
         .put("scale_bars", scaleBars).put("w4_zero", w4Zero).put("divergence", divergence)
         .put("momentum_shift", momentumShift).put("terminal_fractal", terminalFractal)
@@ -281,7 +282,9 @@ internal fun williamsHypothesesFromAnchors(
         if (n >= 8 && price[7] <= price[6]) reasons += "B_NOT_RETRACING_A"
         if (n >= 9 && price[8] >= price[6]) reasons += "C_NOT_EXTENDING_A_COMPLEX_CORRECTION_POSSIBLE"
         val inv = if (n <= 3) p[0].price else if(n<=6 && diagonalOverlap) p[2].price else if (n <= 6) p[1].price else p[5].price
-        if (n <= 6 && sign * (bars.last().c-inv) <= 0) reasons += "LIVE_PRICE_INVALIDATED_COUNT"
+        // A deep A-wave can correct the entire completed five-leg motive.
+        // Never retroactively invalidate historical W5 at the old W1 level.
+        if (n < 6 && sign * (bars.last().c-inv) <= 0) reasons += "LIVE_PRICE_INVALIDATED_COUNT"
         val leg = bars.filter { it.t >= p.last().extremeAt }
         val direction = if (sign == 1) "UP" else "DOWN"
         val h = WilliamsWaveScenario("$frame:$direction:${p.first().extremeAt}:$n",frame,direction,label,p,
@@ -366,7 +369,7 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
             h.observedAt = asOf
             if (observed.isNotEmpty()) {
                 h.legLow = minOf(h.anchors.last().price,observed.minOf { it.l }); h.legHigh = maxOf(h.anchors.last().price,observed.maxOf { it.h })
-                if (h.anchors.size <= 6 && (h.direction == "UP" && observed.minOf { it.l } <= h.invalidation ||
+                if (h.anchors.size < 6 && (h.direction == "UP" && observed.minOf { it.l } <= h.invalidation ||
                     h.direction == "DOWN" && observed.maxOf { it.h } >= h.invalidation)) {
                     h.status = "INVALIDATED"; h.invalidReasons += "LOWER_FRAME_OBSERVED_INVALIDATION"
                 }

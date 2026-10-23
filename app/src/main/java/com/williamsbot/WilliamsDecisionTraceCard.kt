@@ -81,6 +81,17 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                 }
                 trace.optJSONObject("market_phase")?.let { phase ->
                     Text("Состояние рынка по ТФ · закрытые свечи",style=MaterialTheme.typography.titleSmall)
+                    rows(phase.optJSONObject("market_narrative")?.optJSONArray("structural_relations")).forEach {
+                        Text(it.optString("explanation_ru"),style=MaterialTheme.typography.bodySmall)
+                    }
+                    if(expanded) rows(phase.optJSONObject("wave_interpretation")?.optJSONArray("scopes"))
+                        .filter { it.optInt("relation_count")>0 }.forEach { scope ->
+                            rows(scope.optJSONArray("relations")).forEach { relation ->
+                                Text("${relation.optString("parent")} → ${relation.optString("child")} · "+
+                                    "уровень отмены ${relation.opt("parent_invalidation")} · "+
+                                    "опоры известны ${time(relation.optLong("anchors_known_at"))}",style=MaterialTheme.typography.bodySmall)
+                            }
+                        }
                     rows(phase.optJSONArray("frames")).forEach { frame ->
                         val hypotheses=rows(frame.optJSONArray("hypotheses"))
                         Text(williamsMarketObservationLabel(frame),style=MaterialTheme.typography.bodySmall)

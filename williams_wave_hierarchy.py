@@ -90,7 +90,9 @@ class WaveHypothesis:
 
     def to_dict(self):
         return asdict(self) | {"active_label":self.active_label,"active_direction":self.active_direction,
-                              "last_confirmed_leg":self.label}
+                              "last_confirmed_leg":self.label,
+                              "invalidation_scope":("DEVELOPING_MOTIVE" if len(self.anchors)<6
+                                  else "HISTORICAL_REFERENCE_NOT_ACTIVE_INVALIDATION")}
 
 
 @dataclass
@@ -133,7 +135,7 @@ class WaveHierarchy:
         return asdict(self) | {"scenarios":[s.to_dict() for s in self.scenarios],"complex_wave_patterns":(self.complex_structures or complex_patterns)[:48],
                               "schema_version": 1,
                               "wave_labels": "HYPOTHESES_NOT_CERTAINTY",
-                              "chain": list(REQUIRED_FRAMES),"contained_chain_observed":contained,
+                              "chain": list(self.analysis_frames),"contained_chain_observed":contained,
                               "analysed_frames":sorted(self.frame_candle_counts,key=lambda f:-FRAME_MS[f]),
                               "full_history":False,"can_place_orders":False,
                               "squat_volume_input":"KLINE_BASE_VOLUME_PROXY_NOT_CANONICAL_TICK_VOLUME"}
@@ -296,6 +298,32 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
         h.alternatives.append("W3_EXTENSION_OR_WRONG_DEGREE")
 
 
+def terminal_squat_volume_proxy(bars, direction, start, end):
+    """TC1 PDF53 / Course PDF77: squat among the three extreme W5 bars.
+
+    Base-asset volume is only a declared proxy for the original tick volume.
+    Neighbours of the terminal pivot are not necessarily extreme price bars.
+    """
+    if (direction not in {"UP","DOWN"} or not 0 <= start < len(bars)
+            or not 0 <= end < len(bars) or end-start < 2):
+        return False
+    indexes = list(range(start,end+1))
+    for i in indexes:
+        b = bars[i]
+        if (not all(isfinite(x) for x in (b.o,b.h,b.l,b.c,b.v))
+                or b.h < max(b.o,b.l,b.c) or b.l > min(b.o,b.c)
+                or b.l <= 0 or b.v < 0
+                or i > 0 and (not isfinite(bars[i-1].v) or bars[i-1].v < 0)):
+            return False
+    def ranked(i):
+        return bars[i].h if direction == "UP" else -bars[i].l
+    third = sorted((ranked(i) for i in indexes),reverse=True)[2]
+    return any(i > 0 and ranked(i) >= third and bars[i-1].v > 0
+               and bars[i].v > bars[i-1].v
+               and (bars[i].h-bars[i].l)/bars[i].v < (bars[i-1].h-bars[i-1].l)/bars[i-1].v
+               for i in indexes)
+
+
 def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
                             anchors: Sequence[WaveAnchor]) -> list[WaveHypothesis]:
     """Enumerate both orientations; do not turn the latest eight-bar trend into a count."""
@@ -343,7 +371,9 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
         last_bar = bars[-1]
         # A/C must remain on the corrective side of the old W5. B may exceed
         # it in an irregular correction: keep that alternative explicitly.
-        if n <= 6 and sign * (last_bar.c - inv) <= 0:
+        # A complete five-leg sequence is historical evidence. Its following
+        # A-wave may retrace the entire motive without erasing those five legs.
+        if n < 6 and sign * (last_bar.c - inv) <= 0:
             reasons.append("LIVE_PRICE_INVALIDATED_COUNT")
         leg = [b for b in bars if b.t >= p[-1].extreme_at]
         h = WaveHypothesis(
@@ -373,10 +403,13 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
                             sign * sum(valid_ao) / 5 and
                             sign * valid_ao[-1] < sign * valid_ao[-2])
         terminal = p[min(5, n-1)].index
-        for j in range(max(1, terminal-1), min(len(bars), terminal+2)):
-            a, b = bars[j-1], bars[j]
-            if a.v > 0 and b.v > a.v and (b.h-b.l)/b.v < (a.h-a.l)/a.v:
-                h.squat = True
+        if n >= 6:
+            h.squat = terminal_squat_volume_proxy(bars,h.direction,p[4].index,terminal)
+        else:
+            for j in range(max(1, terminal-1), min(len(bars), terminal+2)):
+                a, b = bars[j-1], bars[j]
+                if a.v > 0 and b.v > a.v and (b.h-b.l)/b.v < (a.h-a.l)/a.v:
+                    h.squat = True
         out.append(h)
     return out
 
@@ -428,7 +461,7 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int,
             if observed:
                 h.leg_low = min(h.anchors[-1].price,min(b.l for b in observed))
                 h.leg_high = max(h.anchors[-1].price,max(b.h for b in observed))
-                if len(h.anchors) <= 6 and (
+                if len(h.anchors) < 6 and (
                     h.direction == "UP" and min(b.l for b in observed) <= h.invalidation or
                     h.direction == "DOWN" and max(b.h for b in observed) >= h.invalidation
                 ):

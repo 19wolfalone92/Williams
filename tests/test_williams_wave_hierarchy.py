@@ -55,6 +55,44 @@ def test_every_prefix_is_identical_with_or_without_all_future_candles():
     assert build_wave_hierarchy({"1h":future},120*HOUR).to_dict() == build_wave_hierarchy({"1h":bars[:120]},120*HOUR).to_dict()
 
 
+@pytest.mark.parametrize("mirror", [False, True])
+def test_a_deep_post_fifth_correction_does_not_erase_the_completed_impulse(mirror):
+    # TC1 ch7 / Course PDF36: the whole completed motive can be corrected.
+    # Its old W1 extreme is not an invalidation of the historical five legs.
+    bars = rhythm_bars()
+    for i in range(1, 16):
+        price = 154 - i * 4.5
+        bars.append(WaveBar(len(bars)*HOUR,price,price+.1,price-.1,price,1000))
+    if mirror:
+        bars = [replace(b,o=300-b.o,h=300-b.l,l=300-b.h,c=300-b.c) for b in bars]
+    report = build_wave_hierarchy({"1h":bars},len(bars)*HOUR)
+    fifth = next(s for s in report.scenarios
+                 if len(s.anchors)==6 and s.anchors[0].extreme_at==50*HOUR)
+    assert fifth.label == "W5" and fifth.active_label == "A"
+    assert fifth.status == "PROVISIONAL"
+    assert "LIVE_PRICE_INVALIDATED_COUNT" not in fifth.invalid_reasons
+    assert "LOWER_FRAME_OBSERVED_INVALIDATION" not in fifth.invalid_reasons
+    assert not report.to_dict()["can_place_orders"]
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+def test_unfinished_fifth_still_invalidates_on_a_wick_even_if_close_holds(mirror):
+    bars = rhythm_bars()[:150]
+    if mirror:
+        bars=[replace(b,o=300-b.o,h=300-b.l,l=300-b.h,c=300-b.c) for b in bars]
+    def target(rows):
+        report=build_wave_hierarchy({"1h":rows},len(rows)*HOUR)
+        return next(s for s in report.scenarios if len(s.anchors)==5 and s.anchors[0].extreme_at==50*HOUR)
+    scenario=target(bars)
+    assert scenario.status=="PROVISIONAL" and scenario.active_label=="W5"
+    b=bars[-1]
+    bars[-1]=replace(b,h=max(b.h,scenario.invalidation+.01)) if mirror else replace(b,l=min(b.l,scenario.invalidation-.01))
+    broken=target(bars)
+    assert broken.status=="INVALIDATED"
+    assert "LOWER_FRAME_OBSERVED_INVALIDATION" in broken.invalid_reasons
+    assert "LIVE_PRICE_INVALIDATED_COUNT" not in broken.invalid_reasons
+
+
 def test_real_h4_history_participates_in_hierarchy_and_internal_subdivision_checks():
     bars=[replace(b,t=b.t*4) for b in rhythm_bars()]
     hourly=[replace(b,t=b.t+i*HOUR) for b in bars for i in range(4)]

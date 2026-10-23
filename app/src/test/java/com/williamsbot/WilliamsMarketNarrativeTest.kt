@@ -75,4 +75,12 @@ class WilliamsMarketNarrativeTest {
         assertTrue(narrative.getJSONArray("frames").getJSONObject(0)
             .getString("explanation_ru").contains("не запускался"))
     }
+    @Test fun staleOrUnavailableRowsCannotBecomeFreshObservations() {
+        val stale=frame("1h","UP",now-3_600_000L)
+        val unavailable=frame("15m","DOWN").put("state","UNAVAILABLE")
+        val narrative=williamsMarketNarrative(JSONObject().put("as_of",now)
+            .put("frames",JSONArray().put(stale).put(unavailable)))
+        assertEquals(0,narrative.getInt("observed_frame_count"))
+        assertFalse(narrative.getBoolean("junior_bias_opposes_h1"))
+    }
 }

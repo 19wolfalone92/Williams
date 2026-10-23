@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated": "2026-10-21",
-  "release": "4.53.0",
+  "updated": "2026-10-23",
+  "release": "4.57.0-source-wave-candidate",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
   "source_review_complete": false,
@@ -885,6 +885,94 @@
       "fixtures": [],
       "remaining_evidence": "No claim that every discretionary book trader is prohibited from break-even.",
       "can_place_orders_from_registry": false
+    },
+    {
+      "id": "WAVE.DEGREE_SCOPED_INTERPRETATION",
+      "book": "TC1",
+      "pdf_pages": [
+        61,
+        62,
+        63,
+        64,
+        65
+      ],
+      "rule": "Compare current child leg with the current parent leg; junior correction/divergence does not by itself prove a senior reversal. Structural breaks remain explicit candidates with alternatives.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_wave_interpretation.py",
+        "app/src/main/java/com/williamsbot/WilliamsWaveInterpretation.kt"
+      ],
+      "tests": [
+        "tests/test_williams_wave_interpretation.py::test_degree_scoped_rule_examples_and_counterexamples",
+        "app/src/test/java/com/williamsbot/WilliamsWaveInterpretationTest.kt::sharedDegreeExamplesIncludeMirrorsAndNegativeCases"
+      ],
+      "fixture_file": "app/src/test/resources/williams_wave_interpretation_contract.json",
+      "fixtures": [
+        "cases/junior-w4-within-parent-w3",
+        "cases/junior-w3-continues-parent",
+        "cases/junior-impulse-inside-parent-w4",
+        "cases/own-degree-structural-break-plus-opposite-impulse",
+        "cases/conflicting-counts-have-no-majority-winner"
+      ],
+      "remaining_evidence": "34 mirrored synthetic semantic cases are bounded engineering checks, not independently digitized book charts or a calibrated forecast.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "WAVE.COMPLETED_MOTIVE_REMAINS_HISTORICAL_EVIDENCE",
+      "book": "COURSE",
+      "pdf_pages": [
+        36,
+        40,
+        52
+      ],
+      "rule": "After a complete five-leg motive, A can retrace the whole sequence. Its old W1 level cannot retroactively erase W5; developing motive invalidation is a separate contract.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_wave_hierarchy.py",
+        "app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt"
+      ],
+      "tests": [
+        "tests/test_williams_wave_hierarchy.py::test_a_deep_post_fifth_correction_does_not_erase_the_completed_impulse",
+        "app/src/test/java/com/williamsbot/WilliamsWaveHierarchyTest.kt::aDeepPostFifthCorrectionDoesNotEraseTheHistoricalMotiveInEitherDirection"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Completed motive and historical diagonal alternatives are preserved; real Elliott degree still requires independent annotation.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.TERMINAL_SQUAT_EXTREME_THREE",
+      "book": "COURSE",
+      "pdf_pages": [
+        77
+      ],
+      "rule": "Terminal fifth-wave Squat must occur among the three most extreme price bars, not simply on any neighbouring bar of the final pivot.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_wave_hierarchy.py",
+        "app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt"
+      ],
+      "tests": [
+        "tests/test_williams_terminal_squat.py::test_only_top_three_of_the_fifth_can_supply_terminal_squat",
+        "app/src/test/java/com/williamsbot/WilliamsCourseTerminalEvidenceTest.kt::adjacentSquatOutsideTopThreeDoesNotCertifyTerminalFifthWave"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Python and Kotlin agree on the selected boundary examples; Binance base volume remains a proxy for original tick volume.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "SOURCE.COURSE_EXTERNAL_TUTORIAL_MISSING",
+      "book": "COURSE",
+      "pdf_pages": [
+        84,
+        122
+      ],
+      "rule": "The supplied PDF explicitly refers actual PPT examples to the Computorial and defers final personal tutorial material. Its 122 pages are not all external course media.",
+      "status": "PENDING",
+      "modules": [],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Original referenced Computorial examples and personal tutorial material are absent from these supplied PDFs; not replaced by invented source claims.",
+      "can_place_orders_from_registry": false
     }
   ],
   "required_remaining_evidence": [
@@ -893,5 +981,6 @@
     "Complete nested wave/context and Course corrective campaign specification",
     "Verify user-approved TC2 book stop-and-reverse: protected reduce-only flatten followed by separately risk-authorized opposite entry with verified protective STOP, including outage and partial-fill acceptance",
     "Physical Android Binance Futures Demo LONG/SHORT fills, partial fills, protection, restart and offline recovery"
-  ]
+  ],
+  "page_coverage_file": "docs/williams_source_page_coverage.json"
 }
