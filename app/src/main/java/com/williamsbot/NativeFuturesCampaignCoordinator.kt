@@ -2882,6 +2882,27 @@ internal class NativeFuturesCampaignCoordinator(
                 "EXECUTION_EXCEPTION_UNVERIFIED") }
             throw failure
         }
+        // MARKET reversal fills immediately. Reconcile the SAME persisted id
+        // and install/verify protection inside this execution-door pass,
+        // including a lost POST reply, rather than waiting for another scan.
+        if(plan.reversalOwnerId.isNotBlank() && !result.optBoolean("safe_rejection",false)) {
+            val posted=intentsSnapshot().let { rows -> (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+                .singleOrNull { it.optString("client_id")==plan.clientId &&
+                    it.optBoolean("entry_submission_attempted",true) } }
+            if(posted!=null) {
+                val checked=runCatching { reconcile() }.getOrElse { failure ->
+                    JSONObject().put("ok",false).put("blocker","TC2_REVERSAL_PROTECTION_RECONCILIATION_UNAVAILABLE: "+
+                        safeDiagnosticText(failure.message ?: failure.javaClass.simpleName))
+                }
+                val confirmed=intentsSnapshot().let { rows -> (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+                    .singleOrNull { it.optString("client_id")==plan.clientId } }
+                val protectionConfirmed=confirmed!=null && campaignLifecycleStatus(confirmed)=="OPEN_PROTECTED" &&
+                    confirmed.optString("protection_status")=="PROTECTED"
+                result.put("protection_reconciliation",checked).put("state",state.name)
+                    .put("protection",if(protectionConfirmed) "PROTECTED" else "RECONCILIATION_REQUIRED")
+                if(protectionConfirmed) result.put("accepted",true).put("entry_confirmed_after_reconciliation",true)
+            }
+        }
         val eventId=appendEntryPassport(plan,attempt,"COORDINATOR_RETURNED",result)
         if(eventId==0L) result.put("passport_audit_status","OUTCOME_WRITE_FAILED_RECONCILE_REQUIRED")
         // Diagnostic persistence failure after an accepted order NEVER retries that order.

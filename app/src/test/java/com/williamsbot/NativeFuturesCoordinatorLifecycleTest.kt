@@ -1230,10 +1230,14 @@ class NativeFuturesCoordinatorLifecycleTest {
             exchange.liquidation=if(p.direction.name=="LONG") "50" else "200"
             exchange.loseAdditionReply=lostReply
             val before=exchange.posts("/fapi/v1/order")
-            resumed.submitPendingEntry(p)
+            val reversed=resumed.submitPendingEntry(p)
             assertTrue(verified)
+            assertTrue(reversed.toString(),reversed.optBoolean("accepted"))
+            assertEquals("PROTECTED",reversed.optString("protection"))
+            assertEquals("OPEN_PROTECTED",resumed.state.name)
             assertEquals(before+1,exchange.posts("/fapi/v1/order"))
             assertEquals(if(p.direction.name=="LONG") .1 else -.1,exchange.quantity,1e-10)
+            now+=6*h // Expired entry proof never disables recovery of an existing fill/STOP.
             val restarted=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
             val protectedResult=restarted.reconcile()
             assertTrue(protectedResult.toString(),protectedResult.optBoolean("ok"))
