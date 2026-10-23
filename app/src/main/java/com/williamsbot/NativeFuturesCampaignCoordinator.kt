@@ -1025,6 +1025,18 @@ internal class NativeFuturesCampaignCoordinator(
                     latestEntryIndexBySymbol[item.optString("symbol").uppercase(Locale.US)] = i
                 }
             }
+            // P0 Diagnostics 18: never bind a new SHORT to an older LONG owner.
+            // Detect before ANY add-on/exit intent reconciliation can mutate it.
+            val reversedCampaignSymbols = linkedSetOf<String>()
+            for ((symbol, position) in openBySymbol) {
+                val latest = latestEntryIndexBySymbol[symbol]?.let { persisted.optJSONObject(it) }
+                    ?: continue
+                val signedAmount = position.optString("positionAmt").toBigDecimalOrNull()
+                    ?: throw IllegalStateException("Invalid signed Futures position quantity for $symbol")
+                if (signedAmount.signum() == 0) continue
+                val direction = if (signedAmount.signum() > 0) "LONG" else "SHORT"
+                if (latest.optString("direction") != direction) reversedCampaignSymbols += symbol
+            }
             val activeEntryClientIdsBySymbol = mutableMapOf<String, MutableSet<String>>()
             val activeExitClientIdsBySymbol = mutableMapOf<String, MutableSet<String>>()
             val activeProtectionClientIdsBySymbol = mutableMapOf<String, MutableSet<String>>()
@@ -1218,8 +1230,13 @@ internal class NativeFuturesCampaignCoordinator(
             var hasPendingAddition = false
             var anyUnprotected = false
             val requiredSafetyExits = JSONArray()
-            var actualRiskAuditBlocked = false
-            var actualRiskAuditBlocker: String? = null
+            var actualRiskAuditBlocked = reversedCampaignSymbols.isNotEmpty()
+            var actualRiskAuditBlocker: String? =
+                if (reversedCampaignSymbols.isNotEmpty())
+                    "Signed Futures exposure reversed relative to persisted campaign on " +
+                        reversedCampaignSymbols.joinToString(",") +
+                        "; no old-owner mutation or new entries authorized"
+                else null
             // Resolve persisted entry and exit intents against Binance. Older completed
             // campaigns on a symbol must not be mistaken for the campaign now in market.
             val resolutionOrder=(0 until persisted.length()).sortedBy {
@@ -1233,6 +1250,11 @@ internal class NativeFuturesCampaignCoordinator(
                 val role = intent.optString("intent_role", "ENTRY")
                 if (symbol !in allowedSymbols || clientId.isBlank()) {
                     throw IllegalStateException("Persisted Futures intent is malformed")
+                }
+                if (symbol in reversedCampaignSymbols) {
+                    // Preserve all old campaign, add-on and exit intent bytes.
+                    // Never cancel or transfer ownership across an opposite side.
+                    continue
                 }
                 val position = openBySymbol[symbol]
                 val prior = campaignLifecycleStatus(intent)
@@ -1581,6 +1603,31 @@ internal class NativeFuturesCampaignCoordinator(
                         isFullPositionFuturesStop(it,symbol,direction,
                             position.getString("positionAmt").toBigDecimal().abs(),referenceMark)
                     } else emptyList()
+                if (symbol in reversedCampaignSymbols) {
+                    // Verify protection for signed Binance SHORT, NOT old LONG.
+                    // Exchange protection is informational; neither a new
+                    // strategy owner nor an automatic order action is inferred.
+                    val unique = signedFullStops.singleOrNull()
+                    val proof = if (unique != null) "EXTERNAL_PROTECTED"
+                        else if (signedFullStops.size > 1) "MULTIPLE_PROTECTIVE_ORDERS_UNRESOLVED"
+                        else "STOP_UNCONFIRMED"
+                    protectionObservations.put(JSONObject()
+                        .put("symbol",symbol).put("direction",direction)
+                        .put("quantity",position.optString("positionAmt"))
+                        .put("observed_at_ms",clock()).put("stop_proof",proof)
+                        .put("stop",unique?.optString("triggerPrice",
+                            unique.optString("stopPrice")) ?: JSONObject.NULL)
+                        .put("protection_client_id",unique?.optString("clientAlgoId") ?: JSONObject.NULL)
+                        .put("strategy_ownership_verified",false)
+                        .put("automatic_trailing_authorized",false)
+                        .put("management_mode","REVERSED_CAMPAIGN_QUARANTINE"))
+                    if (unique == null) anyUnprotected = true
+                    actualRiskAuditBlocked = true
+                    lastBlocker = "$symbol $direction conflicts with old campaign; " +
+                        "a verified matching exchange stop must be checked manually. " +
+                        "No automatic reversal/close/stop mutation."
+                    continue
+                }
                 val latestIntentIndex = latestEntryIndexBySymbol[symbol]
                 var matchingIntent = latestIntentIndex?.let { persisted.optJSONObject(it) }
                     ?.takeIf { intent ->
