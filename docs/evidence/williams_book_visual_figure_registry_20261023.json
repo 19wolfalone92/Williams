@@ -1,0 +1,73 @@
+{
+  "schema": "WILLIAMS_SOURCE_FIGURE_VISUAL_OBSERVATIONS_V1",
+  "disclaimer": "MANUAL_SCHEMATIC_TOPOLOGY_NOT_DIGITIZED_MARKET_OHLC_OR_GROUND_TRUTH",
+  "figures": [
+    {
+      "id": "TC1_FIG_7_8",
+      "source_file": "1. Торговый Хаос - 1.pdf",
+      "pdf_page": 55,
+      "figure": "7-8",
+      "annotation_origin": "BOOK_SCHEMATIC",
+      "observed": "Five major motive steps with lower subwaves at at least one nested degree; chart prices/time unprovided",
+      "topology": [
+        "MOTIVE_FIVE",
+        "NESTED_PRICE_SWINGS"
+      ],
+      "eligible_for_accuracy": false
+    },
+    {
+      "id": "TC1_FIG_7_7",
+      "source_file": "1. Торговый Хаос - 1.pdf",
+      "pdf_page": 54,
+      "figure": "7-7",
+      "annotation_origin": "BOOK_SCHEMATIC",
+      "observed": "Fifth-wave continuation/projection illustrated, not a quantified future terminal target",
+      "topology": [
+        "W5_CANDIDATE",
+        "FUTURE_NOT_KNOWN"
+      ],
+      "eligible_for_accuracy": false
+    },
+    {
+      "id": "TC1_FIG_9_4",
+      "source_file": "1. Торговый Хаос - 1.pdf",
+      "pdf_page": 83,
+      "figure": "9-4",
+      "annotation_origin": "BOOK_SCHEMATIC",
+      "observed": "Wave 3 / Wave 5 divergence on plotted Profitunity oscillator; distinct MFI from AO must follow per-edition text",
+      "topology": [
+        "W3_W5_DIVERGENCE",
+        "PROVISIONAL_POINT_ZERO"
+      ],
+      "eligible_for_accuracy": false
+    },
+    {
+      "id": "COURSE_IMPULSE_CHECKLIST",
+      "source_file": "Bill Williams - Trading Chaos Course.pdf",
+      "pdf_page": 59,
+      "figure": "IMPULSE WAVE CHECK LIST",
+      "annotation_origin": "BOOK_SCHEMATIC",
+      "observed": "Three lower swings in presumed W3 force recount rather than certified W3",
+      "topology": [
+        "W3_THREE_SWINGS_RECOUNT",
+        "MULTIPLE_ALTERNATIVES"
+      ],
+      "eligible_for_accuracy": false
+    },
+    {
+      "id": "COURSE_CORRECTION_CHECKLIST",
+      "source_file": "Bill Williams - Trading Chaos Course.pdf",
+      "pdf_page": 60,
+      "figure": "CORRECTION WAVE CHECK LIST",
+      "annotation_origin": "BOOK_SCHEMATIC",
+      "observed": "A/B/C/D/E and 1/X decisions not a unique direction prediction",
+      "topology": [
+        "CORRECTION_FORKS",
+        "A_B_C_D_E"
+      ],
+      "eligible_for_accuracy": false
+    }
+  ],
+  "can_place_orders": false,
+  "book_figures_fully_digitized": false
+}

@@ -64,6 +64,29 @@ jobs:
           set -o pipefail
           python -m pytest -q 2>&1 | tee pytest-output.txt
 
+      - name: Replay genuine historical wave price geometry (NOT human-labelled accuracy)
+        run: |
+          mkdir -p build/wave-audit
+          python tools/replay_real_historical_recursive_cases.py --output build/wave-audit/real_exchange_price_grammar.json
+          python tools/audit_independent_wave_labels.py --output build/wave-audit/independent_wave_truth_gate.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          a=json.loads(Path("build/wave-audit/independent_wave_truth_gate.json").read_text())
+          assert a["accuracy_certified"] is False
+          assert a["status"]=="NOT_MEASURABLE_NO_INDEPENDENT_LABELS"
+          print("No independent ground truth: explicit, truthful NOT_MEASURABLE gate")
+          PY
+
+      - name: Upload wave truth and historical replay evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: williams-wave-independent-truth-gate
+          path: build/wave-audit/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload pytest diagnostics
         if: always()
         uses: actions/upload-artifact@v4
