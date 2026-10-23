@@ -112,6 +112,18 @@ COURSE_CHECKLIST = {
            5: "SHARP_CORRECTION_CANDIDATE"},
     "W5": {3: "DIAGONAL_OR_CONTINUATION_CANDIDATE",
            5: "MOTIVE_OR_DIAGONAL_CANDIDATE"},
+    # Course PDF60 corrective-wave checklist. These are alternatives:
+    # even five declining A swings can be one leg of a larger sideways correction.
+    "A": {3: "CORRECTION_STARTED_NOT_YET_CONFIRMED",
+          5: "SHARP_CORRECTION_OR_LARGER_SIDEWAYS_COMPONENT"},
+    "B": {3: "SIDEWAYS_CORRECTION_CANDIDATE",
+          5: "EXTENDED_W5_OR_WRONG_CORRECTION_COUNT"},
+    "C": {3: "TRIANGLE_OR_C_EXTENSION_OR_RECOUNT",
+          5: "ZIGZAG_OR_FLAT_CORRECTION_CANDIDATE"},
+    "D": {3: "TRIANGLE_LEG_D_CANDIDATE"},
+    "E": {3: "TRIANGLE_LEG_E_CANDIDATE"},
+    "X": {3: "DOUBLE_OR_TRIPLE_CORRECTION_CANDIDATE",
+          5: "POSSIBLE_NEW_W1_OR_CORRECTION_TERMINATION"},
 }
 
 
@@ -179,7 +191,9 @@ def trace_recursive_price_grammar(
         else:
             proof=prove_wave_subdivisions(points,anchors,expected,
                     parent_duration=child_duration,as_of=as_of)
-        tags=(["W1","W2","W3","W4","W5"] if len(proof.expected)==5
+        tags=(["A","B","C","D","E"] if root and "TRIANGLE" in pattern
+              and len(proof.expected)==5
+              else ["W1","W2","W3","W4","W5"] if len(proof.expected)==5
               else ["A","B","C"] if len(proof.expected)==3
               else [f"L{i+1}" for i in range(len(proof.expected))])
         checklist=[{"leg":name,"observed_swings":count,
