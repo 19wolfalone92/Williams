@@ -92,6 +92,16 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                                     "опоры известны ${time(relation.optLong("anchors_known_at"))}",style=MaterialTheme.typography.bodySmall)
                             }
                         }
+                    if(expanded) rows(phase.optJSONArray("recursive_degree_evidence"))
+                        .take(6).forEach { degree ->
+                            val path=degree.optJSONArray("frame_path") ?: JSONArray()
+                            val tf=(0 until path.length()).joinToString(" → ") { i -> path.optString(i) }
+                            Text("Подволны: ${degree.optString("pattern")} · ${tf.ifBlank { "нет полной цепочки" }}",
+                                style=MaterialTheme.typography.bodySmall)
+                            Text(degree.optString("explanation_ru")+
+                                " · ${degree.optString("reason")} · Course PDF59–60",
+                                style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                        }
                     rows(phase.optJSONArray("frames")).forEach { frame ->
                         val hypotheses=rows(frame.optJSONArray("hypotheses"))
                         Text(williamsMarketObservationLabel(frame),style=MaterialTheme.typography.bodySmall)
