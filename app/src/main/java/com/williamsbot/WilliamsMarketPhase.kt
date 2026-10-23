@@ -136,8 +136,34 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
         warns("15m") -> "M15_ONLY_WARNING"
         else -> "NONE"
     }
+    val recursive=JSONArray()
+    for(item in rows(hierarchy.optJSONArray("complex_wave_patterns"))) {
+        val proof=item.optJSONObject("recursive_proof") ?: continue
+        if(errors.has(item.optString("frame")) || errors.has(item.optString("child_frame")) ||
+            item.optLong("known_at",asOf)>asOf) continue
+        val state=proof.optString("status","UNRESOLVED")
+        val explanation=when(state) {
+            "OBSERVED_DEPTH_PRICE_GRAMMAR_CONFIRMED" ->
+                "Внутренняя геометрия подтверждена на запрошенных масштабах; уникальная волна НЕ доказана."
+            "PARTIAL_PRICE_GRAMMAR" ->
+                "Глубина анализа ограничена: не все подволны подтверждены, нужна младшая история."
+            else ->
+                "Подволны не подтверждены: требуется пересмотр счёта или дополнительные закрытые свечи."
+        }
+        recursive.put(JSONObject().put("parent_frame",item.optString("frame"))
+            .put("child_frame",item.optString("child_frame"))
+            .put("pattern",item.optString("pattern")).put("state",state)
+            .put("requested_depth",proof.optInt("requested_depth"))
+            .put("frame_path",proof.optJSONArray("frame_path") ?: JSONArray())
+            .put("reason",proof.optString("reason"))
+            .put("explanation_ru",explanation)
+            .put("unique_elliott_genealogy_proven",false)
+            .put("can_place_orders",false).put("can_close",false).put("can_reverse",false))
+        if(recursive.length()>=16) break
+    }
     val phase=JSONObject().put("schema","WILLIAMS_MARKET_PHASE_V1").put("as_of",asOf)
         .put("frames",JSONArray(frames)).put("warning_scope",scope)
+        .put("recursive_degree_evidence",recursive)
         .put("wave_interpretation",williamsWaveInterpretation(hierarchy))
         .put("wave_genealogy_confirmed",false).put("probability_calibrated",false)
         .put("action_policy","SOURCE_SIGNAL_AND_PRICE_TRIGGER_REQUIRED")
