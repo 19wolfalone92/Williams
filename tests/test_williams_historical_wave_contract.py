@@ -37,8 +37,12 @@ def test_historical_geometry_and_actual_nested_child_endpoints(case,mirror):
         b=frames[case["frame"]][-1]
         frames[case["frame"]][-1]=replace(b,l=min(b.l,scenario.invalidation-.01)) if direction=="UP" else replace(b,h=max(b.h,scenario.invalidation+.01))
         broken=target(build_wave_hierarchy(frames,now))
-        assert broken.status=="INVALIDATED"
-        assert "LOWER_FRAME_OBSERVED_INVALIDATION" in broken.invalid_reasons
+        # All six historical endpoints already exist. A deep following
+        # correction cannot erase the completed diagonal alternative.
+        assert len(parent)==6
+        assert broken.status=="ALTERNATIVE"
+        assert "LOWER_FRAME_OBSERVED_INVALIDATION" not in broken.invalid_reasons
+        assert broken.to_dict()["invalidation_scope"]=="HISTORICAL_REFERENCE_NOT_ACTIVE_INVALIDATION"
         return
     if case["operation"]=="CLASSIFY":
         labels={p.pattern for p in detect_complex_wave_patterns(parent,direction=direction,as_of=now)}

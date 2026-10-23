@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated": "2026-10-21",
-  "release": "4.53.0",
+  "updated": "2026-10-23",
+  "release": "4.57.0-source-wave-candidate",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
   "source_review_complete": false,
@@ -688,16 +688,25 @@
         63,
         65
       ],
-      "rule": "AO behaviour is evidence of minimum W4 conditions, not proof W4 has ended.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "rule": "The direction-normalized 5/34 oscillator must pass zero at the examined 100-140-bar degree. A zero touch or near-zero remains unconfirmed; an actual cross establishes minimum W4 conditions, not its end.",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_wave_hierarchy.py",
         "app/src/main/java/com/williamsbot/WilliamsWaveRhythm.kt"
       ],
-      "tests": [],
-      "fixtures": [],
-      "remaining_evidence": "Exact page/figure mapping and distinction between cross, touch and approach require final source review.",
-      "can_place_orders_from_registry": false
+      "tests": [
+        "tests/test_williams_wave_hierarchy.py::test_source_w4_zero_cross_excludes_touch_and_wrong_degree_scale",
+        "app/src/test/java/com/williamsbot/WilliamsWaveHierarchyTest.kt::sourceW4CrossRequiresPassingZeroAtTheExaminedDegree"
+      ],
+      "fixtures": [
+        "cases/bars-120-past-zero",
+        "cases/bars-120-touch-zero",
+        "cases/bars-99-past-zero",
+        "cases/bars-141-past-zero"
+      ],
+      "remaining_evidence": "Course PDF42-44 and TC1 PDF60-63 reread with figures7-18/19/20. Twenty synthetic boundary cases cover both direction normalizations, zero-touch and 100/140 scale endpoints. These are not digitized historical chart OHLC; full nested-degree classification remains unproven.",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_w4_zero_source_contract.json"
     },
     {
       "id": "WAVE.REAL_TIMEFRAMES",
@@ -885,6 +894,213 @@
       "fixtures": [],
       "remaining_evidence": "No claim that every discretionary book trader is prohibited from break-even.",
       "can_place_orders_from_registry": false
+    },
+    {
+      "id": "WAVE.DEGREE_SCOPED_INTERPRETATION",
+      "book": "TC1",
+      "pdf_pages": [
+        61,
+        62,
+        63,
+        64,
+        65
+      ],
+      "rule": "Compare current child leg with the current parent leg; junior correction/divergence does not by itself prove a senior reversal. Structural breaks remain explicit candidates with alternatives.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_wave_interpretation.py",
+        "app/src/main/java/com/williamsbot/WilliamsWaveInterpretation.kt"
+      ],
+      "tests": [
+        "tests/test_williams_wave_interpretation.py::test_degree_scoped_rule_examples_and_counterexamples",
+        "app/src/test/java/com/williamsbot/WilliamsWaveInterpretationTest.kt::sharedDegreeExamplesIncludeMirrorsAndNegativeCases"
+      ],
+      "fixture_file": "app/src/test/resources/williams_wave_interpretation_contract.json",
+      "fixtures": [
+        "cases/junior-w4-within-parent-w3",
+        "cases/junior-w3-continues-parent",
+        "cases/junior-impulse-inside-parent-w4",
+        "cases/own-degree-structural-break-plus-opposite-impulse",
+        "cases/conflicting-counts-have-no-majority-winner"
+      ],
+      "remaining_evidence": "34 mirrored synthetic semantic cases are bounded engineering checks, not independently digitized book charts or a calibrated forecast.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "WAVE.COMPLETED_MOTIVE_REMAINS_HISTORICAL_EVIDENCE",
+      "book": "COURSE",
+      "pdf_pages": [
+        36,
+        40,
+        52
+      ],
+      "rule": "After a complete five-leg motive, A can retrace the whole sequence. Its old W1 level cannot retroactively erase W5; developing motive invalidation is a separate contract.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_wave_hierarchy.py",
+        "app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt"
+      ],
+      "tests": [
+        "tests/test_williams_wave_hierarchy.py::test_a_deep_post_fifth_correction_does_not_erase_the_completed_impulse",
+        "app/src/test/java/com/williamsbot/WilliamsWaveHierarchyTest.kt::aDeepPostFifthCorrectionDoesNotEraseTheHistoricalMotiveInEitherDirection"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Completed motive and historical diagonal alternatives are preserved; real Elliott degree still requires independent annotation.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.TERMINAL_SQUAT_EXTREME_THREE",
+      "book": "COURSE",
+      "pdf_pages": [
+        77
+      ],
+      "rule": "Terminal fifth-wave Squat must occur among the three most extreme price bars, not simply on any neighbouring bar of the final pivot.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_wave_hierarchy.py",
+        "app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt"
+      ],
+      "tests": [
+        "tests/test_williams_terminal_squat.py::test_only_top_three_of_the_fifth_can_supply_terminal_squat",
+        "app/src/test/java/com/williamsbot/WilliamsCourseTerminalEvidenceTest.kt::adjacentSquatOutsideTopThreeDoesNotCertifyTerminalFifthWave"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Python and Kotlin agree on the selected boundary examples; Binance base volume remains a proxy for original tick volume.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "SOURCE.COURSE_EXTERNAL_TUTORIAL_MISSING",
+      "book": "COURSE",
+      "pdf_pages": [
+        84,
+        122
+      ],
+      "rule": "The supplied PDF explicitly refers actual PPT examples to the Computorial and defers final personal tutorial material. Its 122 pages are not all external course media.",
+      "status": "PENDING",
+      "modules": [],
+      "tests": [],
+      "fixtures": [],
+      "remaining_evidence": "Original referenced Computorial examples and personal tutorial material are absent from these supplied PDFs; not replaced by invented source claims.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "WAVE.W3.GLOBAL_MOMENTUM_AND_PRICE_LAG",
+      "book": "TC1",
+      "pdf_pages": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "rule": "At the proposed degree, identify the global 5/34 peak and the appropriate price extreme 1-5 real bars earlier. Equal competing peaks, an unobserved subsequent turn, or ambiguous finer-frame price timestamps stay unconfirmed.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_wave_momentum.py",
+        "williams_wave_hierarchy.py",
+        "app/src/main/java/com/williamsbot/WilliamsWaveMomentumEvidence.kt",
+        "app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt"
+      ],
+      "tests": [
+        "tests/test_williams_wave_momentum.py::test_source_global_peak_and_one_to_five_bar_lag",
+        "tests/test_williams_wave_momentum.py::test_actual_hierarchy_and_market_phase_carry_the_source_evidence",
+        "app/src/test/java/com/williamsbot/WilliamsWaveMomentumEvidenceTest.kt::sharedSourceExamplesAndCounterexamplesKeepTheirCausalTimes",
+        "app/src/test/java/com/williamsbot/WilliamsWaveMomentumEvidenceTest.kt::hierarchyAndPhaseExposeEvidenceAndExplainUnconfirmedMomentum"
+      ],
+      "fixture_file": "app/src/test/resources/williams_w3_momentum_source_contract.json",
+      "fixtures": [
+        "cases/price-leads-ao-two-bars",
+        "cases/earlier-larger-peak",
+        "cases/earlier-equal-peak",
+        "cases/ao-precedes-price",
+        "cases/ao-six-bars-late",
+        "cases/peak-has-not-turned"
+      ],
+      "remaining_evidence": "The existing standalone Android evaluator is now wired into actual hierarchy/phase/journal and implemented in Python. Ten shared semantic cases cover both directions; they are synthetic rule boundaries, not digitized book chart OHLC. The examined wave degree remains provisional.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.W2.EXACT_ORIGIN_100_PERCENT",
+      "book": "COURSE",
+      "pdf_pages": [
+        46,
+        48
+      ],
+      "rule": "W2 may correct up to (not past) the origin of W1. An exact touch is an unverified non-executable alternative; breaching the origin by a wick invalidates the developing motive.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_wave_hierarchy.py",
+        "williams_wave_interpretation.py",
+        "app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt",
+        "app/src/main/java/com/williamsbot/WilliamsWaveInterpretation.kt"
+      ],
+      "tests": [
+        "tests/test_williams_wave_hierarchy.py::test_course_w2_exact_100_percent_touch_is_unverified_not_invalidated",
+        "app/src/test/java/com/williamsbot/WilliamsWaveHierarchyTest.kt::courseW2ExactOriginTouchIsAnUnverifiedAlternativeNotInvalidation",
+        "tests/test_williams_wave_hierarchy.py::test_book_fractal_requires_two_closed_right_bars_even_for_mirrored_high",
+        "app/src/test/java/com/williamsbot/WilliamsWaveHierarchyTest.kt::unconfirmedRightBarCannotRevealEitherDirectionFractal"
+      ],
+      "fixtures": [
+        "cases/w2-above-origin",
+        "cases/w2-exact-origin",
+        "cases/w2-past-origin",
+        "fractals/two-right-bars"
+      ],
+      "remaining_evidence": "Verified directly against Course PDF46 and PDF48 raster pages. Synthetic mirrored boundary examples, not digitized book OHLC or independently verified recursive degrees.",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_w2_boundary_source_contract.json"
+    },
+    {
+      "id": "COURSE.RECURSIVE_DEGREE_PRICE_GRAMMAR",
+      "book": "COURSE",
+      "pdf_pages": [
+        59,
+        60
+      ],
+      "rule": "Course impulse/correction checklist revises W1/W3 on three internal swings; validate successive child price subdivisions only from unique real confirmed pivots at each requested degree, preserving alternatives and unresolved evidence.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_wave_subdivisions.py",
+        "williams_wave_hierarchy.py",
+        "app/src/main/java/com/williamsbot/WilliamsRecursiveWaveDegree.kt",
+        "app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt"
+      ],
+      "tests": [
+        "tests/test_williams_recursive_degree_course.py::test_three_real_frame_resolutions_prove_two_price_levels_but_not_unique_wave_count",
+        "tests/test_williams_recursive_degree_course.py::test_course_59_60_schematic_branch_contract_and_negative_wave_three",
+        "app/src/test/java/com/williamsbot/WilliamsRecursiveWaveDegreeTest.kt::multiDegreeSourceContractRequiresRealConfirmedChildPriceLegs",
+        "app/src/test/java/com/williamsbot/WilliamsRecursiveWaveDegreeTest.kt::scanChecklistDoesNotMisnameThreeSwingsAsCompletedWaveThree"
+      ],
+      "fixture_file": "app/src/test/resources/williams_recursive_degree_course_contract.json",
+      "fixtures": [
+        "patterns/zigzag-535-two-degrees"
+      ],
+      "remaining_evidence": "Course PDF59/60 visual schematic branches checked. Two-degree mirrored artificial anchor grammar is bounded, not digitized historical book OHLC. Independent ground-truth labelled recursive counts and physical Android Demo acceptance remain absent.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.FIVE_MAGIC_BULLETS_SOURCE_SEPARATION",
+      "book": "TC1",
+      "pdf_pages": [
+        53,
+        54,
+        82,
+        83
+      ],
+      "rule": "Five signs: MFI divergence, wave-degree target zone, terminal fractal, squat among three price-extreme bars, 5/34/5 momentum change. Provisional W5 and 100-140 bars are context; Binance base-volume and AO indicators cannot be asserted to be canonical TC1 MFI. Never an automatic exit.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_tc1_terminal_evidence.py",
+        "williams_market_phase.py",
+        "app/src/main/java/com/williamsbot/WilliamsTc1FiveBullets.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt"
+      ],
+      "tests": [
+        "tests/test_williams_tc1_terminal_evidence.py::test_course_ao_divergence_does_not_certify_tc1_mfi",
+        "app/src/test/java/com/williamsbot/WilliamsTc1FiveBulletsTest.kt::pointZeroNeverCertifiedFromFiveProxyBooleansWithoutMfiAndScale"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Book PDF53-54/82-83 inspected visually; no externally proven canonical MFI divergences on independently labelled W3/W5 historical graphs. Python/Kotlin use current source-scoped proxies for observation only.",
+      "can_place_orders_from_registry": false
     }
   ],
   "required_remaining_evidence": [
@@ -893,5 +1109,6 @@
     "Complete nested wave/context and Course corrective campaign specification",
     "Verify user-approved TC2 book stop-and-reverse: protected reduce-only flatten followed by separately risk-authorized opposite entry with verified protective STOP, including outage and partial-fill acceptance",
     "Physical Android Binance Futures Demo LONG/SHORT fills, partial fills, protection, restart and offline recovery"
-  ]
+  ],
+  "page_coverage_file": "docs/williams_source_page_coverage.json"
 }

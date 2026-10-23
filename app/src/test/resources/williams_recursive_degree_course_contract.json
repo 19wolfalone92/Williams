@@ -1,0 +1,574 @@
+{
+  "source": "Trading Chaos Course PDF59 IMPULSE WAVE CHECK LIST and PDF60 CORRECTION WAVE CHECK LIST, plus synthetic nested price pivots",
+  "source_kind": "RULE_BOUNDARY_SYNTHETIC_NOT_BOOK_OHLC",
+  "as_of": 864000000,
+  "patterns": [
+    {
+      "id": "zigzag-535-two-degrees",
+      "pattern": "ZIGZAG_ABC_CANDIDATE",
+      "top_frame": "6h",
+      "parent": [
+        {
+          "kind": "HIGH",
+          "price": 150,
+          "extreme_at": 432000000,
+          "known_at": 496800000
+        },
+        {
+          "kind": "LOW",
+          "price": 110,
+          "extreme_at": 518400000,
+          "known_at": 583200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 130,
+          "extreme_at": 604800000,
+          "known_at": 669600000
+        },
+        {
+          "kind": "LOW",
+          "price": 80,
+          "extreme_at": 691200000,
+          "known_at": 756000000
+        }
+      ],
+      "children": [
+        {
+          "kind": "HIGH",
+          "price": 150,
+          "extreme_at": 432000000,
+          "known_at": 442800000
+        },
+        {
+          "kind": "LOW",
+          "price": 135,
+          "extreme_at": 446400000,
+          "known_at": 457200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 142,
+          "extreme_at": 460800000,
+          "known_at": 471600000
+        },
+        {
+          "kind": "LOW",
+          "price": 120,
+          "extreme_at": 489600000,
+          "known_at": 500400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 130,
+          "extreme_at": 504000000,
+          "known_at": 514800000
+        },
+        {
+          "kind": "LOW",
+          "price": 110,
+          "extreme_at": 518400000,
+          "known_at": 529200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 123,
+          "extreme_at": 547200000,
+          "known_at": 558000000
+        },
+        {
+          "kind": "LOW",
+          "price": 118,
+          "extreme_at": 576000000,
+          "known_at": 586800000
+        },
+        {
+          "kind": "HIGH",
+          "price": 130,
+          "extreme_at": 604800000,
+          "known_at": 615600000
+        },
+        {
+          "kind": "LOW",
+          "price": 110,
+          "extreme_at": 619200000,
+          "known_at": 630000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 120,
+          "extreme_at": 633600000,
+          "known_at": 644400000
+        },
+        {
+          "kind": "LOW",
+          "price": 90,
+          "extreme_at": 662400000,
+          "known_at": 673200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 100,
+          "extreme_at": 676800000,
+          "known_at": 687600000
+        },
+        {
+          "kind": "LOW",
+          "price": 80,
+          "extreme_at": 691200000,
+          "known_at": 702000000
+        }
+      ],
+      "grandchildren": [
+        {
+          "kind": "HIGH",
+          "price": 150,
+          "extreme_at": 432000000,
+          "known_at": 434700000
+        },
+        {
+          "kind": "LOW",
+          "price": 142.05,
+          "extreme_at": 432900000,
+          "known_at": 435600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 145.95,
+          "extreme_at": 433800000,
+          "known_at": 436500000
+        },
+        {
+          "kind": "LOW",
+          "price": 136.95,
+          "extreme_at": 434700000,
+          "known_at": 437400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 139.95,
+          "extreme_at": 435600000,
+          "known_at": 438300000
+        },
+        {
+          "kind": "LOW",
+          "price": 135,
+          "extreme_at": 446400000,
+          "known_at": 449100000
+        },
+        {
+          "kind": "HIGH",
+          "price": 140.25,
+          "extreme_at": 447300000,
+          "known_at": 450000000
+        },
+        {
+          "kind": "LOW",
+          "price": 137.8,
+          "extreme_at": 448200000,
+          "known_at": 450900000
+        },
+        {
+          "kind": "HIGH",
+          "price": 142,
+          "extreme_at": 460800000,
+          "known_at": 463500000
+        },
+        {
+          "kind": "LOW",
+          "price": 130.34,
+          "extreme_at": 461700000,
+          "known_at": 464400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 136.06,
+          "extreme_at": 462600000,
+          "known_at": 465300000
+        },
+        {
+          "kind": "LOW",
+          "price": 122.86,
+          "extreme_at": 463500000,
+          "known_at": 466200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 127.26,
+          "extreme_at": 464400000,
+          "known_at": 467100000
+        },
+        {
+          "kind": "LOW",
+          "price": 120,
+          "extreme_at": 489600000,
+          "known_at": 492300000
+        },
+        {
+          "kind": "HIGH",
+          "price": 127.5,
+          "extreme_at": 490500000,
+          "known_at": 493200000
+        },
+        {
+          "kind": "LOW",
+          "price": 124,
+          "extreme_at": 491400000,
+          "known_at": 494100000
+        },
+        {
+          "kind": "HIGH",
+          "price": 130,
+          "extreme_at": 504000000,
+          "known_at": 506700000
+        },
+        {
+          "kind": "LOW",
+          "price": 119.4,
+          "extreme_at": 504900000,
+          "known_at": 507600000
+        },
+        {
+          "kind": "HIGH",
+          "price": 124.6,
+          "extreme_at": 505800000,
+          "known_at": 508500000
+        },
+        {
+          "kind": "LOW",
+          "price": 112.6,
+          "extreme_at": 506700000,
+          "known_at": 509400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 116.6,
+          "extreme_at": 507600000,
+          "known_at": 510300000
+        },
+        {
+          "kind": "LOW",
+          "price": 110,
+          "extreme_at": 518400000,
+          "known_at": 521100000
+        },
+        {
+          "kind": "HIGH",
+          "price": 116.89,
+          "extreme_at": 519300000,
+          "known_at": 522000000
+        },
+        {
+          "kind": "LOW",
+          "price": 113.51,
+          "extreme_at": 520200000,
+          "known_at": 522900000
+        },
+        {
+          "kind": "HIGH",
+          "price": 121.31,
+          "extreme_at": 521100000,
+          "known_at": 523800000
+        },
+        {
+          "kind": "LOW",
+          "price": 118.71000000000001,
+          "extreme_at": 522000000,
+          "known_at": 524700000
+        },
+        {
+          "kind": "HIGH",
+          "price": 123,
+          "extreme_at": 547200000,
+          "known_at": 549900000
+        },
+        {
+          "kind": "LOW",
+          "price": 119.25,
+          "extreme_at": 548100000,
+          "known_at": 550800000
+        },
+        {
+          "kind": "HIGH",
+          "price": 121,
+          "extreme_at": 549000000,
+          "known_at": 551700000
+        },
+        {
+          "kind": "LOW",
+          "price": 118,
+          "extreme_at": 576000000,
+          "known_at": 578700000
+        },
+        {
+          "kind": "HIGH",
+          "price": 124.36,
+          "extreme_at": 576900000,
+          "known_at": 579600000
+        },
+        {
+          "kind": "LOW",
+          "price": 121.24,
+          "extreme_at": 577800000,
+          "known_at": 580500000
+        },
+        {
+          "kind": "HIGH",
+          "price": 128.44,
+          "extreme_at": 578700000,
+          "known_at": 581400000
+        },
+        {
+          "kind": "LOW",
+          "price": 126.04,
+          "extreme_at": 579600000,
+          "known_at": 582300000
+        },
+        {
+          "kind": "HIGH",
+          "price": 130,
+          "extreme_at": 604800000,
+          "known_at": 607500000
+        },
+        {
+          "kind": "LOW",
+          "price": 119.4,
+          "extreme_at": 605700000,
+          "known_at": 608400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 124.6,
+          "extreme_at": 606600000,
+          "known_at": 609300000
+        },
+        {
+          "kind": "LOW",
+          "price": 112.6,
+          "extreme_at": 607500000,
+          "known_at": 610200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 116.6,
+          "extreme_at": 608400000,
+          "known_at": 611100000
+        },
+        {
+          "kind": "LOW",
+          "price": 110,
+          "extreme_at": 619200000,
+          "known_at": 621900000
+        },
+        {
+          "kind": "HIGH",
+          "price": 117.5,
+          "extreme_at": 620100000,
+          "known_at": 622800000
+        },
+        {
+          "kind": "LOW",
+          "price": 114,
+          "extreme_at": 621000000,
+          "known_at": 623700000
+        },
+        {
+          "kind": "HIGH",
+          "price": 120,
+          "extreme_at": 633600000,
+          "known_at": 636300000
+        },
+        {
+          "kind": "LOW",
+          "price": 104.1,
+          "extreme_at": 634500000,
+          "known_at": 637200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 111.9,
+          "extreme_at": 635400000,
+          "known_at": 638100000
+        },
+        {
+          "kind": "LOW",
+          "price": 93.9,
+          "extreme_at": 636300000,
+          "known_at": 639000000
+        },
+        {
+          "kind": "HIGH",
+          "price": 99.9,
+          "extreme_at": 637200000,
+          "known_at": 639900000
+        },
+        {
+          "kind": "LOW",
+          "price": 90,
+          "extreme_at": 662400000,
+          "known_at": 665100000
+        },
+        {
+          "kind": "HIGH",
+          "price": 97.5,
+          "extreme_at": 663300000,
+          "known_at": 666000000
+        },
+        {
+          "kind": "LOW",
+          "price": 94,
+          "extreme_at": 664200000,
+          "known_at": 666900000
+        },
+        {
+          "kind": "HIGH",
+          "price": 100,
+          "extreme_at": 676800000,
+          "known_at": 679500000
+        },
+        {
+          "kind": "LOW",
+          "price": 89.4,
+          "extreme_at": 677700000,
+          "known_at": 680400000
+        },
+        {
+          "kind": "HIGH",
+          "price": 94.6,
+          "extreme_at": 678600000,
+          "known_at": 681300000
+        },
+        {
+          "kind": "LOW",
+          "price": 82.6,
+          "extreme_at": 679500000,
+          "known_at": 682200000
+        },
+        {
+          "kind": "HIGH",
+          "price": 86.6,
+          "extreme_at": 680400000,
+          "known_at": 683100000
+        },
+        {
+          "kind": "LOW",
+          "price": 80,
+          "extreme_at": 691200000,
+          "known_at": 693900000
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "leg": "W1",
+      "swings": 3,
+      "expected": "RECOUNT_AS_CORRECTION_NOT_TREND_REVERSAL"
+    },
+    {
+      "leg": "W1",
+      "swings": 5,
+      "expected": "SMALLER_DEGREE_MOTIVE_CANDIDATE"
+    },
+    {
+      "leg": "W2",
+      "swings": 3,
+      "expected": "SIDEWAYS_CORRECTION_CANDIDATE"
+    },
+    {
+      "leg": "W2",
+      "swings": 5,
+      "expected": "SHARP_CORRECTION_CANDIDATE"
+    },
+    {
+      "leg": "W3",
+      "swings": 3,
+      "expected": "RECOUNT_W3_WRONG_WAVE_NUMBER"
+    },
+    {
+      "leg": "W3",
+      "swings": 5,
+      "expected": "W3_PRICE_SUBDIVISIONS_CANDIDATE"
+    },
+    {
+      "leg": "W4",
+      "swings": 3,
+      "expected": "SIDEWAYS_CORRECTION_CANDIDATE"
+    },
+    {
+      "leg": "W4",
+      "swings": 5,
+      "expected": "SHARP_CORRECTION_CANDIDATE"
+    },
+    {
+      "leg": "W5",
+      "swings": 3,
+      "expected": "DIAGONAL_OR_CONTINUATION_CANDIDATE"
+    },
+    {
+      "leg": "W5",
+      "swings": 5,
+      "expected": "MOTIVE_OR_DIAGONAL_CANDIDATE"
+    },
+    {
+      "leg": "W3",
+      "swings": 4,
+      "expected": "UNRESOLVED"
+    },
+    {
+      "leg": "A",
+      "swings": 5,
+      "expected": "SHARP_CORRECTION_OR_LARGER_SIDEWAYS_COMPONENT"
+    },
+    {
+      "leg": "A",
+      "swings": 3,
+      "expected": "CORRECTION_STARTED_NOT_YET_CONFIRMED"
+    },
+    {
+      "leg": "B",
+      "swings": 3,
+      "expected": "SIDEWAYS_CORRECTION_CANDIDATE"
+    },
+    {
+      "leg": "B",
+      "swings": 5,
+      "expected": "EXTENDED_W5_OR_WRONG_CORRECTION_COUNT"
+    },
+    {
+      "leg": "C",
+      "swings": 3,
+      "expected": "TRIANGLE_OR_C_EXTENSION_OR_RECOUNT"
+    },
+    {
+      "leg": "C",
+      "swings": 5,
+      "expected": "ZIGZAG_OR_FLAT_CORRECTION_CANDIDATE"
+    },
+    {
+      "leg": "D",
+      "swings": 3,
+      "expected": "TRIANGLE_LEG_D_CANDIDATE"
+    },
+    {
+      "leg": "E",
+      "swings": 3,
+      "expected": "TRIANGLE_LEG_E_CANDIDATE"
+    },
+    {
+      "leg": "X",
+      "swings": 3,
+      "expected": "DOUBLE_OR_TRIPLE_CORRECTION_CANDIDATE"
+    },
+    {
+      "leg": "X",
+      "swings": 5,
+      "expected": "POSSIBLE_NEW_W1_OR_CORRECTION_TERMINATION"
+    },
+    {
+      "leg": "D",
+      "swings": 5,
+      "expected": "UNRESOLVED"
+    }
+  ]
+}

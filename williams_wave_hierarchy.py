@@ -10,7 +10,8 @@ from dataclasses import asdict, dataclass, field
 from math import isfinite
 from typing import Mapping, Sequence
 from williams_complex_waves import detect_complex_wave_patterns
-from williams_wave_subdivisions import enrich_complex_subdivisions
+from williams_wave_subdivisions import enrich_complex_subdivisions, trace_recursive_price_grammar
+from williams_wave_momentum import evaluate_third_momentum, ordered_sum, third_momentum_unavailable
 
 FRAME_MS = {"1m":60_000,"3m":180_000,"5m":300_000,"15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
             "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
@@ -77,6 +78,7 @@ class WaveHypothesis:
     target_zone: bool = False
     alternatives: list[str] = field(default_factory=list)
     leg_observation_start: int = 0
+    third_momentum: dict | None = None
 
     @property
     def active_label(self):
@@ -90,7 +92,9 @@ class WaveHypothesis:
 
     def to_dict(self):
         return asdict(self) | {"active_label":self.active_label,"active_direction":self.active_direction,
-                              "last_confirmed_leg":self.label}
+                              "last_confirmed_leg":self.label,
+                              "invalidation_scope":("DEVELOPING_MOTIVE" if len(self.anchors)<6
+                                  else "HISTORICAL_REFERENCE_NOT_ACTIVE_INVALIDATION")}
 
 
 @dataclass
@@ -133,7 +137,7 @@ class WaveHierarchy:
         return asdict(self) | {"scenarios":[s.to_dict() for s in self.scenarios],"complex_wave_patterns":(self.complex_structures or complex_patterns)[:48],
                               "schema_version": 1,
                               "wave_labels": "HYPOTHESES_NOT_CERTAINTY",
-                              "chain": list(REQUIRED_FRAMES),"contained_chain_observed":contained,
+                              "chain": list(self.analysis_frames),"contained_chain_observed":contained,
                               "analysed_frames":sorted(self.frame_candle_counts,key=lambda f:-FRAME_MS[f]),
                               "full_history":False,"can_place_orders":False,
                               "squat_volume_input":"KLINE_BASE_VOLUME_PROXY_NOT_CANONICAL_TICK_VOLUME"}
@@ -221,17 +225,21 @@ def wave_leg_observation_start(anchor,frame,frames):
 
 def _ao(bars):
     mid = [(b.h + b.l) / 2 for b in bars]
-    return [sum(mid[i-4:i+1]) / 5 - sum(mid[i-33:i+1]) / 34
+    return [ordered_sum(mid[i-4:i+1]) / 5 - ordered_sum(mid[i-33:i+1]) / 34
             if i >= 33 else float("nan") for i in range(len(mid))]
 
 
 def classify_fourth_ao(third_peak: float, fourth_minimum: float, scale_bars: int) -> str:
-    """Exact AO zero counts; close-but-positive is NON-authorizing evidence."""
+    """Course PDF44 / TC1 PDF63: pass zero; touching is unconfirmed.
+
+    Inputs are direction-normalized: W3 momentum is positive and a real
+    W4 crossing is negative. The same rule therefore covers both directions.
+    """
     if not 100 <= scale_bars <= 140:
         return "WRONG_SCALE"
     if not (isfinite(third_peak) and third_peak > 0 and isfinite(fourth_minimum)):
         return "MISSING_W3_MOMENTUM"
-    if fourth_minimum <= 0:
+    if fourth_minimum < 0:
         return "MINIMUM_ONLY"
     # Ten percent is a documented research heuristic, not a book gate.
     if fourth_minimum / third_peak <= .10:
@@ -262,6 +270,20 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
     osc = _ao(bars)
     sign = 1 if h.direction == "UP" else -1
     p = h.anchors
+
+    # Locate the actual price extreme on the chosen genuine scale. The open
+    # time of a senior candle is not the time of its intrabar extreme.
+    def unique_price_index(anchor):
+        candidates=[i for i,b in enumerate(bars)
+            if anchor.extreme_at<=b.t<anchor.extreme_at+FRAME_MS[h.frame]
+            and abs((b.h if anchor.kind=="HIGH" else b.l)-anchor.price)<=max(1e-9,anchor.price*1e-9)]
+        return candidates[0] if len(candidates)==1 and FRAME_MS[frame]<=FRAME_MS[h.frame] else None
+
+    third_index=unique_price_index(p[3])
+    fourth_index=unique_price_index(p[4]) if len(p)>=5 else indexes[-1]
+    h.third_momentum=(evaluate_third_momentum(bars,osc,indexes[0],third_index,fourth_index,
+        h.direction,FRAME_MS[frame]) if third_index is not None and fourth_index is not None else
+        third_momentum_unavailable("SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS"))
 
     def peak(a, b):
         values = [sign * osc[i] for i in indexes
@@ -296,6 +318,32 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
         h.alternatives.append("W3_EXTENSION_OR_WRONG_DEGREE")
 
 
+def terminal_squat_volume_proxy(bars, direction, start, end):
+    """TC1 PDF53 / Course PDF77: squat among the three extreme W5 bars.
+
+    Base-asset volume is only a declared proxy for the original tick volume.
+    Neighbours of the terminal pivot are not necessarily extreme price bars.
+    """
+    if (direction not in {"UP","DOWN"} or not 0 <= start < len(bars)
+            or not 0 <= end < len(bars) or end-start < 2):
+        return False
+    indexes = list(range(start,end+1))
+    for i in indexes:
+        b = bars[i]
+        if (not all(isfinite(x) for x in (b.o,b.h,b.l,b.c,b.v))
+                or b.h < max(b.o,b.l,b.c) or b.l > min(b.o,b.c)
+                or b.l <= 0 or b.v < 0
+                or i > 0 and (not isfinite(bars[i-1].v) or bars[i-1].v < 0)):
+            return False
+    def ranked(i):
+        return bars[i].h if direction == "UP" else -bars[i].l
+    third = sorted((ranked(i) for i in indexes),reverse=True)[2]
+    return any(i > 0 and ranked(i) >= third and bars[i-1].v > 0
+               and bars[i].v > bars[i-1].v
+               and (bars[i].h-bars[i].l)/bars[i].v < (bars[i-1].h-bars[i-1].l)/bars[i-1].v
+               for i in indexes)
+
+
 def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
                             anchors: Sequence[WaveAnchor]) -> list[WaveHypothesis]:
     """Enumerate both orientations; do not turn the latest eight-bar trend into a count."""
@@ -313,7 +361,11 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             continue
         if price[1] <= price[0]:
             reasons.append("W1_NOT_IMPULSIVE")
-        if n >= 3 and not price[0] < price[2] < price[1]:
+        # Course PDF46/48: W2 may retrace UP TO 100% of W1, never past it.
+        # A touch of the exact origin remains an unverified alternative, not
+        # an invalidated count nor an executable confirmed Elliott degree.
+        w2_origin_touch = n >= 3 and price[2] == price[0]
+        if n >= 3 and not price[0] <= price[2] < price[1]:
             reasons.append("W2_INVALIDATES_ORIGIN")
         if n >= 4 and price[3] <= price[1]:
             reasons.append("W3_DOES_NOT_EXTEND_W1")
@@ -343,7 +395,10 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
         last_bar = bars[-1]
         # A/C must remain on the corrective side of the old W5. B may exceed
         # it in an irregular correction: keep that alternative explicitly.
-        if n <= 6 and sign * (last_bar.c - inv) <= 0:
+        # A complete five-leg sequence is historical evidence. Its following
+        # A-wave may retrace the entire motive without erasing those five legs.
+        if n < 6 and (sign * (last_bar.c - inv) < 0 if n <= 3
+                          else sign * (last_bar.c - inv) <= 0):
             reasons.append("LIVE_PRICE_INVALIDATED_COUNT")
         leg = [b for b in bars if b.t >= p[-1].extreme_at]
         h = WaveHypothesis(
@@ -351,7 +406,9 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             frame, "UP" if sign == 1 else "DOWN", label, p,
             last_bar.t + duration, p[-1].extreme_at,
             min(b.l for b in leg), max(b.h for b in leg), inv,
-            "INVALIDATED" if reasons else ("ALTERNATIVE" if diagonal_overlap else "PROVISIONAL"), reasons)
+            "INVALIDATED" if reasons else ("ALTERNATIVE" if diagonal_overlap or w2_origin_touch else "PROVISIONAL"), reasons)
+        if w2_origin_touch and not reasons:
+            h.alternatives.append("W2_ORIGIN_TOUCH_100_PERCENT_UNCONFIRMED")
         if diagonal_overlap and not reasons:
             h.alternatives.append("UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP")
             # Course PDF46 permits shallow overlap in futures. The percentage
@@ -360,7 +417,7 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             if (price[1]-price[4])/(price[1]-price[0])<=.10:
                 h.alternatives.append("FUTURES_SHALLOW_W4_OVERLAP_10_PERCENT_W1_RANGE_POLICY")
         active_sign = -sign if n in (2, 4, 6, 8) else sign
-        if n < 9 and not reasons and active_sign * (last_bar.c - p[-1].price) <= 0:
+        if n < 9 and h.status == "PROVISIONAL" and active_sign * (last_bar.c - p[-1].price) <= 0:
             h.status = "UNRESOLVED"
             h.alternatives.append("PRIOR_LEG_EXTENSION_OR_UNCONFIRMED_TURN")
         if n >= 6:
@@ -370,13 +427,16 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             h.alternatives.append("IRREGULAR_CORRECTION")
         valid_ao = [v for v in osc[-5:] if isfinite(v)]
         h.momentum_shift = (len(valid_ao) == 5 and sign * valid_ao[-1] <
-                            sign * sum(valid_ao) / 5 and
+                            sign * ordered_sum(valid_ao) / 5 and
                             sign * valid_ao[-1] < sign * valid_ao[-2])
         terminal = p[min(5, n-1)].index
-        for j in range(max(1, terminal-1), min(len(bars), terminal+2)):
-            a, b = bars[j-1], bars[j]
-            if a.v > 0 and b.v > a.v and (b.h-b.l)/b.v < (a.h-a.l)/a.v:
-                h.squat = True
+        if n >= 6:
+            h.squat = terminal_squat_volume_proxy(bars,h.direction,p[4].index,terminal)
+        else:
+            for j in range(max(1, terminal-1), min(len(bars), terminal+2)):
+                a, b = bars[j-1], bars[j]
+                if a.v > 0 and b.v > a.v and (b.h-b.l)/b.v < (a.h-a.l)/a.v:
+                    h.squat = True
         out.append(h)
     return out
 
@@ -428,9 +488,14 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int,
             if observed:
                 h.leg_low = min(h.anchors[-1].price,min(b.l for b in observed))
                 h.leg_high = max(h.anchors[-1].price,max(b.h for b in observed))
-                if len(h.anchors) <= 6 and (
-                    h.direction == "UP" and min(b.l for b in observed) <= h.invalidation or
-                    h.direction == "DOWN" and max(b.h for b in observed) >= h.invalidation
+                if len(h.anchors) < 6 and (
+                    h.direction == "UP" and (
+                        min(b.l for b in observed) < h.invalidation if len(h.anchors) <= 3
+                        else min(b.l for b in observed) <= h.invalidation
+                    ) or h.direction == "DOWN" and (
+                        max(b.h for b in observed) > h.invalidation if len(h.anchors) <= 3
+                        else max(b.h for b in observed) >= h.invalidation
+                    )
                 ):
                     h.status = "INVALIDATED"
                     h.invalid_reasons.append("LOWER_FRAME_OBSERVED_INVALIDATION")
@@ -457,9 +522,13 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int,
                 parent=[p for p in points if evidence.start_at<=p.extreme_at<=evidence.end_at]
                 proof=enrich_complex_subdivisions(evidence.pattern,parent,anchors_by_frame.get(child_frame,[]),
                     parent_duration=FRAME_MS[frame],as_of=as_of)
+                recursive=trace_recursive_price_grammar(
+                    evidence.pattern,parent,anchors_by_frame,FRAME_MS,frame,as_of,
+                    depth=3,max_nodes=64)
                 structures.append(evidence.to_dict()|{"frame":frame,"child_frame":child_frame,
                     "source_scenario_id":f"{frame}:{direction}:{evidence.start_at}:{len(parent)}",
-                    "internal_proof":proof.to_dict(),"can_place_orders":False})
+                    "internal_proof":proof.to_dict(),"recursive_proof":recursive,
+                    "can_place_orders":False})
     return WaveHierarchy(as_of, scenarios, link_wave_hypotheses(scenarios), errors, warnings,
                          {frame:len(bars) for frame,bars in valid.items()},structures,tuple(analysis_frames))
 

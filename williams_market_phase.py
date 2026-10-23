@@ -1,6 +1,8 @@
 """Degree-scoped, competing market phase evidence; no order authority."""
 from williams_wave_hierarchy import FRAME_MS, REQUIRED_FRAMES, build_wave_hierarchy
 from williams_market_reading import market_reading
+from williams_wave_interpretation import wave_interpretation
+from williams_tc1_terminal_evidence import tc1_five_bullet_evidence
 
 OBSERVED_MARKET_FRAMES=("1d","6h","4h","1h","15m")
 
@@ -45,6 +47,8 @@ def market_phase_context(hierarchy):
             "active_label":h["active_label"],"active_direction":h["active_direction"],
             "impulse_direction":h.get("direction",""),"invalidation":h.get("invalidation"),
             "w4_zero":h.get("w4_zero",""),"scale_frame":h.get("scale_frame",""),
+            "third_momentum":h.get("third_momentum"),
+            "tc1_five_bullets":tc1_five_bullet_evidence(h),
             "scale_bars":h.get("scale_bars",0),"signs":[name for key,name in signs.items() if h.get(key,False)]}
             for h in usable]
         state=("NOT_ANALYSED" if as_of<=0 else "UNAVAILABLE" if frame in errors or (frame=="4h" and frame not in counts and not usable)
@@ -64,7 +68,27 @@ def market_phase_context(hierarchy):
         return any(f["frame"]==frame and f["exhaustion_warning"] for f in frames)
     scope=("SENIOR_WARNING" if warns("1d") or warns("6h") or warns("4h") else "H1_WARNING" if warns("1h")
         else "M15_ONLY_WARNING" if warns("15m") else "NONE")
+    recursive=[]
+    for item in hierarchy.get("complex_wave_patterns",[]):
+        proof=item.get("recursive_proof")
+        if (not isinstance(proof,dict) or item.get("frame") in errors
+                or item.get("child_frame") in errors or item.get("known_at",as_of)>as_of):
+            continue
+        state=proof.get("status","UNRESOLVED")
+        recursive.append({"parent_frame":item.get("frame"),"child_frame":item.get("child_frame"),
+            "pattern":item.get("pattern"),"state":state,"requested_depth":proof.get("requested_depth",0),
+            "frame_path":proof.get("frame_path",[]),"reason":proof.get("reason",""),
+            "explanation_ru":("Внутренняя геометрия подтверждена на запрошенных масштабах; уникальная волна НЕ доказана."
+                if state=="OBSERVED_DEPTH_PRICE_GRAMMAR_CONFIRMED"
+                else "Глубина анализа ограничена: не все подволны подтверждены, нужна младшая история."
+                if state=="PARTIAL_PRICE_GRAMMAR"
+                else "Подволны не подтверждены: требуется пересмотр счёта или дополнительные закрытые свечи."),
+            "unique_elliott_genealogy_proven":False,"can_place_orders":False,"can_close":False,"can_reverse":False})
+        if len(recursive)>=16:
+            break
     return {"schema":"WILLIAMS_MARKET_PHASE_V1","as_of":as_of,"frames":frames,"warning_scope":scope,
+        "recursive_degree_evidence":recursive,
+        "wave_interpretation":wave_interpretation(hierarchy),
         "wave_genealogy_confirmed":False,"probability_calibrated":False,
         "action_policy":"SOURCE_SIGNAL_AND_PRICE_TRIGGER_REQUIRED",
         "can_place_orders":False,"can_close":False,"can_reverse":False}

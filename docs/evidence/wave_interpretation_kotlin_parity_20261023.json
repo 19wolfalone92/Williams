@@ -1,0 +1,10 @@
+{
+  "real_historical_snapshots": 45,
+  "pairs": 15,
+  "full_payloads_identical": true,
+  "scope": "COMPLETE_INTERPRETATION_AND_PER_SCENARIO_THIRD_MOMENTUM_JSON",
+  "third_momentum_records_compared": 1350,
+  "input_stream_sha256": "d1deb54af66e259f9500ccff8e6c04e3fb426d61d74b7a1ed9defd5327a54287",
+  "forecast_accuracy_certified": false,
+  "can_place_orders": false
+}

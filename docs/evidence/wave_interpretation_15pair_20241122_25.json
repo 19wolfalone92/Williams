@@ -1,0 +1,912 @@
+{
+  "schema": "WILLIAMS_WAVE_INTERPRETATION_REPLAY_V1",
+  "pairs": 15,
+  "results": [
+    {
+      "symbol": "ADAUSDT",
+      "input_sha256": "e4ebdbae5da7483c12b5bb4c8912212c88fc50dc03fd31f8f9d9f8f6d2f52d9b",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 585,
+        "ALTERNATIVES": 124,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 11
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732237200000,
+          "parent_frame": "6h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "JUNIOR_CORRECTION_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732406400000,
+          "parent_frame": "6h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "ATOMUSDT",
+      "input_sha256": "36c658f7cf3a39c874f1ac7c3229d03e8ae39c87ecd527444c2e7c3ffa8cd86c",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 566,
+        "ALTERNATIVES": 109,
+        "SENIOR_REVERSAL_CANDIDATE": 41,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 4
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732237200000,
+          "parent_frame": "1d",
+          "child_frame": "4h",
+          "relation_count": 4,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732244400000,
+          "parent_frame": "6h",
+          "child_frame": "1h",
+          "relation_count": 2,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732435200000,
+          "parent_frame": "1h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "AVAXUSDT",
+      "input_sha256": "1ecc24eea48e9e3996e4dbd786f22bcb9e2f80ed8281f31a7776c4a924b594c9",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 545,
+        "ALTERNATIVES": 124,
+        "SENIOR_REVERSAL_CANDIDATE": 41,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 10
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732240800000,
+          "parent_frame": "1d",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "JUNIOR_CORRECTION_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732248000000,
+          "parent_frame": "6h",
+          "child_frame": "1h",
+          "relation_count": 2,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732348800000,
+          "parent_frame": "1h",
+          "child_frame": "15m",
+          "relation_count": 3,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "BCHUSDT",
+      "input_sha256": "8d9e81ee16be4de59c8473cf609234f541fe1da71664d040b288c2002eb1d38b",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 523,
+        "ALTERNATIVES": 189,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 6,
+        "SENIOR_REVERSAL_CANDIDATE": 2
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732240800000,
+          "parent_frame": "1d",
+          "child_frame": "15m",
+          "relation_count": 4,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+            "SENIOR_REVERSAL_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732244400000,
+          "parent_frame": "6h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732359600000,
+          "parent_frame": "1d",
+          "child_frame": "15m",
+          "relation_count": 1,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "BNBUSDT",
+      "input_sha256": "a88e3fb576db9b90543ab40d8e1f54c487ac3e04503820fb0475c8e533a7c710",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 485,
+        "ALTERNATIVES": 198,
+        "SENIOR_REVERSAL_CANDIDATE": 32,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 5
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732237200000,
+          "parent_frame": "1d",
+          "child_frame": "1h",
+          "relation_count": 2,
+          "candidate_states": [
+            "OPPOSING_IMPULSE_UNRESOLVED",
+            "UNRESOLVED"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732237200000,
+          "parent_frame": "6h",
+          "child_frame": "1h",
+          "relation_count": 2,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732302000000,
+          "parent_frame": "6h",
+          "child_frame": "15m",
+          "relation_count": 1,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "BTCUSDT",
+      "input_sha256": "ddec3d42d238e282f0bc0b63d292db092dbdccf537bfa9923f1ff9c88a7ca57f",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 671,
+        "ALTERNATIVES": 44,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 4,
+        "SENIOR_REVERSAL_CANDIDATE": 1
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732258800000,
+          "parent_frame": "1h",
+          "child_frame": "15m",
+          "relation_count": 4,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+            "SENIOR_REVERSAL_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732377600000,
+          "parent_frame": "6h",
+          "child_frame": "15m",
+          "relation_count": 1,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732446000000,
+          "parent_frame": "6h",
+          "child_frame": "1h",
+          "relation_count": 1,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "input_sha256": "1c8a0a1cf2eec394f445c5bb0a5693b8913cf1bd83866d7207d56a1766654357",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 510,
+        "ALTERNATIVES": 199,
+        "SENIOR_REVERSAL_CANDIDATE": 10,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 1
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732237200000,
+          "parent_frame": "1d",
+          "child_frame": "4h",
+          "relation_count": 6,
+          "candidate_states": [
+            "IMPULSE_CONTINUATION_CANDIDATE",
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732291200000,
+          "parent_frame": "4h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732482000000,
+          "parent_frame": "1h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "DOTUSDT",
+      "input_sha256": "f5d89721cc1b2dd72664a9ef0311688c7d4a7774f6679d06229e8101966a95a6",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 524,
+        "ALTERNATIVES": 157,
+        "SENIOR_REVERSAL_CANDIDATE": 38,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 1
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732237200000,
+          "parent_frame": "1d",
+          "child_frame": "4h",
+          "relation_count": 4,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+            "SENIOR_REVERSAL_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732240800000,
+          "parent_frame": "6h",
+          "child_frame": "1h",
+          "relation_count": 2,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732269600000,
+          "parent_frame": "1h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "ETHUSDT",
+      "input_sha256": "54dc2f91c00df37a30d4e015064f953515db58b8411d298ace6b704ef9f8d7e0",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 496,
+        "ALTERNATIVES": 210,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 13,
+        "SENIOR_REVERSAL_CANDIDATE": 1
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732255200000,
+          "parent_frame": "6h",
+          "child_frame": "15m",
+          "relation_count": 6,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732269600000,
+          "parent_frame": "4h",
+          "child_frame": "15m",
+          "relation_count": 1,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732446000000,
+          "parent_frame": "1h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "LINKUSDT",
+      "input_sha256": "f6ebf3cb90b5e81fa3626a43356ded6831559b4aba3f26b0e0ba381ad15e0a3b",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 513,
+        "ALTERNATIVES": 176,
+        "SENIOR_REVERSAL_CANDIDATE": 25,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 6
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732237200000,
+          "parent_frame": "6h",
+          "child_frame": "1h",
+          "relation_count": 4,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732248000000,
+          "parent_frame": "6h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732269600000,
+          "parent_frame": "4h",
+          "child_frame": "15m",
+          "relation_count": 1,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "LTCUSDT",
+      "input_sha256": "37ed55774946eef9981a9419386376d827c5bed7469e4fd5484e96f9efe80cf5",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 525,
+        "ALTERNATIVES": 170,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 17,
+        "SENIOR_REVERSAL_CANDIDATE": 8
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732244400000,
+          "parent_frame": "1h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "JUNIOR_CORRECTION_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732258800000,
+          "parent_frame": "1d",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732323600000,
+          "parent_frame": "1h",
+          "child_frame": "15m",
+          "relation_count": 1,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "NEARUSDT",
+      "input_sha256": "b39fae79348088c1588da3f46823bc1875bffe7a40b63f2b62a9bddac281c6ce",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 564,
+        "ALTERNATIVES": 151,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 1,
+        "SENIOR_REVERSAL_CANDIDATE": 4
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732237200000,
+          "parent_frame": "6h",
+          "child_frame": "1h",
+          "relation_count": 3,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+            "SENIOR_REVERSAL_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732248000000,
+          "parent_frame": "4h",
+          "child_frame": "15m",
+          "relation_count": 1,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732327200000,
+          "parent_frame": "6h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "SOLUSDT",
+      "input_sha256": "0b49bd43746413a10cd1bdc6b083ec980d5abb0fafc32dbf528f1a2215765e09",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 499,
+        "ALTERNATIVES": 202,
+        "SENIOR_REVERSAL_CANDIDATE": 8,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 11
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732237200000,
+          "parent_frame": "6h",
+          "child_frame": "1h",
+          "relation_count": 4,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732244400000,
+          "parent_frame": "6h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732284000000,
+          "parent_frame": "4h",
+          "child_frame": "15m",
+          "relation_count": 1,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "TRXUSDT",
+      "input_sha256": "c2905895e7ca78f470189414701c51a4b394dbdb4f8e04ab38d0e70b86fe3b44",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 501,
+        "ALTERNATIVES": 208,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 8,
+        "SENIOR_REVERSAL_CANDIDATE": 3
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732237200000,
+          "parent_frame": "1d",
+          "child_frame": "15m",
+          "relation_count": 4,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732255200000,
+          "parent_frame": "1d",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        },
+        "SENIOR_REVERSAL_CANDIDATE": {
+          "as_of": 1732327200000,
+          "parent_frame": "6h",
+          "child_frame": "1h",
+          "relation_count": 1,
+          "candidate_states": [
+            "SENIOR_REVERSAL_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    },
+    {
+      "symbol": "XRPUSDT",
+      "input_sha256": "8cb0131ba8403292817d1e36bfde32341cf03ccac1c49dbe8b89592b20e8d7c5",
+      "source": "BINANCE_USDS_M_FUTURES_KLINES_READ_ONLY",
+      "independent_frame_bars": {
+        "1d": 500,
+        "6h": 500,
+        "4h": 500,
+        "1h": 500,
+        "15m": 500
+      },
+      "first_as_of": 1732237200000,
+      "last_as_of": 1732492800000,
+      "snapshots": 72,
+      "checks": {
+        "prefix_comparisons": 72,
+        "poisoned_future_comparisons": 72
+      },
+      "scope_state_counts": {
+        "UNRESOLVED": 563,
+        "ALTERNATIVES": 151,
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": 6
+      },
+      "examples": {
+        "ALTERNATIVES": {
+          "as_of": 1732237200000,
+          "parent_frame": "6h",
+          "child_frame": "15m",
+          "relation_count": 4,
+          "candidate_states": [
+            "JUNIOR_CORRECTION_CANDIDATE",
+            "UNRESOLVED"
+          ]
+        },
+        "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE": {
+          "as_of": 1732392000000,
+          "parent_frame": "6h",
+          "child_frame": "15m",
+          "relation_count": 2,
+          "candidate_states": [
+            "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE"
+          ]
+        }
+      },
+      "failures": [],
+      "passed": true,
+      "reference_wave_labels_supplied": false,
+      "forecast_accuracy_certified": false,
+      "profitability_tested": false,
+      "can_place_orders": false
+    }
+  ],
+  "snapshots": 1080,
+  "passed": true,
+  "scope": "CAUSALITY_AND_IMPLEMENTATION_INVARIANTS_NOT_WAVE_ACCURACY_OR_PROFITABILITY",
+  "forecast_accuracy_certified": false,
+  "profitability_tested": false,
+  "can_place_orders": false
+}

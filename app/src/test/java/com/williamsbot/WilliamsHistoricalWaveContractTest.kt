@@ -61,8 +61,10 @@ class WilliamsHistoricalWaveContractTest {
                 val b=bars.last()
                 val changed=if(direction=="UP") b.copy(l=minOf(b.l,scenario.invalidation-.01)) else b.copy(h=maxOf(b.h,scenario.invalidation+.01))
                 val broken=target(buildWilliamsWaveHierarchy(mapOf(frame to bars.dropLast(1)+changed),now))
-                assertEquals("INVALIDATED",broken.status)
-                assertTrue("LOWER_FRAME_OBSERVED_INVALIDATION" in broken.invalidReasons)
+                assertEquals(6,parent.size)
+                assertEquals("ALTERNATIVE",broken.status)
+                assertFalse("LOWER_FRAME_OBSERVED_INVALIDATION" in broken.invalidReasons)
+                assertEquals("HISTORICAL_REFERENCE_NOT_ACTIVE_INVALIDATION",broken.toJson().getString("invalidation_scope"))
                 continue
             }
             if(c.getString("operation")=="CLASSIFY") {

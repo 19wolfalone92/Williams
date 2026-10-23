@@ -32,7 +32,7 @@ A and B are historical candidate swing labels; right-side C is explicitly a proj
 
 Marked price peaks are near/higher at the second peak, but the second AO positive hump is smaller. Treat as potential bearish divergence pending exact OHLC checks. AO may remain positive while momentum declines; AO/AC histogram color reflects CHANGE, not value sign. Alligator will often lag at the top. Divergence is a reversal/exhaustion warning, never sufficient for an automatic SHORT. The screenshot author explicitly reports a losing short and acknowledges failing to check full context.
 
-Important: AO peak can precede corresponding price swing high. Comparing AO only ON the pivot candle (old Wave Engine behavior) can miss this. The new diagnostic compares the AO maximum on each completed up-leg or minimum on each completed down-leg, anchored to confirmed price pivots.
+For this user screenshot the exact timing still requires OHLC verification. The Williams source convention is different from a universal claim that AO leads price: Course PDF42 and TC1 PDF60 describe the W3 price extreme occurring 1–5 bars before the oscillator peak. Comparing AO only on the pivot candle can miss that lag. The hierarchy module includes the observable post-pivot oscillator window; the older leg-only screenshot diagnostic does not establish full source conformity.
 
 ## Wave handout: rigorous separation of evidence
 

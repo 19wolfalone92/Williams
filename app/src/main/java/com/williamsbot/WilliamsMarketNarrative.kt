@@ -27,9 +27,11 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
     for(frame in order) {
         val row=rows[frame]
         val reading=row?.optJSONObject("market_reading")
+        val closedAt=reading?.optLong("as_of_close_ms",0L) ?: 0L
         val readingReady=asOf>0L && row!=null && reading!=null &&
+            row.optString("state")!="UNAVAILABLE" &&
             reading.optString("state")=="OBSERVED" &&
-            reading.optLong("as_of_close_ms") in 1L..asOf
+            closedAt in 1L..asOf && asOf-closedAt<williamsWaveFrames.getValue(frame)
         val phaseState=if(asOf<=0) "NOT_ANALYSED" else row?.optString("state") ?: "UNAVAILABLE"
         val bias=if(readingReady) reading!!.optString("observed_bias") else "UNKNOWN"
         val alligator=if(readingReady)
@@ -88,12 +90,34 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
     else if(h1==null || m15==null)
         "Недостаточно проверенных H1/M15 свечей для сопоставления; старшую волну не угадывать."
     else "Смена направления младшего ТФ сама по себе не меняет степень волны старшего ТФ."
+    val adjacent=setOf("1d:6h","6h:4h","4h:1h","1h:15m")
+    val structure=rows(phase.optJSONObject("wave_interpretation")?.optJSONArray("scopes"))
+        .filter { "${it.optString("parent_frame")}:${it.optString("child_frame")}" in adjacent }
+        .map { scope ->
+            val parent=scope.optString("parent_frame");val child=scope.optString("child_frame")
+            val alternatives=scope.optJSONArray("candidate_states") ?: JSONArray()
+            val labels=(0 until alternatives.length()).mapNotNull { j -> when(alternatives.optString(j)) {
+                "JUNIOR_CORRECTION_CANDIDATE" -> "младшая коррекция внутри импульса"
+                "IMPULSE_CONTINUATION_CANDIDATE" -> "продолжение импульса"
+                "PARENT_CORRECTION_IN_PROGRESS_CANDIDATE" -> "импульс внутри старшей коррекции"
+                "OPPOSING_IMPULSE_UNRESOLVED" -> "встречный импульс без отмены старшей структуры"
+                "SENIOR_REVERSAL_CANDIDATE" -> "возможный старший разворот после нарушения структуры"
+                else -> null
+            } }
+            val variants=if(scope.optString("state")=="ALTERNATIVES" && labels.isNotEmpty())
+                " Возможны: ${labels.joinToString("; ")}." else ""
+            JSONObject().put("parent_frame",parent).put("child_frame",child)
+                .put("state",scope.optString("state")).put("relation_count",scope.optInt("relation_count"))
+                .put("explanation_ru","${names[parent]} → ${names[child]}: ${scope.optString("explanation_ru")}$variants")
+                .put("wave_genealogy_confirmed",false)
+        }
     return JSONObject().put("schema","WILLIAMS_MTF_MARKET_NARRATIVE_V1")
         .put("as_of",asOf).put("frames",details)
         .put("observed_frame_count",reliable.size)
         .put("expected_frame_count",order.size)
         .put("junior_bias_opposes_h1",opposed)
         .put("cross_timeframe_caution_ru",caution)
+        .put("structural_relations",JSONArray(structure))
         .put("interpretation","CLOSED_CANDLE_OBSERVATION_PLUS_UNCONFIRMED_WAVE_HYPOTHESES")
         .put("source","LOCAL_INDEPENDENT_CLOSED_CANDLES")
         .put("confidence_calibrated",false)

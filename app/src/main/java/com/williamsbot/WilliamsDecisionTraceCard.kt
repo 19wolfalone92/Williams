@@ -81,6 +81,27 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                 }
                 trace.optJSONObject("market_phase")?.let { phase ->
                     Text("Состояние рынка по ТФ · закрытые свечи",style=MaterialTheme.typography.titleSmall)
+                    rows(phase.optJSONObject("market_narrative")?.optJSONArray("structural_relations")).forEach {
+                        Text(it.optString("explanation_ru"),style=MaterialTheme.typography.bodySmall)
+                    }
+                    if(expanded) rows(phase.optJSONObject("wave_interpretation")?.optJSONArray("scopes"))
+                        .filter { it.optInt("relation_count")>0 }.forEach { scope ->
+                            rows(scope.optJSONArray("relations")).forEach { relation ->
+                                Text("${relation.optString("parent")} → ${relation.optString("child")} · "+
+                                    "уровень отмены ${relation.opt("parent_invalidation")} · "+
+                                    "опоры известны ${time(relation.optLong("anchors_known_at"))}",style=MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    if(expanded) rows(phase.optJSONArray("recursive_degree_evidence"))
+                        .take(6).forEach { degree ->
+                            val path=degree.optJSONArray("frame_path") ?: JSONArray()
+                            val tf=(0 until path.length()).joinToString(" → ") { i -> path.optString(i) }
+                            Text("Подволны: ${degree.optString("pattern")} · ${tf.ifBlank { "нет полной цепочки" }}",
+                                style=MaterialTheme.typography.bodySmall)
+                            Text(degree.optString("explanation_ru")+
+                                " · ${degree.optString("reason")} · Course PDF59–60",
+                                style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                        }
                     rows(phase.optJSONArray("frames")).forEach { frame ->
                         val hypotheses=rows(frame.optJSONArray("hypotheses"))
                         Text(williamsMarketObservationLabel(frame),style=MaterialTheme.typography.bodySmall)
@@ -107,6 +128,11 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                             } }
                             Text("${h.optString("scenario_id")} · признаки: "+names.joinToString().ifBlank { "не наблюдаются" }+
                                 "\nAO W4: ${h.optString("w4_zero")} · масштаб ${h.optString("scale_frame")} / ${h.optInt("scale_bars")} свечей",style=MaterialTheme.typography.bodySmall)
+                            h.optJSONObject("third_momentum")?.let { momentum ->
+                                Text(williamsThirdMomentumLabel(momentum),style=MaterialTheme.typography.bodySmall)
+                                val known=momentum.optLong("peak_turn_known_at_ms",0L)
+                                if(known>0L) Text("Поворот пика известен: ${time(known)} · TC1 PDF60 / Course PDF42",style=MaterialTheme.typography.bodySmall)
+                            }
                         }
                     }
                     Text("Контекст описывает наблюдаемое состояние. Номер волны — гипотеза; это не вероятность следующего движения.",style=MaterialTheme.typography.bodySmall)

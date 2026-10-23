@@ -33,7 +33,8 @@ internal data class WilliamsWaveScenario(
     var divergence: Boolean = false, var momentumShift: Boolean = false,
     var terminalFractal: Boolean = false, var squat: Boolean = false, var targetZone: Boolean = false,
     val alternatives: MutableList<String> = mutableListOf(),
-    var legObservationStart:Long = 0L
+    var legObservationStart:Long = 0L,
+    var thirdMomentum:JSONObject? = null
 ) {
     val activeLabel:String get()=when(anchors.size) { 2->"W2";3->"W3";4->"W4";5->"W5";6->"A";7->"B";8->"C";else->"NEXT_SEQUENCE_UNRESOLVED" }
     val activeDirection:String get()=if(activeLabel in listOf("W2","W4","A","C")) {
@@ -46,10 +47,12 @@ internal data class WilliamsWaveScenario(
         .put("leg_start", legStart).put("leg_low", legLow).put("leg_high", legHigh)
         .put("leg_observation_start",legObservationStart)
         .put("invalidation", invalidation).put("status", status)
+        .put("invalidation_scope",if(anchors.size<6) "DEVELOPING_MOTIVE" else "HISTORICAL_REFERENCE_NOT_ACTIVE_INVALIDATION")
         .put("invalid_reasons", JSONArray(invalidReasons)).put("scale_frame", scaleFrame)
         .put("scale_bars", scaleBars).put("w4_zero", w4Zero).put("divergence", divergence)
         .put("momentum_shift", momentumShift).put("terminal_fractal", terminalFractal)
         .put("squat", squat).put("target_zone", targetZone).put("alternatives", JSONArray(alternatives))
+        .put("third_momentum",thirdMomentum ?: JSONObject.NULL)
 }
 internal data class WilliamsWaveLink(val parent: String, val child: String, val parentLeg: String, val relationship: String) {
     fun toJson(): JSONObject = JSONObject().put("parent", parent).put("child", child)
@@ -156,8 +159,9 @@ private fun waveAo(bars: List<WilliamsWaveBar>): List<Double> {
 }
 
 /**
- * AO proximity is NOT proof of a fourth-wave degree. Exact zero contact
- * counts as a zero-line event; heuristic proximity is only research evidence.
+ * Course PDF44 / TC1 PDF63 require passing the zero line. An exact touch
+ * does not establish the book minimum; proximity is only research evidence.
+ * Inputs are direction-normalized, so the same rule covers both directions.
  * Never promote NEAR_ZERO_UNCONFIRMED into MINIMUM_ONLY trade permission.
  */
 internal fun classifyWilliamsFourthAo(
@@ -166,7 +170,7 @@ internal fun classifyWilliamsFourthAo(
     if (scaleBars !in 100..140) return "WRONG_SCALE"
     if (!thirdPeak.isFinite() || thirdPeak <= 0.0 ||
         !fourthMinimum.isFinite()) return "MISSING_W3_MOMENTUM"
-    if (fourthMinimum <= 0.0) return "MINIMUM_ONLY"
+    if (fourthMinimum < 0.0) return "MINIMUM_ONLY"
     // 10% of the W3 peak is a declared diagnostic approximation,
     // not an invariant extracted from a Williams book illustration.
     if (fourthMinimum / thirdPeak <= 0.10) return "NEAR_ZERO_UNCONFIRMED"
@@ -191,6 +195,21 @@ private fun enrichWaveRhythm(h: WilliamsWaveScenario, frames: Map<String, List<W
     val osc = waveAo(bars)
     val sign = if (h.direction == "UP") 1 else -1
     val p = h.anchors
+    // Resolve real intrabar price times; never use a senior candle's open as
+    // an invented timestamp for the high/low on a finer oscillator frame.
+    fun uniquePriceIndex(anchor:WilliamsWaveAnchor):Int? {
+        if(williamsWaveFrames.getValue(frame)>williamsWaveFrames.getValue(h.frame)) return null
+        val found=bars.indices.filter { i -> val b=bars[i]
+            b.t>=anchor.extremeAt && b.t<anchor.extremeAt+williamsWaveFrames.getValue(h.frame) &&
+                abs((if(anchor.kind=="HIGH") b.h else b.l)-anchor.price)<=maxOf(1e-9,anchor.price*1e-9) }
+        return found.singleOrNull()
+    }
+    val thirdIndex=uniquePriceIndex(p[3])
+    val fourthIndex=if(p.size>=5) uniquePriceIndex(p[4]) else indexes.last()
+    h.thirdMomentum=if(thirdIndex!=null && fourthIndex!=null)
+        evaluateWilliamsThirdMomentum(bars,osc,indexes.first(),thirdIndex,fourthIndex,h.direction,
+            williamsWaveFrames.getValue(frame)).toJson()
+    else williamsThirdMomentumUnavailable("SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS").toJson()
     var thirdEnd = p[3].extremeAt + 5 * williamsWaveFrames.getValue(frame)
     if (p.size >= 5) thirdEnd = minOf(thirdEnd, p[4].extremeAt)
     val w3Indexes = indexes.filter { bars[it].t in p[2].extremeAt..thirdEnd }
@@ -263,7 +282,10 @@ internal fun williamsHypothesesFromAnchors(
             p.zipWithNext().any { (a,b) -> a.extremeAt >= b.extremeAt }) continue
         val reasons = mutableListOf<String>()
         if (price[1] <= price[0]) reasons += "W1_NOT_IMPULSIVE"
-        if (n >= 3 && !(price[0] < price[2] && price[2] < price[1])) reasons += "W2_INVALIDATES_ORIGIN"
+        // Course PDF46/48: W2 can return TO its origin, not beyond.
+        // The exact-touch count is observational only until separately proved.
+        val w2OriginTouch = n >= 3 && price[2] == price[0]
+        if (n >= 3 && !(price[0] <= price[2] && price[2] < price[1])) reasons += "W2_INVALIDATES_ORIGIN"
         if (n >= 4 && price[3] <= price[1]) reasons += "W3_DOES_NOT_EXTEND_W1"
         // W4/W1 overlap may be a leading/ending diagonal rather than a
         // normal impulse. Never elevate it to a tradable confirmed count:
@@ -281,19 +303,25 @@ internal fun williamsHypothesesFromAnchors(
         if (n >= 8 && price[7] <= price[6]) reasons += "B_NOT_RETRACING_A"
         if (n >= 9 && price[8] >= price[6]) reasons += "C_NOT_EXTENDING_A_COMPLEX_CORRECTION_POSSIBLE"
         val inv = if (n <= 3) p[0].price else if(n<=6 && diagonalOverlap) p[2].price else if (n <= 6) p[1].price else p[5].price
-        if (n <= 6 && sign * (bars.last().c-inv) <= 0) reasons += "LIVE_PRICE_INVALIDATED_COUNT"
+        // A deep A-wave can correct the entire completed five-leg motive.
+        // Never retroactively invalidate historical W5 at the old W1 level.
+        if (n < 6 && if (n <= 3) sign * (bars.last().c-inv) < 0
+            else sign * (bars.last().c-inv) <= 0) reasons += "LIVE_PRICE_INVALIDATED_COUNT"
         val leg = bars.filter { it.t >= p.last().extremeAt }
         val direction = if (sign == 1) "UP" else "DOWN"
         val h = WilliamsWaveScenario("$frame:$direction:${p.first().extremeAt}:$n",frame,direction,label,p,
             bars.last().t+duration,p.last().extremeAt,leg.minOf { it.l },leg.maxOf { it.h },inv,
-            if (reasons.isNotEmpty()) "INVALIDATED" else if (diagonalOverlap) "ALTERNATIVE" else "PROVISIONAL",reasons)
+            if (reasons.isNotEmpty()) "INVALIDATED" else if (diagonalOverlap || w2OriginTouch) "ALTERNATIVE" else "PROVISIONAL",reasons)
+        if (w2OriginTouch && reasons.isEmpty()) {
+            h.alternatives += "W2_ORIGIN_TOUCH_100_PERCENT_UNCONFIRMED"
+        }
         if (diagonalOverlap && reasons.isEmpty()) {
             h.alternatives += "UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP"
             if((price[1]-price[4])/(price[1]-price[0])<=.10)
                 h.alternatives += "FUTURES_SHALLOW_W4_OVERLAP_10_PERCENT_W1_RANGE_POLICY"
         }
         val activeSign = if (n in listOf(2,4,6,8)) -sign else sign
-        if (n < 9 && reasons.isEmpty() && activeSign * (bars.last().c-p.last().price) <= 0) {
+        if (n < 9 && h.status == "PROVISIONAL" && activeSign * (bars.last().c-p.last().price) <= 0) {
             h.status = "UNRESOLVED"; h.alternatives += "PRIOR_LEG_EXTENSION_OR_UNCONFIRMED_TURN"
         }
         if (n >= 6) {
@@ -366,8 +394,8 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
             h.observedAt = asOf
             if (observed.isNotEmpty()) {
                 h.legLow = minOf(h.anchors.last().price,observed.minOf { it.l }); h.legHigh = maxOf(h.anchors.last().price,observed.maxOf { it.h })
-                if (h.anchors.size <= 6 && (h.direction == "UP" && observed.minOf { it.l } <= h.invalidation ||
-                    h.direction == "DOWN" && observed.maxOf { it.h } >= h.invalidation)) {
+                if (h.anchors.size < 6 && (h.direction == "UP" && (if (h.anchors.size <= 3) observed.minOf { it.l } < h.invalidation else observed.minOf { it.l } <= h.invalidation) ||
+                    h.direction == "DOWN" && (if (h.anchors.size <= 3) observed.maxOf { it.h } > h.invalidation else observed.maxOf { it.h } >= h.invalidation))) {
                     h.status = "INVALIDATED"; h.invalidReasons += "LOWER_FRAME_OBSERVED_INVALIDATION"
                 }
             }
@@ -392,8 +420,12 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
             val parent=points.filter { it.extremeAt in evidence.startAt..evidence.endAt }
             val proof=enrichWilliamsComplexSubdivisions(evidence.pattern,parent,anchorsByFrame[childFrame].orEmpty(),
                 williamsWaveFrames.getValue(frame),asOf)
+            val recursive=traceWilliamsRecursivePriceGrammar(
+                evidence.pattern,parent,anchorsByFrame,williamsWaveFrames,frame,asOf,
+                depth=3,maxNodes=64)
             structures+=evidence.toJson().put("frame",frame).put("child_frame",childFrame)
-                .put("source_scenario_id","$frame:$direction:${evidence.startAt}:${parent.size}").put("internal_proof",proof.toJson())
+                .put("source_scenario_id","$frame:$direction:${evidence.startAt}:${parent.size}")
+                .put("internal_proof",proof.toJson()).put("recursive_proof",recursive)
         }
     }
     return WilliamsWaveHierarchy(asOf,scenarios,linkWilliamsWaveHypotheses(scenarios),errors,warnings,

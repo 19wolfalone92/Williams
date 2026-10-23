@@ -9,16 +9,16 @@ import pytest
 from williams_exit_policy import plan_williams_stop, zone_trailing_activation
 from williams_wave_hierarchy import (
     FRAME_MS, WaveAnchor, WaveBar, WaveHierarchy, WaveHypothesis,
-    build_wave_hierarchy, confirmed_wave_anchors, correction_entry_context,
+    build_wave_hierarchy, classify_fourth_ao, confirmed_wave_anchors, correction_entry_context,
     correction_price_allowed, link_wave_hypotheses, opposing_level_triggered,
 )
 
 HOUR = FRAME_MS["1h"]
 
 
-def rhythm_bars(mirror=False):
+def rhythm_bars(mirror=False, w2=106):
     """Synthetic causal price trajectory, not a claimed historical book replay."""
-    knots = [(0,120),(50,100),(65,110),(78,106),(110,150),(145,118),(160,156),(170,154)]
+    knots = [(0,120),(50,100),(65,110),(78,w2),(110,150),(145,118),(160,156),(170,154)]
     prices = []
     for (a,p),(b,q) in zip(knots,knots[1:]):
         prices += [p+(q-p)*(i-a)/(b-a) for i in range(a,b)]
@@ -53,6 +53,44 @@ def test_every_prefix_is_identical_with_or_without_all_future_candles():
     # Even absurdly malformed FUTURE prices cannot affect a previous decision.
     future = bars[:120] + [replace(b,h=float("nan"),l=-99) for b in bars[120:]]
     assert build_wave_hierarchy({"1h":future},120*HOUR).to_dict() == build_wave_hierarchy({"1h":bars[:120]},120*HOUR).to_dict()
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+def test_a_deep_post_fifth_correction_does_not_erase_the_completed_impulse(mirror):
+    # TC1 ch7 / Course PDF36: the whole completed motive can be corrected.
+    # Its old W1 extreme is not an invalidation of the historical five legs.
+    bars = rhythm_bars()
+    for i in range(1, 16):
+        price = 154 - i * 4.5
+        bars.append(WaveBar(len(bars)*HOUR,price,price+.1,price-.1,price,1000))
+    if mirror:
+        bars = [replace(b,o=300-b.o,h=300-b.l,l=300-b.h,c=300-b.c) for b in bars]
+    report = build_wave_hierarchy({"1h":bars},len(bars)*HOUR)
+    fifth = next(s for s in report.scenarios
+                 if len(s.anchors)==6 and s.anchors[0].extreme_at==50*HOUR)
+    assert fifth.label == "W5" and fifth.active_label == "A"
+    assert fifth.status == "PROVISIONAL"
+    assert "LIVE_PRICE_INVALIDATED_COUNT" not in fifth.invalid_reasons
+    assert "LOWER_FRAME_OBSERVED_INVALIDATION" not in fifth.invalid_reasons
+    assert not report.to_dict()["can_place_orders"]
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+def test_unfinished_fifth_still_invalidates_on_a_wick_even_if_close_holds(mirror):
+    bars = rhythm_bars()[:150]
+    if mirror:
+        bars=[replace(b,o=300-b.o,h=300-b.l,l=300-b.h,c=300-b.c) for b in bars]
+    def target(rows):
+        report=build_wave_hierarchy({"1h":rows},len(rows)*HOUR)
+        return next(s for s in report.scenarios if len(s.anchors)==5 and s.anchors[0].extreme_at==50*HOUR)
+    scenario=target(bars)
+    assert scenario.status=="PROVISIONAL" and scenario.active_label=="W5"
+    b=bars[-1]
+    bars[-1]=replace(b,h=max(b.h,scenario.invalidation+.01)) if mirror else replace(b,l=min(b.l,scenario.invalidation-.01))
+    broken=target(bars)
+    assert broken.status=="INVALIDATED"
+    assert "LOWER_FRAME_OBSERVED_INVALIDATION" in broken.invalid_reasons
+    assert "LIVE_PRICE_INVALIDATED_COUNT" not in broken.invalid_reasons
 
 
 def test_real_h4_history_participates_in_hierarchy_and_internal_subdivision_checks():
@@ -335,3 +373,55 @@ def test_observed_five_frame_chain_cannot_skip_requested_h4_evidence():
     assert four["contained_chain_observed"] is True
     assert five["contained_chain_observed"] is False
     assert not five["can_place_orders"]
+
+
+@pytest.mark.parametrize("case",json.loads((Path(__file__).resolve().parents[1]/
+    "app/src/test/resources/williams_w4_zero_source_contract.json").read_text())["cases"],
+    ids=lambda case:case["id"])
+def test_source_w4_zero_cross_excludes_touch_and_wrong_degree_scale(case):
+    # Course PDF44: past zero, not merely at zero. Same oriented rule both ways.
+    for sign in (1,-1):
+        raw_w3=sign*case["third_peak"]
+        raw_w4=sign*case["fourth_minimum"]
+        assert classify_fourth_ao(sign*raw_w3,sign*raw_w4,case["scale_bars"])==case["expected"]
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+def test_course_w2_exact_100_percent_touch_is_unverified_not_invalidated(mirror):
+    # Course PDF46: W2 cannot cross the W1 start; PDF48: 100% is possible.
+    # The pivots are derived from causal synthetic closed candles, not invented labels.
+    fixture=json.loads((Path(__file__).parents[1]/"app/src/test/resources/williams_w2_boundary_source_contract.json").read_text())
+    assert fixture["can_place_orders"] is False
+    for case in fixture["cases"]:
+        second_low,expected=case["second_low"],case["expected"]
+        # Freeze history just after the two right-hand confirmation bars.
+        # Taking the latest suffix after W5 would instead examine another wave degree.
+        bars=rhythm_bars(mirror=mirror,w2=second_low)[:82]
+        report=build_wave_hierarchy({"1h":bars},len(bars)*HOUR)
+        counts=[s for s in report.scenarios if s.direction==("DOWN" if mirror else "UP")
+                and len(s.anchors)==3 and s.anchors[0].extreme_at==50*HOUR]
+        assert len(counts)==1,(mirror,second_low,[(s.label,s.status) for s in report.scenarios])
+        count=counts[0]
+        assert count.status==expected
+        if second_low==100.0:
+            assert count.alternatives==["W2_ORIGIN_TOUCH_100_PERCENT_UNCONFIRMED"]
+            assert count.invalid_reasons==[]
+            assert "LOWER_FRAME_OBSERVED_INVALIDATION" not in count.invalid_reasons
+        if second_low==99.5:
+            assert "W2_INVALIDATES_ORIGIN" in count.invalid_reasons
+        assert report.to_dict()["can_place_orders"] is False
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+def test_book_fractal_requires_two_closed_right_bars_even_for_mirrored_high(mirror):
+    fixture=json.loads((Path(__file__).parents[1]/"app/src/test/resources/williams_w2_boundary_source_contract.json").read_text())
+    case=fixture["fractals"][0]
+    bars=[WaveBar(i*HOUR,v,v+1,v-1,v,100) for i,v in enumerate(case["levels"])]
+    if mirror:
+        bars=[replace(b,o=300-b.o,h=300-b.l,l=300-b.h,c=300-b.c) for b in bars]
+    assert confirmed_wave_anchors(bars[:4],HOUR)==[]
+    pivot=confirmed_wave_anchors(bars,HOUR)
+    assert len(pivot)==1
+    assert pivot[0].kind==("HIGH" if mirror else "LOW")
+    assert pivot[0].extreme_at==2*HOUR
+    assert pivot[0].known_at==case["known_at_bar"]*HOUR

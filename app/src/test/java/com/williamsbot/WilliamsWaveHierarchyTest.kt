@@ -13,6 +13,29 @@ class WilliamsWaveHierarchyTest {
         return (0 until rows.length()).map { i -> val r=rows.getJSONArray(i)
             WilliamsWaveBar(r.getLong(0),r.getDouble(1),r.getDouble(2),r.getDouble(3),r.getDouble(4),r.getDouble(5)) }
     }
+    @Test fun sourceW4CrossRequiresPassingZeroAtTheExaminedDegree() {
+        val cases=JSONObject(requireNotNull(javaClass.getResource(
+            "/williams_w4_zero_source_contract.json")).readText()).getJSONArray("cases")
+        for(i in 0 until cases.length()) {
+            val case=cases.getJSONObject(i)
+            for(sign in listOf(1,-1)) {
+                val rawW3=sign*case.getDouble("third_peak")
+                val rawW4=sign*case.getDouble("fourth_minimum")
+                assertEquals(case.getString("id"),case.getString("expected"),
+                    classifyWilliamsFourthAo(sign*rawW3,sign*rawW4,case.getInt("scale_bars")))
+            }
+        }
+        // The hierarchy scalar and the separate rhythm module must agree
+        // that an exact touch has not met the book minimum in either direction.
+        for(direction in listOf("UP","DOWN")) {
+            val sign=if(direction=="UP") 1 else -1
+            val ao=MutableList(120) { 4.0*sign };ao[55]=8.0*sign;ao[95]=0.0
+            assertEquals(Wave4ZeroStatus.NEAR_ZERO_UNCONFIRMED,
+                evaluateWilliamsWave4Zero(ao,0,55,119,direction).status)
+            assertEquals("NEAR_ZERO_UNCONFIRMED",classifyWilliamsFourthAo(8.0,0.0,120))
+        }
+    }
+
     @Test fun realH4BarsParticipateInHypothesesAndUseH1ForSubdivisionEvidence() {
         val fixture=fixtureCases().getJSONObject(0)
         val h4=fixtureBars(fixture).map { it.copy(t=it.t*4) }
@@ -76,12 +99,98 @@ class WilliamsWaveHierarchyTest {
         assertTrue(invalid.invalidReasons.contains("W4_BREACHES_W3_OR_W4_END"))
         assertEquals("PROVISIONAL",count(125.0).status)
     }
+
+    @Test fun courseW2ExactOriginTouchIsAnUnverifiedAlternativeNotInvalidation() {
+        val cases=JSONObject(requireNotNull(javaClass.getResource(
+            "/williams_w2_boundary_source_contract.json")).readText()).getJSONArray("cases")
+        for (mirror in listOf(false,true)) for(caseIndex in 0 until cases.length()) {
+            val case=cases.getJSONObject(caseIndex)
+            val secondLow=case.getDouble("second_low")
+            val knots=listOf(0 to 120.0,50 to 100.0,65 to 110.0,78 to secondLow,
+                110 to 150.0,145 to 118.0,160 to 156.0,170 to 154.0)
+            val bars=(0..170).map { i ->
+                val pair=knots.zipWithNext().firstOrNull { (a,b) -> i in a.first..b.first }
+                val price=if(pair==null) knots.last().second else {
+                    val (a,b)=pair; a.second+(b.second-a.second)*(i-a.first)/(b.first-a.first)
+                }
+                val original=WilliamsWaveBar(i*hour,price,price+.1,price-.1,price,1000.0)
+                if(mirror) original.copy(o=300-original.o,h=300-original.l,
+                    l=300-original.h,c=300-original.c) else original
+            }
+            // A suffix after W5 would be a DIFFERENT provisional wave count.
+            val prefix=bars.take(82)
+            val report=buildWilliamsWaveHierarchy(mapOf("1h" to prefix),prefix.size*hour)
+            val direction=if(mirror) "DOWN" else "UP"
+            val counts=report.scenarios.filter { it.direction==direction && it.anchors.size==3 &&
+                it.anchors.first().extremeAt==50*hour }
+            assertEquals("W2 case count; mirror=$mirror, w2=$secondLow",1,counts.size)
+            val s=counts.single()
+            assertEquals(case.getString("expected"),s.status)
+            if(secondLow==100.0) {
+                assertEquals(listOf("W2_ORIGIN_TOUCH_100_PERCENT_UNCONFIRMED"),s.alternatives)
+                assertTrue(s.invalidReasons.isEmpty())
+            }
+            if(secondLow==99.5) assertTrue(s.invalidReasons.contains("W2_INVALIDATES_ORIGIN"))
+            assertFalse(report.toJson().getBoolean("can_place_orders"))
+        }
+    }
+    @Test fun unconfirmedRightBarCannotRevealEitherDirectionFractal() {
+        val case=JSONObject(requireNotNull(javaClass.getResource(
+            "/williams_w2_boundary_source_contract.json")).readText()).getJSONArray("fractals").getJSONObject(0)
+        val levels=case.getJSONArray("levels").let { a -> (0 until a.length()).map { a.getDouble(it) } }
+        for(mirror in listOf(false,true)) {
+            val bars=levels.mapIndexed { i,v ->
+                val b=WilliamsWaveBar(i*hour,v,v+1,v-1,v,100.0)
+                if(mirror) b.copy(o=300-b.o,h=300-b.l,l=300-b.h,c=300-b.c) else b
+            }
+            assertTrue(confirmedWilliamsWaveAnchors(bars.dropLast(1),hour).isEmpty())
+            val p=confirmedWilliamsWaveAnchors(bars,hour).single()
+            assertEquals(if(mirror) "HIGH" else "LOW",p.kind)
+            assertEquals(2*hour,p.extremeAt)
+            assertEquals(case.getInt("known_at_bar")*hour,p.knownAt)
+        }
+    }
     @Test fun allCausalPrefixesIgnoreFutureCandles() {
         val bars=fixtureBars(fixtureCases().getJSONObject(0))
         for (n in 40..bars.size step 3) {
             val full=buildWilliamsWaveHierarchy(mapOf("1h" to bars),n*hour)
             val prefix=buildWilliamsWaveHierarchy(mapOf("1h" to bars.take(n)),n*hour)
             assertEquals(prefix.toJson().toString(),full.toJson().toString())
+        }
+    }
+    @Test fun aDeepPostFifthCorrectionDoesNotEraseTheHistoricalMotiveInEitherDirection() {
+        for(mirror in listOf(false,true)) {
+            val bars=fixtureBars(fixtureCases().getJSONObject(0)).toMutableList()
+            for(i in 1..15) {
+                val price=154.0-i*4.5
+                bars+=WilliamsWaveBar(bars.size*hour,price,price+.1,price-.1,price,1000.0)
+            }
+            val source=if(mirror) bars.map { it.copy(o=300-it.o,h=300-it.l,l=300-it.h,c=300-it.c) } else bars
+            val report=buildWilliamsWaveHierarchy(mapOf("1h" to source),source.size*hour)
+            val fifth=report.scenarios.single { it.anchors.size==6 && it.anchors.first().extremeAt==50*hour }
+            assertEquals("W5",fifth.label)
+            assertEquals("A",fifth.activeLabel)
+            assertEquals("PROVISIONAL",fifth.status)
+            assertFalse("LIVE_PRICE_INVALIDATED_COUNT" in fifth.invalidReasons)
+            assertFalse("LOWER_FRAME_OBSERVED_INVALIDATION" in fifth.invalidReasons)
+            assertEquals("HISTORICAL_REFERENCE_NOT_ACTIVE_INVALIDATION",fifth.toJson().getString("invalidation_scope"))
+        }
+    }
+    @Test fun anUnfinishedFifthStillInvalidatesOnAWickWhenTheCloseHolds() {
+        for(mirror in listOf(false,true)) {
+            val original=fixtureBars(fixtureCases().getJSONObject(0)).take(150)
+            val bars=(if(mirror) original.map { it.copy(o=300-it.o,h=300-it.l,l=300-it.h,c=300-it.c) } else original).toMutableList()
+            fun target(rows:List<WilliamsWaveBar>)=buildWilliamsWaveHierarchy(mapOf("1h" to rows),rows.size*hour)
+                .scenarios.single { it.anchors.size==5 && it.anchors.first().extremeAt==50*hour }
+            val initial=target(bars)
+            assertEquals("PROVISIONAL",initial.status)
+            val b=bars.last()
+            bars[bars.lastIndex]=if(mirror) b.copy(h=maxOf(b.h,initial.invalidation+.01))
+                else b.copy(l=minOf(b.l,initial.invalidation-.01))
+            val broken=target(bars)
+            assertEquals("INVALIDATED",broken.status)
+            assertTrue("LOWER_FRAME_OBSERVED_INVALIDATION" in broken.invalidReasons)
+            assertFalse("LIVE_PRICE_INVALIDATED_COUNT" in broken.invalidReasons)
         }
     }
     @Test fun gapsDuplicatesNonFiniteAndStaleHistoryCannotAuthorizeWaves() {

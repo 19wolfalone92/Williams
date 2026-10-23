@@ -22,15 +22,31 @@ internal data class WilliamsThirdMomentumEvidence(
         .put("signal_sma5_at_peak",signalAtPeak?:JSONObject.NULL)
         .put("signal_cross_known_at_ms",signalCrossKnownAt?:JSONObject.NULL)
         .put("book_lag_range","1_TO_5_REAL_BARS")
+        .put("source","TC1_PDF60_COURSE_PDF42")
         .put("wave_degree_confirmed",false).put("can_place_orders",false)
         .put("can_close_positions",false)
+}
+
+internal fun williamsThirdMomentumUnavailable(reason:String)=
+    WilliamsThirdMomentumEvidence(reason,null,null,emptyList(),null,null,null,null)
+
+internal fun williamsThirdMomentumLabel(evidence:JSONObject):String=when(evidence.optString("status")) {
+    "GLOBAL_PEAK_AND_PRICE_LAG_OBSERVED" ->
+        "W3: глобальный пик 5/34 следует за ценовым экстремумом на ${evidence.optInt("price_to_ao_lag_bars")} бар.; поворот пика наблюдается. Степень волны остаётся гипотезой."
+    "GLOBAL_PEAK_OUTSIDE_W3_PRICE_LAG_WINDOW" ->
+        "W3: глобальный пик 5/34 не согласован с ценовым экстремумом в диапазоне 1–5 баров; проверить разметку и степень."
+    "MULTIPLE_GLOBAL_PEAKS_DEGREE_UNCONFIRMED" ->
+        "W3: равные глобальные пики 5/34 допускают другую разметку; степень не подтверждена."
+    "GLOBAL_PEAK_TURN_NOT_YET_OBSERVED" ->
+        "W3: последующий поворот пика 5/34 ещё не наблюдался."
+    else -> "W3: нет однозначной привязки ценового экстремума к пику 5/34 на выбранном масштабе."
 }
 
 internal fun evaluateWilliamsThirdMomentum(
     rows:List<WilliamsWaveBar>,ao:List<Double>,cycleStart:Int,
     thirdPriceIndex:Int,fourthPriceIndex:Int,direction:String,frameMs:Long
 ):WilliamsThirdMomentumEvidence {
-    fun absent(reason:String)=WilliamsThirdMomentumEvidence(reason,null,null,emptyList(),null,null,null,null)
+    fun absent(reason:String)=williamsThirdMomentumUnavailable(reason)
     if(direction !in listOf("UP","DOWN") || frameMs<=0 || rows.size!=ao.size ||
         cycleStart<0 || thirdPriceIndex<cycleStart || fourthPriceIndex<=thirdPriceIndex ||
         fourthPriceIndex>=rows.size || !ao.subList(cycleStart,fourthPriceIndex+1).all(Double::isFinite))
