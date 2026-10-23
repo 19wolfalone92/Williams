@@ -60,4 +60,27 @@ class FuturesExternalStopManagementTest {
         good.put("strategy_ownership_verified",false)
         assertTrue(verifiedExternalStopManagementScope(candidate,foreign,owners).isEmpty())
     }
+
+    @Test fun quarantinedOtherSidePermitsOnlyFreshAuditedOwnedStopsOnUnrelatedPairs() {
+        val now=1_000_000L
+        val owned=owner("BTCUSDT").put("actual_risk_audit_status","PASS")
+            .put("actual_risk_audited_at_ms",now).put("liquidation_guard_status","PASS")
+        val proof=observed("BTCUSDT").put("observed_at_ms",now)
+        val owners=JSONArray().put(owned)
+        val proofs=JSONArray().put(proof)
+        fun scope()=verifiedQuarantineStopManagementScope(proofs,JSONArray(),owners,setOf("ETHUSDT"),now)
+        assertEquals(setOf("BTCUSDT"),scope())
+        owned.put("actual_risk_audit_blocker","UNKNOWN_ACCOUNT")
+        assertTrue(scope().isEmpty())
+        owned.remove("actual_risk_audit_blocker")
+        owned.put("actual_risk_audit_status","BLOCKED")
+        assertTrue(scope().isEmpty())
+        owned.put("actual_risk_audit_status","PASS")
+        proof.put("observed_at_ms",now-30_001L)
+        assertTrue(scope().isEmpty())
+        proof.put("observed_at_ms",now)
+        assertTrue(verifiedQuarantineStopManagementScope(proofs,JSONArray(),owners,setOf("BTCUSDT"),now).isEmpty())
+        owners.put(org.json.JSONObject().put("symbol","BTCUSDT").put("intent_role","ADD_ON").put("order_status","NEW"))
+        assertTrue(scope().isEmpty())
+    }
 }

@@ -2629,7 +2629,7 @@ internal class NativeFuturesCampaignCoordinator(
             // Allow only a narrowly scoped maintenance exception when the
             // SOLE global reconciliation blocker is a foreign order on an
             // unrelated symbol. A closed/read-only campaign gets no permission.
-            val eligibleExternalStopManagement=if(
+            val externalOrderOnlyScope=if(
                 externalOrders.length()>0 && !otherRiskBlock &&
                 !anyUnprotected && !hasPendingExit && !hasPendingAddition && !hasPendingEntry &&
                 requiredSafetyExits.length()==0
@@ -2638,6 +2638,13 @@ internal class NativeFuturesCampaignCoordinator(
                     protectionObservations,externalOrders,persisted
                 )
             } else emptySet()
+            val emergencySymbols=(0 until requiredSafetyExits.length()).map {
+                requiredSafetyExits.getJSONObject(it).optString("symbol")
+            }.toSet()
+            val isolatedQuarantineScope=verifiedQuarantineStopManagementScope(
+                protectionObservations,externalOrders,persisted,reversedCampaignSymbols,clock()
+            ) - emergencySymbols
+            val eligibleExternalStopManagement=externalOrderOnlyScope + isolatedQuarantineScope
             externalStopManagementSymbolsJson=JSONArray(eligibleExternalStopManagement.sorted()).toString()
             externalStopManagementVerifiedAtMs=if(eligibleExternalStopManagement.isNotEmpty()) clock() else 0L
             val verifiedOverCap = !anyUnprotected && !hasPendingExit && !hasPendingAddition &&
@@ -3479,7 +3486,7 @@ internal class NativeFuturesCampaignCoordinator(
         clientAlgoId: String,
         reason: String = "UNSPECIFIED_STRUCTURAL_TRAIL"
     ): JSONObject = synchronized(lock) {
-        val foreignOrderRiskOnly = state == State.RECONCILE_REQUIRED &&
+        val foreignOrderRiskOnly = state in setOf(State.RECONCILE_REQUIRED, State.POSITION_UNPROTECTED) &&
             clientAlgoId.startsWith("W2T_") &&
             externalStopManagementVerifiedAtMs>0L &&
             clock()>=externalStopManagementVerifiedAtMs &&

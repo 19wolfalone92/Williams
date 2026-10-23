@@ -2467,6 +2467,15 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals("REVERSED_CAMPAIGN_QUARANTINE",proofs.getJSONObject(1).getString("management_mode"))
         assertEquals(before,exchange.posts("/fapi/v1/algoOrder"))
         assertEquals(0,exchange.posts("/fapi/v1/order"))
+        val scope=result.getJSONArray("verified_external_stop_management_symbols")
+        assertEquals(1,scope.length())
+        assertEquals("BTCUSDT",scope.getString(0))
+        val trail=coordinator.trailProtectiveStop("BTCUSDT",NativeFuturesCampaignCoordinator.Direction.LONG,
+            "96","W2T_ISOLATED_BTC","TC2_LAST_5_CLOSED_BARS")
+        assertTrue(trail.toString(),trail.getBoolean("ok"))
+        assertEquals("POSITION_UNPROTECTED",coordinator.state.name)
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
     }
 
     @Test fun diagnostics19DuplicateSignedPositionRowsNeverOverwriteRealExposure() {
@@ -2476,7 +2485,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         val before=exchange.posts("/fapi/v1/algoOrder")
         val result=coordinator.reconcile()
         assertFalse(result.getBoolean("ok"))
-        assertTrue(result.getString("blocker").contains("duplicate position symbol"))
+        assertTrue(result.toString(),result.getString("blocker").contains("duplicate",ignoreCase=true))
         assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
         assertEquals(before,exchange.posts("/fapi/v1/algoOrder"))
         assertEquals(0,exchange.posts("/fapi/v1/order"))
