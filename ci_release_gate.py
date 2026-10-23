@@ -216,7 +216,13 @@ def main() -> None:
     must(futures, 'market_on_close_reason(', "futures_williams_runtime.py")
     coordinator_editions=read("app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     must(coordinator_editions,'Addition campaign/profile identity mismatch',"NativeFuturesCampaignCoordinator.kt")
-    must(coordinator_editions,'Market exposure is only a verified NTD zone addition',"NativeFuturesCampaignCoordinator.kt")
+    must(coordinator_editions,'Market exposure requires an owned NTD close event or TC2 confirmed-flat reversal',"NativeFuturesCampaignCoordinator.kt")
+    must(coordinator_editions,'if(isReversal) checkBookReversalDoor(plan,currentIntents,adapter,true)',"TC2 reversal final exchange door")
+    must(coordinator_editions,'"TC2_REVERSAL_OLD_ORDERS_NOT_CLEANED_UP"',"TC2 reversal cleanup fence")
+    reversal=read("app/src/main/java/com/williamsbot/WilliamsTc2Reversal.kt")
+    for proof in ('"EXIT_CONFIRMED"','"FILLED"','"executed_qty"','"position_before_qty"',
+                  '"reversal_owner_id"','"TC2_REVERSAL_TRIGGER_TOO_FAR_NO_CHASING"'):
+        must(reversal,proof,"TC2 confirmed-flat reversal contract")
     must(coordinator_editions,'exchange quantity cannot be attributed',"NativeFuturesCampaignCoordinator.kt")
     must(futures, "default_symbols = DEFAULT_FUTURES_SYMBOLS", "futures_williams_runtime.py")
     must(futures, "tuple(approved) != DEFAULT_FUTURES_SYMBOLS", "futures_williams_runtime.py")

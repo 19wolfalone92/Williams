@@ -13,6 +13,9 @@ internal fun williamsNewExposureBlocker(source:String):String? =
 internal fun williamsExecutionPolicySnapshot():JSONObject = JSONObject()
     .put("mode",WILLIAMS_EXECUTION_POLICY).put("execution_profile",williamsExecutionProfile)
     .put("observer_profiles",JSONArray(williamsObserverProfiles)).put("one_campaign_per_symbol",true)
+    .put("tc2_reversal_policy",WILLIAMS_TC2_REVERSAL)
+    .put("tc2_reversal_requires",JSONArray(listOf("OWNED_EXIT_FILLED","SIGNED_FLAT","OLD_ORDERS_CLEANED",
+        "FRESH_H1_SIGNAL","NEW_RISK_BUDGET","NEW_PROTECTIVE_STOP")))
     .put("legacy_management","PINNED_SOURCE_NO_NEW_EXPOSURE")
 
 internal fun williamsStructuralFractal(type:String,source:String):Boolean =

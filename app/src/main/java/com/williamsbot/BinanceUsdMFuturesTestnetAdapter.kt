@@ -171,6 +171,17 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         return value
     }
 
+    fun bestBidAsk(symbol:String):Pair<Double,Double> {
+        requireSymbol(symbol)
+        val row=JSONObject(requestRaw("GET","/fapi/v1/ticker/bookTicker",mapOf("symbol" to symbol),signed=false))
+        val bid=row.optString("bidPrice").toDoubleOrNull()
+        val ask=row.optString("askPrice").toDoubleOrNull()
+        if(row.optString("symbol")!=symbol || bid==null || ask==null ||
+            !bid.isFinite() || !ask.isFinite() || bid<=0 || ask<bid)
+            throw IOException("Futures executable quote identity/value is invalid")
+        return bid to ask
+    }
+
     fun klines(symbol: String, interval: String = "1h", limit: Int = 300): JSONArray {
         requireSymbol(symbol)
         require(interval in APPROVED_FUTURES_KLINE_INTERVALS) { "Unsupported USD-M Futures kline interval: $interval" }

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "updated": "2026-10-23",
-  "release": "4.57.1-diagnostics19-book-stops",
+  "release": "4.59.0-tc2-confirmed-flat-reversal",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
   "source_review_complete": false,
@@ -839,21 +839,34 @@
         155,
         165
       ],
-      "rule": "TC2 includes stop-and-reverse exits: opposing confirmed Wise-Man breakout may flatten current ownership; automatic reverse entry is a distinct, not yet accepted financial action.",
-      "status": "PENDING",
+      "rule": "TC2 opposite confirmed Wise-Man breakout closes the owned campaign; a distinct opposite campaign follows only after a signed full exit, flat position and old STOP cleanup, with fresh H1 evidence, new risk and a new protective STOP.",
+      "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_execution_policy.py",
         "app/src/main/java/com/williamsbot/WilliamsExecutionPolicy.kt",
         "futures_williams_runtime.py",
-        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
+        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt",
+        "williams_tc2_reversal.py",
+        "app/src/main/java/com/williamsbot/WilliamsTc2Reversal.kt",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
       ],
       "tests": [
         "tests/test_tc2_final_exit_door.py::test_tc2_exit_rereads_exact_futures_contract_before_exit_intent",
-        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::confirmedBookOppositeExitFlattensOnlyOwnedPositionWithStopHeldUntilFill"
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::confirmedBookOppositeExitFlattensOnlyOwnedPositionWithStopHeldUntilFill",
+        "tests/test_williams_tc2_reversal.py::test_shared_two_leg_contract_rejects_unconfirmed_flat_replay_and_price_chasing",
+        "app/src/test/java/com/williamsbot/WilliamsTc2ReversalTest.kt::sharedTwoLegContractRejectsUnconfirmedFlatReplayAndPriceChasing",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::bookReversalUsesTwoDistinctFilledCampaignsAndNewProtectionWithoutDuplicateEntry",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::partialOppositeExitCannotAuthorizeReverseRiskAfterRestart"
       ],
-      "fixtures": [],
-      "remaining_evidence": "Prior SL-only override was explicitly rescinded on 2026-10-22. Risk-reducing opposite H1 Wise-Man exit implemented with CONTRACT_PRICE trigger plus separate mark-profit/owner guards; the book's subsequent reverse entry and deterministic two-leg Binance Demo lifecycle (partial fill, crash, idempotence) are not yet implemented or accepted.",
-      "can_place_orders_from_registry": false
+      "fixtures": [
+        "cases/valid",
+        "cases/partial-exit",
+        "cases/already-admitted",
+        "cases/trigger-recovered"
+      ],
+      "remaining_evidence": "Native execution now implements the second leg with deterministic client id and source-pinned H1 revalidation, fresh position/order/quote checks, independent sizing and new STOP. Shared Python/Kotlin semantic fixtures and real coordinator transport/SQLite model cover both directions, partial exits, lost close/entry replies and restart. The existing user positive-after-cost exit restriction is retained. Physical Android Demo acceptance and backend Python automatic reversal execution remain pending; canonical Python evaluator is read-only.",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_tc2_reversal_contract.json"
     },
     {
       "id": "ENGINEERING.RISK_AND_LOT_LIMITS",

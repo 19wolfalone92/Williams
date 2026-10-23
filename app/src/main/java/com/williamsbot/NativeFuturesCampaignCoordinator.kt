@@ -786,7 +786,8 @@ internal class NativeFuturesCampaignCoordinator(
         val referenceClose: Double = 0.0,
         val setupContext: String = "",
         val reentryOwnerId:String="",
-        val signalId:String=""
+        val signalId:String="",
+        val reversalOwnerId:String=""
     )
 
     @Volatile var state: State = State.UNINITIALIZED
@@ -2915,11 +2916,16 @@ internal class NativeFuturesCampaignCoordinator(
     }
     private fun submitPendingEntryLocked(plan: EntryPlan): JSONObject = synchronized(lock) {
         val currentIntents = intents()
+        val isReversal=plan.reversalOwnerId.isNotBlank()
+        if(isReversal && (plan.kind!=EntryKind.MARKET || plan.strategyProfile!=williamsTc2Profile ||
+            plan.entryClientId.isNotBlank() || plan.reentryOwnerId.isNotBlank() ||
+            plan.executionSemantics!=WILLIAMS_TC2_REVERSAL))
+            return@synchronized safePreflightRejection("TC2_REVERSAL_PLAN_INVALID")
         if ((0 until currentIntents.length()).any { currentIntents.getJSONObject(it).has("native_stop_replacement") })
             return@synchronized safePreflightRejection("NATIVE_STOP_REPLACEMENT_PENDING: reconcile all STOP identities before new exposure")
         if(hasUnresolvedTriggeringEntry(currentIntents))
             return@synchronized safePreflightRejection("CONDITIONAL_TRIGGER_IN_PROGRESS: reconcile child order and position before new exposure")
-        if(requireM15FractalForAutomatedEntries && plan.entryClientId.isBlank() &&
+        if(requireM15FractalForAutomatedEntries && !isReversal && plan.entryClientId.isBlank() &&
             plan.signalType!="OPERATOR_FORCED_DIRECTION") {
             val proof=williamsMtfProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
                 plan.entryPrice.toDoubleOrNull() ?: Double.NaN,plan.protectiveStop.toDoubleOrNull() ?: Double.NaN,clock())
@@ -2927,7 +2933,7 @@ internal class NativeFuturesCampaignCoordinator(
             if(williamsH1ParentAlreadyFilled(currentIntents,plan.signalId,plan.signalType,plan.signalBarTimeMs))
                 return@synchronized safePreflightRejection("H1_PARENT_ALREADY_FILLED: no second initial campaign")
         }
-        if(requireBookH1ProofForAutomatedEntries &&
+        if(requireBookH1ProofForAutomatedEntries && !isReversal &&
             plan.signalType!="OPERATOR_FORCED_DIRECTION") {
             val bookProof=williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,
                 plan.signalId,plan.signalType,plan.strategyProfile,
@@ -2982,6 +2988,11 @@ internal class NativeFuturesCampaignCoordinator(
             )
         }
         val preflightAdapter = adapterFactory()
+        if(isReversal) {
+            val blocker=runCatching { checkBookReversalDoor(plan,currentIntents,preflightAdapter,false) }
+                .getOrElse { "TC2_REVERSAL_PREFLIGHT_UNAVAILABLE: "+safeDiagnosticText(it.message ?: it.javaClass.simpleName) }
+            if(blocker!=null) return@synchronized safePreflightRejection(blocker)
+        }
         val preflightAccount = runCatching {
             parseFuturesAccountSnapshot(preflightAdapter.account())
         }.getOrNull() ?: return@synchronized safePreflightRejection(
@@ -3112,7 +3123,7 @@ internal class NativeFuturesCampaignCoordinator(
         val riskBlocker = futuresPortfolioRiskBlocker(plan.riskPct, reservedRiskPcts)
         if (riskBlocker != null) return@synchronized safePreflightRejection(riskBlocker)
 
-        if (plan.kind==EntryKind.MARKET) {
+        if (plan.kind==EntryKind.MARKET && !isReversal) {
             val reason=williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
                 plan.referenceClose,preflightAdapter.markPrice(plan.symbol))
             if (reason!=null) return@synchronized safePreflightRejection(reason)
@@ -3120,6 +3131,7 @@ internal class NativeFuturesCampaignCoordinator(
         val intent = JSONObject()
             .put("intent_role", if (isAddition) "ADD_ON" else "ENTRY")
             .put("entry_client_id",plan.entryClientId).put("reentry_owner_id",plan.reentryOwnerId)
+            .put("reversal_owner_id",plan.reversalOwnerId)
             .put("strategy_profile",plan.strategyProfile)
             .put("execution_semantics",plan.executionSemantics)
             .put("reference_close",plan.referenceClose)
@@ -3198,7 +3210,7 @@ internal class NativeFuturesCampaignCoordinator(
             saveIntents(currentIntents)
             finalContextCheckStarted = true
             check(entryTimePolicyProvider().allows(clock())) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_SUBMISSION" }
-            if(requireM15FractalForAutomatedEntries && !isAddition && plan.signalType!="OPERATOR_FORCED_DIRECTION") {
+            if(requireM15FractalForAutomatedEntries && !isReversal && !isAddition && plan.signalType!="OPERATOR_FORCED_DIRECTION") {
                 check(williamsMtfProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
                     plan.entryPrice.toDouble(),plan.protectiveStop.toDouble(),clock())==null) {
                     "M15_FRACTAL_PROOF_EXPIRED_BEFORE_SUBMISSION"
@@ -3206,8 +3218,8 @@ internal class NativeFuturesCampaignCoordinator(
                 val verifier=m15EntryVerifier ?: error("M15_FINAL_VERIFIER_REQUIRED")
                 verifier(plan)
             }
-            if(requireBookH1ProofForAutomatedEntries && plan.signalType!="OPERATOR_FORCED_DIRECTION") {
-                check(williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
+            if((requireBookH1ProofForAutomatedEntries || isReversal) && plan.signalType!="OPERATOR_FORCED_DIRECTION") {
+                if(!isReversal) check(williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
                     plan.signalType,plan.strategyProfile,plan.entryPrice.toDouble(),
                     plan.protectiveStop.toDouble(),clock(),plan.entryClientId)==null) {
                     "H1_BOOK_PROOF_EXPIRED_BEFORE_SUBMISSION"
@@ -3215,6 +3227,7 @@ internal class NativeFuturesCampaignCoordinator(
                 val verifier=bookH1EntryVerifier ?: error("H1_BOOK_FINAL_VERIFIER_REQUIRED")
                 verifier(plan)
             }
+            if(isReversal) checkBookReversalDoor(plan,currentIntents,adapter,true)?.let { error(it) }
             if(isAddition && plan.strategyProfile==williamsTc2Profile) {
                 val positions=adapter.positions()
                 val live=(0 until positions.length()).mapNotNull { positions.optJSONObject(it) }
@@ -3228,7 +3241,7 @@ internal class NativeFuturesCampaignCoordinator(
                 tc2AdditionBookBlocker(plan,primary,currentIntents,live,
                     adapter.markPrice(plan.symbol),adapter.contractPrice(plan.symbol))?.let { error(it) }
             }
-            if(plan.kind==EntryKind.MARKET) check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
+            if(plan.kind==EntryKind.MARKET && !isReversal) check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
                 plan.referenceClose,adapter.markPrice(plan.symbol))==null) { "NTD close-event expired or moved before mutation" }
             orderSubmissionAttempted = true
             val result = when (plan.kind) {
@@ -3951,6 +3964,7 @@ internal class NativeFuturesCampaignCoordinator(
             exitIntent.put("exchange_order_id", confirmedOrder.optString("orderId", result.optString("orderId", "")))
                 .put("exchange_status", finalOrderStatus)
                 .put("order_status", finalOrderStatus)
+                .put("executed_qty",confirmedOrder.optString("executedQty"))
                 .put("last_reconciled_ms", clock())
             saveIntents(intents)
             if (finalOrderStatus != "FILLED") {
@@ -4739,9 +4753,11 @@ internal class NativeFuturesCampaignCoordinator(
         require(plan.strategyProfile!=williamsCourseProfile || family in setOf("COURSE_HUMP","COURSE_THUMB","COURSE_SQUAT")) { "Signal does not belong to Course" }
         require(plan.entryClientId.isNotBlank() || plan.reentryOwnerId.isNotBlank() || plan.strategyProfile!=williamsNtdProfile ||
             plan.signalType.removePrefix("SHORT_")=="FRACTAL") { "NTD cycle must start with an external fractal" }
-        require(plan.kind!=EntryKind.MARKET || ((plan.entryClientId.isNotBlank() || plan.reentryOwnerId.isNotBlank()) &&
+        val reversal=plan.reversalOwnerId.isNotBlank() && plan.strategyProfile==williamsTc2Profile &&
+            plan.executionSemantics==WILLIAMS_TC2_REVERSAL && family in setOf("REVERSAL","SUPER_AO","FRACTAL")
+        require(plan.kind!=EntryKind.MARKET || reversal || ((plan.entryClientId.isNotBlank() || plan.reentryOwnerId.isNotBlank()) &&
             plan.strategyProfile==williamsNtdProfile && plan.signalType.removePrefix("SHORT_")=="ZONE_ADD_ON" &&
-            plan.executionSemantics=="MARKET_ON_CLOSE")) { "Market exposure is only a verified NTD zone addition" }
+            plan.executionSemantics=="MARKET_ON_CLOSE")) { "Market exposure requires an owned NTD close event or TC2 confirmed-flat reversal" }
         require(plan.quantity.toBigDecimalOrNull()?.signum() == 1) { "Quantity must be positive" }
         val price = plan.entryPrice.toBigDecimalOrNull()
             ?: throw IllegalArgumentException("Entry price is invalid")
@@ -4759,6 +4775,35 @@ internal class NativeFuturesCampaignCoordinator(
             }
         }
         require(plan.clientId.matches(Regex("[A-Za-z0-9_./:-]{1,36}"))) { "Invalid client order ID" }
+    }
+
+    /** Signed flat/order cleanup and the original durable book signal are both
+     * rechecked before configuration and immediately before the new order POST. */
+    private fun checkBookReversalDoor(plan:EntryPlan,ledger:JSONArray,
+        adapter:BinanceUsdMFuturesTestnetAdapter,allowSelf:Boolean):String? {
+        val info=adapter.exchangeInfo().optJSONArray("symbols") ?: return "TC2_REVERSAL_TICK_UNVERIFIED"
+        val row=(0 until info.length()).mapNotNull { info.optJSONObject(it) }.singleOrNull { it.optString("symbol")==plan.symbol }
+            ?: return "TC2_REVERSAL_TICK_UNVERIFIED"
+        val filters=row.optJSONArray("filters") ?: return "TC2_REVERSAL_TICK_UNVERIFIED"
+        val tick=(0 until filters.length()).mapNotNull { filters.optJSONObject(it) }
+            .singleOrNull { it.optString("filterType")=="PRICE_FILTER" }?.optString("tickSize")?.toDoubleOrNull()
+            ?: return "TC2_REVERSAL_TICK_UNVERIFIED"
+        val blocker=williamsTc2ReversalEntryBlocker(ledger,plan.reversalOwnerId,plan.symbol,plan.direction.name,
+            plan.signalId,plan.signalType,plan.signalBarTimeMs,plan.clientId,plan.entryPrice.toDouble(),
+            plan.protectiveStop.toDouble(),clock(),adapter.contractPrice(plan.symbol),adapter.markPrice(plan.symbol),tick,allowSelf)
+        if(blocker!=null) return blocker
+        val (bid,ask)=adapter.bestBidAsk(plan.symbol)
+        if(if(plan.direction==Direction.LONG) ask>plan.entryPrice.toDouble() else bid<plan.entryPrice.toDouble())
+            return "TC2_REVERSAL_EXECUTABLE_QUOTE_OUTSIDE_RISK_BOUND"
+        val positions=adapter.positions()
+        for(i in 0 until positions.length()) {
+            val p=positions.optJSONObject(i) ?: return "TC2_REVERSAL_LIVE_FLAT_UNVERIFIED"
+            val qty=p.optString("positionAmt").toBigDecimalOrNull() ?: return "TC2_REVERSAL_LIVE_FLAT_UNVERIFIED"
+            if(p.optString("symbol")==plan.symbol && qty.signum()!=0) return "TC2_REVERSAL_LIVE_FLAT_UNVERIFIED"
+        }
+        if(adapter.openOrders(plan.symbol).length()!=0 || adapter.openAlgoOrders(plan.symbol).length()!=0)
+            return "TC2_REVERSAL_OLD_ORDERS_NOT_CLEANED_UP"
+        return null
     }
 
     private fun recordNativeReplacementProof(owner: JSONObject, proof: JSONObject?) {

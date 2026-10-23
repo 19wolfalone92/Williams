@@ -406,7 +406,8 @@ def test_android_book_native_h1_entry_does_not_require_m15_fractal():
     final_check = coordinator.split("finalContextCheckStarted = true", 1)[1].split(
         "orderSubmissionAttempted = true", 1
     )[0]
-    assert 'if(requireBookH1ProofForAutomatedEntries && plan.signalType!="OPERATOR_FORCED_DIRECTION")' in final_check
+    assert 'if((requireBookH1ProofForAutomatedEntries || isReversal) && plan.signalType!="OPERATOR_FORCED_DIRECTION")' in final_check
+    assert 'if(isReversal) checkBookReversalDoor(plan,currentIntents,adapter,true)' in final_check
     assert "plan.protectiveStop.toDouble(),clock(),plan.entryClientId)" in final_check
     assert "williamsBookH1ObservedBreakoutBlocker(" in runtime
     assert "val recent=futuresMarketData.klines(plan.symbol,\"1h\",2)" in runtime

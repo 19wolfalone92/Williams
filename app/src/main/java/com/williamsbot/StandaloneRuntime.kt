@@ -6090,7 +6090,104 @@ private class NativeEngine(
             }
         }
         manageVerifiedNativePositions(positions, intents, riskOnly = false)
+        if(processNativeTc2Reversals()) return false
         return true
+    }
+
+    /** Resume a durable opposite-Wise-Man handoff after close/restart. All
+     * normal runtime, session, daily, portfolio and exchange risk doors apply. */
+    private fun processNativeTc2Reversals():Boolean {
+        if(forceTestnetMode || !executionReady() || !williamsProfileAllowsSource(williamsProfile,williamsTc2Profile)) return false
+        val now=futuresMarketData.exchangeNowMs()
+        if(!entryTimePolicy.allows(now)) return false
+        val ledger=futuresCampaignCoordinator.intentsSnapshot()
+        for(i in 0 until ledger.length()) {
+            val owner=ledger.optJSONObject(i) ?: continue
+            if(owner.optString("intent_role","ENTRY")!="ENTRY") continue
+            val c=williamsTc2ReversalCandidate(ledger,owner.optString("client_id"),now) ?: continue
+            val symbol=c.getString("symbol")
+            try {
+                if(!checkFuturesDailyLoss() || !executionReady()) return false
+                val positions=futuresCampaignCoordinator.positionsSnapshot()
+                val openSymbols=(0 until positions.length()).map { index ->
+                    val p=positions.optJSONObject(index) ?: error("TC2_REVERSAL_POSITION_SNAPSHOT_MALFORMED")
+                    val qty=p.optString("positionAmt").toBigDecimalOrNull() ?: error("TC2_REVERSAL_POSITION_QUANTITY_UNKNOWN")
+                    p.optString("symbol").takeIf { qty.signum()!=0 }
+                }.filterNotNull()
+                val slot=futuresPositionSlotBlocker(symbol,openSymbols,ledger,maxOpenPositions)
+                if(slot!=null) { rejectDecision(symbol,slot);continue }
+                val side=c.getString("direction")
+                val direction=NativeFuturesCampaignCoordinator.Direction.valueOf(side)
+                val rules=symbolFilters(symbol)
+                val trigger=c.getDouble("trigger")
+                // Budget at the adverse end of the permitted trigger deviation,
+                // rather than reusing the old campaign's risk or quantity.
+                val entry=if(side=="LONG") normalizePrice(trigger*(1+maxSlippagePct),rules.tick)
+                    else normalizeTriggerPrice(trigger*(1-maxSlippagePct),rules.tick)
+                val stop=if(side=="LONG") normalizePrice(c.getDouble("protective_stop"),rules.tick)
+                    else normalizeTriggerPrice(c.getDouble("protective_stop"),rules.tick)
+                val contract=futuresMarketData.price(symbol)
+                val mark=futuresMarketData.markPrice(symbol)
+                val (bid,ask)=futuresMarketData.topOfBook(symbol)
+                if((ask-bid)/bid !in 0.0..maxSpreadPct ||
+                    (if(side=="LONG") ask>entry else bid<entry)) {
+                    rejectDecision(symbol,"TC2_REVERSAL_EXECUTABLE_QUOTE_OUTSIDE_RISK_BOUND");continue
+                }
+                val blocker=williamsTc2ReversalEntryBlocker(ledger,c.getString("owner_id"),symbol,side,
+                    c.getString("signal_id"),c.getString("signal_type"),c.getLong("signal_bar_time_ms"),
+                    c.getString("client_id"),entry,stop,now,contract,mark,rules.tick)
+                if(blocker!=null) { rejectDecision(symbol,blocker);continue }
+                val account=parseFuturesAccountSnapshot(futuresCampaignCoordinator.accountSnapshot())
+                    ?: error("TC2_REVERSAL_ACCOUNT_UNVERIFIED")
+                check(futuresAccountFundedForEntry(account.availableUsdt,account.equityUsdt)) { "TC2_REVERSAL_FUNDS_UNVERIFIED" }
+                val riskUsed=(0 until ledger.length()).mapNotNull { ledger.optJSONObject(it) }.sumOf {
+                    if(it.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(it))
+                        conservativeRiskReservation(futuresCampaignReservedRisk(it,ledger),maxTotalRiskPct) else 0.0
+                }
+                val cap=williamsTc2InitialUnitRisk(campaignInitialRiskPct,campaignRiskLimitPct,maxRiskPerTradePct)
+                val riskPct=min(cap,min(maxRiskPerTradePct,maxTotalRiskPct-riskUsed))
+                check(riskPct>0) { "TC2_REVERSAL_PORTFOLIO_RISK_EXHAUSTED" }
+                val leverage=futuresLeverageSettings.forSymbol(symbol)
+                val loss=abs(entry-stop)/entry+2*feeBufferPerSidePct+maxSlippagePct
+                val notional=min(account.equityUsdt*.25,min(account.availableUsdt*leverage*.95,account.equityUsdt*riskPct/loss))
+                val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
+                val qty=floorStep(notional/entry,step)
+                val marketLot=rules.marketStep.isFinite() && rules.marketStep>0
+                check(qty.isFinite() && qty>=maxOf(rules.minQty,if(marketLot) rules.marketMinQty else rules.minQty) &&
+                    qty<=minOf(rules.maxQty,if(marketLot) rules.marketMaxQty else rules.maxQty) &&
+                    ExecutionMath.isMultiple(qty,rules.step) && (!marketLot || ExecutionMath.isMultiple(qty,rules.marketStep)) &&
+                    qty*entry>=rules.minNotional && qty*entry<=rules.maxNotional) { "TC2_REVERSAL_QUANTITY_FILTER_BLOCKED" }
+                val plan=NativeFuturesCampaignCoordinator.EntryPlan(symbol,direction,
+                    NativeFuturesCampaignCoordinator.EntryKind.MARKET,fmtQty(qty,rules.decimals),fmtPrice(entry,rules.tick),
+                    fmtPrice(stop,rules.tick),c.getString("client_id"),riskPct,
+                    signalType=c.getString("signal_type"),signalBarTimeMs=c.getLong("signal_bar_time_ms"),
+                    signalReason="TC2 book reversal after confirmed reduce-only flat",leverage=leverage,
+                    strategyProfile=williamsTc2Profile,executionSemantics=WILLIAMS_TC2_REVERSAL,
+                    setupContext=JSONObject().put("tc2_book_reversal",c)
+                        .put("tc2_reverse_pyramid",JSONObject().put("policy",WILLIAMS_TC2_PYRAMID_POLICY)).toString(),
+                    signalId=c.getString("signal_id"),reversalOwnerId=c.getString("owner_id"))
+                val before=futuresCampaignCoordinator.intentsSnapshot().length()
+                val result=withCampaignMutation(symbol,"TC2_CONFIRMED_FLAT_REVERSE_ENTRY") {
+                    check(executionReady() && !forceTestnetMode && entryTimePolicy.allows(futuresMarketData.exchangeNowMs())) {
+                        "TC2_REVERSAL_RUNTIME_CHANGED_BEFORE_SUBMISSION"
+                    }
+                    futuresCampaignCoordinator.submitPendingEntry(plan)
+                }
+                lastOrder=result
+                if(result.optBoolean("accepted")) {
+                    lastRestReconcileMs=0L
+                    stateMachine.force(TradingState.ENTRY_PENDING,"TC2 reversal fill/protection reconciliation")
+                } else rejectDecision(symbol,result.optString("blocker","TC2_REVERSAL_REJECTED"))
+                if(futuresCampaignCoordinator.state==NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED) {
+                    reconcileRequired=true;persistSafetyFlag("reconcile_required",true)
+                }
+                return result.optBoolean("accepted") || futuresCampaignCoordinator.intentsSnapshot().length()!=before
+            } catch(failure:Exception) {
+                lastError="TC2_REVERSAL_REQUIRES_REVALIDATION: $symbol: "+(failure.message ?: failure.javaClass.simpleName)
+                rejectDecision(symbol,lastError ?: "TC2_REVERSAL_BLOCKED")
+            }
+        }
+        return false
     }
 
     /** Cancel first; a replacement is sized only after a fresh complete exchange reconciliation. */
@@ -6436,7 +6533,14 @@ private class NativeEngine(
                     .put("observed_at_ms",proofAt).put("edition_exit",editionExit)
                     .put("correction_boundary_broken",boundaryExit).put("higher_correction",correction.toJson())
                     .put("opposition_check",if(actionableOpposing!=null)
-                        JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) else JSONObject.NULL))
+                        JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) else JSONObject.NULL)
+                    .put("reverse_candidate",if(profile==williamsTc2Profile && actionableOpposing!=null) JSONObject()
+                        .put("symbol",symbol).put("direction",campaignSignalDirection(actionableOpposing.type))
+                        .put("signal_id",actionableOpposing.signalId).put("signal_type",actionableOpposing.type)
+                        .put("strategy_profile",profile).put("execution_semantics",actionableOpposing.executionSemantics)
+                        .put("signal_bar_time_ms",actionableOpposing.signalBarTimeMs)
+                        .put("trigger",actionableOpposing.triggerPrice).put("protective_stop",actionableOpposing.protectivePrice)
+                        else JSONObject.NULL))
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
                 val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"),rules)
                 val clientId = ("W2O_"+symbol.take(8)+"_"+System.nanoTime().toString(16).takeLast(12)).take(36)
@@ -8596,6 +8700,27 @@ private class NativeEngine(
         check(!forceTestnetMode) { "OPERATOR_DIRECTION_MODE_ACTIVE_BEFORE_SUBMISSION" }
         val now=futuresMarketData.exchangeNowMs()
         val tick=symbolFilters(plan.symbol).tick
+        if(plan.reversalOwnerId.isNotBlank()) {
+            check(plan.strategyProfile==williamsTc2Profile && williamsProfileAllowsSource(williamsProfile,williamsTc2Profile)) {
+                "TC2_REVERSAL_SOURCE_CHANGED"
+            }
+            val c=williamsTc2ReversalCandidate(futuresCampaignCoordinator.intentsSnapshot(),plan.reversalOwnerId,now,plan.clientId)
+                ?: error("TC2_REVERSAL_DURABLE_HANDOFF_UNVERIFIED")
+            val bars=fetchCandles(plan.symbol,"1h",220).filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+            check(williamsClosedH1HistoryBlocker(bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)==null) {
+                "TC2_REVERSAL_H1_HISTORY_UNVERIFIED"
+            }
+            val signal=h1OppositionCandidates(plan.symbol,bars,tick,williamsTc2Profile).singleOrNull {
+                it.signalId==plan.signalId && it.type==plan.signalType && it.signalBarTimeMs==plan.signalBarTimeMs &&
+                    abs(it.triggerPrice-c.getDouble("trigger"))<=tick*.11 &&
+                    abs(it.protectivePrice-plan.protectiveStop.toDouble())<=tick*.11
+            } ?: error("TC2_REVERSAL_H1_SIGNAL_CHANGED")
+            val teeth=williamsBookH1ActivationTeeth(bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)
+            check(williamsBookFractalTeethBlocker(signal.type,plan.direction.name,signal.triggerPrice,teeth,tick)==null) {
+                "TC2_REVERSAL_FRACTAL_TEETH_INVALID"
+            }
+            return
+        }
         val target=plan.entryPrice.toDouble()
         val stop=plan.protectiveStop.toDouble()
         check(williamsProfileAllowsSource(williamsProfile,plan.strategyProfile)) { "H1_BOOK_EDITION_CHANGED" }

@@ -77,6 +77,8 @@ class NativeFuturesCoordinatorLifecycleTest {
                 "/fapi/v1/premiumIndex" -> { beforeMarkRead?.invoke()
                     JSONObject().put("symbol", "BTCUSDT").put("markPrice", mark.toString()) }
                 "/fapi/v2/ticker/price" -> JSONObject().put("symbol","BTCUSDT").put("price",(contract ?: mark).toString())
+                "/fapi/v1/ticker/bookTicker" -> JSONObject().put("symbol","BTCUSDT")
+                    .put("bidPrice",(contract ?: mark).toString()).put("askPrice",(contract ?: mark).toString())
                 "/fapi/v1/exchangeInfo" -> JSONObject("""{"symbols":[{"symbol":"BTCUSDT","status":"TRADING","filters":[
                     {"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
                     {"filterType":"MARKET_LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
@@ -142,12 +144,12 @@ class NativeFuturesCoordinatorLifecycleTest {
                     }
                 }
                 "/fapi/v1/order" -> if (request.method == "POST" && p["reduceOnly"]!="true") {
-                    check(p["side"]==if(quantity>0 || quantity==0.0 && direction.name=="LONG") "BUY" else "SELL")
+                    check(quantity==0.0 || p["side"]==if(quantity>0) "BUY" else "SELL")
                     val added=p.getValue("quantity").toDouble()*additionFraction
                     val id=(100+orders.size).toString()
                     val old=kotlin.math.abs(quantity)
                     entry=(entry*old+mark*added)/(old+added)
-                    quantity=(quantity.toString().toBigDecimal()+(if(quantity>0 || quantity==0.0 && direction.name=="LONG") added else -added).toString().toBigDecimal()).toDouble()
+                    quantity=(quantity.toString().toBigDecimal()+(if(p["side"]=="BUY") added else -added).toString().toBigDecimal()).toDouble()
                     val row=JSONObject(p).put("orderId",id).put("status",if(additionFraction==1.0) "FILLED" else "PARTIALLY_FILLED")
                         .put("clientOrderId",p.getValue("newClientOrderId")).put("origQty",p.getValue("quantity"))
                         .put("executedQty",added.toString()).put("avgPrice",mark.toString())
@@ -1169,6 +1171,103 @@ class NativeFuturesCoordinatorLifecycleTest {
                     it.optString("reason")==reason && it.optString("exit_authority")=="PINNED_EDITION_RULE"
                 }
             })
+        }
+    }
+
+    private fun persistReversalSignal(coordinator:NativeFuturesCampaignCoordinator,journal:Journal,
+        direction:NativeFuturesCampaignCoordinator.Direction,now:Long) {
+        val owner=coordinator.intentsSnapshot().getJSONObject(0)
+        val opposite=if(direction.name=="LONG") "SHORT" else "LONG"
+        val trigger=if(opposite=="LONG") 90.0 else 110.0
+        val signalId="REVERSAL_BOOK_"+opposite
+        val signalAt=now-2*3_600_000L
+        val decision=JSONObject().put("direction",direction.name)
+            .put("scope_started_at_ms",owner.getLong("position_open_observed_at_ms"))
+            .put("observed_at_ms",now-1000).put("trigger_price_basis","CONTRACT_PRICE")
+            .put("uncertain",JSONArray()).put("opposition",JSONObject().put("signal_id",signalId)
+                .put("direction",opposite).put("strategy_profile",williamsTc2Profile).put("execution_semantics","STOP_ENTRY")
+                .put("signal_bar_time_ms",signalAt).put("trigger",trigger)
+                .put("event",JSONObject().put("state","TRIGGERED").put("known_at_ms",now-2000)))
+        assertTrue(journal.writeState("decision_h1_opposition_BTCUSDT",decision.toString()))
+        val candidate=JSONObject().put("symbol","BTCUSDT").put("direction",opposite)
+            .put("strategy_profile",williamsTc2Profile).put("execution_semantics","STOP_ENTRY")
+            .put("signal_id",signalId).put("signal_type",if(opposite=="LONG") "REVERSAL" else "SHORT_REVERSAL")
+            .put("signal_bar_time_ms",signalAt).put("trigger",trigger).put("protective_stop",if(opposite=="LONG") 85.0 else 115.0)
+        coordinator.saveManagementState("BTCUSDT",owner.getString("client_id"),JSONObject().put("exit_evidence",JSONObject()
+            .put("reason","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED").put("signal_id",signalId).put("observed_at_ms",now-1000)
+            .put("opposition_check",decision).put("reverse_candidate",candidate)))
+    }
+
+    private fun reversalPlan(c:JSONObject)=NativeFuturesCampaignCoordinator.EntryPlan("BTCUSDT",
+        NativeFuturesCampaignCoordinator.Direction.valueOf(c.getString("direction")),
+        NativeFuturesCampaignCoordinator.EntryKind.MARKET,"0.1",
+        if(c.getString("direction")=="LONG") "90.1" else "109.9",c.getDouble("protective_stop").toString(),
+        c.getString("client_id"),.002,signalType=c.getString("signal_type"),signalId=c.getString("signal_id"),
+        signalBarTimeMs=c.getLong("signal_bar_time_ms"),reversalOwnerId=c.getString("owner_id"),
+        executionSemantics=WILLIAMS_TC2_REVERSAL)
+
+    @Test fun bookReversalUsesTwoDistinctFilledCampaignsAndNewProtectionWithoutDuplicateEntry() {
+        val h=3_600_000L
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) for(lostReply in listOf(false,true)) {
+            var now=System.currentTimeMillis()-4*h
+            val journal=Journal();val (coordinator,exchange)=open(direction,journal=journal,clock={now})
+            now+=4*h;persistReversalSignal(coordinator,journal,direction,now)
+            val ownerId=coordinator.intentsSnapshot().getJSONObject(0).getString("client_id")
+            val oldStop=coordinator.intentsSnapshot().getJSONObject(0).getString("protection_client_id")
+            exchange.mark=if(direction.name=="LONG") 110.0 else 90.0
+            exchange.loseCloseReply=lostReply
+            val closed=coordinator.closePosition("BTCUSDT",direction,"1","REV_EXIT_${direction.name}_$lostReply",
+                "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
+            assertEquals(!lostReply,closed.optBoolean("ok"))
+            val resumed=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            val recovered=resumed.reconcile()
+            assertTrue(recovered.toString(),recovered.optBoolean("ok"))
+            val c=williamsTc2ReversalCandidate(resumed.intentsSnapshot(),ownerId,now)!!
+            assertFalse(exchange.algos.values.any { it.optString("clientAlgoId")==oldStop && it.optString("algoStatus")=="NEW" })
+            val p=reversalPlan(c)
+            var verified=false
+            resumed.bookH1EntryVerifier={ checked -> assertEquals(p.signalId,checked.signalId);verified=true }
+            exchange.liquidation=if(p.direction.name=="LONG") "50" else "200"
+            exchange.loseAdditionReply=lostReply
+            val before=exchange.posts("/fapi/v1/order")
+            resumed.submitPendingEntry(p)
+            assertTrue(verified)
+            assertEquals(before+1,exchange.posts("/fapi/v1/order"))
+            assertEquals(if(p.direction.name=="LONG") .1 else -.1,exchange.quantity,1e-10)
+            val restarted=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            val protectedResult=restarted.reconcile()
+            assertTrue(protectedResult.toString(),protectedResult.optBoolean("ok"))
+            assertEquals("OPEN_PROTECTED",restarted.state.name)
+            assertNull(williamsTc2ReversalCandidate(restarted.intentsSnapshot(),ownerId,now))
+            assertFalse(restarted.submitPendingEntry(p).getBoolean("accepted"))
+            assertEquals(before+1,exchange.posts("/fapi/v1/order"))
+            val reverse=restarted.intentsSnapshot().let { a -> (0 until a.length()).map { a.getJSONObject(it) }
+                .single { it.optString("reversal_owner_id")==ownerId } }
+            assertEquals("OPEN_PROTECTED",campaignLifecycleStatus(reverse))
+            assertNotEquals(oldStop,reverse.getString("protection_client_id"))
+            assertTrue(exchange.algos.values.any { it.optString("clientAlgoId")==reverse.getString("protection_client_id") &&
+                it.optString("workingType")=="MARK_PRICE" && it.optString("closePosition")=="true" })
+        }
+    }
+
+    @Test fun partialOppositeExitCannotAuthorizeReverseRiskAfterRestart() {
+        val h=3_600_000L
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            var now=System.currentTimeMillis()-4*h
+            val journal=Journal();val (coordinator,exchange)=open(direction,journal=journal,clock={now})
+            now+=4*h;persistReversalSignal(coordinator,journal,direction,now)
+            val ownerId=coordinator.intentsSnapshot().getJSONObject(0).getString("client_id")
+            exchange.mark=if(direction.name=="LONG") 110.0 else 90.0
+            exchange.closeStatus="PARTIALLY_FILLED";exchange.closeFraction=.5
+            val result=coordinator.closePosition("BTCUSDT",direction,"1","PARTIAL_REVERSE_"+direction.name,
+                "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
+            assertFalse(result.getBoolean("ok"));assertEquals(.5,kotlin.math.abs(exchange.quantity),1e-10)
+            assertNull(williamsTc2ReversalCandidate(coordinator.intentsSnapshot(),ownerId,now))
+            val restarted=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            restarted.reconcile()
+            assertNull(williamsTc2ReversalCandidate(restarted.intentsSnapshot(),ownerId,now))
+            assertEquals(1,exchange.posts("/fapi/v1/order"))
+            assertTrue(exchange.algos.values.any { it.optString("closePosition")=="true" && it.optString("algoStatus")=="NEW" })
         }
     }
 
