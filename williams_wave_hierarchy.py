@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from math import isfinite
 from typing import Mapping, Sequence
 from williams_complex_waves import detect_complex_wave_patterns
-from williams_wave_subdivisions import enrich_complex_subdivisions
+from williams_wave_subdivisions import enrich_complex_subdivisions, trace_recursive_price_grammar
 from williams_wave_momentum import evaluate_third_momentum, ordered_sum, third_momentum_unavailable
 
 FRAME_MS = {"1m":60_000,"3m":180_000,"5m":300_000,"15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
@@ -522,9 +522,13 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int,
                 parent=[p for p in points if evidence.start_at<=p.extreme_at<=evidence.end_at]
                 proof=enrich_complex_subdivisions(evidence.pattern,parent,anchors_by_frame.get(child_frame,[]),
                     parent_duration=FRAME_MS[frame],as_of=as_of)
+                recursive=trace_recursive_price_grammar(
+                    evidence.pattern,parent,anchors_by_frame,FRAME_MS,frame,as_of,
+                    depth=3,max_nodes=64)
                 structures.append(evidence.to_dict()|{"frame":frame,"child_frame":child_frame,
                     "source_scenario_id":f"{frame}:{direction}:{evidence.start_at}:{len(parent)}",
-                    "internal_proof":proof.to_dict(),"can_place_orders":False})
+                    "internal_proof":proof.to_dict(),"recursive_proof":recursive,
+                    "can_place_orders":False})
     return WaveHierarchy(as_of, scenarios, link_wave_hypotheses(scenarios), errors, warnings,
                          {frame:len(bars) for frame,bars in valid.items()},structures,tuple(analysis_frames))
 
