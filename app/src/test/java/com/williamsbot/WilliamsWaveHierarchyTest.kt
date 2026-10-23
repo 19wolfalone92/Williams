@@ -99,6 +99,49 @@ class WilliamsWaveHierarchyTest {
         assertTrue(invalid.invalidReasons.contains("W4_BREACHES_W3_OR_W4_END"))
         assertEquals("PROVISIONAL",count(125.0).status)
     }
+
+    @Test fun courseW2ExactOriginTouchIsAnUnverifiedAlternativeNotInvalidation() {
+        for (mirror in listOf(false,true)) for (secondLow in listOf(100.5,100.0,99.5)) {
+            val knots=listOf(0 to 120.0,50 to 100.0,65 to 110.0,78 to secondLow,
+                110 to 150.0,145 to 118.0,160 to 156.0,170 to 154.0)
+            val bars=(0..170).map { i ->
+                val pair=knots.zipWithNext().firstOrNull { (a,b) -> i in a.first..b.first }
+                val price=if(pair==null) knots.last().second else {
+                    val (a,b)=pair; a.second+(b.second-a.second)*(i-a.first)/(b.first-a.first)
+                }
+                val original=WilliamsWaveBar(i*hour,price,price+.1,price-.1,price,1000.0)
+                if(mirror) original.copy(o=300-original.o,h=300-original.l,
+                    l=300-original.h,c=300-original.c) else original
+            }
+            val report=buildWilliamsWaveHierarchy(mapOf("1h" to bars),bars.size*hour)
+            val direction=if(mirror) "DOWN" else "UP"
+            val counts=report.scenarios.filter { it.direction==direction && it.anchors.size==3 &&
+                it.anchors.first().extremeAt==50*hour }
+            assertEquals("W2 case count; mirror=$mirror, w2=$secondLow",1,counts.size)
+            val s=counts.single()
+            assertEquals(if(secondLow==100.5) "PROVISIONAL" else if(secondLow==100.0) "ALTERNATIVE" else "INVALIDATED",s.status)
+            if(secondLow==100.0) {
+                assertEquals(listOf("W2_ORIGIN_TOUCH_100_PERCENT_UNCONFIRMED"),s.alternatives)
+                assertTrue(s.invalidReasons.isEmpty())
+            }
+            if(secondLow==99.5) assertTrue(s.invalidReasons.contains("W2_INVALIDATES_ORIGIN"))
+            assertFalse(report.toJson().getBoolean("can_place_orders"))
+        }
+    }
+    @Test fun unconfirmedRightBarCannotRevealEitherDirectionFractal() {
+        val levels=listOf(108.0,106.0,100.0,104.0,105.0)
+        for(mirror in listOf(false,true)) {
+            val bars=levels.mapIndexed { i,v ->
+                val b=WilliamsWaveBar(i*hour,v,v+1,v-1,v,100.0)
+                if(mirror) b.copy(o=300-b.o,h=300-b.l,l=300-b.h,c=300-b.c) else b
+            }
+            assertTrue(confirmedWilliamsWaveAnchors(bars.dropLast(1),hour).isEmpty())
+            val p=confirmedWilliamsWaveAnchors(bars,hour).single()
+            assertEquals(if(mirror) "HIGH" else "LOW",p.kind)
+            assertEquals(2*hour,p.extremeAt)
+            assertEquals(5*hour,p.knownAt)
+        }
+    }
     @Test fun allCausalPrefixesIgnoreFutureCandles() {
         val bars=fixtureBars(fixtureCases().getJSONObject(0))
         for (n in 40..bars.size step 3) {

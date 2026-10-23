@@ -361,7 +361,11 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             continue
         if price[1] <= price[0]:
             reasons.append("W1_NOT_IMPULSIVE")
-        if n >= 3 and not price[0] < price[2] < price[1]:
+        # Course PDF46/48: W2 may retrace UP TO 100% of W1, never past it.
+        # A touch of the exact origin remains an unverified alternative, not
+        # an invalidated count nor an executable confirmed Elliott degree.
+        w2_origin_touch = n >= 3 and price[2] == price[0]
+        if n >= 3 and not price[0] <= price[2] < price[1]:
             reasons.append("W2_INVALIDATES_ORIGIN")
         if n >= 4 and price[3] <= price[1]:
             reasons.append("W3_DOES_NOT_EXTEND_W1")
@@ -393,7 +397,8 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
         # it in an irregular correction: keep that alternative explicitly.
         # A complete five-leg sequence is historical evidence. Its following
         # A-wave may retrace the entire motive without erasing those five legs.
-        if n < 6 and sign * (last_bar.c - inv) <= 0:
+        if n < 6 and (sign * (last_bar.c - inv) < 0 if n <= 3
+                          else sign * (last_bar.c - inv) <= 0):
             reasons.append("LIVE_PRICE_INVALIDATED_COUNT")
         leg = [b for b in bars if b.t >= p[-1].extreme_at]
         h = WaveHypothesis(
@@ -401,7 +406,9 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             frame, "UP" if sign == 1 else "DOWN", label, p,
             last_bar.t + duration, p[-1].extreme_at,
             min(b.l for b in leg), max(b.h for b in leg), inv,
-            "INVALIDATED" if reasons else ("ALTERNATIVE" if diagonal_overlap else "PROVISIONAL"), reasons)
+            "INVALIDATED" if reasons else ("ALTERNATIVE" if diagonal_overlap or w2_origin_touch else "PROVISIONAL"), reasons)
+        if w2_origin_touch and not reasons:
+            h.alternatives.append("W2_ORIGIN_TOUCH_100_PERCENT_UNCONFIRMED")
         if diagonal_overlap and not reasons:
             h.alternatives.append("UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP")
             # Course PDF46 permits shallow overlap in futures. The percentage
@@ -410,7 +417,7 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             if (price[1]-price[4])/(price[1]-price[0])<=.10:
                 h.alternatives.append("FUTURES_SHALLOW_W4_OVERLAP_10_PERCENT_W1_RANGE_POLICY")
         active_sign = -sign if n in (2, 4, 6, 8) else sign
-        if n < 9 and not reasons and active_sign * (last_bar.c - p[-1].price) <= 0:
+        if n < 9 and h.status == "PROVISIONAL" and active_sign * (last_bar.c - p[-1].price) <= 0:
             h.status = "UNRESOLVED"
             h.alternatives.append("PRIOR_LEG_EXTENSION_OR_UNCONFIRMED_TURN")
         if n >= 6:
@@ -482,8 +489,13 @@ def build_wave_hierarchy(frames: Mapping[str, Sequence[WaveBar]], as_of: int,
                 h.leg_low = min(h.anchors[-1].price,min(b.l for b in observed))
                 h.leg_high = max(h.anchors[-1].price,max(b.h for b in observed))
                 if len(h.anchors) < 6 and (
-                    h.direction == "UP" and min(b.l for b in observed) <= h.invalidation or
-                    h.direction == "DOWN" and max(b.h for b in observed) >= h.invalidation
+                    h.direction == "UP" and (
+                        min(b.l for b in observed) < h.invalidation if len(h.anchors) <= 3
+                        else min(b.l for b in observed) <= h.invalidation
+                    ) or h.direction == "DOWN" and (
+                        max(b.h for b in observed) > h.invalidation if len(h.anchors) <= 3
+                        else max(b.h for b in observed) >= h.invalidation
+                    )
                 ):
                     h.status = "INVALIDATED"
                     h.invalid_reasons.append("LOWER_FRAME_OBSERVED_INVALIDATION")

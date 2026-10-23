@@ -1017,6 +1017,34 @@
       ],
       "remaining_evidence": "The existing standalone Android evaluator is now wired into actual hierarchy/phase/journal and implemented in Python. Ten shared semantic cases cover both directions; they are synthetic rule boundaries, not digitized book chart OHLC. The examined wave degree remains provisional.",
       "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.W2.EXACT_ORIGIN_100_PERCENT",
+      "book": "COURSE",
+      "pdf_pages": [
+        46,
+        48
+      ],
+      "rule": "W2 may correct up to (not past) the origin of W1. An exact touch is an unverified non-executable alternative; breaching the origin by a wick invalidates the developing motive.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_wave_hierarchy.py",
+        "williams_wave_interpretation.py",
+        "app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt",
+        "app/src/main/java/com/williamsbot/WilliamsWaveInterpretation.kt"
+      ],
+      "tests": [
+        "tests/test_williams_wave_hierarchy.py::test_course_w2_exact_100_percent_touch_is_unverified_not_invalidated",
+        "app/src/test/java/com/williamsbot/WilliamsWaveHierarchyTest.kt::courseW2ExactOriginTouchIsAnUnverifiedAlternativeNotInvalidation",
+        "tests/test_williams_wave_hierarchy.py::test_book_fractal_requires_two_closed_right_bars_even_for_mirrored_high",
+        "app/src/test/java/com/williamsbot/WilliamsWaveHierarchyTest.kt::unconfirmedRightBarCannotRevealEitherDirectionFractal"
+      ],
+      "fixtures": [
+        "synthetic/mirrored-W2-retrace-99_5-100-100_5",
+        "synthetic/fractal-two-closed-right-bars"
+      ],
+      "remaining_evidence": "Verified directly against Course PDF46 and PDF48 raster pages. Synthetic mirrored boundary examples, not digitized book OHLC or independently verified recursive degrees.",
+      "can_place_orders_from_registry": false
     }
   ],
   "required_remaining_evidence": [

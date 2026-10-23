@@ -282,7 +282,10 @@ internal fun williamsHypothesesFromAnchors(
             p.zipWithNext().any { (a,b) -> a.extremeAt >= b.extremeAt }) continue
         val reasons = mutableListOf<String>()
         if (price[1] <= price[0]) reasons += "W1_NOT_IMPULSIVE"
-        if (n >= 3 && !(price[0] < price[2] && price[2] < price[1])) reasons += "W2_INVALIDATES_ORIGIN"
+        // Course PDF46/48: W2 can return TO its origin, not beyond.
+        // The exact-touch count is observational only until separately proved.
+        val w2OriginTouch = n >= 3 && price[2] == price[0]
+        if (n >= 3 && !(price[0] <= price[2] && price[2] < price[1])) reasons += "W2_INVALIDATES_ORIGIN"
         if (n >= 4 && price[3] <= price[1]) reasons += "W3_DOES_NOT_EXTEND_W1"
         // W4/W1 overlap may be a leading/ending diagonal rather than a
         // normal impulse. Never elevate it to a tradable confirmed count:
@@ -302,19 +305,23 @@ internal fun williamsHypothesesFromAnchors(
         val inv = if (n <= 3) p[0].price else if(n<=6 && diagonalOverlap) p[2].price else if (n <= 6) p[1].price else p[5].price
         // A deep A-wave can correct the entire completed five-leg motive.
         // Never retroactively invalidate historical W5 at the old W1 level.
-        if (n < 6 && sign * (bars.last().c-inv) <= 0) reasons += "LIVE_PRICE_INVALIDATED_COUNT"
+        if (n < 6 && if (n <= 3) sign * (bars.last().c-inv) < 0
+            else sign * (bars.last().c-inv) <= 0) reasons += "LIVE_PRICE_INVALIDATED_COUNT"
         val leg = bars.filter { it.t >= p.last().extremeAt }
         val direction = if (sign == 1) "UP" else "DOWN"
         val h = WilliamsWaveScenario("$frame:$direction:${p.first().extremeAt}:$n",frame,direction,label,p,
             bars.last().t+duration,p.last().extremeAt,leg.minOf { it.l },leg.maxOf { it.h },inv,
-            if (reasons.isNotEmpty()) "INVALIDATED" else if (diagonalOverlap) "ALTERNATIVE" else "PROVISIONAL",reasons)
+            if (reasons.isNotEmpty()) "INVALIDATED" else if (diagonalOverlap || w2OriginTouch) "ALTERNATIVE" else "PROVISIONAL",reasons)
+        if (w2OriginTouch && reasons.isEmpty()) {
+            h.alternatives += "W2_ORIGIN_TOUCH_100_PERCENT_UNCONFIRMED"
+        }
         if (diagonalOverlap && reasons.isEmpty()) {
             h.alternatives += "UNVERIFIED_LEADING_OR_ENDING_DIAGONAL_W4_OVERLAP"
             if((price[1]-price[4])/(price[1]-price[0])<=.10)
                 h.alternatives += "FUTURES_SHALLOW_W4_OVERLAP_10_PERCENT_W1_RANGE_POLICY"
         }
         val activeSign = if (n in listOf(2,4,6,8)) -sign else sign
-        if (n < 9 && reasons.isEmpty() && activeSign * (bars.last().c-p.last().price) <= 0) {
+        if (n < 9 && h.status == "PROVISIONAL" && activeSign * (bars.last().c-p.last().price) <= 0) {
             h.status = "UNRESOLVED"; h.alternatives += "PRIOR_LEG_EXTENSION_OR_UNCONFIRMED_TURN"
         }
         if (n >= 6) {
@@ -387,8 +394,8 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
             h.observedAt = asOf
             if (observed.isNotEmpty()) {
                 h.legLow = minOf(h.anchors.last().price,observed.minOf { it.l }); h.legHigh = maxOf(h.anchors.last().price,observed.maxOf { it.h })
-                if (h.anchors.size < 6 && (h.direction == "UP" && observed.minOf { it.l } <= h.invalidation ||
-                    h.direction == "DOWN" && observed.maxOf { it.h } >= h.invalidation)) {
+                if (h.anchors.size < 6 && (h.direction == "UP" && (if (h.anchors.size <= 3) observed.minOf { it.l } < h.invalidation else observed.minOf { it.l } <= h.invalidation) ||
+                    h.direction == "DOWN" && (if (h.anchors.size <= 3) observed.maxOf { it.h } > h.invalidation else observed.maxOf { it.h } >= h.invalidation))) {
                     h.status = "INVALIDATED"; h.invalidReasons += "LOWER_FRAME_OBSERVED_INVALIDATION"
                 }
             }

@@ -16,9 +16,9 @@ from williams_wave_hierarchy import (
 HOUR = FRAME_MS["1h"]
 
 
-def rhythm_bars(mirror=False):
+def rhythm_bars(mirror=False, w2=106):
     """Synthetic causal price trajectory, not a claimed historical book replay."""
-    knots = [(0,120),(50,100),(65,110),(78,106),(110,150),(145,118),(160,156),(170,154)]
+    knots = [(0,120),(50,100),(65,110),(78,w2),(110,150),(145,118),(160,156),(170,154)]
     prices = []
     for (a,p),(b,q) in zip(knots,knots[1:]):
         prices += [p+(q-p)*(i-a)/(b-a) for i in range(a,b)]
@@ -384,3 +384,38 @@ def test_source_w4_zero_cross_excludes_touch_and_wrong_degree_scale(case):
         raw_w3=sign*case["third_peak"]
         raw_w4=sign*case["fourth_minimum"]
         assert classify_fourth_ao(sign*raw_w3,sign*raw_w4,case["scale_bars"])==case["expected"]
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+def test_course_w2_exact_100_percent_touch_is_unverified_not_invalidated(mirror):
+    # Course PDF46: W2 cannot cross the W1 start; PDF48: 100% is possible.
+    # The pivots are derived from causal synthetic closed candles, not invented labels.
+    for second_low,expected in [(100.5,"PROVISIONAL"),(100.0,"ALTERNATIVE"),(99.5,"INVALIDATED")]:
+        bars=rhythm_bars(mirror=mirror,w2=second_low)
+        report=build_wave_hierarchy({"1h":bars},len(bars)*HOUR)
+        counts=[s for s in report.scenarios if s.direction==("DOWN" if mirror else "UP")
+                and len(s.anchors)==3 and s.anchors[0].extreme_at==50*HOUR]
+        assert len(counts)==1,(mirror,second_low,[(s.label,s.status) for s in report.scenarios])
+        count=counts[0]
+        assert count.status==expected
+        if second_low==100.0:
+            assert count.alternatives==["W2_ORIGIN_TOUCH_100_PERCENT_UNCONFIRMED"]
+            assert count.invalid_reasons==[]
+            assert "LOWER_FRAME_OBSERVED_INVALIDATION" not in count.invalid_reasons
+        if second_low==99.5:
+            assert "W2_INVALIDATES_ORIGIN" in count.invalid_reasons
+        assert report.to_dict()["can_place_orders"] is False
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+def test_book_fractal_requires_two_closed_right_bars_even_for_mirrored_high(mirror):
+    levels=[108,106,100,104,105]
+    bars=[WaveBar(i*HOUR,v,v+1,v-1,v,100) for i,v in enumerate(levels)]
+    if mirror:
+        bars=[replace(b,o=300-b.o,h=300-b.l,l=300-b.h,c=300-b.c) for b in bars]
+    assert confirmed_wave_anchors(bars[:4],HOUR)==[]
+    pivot=confirmed_wave_anchors(bars,HOUR)
+    assert len(pivot)==1
+    assert pivot[0].kind==("HIGH" if mirror else "LOW")
+    assert pivot[0].extreme_at==2*HOUR
+    assert pivot[0].known_at==5*HOUR

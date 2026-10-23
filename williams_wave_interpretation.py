@@ -68,7 +68,13 @@ def _broken(scenario):
     # A completed historical W5 cannot be retroactively invalidated by A.
     if len(scenario["anchors"]) >= 6:
         return False
-    return (scenario["leg_low"] <= scenario["invalidation"] if scenario["direction"] == "UP"
+    # Course PDF46/48 allows an exact W2 origin touch. A breach beyond
+    # origin, including a wick, is structural invalidation.
+    boundary_is_w2 = len(scenario["anchors"]) <= 3
+    if scenario["direction"] == "UP":
+        return (scenario["leg_low"] < scenario["invalidation"] if boundary_is_w2
+                else scenario["leg_low"] <= scenario["invalidation"])
+    return (scenario["leg_high"] > scenario["invalidation"] if boundary_is_w2
             else scenario["leg_high"] >= scenario["invalidation"])
 
 

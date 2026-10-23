@@ -49,8 +49,15 @@ internal fun williamsWaveInterpretation(hierarchy:JSONObject):JSONObject {
     }
     fun broken(s:JSONObject):Boolean {
         if((s.optJSONArray("anchors")?.length() ?: 0)>=6) return false
-        return if(s.optString("direction")=="UP") s.getDouble("leg_low")<=s.getDouble("invalidation")
+        // A Course PDF46/48 W2 touch is not a breach; later motives keep their own limits.
+        val w2Boundary=(s.optJSONArray("anchors")?.length() ?: 0)<=3
+        return if(s.optString("direction")=="UP") {
+            if(w2Boundary) s.getDouble("leg_low")<s.getDouble("invalidation")
+            else s.getDouble("leg_low")<=s.getDouble("invalidation")
+        } else {
+            if(w2Boundary) s.getDouble("leg_high")>s.getDouble("invalidation")
             else s.getDouble("leg_high")>=s.getDouble("invalidation")
+        }
     }
     fun state(parent:JSONObject,child:JSONObject):String {
         val p=parent.getString("active_label");val c=child.getString("active_label")
