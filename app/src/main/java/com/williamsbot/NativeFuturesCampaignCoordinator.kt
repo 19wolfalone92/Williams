@@ -2925,8 +2925,9 @@ internal class NativeFuturesCampaignCoordinator(
                 val protectedOwner=if(plan.entryClientId.isBlank()) confirmed else intentsSnapshot().let { rows ->
                     (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.singleOrNull {
                         it.optString("client_id")==plan.entryClientId && it.optString("intent_role","ENTRY")=="ENTRY" } }
-                val protectionConfirmed=confirmed!=null &&
-                    confirmed.optString("executed_qty").toBigDecimalOrNull()?.signum()==1 &&
+                val confirmedFill=confirmed?.optString(if(plan.entryClientId.isBlank())
+                    "actual_entry_executed_qty" else "executed_qty")?.toBigDecimalOrNull()
+                val protectionConfirmed=confirmedFill?.signum()==1 &&
                     protectedOwner!=null && campaignLifecycleStatus(protectedOwner)=="OPEN_PROTECTED" &&
                     protectedOwner.optString("protection_status")=="PROTECTED"
                 result.put("protection_reconciliation",checked).put("state",state.name)
@@ -3168,6 +3169,11 @@ internal class NativeFuturesCampaignCoordinator(
             }
         }
 
+        if(isAddition) {
+            val campaignBlocker=futuresPortfolioRiskBlocker(plan.riskPct,
+                futuresCampaignRiskComponents(primary!!,currentIntents),maxTotalRiskPct=.006)
+            if(campaignBlocker!=null) return@synchronized safePreflightRejection("CAMPAIGN_RISK_LIMIT: "+campaignBlocker)
+        }
         // Sum active intent risk conservatively. Missing/invalid reservations cannot
         // silently free aggregate portfolio capacity.
         val reservedRiskPcts=(0 until currentIntents.length()).flatMap { i ->

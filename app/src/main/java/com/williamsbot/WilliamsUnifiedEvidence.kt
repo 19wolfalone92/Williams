@@ -40,6 +40,7 @@ internal fun buildWilliamsUnifiedEvidence(
     var total = 0
     var conflicts = 0
     var tc2Conflicts = 0
+    var liveSourceConflicts = 0
     var activeCampaigns = 0
     var observerProofComplete = true
     val visited = mutableSetOf<String>()
@@ -83,6 +84,7 @@ internal fun buildWilliamsUnifiedEvidence(
         for (source in williamsSourceProfiles) sourceCounts.put(source, 0)
         val freshSides = mutableSetOf<String>()
         val tc2FreshSides = mutableSetOf<String>()
+        val liveFreshSides = mutableSetOf<String>()
         val unique = mutableSetOf<String>()
         val pairOwners=activeIntents.filter { it.optString("symbol")==symbol &&
             it.optString("role")=="ENTRY" &&
@@ -116,7 +118,8 @@ internal fun buildWilliamsUnifiedEvidence(
             val fresh = valid && williamsH1SignalTimeEligible(stamp,family,source,nowMs)
             if (fresh && role == "ENTRY" && side != null) {
                 freshSides += side
-                if(williamsVerifiedNewRiskSource(source)) tc2FreshSides += side
+                if(source==williamsTc2Profile) tc2FreshSides += side
+                if(williamsVerifiedNewRiskSource(source)) liveFreshSides += side
             }
             if (source in williamsSourceProfiles) {
                 sourceCounts.put(source, sourceCounts.optInt(source) + 1)
@@ -146,6 +149,7 @@ internal fun buildWilliamsUnifiedEvidence(
         val liveConflict = tc2FreshSides.size > 1
         if (conflict) conflicts++
         if (liveConflict) tc2Conflicts++
+        if (liveFreshSides.size>1) liveSourceConflicts++
         perPair.put(JSONObject().put("symbol", symbol)
             .put("campaign_occupied",pairOwners.isNotEmpty())
             .put("active_owner_count",pairOwners.size)
@@ -164,6 +168,7 @@ internal fun buildWilliamsUnifiedEvidence(
             })
             .put("other_strategies_can_trade_this_pair",false)
             .put("live_tc2_opposing_entries_before_context",liveConflict)
+            .put("live_source_opposing_entries_before_context",liveFreshSides.size>1)
             .put("observed", candidate != null)
             .put("source_counts", sourceCounts)
             .put("edition_observation_proof",observerProof)
@@ -209,6 +214,7 @@ internal fun buildWilliamsUnifiedEvidence(
         .put("source_contract_errors", errors)
         .put("pre_context_opposing_symbol_count", conflicts)
         .put("live_tc2_opposing_symbol_count",tc2Conflicts)
+        .put("live_source_opposing_symbol_count",liveSourceConflicts)
         .put("is_execution_decision", false)
         .put("completeness_warning", "Cached H1 signals only. TC2 and NTD have independent source-owned H1 execution, risk and Binance checks; Course OBSERVE only. Source snapshots are not fills, owner evidence, or PnL. No M15 confirmation is required.")
         .put("last_runtime_error_unattributed", status.optString("last_error").take(300))

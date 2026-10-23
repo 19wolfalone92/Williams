@@ -68,9 +68,9 @@ class WilliamsEditionRulesTest {
         assertFalse(williamsProfileAllowsSource(williamsUnifiedProfile,williamsUnifiedProfile))
     }
 
-    @Test fun researchSourcesNeverReceiveNewAutomatedRiskEvenInUnifiedMode() {
+    @Test fun courseRemainsObservationOnlyWhileTc2AndNtdOwnTheirExecution() {
         assertTrue(williamsVerifiedNewRiskSource(williamsTc2Profile))
-        assertFalse(williamsVerifiedNewRiskSource(williamsNtdProfile))
+        assertTrue(williamsVerifiedNewRiskSource(williamsNtdProfile))
         assertFalse(williamsVerifiedNewRiskSource(williamsCourseProfile))
         assertFalse(williamsVerifiedNewRiskSource(williamsUnifiedProfile))
         // The same disabled sources must remain available for independent

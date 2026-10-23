@@ -787,8 +787,49 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun ntdCampaignCannotSpendTheUnusedPortfolioBudgetBeyondItsOwnCeiling() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val now=System.currentTimeMillis()/WILLIAMS_H1_MS*WILLIAMS_H1_MS+1000
+            val journal=Journal();val exchange=Exchange(direction)
+            val c=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            c.reconcile();requireNtdBookProof(c)
+            val initial=ntdBookPlan(plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL"),now-WILLIAMS_H1_MS)
+            assertTrue(c.submitPendingEntry(initial).getBoolean("accepted"));exchange.fill();assertTrue(c.reconcile().getBoolean("ok"))
+            val sign=if(direction.name=="LONG") 1 else -1
+            for(family in listOf("AO_SAUCER","AO_ZERO_LINE","AC_SIGNAL")) {
+                val add=ntdBookPlan(initial.copy(signalType=family,quantity="0.1",riskPct=.001,
+                    entryPrice=(exchange.mark+sign).toString(),entryClientId=initial.clientId,clientId="W2A_CAP_${direction.name}_$family"),now)
+                val admitted=c.submitPendingEntry(add);assertTrue(admitted.toString(),admitted.getBoolean("accepted"))
+                exchange.fillAddition(add.clientId);assertTrue(c.reconcile().getBoolean("ok"))
+            }
+            val ledger=c.intentsSnapshot()
+            assertEquals(.0055,futuresCampaignReservedRisk(ledger.getJSONObject(0),ledger),1e-9)
+            val last=ntdBookPlan(initial.copy(signalType="BALANCE_LINE",quantity="0.1",riskPct=.001,
+                entryPrice=(exchange.mark+sign).toString(),entryClientId=initial.clientId,clientId="W2A_CAP_LAST_${direction.name}"),now)
+            val before=exchange.posts("/fapi/v1/algoOrder");val blocked=c.submitPendingEntry(last)
+            assertFalse(blocked.toString(),blocked.getBoolean("accepted"))
+            assertTrue(blocked.toString(),blocked.getString("blocker").startsWith("CAMPAIGN_RISK_LIMIT:"))
+            assertEquals(before,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals("OPEN_PROTECTED",c.state.name)
+        }
+    }
+
+    @Test fun oldNtdSourceLabelAloneCannotAcquireAdditionAuthority() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal=Journal();val (c,exchange)=open(direction,journal=journal)
+            markLegacySource(journal,c,williamsNtdProfile,"FRACTAL")
+            val base=plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="AO_SAUCER",quantity="0.1",riskPct=.001,
+                entryPrice=(exchange.mark+if(direction.name=="LONG") 1 else -1).toString(),
+                entryClientId=plan(direction).clientId,clientId="W2A_OLD_NTD_${direction.name}",signalBarTimeMs=System.currentTimeMillis()-1000)
+            val before=exchange.posts("/fapi/v1/algoOrder");val blocked=c.submitPendingEntry(base)
+            assertFalse(blocked.getBoolean("accepted"))
+            assertTrue(blocked.getString("blocker").contains("CYCLE_NOT_PROVEN"))
+            assertEquals(before,exchange.posts("/fapi/v1/algoOrder"));assertEquals("OPEN_PROTECTED",c.state.name)
+        }
+    }
+
     @Test fun profitableNtdCycleReentersOnlyOnceWithOwnedStopOrCloseEvent() {
-        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(market in listOf(false,true)) {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(market in listOf(false,true)) for(lost in listOf(false,true)) {
             val journal=Journal();val exchange=Exchange(direction)
             var now=System.currentTimeMillis()/WILLIAMS_H1_MS*WILLIAMS_H1_MS+1000
             val coordinator=NativeFuturesCampaignCoordinator(journal,clock={ now }) { exchange.adapter() }
@@ -812,6 +853,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 referenceClose=if(market) exchange.mark else 0.0,
                 entryPrice=(exchange.mark+if(market) 0 else if(direction.name=="LONG") 1 else -1).toString()),now)
             requireNtdBookProof(coordinator)
+            exchange.loseAdditionReply=lost
             val admitted=coordinator.submitPendingEntry(reentry)
             assertTrue(admitted.toString(),admitted.getBoolean("accepted"))
             assertFalse(williamsNtdReentryEligible(coordinator.intentsSnapshot().getJSONObject(0),"BTCUSDT",direction.name,now))

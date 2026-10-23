@@ -8,6 +8,12 @@ internal const val WILLIAMS_EXECUTION_POLICY = "TC2_NTD_OWNED_LIFECYCLES_V2"
 internal const val williamsExecutionProfile = williamsTc2Profile
 internal val williamsExecutionProfiles = listOf(williamsTc2Profile,williamsNtdProfile)
 internal val williamsObserverProfiles = listOf(williamsCourseProfile)
+/** Old releases persisted TC2 as a fixed, non-selectable value. It must not
+ * silently disable NTD after the source lifecycle upgrade. Explicit selections
+ * saved under this policy retain their meaning across process restarts. */
+internal fun williamsRestoredExecutionSelection(stored:String?,policy:String?):String =
+    if(policy==WILLIAMS_EXECUTION_POLICY && stored!=null &&
+        (stored==williamsUnifiedProfile || stored in williamsExecutionProfiles)) stored else williamsUnifiedProfile
 internal fun williamsNewExposureBlocker(source:String):String? =
     if(source in williamsExecutionProfiles) null else "WILLIAMS_SOURCE_OBSERVATION_ONLY"
 internal fun williamsExecutionPolicySnapshot():JSONObject = JSONObject()

@@ -1354,8 +1354,8 @@ private class NativeEngine(
     @Volatile private var entryTimePolicy=prefs.getString("entry_time_policy_v1",null)?.let {
         WilliamsEntryTimePolicy.fromJson(JSONObject(it))
     } ?: WilliamsEntryTimePolicy()
-    @Volatile private var williamsProfile=prefs.getString("williams_strategy_profile_v1",null)
-        ?.takeIf { it==williamsUnifiedProfile || williamsVerifiedNewRiskSource(it) } ?: williamsUnifiedProfile
+    @Volatile private var williamsProfile=williamsRestoredExecutionSelection(
+        prefs.getString("williams_strategy_profile_v1",null),prefs.getString("williams_execution_policy_v2",null))
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
         NativeFuturesCampaignCoordinator(executionStore) {
@@ -6667,7 +6667,8 @@ private class NativeEngine(
         val reserved=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.filter {
             it.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(it)
         }.sumOf { futuresCampaignReservedRisk(it,all) }
-        val risk=minOf(campaignAddRiskCapPct,maxRiskPerTradePct,maxTotalRiskPct-reserved)
+        val risk=minOf(campaignAddRiskCapPct,maxRiskPerTradePct,maxTotalRiskPct-reserved,
+            campaignRiskLimitPct-futuresCampaignReservedRisk(owner,all))
         if(risk<=0) return
         val account=parseFuturesAccountSnapshot(futuresCampaignCoordinator.accountSnapshot()) ?: return
         val leverage=owner.optInt("requested_leverage",0)
@@ -11424,6 +11425,7 @@ private class NativeEngine(
         }
         fun persist() {
             check(prefs.edit().putString("entry_time_policy_v1",nextTime.toJson().toString()).putString("williams_strategy_profile_v1",profile)
+                .putString("williams_execution_policy_v2",WILLIAMS_EXECUTION_POLICY)
                 .putString("futures_leverage_settings_v1", next.toJson().toString()).commit()) {
                 "Не удалось сохранить настройки стратегии"
             }

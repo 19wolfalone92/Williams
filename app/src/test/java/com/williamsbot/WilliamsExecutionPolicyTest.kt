@@ -7,6 +7,12 @@ import org.junit.Test
 
 class WilliamsExecutionPolicyTest {
     private val h=3_600_000L
+    @Test fun legacyFixedTc2SelectionMigratesWhileExplicitNewPolicySelectionsSurviveRestart() {
+        assertEquals(williamsUnifiedProfile,williamsRestoredExecutionSelection(williamsTc2Profile,null))
+        assertEquals(williamsUnifiedProfile,williamsRestoredExecutionSelection(williamsCourseProfile,WILLIAMS_EXECUTION_POLICY))
+        for(profile in williamsExecutionProfiles+williamsUnifiedProfile)
+            assertEquals(profile,williamsRestoredExecutionSelection(profile,WILLIAMS_EXECUTION_POLICY))
+    }
     @Test fun tc2AndNtdOwnNewRiskWhileCourseRemainsObservationOnly() {
         assertNull(williamsNewExposureBlocker(williamsTc2Profile))
         for(source in listOf(williamsCourseProfile,williamsUnifiedProfile,""))
