@@ -3,7 +3,9 @@
 Source: Trading Chaos 1st ed. Russian PDF53-54, PDF82-83.
 Five signs: MFI divergence, wave price target zone, terminal fractal,
 Squat in three actual extreme bars and Profitunity 5/34/5 momentum turn.
-MFI (market facilitation index) must not silently become Course AO.
+TC1 PDF59 explicitly describes 5/34 as a close approximation to average
+wave MFI; PDF82-83 uses Profitunity oscillator divergence. Report that
+book-described alternative separately from canonical volume-based MFI.
 Binance base volume is a proxy, not source tick-volume MFI.
 
 No action is authorized. Historical wave label remains a hypothesis.
@@ -38,6 +40,9 @@ def tc1_five_bullet_evidence(scenario: dict, verified_mfi_divergence=None, mfi_s
     except (TypeError, ValueError, OverflowError, AttributeError, IndexError):
         scale_bars, observed_at, known_at = 0, 0, 0
     chronological = known_at > 0 and observed_at >= known_at
+    oscillator_alternative = (
+        w5 and 100 <= scale_bars <= 140 and chronological and scenario.get("divergence") is True
+    )
     return {
         "source":"TC1_CH7_PDF53_AND_CH9_PDF82_83",
         "status": ("NO_PROVISIONAL_COMPLETED_FIVE_WAVE_PIVOT" if not w5
@@ -48,6 +53,15 @@ def tc1_five_bullet_evidence(scenario: dict, verified_mfi_divergence=None, mfi_s
         "observed_or_proxy_count":observed,
         "required_count":5,
         "mfi_source":mfi_source if verified else None,
+        "book_described_5_34_alternative": {
+            "source":"TC1_CH7_PDF59_AND_CH9_PDF82_83",
+            "status":("OBSERVED_BOOK_5_34_APPROXIMATION" if oscillator_alternative
+                      else "NOT_OBSERVED_OR_WAVE_SCALE_UNVERIFIED"),
+            "divergence_observed":oscillator_alternative,
+            "canonical_mfi_verified":False,
+            "wave_degree_certified":False,
+            "can_place_orders":False,"can_close":False,"can_reverse":False,
+        },
         "tc1_mfi_distinct_from_course_ao":True,
         "wave_scale_100_140_observed":100 <= scale_bars <= 140,
         "wave_scale_bars":scale_bars,

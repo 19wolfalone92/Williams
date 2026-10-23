@@ -43,6 +43,27 @@ class WilliamsTc1FiveBulletsTest {
             williamsTc1FiveBulletEvidence(completeProxy().put("status","INVALIDATED"))
                 .getString("status"))
     }
+    @Test fun tc1BookDescribed534ApproximationRequiresCausalWaveScaleAndStaysReadOnly() {
+        val pivots=org.json.JSONArray()
+        for(i in 0..5) pivots.put(JSONObject().put("known_at",100L+i*10L))
+        val scenario=completeProxy().put("scale_bars",120).put("observed_at",160L).put("anchors",pivots)
+        val result=williamsTc1FiveBulletEvidence(scenario)
+        val alt=result.getJSONObject("book_described_5_34_alternative")
+        assertEquals("OBSERVED_BOOK_5_34_APPROXIMATION",alt.getString("status"))
+        assertTrue(alt.getBoolean("divergence_observed"))
+        assertFalse(alt.getBoolean("canonical_mfi_verified"))
+        assertFalse(alt.getBoolean("can_place_orders"))
+        assertEquals("NOT_VERIFIED",result.getJSONObject("checks").getString("mfi_divergence"))
+        for(scale in listOf(99,141)) {
+            scenario.put("scale_bars",scale)
+            assertFalse(williamsTc1FiveBulletEvidence(scenario)
+                .getJSONObject("book_described_5_34_alternative").getBoolean("divergence_observed"))
+        }
+        scenario.put("scale_bars",120).put("observed_at",149L)
+        assertFalse(williamsTc1FiveBulletEvidence(scenario)
+            .getJSONObject("book_described_5_34_alternative").getBoolean("divergence_observed"))
+    }
+
     @Test fun pointZeroNeverCertifiedFromFiveProxyBooleansWithoutMfiAndScale() {
         val missing=williamsTc1FiveBulletEvidence(completeProxy())
         assertFalse(missing.getBoolean("wave_scale_100_140_observed"))

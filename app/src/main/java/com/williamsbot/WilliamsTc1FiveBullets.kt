@@ -10,7 +10,9 @@ import org.json.JSONObject
  * Important edition distinction: TC1 lists a divergence in its MFI
  * oscillator AND a turn in Profitunity MACD; Course Level III PDF p77
  * lists FOUR separate signs, including W3/W5 5/34 oscillator divergence.
- * AO divergence is never silently substituted for TC1 MFI divergence.
+ * TC1 PDF59 explicitly permits 5/34 as an approximation to wave-average
+ * MFI; PDF82-83 uses Profitunity oscillator divergence. Keep that alternative
+ * visible without relabelling a price oscillator as canonical volume MFI.
  *
  * Our market input has Binance kline BASE VOLUME rather than canonical
  * MFI/tick series. Thus TC1 bullets remain explicitly unverified unless
@@ -59,6 +61,13 @@ internal fun williamsTc1FiveBulletEvidence(
         .put("checks",checks).put("observed_or_proxy_count",observed)
         .put("required_count",5)
         .put("mfi_source",if(mfiVerified) mfiSource else JSONObject.NULL)
+        .put("book_described_5_34_alternative",JSONObject()
+            .put("source","TC1_CH7_PDF59_AND_CH9_PDF82_83")
+            .put("status",if(w5 && scaleValid && chronological && scenario.optBoolean("divergence"))
+                "OBSERVED_BOOK_5_34_APPROXIMATION" else "NOT_OBSERVED_OR_WAVE_SCALE_UNVERIFIED")
+            .put("divergence_observed",w5 && scaleValid && chronological && scenario.optBoolean("divergence"))
+            .put("canonical_mfi_verified",false).put("wave_degree_certified",false)
+            .put("can_place_orders",false).put("can_close",false).put("can_reverse",false))
         .put("tc1_mfi_distinct_from_course_ao",true)
         .put("wave_scale_100_140_observed",scaleValid)
         .put("wave_scale_bars",scaleBars)

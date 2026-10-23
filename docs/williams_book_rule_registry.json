@@ -1086,10 +1086,12 @@
       "pdf_pages": [
         53,
         54,
+        58,
+        59,
         82,
         83
       ],
-      "rule": "Five signs: MFI divergence, wave-degree target zone, terminal fractal, squat among three price-extreme bars, 5/34/5 momentum change. Provisional W5 and 100-140 bars are context; Binance base-volume and AO indicators cannot be asserted to be canonical TC1 MFI. Never an automatic exit.",
+      "rule": "Five signs include divergence, wave-degree target zone, terminal fractal, squat among three price-extreme bars, and 5/34/5 momentum change. TC1 PDF58 describes wave-average volume-based MFI; PDF59 explicitly describes 5/34 as a close approximation, also used in PDF82-83. Report the book-described 5/34 alternative separately, with causal 100–140-bar scale, without certifying canonical MFI, wave degree or an automatic exit.",
       "status": "BOUNDED_TESTED",
       "modules": [
         "williams_tc1_terminal_evidence.py",
@@ -1099,10 +1101,12 @@
       ],
       "tests": [
         "tests/test_williams_tc1_terminal_evidence.py::test_course_ao_divergence_does_not_certify_tc1_mfi",
-        "app/src/test/java/com/williamsbot/WilliamsTc1FiveBulletsTest.kt::pointZeroNeverCertifiedFromFiveProxyBooleansWithoutMfiAndScale"
+        "app/src/test/java/com/williamsbot/WilliamsTc1FiveBulletsTest.kt::pointZeroNeverCertifiedFromFiveProxyBooleansWithoutMfiAndScale",
+        "tests/test_williams_tc1_terminal_evidence.py::test_tc1_itself_describes_a_5_34_alternative_without_certifying_volume_mfi",
+        "app/src/test/java/com/williamsbot/WilliamsTc1FiveBulletsTest.kt::tc1BookDescribed534ApproximationRequiresCausalWaveScaleAndStaysReadOnly"
       ],
       "fixtures": [],
-      "remaining_evidence": "Book PDF53-54/82-83 inspected visually; no externally proven canonical MFI divergences on independently labelled W3/W5 historical graphs. Python/Kotlin use current source-scoped proxies for observation only.",
+      "remaining_evidence": "TC1 PDF53-54/58-59/82-83 terminology reconciled: volume MFI and the author-described 5/34 approximation stay distinguishable. Full independent degree labels, target zones and Squat tick-volume acceptance remain pending.",
       "can_place_orders_from_registry": false
     }
   ],
