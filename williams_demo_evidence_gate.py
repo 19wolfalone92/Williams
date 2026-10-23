@@ -82,7 +82,7 @@ def validate_demo_device_evidence(payload:dict)->dict:
         ("BOOT_COMPLETED","KEYSTORE_RESTORED"),("KEYSTORE_RESTORED","ENGINE_RECOVERED"),
         ("ENGINE_RECOVERED","POSITION_RECONCILED"),
         ("POSITION_RECONCILED","STOP_RECONFIRMED"),
-        ("STOP_RECONFIRMED","POSITION_FLAT")):
+        ("STOP_RECONFIRMED","POSITION_FLAT"))):
         errors.append("LIFECYCLE_ORDER_OR_REBOOT_RECOVERY_UNPROVED")
     if first("ENTRY_FILL_REPORTED").get("exchange_order_id") in (None,""):
         errors.append("ENTRY_FILL_LACKS_EXCHANGE_ORDER_ID")
