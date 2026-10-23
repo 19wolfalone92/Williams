@@ -688,16 +688,25 @@
         63,
         65
       ],
-      "rule": "AO behaviour is evidence of minimum W4 conditions, not proof W4 has ended.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "rule": "The direction-normalized 5/34 oscillator must pass zero at the examined 100-140-bar degree. A zero touch or near-zero remains unconfirmed; an actual cross establishes minimum W4 conditions, not its end.",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_wave_hierarchy.py",
         "app/src/main/java/com/williamsbot/WilliamsWaveRhythm.kt"
       ],
-      "tests": [],
-      "fixtures": [],
-      "remaining_evidence": "Exact page/figure mapping and distinction between cross, touch and approach require final source review.",
-      "can_place_orders_from_registry": false
+      "tests": [
+        "tests/test_williams_wave_hierarchy.py::test_source_w4_zero_cross_excludes_touch_and_wrong_degree_scale",
+        "app/src/test/java/com/williamsbot/WilliamsWaveHierarchyTest.kt::sourceW4CrossRequiresPassingZeroAtTheExaminedDegree"
+      ],
+      "fixtures": [
+        "cases/bars-120-past-zero",
+        "cases/bars-120-touch-zero",
+        "cases/bars-99-past-zero",
+        "cases/bars-141-past-zero"
+      ],
+      "remaining_evidence": "Course PDF42-44 and TC1 PDF60-63 reread with figures7-18/19/20. Twenty synthetic boundary cases cover both direction normalizations, zero-touch and 100/140 scale endpoints. These are not digitized historical chart OHLC; full nested-degree classification remains unproven.",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_w4_zero_source_contract.json"
     },
     {
       "id": "WAVE.REAL_TIMEFRAMES",
@@ -972,6 +981,41 @@
       "tests": [],
       "fixtures": [],
       "remaining_evidence": "Original referenced Computorial examples and personal tutorial material are absent from these supplied PDFs; not replaced by invented source claims.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "WAVE.W3.GLOBAL_MOMENTUM_AND_PRICE_LAG",
+      "book": "TC1",
+      "pdf_pages": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "rule": "At the proposed degree, identify the global 5/34 peak and the appropriate price extreme 1-5 real bars earlier. Equal competing peaks, an unobserved subsequent turn, or ambiguous finer-frame price timestamps stay unconfirmed.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_wave_momentum.py",
+        "williams_wave_hierarchy.py",
+        "app/src/main/java/com/williamsbot/WilliamsWaveMomentumEvidence.kt",
+        "app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt"
+      ],
+      "tests": [
+        "tests/test_williams_wave_momentum.py::test_source_global_peak_and_one_to_five_bar_lag",
+        "tests/test_williams_wave_momentum.py::test_actual_hierarchy_and_market_phase_carry_the_source_evidence",
+        "app/src/test/java/com/williamsbot/WilliamsWaveMomentumEvidenceTest.kt::sharedSourceExamplesAndCounterexamplesKeepTheirCausalTimes",
+        "app/src/test/java/com/williamsbot/WilliamsWaveMomentumEvidenceTest.kt::hierarchyAndPhaseExposeEvidenceAndExplainUnconfirmedMomentum"
+      ],
+      "fixture_file": "app/src/test/resources/williams_w3_momentum_source_contract.json",
+      "fixtures": [
+        "cases/price-leads-ao-two-bars",
+        "cases/earlier-larger-peak",
+        "cases/earlier-equal-peak",
+        "cases/ao-precedes-price",
+        "cases/ao-six-bars-late",
+        "cases/peak-has-not-turned"
+      ],
+      "remaining_evidence": "The existing standalone Android evaluator is now wired into actual hierarchy/phase/journal and implemented in Python. Ten shared semantic cases cover both directions; they are synthetic rule boundaries, not digitized book chart OHLC. The examined wave degree remains provisional.",
       "can_place_orders_from_registry": false
     }
   ],

@@ -93,6 +93,7 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
             .put("active_label",h.optString("active_label")).put("active_direction",h.optString("active_direction"))
             .put("impulse_direction",h.optString("direction")).put("invalidation",h.opt("invalidation") ?: JSONObject.NULL)
             .put("w4_zero",h.optString("w4_zero")).put("scale_frame",h.optString("scale_frame"))
+            .put("third_momentum",h.opt("third_momentum") ?: JSONObject.NULL)
             .put("scale_bars",h.optInt("scale_bars"))
             .put("signs",JSONArray(signs.filterKeys { h.optBoolean(it) }.values.toList()))
             .put("course_four_signs",williamsCourseFourSignEvidence(h))

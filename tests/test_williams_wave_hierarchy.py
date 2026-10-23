@@ -9,7 +9,7 @@ import pytest
 from williams_exit_policy import plan_williams_stop, zone_trailing_activation
 from williams_wave_hierarchy import (
     FRAME_MS, WaveAnchor, WaveBar, WaveHierarchy, WaveHypothesis,
-    build_wave_hierarchy, confirmed_wave_anchors, correction_entry_context,
+    build_wave_hierarchy, classify_fourth_ao, confirmed_wave_anchors, correction_entry_context,
     correction_price_allowed, link_wave_hypotheses, opposing_level_triggered,
 )
 
@@ -373,3 +373,14 @@ def test_observed_five_frame_chain_cannot_skip_requested_h4_evidence():
     assert four["contained_chain_observed"] is True
     assert five["contained_chain_observed"] is False
     assert not five["can_place_orders"]
+
+
+@pytest.mark.parametrize("case",json.loads((Path(__file__).resolve().parents[1]/
+    "app/src/test/resources/williams_w4_zero_source_contract.json").read_text())["cases"],
+    ids=lambda case:case["id"])
+def test_source_w4_zero_cross_excludes_touch_and_wrong_degree_scale(case):
+    # Course PDF44: past zero, not merely at zero. Same oriented rule both ways.
+    for sign in (1,-1):
+        raw_w3=sign*case["third_peak"]
+        raw_w4=sign*case["fourth_minimum"]
+        assert classify_fourth_ao(sign*raw_w3,sign*raw_w4,case["scale_bars"])==case["expected"]

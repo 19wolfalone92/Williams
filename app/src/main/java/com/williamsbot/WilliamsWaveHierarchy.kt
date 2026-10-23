@@ -33,7 +33,8 @@ internal data class WilliamsWaveScenario(
     var divergence: Boolean = false, var momentumShift: Boolean = false,
     var terminalFractal: Boolean = false, var squat: Boolean = false, var targetZone: Boolean = false,
     val alternatives: MutableList<String> = mutableListOf(),
-    var legObservationStart:Long = 0L
+    var legObservationStart:Long = 0L,
+    var thirdMomentum:JSONObject? = null
 ) {
     val activeLabel:String get()=when(anchors.size) { 2->"W2";3->"W3";4->"W4";5->"W5";6->"A";7->"B";8->"C";else->"NEXT_SEQUENCE_UNRESOLVED" }
     val activeDirection:String get()=if(activeLabel in listOf("W2","W4","A","C")) {
@@ -51,6 +52,7 @@ internal data class WilliamsWaveScenario(
         .put("scale_bars", scaleBars).put("w4_zero", w4Zero).put("divergence", divergence)
         .put("momentum_shift", momentumShift).put("terminal_fractal", terminalFractal)
         .put("squat", squat).put("target_zone", targetZone).put("alternatives", JSONArray(alternatives))
+        .put("third_momentum",thirdMomentum ?: JSONObject.NULL)
 }
 internal data class WilliamsWaveLink(val parent: String, val child: String, val parentLeg: String, val relationship: String) {
     fun toJson(): JSONObject = JSONObject().put("parent", parent).put("child", child)
@@ -157,8 +159,9 @@ private fun waveAo(bars: List<WilliamsWaveBar>): List<Double> {
 }
 
 /**
- * AO proximity is NOT proof of a fourth-wave degree. Exact zero contact
- * counts as a zero-line event; heuristic proximity is only research evidence.
+ * Course PDF44 / TC1 PDF63 require passing the zero line. An exact touch
+ * does not establish the book minimum; proximity is only research evidence.
+ * Inputs are direction-normalized, so the same rule covers both directions.
  * Never promote NEAR_ZERO_UNCONFIRMED into MINIMUM_ONLY trade permission.
  */
 internal fun classifyWilliamsFourthAo(
@@ -167,7 +170,7 @@ internal fun classifyWilliamsFourthAo(
     if (scaleBars !in 100..140) return "WRONG_SCALE"
     if (!thirdPeak.isFinite() || thirdPeak <= 0.0 ||
         !fourthMinimum.isFinite()) return "MISSING_W3_MOMENTUM"
-    if (fourthMinimum <= 0.0) return "MINIMUM_ONLY"
+    if (fourthMinimum < 0.0) return "MINIMUM_ONLY"
     // 10% of the W3 peak is a declared diagnostic approximation,
     // not an invariant extracted from a Williams book illustration.
     if (fourthMinimum / thirdPeak <= 0.10) return "NEAR_ZERO_UNCONFIRMED"
@@ -192,6 +195,21 @@ private fun enrichWaveRhythm(h: WilliamsWaveScenario, frames: Map<String, List<W
     val osc = waveAo(bars)
     val sign = if (h.direction == "UP") 1 else -1
     val p = h.anchors
+    // Resolve real intrabar price times; never use a senior candle's open as
+    // an invented timestamp for the high/low on a finer oscillator frame.
+    fun uniquePriceIndex(anchor:WilliamsWaveAnchor):Int? {
+        if(williamsWaveFrames.getValue(frame)>williamsWaveFrames.getValue(h.frame)) return null
+        val found=bars.indices.filter { i -> val b=bars[i]
+            b.t>=anchor.extremeAt && b.t<anchor.extremeAt+williamsWaveFrames.getValue(h.frame) &&
+                abs((if(anchor.kind=="HIGH") b.h else b.l)-anchor.price)<=maxOf(1e-9,anchor.price*1e-9) }
+        return found.singleOrNull()
+    }
+    val thirdIndex=uniquePriceIndex(p[3])
+    val fourthIndex=if(p.size>=5) uniquePriceIndex(p[4]) else indexes.last()
+    h.thirdMomentum=if(thirdIndex!=null && fourthIndex!=null)
+        evaluateWilliamsThirdMomentum(bars,osc,indexes.first(),thirdIndex,fourthIndex,h.direction,
+            williamsWaveFrames.getValue(frame)).toJson()
+    else williamsThirdMomentumUnavailable("SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS").toJson()
     var thirdEnd = p[3].extremeAt + 5 * williamsWaveFrames.getValue(frame)
     if (p.size >= 5) thirdEnd = minOf(thirdEnd, p[4].extremeAt)
     val w3Indexes = indexes.filter { bars[it].t in p[2].extremeAt..thirdEnd }

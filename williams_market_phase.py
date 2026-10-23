@@ -46,6 +46,7 @@ def market_phase_context(hierarchy):
             "active_label":h["active_label"],"active_direction":h["active_direction"],
             "impulse_direction":h.get("direction",""),"invalidation":h.get("invalidation"),
             "w4_zero":h.get("w4_zero",""),"scale_frame":h.get("scale_frame",""),
+            "third_momentum":h.get("third_momentum"),
             "scale_bars":h.get("scale_bars",0),"signs":[name for key,name in signs.items() if h.get(key,False)]}
             for h in usable]
         state=("NOT_ANALYSED" if as_of<=0 else "UNAVAILABLE" if frame in errors or (frame=="4h" and frame not in counts and not usable)

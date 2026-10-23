@@ -13,6 +13,29 @@ class WilliamsWaveHierarchyTest {
         return (0 until rows.length()).map { i -> val r=rows.getJSONArray(i)
             WilliamsWaveBar(r.getLong(0),r.getDouble(1),r.getDouble(2),r.getDouble(3),r.getDouble(4),r.getDouble(5)) }
     }
+    @Test fun sourceW4CrossRequiresPassingZeroAtTheExaminedDegree() {
+        val cases=JSONObject(requireNotNull(javaClass.getResource(
+            "/williams_w4_zero_source_contract.json")).readText()).getJSONArray("cases")
+        for(i in 0 until cases.length()) {
+            val case=cases.getJSONObject(i)
+            for(sign in listOf(1,-1)) {
+                val rawW3=sign*case.getDouble("third_peak")
+                val rawW4=sign*case.getDouble("fourth_minimum")
+                assertEquals(case.getString("id"),case.getString("expected"),
+                    classifyWilliamsFourthAo(sign*rawW3,sign*rawW4,case.getInt("scale_bars")))
+            }
+        }
+        // The hierarchy scalar and the separate rhythm module must agree
+        // that an exact touch has not met the book minimum in either direction.
+        for(direction in listOf("UP","DOWN")) {
+            val sign=if(direction=="UP") 1 else -1
+            val ao=MutableList(120) { 4.0*sign };ao[55]=8.0*sign;ao[95]=0.0
+            assertEquals(Wave4ZeroStatus.NEAR_ZERO_UNCONFIRMED,
+                evaluateWilliamsWave4Zero(ao,0,55,119,direction).status)
+            assertEquals("NEAR_ZERO_UNCONFIRMED",classifyWilliamsFourthAo(8.0,0.0,120))
+        }
+    }
+
     @Test fun realH4BarsParticipateInHypothesesAndUseH1ForSubdivisionEvidence() {
         val fixture=fixtureCases().getJSONObject(0)
         val h4=fixtureBars(fixture).map { it.copy(t=it.t*4) }

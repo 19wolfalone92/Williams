@@ -11,6 +11,7 @@ from math import isfinite
 from typing import Mapping, Sequence
 from williams_complex_waves import detect_complex_wave_patterns
 from williams_wave_subdivisions import enrich_complex_subdivisions
+from williams_wave_momentum import evaluate_third_momentum, ordered_sum, third_momentum_unavailable
 
 FRAME_MS = {"1m":60_000,"3m":180_000,"5m":300_000,"15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
             "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
@@ -77,6 +78,7 @@ class WaveHypothesis:
     target_zone: bool = False
     alternatives: list[str] = field(default_factory=list)
     leg_observation_start: int = 0
+    third_momentum: dict | None = None
 
     @property
     def active_label(self):
@@ -223,17 +225,21 @@ def wave_leg_observation_start(anchor,frame,frames):
 
 def _ao(bars):
     mid = [(b.h + b.l) / 2 for b in bars]
-    return [sum(mid[i-4:i+1]) / 5 - sum(mid[i-33:i+1]) / 34
+    return [ordered_sum(mid[i-4:i+1]) / 5 - ordered_sum(mid[i-33:i+1]) / 34
             if i >= 33 else float("nan") for i in range(len(mid))]
 
 
 def classify_fourth_ao(third_peak: float, fourth_minimum: float, scale_bars: int) -> str:
-    """Exact AO zero counts; close-but-positive is NON-authorizing evidence."""
+    """Course PDF44 / TC1 PDF63: pass zero; touching is unconfirmed.
+
+    Inputs are direction-normalized: W3 momentum is positive and a real
+    W4 crossing is negative. The same rule therefore covers both directions.
+    """
     if not 100 <= scale_bars <= 140:
         return "WRONG_SCALE"
     if not (isfinite(third_peak) and third_peak > 0 and isfinite(fourth_minimum)):
         return "MISSING_W3_MOMENTUM"
-    if fourth_minimum <= 0:
+    if fourth_minimum < 0:
         return "MINIMUM_ONLY"
     # Ten percent is a documented research heuristic, not a book gate.
     if fourth_minimum / third_peak <= .10:
@@ -264,6 +270,20 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
     osc = _ao(bars)
     sign = 1 if h.direction == "UP" else -1
     p = h.anchors
+
+    # Locate the actual price extreme on the chosen genuine scale. The open
+    # time of a senior candle is not the time of its intrabar extreme.
+    def unique_price_index(anchor):
+        candidates=[i for i,b in enumerate(bars)
+            if anchor.extreme_at<=b.t<anchor.extreme_at+FRAME_MS[h.frame]
+            and abs((b.h if anchor.kind=="HIGH" else b.l)-anchor.price)<=max(1e-9,anchor.price*1e-9)]
+        return candidates[0] if len(candidates)==1 and FRAME_MS[frame]<=FRAME_MS[h.frame] else None
+
+    third_index=unique_price_index(p[3])
+    fourth_index=unique_price_index(p[4]) if len(p)>=5 else indexes[-1]
+    h.third_momentum=(evaluate_third_momentum(bars,osc,indexes[0],third_index,fourth_index,
+        h.direction,FRAME_MS[frame]) if third_index is not None and fourth_index is not None else
+        third_momentum_unavailable("SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS"))
 
     def peak(a, b):
         values = [sign * osc[i] for i in indexes
@@ -400,7 +420,7 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             h.alternatives.append("IRREGULAR_CORRECTION")
         valid_ao = [v for v in osc[-5:] if isfinite(v)]
         h.momentum_shift = (len(valid_ao) == 5 and sign * valid_ao[-1] <
-                            sign * sum(valid_ao) / 5 and
+                            sign * ordered_sum(valid_ao) / 5 and
                             sign * valid_ao[-1] < sign * valid_ao[-2])
         terminal = p[min(5, n-1)].index
         if n >= 6:

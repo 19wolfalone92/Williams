@@ -1,0 +1,173 @@
+{
+  "schema": "WILLIAMS_W4_ZERO_SOURCE_CONTRACT_V1",
+  "source_references": [
+    {
+      "book": "COURSE",
+      "pdf_pages": [
+        42,
+        43,
+        44
+      ],
+      "rule": "The 5/34 oscillator must move past zero after W3; the condition is only a minimum, not proof of completed W4."
+    },
+    {
+      "book": "TC1",
+      "pdf_pages": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "figures": [
+        "7-18",
+        "7-19",
+        "7-20"
+      ],
+      "rule": "Keep each 100-140-bar sequence at its own degree. A junior divergence without its own zero-cross proof can be W5 within a larger W3."
+    }
+  ],
+  "fixture_provenance": "SYNTHETIC_BOUNDARY_VALUES_DERIVED_FROM_REVIEWED_SOURCE_RULE_NOT_DIGITIZED_BOOK_OHLC",
+  "direction_normalization": "Multiply AO by +1 for UP motives and -1 for DOWN motives before using the scalar predicate.",
+  "cases": [
+    {
+      "id": "bars-99-past-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": -0.001,
+      "scale_bars": 99,
+      "expected": "WRONG_SCALE"
+    },
+    {
+      "id": "bars-99-touch-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": 0.0,
+      "scale_bars": 99,
+      "expected": "WRONG_SCALE"
+    },
+    {
+      "id": "bars-99-near-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": 0.001,
+      "scale_bars": 99,
+      "expected": "WRONG_SCALE"
+    },
+    {
+      "id": "bars-99-same-side",
+      "third_peak": 8.0,
+      "fourth_minimum": 2.0,
+      "scale_bars": 99,
+      "expected": "WRONG_SCALE"
+    },
+    {
+      "id": "bars-100-past-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": -0.001,
+      "scale_bars": 100,
+      "expected": "MINIMUM_ONLY"
+    },
+    {
+      "id": "bars-100-touch-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": 0.0,
+      "scale_bars": 100,
+      "expected": "NEAR_ZERO_UNCONFIRMED"
+    },
+    {
+      "id": "bars-100-near-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": 0.001,
+      "scale_bars": 100,
+      "expected": "NEAR_ZERO_UNCONFIRMED"
+    },
+    {
+      "id": "bars-100-same-side",
+      "third_peak": 8.0,
+      "fourth_minimum": 2.0,
+      "scale_bars": 100,
+      "expected": "NO_ZERO_CROSS"
+    },
+    {
+      "id": "bars-120-past-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": -0.001,
+      "scale_bars": 120,
+      "expected": "MINIMUM_ONLY"
+    },
+    {
+      "id": "bars-120-touch-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": 0.0,
+      "scale_bars": 120,
+      "expected": "NEAR_ZERO_UNCONFIRMED"
+    },
+    {
+      "id": "bars-120-near-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": 0.001,
+      "scale_bars": 120,
+      "expected": "NEAR_ZERO_UNCONFIRMED"
+    },
+    {
+      "id": "bars-120-same-side",
+      "third_peak": 8.0,
+      "fourth_minimum": 2.0,
+      "scale_bars": 120,
+      "expected": "NO_ZERO_CROSS"
+    },
+    {
+      "id": "bars-140-past-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": -0.001,
+      "scale_bars": 140,
+      "expected": "MINIMUM_ONLY"
+    },
+    {
+      "id": "bars-140-touch-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": 0.0,
+      "scale_bars": 140,
+      "expected": "NEAR_ZERO_UNCONFIRMED"
+    },
+    {
+      "id": "bars-140-near-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": 0.001,
+      "scale_bars": 140,
+      "expected": "NEAR_ZERO_UNCONFIRMED"
+    },
+    {
+      "id": "bars-140-same-side",
+      "third_peak": 8.0,
+      "fourth_minimum": 2.0,
+      "scale_bars": 140,
+      "expected": "NO_ZERO_CROSS"
+    },
+    {
+      "id": "bars-141-past-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": -0.001,
+      "scale_bars": 141,
+      "expected": "WRONG_SCALE"
+    },
+    {
+      "id": "bars-141-touch-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": 0.0,
+      "scale_bars": 141,
+      "expected": "WRONG_SCALE"
+    },
+    {
+      "id": "bars-141-near-zero",
+      "third_peak": 8.0,
+      "fourth_minimum": 0.001,
+      "scale_bars": 141,
+      "expected": "WRONG_SCALE"
+    },
+    {
+      "id": "bars-141-same-side",
+      "third_peak": 8.0,
+      "fourth_minimum": 2.0,
+      "scale_bars": 141,
+      "expected": "WRONG_SCALE"
+    }
+  ]
+}

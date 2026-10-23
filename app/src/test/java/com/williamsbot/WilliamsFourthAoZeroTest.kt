@@ -3,10 +3,10 @@ package com.williamsbot
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Fourth-wave AO zero contact is evidence, not a wave-degree certificate. */
+/** Course PDF44: exact zero contact does not meet the cross-past-zero rule. */
 class WilliamsFourthAoZeroTest {
     @Test fun bothSignsNormalizeToSameFourthWaveEvidence() {
-        assertEquals("MINIMUM_ONLY",classifyWilliamsFourthAo(10.0,0.0,120))
+        assertEquals("NEAR_ZERO_UNCONFIRMED",classifyWilliamsFourthAo(10.0,0.0,120))
         assertEquals("MINIMUM_ONLY",classifyWilliamsFourthAo(10.0,-0.001,120))
         assertEquals("NEAR_ZERO_UNCONFIRMED",classifyWilliamsFourthAo(10.0,0.5,120))
         assertEquals("NEAR_ZERO_UNCONFIRMED",classifyWilliamsFourthAo(10.0,1.0,120))

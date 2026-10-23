@@ -1,11 +1,11 @@
-"""AO W4: exact touch vs positive proximity; neither proves wave degree."""
+"""Course PDF44: a zero touch is not the required cross past zero."""
 import math
 import pytest
 from williams_wave_hierarchy import classify_fourth_ao
 
 
 @pytest.mark.parametrize("third,minimum,bars,expected",[
-    (10.,0.,120,"MINIMUM_ONLY"),
+    (10.,0.,120,"NEAR_ZERO_UNCONFIRMED"),
     (10.,-0.001,120,"MINIMUM_ONLY"),
     (10.,.5,120,"NEAR_ZERO_UNCONFIRMED"),
     (10.,1.,120,"NEAR_ZERO_UNCONFIRMED"),

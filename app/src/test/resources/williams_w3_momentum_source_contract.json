@@ -1,0 +1,104 @@
+{
+  "schema": "WILLIAMS_W3_SOURCE_MOMENTUM_V1",
+  "source_references": [
+    {
+      "book": "TC1",
+      "pdf_pages": [
+        60
+      ],
+      "figures": [
+        "7-17"
+      ],
+      "rule": "Use the global oscillator peak of the proposed wave sequence and the appropriate price extreme 1-5 actual bars earlier."
+    },
+    {
+      "book": "COURSE",
+      "pdf_pages": [
+        42,
+        43,
+        44
+      ],
+      "rule": "Do not infer W3/W4 degree from a convenient local peak or a zero touch."
+    }
+  ],
+  "fixture_provenance": "SYNTHETIC_RULE_BOUNDARIES_NOT_DIGITIZED_BOOK_OHLC",
+  "cycle_start": 40,
+  "third_price_index": 70,
+  "cases": [
+    {
+      "id": "price-leads-ao-two-bars",
+      "peak_index": 72,
+      "end_index": 110,
+      "expected": "GLOBAL_PEAK_AND_PRICE_LAG_OBSERVED",
+      "lag": 2,
+      "known_bar": 74
+    },
+    {
+      "id": "earlier-larger-peak",
+      "peak_index": 72,
+      "other_peak": [
+        50,
+        12.0
+      ],
+      "end_index": 110,
+      "expected": "GLOBAL_PEAK_OUTSIDE_W3_PRICE_LAG_WINDOW"
+    },
+    {
+      "id": "earlier-equal-peak",
+      "peak_index": 72,
+      "other_peak": [
+        50,
+        10.0
+      ],
+      "end_index": 110,
+      "expected": "MULTIPLE_GLOBAL_PEAKS_DEGREE_UNCONFIRMED"
+    },
+    {
+      "id": "ao-precedes-price",
+      "peak_index": 69,
+      "end_index": 110,
+      "expected": "GLOBAL_PEAK_OUTSIDE_W3_PRICE_LAG_WINDOW"
+    },
+    {
+      "id": "ao-same-bar-as-price",
+      "peak_index": 70,
+      "end_index": 110,
+      "expected": "GLOBAL_PEAK_OUTSIDE_W3_PRICE_LAG_WINDOW"
+    },
+    {
+      "id": "ao-six-bars-late",
+      "peak_index": 76,
+      "end_index": 110,
+      "expected": "GLOBAL_PEAK_OUTSIDE_W3_PRICE_LAG_WINDOW"
+    },
+    {
+      "id": "price-leads-ao-one-bar",
+      "peak_index": 71,
+      "end_index": 110,
+      "expected": "GLOBAL_PEAK_AND_PRICE_LAG_OBSERVED",
+      "lag": 1,
+      "known_bar": 73
+    },
+    {
+      "id": "price-leads-ao-five-bars",
+      "peak_index": 75,
+      "end_index": 110,
+      "expected": "GLOBAL_PEAK_AND_PRICE_LAG_OBSERVED",
+      "lag": 5,
+      "known_bar": 77
+    },
+    {
+      "id": "peak-has-not-turned",
+      "peak_index": 72,
+      "end_index": 72,
+      "expected": "GLOBAL_PEAK_TURN_NOT_YET_OBSERVED"
+    },
+    {
+      "id": "wrong-price-extreme",
+      "peak_index": 72,
+      "end_index": 110,
+      "higher_bar": 69,
+      "expected": "GLOBAL_PEAK_OUTSIDE_W3_PRICE_LAG_WINDOW"
+    }
+  ]
+}

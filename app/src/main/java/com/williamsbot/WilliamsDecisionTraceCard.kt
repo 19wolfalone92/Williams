@@ -118,6 +118,11 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                             } }
                             Text("${h.optString("scenario_id")} · признаки: "+names.joinToString().ifBlank { "не наблюдаются" }+
                                 "\nAO W4: ${h.optString("w4_zero")} · масштаб ${h.optString("scale_frame")} / ${h.optInt("scale_bars")} свечей",style=MaterialTheme.typography.bodySmall)
+                            h.optJSONObject("third_momentum")?.let { momentum ->
+                                Text(williamsThirdMomentumLabel(momentum),style=MaterialTheme.typography.bodySmall)
+                                val known=momentum.optLong("peak_turn_known_at_ms",0L)
+                                if(known>0L) Text("Поворот пика известен: ${time(known)} · TC1 PDF60 / Course PDF42",style=MaterialTheme.typography.bodySmall)
+                            }
                         }
                     }
                     Text("Контекст описывает наблюдаемое состояние. Номер волны — гипотеза; это не вероятность следующего движения.",style=MaterialTheme.typography.bodySmall)
