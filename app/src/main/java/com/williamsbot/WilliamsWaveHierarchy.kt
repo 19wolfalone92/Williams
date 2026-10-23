@@ -420,8 +420,12 @@ internal fun buildWilliamsWaveHierarchy(frames: Map<String,List<WilliamsWaveBar>
             val parent=points.filter { it.extremeAt in evidence.startAt..evidence.endAt }
             val proof=enrichWilliamsComplexSubdivisions(evidence.pattern,parent,anchorsByFrame[childFrame].orEmpty(),
                 williamsWaveFrames.getValue(frame),asOf)
+            val recursive=traceWilliamsRecursivePriceGrammar(
+                evidence.pattern,parent,anchorsByFrame,williamsWaveFrames,frame,asOf,
+                depth=3,maxNodes=64)
             structures+=evidence.toJson().put("frame",frame).put("child_frame",childFrame)
-                .put("source_scenario_id","$frame:$direction:${evidence.startAt}:${parent.size}").put("internal_proof",proof.toJson())
+                .put("source_scenario_id","$frame:$direction:${evidence.startAt}:${parent.size}")
+                .put("internal_proof",proof.toJson()).put("recursive_proof",recursive)
         }
     }
     return WilliamsWaveHierarchy(asOf,scenarios,linkWilliamsWaveHypotheses(scenarios),errors,warnings,
