@@ -59,6 +59,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         var closeFraction = 1.0
         var closeStatus = "FILLED"
         var positionSide = "BOTH"
+        var positionSnapshotTransform: ((JSONArray) -> JSONArray)? = null
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
             requests += request
@@ -175,11 +176,11 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .body(response.toString().toResponseBody("application/json".toMediaType())).build()
         }.build()
 
-        fun positions() = JSONArray().apply {
+        fun positions(): JSONArray = JSONArray().apply {
             if (quantity != 0.0) put(JSONObject().put("symbol", "BTCUSDT").put("positionSide", positionSide)
                 .put("positionAmt", quantity.toString()).put("entryPrice", entry.toString())
                 .put("markPrice", mark.toString()).put("liquidationPrice", liquidation))
-        }
+        }.let { positionSnapshotTransform?.invoke(it) ?: it }
         fun fill(fraction: Double = 1.0, childClientId: String? = null) {
             val pending = algos.values.single { it.optString("closePosition") != "true" }
             entry = pending.getString("triggerPrice").toDouble()
@@ -2423,6 +2424,63 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+
+    @Test fun diagnostics19RecoveredStopIsPublishedInTheSameSignedAudit() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal=Journal()
+            val (coordinator,exchange)=open(direction,journal=journal)
+            // open() performs the first fill reconciliation and STOP POST.
+            // Its proof must already reflect that newly confirmed STOP.
+            val proof=coordinator.status().getJSONArray("exchange_protection_observations").getJSONObject(0)
+            val owner=coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("OWNED_STOP_SEEN",proof.getString("stop_proof"))
+            assertEquals(owner.getString("protection_client_id"),proof.getString("protection_client_id"))
+            assertEquals(owner.getString("protective_stop"),proof.getString("stop"))
+            assertTrue(proof.getBoolean("automatic_trailing_authorized"))
+            val posts=exchange.posts("/fapi/v1/algoOrder")
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertEquals(posts,exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+
+    @Test fun diagnostics19UnrelatedReversedCampaignCannotContaminateOwnedPositionRiskOrProof() {
+        val journal=Journal()
+        val (coordinator,exchange)=open(NativeFuturesCampaignCoordinator.Direction.LONG,journal=journal)
+        val rows=coordinator.intentsSnapshot()
+        val foreign=JSONObject(rows.getJSONObject(0).toString())
+            .put("symbol","ETHUSDT").put("client_id","W2E_ETH_OLD_LONG")
+        rows.put(foreign)
+        journal.writeState("futures_campaign_intents_v2",rows.toString())
+        exchange.positionSnapshotTransform={ positions -> positions.put(JSONObject()
+            .put("symbol","ETHUSDT").put("positionSide","BOTH").put("positionAmt","-1")
+            .put("entryPrice","99").put("markPrice","100").put("liquidationPrice","200")) }
+        val before=exchange.posts("/fapi/v1/algoOrder")
+        val result=coordinator.reconcile()
+        assertFalse(result.getBoolean("ok"))
+        assertEquals("POSITION_UNPROTECTED",result.getString("state"))
+        val owned=coordinator.intentsSnapshot().getJSONObject(0)
+        assertEquals("PASS",owned.getString("actual_risk_audit_status"))
+        assertFalse(owned.has("actual_risk_audit_blocker"))
+        val proofs=result.getJSONArray("exchange_protection_observations")
+        assertEquals(2,proofs.length())
+        assertEquals("OWNED_STOP_SEEN",proofs.getJSONObject(0).getString("stop_proof"))
+        assertEquals("REVERSED_CAMPAIGN_QUARANTINE",proofs.getJSONObject(1).getString("management_mode"))
+        assertEquals(before,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+    }
+
+    @Test fun diagnostics19DuplicateSignedPositionRowsNeverOverwriteRealExposure() {
+        val (coordinator,exchange)=open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.positionSnapshotTransform={ rows -> rows.put(JSONObject(rows.getJSONObject(0).toString())
+            .put("positionAmt","0")) }
+        val before=exchange.posts("/fapi/v1/algoOrder")
+        val result=coordinator.reconcile()
+        assertFalse(result.getBoolean("ok"))
+        assertTrue(result.getString("blocker").contains("duplicate position symbol"))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        assertEquals(before,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+    }
 
     @Test fun diagnostics18ReversedLivePositionNeverBelongsToOldCampaignAndDoesNotMutateOrders() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {

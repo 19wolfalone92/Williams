@@ -4,6 +4,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.json.JSONArray
+import org.json.JSONObject
 
 class StandaloneRuntimeReconciliationTest {
     @Test
@@ -64,6 +66,21 @@ class StandaloneRuntimeReconciliationTest {
         assertFalse(mayCommitUserStreamSync(false, false, 7L, 7L))
         assertFalse(mayCommitUserStreamSync(true, true, 7L, 7L))
         assertFalse(mayCommitUserStreamSync(true, false, 6L, 7L))
+    }
+
+    @Test
+    fun completeSignedDataCanSynchronizeWhileNewEntriesStayBlocked() {
+        val blocked=JSONObject().put("ok",false).put("state","POSITION_UNPROTECTED")
+            .put("exchange_snapshot_complete",true).put("positions_checked",3)
+            .put("exchange_protection_observations",JSONArray())
+        assertTrue(futuresSignedSnapshotComplete(blocked))
+        assertFalse(blocked.getBoolean("ok"))
+        assertEquals("POSITION_UNPROTECTED",blocked.getString("state"))
+        blocked.remove("exchange_protection_observations")
+        assertFalse(futuresSignedSnapshotComplete(blocked))
+        assertFalse(futuresSignedSnapshotComplete(JSONObject().put("ok",true)))
+        assertFalse(futuresSignedSnapshotComplete(JSONObject()
+            .put("ok",false).put("blocker","signed REST timeout")))
     }
 
     @Test

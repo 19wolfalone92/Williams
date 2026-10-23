@@ -686,7 +686,8 @@ def test_android_super_ao_uses_the_third_rising_bar_and_not_the_oldest_of_three(
     assert "williamsTc2SuperAoInitialStop(" in wm2
     assert "streak == 3" not in wm2
     assert "val structuralStop = williamsTc2SuperAoInitialStop(" in wm2
-    assert '.put("initial_stop_window",5)' in wm2
+    assert '.put("initial_stop_window",1)' in wm2
+    assert 'TC2_SUPER_AO_SIGNAL_BAR' in wm2
     # SHORT context reflection was centralized to reject malformed proofs and
     # allow only the explicitly documented legacy-empty WM3 source context.
     assert "reflectedTc2SetupContext(signal.type, signal.setupContext, reflection)" in runtime

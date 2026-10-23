@@ -72,9 +72,9 @@ def test_super_ao_recovers_original_third_bar_after_scanner_gap():
     assert result is not None
     assert result[0] == 3
     assert result[1] == 104.0
-    # TC2 ch12: initial WM2 SL is beneath the lowest of the prior 3-5
-    # closed price bars, not merely the third AO bar's low (102).
-    assert result[2] == 99.0
+    # TC2 PDF156/printed141 explicitly permits the signal-bar initial
+    # stop; the 3–5 bar window is subsequent trailing, not this anchor.
+    assert result[2] == 102.0
 
 
 def test_super_ao_does_not_require_fractal_gate():

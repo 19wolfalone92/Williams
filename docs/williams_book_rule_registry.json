@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "updated": "2026-10-23",
-  "release": "4.57.0-source-wave-candidate",
+  "release": "4.57.1-diagnostics19-book-stops",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
   "source_review_complete": false,
@@ -270,18 +270,21 @@
       "id": "TC2.WM2.FIRST_STOP",
       "book": "TC2",
       "pdf_pages": [
-        156,
-        157
+        156
       ],
-      "rule": "If SuperAO appears first, choose book three/five-bar or trend-base initial protection, documented selection.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "rule": "If Super AO presents first, initial stop may use the reversal base or opposite end of its signal price bar. Select the signal-bar variant; 3–5 closed bars describe subsequent trailing.",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/WilliamsSetupRules.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_market_geometry.py::test_python_tc2_wm2_initial_signal_bar_stop_is_distinct_from_trailing",
+        "app/src/test/java/com/williamsbot/WilliamsSetupRulesTest.kt::superAoInitialStopUsesSignalBarAndNotSubsequentTrailingWindow",
+        "app/src/test/java/com/williamsbot/WilliamsSetupRulesTest.kt::bearishSuperAoInitialStopIsTheMirroredSignalBarHigh"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Five-bar choice implemented; alternative discretionary stop choice is not uniquely determined by text.",
+      "remaining_evidence": "PDF156/printed141 inspected visually on 2026-10-23. Signal-bar option implemented causally in Python/Kotlin; reversal-base alternative and all historical figures are not certified.",
       "can_place_orders_from_registry": false
     },
     {

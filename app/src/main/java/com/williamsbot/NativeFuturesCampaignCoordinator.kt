@@ -973,14 +973,18 @@ internal class NativeFuturesCampaignCoordinator(
             adapter.account() // verifies authenticated Futures account access
             val exchangePositions = adapter.positions()
             val openBySymbol = linkedMapOf<String, JSONObject>()
+            val seenPositionSymbols = mutableSetOf<String>()
             for (i in 0 until exchangePositions.length()) {
                 val row = exchangePositions.optJSONObject(i)
                     ?: throw IllegalStateException("Binance returned a malformed position row at index $i during reconciliation")
                 val symbol = row.optString("symbol").uppercase(Locale.US)
-                val amount = row.optString("positionAmt").toDoubleOrNull()
+                check(symbol.isNotBlank() && seenPositionSymbols.add(symbol)) {
+                    "Binance returned a blank or duplicate position symbol during reconciliation"
+                }
+                val amount = row.optString("positionAmt").toBigDecimalOrNull()
                     ?: throw IllegalStateException("Binance returned a malformed position amount for $symbol")
-                if (amount == 0.0) continue
-                check(amount.isFinite() && row.optString("positionSide", "BOTH") == "BOTH") {
+                if (amount.signum() == 0) continue
+                check(row.optString("positionSide") == "BOTH") {
                     "Live Futures position does not prove the required one-way mode"
                 }
                 if (symbol !in allowedSymbols) {
@@ -2273,14 +2277,15 @@ internal class NativeFuturesCampaignCoordinator(
                     // quantity/entry, original structural stop, and fresh Futures equity.
                     val originalStop = matchingIntent.optString("initial_protective_stop")
                         .toDoubleOrNull()
+                    var positionRiskBlocker: String? = null
                     if (actualRiskAccount == null) {
                         actualRiskAuditBlocked = true
-                        actualRiskAuditBlocker =
+                        positionRiskBlocker =
                             "$symbol stop is exchange-confirmed but actual risk cannot be proven without a fresh Futures equity snapshot"
                         matchingIntent.put("actual_risk_audit_status", "UNKNOWN_ACCOUNT")
                     } else if (originalStop == null) {
                         actualRiskAuditBlocked = true
-                        actualRiskAuditBlocker =
+                        positionRiskBlocker =
                             "$symbol stop is exchange-confirmed but original structural stop is missing; manual risk reconciliation required"
                         matchingIntent.put("actual_risk_audit_status", "UNKNOWN_ORIGINAL_STOP")
                     } else {
@@ -2333,22 +2338,25 @@ internal class NativeFuturesCampaignCoordinator(
                                 matchingIntent.remove("actual_risk_audit_blocker")
                             } else {
                                 actualRiskAuditBlocked = true
-                                actualRiskAuditBlocker = adjustmentBlocker
+                                positionRiskBlocker = adjustmentBlocker
                                 matchingIntent.put("actual_risk_audit_status", "BLOCKED")
                                     .put("actual_risk_audit_blocker", adjustmentBlocker)
                             }
                         } else if (riskAudit.blocker != null) {
                             actualRiskAuditBlocked = true
-                            actualRiskAuditBlocker = riskAudit.blocker
+                            positionRiskBlocker = riskAudit.blocker
                             matchingIntent.put("actual_risk_audit_status", "BLOCKED")
                         } else {
                             matchingIntent.put("actual_risk_audit_status", "PASS")
                             matchingIntent.remove("actual_risk_audit_blocker")
                         }
-                        if (actualRiskAuditBlocker != null) {
-                            matchingIntent.put("actual_risk_audit_blocker", actualRiskAuditBlocker)
-                        }
                     }
+                    // Account-wide blockers (for example an unrelated reversed
+                    // ETH campaign) must not contaminate this position's PASS.
+                    if (positionRiskBlocker != null) {
+                        actualRiskAuditBlocker = positionRiskBlocker
+                        matchingIntent.put("actual_risk_audit_blocker", positionRiskBlocker)
+                    } else matchingIntent.remove("actual_risk_audit_blocker")
                     for(j in 0 until persisted.length()) {
                         val child=persisted.optJSONObject(j) ?: continue
                         if(child.optString("intent_role")!="ADD_ON" || child.optString("entry_client_id")!=matchingIntent.optString("client_id")) continue
@@ -2465,6 +2473,20 @@ internal class NativeFuturesCampaignCoordinator(
                                 put("management_mode", "STRATEGY_OWNED")
                             }
                     }
+                    // The first observation preceded STOP recovery/placement.
+                    // Publish the signed final proof after all replacement and
+                    // predecessor checks, even when another symbol stays blocked.
+                    (0 until protectionObservations.length()).map { protectionObservations.getJSONObject(it) }
+                        .singleOrNull { it.optString("symbol") == symbol }?.apply {
+                            val owned = matchingIntent.optBoolean("strategy_ownership_verified", false)
+                            put("stop_proof", if (owned) "OWNED_STOP_SEEN" else "EXTERNAL_PROTECTED")
+                            put("stop", confirmedStop)
+                            put("protection_client_id", confirmedClientId)
+                            put("observed_at_ms", clock())
+                            put("strategy_ownership_verified", owned)
+                            put("automatic_trailing_authorized", owned)
+                            put("management_mode", if (owned) "STRATEGY_OWNED" else "OBSERVE_ONLY")
+                        }
                 }
             }
 
@@ -2643,6 +2665,7 @@ internal class NativeFuturesCampaignCoordinator(
             }
             JSONObject()
                 .put("ok", !anyUnprotected && !actualRiskAuditBlocked && !hasPendingExit)
+                .put("exchange_snapshot_complete", true)
                 .put("external_open_orders",JSONArray(externalOrderObservationsJson))
                 .put("exchange_protection_observations",JSONArray(externalProtectionObservationsJson))
                 .put("verified_external_stop_management_symbols",

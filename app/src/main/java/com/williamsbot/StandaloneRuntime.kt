@@ -349,6 +349,14 @@ internal fun mayCommitUserStreamSync(
     currentGeneration: Long
 ): Boolean = connected && !reconciliationPending && attemptGeneration == currentGeneration
 
+/** A completed signed account audit can expose a genuine risk/owner blocker.
+ * Receiving that snapshot synchronizes DATA; it never grants order authority.
+ * Transport/identity/partial-audit failures must retain the WS resync latch. */
+internal fun futuresSignedSnapshotComplete(result: JSONObject): Boolean =
+    result.optBoolean("exchange_snapshot_complete", false) &&
+        result.optJSONArray("exchange_protection_observations") != null &&
+        result.optInt("positions_checked", -1) >= 0
+
 /** A reconciliation worker is unhealthy if its start time is unknown, in the future, or over the deadline. */
 internal fun reconciliationTaskLifecycleHealthy(
     running: Boolean,
@@ -4843,6 +4851,18 @@ private class NativeEngine(
             // private-stream reconciliation and never reach its failure branch.
             // Neither the reconciliation result nor entry authority is relaxed.
             runOperatorStopSupervisionIfDue()
+            if (result.has("exchange_protection_observations")) {
+                // A complete signed audit may confirm BTC/ADA stops while an
+                // unrelated ETH owner conflict still blocks new entries.
+                // Refresh display evidence on that result too; never clear the
+                // trading latch merely because a stop observation is available.
+                synchronized(this) {
+                    futuresPositionSnapshotEpoch++
+                    cachedFuturesPositionEnvelope = null
+                    futuresPositionSnapshotLastAttemptMs = 0L
+                    futuresPositionSnapshotRefreshError = null
+                }
+            }
             if (result.optBoolean("ok", false)) {
                 lastRestReconcileMs = System.currentTimeMillis()
                 lastReconciliationResult = "SUCCESS"
@@ -7470,7 +7490,7 @@ private class NativeEngine(
                         allowStopped = true,
                         allowKillLatched = true
                     )
-                    check(result.optBoolean("ok", false)) {
+                    check(futuresSignedSnapshotComplete(result)) {
                         result.optString("blocker", "Futures reconciliation returned not-ok")
                     }
                     val repeat = synchronized(this) {
@@ -8418,7 +8438,7 @@ private class NativeEngine(
             if (signalIndex in 35..candles.lastIndex) {
                 val trigger = candles[signalIndex].h + tick
                 val structuralStop = williamsTc2SuperAoInitialStop(
-                    "LONG",waveBars,signalIndex,tick,window=5
+                    "LONG",waveBars,signalIndex,tick
                 )
                 if (structuralStop != null && structuralStop<trigger &&
                     triggerStillPending(signalIndex, trigger)) {
@@ -8431,9 +8451,9 @@ private class NativeEngine(
                         protectivePrice = structuralStop,
                         teethAtDetection = teethS[signalIndex].takeIf { it.isFinite() } ?: 0.0,
                         invalidationPrice = structuralStop,
-                        reason = "WM2 Super AO: third rising AO bar; stop behind previous five closed H1 bars",
-                        setupContext = JSONObject().put("initial_stop_rule","TC2_3_TO_5_CLOSED_PRICE_BARS")
-                            .put("initial_stop_window",5).put("third_ao_bar_at_ms",candles[signalIndex].t)
+                        reason = "WM2 Super AO: third rising AO bar; initial stop behind its signal price bar",
+                        setupContext = JSONObject().put("initial_stop_rule","TC2_SUPER_AO_SIGNAL_BAR")
+                            .put("initial_stop_window",1).put("third_ao_bar_at_ms",candles[signalIndex].t)
                             .put("risk_stop_at_price",structuralStop).toString()
                     )
                 }
@@ -11018,6 +11038,7 @@ private class NativeEngine(
             .put("system_info", JSONObject()
                 .put("runtime", "standalone")
                 .put("app_version", BuildConfig.VERSION_NAME)
+                .put("source_revision", BuildConfig.SOURCE_REVISION)
                 .put("android_sdk", android.os.Build.VERSION.SDK_INT)
                 .put("device_model", android.os.Build.MODEL)
                 .put("manufacturer", android.os.Build.MANUFACTURER))
