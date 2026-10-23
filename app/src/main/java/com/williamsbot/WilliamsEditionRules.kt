@@ -217,6 +217,14 @@ internal fun williamsCourseAirbagStop(side:String,higher:List<WilliamsWaveBar>,t
     return stop.takeIf { it>0 }
 }
 
+/** Preserve BOTH the formation invalidation and higher-frame Air Bag.
+ * A crossed Air Bag blocks new exposure instead of widening the local stop. */
+internal fun williamsCourseInitialProtection(side:String,formation:Double,airbag:Double,entry:Double):Double? {
+    if(side !in listOf("LONG","SHORT") || listOf(formation,airbag,entry).any { !it.isFinite() || it<=0 }) return null
+    return if(side=="LONG") maxOf(formation,airbag).takeIf { it<entry }
+        else minOf(formation,airbag).takeIf { it>entry }
+}
+
 internal fun williamsCourseRhythm(bars:List<WilliamsWaveBar>):Pair<String,String> {
     if (bars.size<34 || !validWilliamsEditionBars(bars)) return "UNKNOWN" to "UNKNOWN"
     val mids=bars.map { (it.h+it.l)/2 }
@@ -277,7 +285,7 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
     }
     val fractalKind=if (sign==1) "HIGH" else "LOW"
     confirmedWilliamsEditionFractals(bars).asReversed().firstOrNull { f ->
-        f.kind==fractalKind && bars.last().t-bars[f.confirmation].t<18_000_000L &&
+        f.kind==fractalKind &&
             // NTD ch4 / TC2 ch11: qualify the actual +1/-1 tick
             // BREAKOUT beyond red Teeth, not the earlier pivot price.
             sign*(f.price+sign*tick-teeth.last())>0 &&

@@ -22,11 +22,11 @@ def execution_policy_snapshot():
 
 def structural_fractal(signal_type, source=TC2):
     family = getattr(signal_type, "value", signal_type)
-    return source == TC2 and str(family).removeprefix("SHORT_").removeprefix("LONG_") == "FRACTAL"
+    return source in {TC2, NTD} and str(family).removeprefix("SHORT_").removeprefix("LONG_") == "FRACTAL"
 
 
 def h1_signal_expiry(signal_at, signal_type, source=TC2):
-    """TC2 ch11 PDF149: unbroken fractal, until replacement, not a 5h TTL.
+    """TC2 PDF149 / NTD PDF43: fractal until trigger or replacement, no age TTL.
 
 Zero means structural validity, NOT permission to use stale market data.
 Other families retain the explicit project age policy pending source proof.

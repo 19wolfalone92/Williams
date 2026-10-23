@@ -82,6 +82,17 @@ def test_airbag_skips_inside_higher_frame_bars_and_uses_the_actual_older_low():
     assert course_airbag_stop("SHORT",mirror(series),.1)==pytest.approx(206.9)
 
 
+@pytest.mark.parametrize("side,formation,airbag,entry,expected", [
+    ("LONG",95.,90.,100.,95.), ("LONG",95.,97.,100.,97.),
+    ("SHORT",105.,110.,100.,105.), ("SHORT",105.,103.,100.,103.),
+    ("LONG",95.,101.,100.,None), ("SHORT",105.,99.,100.,None),
+    ("LONG",float("nan"),90.,100.,None), ("SHORT",105.,float("inf"),100.,None),
+])
+def test_course_airbag_cannot_discard_the_formation_stop_or_admit_a_crossed_boundary(side,formation,airbag,entry,expected):
+    from williams_edition_rules import course_initial_protection
+    assert course_initial_protection(side,formation,airbag,entry)==expected
+
+
 def test_airbag_tick_change_does_not_modify_course_squat_structural_stop():
     series = bars([100.0, 100.5], [90.0, 95.0], [100, 200])
     long = course_squat_setup("LONG", series, .1)

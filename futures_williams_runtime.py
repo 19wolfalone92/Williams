@@ -44,6 +44,7 @@ from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
 from williams_execution_policy import EXECUTION_PROFILE,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
 from williams_course_campaign import course_active_context,course_next_stage,course_target,TARGETS as COURSE_TARGETS
+from williams_edition_rules import course_initial_protection
 from williams_tc2_pyramid import (
     POLICY as TC2_PYRAMID_POLICY, initial_unit_risk_pct, require_profitable_position,
     next_tranche as tc2_next_tranche, cap_book_tranche,
@@ -1614,7 +1615,8 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError("COURSE_AIRBAG_HISTORY_NOT_PROVEN")
             airbag=course_airbag_stop("LONG" if signal.side=="BUY" else "SHORT",higher_bars,self._tick(symbol))
             if airbag is None:raise RuntimeError("COURSE_AIRBAG_UNAVAILABLE")
-            stop=min(stop,airbag) if signal.side=="BUY" else max(stop,airbag)
+            stop=course_initial_protection("LONG" if signal.side=="BUY" else "SHORT",stop,airbag,trigger)
+            if stop is None:raise RuntimeError("COURSE_FORMATION_OR_AIRBAG_ALREADY_INVALIDATED")
         if signal.side == "BUY":
             if stop >= trigger:
                 raise RuntimeError("LONG protective stop is not below entry trigger")

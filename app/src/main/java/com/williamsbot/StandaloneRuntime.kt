@@ -7025,10 +7025,10 @@ private class NativeEngine(
         if(signal.strategyProfile==williamsCourseProfile) {
             val higher=closedWilliamsWaveBars(fetchCandles(symbol,"6h",100).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },"6h",contextNow)
             val airbag=williamsCourseAirbagStop(direction.name,higher,rules.tick) ?: return rejectDecision(symbol,"REQUIRED_ENTRY_EVIDENCE_UNAVAILABLE")
-            // The Course higher Air Bag may tighten protection, not increase
-            // the original H1 book signal's initial risk.
-            stop=if(direction.name=="LONG") normalizePrice(maxOf(stop,airbag),rules.tick)
-                else normalizeTriggerPrice(minOf(stop,airbag),rules.tick)
+            val combined=williamsCourseInitialProtection(direction.name,stop,airbag,trigger)
+                ?: return rejectDecision(symbol,"COURSE_FORMATION_OR_AIRBAG_ALREADY_INVALIDATED")
+            stop=if(direction.name=="LONG") normalizePrice(combined,rules.tick)
+                else normalizeTriggerPrice(combined,rules.tick)
         }
         if (trigger <= 0.0 || stop <= 0.0) return rejectDecision(symbol,"INVALID_TRIGGER_OR_STOP")
         if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
@@ -8441,7 +8441,8 @@ private class NativeEngine(
                         else -> true
                     }
                 }
-            setups.filter { bars.last().t-bars[it.knownIndex].t<18_000_000L }.map { setup ->
+            setups.filter { (profile==williamsNtdProfile && it.kind=="FRACTAL") ||
+                bars.last().t-bars[it.knownIndex].t<18_000_000L }.map { setup ->
                 val type=(if(side=="SHORT") "SHORT_" else "")+setup.kind
                 val whenMs=bars[setup.knownIndex].t
                 val id=if(setup.kind=="BALANCE_LINE") "$profile:$symbol:$frame:$side:BALANCE_LINE:${setup.context.getString("formation_key")}" else profile+":"+campaignSignalId(symbol,frame,type,whenMs)

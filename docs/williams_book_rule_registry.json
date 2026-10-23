@@ -384,15 +384,18 @@
         53,
         54
       ],
-      "rule": "First external fractal starts the cycle after sleep; other dimensions follow that cycle.",
+      "rule": "First external fractal starts the cycle after sleep; other dimensions follow that cycle. NTD PDF43: an untriggered valid fractal persists until trigger or a fresher valid fractal; no five-hour/eighty-bar lifetime.",
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_profiles.py",
         "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_tc2_execution_observers.py::test_ntd_pdf43_old_fractal_lasts_until_trigger_or_new_valid_fractal",
+        "app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt::ntdPdf43OldFractalPersistsUntilTriggerOrNewValidFractal"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Full independent NTD execution acceptance absent; remains OBSERVE.",
+      "remaining_evidence": "Full independent NTD execution acceptance absent; remains OBSERVE. Python and native old-fractal lifetime boundaries now agree; fresh Teeth/trigger/history proofs remain required.",
       "can_place_orders_from_registry": false
     },
     {
@@ -630,9 +633,12 @@
         "williams_edition_rules.py",
         "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_edition_rules.py::test_course_airbag_cannot_discard_the_formation_stop_or_admit_a_crossed_boundary",
+        "app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt::courseAirbagPreservesFormationProtectionAndRejectsAlreadyCrossedBoundaries"
+      ],
       "fixtures": [],
-      "remaining_evidence": "6h for H1 is exchange adaptation; exact plus/minus tick wording and all illustrations need review.",
+      "remaining_evidence": "6h for H1 is exchange adaptation; exact plus/minus tick wording and all illustrations need review. Course PDF86-87 visually reread: both formation stop and higher-frame Air Bag are retained. Python initial protection no longer widens the formation boundary; a non-protective combined boundary blocks the entry.",
       "can_place_orders_from_registry": false
     },
     {

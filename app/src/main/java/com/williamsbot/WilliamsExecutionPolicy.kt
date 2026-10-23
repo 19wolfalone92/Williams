@@ -19,9 +19,9 @@ internal fun williamsExecutionPolicySnapshot():JSONObject = JSONObject()
     .put("legacy_management","PINNED_SOURCE_NO_NEW_EXPOSURE")
 
 internal fun williamsStructuralFractal(type:String,source:String):Boolean =
-    source==williamsTc2Profile && type.removePrefix("SHORT_").removePrefix("LONG_")=="FRACTAL"
+    source in setOf(williamsTc2Profile,williamsNtdProfile) && type.removePrefix("SHORT_").removePrefix("LONG_")=="FRACTAL"
 
-/** TC2 ch11 PDF149: until trigger or replacement; zero is structural validity.
+/** TC2 PDF149 / NTD PDF43: until trigger or replacement; zero is structural validity.
  * Fresh closed-bar proof is still required at the Binance submission door. */
 internal fun williamsH1SignalExpiry(at:Long,type:String,source:String):Long =
     if(williamsStructuralFractal(type,source)) 0L else at+5*WILLIAMS_H1_MS

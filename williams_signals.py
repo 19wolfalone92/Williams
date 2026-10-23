@@ -724,7 +724,7 @@ def extract_ntd_fractal_signal_specs(
     side: str,
     timeframe: str,
     tick_size: float,
-    max_age_bars: int = 80,
+    max_age_bars: int | None = None,
 ) -> list[SignalSpec]:
     """Return the NTD first external-fractal breakout as a conditional entry.
 
@@ -745,7 +745,9 @@ def extract_ntd_fractal_signal_specs(
     current_close = float(ind.iloc[-1].get("close", 0.0) or 0.0)
     if not math.isfinite(current_close) or current_close <= 0:
         return []
-    earliest_center = max(2, len(ind) - max(3, int(max_age_bars)) - 2)
+    # NTD PDF43: validity ends on trigger or replacement, never on age.
+    # A supplied scan-depth limit only bounds the caller's history search.
+    earliest_center = 2 if max_age_bars is None else max(2, len(ind) - max(3, int(max_age_bars)) - 2)
     confirmed_col = "fractal_up_confirmed" if is_long else "fractal_down_confirmed"
     center_col = "confirmed_up_center_index" if is_long else "confirmed_down_center_index"
     group_start_col = "confirmed_up_group_start_index" if is_long else "confirmed_down_group_start_index"
@@ -841,7 +843,7 @@ def extract_ntd_fractal_signal_specs(
                 + " the fractal extreme"
             ),
             source_candle_index=center_i,
-            expires_at_ms=_expiry(signal_time, timeframe, max_age_bars),
+            expires_at_ms=0,
         )]
     return []
 
