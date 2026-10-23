@@ -793,7 +793,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             val journal=Journal();val exchange=Exchange(direction)
             val c=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
             c.reconcile();requireNtdBookProof(c)
-            val initial=ntdBookPlan(plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL"),now-WILLIAMS_H1_MS)
+            val initial=ntdBookPlan(plan(direction,leverage=2).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL"),now-WILLIAMS_H1_MS)
             assertTrue(c.submitPendingEntry(initial).getBoolean("accepted"));exchange.fill();assertTrue(c.reconcile().getBoolean("ok"))
             val sign=if(direction.name=="LONG") 1 else -1
             for(family in listOf("AO_SAUCER","AO_ZERO_LINE","AC_SIGNAL","AO_TWIN_PEAKS")) {
