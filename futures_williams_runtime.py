@@ -42,7 +42,8 @@ from williams_signals import (
 from williams_decision_trace import build_decision_trace
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
-from williams_execution_policy import EXECUTION_PROFILE,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
+from williams_execution_policy import EXECUTION_PROFILES,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
+from williams_ntd_execution import FAMILIES as NTD_FAMILIES, close_entry_bound, require_close_entry
 from williams_course_campaign import course_active_context,course_next_stage,course_target,TARGETS as COURSE_TARGETS
 from williams_edition_rules import course_initial_protection
 from williams_tc2_pyramid import (
@@ -430,40 +431,55 @@ class FuturesWilliamsScanner:
         point_zero_confirmed = bool(wave_snapshot.point_zero_confirmed)
         point_zero_score = int(wave_snapshot.point_zero_score)
 
-        profile = EXECUTION_PROFILE
+        profile = os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()
         profile_block_reason = _signal_profile_entry_block_reason(profile)
         if profile_block_reason:
             self.last_signal_profile_error = profile_block_reason
             return []
-        if profile == "TC2_THREE_WISE_MEN":
-            long_specs = extract_long_signal_specs(
-                symbol,
-                ind,
-                timeframe=self.interval,
-                tick_size=tick,
-                point_zero_confirmed=point_zero_confirmed,
-                point_zero_score=point_zero_score,
-                require_point_zero_for_reversal=os.getenv(
-                    "REQUIRE_POINT_ZERO_FOR_WM1", "false"
-                ).lower() == "true",
-            )
-            short_specs = extract_short_signal_specs(
-                symbol,
-                ind,
-                timeframe=self.interval,
-                tick_size=tick,
-                point_zero_confirmed=point_zero_confirmed,
-                point_zero_score=point_zero_score,
-                require_point_zero_for_reversal=os.getenv(
-                    "REQUIRE_POINT_ZERO_FOR_WM1", "false"
-                ).lower() == "true",
-            )
-        else:
-            long_specs=extract_profile_signals(symbol,ind,profile=profile,side="LONG",timeframe=self.interval,tick_size=tick)
-            short_specs=extract_profile_signals(symbol,ind,profile=profile,side="SHORT",timeframe=self.interval,tick_size=tick)
+        execution_source_errors={}
+        try:
+            if profile_allows_source(profile, TC2):
+                long_specs = extract_long_signal_specs(
+                    symbol,
+                    ind,
+                    timeframe=self.interval,
+                    tick_size=tick,
+                    point_zero_confirmed=point_zero_confirmed,
+                    point_zero_score=point_zero_score,
+                    require_point_zero_for_reversal=os.getenv(
+                        "REQUIRE_POINT_ZERO_FOR_WM1", "false"
+                    ).lower() == "true",
+                )
+                short_specs = extract_short_signal_specs(
+                    symbol,
+                    ind,
+                    timeframe=self.interval,
+                    tick_size=tick,
+                    point_zero_confirmed=point_zero_confirmed,
+                    point_zero_score=point_zero_score,
+                    require_point_zero_for_reversal=os.getenv(
+                        "REQUIRE_POINT_ZERO_FOR_WM1", "false"
+                    ).lower() == "true",
+                )
+            else:
+                long_specs=[];short_specs=[]
+        except Exception as exc:
+            long_specs=[];short_specs=[]
+            execution_source_errors[TC2]=type(exc).__name__
+        try:
+            if profile_allows_source(profile,NTD):
+                long_specs+=extract_profile_signals(symbol,ind,profile=NTD,side="LONG",timeframe=self.interval,tick_size=tick)
+                short_specs+=extract_profile_signals(symbol,ind,profile=NTD,side="SHORT",timeframe=self.interval,tick_size=tick)
+        except Exception as exc:
+            execution_source_errors[NTD]=type(exc).__name__
+        long_specs=[s for s in long_specs if s.strategy_profile not in execution_source_errors]
+        short_specs=[s for s in short_specs if s.strategy_profile not in execution_source_errors]
         observed,observations=observe_edition_signals(symbol,ind,timeframe=self.interval,tick_size=tick)
+        for observation in observations:
+            if observation["profile"] in execution_source_errors:
+                observation.update(state="ANALYSIS_FAILED",error_type=execution_source_errors[observation["profile"]])
         self.latest_edition_observations[symbol]=observations
-        raw_signals=long_specs+short_specs+[s for s in observed if s.strategy_profile!=EXECUTION_PROFILE]
+        raw_signals=list({s.signal_id:s for s in [*observed,*long_specs,*short_specs]}.values())
         trace_bars=wave_bars_from_dataframe(ind) if {"open","high","low","close","volume"}.issubset(ind.columns) else []
         hierarchy=self.wave_hierarchy(symbol,frame)
         def last_value(name):
@@ -518,8 +534,9 @@ class FuturesWilliamsScanner:
         out: list[FuturesCandidate] = []
 
         for side, specs, htf_ok in (
-            ("LONG", long_specs, long_htf),
-            ("SHORT", short_specs, short_htf),
+            (side,[s for s in specs if s.strategy_profile==source],htf)
+            for side,specs,htf in (("LONG",long_specs,long_htf),("SHORT",short_specs,short_htf))
+            for source in EXECUTION_PROFILES
         ):
             if side == "LONG" and not _env_bool("ALLOW_LONG", True):
                 continue
@@ -1254,6 +1271,12 @@ class FuturesWilliamsRuntime:
 
         purpose = intent.purpose.upper()
         if purpose in {"CAMPAIGN_ENTRY","CAMPAIGN_ADD_ON"}:self._require_entry_time()
+        if purpose in {"CAMPAIGN_ENTRY","CAMPAIGN_ADD_ON"}:
+            profile=getattr(campaign,"tags",{}).get("strategy_profile",TC2)
+            if not profile_allows_source(os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper(),profile):
+                raise RuntimeError("WILLIAMS_SOURCE_CHANGED_BEFORE_SUBMISSION")
+            if profile==NTD:
+                self._revalidate_ntd_signal(campaign,intent)
         if purpose == "CAMPAIGN_CANCEL_ENTRY":
             if campaign.tags.get("pending_order_client_id") != intent.client_order_id:
                 raise RuntimeError("Entry cancellation lacks durable campaign ownership")
@@ -1324,15 +1347,16 @@ class FuturesWilliamsRuntime:
             payload=(campaign.tags.get("pending_signal") or {}).get("signal") or {}
             if payload.get("strategy_profile",TC2)!=campaign.tags.get("strategy_profile",TC2):
                 raise RuntimeError("Add-on edition changed before submission")
-            if campaign.tags.get("strategy_profile",TC2)==TC2:
+            if campaign.tags.get("strategy_profile",TC2) in EXECUTION_PROFILES:
                 current=float(self.client.ticker_price(intent.symbol).get("price",0) or 0)
-                reason=_pending_entry_preflight_reason(campaign.tags.get("pending_signal"),intent,current,
-                    int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
-                if reason:raise RuntimeError("TC2_ADDITION_PREFLIGHT_BLOCKED: "+reason)
+                if intent.order_type!="MARKET":
+                    reason=_pending_entry_preflight_reason(campaign.tags.get("pending_signal"),intent,current,
+                        int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
+                    if reason:raise RuntimeError("BOOK_ADDITION_PREFLIGHT_BLOCKED: "+reason)
                 require_profitable_position(campaign.side,position.get("entryPrice"),current,
                     campaign.tags.get("pending_order_trigger"))
                 pyramid=campaign.tags.get("tc2_reverse_pyramid")
-                if pyramid is not None:
+                if campaign.tags.get("strategy_profile",TC2)==TC2 and pyramid is not None:
                     required=tc2_next_tranche(pyramid,owned_quantity=pos_qty,additions=campaign.additions)
                     if Decimal(str(intent.quantity))!=required:
                         raise RuntimeError("TC2_PYRAMID_EXACT_BOOK_QUANTITY_REQUIRED")
@@ -1354,6 +1378,9 @@ class FuturesWilliamsRuntime:
                     f"{intent.symbol}: liquidation safety buffer is violated"
                 )
         elif purpose == "CAMPAIGN_EXIT":
+            reason=campaign.tags.get("pending_exit_reason","")
+            if campaign.tags.get("strategy_profile")==NTD and reason not in {"MANUAL_EXIT","KILL_SWITCH"} and campaign.tags.get("pending_exit_authority")!="VERIFIED_RISK_REDUCTION":
+                self._revalidate_ntd_exit(campaign,reason)
             if pos_qty <= 0 or not self._position_matches(campaign, position):
                 raise RuntimeError(
                     f"{intent.symbol}: exit requires the exact active campaign position"
@@ -1521,6 +1548,45 @@ class FuturesWilliamsRuntime:
         except Exception:
             pass  # Observation failure never turns a financial mutation into a retry.
 
+    def _revalidate_ntd_signal(self,campaign,intent):
+        """Recompute the pinned NTD dimension from fresh CLOSED H1 data.
+
+        A saved boolean or a profitable former campaign is insufficient to
+        authorize a new order. No Course/TC2 signal can substitute for NTD.
+        """
+        if intent.purpose.upper()=="CAMPAIGN_ADD_ON" and campaign.tags.get("ntd_cycle_basis") not in {"FIRST_EXTERNAL_FRACTAL","AUTHENTICATED_PROFITABLE_REENTRY"}:
+            raise RuntimeError("NTD_OWNED_FRACTAL_OR_PROFITABLE_CYCLE_NOT_PROVEN")
+        payload=(campaign.tags.get("pending_signal") or {}).get("signal") or {}
+        now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+        if (payload.get("strategy_profile")!=NTD or payload.get("timeframe")!="1h" or
+                payload.get("signal_type") not in NTD_FAMILIES or payload.get("signal_id")!=intent.signal_id):
+            raise RuntimeError("NTD_SOURCE_SIGNAL_IDENTITY_UNVERIFIED")
+        frame=fetch_klines(self.client,campaign.symbol,"1h",limit=220)
+        closed=closed_strategy_frame(frame,"1h",now)
+        bars=wave_bars_from_dataframe(closed)
+        if closed_h1_history_blocker(bars,now):
+            raise RuntimeError("NTD_CLOSED_H1_HISTORY_UNVERIFIED")
+        ind=calculate_indicators(closed,self.config)
+        found=extract_profile_signals(campaign.symbol,ind,profile=NTD,
+            side="LONG" if campaign.side=="BUY" else "SHORT",timeframe="1h",tick_size=self._tick(campaign.symbol))
+        actual=next((s for s in found if s.signal_id==intent.signal_id),None)
+        if (actual is None or actual.signal_type.value!=payload["signal_type"] or
+                actual.execution_semantics!=payload.get("execution_semantics","STOP_ENTRY") or
+                abs(actual.trigger_price-float(payload.get("trigger_price",0)))>self._tick(campaign.symbol)*.11 or
+                abs(actual.protective_reference-float(payload.get("protective_reference",0)))>self._tick(campaign.symbol)*.11):
+            raise RuntimeError("NTD_FRESH_H1_FORMATION_CHANGED")
+        if intent.purpose.upper()=="CAMPAIGN_ENTRY" and not campaign.tags.get("ntd_reentry_owner_id"):
+            if actual.signal_type!=SignalType.FRACTAL or actual.role!=SignalRole.ENTRY or not actual.setup_context.get("ntd_initial",{}).get("eligible"):
+                raise RuntimeError("NTD_SLEEP_OR_FIRST_BREAKOUT_NOT_PROVEN")
+        if intent.order_type=="MARKET":
+            contract=float(self.client.ticker_price(campaign.symbol).get("price",0))
+            mark_row=self.client.mark_price(campaign.symbol)
+            quote=self.client.book_ticker(campaign.symbol)
+            if mark_row.get("symbol")!=campaign.symbol or quote.get("symbol")!=campaign.symbol:
+                raise RuntimeError("NTD_CLOSE_QUOTE_SYMBOL_UNVERIFIED")
+            require_close_entry(campaign.side,actual.signal_bar_time_ms,actual.trigger_price,
+                float(campaign.tags.get("pending_order_trigger",0)),now,contract,float(mark_row.get("markPrice",0)),quote,self._tick(campaign.symbol))
+
     def _ntd_reentry_source(self,signal):
         row=self.db.conn.execute("SELECT campaign_id FROM campaigns WHERE symbol=? ORDER BY created_at DESC,rowid DESC LIMIT 1",(signal.symbol,)).fetchone()
         previous=self.engine.load_campaign(row["campaign_id"]) if row else None
@@ -1573,7 +1639,7 @@ class FuturesWilliamsRuntime:
         signal = candidate.signal
         if new_exposure_blocker(signal.strategy_profile):
             raise RuntimeError(new_exposure_blocker(signal.strategy_profile))
-        selected_profile=EXECUTION_PROFILE
+        selected_profile=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()
         if not profile_allows_source(selected_profile,signal.strategy_profile):
             raise RuntimeError("Williams signal source changed before Futures entry")
         reentry=self._ntd_reentry_source(signal) if signal.strategy_profile==NTD else None
@@ -1625,7 +1691,7 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError("SHORT protective stop is not above entry trigger")
 
         if (
-            self.config.require_htf_confirmation
+            self.config.require_htf_confirmation and signal.strategy_profile!=NTD
             and _requires_directional_htf_confirmation(signal.signal_type)
             and not candidate.htf_confirmed
         ):
@@ -1638,7 +1704,7 @@ class FuturesWilliamsRuntime:
             reason=market_on_close_reason(signal.signal_bar_time_ms,FRAME_MS.get(signal.timeframe,0),
                 int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)),signal.trigger_price,current)
             if reason:raise RuntimeError(reason)
-            trigger=current
+            trigger=close_entry_bound(signal.side,signal.trigger_price,self._tick(symbol))
         self._ensure_symbol_config(symbol)
         if not market_close and signal.side == "BUY" and current >= trigger:
             raise RuntimeError("LONG trigger already crossed")
@@ -1673,6 +1739,8 @@ class FuturesWilliamsRuntime:
         campaign.tags["scanner_score_at_entry"] = float(candidate.score)
         campaign.tags["trade_mode"] = candidate.trade_mode
         campaign.tags["strategy_profile"] = signal.strategy_profile
+        if signal.strategy_profile==NTD:
+            campaign.tags["ntd_cycle_basis"]="AUTHENTICATED_PROFITABLE_REENTRY" if reentry else "FIRST_EXTERNAL_FRACTAL"
         campaign.tags["setup_context"] = dict(signal.setup_context)
         if signal.strategy_profile==TC2:
             campaign.tags["tc2_reverse_pyramid"]={"policy":TC2_PYRAMID_POLICY,
@@ -1776,8 +1844,10 @@ class FuturesWilliamsRuntime:
             campaign.tags["pending_signal"] = pending_signal.to_dict()
             campaign.tags["pending_order_id"] = str(result.get("orderId", ""))
             self.db.save_campaign(campaign)
+            if market_close:self._reconcile_pending()
             return {"campaign_id": campaign.campaign_id, "order_id": result.get("orderId"), "client_order_id": cid, "trigger_price": trigger, "stop_price": stop, "quantity": qty}
         except Exception:
+            if market_close:self._reconcile_pending()
             self._set_state(symbol, "RECONCILE_REQUIRED")
             raise
 
@@ -1795,6 +1865,12 @@ class FuturesWilliamsRuntime:
             raise RuntimeError("WILLIAMS_SOURCE_OBSERVATION_ONLY")
         if signal.strategy_profile!=profile:
             raise RuntimeError("Add-on profile does not match the durable campaign edition")
+        if profile==NTD and campaign.tags.get("ntd_cycle_basis") not in {"FIRST_EXTERNAL_FRACTAL","AUTHENTICATED_PROFITABLE_REENTRY"}:
+            raise RuntimeError("NTD_OWNED_FRACTAL_OR_PROFITABLE_CYCLE_NOT_PROVEN")
+        if not profile_allows_source(os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper(),profile):
+            raise RuntimeError("ADDITION_SOURCE_PROFILE_CHANGED_BEFORE_SUBMISSION")
+        if profile==NTD and signal.signal_type.value not in NTD_FAMILIES:
+            raise RuntimeError("Signal does not belong to NTD")
         if profile==NTD and not addition_signal_time_allowed(signal,campaign):
             raise RuntimeError("NTD addition must be a distinct formation in the owned fractal cycle")
         market_close=(profile==NTD and signal.signal_type==SignalType.ZONE_ADD_ON and signal.execution_semantics=="MARKET_ON_CLOSE")
@@ -1815,10 +1891,10 @@ class FuturesWilliamsRuntime:
             reason=market_on_close_reason(signal.signal_bar_time_ms,FRAME_MS.get(signal.timeframe,0),
                 int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)),signal.trigger_price,current)
             if reason:raise RuntimeError(reason)
-            trigger=current
+            trigger=close_entry_bound(signal.side,signal.trigger_price,self._tick(signal.symbol))
         elif (signal.side == "BUY" and current >= trigger) or (signal.side == "SELL" and current <= trigger):
             raise RuntimeError("add-on trigger already crossed")
-        if profile==TC2:
+        if profile in EXECUTION_PROFILES:
             require_profitable_position(campaign.side,campaign.average_entry_price,current,trigger)
         self._ensure_symbol_config(signal.symbol)
 
@@ -1908,18 +1984,22 @@ class FuturesWilliamsRuntime:
             risk_quote=risk_quote,
             capital_reserved_quote=campaign.capital_reserved_quote,
         )
-        result = self._submit(
-            intent,
-            lambda: self.client.order_safe(
-                signal.symbol,
-                signal.side,
-                "MARKET" if market_close else "STOP_MARKET",
-                quantity=self.client.decimal_format(qty),
-                stop_price=None if market_close else self.client.decimal_format(trigger),
-                new_client_order_id=cid,
-            ),
-            lambda _snapshot: None,
-        )
+        try:
+            result = self._submit(
+                intent,
+                lambda: self.client.order_safe(
+                    signal.symbol,
+                    signal.side,
+                    "MARKET" if market_close else "STOP_MARKET",
+                    quantity=self.client.decimal_format(qty),
+                    stop_price=None if market_close else self.client.decimal_format(trigger),
+                    new_client_order_id=cid,
+                ),
+                lambda _snapshot: None,
+            )
+        except Exception:
+            if market_close:self._reconcile_pending()
+            raise
         self.db.save_campaign_order(
             PendingOrderRecord(
                 order_id=str(result.get("orderId", "")),
@@ -1943,6 +2023,7 @@ class FuturesWilliamsRuntime:
         campaign.tags["pending_signal"] = pending_signal.to_dict()
         campaign.tags["pending_order_id"] = str(result.get("orderId", ""))
         self.db.save_campaign(campaign)
+        if market_close:self._reconcile_pending()
         return {"campaign_id": campaign.campaign_id, "order_id": result.get("orderId"), "client_order_id": cid, "trigger_price": trigger, "quantity": qty}
 
     def _cancel(self, symbol, order_id, purpose="CAMPAIGN_CANCEL"):
@@ -2153,6 +2234,39 @@ class FuturesWilliamsRuntime:
         return True
 
 
+    def _revalidate_ntd_exit(self,campaign,reason):
+        if market_exit_blocker(NTD,reason):raise RuntimeError("NTD_EXIT_REQUIRES_OWN_BOOK_RULE")
+        now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+        closed=closed_strategy_frame(fetch_klines(self.client,campaign.symbol,"1h",limit=220),"1h",now)
+        bars=wave_bars_from_dataframe(closed)
+        if closed_h1_history_blocker(bars,now):raise RuntimeError("NTD_EXIT_H1_HISTORY_UNVERIFIED")
+        if reason in {"TEETH_CLOSE_EXIT","LIPS_CLOSE_EXIT","NTD_FIVE_ZONE_PROTECTION_CROSSED"}:
+            ind=calculate_indicators(closed,canonical_indicator_config_from_env())
+            def values(name):
+                column=next((n for n in (name+"_current",name+"_shifted",name) if n in ind),None)
+                return [float(v) for v in ind[column]] if column else [float("nan")]*len(ind)
+            plan=ntd_management_plan("LONG" if campaign.side=="BUY" else "SHORT",bars,
+                values("teeth"),values("lips"),values("ao"),values("ac"),self._tick(campaign.symbol),
+                int(campaign.tags.get("position_open_observed_at_ms",0)),campaign.tags.get("edition_management",{}))
+            if reason=="NTD_FIVE_ZONE_PROTECTION_CROSSED":
+                stop=plan["stop"];mark=float(self.client.mark_price(campaign.symbol).get("markPrice",0))
+                if stop is None or not math.isfinite(mark) or mark<=0 or not (mark<=stop if campaign.side=="BUY" else mark>=stop):
+                    raise RuntimeError("NTD_ZONE_STOP_NO_LONGER_CROSSED")
+            elif plan["exit_reason"]!=reason:raise RuntimeError("NTD_CLOSED_LINE_EXIT_NO_LONGER_VALID")
+        else:
+            self._require_ntd_opposite_profit(campaign)
+            current=float(self.client.ticker_price(campaign.symbol).get("price",0))
+            if self._triggered_opposite_from_history(campaign,closed,self._tick(campaign.symbol),current) is None:
+                raise RuntimeError("NTD_OPPOSITE_TRIGGER_NO_LONGER_VALID")
+
+    def _require_ntd_opposite_profit(self,campaign):
+        row=self.client.mark_price(campaign.symbol)
+        if not isinstance(row,dict) or row.get("symbol")!=campaign.symbol:
+            raise RuntimeError("NTD_OPPOSITE_EXIT_MARK_UNVERIFIED")
+        blocker=tc2_opposite_exit_profit_blocker(campaign.side,campaign.average_entry_price,
+            row.get("markPrice"),tick=self._tick(campaign.symbol))
+        if blocker:raise RuntimeError(blocker)
+
     @serialized_campaign_operation
     def _exit_market(self, campaign, reason, *, partial_quantity=None, risk_emergency=False):
         """Durable reduce-only market exit; protection is cancelled only after flat."""
@@ -2160,6 +2274,12 @@ class FuturesWilliamsRuntime:
                                      risk_emergency=risk_emergency)
         if blocker:
             raise RuntimeError(blocker)
+        if campaign.tags.get("strategy_profile")==NTD and campaign.state==CampaignState.ADD_ON_PENDING and not risk_emergency and reason not in {"MANUAL_EXIT","KILL_SWITCH"}:
+            self._revalidate_ntd_exit(campaign,reason)
+        ntd_opposite=(campaign.tags.get("strategy_profile")==NTD and not risk_emergency and
+            reason in ("NTD_OPPOSITE_SIGNAL_TRIGGERED","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+                       "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"))
+        if ntd_opposite:self._require_ntd_opposite_profit(campaign)
         # TC2 book exit MUST have a fresh, pinned-source causal trigger before
         # canceling resting additions or reading/mutating any exchange orders.
         if (campaign.tags.get("strategy_profile",TC2)==TC2 and not risk_emergency
@@ -2238,6 +2358,9 @@ class FuturesWilliamsRuntime:
                 f"{symbol}: position is flat without attributable campaign exit"
             )
 
+        if campaign.tags.get("strategy_profile")==NTD and not risk_emergency and reason not in {"MANUAL_EXIT","KILL_SWITCH"}:
+            self._revalidate_ntd_exit(campaign,reason)
+        if ntd_opposite:self._require_ntd_opposite_profit(campaign)
         # Last possible read-only check before persisting EXIT_PENDING.
         # A prior contract quote cannot authorize a later H1 book exit.
         # Recheck its original price basis; retain MARK for risk/profit only.
@@ -3284,7 +3407,7 @@ class FuturesWilliamsRuntime:
                 if not correction_bounds_valid(proof):
                     raise RuntimeError("CORRECTION_PROOF_MISSING; retain exchange protection")
                 if not correction_price_allowed(proof,current_price):
-                    if profile!=TC2 and strategy_market_close_allowed(profile):
+                    if profile==COURSE and strategy_market_close_allowed(profile):
                         return self._exit_market(campaign,"CORRECTION_PARENT_PRICE_INVALIDATED")
                     tags["tc2_correction_boundary_advisory"] = {
                         "policy": "TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED", "mark_price": current_price,
@@ -3405,7 +3528,9 @@ class FuturesWilliamsRuntime:
             if hasattr(self,"db") and hasattr(campaign,"campaign_id"):self.db.save_campaign(campaign)
             if management["exit_reason"]:return self._exit_market(campaign,management["exit_reason"])
             opposing=self._triggered_opposite_from_history(campaign,closed,tick,current_price)
-            if opposing is not None:return self._exit_market(campaign,"NTD_OPPOSITE_SIGNAL_TRIGGERED")
+            if opposing is not None and tc2_opposite_exit_profit_blocker(campaign.side,
+                    campaign.average_entry_price,current_price,tick=tick) is None:
+                return self._exit_market(campaign,"NTD_OPPOSITE_SIGNAL_TRIGGERED")
             proposed=management["stop"]
             if proposed is not None:
                 if (current_price<=proposed if campaign.side=="BUY" else current_price>=proposed):
@@ -3574,7 +3699,7 @@ class FuturesWilliamsRuntime:
                     self.db.log_event("WARNING", "futures_add_on_blocked", str(exc), {"symbol": symbol})
 
         active_symbols = {str(r["symbol"]).upper() for r in self.db.open_trades()}
-        unified=False  # Observers cannot veto or authorize the TC2 execution pool.
+        unified=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()==UNIFIED
         conflicts={symbol for symbol,rows in by_symbol.items()
                    if unified and unified_direction_conflict(
                        c.side for c in rows if c.signal.role==SignalRole.ENTRY)}

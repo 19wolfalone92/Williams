@@ -49,5 +49,5 @@ def ntd_five_dimensions_research(symbol, ind, timeframe, tick_size) -> dict:
     if out["errors"]:
         out["reason"]="PARTIAL_NTD_EVIDENCE_MISSING; NEVER EXECUTE"
     else:
-        out["reason"]="NTD_ENTRY_ADD_ON_EXIT_EXCHANGE_LIFECYCLE_NOT_VALIDATED"
+        out["reason"]="READ_ONLY_RESEARCH_REPORT; EXECUTION_REQUIRES_OWNED_CYCLE_AND_FINAL_EXCHANGE_GATES"
     return out

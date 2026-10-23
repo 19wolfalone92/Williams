@@ -3,20 +3,21 @@ package com.williamsbot
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** New risk belongs to TC2; other editions remain independently observable.
- * Filled legacy campaigns keep their original management, without new adds. */
-internal const val WILLIAMS_EXECUTION_POLICY = "TC2_LIVE_EDITIONS_OBSERVE_V1"
+/** Independent source-owned lifecycles; Course remains observation-only. */
+internal const val WILLIAMS_EXECUTION_POLICY = "TC2_NTD_OWNED_LIFECYCLES_V2"
 internal const val williamsExecutionProfile = williamsTc2Profile
-internal val williamsObserverProfiles = listOf(williamsNtdProfile,williamsCourseProfile)
+internal val williamsExecutionProfiles = listOf(williamsTc2Profile,williamsNtdProfile)
+internal val williamsObserverProfiles = listOf(williamsCourseProfile)
 internal fun williamsNewExposureBlocker(source:String):String? =
-    if(source==williamsExecutionProfile) null else "WILLIAMS_SOURCE_OBSERVATION_ONLY"
+    if(source in williamsExecutionProfiles) null else "WILLIAMS_SOURCE_OBSERVATION_ONLY"
 internal fun williamsExecutionPolicySnapshot():JSONObject = JSONObject()
     .put("mode",WILLIAMS_EXECUTION_POLICY).put("execution_profile",williamsExecutionProfile)
+    .put("execution_profiles",JSONArray(williamsExecutionProfiles))
     .put("observer_profiles",JSONArray(williamsObserverProfiles)).put("one_campaign_per_symbol",true)
     .put("tc2_reversal_policy",WILLIAMS_TC2_REVERSAL)
     .put("tc2_reversal_requires",JSONArray(listOf("OWNED_EXIT_FILLED","SIGNED_FLAT","OLD_ORDERS_CLEANED",
         "FRESH_H1_SIGNAL","NEW_RISK_BUDGET","NEW_PROTECTIVE_STOP")))
-    .put("legacy_management","PINNED_SOURCE_NO_NEW_EXPOSURE")
+    .put("legacy_management","PINNED_SOURCE_VALIDATED_CYCLE_REQUIRED_FOR_ADDITIONS")
 
 internal fun williamsStructuralFractal(type:String,source:String):Boolean =
     source in setOf(williamsTc2Profile,williamsNtdProfile) && type.removePrefix("SHORT_").removePrefix("LONG_")=="FRACTAL"
@@ -59,7 +60,7 @@ internal fun williamsOpposingSignalCanMarketClose(ownerProfile:String):Boolean =
  * account/reconciliation checks are ALWAYS mandatory.
  */
 internal fun williamsAdditionRequiresHigherFrameTrendVeto(ownerProfile:String):Boolean =
-    ownerProfile != williamsTc2Profile
+    ownerProfile !in williamsExecutionProfiles
 
 
 /** Trading Chaos 2nd ed. chapter 12 (three possible FIRST presenting
@@ -78,6 +79,8 @@ internal fun williamsBookInitialContextRank(
     validatedCorrection:Boolean=false
 ):Int {
     val prior=directionalSignalContextRank(signalType,d1Bull,d1Bear,h4Bull,h4Bear)
+    if(source==williamsNtdProfile) return if(signalType.removePrefix("SHORT_").removePrefix("LONG_") in williamsNtdFamilies &&
+        campaignSignalDirection(signalType)!=null) maxOf(prior,1) else 0
     if(source!=williamsTc2Profile) return maxOf(prior,if(validatedCorrection) 2 else 0)
     val side=campaignSignalDirection(signalType) ?: return 0
     if(side !in setOf("LONG","SHORT")) return 0
@@ -97,7 +100,7 @@ internal fun williamsBookInitialContextRank(
  * exchange account/mark freshness, risk and stop gates are unaffected.
  */
 internal fun williamsInitialHigherFrameHistoryRequired(source:String):Boolean =
-    source!=williamsTc2Profile
+    source !in williamsExecutionProfiles
 
 /** Reject discretionary TC2 closes that lack a book-authenticated opposite
  * H1 price trigger. The coordinator independently binds this reason to the
@@ -110,7 +113,8 @@ internal fun williamsMarketExitBlocker(owner: String, reason: String): String? {
             "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
             "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
         )) null else "TC2_EXIT_REQUIRES_BOOK_OPPOSITE_TRIGGER"
-        williamsNtdProfile,williamsCourseProfile -> null
+        williamsNtdProfile -> if(reason in williamsNtdBookExitReasons) null else "NTD_EXIT_REQUIRES_OWN_BOOK_RULE"
+        williamsCourseProfile -> null
         else -> "EXIT_STRATEGY_OWNER_UNVERIFIED"
     }
 }

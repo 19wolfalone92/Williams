@@ -1,23 +1,25 @@
 """Release execution policy, separate from book signal detection.
 
-TC2 owns new risk. NTD/Course are independent observations, never votes or
-order intents. Previously filled campaigns retain their original exit policy.
+TC2 and NTD retain independent entry and management rules. Course stays an
+observation. Previously filled campaigns retain their original exit policy.
 """
 from williams_edition_rules import TC2, NTD, COURSE
 
 EXECUTION_PROFILE = TC2
-OBSERVER_PROFILES = (NTD, COURSE)
-EXECUTION_POLICY = "TC2_LIVE_EDITIONS_OBSERVE_V1"
+EXECUTION_PROFILES = (TC2, NTD)
+OBSERVER_PROFILES = (COURSE,)
+EXECUTION_POLICY = "TC2_NTD_OWNED_LIFECYCLES_V2"
 
 
 def new_exposure_blocker(source):
-    return None if source == EXECUTION_PROFILE else "WILLIAMS_SOURCE_OBSERVATION_ONLY"
+    return None if source in EXECUTION_PROFILES else "WILLIAMS_SOURCE_OBSERVATION_ONLY"
 
 
 def execution_policy_snapshot():
     return {"mode": EXECUTION_POLICY, "execution_profile": EXECUTION_PROFILE,
+            "execution_profiles": list(EXECUTION_PROFILES),
             "observer_profiles": list(OBSERVER_PROFILES), "one_campaign_per_symbol": True,
-            "legacy_management": "PINNED_SOURCE_NO_NEW_EXPOSURE"}
+            "legacy_management": "PINNED_SOURCE_VALIDATED_CYCLE_REQUIRED_FOR_ADDITIONS"}
 
 
 def structural_fractal(signal_type, source=TC2):
@@ -142,4 +144,10 @@ def market_exit_blocker(source, reason, *, risk_emergency=False):
             "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
             "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION",
         } else "TC2_EXIT_REQUIRES_BOOK_OPPOSITE_TRIGGER")
-    return None if source in (NTD, COURSE) else "EXIT_STRATEGY_OWNER_UNVERIFIED"
+    if source == NTD:
+        return None if reason in {
+            "TEETH_CLOSE_EXIT", "LIPS_CLOSE_EXIT", "NTD_FIVE_ZONE_PROTECTION_CROSSED",
+            "NTD_OPPOSITE_SIGNAL_TRIGGERED", "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+            "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION",
+        } else "NTD_EXIT_REQUIRES_OWN_BOOK_RULE"
+    return None if source == COURSE else "EXIT_STRATEGY_OWNER_UNVERIFIED"

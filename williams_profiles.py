@@ -30,17 +30,18 @@ def observe_edition_signals(symbol,ind,*,timeframe,tick_size):
     """
     signals=[]
     observations=[]
+    from williams_execution_policy import new_exposure_blocker
     for source in SOURCE_PROFILES:
         try:
             found=[s for side in ("LONG","SHORT") for s in extract_profile_signals(
                 symbol,ind,profile=source,side=side,timeframe=timeframe,tick_size=tick_size)]
             signals.extend(found)
             observations.append({"profile":source,"state":"FORMATION_OBSERVED" if found else "NO_VALID_FORMATION",
-                "signal_count":len(found),"execution_role":"LIVE" if source==TC2 else "OBSERVE",
+                "signal_count":len(found),"execution_role":"LIVE" if new_exposure_blocker(source) is None else "OBSERVE",
                 "can_place_orders":False})
         except Exception as exc:
             observations.append({"profile":source,"state":"ANALYSIS_FAILED","error_type":type(exc).__name__,
-                "execution_role":"LIVE" if source==TC2 else "OBSERVE","can_place_orders":False})
+                "execution_role":"LIVE" if new_exposure_blocker(source) is None else "OBSERVE","can_place_orders":False})
     return signals,observations
 
 

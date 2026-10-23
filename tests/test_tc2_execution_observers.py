@@ -58,7 +58,8 @@ def test_one_observer_failure_is_not_no_signal_or_a_tc2_failure(monkeypatch):
     assert (COURSE,"SHORT") in calls
     assert all(o["can_place_orders"] is False for o in observations)
     assert new_exposure_blocker(TC2) is None
-    assert all(new_exposure_blocker(s)=="WILLIAMS_SOURCE_OBSERVATION_ONLY" for s in (NTD,COURSE,"WILLIAMS_UNIFIED",""))
+    assert new_exposure_blocker(NTD) is None
+    assert all(new_exposure_blocker(s)=="WILLIAMS_SOURCE_OBSERVATION_ONLY" for s in (COURSE,"WILLIAMS_UNIFIED",""))
 
 
 def test_structural_validity_does_not_accept_stale_gapped_or_future_h1_data():

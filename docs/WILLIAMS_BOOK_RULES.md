@@ -67,7 +67,7 @@ This source router does not certify whole-book compliance.
 TC2 English PDF pages: 139-152 WM1; 154-162 WM2; 165-173 WM3; 175-186 campaigns,
 allocation and exits. Page numbers differ in the 224-page Russian registry source.
 
-## Separate observation profiles
+## Independent source profiles
 
 - NTD_FIVE_DIMENSIONS: first external fractal, AO Saucer/Zero Cross/Twin Peaks,
   AC, Zone and Balance Line keep their own admission and management rules.
@@ -78,8 +78,23 @@ allocation and exits. Page numbers differ in the 224-page Russian registry sourc
 - TC1: fractal start/signal/leverage, tick-volume/MFI and wave/psychological material
   is not a completed independent live profile. Base-asset volume is a labelled proxy.
 
-NTD and Course remain OBSERVE for new exposure. Selected passing fixtures do not
-permit enabling an unverified live strategy.
+Since 4.60, TC2 and NTD have independent execution paths. An NTD cycle starts
+only on a freshly revalidated external fractal, or an authenticated profitable
+closed NTD cycle may authorize a single reentry. Other dimensions add only to
+the same protected owner. Legacy NTD records without cycle evidence remain
+protected without new additions. New risk, exchange fills, monotone protection
+and duplicate prevention are independent gates, not signal votes.
+
+NTD zone events are bounded MARKET orders within 90 seconds of the H1 close;
+0.15% deviation and adverse quote bounds are explicit project limits. All
+additions require a profitable owned position. Teeth/Lips exits use a close
+AFTER entry; five-zone trailing persists. Book exits are revalidated at the
+exchange door. An opposite-signal exit also retains the user's positive
+profit-after-cost-reserve constraint. D1/H4 do not replace NTD's own Alligator.
+
+Course remains OBSERVE for new exposure. Transport-model tests do not certify
+all book figures, subjective chart angles or physical Android/Futures Demo
+acceptance; whole-book certification remains false.
 
 ## Common evidence and execution boundaries
 

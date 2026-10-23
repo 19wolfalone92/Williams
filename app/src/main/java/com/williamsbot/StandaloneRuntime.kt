@@ -1354,7 +1354,8 @@ private class NativeEngine(
     @Volatile private var entryTimePolicy=prefs.getString("entry_time_policy_v1",null)?.let {
         WilliamsEntryTimePolicy.fromJson(JSONObject(it))
     } ?: WilliamsEntryTimePolicy()
-    @Volatile private var williamsProfile=williamsExecutionProfile
+    @Volatile private var williamsProfile=prefs.getString("williams_strategy_profile_v1",null)
+        ?.takeIf { it==williamsUnifiedProfile || williamsVerifiedNewRiskSource(it) } ?: williamsUnifiedProfile
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
         NativeFuturesCampaignCoordinator(executionStore) {
@@ -1368,6 +1369,7 @@ private class NativeEngine(
             coordinator.m15EntryVerifier = null
             coordinator.requireBookH1ProofForAutomatedEntries = true
             coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }
+            coordinator.bookNtdExitVerifier = { owner,reason -> verifyNtdExitBeforeSubmit(owner,reason) }
             coordinator.setEditionSelectionProvider { williamsProfile }
             coordinator.setEntryTimePolicyProvider { entryTimePolicy }
             coordinator.setEntryPassportAuditSink { event -> auditStore.recordEntryPassportEvent(event) }
@@ -4918,7 +4920,8 @@ private class NativeEngine(
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
         // TC2's first still-valid presenting Wise Man. Consumed levels have
         // already been removed by their causal trigger checks.
-        candidate.campaignSignals.filter { it.strategyProfile==williamsExecutionProfile && it.role=="ENTRY" }.minByOrNull { it.signalBarTimeMs }
+        candidate.campaignSignals.filter { williamsVerifiedNewRiskSource(it.strategyProfile) &&
+            williamsProfileAllowsSource(williamsProfile,it.strategyProfile) && it.role=="ENTRY" }.minByOrNull { it.signalBarTimeMs }
 
     // Legacy Spot-era campaign submission/management/recovery implementation removed.
     // Entry, trailing protection, and exits are owned by NativeFuturesCampaignCoordinator.
@@ -5942,7 +5945,7 @@ private class NativeEngine(
             // Binance executes conditional stops asynchronously. In particular,
             // the WM3 fractal must still break on the correct side of Teeth.
             val bookAddition=pending.optString("intent_role")=="ADD_ON" &&
-                profile==williamsTc2Profile && pending.optString("entry_client_id").isNotBlank() &&
+                williamsVerifiedNewRiskSource(profile) && pending.optString("entry_client_id").isNotBlank() &&
                 pending.optString("client_id").startsWith("W2A_")
             if(((pending.optString("intent_role","ENTRY")=="ENTRY" && exchangeRowsValid &&
                     pending.optString("client_id").startsWith("W2H_")) || bookAddition) && !invalidEdition &&
@@ -5958,13 +5961,15 @@ private class NativeEngine(
                     val proofError=williamsBookH1ProofBlocker(setup.toString(),
                         pending.optString("direction"),parentId,pending.optString("signal_type"),
                         pending.optString("strategy_profile",williamsTc2Profile),price,stop,now,
-                        pending.optString("entry_client_id"))
+                        pending.optString("entry_client_id"),pending.optString("reentry_owner_id"),
+                        pending.optString("execution_semantics","STOP_ENTRY"),pending.optDouble("reference_close",0.0))
                     if(proofError!=null) proofError
                     else {
                         val h1=fetchCandles(symbol,"1h",220)
                         val valid=h1ContextCampaignSignals(symbol,h1,tick).any {
                             it.signalId==parentId && it.type==pending.optString("signal_type") &&
-                            it.strategyProfile==profile && it.role=="ENTRY"
+                            it.strategyProfile==profile && williamsBookSignalRoleAllowed(profile,it.type,it.role,
+                                pending.optString("entry_client_id"),pending.optString("reentry_owner_id"))
                         }
                         if(!valid) h1ParentRejectionReason(symbol,parentId,"H1_BOOK_PARENT_INVALIDATED")
                         else {
@@ -6398,6 +6403,9 @@ private class NativeEngine(
             if(eligibleSymbols!=null && profile!=williamsTc2Profile) continue
             require(profile in williamsEditionProfiles) { "Unknown durable strategy profile; retain protection" }
             val bars=candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+            require(williamsClosedH1HistoryBlocker(bars,futuresMarketData.exchangeNowMs())==null) {
+                "SOURCE_MANAGEMENT_CLOSED_H1_HISTORY_UNVERIFIED"
+            }
             var editionExit="";var editionStop:Double?=null
             if(profile==williamsNtdProfile) {
                 val aos=candles.indices.map { ao(candles,it) }
@@ -6407,6 +6415,7 @@ private class NativeEngine(
                     williamsAlligatorLine(candles,5,3).map { it ?: Double.NaN },aos,acs,rules.tick,openedAt,
                     intent.optJSONObject("edition_management") ?: JSONObject())
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management.state)
+                intent.put("edition_management",management.state)
                 editionExit=management.exitReason;editionStop=management.stop
                 if(editionStop!=null && (if(dir=="LONG") mark<=editionStop else mark>=editionStop))
                     editionExit="NTD_FIVE_ZONE_PROTECTION_CROSSED"
@@ -6432,6 +6441,7 @@ private class NativeEngine(
                     management.remove("course_pending_target");management.remove("course_pending_client_id")
                 }
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+                intent.put("edition_management",management)
                 if(management.has("course_unit_quantity")) {
                     val context=williamsCourseActiveContext(waveHierarchyFor(symbol),dir,management.getLong("course_origin_at"))
                     val stage=context?.let { williamsCourseNextStage(management.getString("course_stage"),it.getString("phase")) }
@@ -6494,11 +6504,12 @@ private class NativeEngine(
                         (if(dir=="LONG") quote<=opposing.triggerPrice else quote>=opposing.triggerPrice)
                 }==true)
             val exchangeEntryForExit=row.optString("entryPrice").toDoubleOrNull() ?: Double.NaN
-            val oppositeProfitBlocker=if(profile==williamsTc2Profile)
+            val oppositeProfitBlocker=if(profile in williamsExecutionProfiles)
                 williamsTc2OppositeExitProfitBlocker(dir,exchangeEntryForExit,mark,
                     2.0*feeBufferPerSidePct+maxSlippagePct,rules.tick) else null
             val actionableOpposing = opposing?.takeIf {
                 williamsOpposingSignalCanMarketClose(profile) &&
+                    oppositeProfitBlocker==null &&
                     (profile!=williamsTc2Profile ||
                         (!riskOnly && eligibleSymbols==null && tc2TriggerNow &&
                             oppositeProfitBlocker==null))
@@ -6516,11 +6527,11 @@ private class NativeEngine(
             }
             if (williamsStrategyCanMarketClose(profile) &&
                 (actionableOpposing != null ||
-                    profile!=williamsTc2Profile && (boundaryExit || editionExit.isNotEmpty()))) {
+                    profile!=williamsTc2Profile && (profile==williamsCourseProfile && boundaryExit || editionExit.isNotEmpty()))) {
                 val correction = if (actionableOpposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
                     if (dir == "LONG") "SHORT" else "LONG",actionableOpposing.signalBarTimeMs,actionableOpposing.type) else WilliamsCorrectionContext()
                 val exitReason = if(profile!=williamsTc2Profile && editionExit.isNotEmpty()) editionExit
-                    else if(profile!=williamsTc2Profile && boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
+                    else if(profile==williamsCourseProfile && boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
                     else if (correction.allowed) "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
                     else "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
                 val decision = if(profile==williamsTc2Profile)
@@ -6606,7 +6617,7 @@ private class NativeEngine(
         // A verified old NTD/Course owner can retain exchange protection and
         // recovery, but observation-only sources must not create add-on risk.
         if(!williamsVerifiedNewRiskSource(profile)) {
-            rejectDecision(symbol,"SOURCE_OBSERVATION_ONLY: no NTD/Course LIVE add-ons before Demo acceptance")
+            rejectDecision(symbol,"SOURCE_OBSERVATION_ONLY: source lifecycle not enabled")
             return
         }
         if(!williamsProfileAllowsSource(williamsProfile,profile) || !executionReady()) return
@@ -6634,10 +6645,11 @@ private class NativeEngine(
         val market=signal.executionSemantics=="MARKET_ON_CLOSE"
         if(market && (profile!=williamsNtdProfile || signal.type.removePrefix("SHORT_")!="ZONE_ADD_ON" ||
             williamsMarketOnCloseReason(signal.signalBarTimeMs,3_600_000L,now,signal.triggerPrice,mark)!=null)) return
-        val price=if(market) mark else signal.triggerPrice
+        val price=if(market) williamsNtdCloseEntryBound(direction,signal.triggerPrice,rules.tick) ?: return
+            else signal.triggerPrice
         val stop=owner.getString("protective_stop").toDouble()
         if((if(direction=="LONG") stop>=price || !market && price<=contractPrice else stop<=price || !market && price>=contractPrice)) return
-        if(profile==williamsTc2Profile) {
+        if(profile in williamsExecutionProfiles) {
             williamsTc2ProfitBlocker(direction,owner.optString("actual_entry_price").toDoubleOrNull() ?: Double.NaN,mark,price)
                 ?.let { return rejectDecision(symbol,it) }
         }
@@ -6687,12 +6699,12 @@ private class NativeEngine(
             setup.put("course_target_stage",targetStage).put("course_target_quantity",target)
         }
         if(!quantity.isFinite() || quantity<=0) return
-        if(profile==williamsTc2Profile) setup.put("book_h1_entry",williamsBookH1Proof(
+        if(profile in williamsExecutionProfiles) setup.put("book_h1_entry",williamsBookH1Proof(
             signal.signalId,direction,signal.type,profile,signal.signalBarTimeMs,
-            fmtPrice(price,rules.tick).toDouble(),
+            (if(market) signal.triggerPrice else fmtPrice(price,rules.tick).toDouble()),
             (if(direction=="LONG") normalizePrice(signal.protectivePrice,rules.tick)
                 else normalizeTriggerPrice(signal.protectivePrice,rules.tick)),
-            rules.tick,parentId,stop))
+            rules.tick,parentId,stop,signal.executionSemantics,if(market) signal.triggerPrice else 0.0))
         val clientId=additionClientId(signal)
         if((0 until all.length()).any { all.optJSONObject(it)?.optString("client_id")==clientId }) return
         val plan=NativeFuturesCampaignCoordinator.EntryPlan(symbol,
@@ -6710,7 +6722,7 @@ private class NativeEngine(
             val fresh=editionCampaignSignals(symbol,fetchCandles(symbol,"1h",220),"1h",rules.tick,profile)
             check(fresh.any { it.signalId==signal.signalId && it.triggerPrice==signal.triggerPrice }) { "Addition formation no longer valid" }
             if(!market) {
-                val current=futuresMarketData.markPrice(symbol)
+                val current=futuresMarketData.price(symbol)
                 check(if(direction=="LONG") current<price else current>price) { "Addition trigger already consumed" }
             }
             futuresCampaignCoordinator.submitPendingEntry(plan)
@@ -6771,8 +6783,8 @@ private class NativeEngine(
             submitNativeFuturesAddition(candidate,owned)
             return
         }
-        if(williamsProfile !in setOf(williamsTc2Profile,williamsUnifiedProfile)) {
-            return rejectDecision(symbol,"SOURCE_OBSERVATION_ONLY: TC2 is the only verified automated entry source")
+        if(williamsProfile!=williamsUnifiedProfile && !williamsVerifiedNewRiskSource(williamsProfile)) {
+            return rejectDecision(symbol,"SOURCE_OBSERVATION_ONLY: selected source lifecycle not enabled")
         }
         // Keep both directional hypotheses until D1/H4 context is known. Picking
         // the newest signal before applying the directional macro veto caused a
@@ -7016,10 +7028,12 @@ private class NativeEngine(
         val contractPrice = futuresMarketData.price(symbol)
         // TC2 WM1 / WM2 / WM3 and NTD / Course preserve their H1 book
         // signal bar trigger, independent of any junior execution fractal.
-        val marketReentry=false
+        val marketReentry=profitReentry(signal) && signal.executionSemantics=="MARKET_ON_CLOSE"
         val reference=signal.triggerPrice
-        val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
-            normalizeTriggerPrice(reference, rules.tick) else normalizePrice(reference, rules.tick)
+        val trigger = if(marketReentry) williamsNtdCloseEntryBound(direction.name,reference,rules.tick)
+            ?: return rejectDecision(symbol,"NTD_CLOSE_BOUND_UNVERIFIED")
+            else if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
+                normalizeTriggerPrice(reference, rules.tick) else normalizePrice(reference, rules.tick)
         var stop = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
             normalizePrice(signal.protectivePrice, rules.tick) else normalizeTriggerPrice(signal.protectivePrice, rules.tick)
         if(signal.strategyProfile==williamsCourseProfile) {
@@ -7078,14 +7092,16 @@ private class NativeEngine(
                 " stop-entry at H1 signal trigger (no M15 confirmation)",
             tradeMode = if (correction.allowed) "CORRECTION" else "TREND",
             waveContext = if (correction.allowed) correction.toJson().toString() else "",
-            strategyProfile=signal.strategyProfile,executionSemantics="STOP_ENTRY",
+            strategyProfile=signal.strategyProfile,executionSemantics=signal.executionSemantics,
             setupContext=(runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject()).apply {
                 put("parent_execution_semantics",signal.executionSemantics)
                 if(signal.strategyProfile==williamsTc2Profile)
                     put("tc2_reverse_pyramid",JSONObject().put("policy",WILLIAMS_TC2_PYRAMID_POLICY))
                 put("book_h1_entry",williamsBookH1Proof(signal.signalId,direction.name,
                     signal.type,signal.strategyProfile,signal.signalBarTimeMs,
-                    trigger,stop,rules.tick))
+                    (if(marketReentry) reference else trigger),stop,rules.tick,
+                    executionSemantics=signal.executionSemantics,referenceClose=if(marketReentry) reference else 0.0,
+                    reentryOwnerId=if(profitReentry(signal)) owned!!.getString("client_id") else ""))
                 if(signal.strategyProfile==williamsCourseProfile) {
                     williamsCourseActiveContext(hierarchy,direction.name)?.let { context ->
                         put("course_origin_at",context.getLong("origin_at")).put("course_initial_stage",context.getString("phase"))
@@ -7132,7 +7148,7 @@ private class NativeEngine(
                 "H1_BOOK_SIGNAL_NO_LONGER_VALID: no Futures order submitted"
             }
             val submitH1=fetchCandles(symbol,"1h",220)
-            check(!williamsBookH1TriggerConsumed(direction.name,signal.signalBarTimeMs,trigger,
+            check(marketReentry || !williamsBookH1TriggerConsumed(direction.name,signal.signalBarTimeMs,trigger,
                 submitNow,submitH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })) {
                 "H1_BOOK_BREAKOUT_ALREADY_CONSUMED_BEFORE_SUBMISSION"
             }
@@ -8398,7 +8414,7 @@ private class NativeEngine(
             if(profile==williamsUnifiedProfile && !exitMode) for(source in williamsSourceProfiles) {
                 executionStore.writeState("edition_observation_"+symbol+"_"+source,
                     JSONObject().put("profile", source).put("execution_role",
-                        if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
+                        if(williamsVerifiedNewRiskSource(source)) "LIVE" else "OBSERVE")
                         .put("state", "HISTORY_INVALID")
                         .put("reason", bookSeriesBlocker)
                         .put("as_of_close_ms", candles.lastOrNull()?.let { it.t+WILLIAMS_H1_MS } ?: 0L)
@@ -8412,7 +8428,7 @@ private class NativeEngine(
             return williamsSourceProfiles.flatMap { source ->
                 val result=runCatching { editionCampaignSignals(symbol,candles,frame,tick,source,exitMode) }
                 if(!exitMode) executionStore.writeState("edition_observation_"+symbol+"_"+source,JSONObject()
-                    .put("profile",source).put("execution_role",if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
+                    .put("profile",source).put("execution_role",if(williamsVerifiedNewRiskSource(source)) "LIVE" else "OBSERVE")
                     .put("state",if(result.isFailure) "ANALYSIS_FAILED" else if(result.getOrNull().isNullOrEmpty()) "NO_VALID_FORMATION" else "FORMATION_OBSERVED")
                     .put("error_type",result.exceptionOrNull()?.javaClass?.simpleName ?: JSONObject.NULL)
                     .put("as_of_close_ms",candles.lastOrNull()?.let { it.t+WILLIAMS_H1_MS } ?: 0L)
@@ -8667,7 +8683,10 @@ private class NativeEngine(
             val prefix=bars.take(bars.size-omitted)
             val signals=editionCampaignSignals(symbol,prefix,"1h",tick,if(omitted==0) williamsUnifiedProfile else williamsExecutionProfile)
             out+=signals.filter { signal ->
-                if(signal.strategyProfile!=williamsExecutionProfile || signal.role!="ENTRY") omitted==0
+                if(signal.strategyProfile!=williamsTc2Profile || signal.role!="ENTRY") omitted==0 &&
+                    (signal.strategyProfile!=williamsNtdProfile || signal.executionSemantics=="MARKET_ON_CLOSE" ||
+                        williamsH1ParentInvalidation(h1EntryParent(signal),
+                            bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },contractPrice,now)==null)
                 else williamsH1SignalTimeEligible(signal.signalBarTimeMs,signal.type,signal.strategyProfile,now) &&
                     williamsH1ParentInvalidation(h1EntryParent(signal),
                         bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },contractPrice,now)==null
@@ -8680,7 +8699,8 @@ private class NativeEngine(
         val valid=out.distinctBy { it.signalId }.filter { signal ->
             if(signal.strategyProfile!=williamsExecutionProfile || signal.role!="ENTRY") return@filter true
             val parent=h1EntryParent(signal)
-            val assessment=assessWilliamsScenarioOpposition(parent.direction,parent.knownAt,sourceEvidence,waveBars,contractPrice,now)
+            val assessment=assessWilliamsScenarioOpposition(parent.direction,parent.knownAt,
+                sourceEvidence.filter { it.profile==signal.strategyProfile },waveBars,contractPrice,now)
             lifecycle.put(JSONObject().put("parent_id",parent.signalId).put("direction",parent.direction)
                 .put("state",if(assessment.blocker==null) "VALID_CONTEXT" else if(assessment.opposition!=null) "REVOKED" else "UNVERIFIED")
                 .put("reason",assessment.blocker ?: "NO_LATER_TRIGGERED_OPPOSITION")
@@ -8691,6 +8711,37 @@ private class NativeEngine(
         check(executionStore.writeState("decision_h1_parent_lifecycle_"+symbol,JSONObject()
             .put("observed_at_ms",now).put("trigger_price_basis","CONTRACT_PRICE").put("parents",lifecycle).toString())) { "H1_LIFECYCLE_PROOF_NOT_DURABLE" }
         return valid
+    }
+
+    private fun verifyNtdExitBeforeSubmit(owner:JSONObject,reason:String) {
+        check(owner.optString("strategy_profile")==williamsNtdProfile && reason in williamsNtdBookExitReasons) {
+            "NTD_EXIT_OWNER_OR_RULE_CHANGED"
+        }
+        val symbol=owner.getString("symbol");val direction=owner.getString("direction")
+        val now=futuresMarketData.exchangeNowMs();val tick=symbolFilters(symbol).tick
+        val candles=fetchCandles(symbol,"1h",220).filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+        val bars=candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        check(williamsClosedH1HistoryBlocker(bars,now)==null) { "NTD_EXIT_H1_HISTORY_UNVERIFIED" }
+        if(reason in setOf("TEETH_CLOSE_EXIT","LIPS_CLOSE_EXIT","NTD_FIVE_ZONE_PROTECTION_CROSSED")) {
+            val aos=candles.indices.map { ao(candles,it) }
+            val acs=candles.indices.map { i -> if(i>=4) nativeAcFromClosedAo(aos.subList(i-4,i+1)) else Double.NaN }
+            val plan=williamsNtdManagementPlan(direction,bars,
+                williamsAlligatorLine(candles,8,5).map { it ?: Double.NaN },
+                williamsAlligatorLine(candles,5,3).map { it ?: Double.NaN },aos,acs,tick,
+                owner.optLong("position_open_observed_at_ms"),owner.optJSONObject("edition_management") ?: JSONObject())
+            if(reason=="NTD_FIVE_ZONE_PROTECTION_CROSSED") {
+                val stop=plan.stop ?: error("NTD_ZONE_PROTECTION_NOT_ACTIVE")
+                val mark=futuresMarketData.markPrice(symbol)
+                check(if(direction=="LONG") mark<=stop else mark>=stop) { "NTD_ZONE_STOP_NO_LONGER_CROSSED" }
+            } else check(plan.exitReason==reason) { "NTD_CLOSED_LINE_EXIT_NO_LONGER_VALID" }
+        } else {
+            val signal=triggeredOpposingSignal(symbol,NativeFuturesCampaignCoordinator.Direction.valueOf(direction),
+                candles,tick,futuresMarketData.price(symbol),owner.optLong("position_open_observed_at_ms"),williamsNtdProfile)
+                ?: error("NTD_OPPOSITE_TRIGGER_NO_LONGER_VALID")
+            val proof=owner.optJSONObject("edition_management")?.optJSONObject("exit_evidence")
+            check(signal.strategyProfile==williamsNtdProfile && proof!=null && proof.optString("reason")==reason &&
+                proof.optString("signal_id")==signal.signalId) { "NTD_OPPOSITE_SOURCE_PROOF_CHANGED" }
+        }
     }
 
     /** Final non-M15 book-rule check executed by the coordinator AFTER
@@ -8726,13 +8777,20 @@ private class NativeEngine(
         val stop=plan.protectiveStop.toDouble()
         check(williamsProfileAllowsSource(williamsProfile,plan.strategyProfile)) { "H1_BOOK_EDITION_CHANGED" }
         check(williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
-            plan.signalType,plan.strategyProfile,target,stop,now,plan.entryClientId)==null) { "H1_BOOK_PROOF_UNVERIFIED" }
+            plan.signalType,plan.strategyProfile,target,stop,now,plan.entryClientId,plan.reentryOwnerId,
+            plan.executionSemantics,plan.referenceClose)==null) { "H1_BOOK_PROOF_UNVERIFIED" }
         val candles=fetchCandles(plan.symbol,"1h",220)
         val signals=h1ContextCampaignSignals(plan.symbol,candles,tick)
         val actual=signals.singleOrNull { it.signalId==plan.signalId &&
-            it.type==plan.signalType && it.strategyProfile==plan.strategyProfile && it.role=="ENTRY" &&
+            it.type==plan.signalType && it.strategyProfile==plan.strategyProfile &&
+            williamsBookSignalRoleAllowed(it.strategyProfile,it.type,it.role,plan.entryClientId,plan.reentryOwnerId) &&
             campaignSignalDirection(it.type)==plan.direction.name }
             ?: error(h1ParentRejectionReason(plan.symbol,plan.signalId,"H1_BOOK_PARENT_NO_LONGER_VALID"))
+        if(plan.executionSemantics=="MARKET_ON_CLOSE") {
+            check(plan.strategyProfile==williamsNtdProfile && actual.executionSemantics=="MARKET_ON_CLOSE" &&
+                abs(actual.triggerPrice-plan.referenceClose)<=tick*.11) { "NTD_CLOSE_EVENT_CHANGED" }
+            return // coordinator independently verifies fresh contract/mark AND executable bid/ask bound
+        }
         val expected=if(plan.direction.name=="LONG")
             normalizeTriggerPrice(actual.triggerPrice,tick)
             else normalizePrice(actual.triggerPrice,tick)
@@ -8928,7 +8986,7 @@ private class NativeEngine(
 
         var strictSignal =
             if (campaignEngineEnabled) {
-                campaignSignals.any { it.strategyProfile==williamsExecutionProfile } &&
+                campaignSignals.any { williamsVerifiedNewRiskSource(it.strategyProfile) && williamsProfileAllowsSource(williamsProfile,it.strategyProfile) } &&
                     atrPct in 0.0..0.08 &&
                     spread <= maxSpreadPct
             } else {
@@ -8997,7 +9055,8 @@ private class NativeEngine(
             tradeFlowImbalance = flowImbalance,
             reason = reason,
             campaignSignals = campaignSignals,
-            campaignReady = campaignEngineEnabled && campaignSignals.any { it.strategyProfile==williamsExecutionProfile && it.role=="ENTRY" }
+            campaignReady = campaignEngineEnabled && campaignSignals.any {
+                williamsVerifiedNewRiskSource(it.strategyProfile) && williamsProfileAllowsSource(williamsProfile,it.strategyProfile) }
         )
     }
 
@@ -11360,7 +11419,9 @@ private class NativeEngine(
         val next = FuturesLeverageSettings.fromJson(payload)
         val profile=payload.optString("strategy_profile",williamsProfile)
         val nextTime=payload.optJSONObject("entry_time_policy")?.let { WilliamsEntryTimePolicy.fromJson(it) } ?: entryTimePolicy
-        require(profile==williamsExecutionProfile) { "Торговля — TC2; NTD и Course работают в наблюдении" }
+        require(profile==williamsUnifiedProfile || williamsVerifiedNewRiskSource(profile)) {
+            "Торговые источники: TC2 и NTD; Course работает в наблюдении"
+        }
         fun persist() {
             check(prefs.edit().putString("entry_time_policy_v1",nextTime.toJson().toString()).putString("williams_strategy_profile_v1",profile)
                 .putString("futures_leverage_settings_v1", next.toJson().toString()).commit()) {

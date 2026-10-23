@@ -305,12 +305,16 @@ class CockpitDiagnosticsTest {
         assertEquals("FAIL",severity("DATA-05",s))
     }
 
-    @Test fun independentNtdCourseObserversMayNotCreatePendingExposure() {
+    @Test fun onlyVerifiedSourcesMayCreatePendingExposure() {
         val foreign=entry().put("strategy_profile","NTD")
         val c=coordinator().put("pending_intent_details",JSONArray().put(foreign))
         assertEquals("FAIL",severity("STR-10",healthy(),c))
         foreign.put("strategy_profile",williamsTc2Profile)
         assertEquals("PASS",severity("STR-10",healthy(),c))
+        foreign.put("strategy_profile",williamsNtdProfile)
+        assertEquals("PASS",severity("STR-10",healthy(),c))
+        foreign.put("strategy_profile",williamsCourseProfile)
+        assertEquals("FAIL",severity("STR-10",healthy(),c))
         foreign.put("campaign_status","OPEN_PROTECTED").put("strategy_profile","COURSE")
         assertEquals("PASS",severity("STR-10",healthy(),c))
     }

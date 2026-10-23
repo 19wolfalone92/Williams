@@ -137,7 +137,9 @@
         "ntd_balance_line.py",
         "williams_edition_rules.py",
         "app/src/main/java/com/williamsbot/WilliamsNtdBalanceLine.kt",
-        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [
         "tests/test_williams_book_rules_contract.py::test_ntd_diagnostic_and_edition_scanners_agree_on_local_base",
@@ -359,7 +361,9 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "strategy.py",
-        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [],
       "fixtures": [],
@@ -388,14 +392,17 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_profiles.py",
-        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [
         "tests/test_tc2_execution_observers.py::test_ntd_pdf43_old_fractal_lasts_until_trigger_or_new_valid_fractal",
-        "app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt::ntdPdf43OldFractalPersistsUntilTriggerOrNewValidFractal"
+        "app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt::ntdPdf43OldFractalPersistsUntilTriggerOrNewValidFractal",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::ntdInitialFractalAndEveryPendingDimensionUseTheRealProtectedOwner"
       ],
       "fixtures": [],
-      "remaining_evidence": "Full independent NTD execution acceptance absent; remains OBSERVE. Python and native old-fractal lifetime boundaries now agree; fresh Teeth/trigger/history proofs remain required.",
+      "remaining_evidence": "4.60 implements source-owned NTD execution, first-fractal/profitable-cycle authority and final fresh-H1 verification. Independent exhaustive book-figure fixtures, discretionary sleep interpretation and physical Demo acceptance remain unverified.",
       "can_place_orders_from_registry": false
     },
     {
@@ -411,7 +418,9 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_signals.py",
-        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [],
       "fixtures": [],
@@ -430,7 +439,9 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_signals.py",
-        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [],
       "fixtures": [],
@@ -455,7 +466,9 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_signals.py",
-        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [],
       "fixtures": [],
@@ -484,7 +497,9 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_signals.py",
-        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [],
       "fixtures": [],
@@ -507,11 +522,20 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_signals.py",
-        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_futures_order_lifecycle.py::test_ntd_owned_zone_adds_once_and_keeps_protection_after_lost_reply",
+        "tests/test_futures_order_lifecycle.py::test_ntd_profitable_authenticated_cycle_reenters_once",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::ntdZoneAdditionRetainsProtectionAcrossPartialFillLostReplyAndRestart",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::profitableNtdCycleReentersOnlyOnceWithOwnedStopOrCloseEvent",
+        "tests/test_williams_ntd_execution.py::test_shared_closed_event_contract",
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedClosedEventContractChecksActualExecutionQuotesAndDeadline"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Full independent profile lifecycle and source-chart replay pending.",
+      "remaining_evidence": "Source-owned native/Python execution, bounded quote checks and transport restart/idempotency cases are implemented. Exhaustive independent chart fixtures and physical Demo acceptance remain open. 90s/0.15% are project limits.",
       "can_place_orders_from_registry": false
     },
     {
@@ -529,7 +553,9 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_edition_rules.py",
-        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [],
       "fixtures": [],
@@ -547,7 +573,9 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "ntd_balance_line.py",
-        "app/src/main/java/com/williamsbot/WilliamsNtdBalanceLine.kt"
+        "app/src/main/java/com/williamsbot/WilliamsNtdBalanceLine.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [],
       "fixtures": [],
@@ -569,11 +597,17 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_edition_rules.py",
-        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_ntd_execution.py::test_preentry_candle_cannot_close_a_fresh_campaign",
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::preentryBarCannotSelectAnExitOrTighterStopForANewPosition",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::ntdAdditionProfitAndBookExitProofAreRecheckedBeforeAnyNewMutation"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Chart-angle to percentage-slope choice is a declared heuristic, not an exact original rule.",
+      "remaining_evidence": "Preentry closes cannot authorize an exit. Fresh source-specific exit verification occurs before mutation. Numerical price-vs-Lips speed selection is an explicit interpretation; exhaustive chart/source validation and physical Demo acceptance remain open.",
       "can_place_orders_from_registry": false
     },
     {

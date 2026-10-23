@@ -17,8 +17,8 @@ internal fun williamsProfileAllowsSource(selected:String,source:String):Boolean 
     source in williamsSourceProfiles && (selected==williamsUnifiedProfile || selected==source)
 
 /** Live new exposure is deliberately narrower than signal-source visibility.
- * NTD and Course continue independent OBSERVE analysis and stop-only ownership
- * of legacy exposure, but cannot create new automated risk until exchange E2E.
+ * TC2 and NTD retain independent source lifecycles. Course remains OBSERVE;
+ * an observation cannot acquire order authority through the unified selector.
  */
 internal fun williamsVerifiedNewRiskSource(source:String):Boolean =
     williamsNewExposureBlocker(source)==null
@@ -347,6 +347,7 @@ internal fun williamsNtdManagementPlan(side:String,bars:List<WilliamsWaveBar>,te
     val s=JSONObject(state.toString());val n=bars.size;val sign=if(side=="LONG") 1 else -1
     if(side !in listOf("LONG","SHORT") || n<6 || !validWilliamsEditionBars(bars) || tick<=0 || openedAt<=0 ||
         listOf(teeth,lips,ao,ac).any { it.size!=n }) return WilliamsNtdManagement(s)
+    if(bars.last().t+WILLIAMS_H1_MS<=openedAt) return WilliamsNtdManagement(s)
     var run=0
     for(i in 1 until n) {
         if(bars[i].t+3_600_000L<=openedAt) continue

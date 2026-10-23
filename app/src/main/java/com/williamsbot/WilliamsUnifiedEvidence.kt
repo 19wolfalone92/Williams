@@ -13,7 +13,7 @@ internal fun buildWilliamsUnifiedEvidence(
     scanner: JSONObject, status: JSONObject, nowMs: Long
 ): JSONObject {
     val selected = status.optString("strategy_profile")
-    // This deployment executes TC2 and independently OBSERVES NTD/Course.
+    // This deployment executes independently owned TC2/NTD lifecycles and observes Course.
     // The old evidence page required WILLIAMS_UNIFIED, thereby declaring
     // every correct 4.38 TC2-live scan WRONG_PROFILE.
     val coordinator = status.optJSONObject("futures_runtime")
@@ -60,7 +60,7 @@ internal fun buildWilliamsUnifiedEvidence(
             val report=rows.singleOrNull()
             val state=when {
                 candidate==null || report==null || rows.size!=1 -> "UNAVAILABLE"
-                report.optString("execution_role")!=(if(source==williamsExecutionProfile) "LIVE" else "OBSERVE") ->
+                report.optString("execution_role")!=(if(williamsVerifiedNewRiskSource(source)) "LIVE" else "OBSERVE") ->
                     "ROLE_MISMATCH"
                 expectedH1Close<=0L || expectedH1Close>nowMs ||
                     report.optLong("as_of_close_ms")!=expectedH1Close -> "H1_SNAPSHOT_MISMATCH"
@@ -69,7 +69,7 @@ internal fun buildWilliamsUnifiedEvidence(
                 else -> "UNKNOWN_SOURCE_STATE"
             }
             observerProof.put(source,JSONObject().put("state",state)
-                .put("execution_role",if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
+                .put("execution_role",if(williamsVerifiedNewRiskSource(source)) "LIVE" else "OBSERVE")
                 .put("as_of_close_ms",report?.optLong("as_of_close_ms") ?: JSONObject.NULL)
                 .put("reported_signal_count",report?.optInt("signal_count") ?: JSONObject.NULL)
                 .put("error_type",report?.opt("error_type") ?: JSONObject.NULL))
@@ -116,7 +116,7 @@ internal fun buildWilliamsUnifiedEvidence(
             val fresh = valid && williamsH1SignalTimeEligible(stamp,family,source,nowMs)
             if (fresh && role == "ENTRY" && side != null) {
                 freshSides += side
-                if(source==williamsExecutionProfile) tc2FreshSides += side
+                if(williamsVerifiedNewRiskSource(source)) tc2FreshSides += side
             }
             if (source in williamsSourceProfiles) {
                 sourceCounts.put(source, sourceCounts.optInt(source) + 1)
@@ -135,7 +135,7 @@ internal fun buildWilliamsUnifiedEvidence(
                 .put("signal_time_eligible", fresh)
                 .put("validity_policy",if(williamsStructuralFractal(family,source))
                     "UNBROKEN_UNSUPERSEDED_FRACTAL" else "PROJECT_AGE_WINDOW")
-                .put("execution_role",if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
+                .put("execution_role",if(williamsVerifiedNewRiskSource(source)) "LIVE" else "OBSERVE")
                 .put("book_origin_known", source in williamsSourceProfiles)
                 .put("structure_valid",valid)
                 .put("reason", signal.optString("reason"))
@@ -179,7 +179,7 @@ internal fun buildWilliamsUnifiedEvidence(
     for (symbol in bySymbol.keys) if (symbol !in APPROVED_FUTURES_SYMBOLS)
         errors.put("UNKNOWN_SYMBOL:${symbol.take(25)}")
     val snapshot = when {
-        selected != williamsExecutionProfile -> "WRONG_PROFILE"
+        selected != williamsUnifiedProfile && !williamsVerifiedNewRiskSource(selected) -> "WRONG_PROFILE"
         !recent -> "STALE_OR_MISSING_SCAN"
         scanning -> "SCAN_IN_PROGRESS"
         !complete || visited.size != 10 -> "INCOMPLETE_SCAN"
@@ -210,6 +210,6 @@ internal fun buildWilliamsUnifiedEvidence(
         .put("pre_context_opposing_symbol_count", conflicts)
         .put("live_tc2_opposing_symbol_count",tc2Conflicts)
         .put("is_execution_decision", false)
-        .put("completeness_warning", "Cached H1 signals only. TC2 can execute after independent D1/H4, risk and Binance checks; NTD/Course OBSERVE only. Source snapshots are not fills, owner evidence, or PnL. No M15 confirmation is required.")
+        .put("completeness_warning", "Cached H1 signals only. TC2 and NTD have independent source-owned H1 execution, risk and Binance checks; Course OBSERVE only. Source snapshots are not fills, owner evidence, or PnL. No M15 confirmation is required.")
         .put("last_runtime_error_unattributed", status.optString("last_error").take(300))
 }

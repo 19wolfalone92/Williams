@@ -320,6 +320,8 @@ def ntd_management_plan(side,bars,teeth,lips,ao,ac,tick,opened_at,state=None):
         return {"state":state,"exit_reason":"","stop":None}
     if any(len(v)!=n for v in (teeth,lips,ao,ac)):
         return {"state":state,"exit_reason":"","stop":None}
+    if bars[-1].t+3_600_000<=opened_at:
+        return {"state":state,"exit_reason":"","stop":None}
     run=0
     for i in range(1,n):
         if bars[i].t+3_600_000<=opened_at:continue

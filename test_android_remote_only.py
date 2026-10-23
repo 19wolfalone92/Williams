@@ -408,7 +408,7 @@ def test_android_book_native_h1_entry_does_not_require_m15_fractal():
     )[0]
     assert 'if((requireBookH1ProofForAutomatedEntries || isReversal) && plan.signalType!="OPERATOR_FORCED_DIRECTION")' in final_check
     assert 'if(isReversal) checkBookReversalDoor(plan,currentIntents,adapter,true)' in final_check
-    assert "plan.protectiveStop.toDouble(),clock(),plan.entryClientId)" in final_check
+    assert "plan.protectiveStop.toDouble(),clock(),plan.entryClientId,plan.reentryOwnerId," in final_check
     assert "williamsBookH1ObservedBreakoutBlocker(" in runtime
     assert "val recent=futuresMarketData.klines(plan.symbol,\"1h\",2)" in runtime
     assert "val verifier=bookH1EntryVerifier ?: error" in coordinator
@@ -922,9 +922,9 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
 def test_h1_parent_invalidation_and_fractal_reanchor_use_the_candle_price_basis():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     context = runtime.split("private fun h1ContextCampaignSignals(", 1)[1].split(
-        "private fun verifyBookH1PlanBeforeSubmit(", 1)[0]
+        "private fun verifyNtdExitBeforeSubmit(", 1)[0]
     assert 'val contractPrice=futuresMarketData.price(symbol)' in context
-    assert 'sourceEvidence,waveBars,contractPrice,now)' in context
+    assert 'sourceEvidence.filter { it.profile==signal.strategyProfile },waveBars,contractPrice,now)' in context
     assert '},contractPrice,now)==null' in context
     assert 'futuresMarketData.markPrice' not in context
     reanchor = runtime.split('val proposal=confirmedBetterFractal(', 1)[1].split('proposal?.let', 1)[0]
@@ -944,7 +944,7 @@ def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_cont
     assert "oppositeProfitBlocker==null" in manage
     assert "williamsTc2OppositeExitProfitBlocker(" in policy
     assert "williamsTc2OppositeExitProfitBlocker(" in coordinator
-    assert 'profile!=williamsTc2Profile && (boundaryExit || editionExit.isNotEmpty())' in manage
+    assert 'profile!=williamsTc2Profile && (profile==williamsCourseProfile && boundaryExit || editionExit.isNotEmpty())' in manage
     assert '"tc2_correction_boundary_advisory"' in manage
     assert 'market_close_authorized",false' in manage
     assert 'williamsTc2OppositeExitEvidenceBlocker(' in policy

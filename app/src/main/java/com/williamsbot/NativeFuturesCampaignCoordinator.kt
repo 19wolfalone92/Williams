@@ -758,6 +758,7 @@ internal class NativeFuturesCampaignCoordinator(
     var m15EntryVerifier:((EntryPlan)->Unit)? = null
     var requireBookH1ProofForAutomatedEntries:Boolean = false
     var bookH1EntryVerifier:((EntryPlan)->Unit)? = null
+    var bookNtdExitVerifier:((JSONObject,String)->Unit)? = null
     enum class Direction { LONG, SHORT }
     enum class EntryKind { STOP, TAKE_PROFIT, LIMIT, MARKET }
     enum class State {
@@ -2851,16 +2852,41 @@ internal class NativeFuturesCampaignCoordinator(
             kotlin.math.abs(entry-recorded)>maxOf(1e-8,recorded*1e-8)) return "TC2_ADDITION_ENTRY_OWNERSHIP_CHANGED"
         williamsTc2ProfitBlocker(plan.direction.name,entry,mark,plan.entryPrice.toDouble())?.let { return it }
         if(!contractPrice.isFinite() || contractPrice<=0) return "TC2_ADDITION_CONTRACT_PRICE_UNVERIFIED"
-        if(if(plan.direction==Direction.LONG) contractPrice>=plan.entryPrice.toDouble() else contractPrice<=plan.entryPrice.toDouble())
+        if(plan.strategyProfile==williamsNtdProfile)
+            williamsTc2ProfitBlocker(plan.direction.name,entry,contractPrice,plan.entryPrice.toDouble())?.let { return it }
+        if(plan.kind!=EntryKind.MARKET &&
+            (if(plan.direction==Direction.LONG) contractPrice>=plan.entryPrice.toDouble() else contractPrice<=plan.entryPrice.toDouble()))
             return "TC2_ADDITION_TRIGGER_CONSUMED_BEFORE_SUBMISSION"
         // Existing campaigns keep their persisted allocation semantics. Only
         // newly pinned campaigns may claim the book's exact quantity sequence.
-        if(williamsTc2PyramidPolicy(owner)!=null) {
+        if(plan.strategyProfile==williamsTc2Profile && williamsTc2PyramidPolicy(owner)!=null) {
             val next=williamsTc2NextTranche(owner,ledger,plan.clientId)
             next.blocker?.let { return it }
             return williamsTc2TrancheQuantityBlocker(next.quantity!!,plan.quantity)
         }
         return null
+    }
+
+    private fun ntdCloseEntryDoor(plan:EntryPlan,adapter:BinanceUsdMFuturesTestnetAdapter):String? {
+        val filters=adapter.exchangeInfo().getJSONArray("symbols")
+        val symbol=(0 until filters.length()).map { filters.getJSONObject(it) }
+            .singleOrNull { it.optString("symbol")==plan.symbol } ?: return "NTD_CLOSE_SYMBOL_UNVERIFIED"
+        val rules=symbol.getJSONArray("filters")
+        val tick=(0 until rules.length()).map { rules.getJSONObject(it) }
+            .singleOrNull { it.optString("filterType")=="PRICE_FILTER" }?.optString("tickSize")?.toDoubleOrNull()
+            ?: return "NTD_CLOSE_TICK_UNVERIFIED"
+        val quote=adapter.bestBidAsk(plan.symbol)
+        if(plan.entryClientId.isNotBlank()) {
+            val rows=adapter.positions()
+            val owner=(0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.singleOrNull {
+                it.optString("symbol")==plan.symbol && it.optString("positionAmt").toDoubleOrNull()?.let { q -> q!=0.0 }==true
+            } ?: return "NTD_CLOSE_POSITION_UNVERIFIED"
+            williamsTc2ProfitBlocker(plan.direction.name,owner.optString("entryPrice").toDoubleOrNull() ?: Double.NaN,
+                if(plan.direction==Direction.LONG) quote.second else quote.first,plan.entryPrice.toDouble())?.let { return it }
+        }
+        return williamsNtdCloseEntryBlocker(plan.direction.name,plan.signalBarTimeMs,plan.referenceClose,
+            plan.entryPrice.toDouble(),clock(),adapter.contractPrice(plan.symbol),adapter.markPrice(plan.symbol),
+            quote.first,quote.second,tick)
     }
 
     /** Persist the entry request before any account/order mutation. */
@@ -2882,22 +2908,27 @@ internal class NativeFuturesCampaignCoordinator(
                 "EXECUTION_EXCEPTION_UNVERIFIED") }
             throw failure
         }
-        // MARKET reversal fills immediately. Reconcile the SAME persisted id
+        // MARKET entries/additions fill immediately. Reconcile the SAME persisted id
         // and install/verify protection inside this execution-door pass,
         // including a lost POST reply, rather than waiting for another scan.
-        if(plan.reversalOwnerId.isNotBlank() && !result.optBoolean("safe_rejection",false)) {
+        if(plan.kind==EntryKind.MARKET && !result.optBoolean("safe_rejection",false)) {
             val posted=intentsSnapshot().let { rows -> (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
                 .singleOrNull { it.optString("client_id")==plan.clientId &&
                     it.optBoolean("entry_submission_attempted",true) } }
             if(posted!=null) {
                 val checked=runCatching { reconcile() }.getOrElse { failure ->
-                    JSONObject().put("ok",false).put("blocker","TC2_REVERSAL_PROTECTION_RECONCILIATION_UNAVAILABLE: "+
+                    JSONObject().put("ok",false).put("blocker","MARKET_ENTRY_PROTECTION_RECONCILIATION_UNAVAILABLE: "+
                         safeDiagnosticText(failure.message ?: failure.javaClass.simpleName))
                 }
                 val confirmed=intentsSnapshot().let { rows -> (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
                     .singleOrNull { it.optString("client_id")==plan.clientId } }
-                val protectionConfirmed=confirmed!=null && campaignLifecycleStatus(confirmed)=="OPEN_PROTECTED" &&
-                    confirmed.optString("protection_status")=="PROTECTED"
+                val protectedOwner=if(plan.entryClientId.isBlank()) confirmed else intentsSnapshot().let { rows ->
+                    (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.singleOrNull {
+                        it.optString("client_id")==plan.entryClientId && it.optString("intent_role","ENTRY")=="ENTRY" } }
+                val protectionConfirmed=confirmed!=null &&
+                    confirmed.optString("executed_qty").toBigDecimalOrNull()?.signum()==1 &&
+                    protectedOwner!=null && campaignLifecycleStatus(protectedOwner)=="OPEN_PROTECTED" &&
+                    protectedOwner.optString("protection_status")=="PROTECTED"
                 result.put("protection_reconciliation",checked).put("state",state.name)
                     .put("protection",if(protectionConfirmed) "PROTECTED" else "RECONCILIATION_REQUIRED")
                 if(protectionConfirmed) {
@@ -2957,7 +2988,8 @@ internal class NativeFuturesCampaignCoordinator(
             val bookProof=williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,
                 plan.signalId,plan.signalType,plan.strategyProfile,
                 plan.entryPrice.toDoubleOrNull() ?: Double.NaN,
-                plan.protectiveStop.toDoubleOrNull() ?: Double.NaN,clock(),plan.entryClientId)
+                plan.protectiveStop.toDoubleOrNull() ?: Double.NaN,clock(),plan.entryClientId,
+                plan.reentryOwnerId,plan.executionSemantics,plan.referenceClose)
             if(bookProof!=null) return@synchronized safePreflightRejection(bookProof)
             if(plan.entryClientId.isBlank() && williamsH1ParentAlreadyFilled(currentIntents,plan.signalId,plan.signalType,plan.signalBarTimeMs))
                 return@synchronized safePreflightRejection("H1_PARENT_ALREADY_FILLED")
@@ -2989,6 +3021,9 @@ internal class NativeFuturesCampaignCoordinator(
                 it.optString("intent_role")=="ADD_ON" && it.optString("entry_client_id")==plan.entryClientId &&
                     exchangeOrderStatus(it) !in ENTRY_ORDER_TERMINAL_STATUSES }))
             return@synchronized safePreflightRejection("Addition requires the same protected campaign, stop, leverage and a new formation")
+        if(isAddition && plan.strategyProfile==williamsNtdProfile &&
+            primary!!.optString("ntd_cycle_basis") !in setOf("FIRST_EXTERNAL_FRACTAL","AUTHENTICATED_PROFITABLE_REENTRY"))
+            return@synchronized safePreflightRejection("NTD_OWNED_FRACTAL_OR_PROFITABLE_CYCLE_NOT_PROVEN")
         val coordinatorCanAdmit = state == State.READY || state == State.OPEN_PROTECTED ||
             (state == State.ENTRY_PENDING &&
                 confirmedPendingEntriesAllowConcurrentAdmission(currentIntents))
@@ -3126,7 +3161,7 @@ internal class NativeFuturesCampaignCoordinator(
             val live=openPositionRows[plan.symbol] ?: return@synchronized safePreflightRejection("Addition requires a live owned position")
             if (live.optString("positionAmt").toBigDecimal().abs().compareTo(primary!!.getString("confirmed_position_qty").toBigDecimal())!=0)
                 return@synchronized safePreflightRejection("Position changed since ownership reconciliation")
-            if(plan.strategyProfile==williamsTc2Profile) {
+            if(plan.strategyProfile in williamsExecutionProfiles) {
                 val blocker=tc2AdditionBookBlocker(plan,primary,currentIntents,live,
                     preflightAdapter.markPrice(plan.symbol),preflightAdapter.contractPrice(plan.symbol))
                 if(blocker!=null) return@synchronized safePreflightRejection(blocker)
@@ -3143,8 +3178,7 @@ internal class NativeFuturesCampaignCoordinator(
         if (riskBlocker != null) return@synchronized safePreflightRejection(riskBlocker)
 
         if (plan.kind==EntryKind.MARKET && !isReversal) {
-            val reason=williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
-                plan.referenceClose,preflightAdapter.markPrice(plan.symbol))
+            val reason=ntdCloseEntryDoor(plan,preflightAdapter)
             if (reason!=null) return@synchronized safePreflightRejection(reason)
         }
         val intent = JSONObject()
@@ -3194,6 +3228,8 @@ internal class NativeFuturesCampaignCoordinator(
                 ?.optJSONObject("tc2_reverse_pyramid")?.optString("policy") ?: "LEGACY_UNPINNED"
             intent.put("tc2_quantity_policy",policy)
         }
+        if(!isAddition && plan.strategyProfile==williamsNtdProfile)
+            intent.put("ntd_cycle_basis",if(reentry) "AUTHENTICATED_PROFITABLE_REENTRY" else "FIRST_EXTERNAL_FRACTAL")
         if(reentry) prior!!.put("ntd_reentry_consumed_by",plan.clientId)
         if(isAddition && plan.strategyProfile==williamsCourseProfile) {
             val setup=runCatching { JSONObject(plan.setupContext) }.getOrDefault(JSONObject())
@@ -3240,14 +3276,15 @@ internal class NativeFuturesCampaignCoordinator(
             if((requireBookH1ProofForAutomatedEntries || isReversal) && plan.signalType!="OPERATOR_FORCED_DIRECTION") {
                 if(!isReversal) check(williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
                     plan.signalType,plan.strategyProfile,plan.entryPrice.toDouble(),
-                    plan.protectiveStop.toDouble(),clock(),plan.entryClientId)==null) {
+                    plan.protectiveStop.toDouble(),clock(),plan.entryClientId,plan.reentryOwnerId,
+                    plan.executionSemantics,plan.referenceClose)==null) {
                     "H1_BOOK_PROOF_EXPIRED_BEFORE_SUBMISSION"
                 }
                 val verifier=bookH1EntryVerifier ?: error("H1_BOOK_FINAL_VERIFIER_REQUIRED")
                 verifier(plan)
             }
             if(isReversal) checkBookReversalDoor(plan,currentIntents,adapter,true)?.let { error(it) }
-            if(isAddition && plan.strategyProfile==williamsTc2Profile) {
+            if(isAddition && plan.strategyProfile in williamsExecutionProfiles) {
                 val positions=adapter.positions()
                 val live=(0 until positions.length()).mapNotNull { positions.optJSONObject(it) }
                     .singleOrNull { it.optString("symbol")==plan.symbol &&
@@ -3260,8 +3297,8 @@ internal class NativeFuturesCampaignCoordinator(
                 tc2AdditionBookBlocker(plan,primary,currentIntents,live,
                     adapter.markPrice(plan.symbol),adapter.contractPrice(plan.symbol))?.let { error(it) }
             }
-            if(plan.kind==EntryKind.MARKET && !isReversal) check(williamsMarketOnCloseReason(plan.signalBarTimeMs,3_600_000L,clock(),
-                plan.referenceClose,adapter.markPrice(plan.symbol))==null) { "NTD close-event expired or moved before mutation" }
+            if(plan.kind==EntryKind.MARKET && !isReversal)
+                ntdCloseEntryDoor(plan,adapter)?.let { error(it) }
             orderSubmissionAttempted = true
             val result = when (plan.kind) {
                 EntryKind.MARKET -> {
@@ -3738,6 +3775,14 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("mutation_attempted",false).put("symbol",symbol).put("reason",reason)
                 .put("strategy_profile",exitOwner?.optString("strategy_profile") ?: JSONObject.NULL)
         }
+        val ntdBookExit=!riskEmergencyVerified && exitOwner?.optString("strategy_profile")==williamsNtdProfile &&
+            reason in williamsNtdBookExitReasons
+        if(ntdBookExit) {
+            val proof=runCatching { (bookNtdExitVerifier ?: error("NTD_FINAL_EXIT_VERIFIER_REQUIRED"))(
+                JSONObject(exitOwner!!.toString()),reason) }
+            if(proof.isFailure) return@synchronized JSONObject().put("ok",false).put("safe_rejection",true)
+                .put("mutation_attempted",false).put("blocker",safeDiagnosticText(proof.exceptionOrNull()?.message.orEmpty()))
+        }
         if ((0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
                 it.optString("intent_role")=="ADD_ON" && it.optString("symbol")==symbol && exchangeOrderStatus(it) in activeStatuses }) {
             // A contrary Wise-Man exit is OPTIONAL, unlike liquidation control.
@@ -3882,6 +3927,15 @@ internal class NativeFuturesCampaignCoordinator(
             // durable closed-H1 opposite-signal proof to this exact owner,
             // symbol/direction, and the exchange's CURRENT contract price before POST.
             // Unknown or stale evidence keeps the exchange-side STOP alive.
+            if(!riskEmergencyVerified && managedEntry?.optString("strategy_profile")==williamsNtdProfile &&
+                reason in setOf("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED","OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION",
+                    "NTD_OPPOSITE_SIGNAL_TRIGGERED")) {
+                val profit=williamsTc2OppositeExitProfitBlocker(direction.name,
+                    liveForSymbol.single().first.optString("entryPrice").toDoubleOrNull() ?: Double.NaN,
+                    adapterPreflight.markPrice(symbol))
+                if(profit!=null) return@synchronized JSONObject().put("ok",false).put("safe_rejection",true)
+                    .put("mutation_attempted",false).put("blocker",profit).put("symbol",symbol)
+            }
             if(!riskEmergencyVerified &&
                 managedEntry?.optString("strategy_profile")==williamsTc2Profile &&
                 reason in setOf("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
@@ -3906,6 +3960,8 @@ internal class NativeFuturesCampaignCoordinator(
                         .put("safe_rejection",true).put("mutation_attempted",false)
                         .put("blocker",profitBlocker).put("symbol",symbol)
             }
+            if(ntdBookExit) (bookNtdExitVerifier ?: error("NTD_FINAL_EXIT_VERIFIER_REQUIRED"))(
+                JSONObject(managedEntry!!.toString()),reason)
             if (emergencyWithoutStop) {
                 // Second read as close to POST as possible, because the
                 // previously missing STOP could have been replaced meanwhile.
@@ -4772,6 +4828,10 @@ internal class NativeFuturesCampaignCoordinator(
         require(plan.strategyProfile!=williamsCourseProfile || family in setOf("COURSE_HUMP","COURSE_THUMB","COURSE_SQUAT")) { "Signal does not belong to Course" }
         require(plan.entryClientId.isNotBlank() || plan.reentryOwnerId.isNotBlank() || plan.strategyProfile!=williamsNtdProfile ||
             plan.signalType.removePrefix("SHORT_")=="FRACTAL") { "NTD cycle must start with an external fractal" }
+        if(plan.strategyProfile==williamsNtdProfile && plan.entryClientId.isBlank())
+            require(williamsNtdFirstEntryBlocker(plan.setupContext,plan.signalType,plan.reentryOwnerId)==null) {
+                "NTD_SLEEP_OR_FIRST_BREAKOUT_NOT_PROVEN"
+            }
         val reversal=plan.reversalOwnerId.isNotBlank() && plan.strategyProfile==williamsTc2Profile &&
             plan.executionSemantics==WILLIAMS_TC2_REVERSAL && family in setOf("REVERSAL","SUPER_AO","FRACTAL")
         require(plan.kind!=EntryKind.MARKET || reversal || ((plan.entryClientId.isNotBlank() || plan.reentryOwnerId.isNotBlank()) &&

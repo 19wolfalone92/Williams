@@ -50,6 +50,10 @@ class DemoExchangeModel:
             }
         if path.endswith("marginType"):
             return {"code": 200}
+        if path.endswith("premiumIndex"):
+            return {"symbol":"BTCUSDT","markPrice":str(self.price)}
+        if path.endswith("bookTicker"):
+            return {"symbol":"BTCUSDT","bidPrice":str(self.price),"askPrice":str(self.price)}
         if path.endswith("ticker/price"):
             return {"symbol": "BTCUSDT", "price": str(self.price)}
         if path.endswith("/account"):
@@ -86,7 +90,7 @@ class DemoExchangeModel:
                     assert self.amount==0 or p["side"]==("BUY" if self.amount>0 else "SELL")
                     quantity=float(p["quantity"]);old=abs(self.amount)
                     self.entry_price=(self.entry_price*old+self.price*quantity)/(old+quantity)
-                    self.amount+=(quantity if self.amount>0 else -quantity)
+                    self.amount+=(quantity if p["side"]=="BUY" else -quantity)
                     self.orders[oid]={**p,"orderId":oid,"clientOrderId":p["newClientOrderId"],"status":"FILLED",
                         "executedQty":str(quantity),"origQty":str(quantity),"avgPrice":str(self.price)}
                     if self.market_add_timeout_after_fill:
@@ -160,19 +164,11 @@ def armed_runtime(monkeypatch, tmp_path, request):
         protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000,strategy_profile=profile,
         setup_context={"ntd_initial":{"eligible":True,"sleep_at_ms":now-10*3600000,"reason":"FIXTURE_OBSERVED_SLEEP"}} if profile=="NTD_FIVE_DIMENSIONS" else {})
     candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
-    # Arrange a legacy pending order without granting the new release any
-    # observer execution authority. Submit its TC2-shaped fixture, then restore
-    # the persisted source/payload as it would have existed before this upgrade.
-    if profile!="TC2_THREE_WISE_MEN":
-        from dataclasses import replace
-        legacy_candidate=replace(candidate,signal=replace(signal,strategy_profile="TC2_THREE_WISE_MEN"))
-        armed=bot._arm_entry(legacy_candidate)
-        legacy=bot.engine.load_campaign(armed["campaign_id"])
-        legacy.tags["strategy_profile"]=profile
-        legacy.tags["pending_signal"]["signal"]=signal.to_dict()
-        bot.db.save_campaign(legacy)
-    else:
-        armed = bot._arm_entry(candidate)
+    # Transport lifecycle tests model the source-data peer separately. The
+    # final NTD source verifier itself is exercised with real detectors below.
+    if profile=="NTD_FIVE_DIMENSIONS":
+        monkeypatch.setattr(bot,"_revalidate_ntd_signal",lambda campaign,intent:None)
+    armed=bot._arm_entry(candidate)
     trace=bot.db.conn.execute("SELECT raw_json FROM events WHERE event='decision_trace_execution' ORDER BY id DESC LIMIT 1").fetchone()
     assert trace and '"stage": "_arm_entry"' in trace[0]
     assert "test-secret" not in trace[0]
@@ -435,7 +431,7 @@ def test_leverage_failure_never_sends_an_entry(monkeypatch, tmp_path, failure, s
 
 @pytest.mark.parametrize("armed_runtime",[{"side":"BUY","profile":"NTD_FIVE_DIMENSIONS"},{"side":"SELL","profile":"NTD_FIVE_DIMENSIONS"}],indirect=True)
 @pytest.mark.parametrize("lost_response",[False,True])
-def test_observer_ntd_cannot_add_to_a_legacy_filled_campaign(armed_runtime,monkeypatch,lost_response):
+def test_ntd_owned_zone_adds_once_and_keeps_protection_after_lost_reply(armed_runtime,monkeypatch,lost_response):
     bot,exchange,_=armed_runtime
     exchange.fill_entry();bot._reconcile_pending()
     campaign=bot.engine.load_campaign(bot.db.open_campaigns()[0]["campaign_id"])
@@ -460,12 +456,23 @@ def test_observer_ntd_cannot_add_to_a_legacy_filled_campaign(armed_runtime,monke
     signal=next(s for s in extract_profile_signals("BTCUSDT",ind,profile="NTD_FIVE_DIMENSIONS",
         side="LONG" if sign==1 else "SHORT",timeframe="1h",tick_size=.1) if s.signal_type==SignalType.ZONE_ADD_ON)
     assert signal.expires_at_ms==closed_at+90_000
-    calls_before=len(exchange.calls)
-    with pytest.raises(RuntimeError,match="OBSERVATION_ONLY"):
+    # Exercise the real final source checker against the actual zone detector.
+    import futures_williams_runtime as runtime_module
+    monkeypatch.setattr(runtime_module,"fetch_klines",lambda *a,**k:ind)
+    monkeypatch.setattr(runtime_module,"calculate_indicators",lambda *a,**k:ind)
+    monkeypatch.setattr(bot,"_revalidate_ntd_signal",bot.__class__._revalidate_ntd_signal.__get__(bot))
+    if lost_response:
+        with pytest.raises(Exception):bot._arm_add_on(campaign,signal)
+    else:
         bot._arm_add_on(campaign,signal)
-    assert abs(exchange.amount)==before
-    assert not any(method=="POST" for method,_,_ in exchange.calls[calls_before:])
+    bot._reconcile_pending()
+    assert abs(exchange.amount)>before
     assert any(a.get("closePosition")=="true" and a["algoStatus"]=="NEW" for a in exchange.algos.values())
+    assert bot.recover()["ok"]
+    campaign=bot.engine.load_campaign(campaign.campaign_id)
+    with pytest.raises(RuntimeError,match="already admitted"):
+        bot._arm_add_on(campaign,signal)
+    assert sum(1 for method,path,p in exchange.calls if method=="POST" and path.endswith("/order") and p.get("reduceOnly")!="true")==1
 
 
 
@@ -530,12 +537,12 @@ def test_course_management_executes_an_observed_w4_trim_without_waiting_for_entr
 
 @pytest.mark.parametrize("armed_runtime",[{"side":"BUY","profile":"NTD_FIVE_DIMENSIONS"},{"side":"SELL","profile":"NTD_FIVE_DIMENSIONS"}],indirect=True)
 @pytest.mark.parametrize("market",[False,True])
-def test_observer_ntd_profit_cycle_cannot_authorize_new_exposure(armed_runtime,monkeypatch,market):
+def test_ntd_profitable_authenticated_cycle_reenters_once(armed_runtime,monkeypatch,market):
     bot,exchange,armed=armed_runtime
     exchange.fill_entry();bot._reconcile_pending()
     previous=bot.engine.load_campaign(armed["campaign_id"])
     exchange.price=104 if previous.side=="BUY" else 96
-    assert bot._exit_market(previous,"PROFIT_CYCLE")["state"]=="CLOSED"
+    assert bot._exit_market(previous,"MANUAL_EXIT")["state"]=="CLOSED"
     previous=bot.engine.load_campaign(previous.campaign_id)
     assert previous.tags.get("verified_trade_result",{}).get("net_pnl",0)>0
     closed_at=(int(time.time()*1000)//3_600_000+3)*3_600_000
@@ -548,11 +555,67 @@ def test_observer_ntd_profit_cycle_cannot_authorize_new_exposure(armed_runtime,m
         strategy_profile="NTD_FIVE_DIMENSIONS",expires_at_ms=closed_at+3_600_000)
     assert bot._ntd_reentry_source(signal).campaign_id==previous.campaign_id
     candidate=FuturesCandidate("BTCUSDT","LONG" if previous.side=="BUY" else "SHORT",signal,(signal,),.01,.001,True,90)
-    calls_before=len(exchange.calls)
-    with pytest.raises(RuntimeError,match="OBSERVATION_ONLY"):
-        bot._arm_entry(candidate)
-    assert not bot.db.state_get("ntd_reentry_consumed:"+previous.campaign_id)
-    assert not any(method=="POST" for method,_,_ in exchange.calls[calls_before:])
+    result=bot._arm_entry(candidate)
+    assert bot.db.state_get("ntd_reentry_consumed:"+previous.campaign_id)==result["campaign_id"]
+    if market:
+        assert abs(exchange.amount)>0
+        assert any(a.get("closePosition")=="true" and a["algoStatus"]=="NEW" for a in exchange.algos.values())
+    else:
+        exchange.fill_entry();bot._reconcile_pending()
+    assert bot._ntd_reentry_source(signal) is None
+
+
+@pytest.mark.parametrize("armed_runtime",[{"side":"BUY","profile":"NTD_FIVE_DIMENSIONS"},{"side":"SELL","profile":"NTD_FIVE_DIMENSIONS"}],indirect=True)
+@pytest.mark.parametrize("family",[SignalType.FRACTAL,SignalType.AO_SAUCER,SignalType.AO_ZERO_LINE,
+                                 SignalType.AO_TWIN_PEAKS,SignalType.AC_SIGNAL,SignalType.BALANCE_LINE])
+def test_ntd_each_pending_dimension_fills_into_the_same_protected_cycle_after_restart(armed_runtime,monkeypatch,family):
+    bot,exchange,armed=armed_runtime
+    exchange.fill_entry();bot._reconcile_pending()
+    campaign=bot.engine.load_campaign(armed["campaign_id"])
+    before=abs(exchange.amount);sign=1 if campaign.side=="BUY" else -1
+    exchange.price=exchange.entry_price+3*sign
+    now=int(time.time()*1000);h=3_600_000
+    signal=SignalSpec.new(symbol=campaign.symbol,side=campaign.side,signal_type=family,role=SignalRole.ADD_ON,
+        timeframe="1h",signal_bar_time_ms=(now//h-1)*h,trigger_price=exchange.price+sign,
+        protective_reference=exchange.price-2*sign,strategy_profile="NTD_FIVE_DIMENSIONS",expires_at_ms=now+h)
+    pending=bot._arm_add_on(campaign,signal)
+    exchange.fill_addition(pending["client_order_id"]);bot._reconcile_pending()
+    restarted=FuturesWilliamsRuntime("test-key","test-secret",testnet=True)
+    monkeypatch.setattr(restarted.client,"_request",exchange.request)
+    try:
+        assert restarted.recover()["ok"]
+        owner=restarted.engine.load_campaign(campaign.campaign_id)
+        assert owner.position_qty>before and owner.tags["strategy_profile"]=="NTD_FIVE_DIMENSIONS"
+        assert any(a.get("closePosition")=="true" and a["algoStatus"]=="NEW" for a in exchange.algos.values())
+        with pytest.raises(RuntimeError,match="already admitted"):
+            restarted._arm_add_on(owner,signal)
+    finally:
+        restarted.client.session.close();restarted.db.conn.close()
+
+
+@pytest.mark.parametrize("armed_runtime",[{"side":"BUY","profile":"NTD_FIVE_DIMENSIONS"},{"side":"SELL","profile":"NTD_FIVE_DIMENSIONS"}],indirect=True)
+@pytest.mark.parametrize("race",[False,True])
+def test_ntd_addition_cannot_average_down_even_if_profit_disappears_at_the_final_door(armed_runtime,monkeypatch,race):
+    bot,exchange,armed=armed_runtime
+    exchange.fill_entry();bot._reconcile_pending()
+    campaign=bot.engine.load_campaign(armed["campaign_id"])
+    sign=1 if campaign.side=="BUY" else -1
+    exchange.price=exchange.entry_price+(3*sign if race else 0)
+    now=int(time.time()*1000);h=3_600_000
+    signal=SignalSpec.new(symbol=campaign.symbol,side=campaign.side,signal_type=SignalType.AO_SAUCER,role=SignalRole.ADD_ON,
+        timeframe="1h",signal_bar_time_ms=(now//h-1)*h,trigger_price=exchange.price+sign,
+        protective_reference=campaign.current_stop_price,strategy_profile="NTD_FIVE_DIMENSIONS",expires_at_ms=now+h)
+    if race:
+        original=bot._futures_pre_submit_checks
+        def raced(intent):
+            if intent.purpose=="CAMPAIGN_ADD_ON":exchange.price=exchange.entry_price
+            original(intent)
+        monkeypatch.setattr(bot,"_futures_pre_submit_checks",raced)
+    before=len(exchange.calls)
+    with pytest.raises(RuntimeError,match="PROFITABLE_POSITION"):
+        bot._arm_add_on(campaign,signal)
+    assert not any(method=="POST" and path.endswith(("/order","algoOrder")) for method,path,_ in exchange.calls[before:])
+    assert any(a.get("closePosition")=="true" and a["algoStatus"]=="NEW" for a in exchange.algos.values())
 
 
 
