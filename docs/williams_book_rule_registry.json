@@ -1048,6 +1048,34 @@
       "remaining_evidence": "Verified directly against Course PDF46 and PDF48 raster pages. Synthetic mirrored boundary examples, not digitized book OHLC or independently verified recursive degrees.",
       "can_place_orders_from_registry": false,
       "fixture_file": "app/src/test/resources/williams_w2_boundary_source_contract.json"
+    },
+    {
+      "id": "COURSE.RECURSIVE_DEGREE_PRICE_GRAMMAR",
+      "book": "COURSE",
+      "pdf_pages": [
+        59,
+        60
+      ],
+      "rule": "Course impulse/correction checklist revises W1/W3 on three internal swings; validate successive child price subdivisions only from unique real confirmed pivots at each requested degree, preserving alternatives and unresolved evidence.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_wave_subdivisions.py",
+        "williams_wave_hierarchy.py",
+        "app/src/main/java/com/williamsbot/WilliamsRecursiveWaveDegree.kt",
+        "app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt"
+      ],
+      "tests": [
+        "tests/test_williams_recursive_degree_course.py::test_three_real_frame_resolutions_prove_two_price_levels_but_not_unique_wave_count",
+        "tests/test_williams_recursive_degree_course.py::test_course_59_60_schematic_branch_contract_and_negative_wave_three",
+        "app/src/test/java/com/williamsbot/WilliamsRecursiveWaveDegreeTest.kt::multiDegreeSourceContractRequiresRealConfirmedChildPriceLegs",
+        "app/src/test/java/com/williamsbot/WilliamsRecursiveWaveDegreeTest.kt::scanChecklistDoesNotMisnameThreeSwingsAsCompletedWaveThree"
+      ],
+      "fixture_file": "app/src/test/resources/williams_recursive_degree_course_contract.json",
+      "fixtures": [
+        "patterns/zigzag-535-two-degrees"
+      ],
+      "remaining_evidence": "Course PDF59/60 visual schematic branches checked. Two-degree mirrored artificial anchor grammar is bounded, not digitized historical book OHLC. Independent ground-truth labelled recursive counts and physical Android Demo acceptance remain absent.",
+      "can_place_orders_from_registry": false
     }
   ],
   "required_remaining_evidence": [
