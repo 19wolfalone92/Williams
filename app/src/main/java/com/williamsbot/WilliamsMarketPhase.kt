@@ -95,7 +95,8 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
             .put("w4_zero",h.optString("w4_zero")).put("scale_frame",h.optString("scale_frame"))
             .put("scale_bars",h.optInt("scale_bars"))
             .put("signs",JSONArray(signs.filterKeys { h.optBoolean(it) }.values.toList()))
-            .put("course_four_signs",williamsCourseFourSignEvidence(h)) }
+            .put("course_four_signs",williamsCourseFourSignEvidence(h))
+            .put("tc1_five_bullets",williamsTc1FiveBulletEvidence(h)) }
         val frameScenarios=all.filter { it.optString("frame")==frame }
         JSONObject().put("frame",frame).put("state",when {
             asOf<=0L -> "NOT_ANALYSED"
