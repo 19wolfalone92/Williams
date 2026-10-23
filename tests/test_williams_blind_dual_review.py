@@ -1,5 +1,6 @@
 """Two nonhuman toy reviewers test the evaluator; no fabricated human acceptance."""
 import csv,importlib.util
+from datetime import datetime,timezone
 from pathlib import Path
 import pytest
 
@@ -67,7 +68,7 @@ def test_conflicting_labels_are_not_merged_as_independent_truth(tmp_path):
     a=filled_csv(tmp_path,"one")
     b=filled_csv(tmp_path,"two",alter=lambda x:x.update(
         expert_label="COMPLEX_CORRECTION",direction="UP",
-        pivot_times_utc="2024-11-14T00:00:00Z") if x["symbol"]=="BTCUSDT"
+        pivot_times_utc=datetime.fromtimestamp((int(x["as_of"])-12*3_600_000)/1000,timezone.utc).isoformat()) if x["symbol"]=="BTCUSDT"
         else None)
     got=dual.compare_reviews(a,b,compared_at=TIME)
     assert got["disagreement_count"]==6
