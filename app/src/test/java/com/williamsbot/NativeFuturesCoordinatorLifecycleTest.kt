@@ -2423,4 +2423,60 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+
+    @Test fun diagnostics18ReversedLivePositionNeverBelongsToOldCampaignAndDoesNotMutateOrders() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator,exchange) = open(direction)
+            val oldJournal=coordinator.intentsSnapshot().toString()
+            val postsBefore=exchange.posts("/fapi/v1/algoOrder")
+            val otherBefore=exchange.posts("/fapi/v1/order")
+            val existingProtection=exchange.algos.values.single {
+                it.optString("closePosition")=="true"
+            }
+            val oldSide=existingProtection.getString("side")
+            exchange.quantity = -exchange.quantity
+            exchange.mark = if (exchange.quantity>0.0) 102.0 else 98.0
+            val first=coordinator.reconcile()
+            assertFalse(first.toString(),first.getBoolean("ok"))
+            assertEquals("POSITION_UNPROTECTED",first.getString("state"))
+            assertEquals(1,first.getInt("positions_checked"))
+            assertEquals(1,first.getJSONArray("exchange_protection_observations").length())
+            val proof=first.getJSONArray("exchange_protection_observations").getJSONObject(0)
+            assertEquals("STOP_UNCONFIRMED",proof.getString("stop_proof"))
+            assertEquals("REVERSED_CAMPAIGN_QUARANTINE",proof.getString("management_mode"))
+            assertFalse(proof.getBoolean("strategy_ownership_verified"))
+            assertFalse(proof.getBoolean("automatic_trailing_authorized"))
+            assertEquals(oldSide,existingProtection.getString("side"))
+            assertEquals(oldJournal,coordinator.intentsSnapshot().toString())
+            assertEquals(postsBefore,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(otherBefore,exchange.posts("/fapi/v1/order"))
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+            val again=coordinator.reconcile()
+            assertFalse(again.getBoolean("ok"))
+            assertEquals(0,again.getJSONArray("required_safety_exits").length())
+            assertEquals(postsBefore,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(otherBefore,exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun diagnostics18GenuineExchangeStopForReversedPositionIsVisibleButNeverOwned() {
+        val (coordinator,exchange)=open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val old=coordinator.intentsSnapshot().toString()
+        exchange.quantity=-exchange.quantity
+        exchange.mark=98.0
+        exchange.adapter().placeProtectiveStop("BTCUSDT","SHORT","105","MANUAL_SHORT_STOP")
+        val before=exchange.posts("/fapi/v1/algoOrder")
+        val result=coordinator.reconcile()
+        assertFalse(result.toString(),result.getBoolean("ok"))
+        assertEquals("RECONCILE_REQUIRED",result.getString("state"))
+        val p=result.getJSONArray("exchange_protection_observations").getJSONObject(0)
+        assertEquals("SHORT",p.getString("direction"))
+        assertEquals("EXTERNAL_PROTECTED",p.getString("stop_proof"))
+        assertEquals("MANUAL_SHORT_STOP",p.getString("protection_client_id"))
+        assertEquals("REVERSED_CAMPAIGN_QUARANTINE",p.getString("management_mode"))
+        assertFalse(p.getBoolean("automatic_trailing_authorized"))
+        assertEquals(before,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(old,coordinator.intentsSnapshot().toString())
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+    }
 }
