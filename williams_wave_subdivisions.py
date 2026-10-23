@@ -97,3 +97,134 @@ def enrich_complex_subdivisions(pattern,parent,children,*,parent_duration,as_of)
     else:return SubdivisionProof("UNRESOLVED",(),(),0,"PATTERN_HAS_COMPETING_INTERNAL_GRAMMARS")
     return prove_wave_subdivisions(points,children,expected,parent_duration=parent_duration,as_of=as_of,
                                    allow_flat_corrections="DIAGONAL" not in pattern)
+
+
+# Trading Chaos Course PDF59-60: a visual decision checklist, not a unique
+# wave forecast. The branches are explicit so "3" at W3 is never called a W3.
+COURSE_CHECKLIST = {
+    "W1": {3: "RECOUNT_AS_CORRECTION_NOT_TREND_REVERSAL",
+           5: "SMALLER_DEGREE_MOTIVE_CANDIDATE"},
+    "W2": {3: "SIDEWAYS_CORRECTION_CANDIDATE",
+           5: "SHARP_CORRECTION_CANDIDATE"},
+    "W3": {3: "RECOUNT_W3_WRONG_WAVE_NUMBER",
+           5: "W3_PRICE_SUBDIVISIONS_CANDIDATE"},
+    "W4": {3: "SIDEWAYS_CORRECTION_CANDIDATE",
+           5: "SHARP_CORRECTION_CANDIDATE"},
+    "W5": {3: "DIAGONAL_OR_CONTINUATION_CANDIDATE",
+           5: "MOTIVE_OR_DIAGONAL_CANDIDATE"},
+}
+
+
+def course_checklist_leg(leg: str, observed_swings: int) -> str:
+    """A schematic branch from Course PDF59/60, not an entry/exit signal."""
+    if not isinstance(observed_swings, int) or isinstance(observed_swings, bool):
+        return "UNRESOLVED"
+    return COURSE_CHECKLIST.get(leg, {}).get(observed_swings, "UNRESOLVED")
+
+
+def trace_recursive_price_grammar(
+    pattern, parent, pivots_by_frame, frame_durations, parent_frame, as_of,
+    *, depth=3, max_nodes=64
+):
+    """Inspect actual child anchors down several degrees without lookahead.
+
+    Positive status verifies price grammar *at the observed, listed depths*.
+    It DOES NOT establish a unique Elliott genealogy or certify trades.
+    Missing resolutions, ambiguous matching, unconfirmed pivots and resource
+    exhaustion remain unresolved rather than guessed.
+    """
+    def output(status, reason, frame="", child="", proof=None, checklist=None, branches=None):
+        result = {
+            "status": status, "reason": reason,
+            "frame": frame, "child_frame": child,
+            "internal_proof": (proof.to_dict() if proof is not None else None),
+            "checklist": checklist or [], "branches": branches or [],
+            "source": "COURSE_PDF59_60_CHECKLIST_AND_CONFIRMED_PRICE_PIVOTS",
+            "unique_elliott_genealogy_proven": False,
+            "can_place_orders": False, "can_close": False, "can_reverse": False,
+        }
+        return result
+
+    if (not isinstance(as_of, int) or as_of <= 0 or not 1 <= depth <= 3
+            or not 1 <= max_nodes <= 256 or parent_frame not in frame_durations):
+        return output("UNRESOLVED", "INVALID_RECURSIVE_DEGREE_CONTRACT")
+
+    frames = [parent_frame] + sorted(
+        (f for f in pivots_by_frame
+         if f in frame_durations and 0 < frame_durations[f] < frame_durations[parent_frame]),
+        key=lambda f: -frame_durations[f])
+    if any(frame_durations[a] <= frame_durations[b] for a,b in zip(frames, frames[1:])):
+        return output("UNRESOLVED", "NON_DESCENDING_REAL_TIMEFRAMES")
+
+    budget = [0]
+    def pivot_matches(p, c, duration):
+        return (p.kind == c.kind
+                and p.extreme_at <= c.extreme_at < p.extreme_at + duration
+                and abs(p.price - c.price) <= max(1e-9, abs(p.price) * 1e-9))
+
+    def walk(points, expected, index, remaining, root=False):
+        budget[0] += 1
+        frame=frames[index]
+        if budget[0] > max_nodes:
+            return output("UNRESOLVED", "RECURSIVE_NODE_BUDGET_EXHAUSTED", frame)
+        if index+1 >= len(frames):
+            return output("UNRESOLVED", "CHILD_TIMEFRAME_UNAVAILABLE", frame)
+        child=frames[index+1]
+        child_duration=frame_durations[frame]
+        anchors=[p for p in pivots_by_frame.get(child, ())
+                 if p.known_at <= as_of]
+        if root:
+            proof=enrich_complex_subdivisions(pattern,points,anchors,
+                    parent_duration=child_duration,as_of=as_of)
+        else:
+            proof=prove_wave_subdivisions(points,anchors,expected,
+                    parent_duration=child_duration,as_of=as_of)
+        tags=(["W1","W2","W3","W4","W5"] if len(proof.expected)==5
+              else ["A","B","C"] if len(proof.expected)==3
+              else [f"L{i+1}" for i in range(len(proof.expected))])
+        checklist=[{"leg":name,"observed_swings":count,
+                    "course_branch":course_checklist_leg(name,count)}
+                   for name,count in zip(tags,proof.observed)]
+        if proof.status != "PRICE_SUBDIVISIONS_CONFIRMED":
+            return output("UNRESOLVED",proof.reason,frame,child,proof,checklist)
+        if remaining==1:
+            return output("OBSERVED_DEPTH_PRICE_GRAMMAR_CONFIRMED",
+                          "ALL_REQUESTED_PRICE_DEPTHS_OBSERVED",frame,child,proof,checklist)
+        indices=[]
+        for p in points:
+            options=[i for i,c in enumerate(anchors)
+                     if pivot_matches(p,c,child_duration)]
+            if len(options)!=1:
+                return output("PARTIAL_PRICE_GRAMMAR",
+                              "DESCENDANT_ENDPOINT_AMBIGUOUS",frame,child,proof,checklist)
+            indices.append(options[0])
+        if any(a>=b for a,b in zip(indices,indices[1:])):
+            return output("PARTIAL_PRICE_GRAMMAR",
+                          "DESCENDANT_ENDPOINT_ORDER_INVALID",frame,child,proof,checklist)
+        shapes={
+            "IMPULSE_PRICE_SKELETON":(5,3,5,3,5),
+            "TRUNCATED_IMPULSE_PRICE_SKELETON":(5,3,5,3,5),
+            "ZIGZAG_PRICE_SKELETON":(5,3,5),
+            "REGULAR_FLAT_PRICE_SKELETON":(3,3,5),
+            "EXPANDED_FLAT_PRICE_SKELETON":(3,3,5),
+            "RUNNING_FLAT_PRICE_SKELETON":(3,3,5),
+        }
+        branches=[]
+        for i,shape in enumerate(proof.leg_patterns):
+            next_expected=shapes.get(shape)
+            if next_expected is None:
+                branches.append(output("UNRESOLVED","UNKNOWN_CHILD_GRAMMAR",child))
+            else:
+                branches.append(walk(anchors[indices[i]:indices[i+1]+1],
+                                     next_expected,index+1,remaining-1))
+        if all(b["status"]=="OBSERVED_DEPTH_PRICE_GRAMMAR_CONFIRMED" for b in branches):
+            return output("OBSERVED_DEPTH_PRICE_GRAMMAR_CONFIRMED",
+                          "ALL_REQUESTED_PRICE_DEPTHS_OBSERVED",frame,child,proof,checklist,branches)
+        return output("PARTIAL_PRICE_GRAMMAR",
+                      "SOME_RECURSIVE_LEGS_UNRESOLVED",frame,child,proof,checklist,branches)
+
+    result=walk(parent,(),0,depth,root=True)
+    result["requested_depth"]=depth
+    result["frame_path"]=frames[:depth+1]
+    result["observed_node_count"]=budget[0]
+    return result
