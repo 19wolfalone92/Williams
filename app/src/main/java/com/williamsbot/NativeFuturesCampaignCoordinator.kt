@@ -2900,7 +2900,12 @@ internal class NativeFuturesCampaignCoordinator(
                     confirmed.optString("protection_status")=="PROTECTED"
                 result.put("protection_reconciliation",checked).put("state",state.name)
                     .put("protection",if(protectionConfirmed) "PROTECTED" else "RECONCILIATION_REQUIRED")
-                if(protectionConfirmed) result.put("accepted",true).put("entry_confirmed_after_reconciliation",true)
+                if(protectionConfirmed) {
+                    // The original transport failure remains in the durable
+                    // intent/passport; it is no longer a CURRENT blocker.
+                    result.remove("blocker");result.remove("error")
+                    result.put("accepted",true).put("entry_confirmed_after_reconciliation",true)
+                }
             }
         }
         val eventId=appendEntryPassport(plan,attempt,"COORDINATOR_RETURNED",result)

@@ -1234,6 +1234,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertTrue(verified)
             assertTrue(reversed.toString(),reversed.optBoolean("accepted"))
             assertEquals("PROTECTED",reversed.optString("protection"))
+            assertFalse(reversed.has("blocker"));assertFalse(reversed.has("error"))
             assertEquals("OPEN_PROTECTED",resumed.state.name)
             assertEquals(before+1,exchange.posts("/fapi/v1/order"))
             assertEquals(if(p.direction.name=="LONG") .1 else -.1,exchange.quantity,1e-10)
