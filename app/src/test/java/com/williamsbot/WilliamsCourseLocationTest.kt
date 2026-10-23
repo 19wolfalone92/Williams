@@ -7,6 +7,11 @@ import org.junit.Test
 
 class WilliamsCourseLocationTest {
     private val hour=3_600_000L
+    private fun jsonValue(value:Any?):Any?=when(value) {
+        is JSONObject -> value.keys().asSequence().toList().sorted().associateWith { jsonValue(value.get(it)) }
+        is JSONArray -> (0 until value.length()).map { jsonValue(value.get(it)) }
+        else -> value
+    }
     @Test fun sharedPriceLocationsUseTheCorrectLegOriginAndClosedPivots() {
         val fixture=JSONObject(javaClass.classLoader!!.getResource("williams_course_location_contract.json")!!.readText())
         val cases=fixture.getJSONArray("cases")
@@ -101,7 +106,7 @@ class WilliamsCourseLocationTest {
                 val prefix=buildWilliamsWaveHierarchy(mapOf("1h" to bars.take(n)),asOf).toJson()
                 val future=bars.mapIndexed { i,b -> if(i<n) b else b.copy(h=Double.NaN,c= -1.0) }
                 val replay=buildWilliamsWaveHierarchy(mapOf("1h" to future),asOf).toJson()
-                assertTrue(prefix.similar(replay))
+                assertEquals(jsonValue(prefix),jsonValue(replay))
                 val scenarios=replay.getJSONArray("scenarios")
                 for(i in 0 until scenarios.length()) {
                     val s=scenarios.getJSONObject(i)
