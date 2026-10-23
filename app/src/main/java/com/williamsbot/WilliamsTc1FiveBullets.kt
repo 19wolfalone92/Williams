@@ -38,8 +38,18 @@ internal fun williamsTc1FiveBulletEvidence(
         "profitunity_macd_momentum_turn").count {
         checks.optString(it) !in listOf("NOT_OBSERVED","NOT_VERIFIED")
     } + if(mfiVerified) 1 else 0
+    // TC1 PDF82-83 requires observing the five signs at the degree actually
+    // counted (roughly 100-140 bars). A missing scale or a partial wave
+    // is NOT evidence of a completed Point Zero or permission to reverse.
+    val scaleBars=scenario.optInt("scale_bars",0)
+    val scaleValid=scaleBars in 100..140
+    val obs=scenario.optLong("observed_at",0L)
+    val anchors=scenario.optJSONArray("anchors")
+    val w5Known=if(anchors!=null && anchors.length()>=6)
+        anchors.optJSONObject(5)?.optLong("known_at",0L) ?: 0L else 0L
+    val chronological=w5Known>0L && obs>=w5Known
     return JSONObject()
-        .put("source","TC1_CH7_PDF53")
+        .put("source","TC1_CH7_PDF53_AND_CH9_PDF82_83")
         .put("status",when {
             !w5 -> "NO_PROVISIONAL_COMPLETED_FIVE_WAVE_PIVOT"
             !mfiVerified -> "MFI_DIVERGENCE_UNVERIFIED"
@@ -50,6 +60,12 @@ internal fun williamsTc1FiveBulletEvidence(
         .put("required_count",5)
         .put("mfi_source",if(mfiVerified) mfiSource else JSONObject.NULL)
         .put("tc1_mfi_distinct_from_course_ao",true)
+        .put("wave_scale_100_140_observed",scaleValid)
+        .put("wave_scale_bars",scaleBars)
+        .put("last_w5_pivot_causally_known",chronological)
+        .put("w5_known_at",if(chronological) w5Known else JSONObject.NULL)
+        .put("point_zero_certified",false)
+        .put("book_bullets_vs_proxies","TC1_MFI_AND_PROFITUNITY_MACD_NOT_AUTO_EQUALS_AO_AND_BASE_VOLUME")
         .put("this_is_not_course_four_sign_check",true)
         .put("wave_degree_confirmed",false).put("can_place_orders",false)
         .put("can_close",false).put("can_reverse",false)

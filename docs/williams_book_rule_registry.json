@@ -1076,6 +1076,31 @@
       ],
       "remaining_evidence": "Course PDF59/60 visual schematic branches checked. Two-degree mirrored artificial anchor grammar is bounded, not digitized historical book OHLC. Independent ground-truth labelled recursive counts and physical Android Demo acceptance remain absent.",
       "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.FIVE_MAGIC_BULLETS_SOURCE_SEPARATION",
+      "book": "TC1",
+      "pdf_pages": [
+        53,
+        54,
+        82,
+        83
+      ],
+      "rule": "Five signs: MFI divergence, wave-degree target zone, terminal fractal, squat among three price-extreme bars, 5/34/5 momentum change. Provisional W5 and 100-140 bars are context; Binance base-volume and AO indicators cannot be asserted to be canonical TC1 MFI. Never an automatic exit.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_tc1_terminal_evidence.py",
+        "williams_market_phase.py",
+        "app/src/main/java/com/williamsbot/WilliamsTc1FiveBullets.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt"
+      ],
+      "tests": [
+        "tests/test_williams_tc1_terminal_evidence.py::test_course_ao_divergence_does_not_certify_tc1_mfi",
+        "app/src/test/java/com/williamsbot/WilliamsTc1FiveBulletsTest.kt::pointZeroNeverCertifiedFromFiveProxyBooleansWithoutMfiAndScale"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Book PDF53-54/82-83 inspected visually; no externally proven canonical MFI divergences on independently labelled W3/W5 historical graphs. Python/Kotlin use current source-scoped proxies for observation only.",
+      "can_place_orders_from_registry": false
     }
   ],
   "required_remaining_evidence": [

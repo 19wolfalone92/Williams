@@ -43,4 +43,24 @@ class WilliamsTc1FiveBulletsTest {
             williamsTc1FiveBulletEvidence(completeProxy().put("status","INVALIDATED"))
                 .getString("status"))
     }
+    @Test fun pointZeroNeverCertifiedFromFiveProxyBooleansWithoutMfiAndScale() {
+        val missing=williamsTc1FiveBulletEvidence(completeProxy())
+        assertFalse(missing.getBoolean("wave_scale_100_140_observed"))
+        assertFalse(missing.getBoolean("last_w5_pivot_causally_known"))
+        assertFalse(missing.getBoolean("point_zero_certified"))
+        val pivots=org.json.JSONArray()
+        for(i in 0..5) pivots.put(JSONObject().put("known_at",100L+i*10L))
+        val scenario=completeProxy().put("scale_bars",120).put("observed_at",160L)
+            .put("anchors",pivots)
+        val observed=williamsTc1FiveBulletEvidence(scenario,true,"MANUALLY_VERIFIED_TC1_CHART")
+        assertTrue(observed.getBoolean("wave_scale_100_140_observed"))
+        assertTrue(observed.getBoolean("last_w5_pivot_causally_known"))
+        assertEquals("FIVE_SIGNS_OBSERVED_UNCERTIFIED_WAVE_DEGREE",observed.getString("status"))
+        assertFalse(observed.getBoolean("point_zero_certified"))
+        scenario.put("observed_at",149L)
+        val impossible=williamsTc1FiveBulletEvidence(scenario,true,"MANUALLY_VERIFIED_TC1_CHART")
+        assertFalse(impossible.getBoolean("last_w5_pivot_causally_known"))
+        assertFalse(impossible.getBoolean("can_close"))
+    }
+
 }
