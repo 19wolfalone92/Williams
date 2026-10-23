@@ -146,10 +146,10 @@ def run(output,charts=False):
             vax.bar(range(len(vol)),vol,width=.65)
             ax.set_ylabel("Price (USDT)")
             aox.set_ylabel("AO 5/34")
-            vax.set_ylabel("Volume\\n(base units)")
+            vax.set_ylabel("Volume\n(base units)")
             vax.set_xlabel("Closed H1 bars 0–159 (UTC). Future candles are hidden.")
-            ax.set_title(f"BLIND REVIEW \\u2022 {c['symbol']} H1 \\u2022 "
-                f"{datetime.fromtimestamp(c['as_of']/1000,timezone.utc):%Y-%m-%d %H:%M} UTC\\n"
+            ax.set_title(f"BLIND REVIEW • {c['symbol']} H1 • "
+                f"{datetime.fromtimestamp(c['as_of']/1000,timezone.utc):%Y-%m-%d %H:%M} UTC\n"
                 "No future price, model labels, reference proxy or trade orders")
             for plot in (ax,aox,vax):
                 plot.set_xlim(-1,161);plot.grid(alpha=.14,linewidth=.4)
