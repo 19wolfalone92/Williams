@@ -101,6 +101,22 @@ jobs:
           print("Price-grammar proxy only; no independent human Elliott accuracy certified.")
           PY
 
+      - name: Export separate sealed human review packet without model/proxy labels
+        run: |
+          python tools/export_blind_human_wave_packet.py \
+            --source build/blind-wave-review/blind_reference_frozen.json \
+            --charts build/blind-wave-review \
+            --output build/blind-human-review
+
+      - name: Upload blinded chart-only independent expert packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: williams-blind-h1-expert-annotation-packet
+          path: build/blind-human-review/
+          if-no-files-found: warn
+          retention-days: 21
+
       - name: Archive 30 blind historical charts, scores and source IDs
         if: always()
         uses: actions/upload-artifact@v4
