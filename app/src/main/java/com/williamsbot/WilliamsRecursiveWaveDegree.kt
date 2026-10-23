@@ -43,7 +43,7 @@ internal fun traceWilliamsRecursivePriceGrammar(
 
     val rootDuration=frameDurations.getValue(parentFrame)
     val frames=listOf(parentFrame)+pivotsByFrame.keys.filter {
-        it in frameDurations && frameDurations.getValue(it) in 1 until rootDuration
+        it in frameDurations && frameDurations.getValue(it)>0L && frameDurations.getValue(it)<rootDuration
     }.sortedByDescending { frameDurations.getValue(it) }
     if (frames.zipWithNext().any { (a,b) -> frameDurations.getValue(a)<=frameDurations.getValue(b) })
         return output("UNRESOLVED","NON_DESCENDING_REAL_TIMEFRAMES")
