@@ -6013,7 +6013,7 @@ private class NativeEngine(
                                 .put("trigger_price",signal.triggerPrice)
                                 .put("protective_price",signal.protectivePrice))
                         }
-                    },futuresMarketData.markPrice(symbol),tick,now)
+                    },futuresMarketData.price(symbol),tick,now)
                     proposal?.let { it to now }
                 }.getOrNull()
                 if(next!=null) {
@@ -6919,7 +6919,7 @@ private class NativeEngine(
         // Even with no old Binance order, prefer a newer confirmed WM3 level
         // when it has moved TOWARD current price. Do not blindly select the
         // oldest surviving Wise-Man hypothesis high above market.
-        val currentMark=futuresMarketData.markPrice(symbol)
+        val currentContractPrice=futuresMarketData.price(symbol)
         val nearestFractal = if(reanchorLock==null && baseline.strategyProfile==williamsTc2Profile) {
             val side=campaignSignalDirection(baseline.type)
             selectableSignals.filter { alt ->
@@ -6927,9 +6927,9 @@ private class NativeEngine(
                     alt.type==(if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL") &&
                     alt.role=="ENTRY" && alt.signalBarTimeMs>baseline.signalBarTimeMs &&
                     alt.protectivePrice>0 && alt.triggerPrice.isFinite() &&
-                    (if(side=="LONG") alt.triggerPrice>currentMark &&
+                    (if(side=="LONG") alt.triggerPrice>currentContractPrice &&
                         alt.triggerPrice<baseline.triggerPrice && alt.protectivePrice<alt.triggerPrice
-                     else alt.triggerPrice<currentMark &&
+                     else alt.triggerPrice<currentContractPrice &&
                         alt.triggerPrice>baseline.triggerPrice && alt.protectivePrice>alt.triggerPrice)
             }.maxByOrNull { it.signalBarTimeMs }
         } else null
@@ -8661,7 +8661,7 @@ private class NativeEngine(
         val now=futuresMarketData.exchangeNowMs()
         val bars=input.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
         if(williamsClosedH1HistoryBlocker(bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)!=null) return emptyList()
-        val mark=futuresMarketData.markPrice(symbol)
+        val contractPrice=futuresMarketData.price(symbol)
         val out=mutableListOf<CampaignSignalN>()
         for(omitted in 0..minOf(4,bars.size-45)) {
             val prefix=bars.take(bars.size-omitted)
@@ -8670,7 +8670,7 @@ private class NativeEngine(
                 if(signal.strategyProfile!=williamsExecutionProfile || signal.role!="ENTRY") omitted==0
                 else williamsH1SignalTimeEligible(signal.signalBarTimeMs,signal.type,signal.strategyProfile,now) &&
                     williamsH1ParentInvalidation(h1EntryParent(signal),
-                        bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },mark,now)==null
+                        bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },contractPrice,now)==null
             }
         }
         val oppositeCandidates=h1OppositionCandidates(symbol,bars,tick,williamsProfile)
@@ -8680,7 +8680,7 @@ private class NativeEngine(
         val valid=out.distinctBy { it.signalId }.filter { signal ->
             if(signal.strategyProfile!=williamsExecutionProfile || signal.role!="ENTRY") return@filter true
             val parent=h1EntryParent(signal)
-            val assessment=assessWilliamsScenarioOpposition(parent.direction,parent.knownAt,sourceEvidence,waveBars,mark,now)
+            val assessment=assessWilliamsScenarioOpposition(parent.direction,parent.knownAt,sourceEvidence,waveBars,contractPrice,now)
             lifecycle.put(JSONObject().put("parent_id",parent.signalId).put("direction",parent.direction)
                 .put("state",if(assessment.blocker==null) "VALID_CONTEXT" else if(assessment.opposition!=null) "REVOKED" else "UNVERIFIED")
                 .put("reason",assessment.blocker ?: "NO_LATER_TRIGGERED_OPPOSITION")
@@ -8689,7 +8689,7 @@ private class NativeEngine(
             assessment.blocker==null
         }.sortedBy { it.signalBarTimeMs }
         check(executionStore.writeState("decision_h1_parent_lifecycle_"+symbol,JSONObject()
-            .put("observed_at_ms",now).put("parents",lifecycle).toString())) { "H1_LIFECYCLE_PROOF_NOT_DURABLE" }
+            .put("observed_at_ms",now).put("trigger_price_basis","CONTRACT_PRICE").put("parents",lifecycle).toString())) { "H1_LIFECYCLE_PROOF_NOT_DURABLE" }
         return valid
     }
 

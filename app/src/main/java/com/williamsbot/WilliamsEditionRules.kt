@@ -336,7 +336,7 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
         add("ZONE_ADD_ON",i,execution="MARKET_ON_CLOSE",reference=bars[i].c)
     williamsNtdBalanceLineSetup(side,bars,jaw,teeth,lips,ao,ac,tick,requireMouth=!exitMode)?.let { out+=it }
     val mouth=if(sign==1) maxOf(jaw.last(),teeth.last(),lips.last()) else minOf(jaw.last(),teeth.last(),lips.last())
-    return out.filter { bars.last().t-bars[it.knownIndex].t<18_000_000L &&
+    return out.filter { (it.kind=="FRACTAL" || bars.last().t-bars[it.knownIndex].t<18_000_000L) &&
         (exitMode || it.role=="ENTRY" || mouth.isFinite() && sign*(it.trigger-mouth)>0) }
 }
 

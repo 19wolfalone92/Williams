@@ -22,7 +22,7 @@ class WilliamsExecutionPolicyTest {
                 direction,"f",type,williamsTc2Profile,entry.toDouble(),stop.toDouble(),now))
         }
         assertFalse(williamsH1SignalTimeEligible(at,"REVERSAL",williamsTc2Profile,now))
-        assertFalse(williamsH1SignalTimeEligible(at,"FRACTAL",williamsNtdProfile,now))
+        assertTrue(williamsH1SignalTimeEligible(at,"FRACTAL",williamsNtdProfile,now))
         val bars=(0..44).map { i -> WilliamsWaveBar(at+i*h,100.0,101.0,99.0,100.0,1.0) }
         assertNull(williamsClosedH1HistoryBlocker(bars,at+45*h+1000))
         assertEquals("H1_SNAPSHOT_STALE",williamsClosedH1HistoryBlocker(bars,at+46*h+1000))

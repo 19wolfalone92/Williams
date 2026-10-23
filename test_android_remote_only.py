@@ -919,6 +919,19 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
     assert 'p?.activeLabel == "W5" && c?.activeLabel == "W3"' in enrich
 
 
+def test_h1_parent_invalidation_and_fractal_reanchor_use_the_candle_price_basis():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    context = runtime.split("private fun h1ContextCampaignSignals(", 1)[1].split(
+        "private fun verifyBookH1PlanBeforeSubmit(", 1)[0]
+    assert 'val contractPrice=futuresMarketData.price(symbol)' in context
+    assert 'sourceEvidence,waveBars,contractPrice,now)' in context
+    assert '},contractPrice,now)==null' in context
+    assert 'futuresMarketData.markPrice' not in context
+    reanchor = runtime.split('val proposal=confirmedBetterFractal(', 1)[1].split('proposal?.let', 1)[0]
+    assert 'futuresMarketData.price(symbol)' in reanchor
+    assert 'futuresMarketData.markPrice' not in reanchor
+
+
 def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_contract():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     policy = _read(ANDROID / "java/com/williamsbot/WilliamsExecutionPolicy.kt")
