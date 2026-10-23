@@ -87,6 +87,45 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Blind 30-slice Binance H1 wave benchmark (rule proxy, NOT expert labels)
+        run: |
+          mkdir -p build/blind-wave-review
+          python tools/benchmark_blind_30_h1_wave_cases.py --output build/blind-wave-review --charts
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path("build/blind-wave-review/model_vs_proxy_results.json").read_text())["metrics"]
+          assert m["snapshot_count"]==30
+          assert m["independent_expert_annotations"]==0
+          assert m["accuracy_vs_human_expert"] is None
+          print("Price-grammar proxy only; no independent human Elliott accuracy certified.")
+          PY
+
+      - name: Export separate sealed human review packet without model/proxy labels
+        run: |
+          python tools/export_blind_human_wave_packet.py \
+            --source build/blind-wave-review/blind_reference_frozen.json \
+            --charts build/blind-wave-review \
+            --output build/blind-human-review
+
+      - name: Upload blinded chart-only independent expert packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: williams-blind-h1-expert-annotation-packet
+          path: build/blind-human-review/
+          if-no-files-found: warn
+          retention-days: 21
+
+      - name: Archive 30 blind historical charts, scores and source IDs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: williams-blind-wave-30-real-h1-review
+          path: build/blind-wave-review/
+          if-no-files-found: warn
+          retention-days: 21
+
       - name: Upload pytest diagnostics
         if: always()
         uses: actions/upload-artifact@v4
