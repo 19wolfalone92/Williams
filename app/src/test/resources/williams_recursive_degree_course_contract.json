@@ -1,5 +1,5 @@
 {
-  "source": "Course PDF59-60 schematic W1/W3/W5 checklist and synthetic nested price pivots",
+  "source": "Trading Chaos Course PDF59 IMPULSE WAVE CHECK LIST and PDF60 CORRECTION WAVE CHECK LIST, plus synthetic nested price pivots",
   "source_kind": "RULE_BOUNDARY_SYNTHETIC_NOT_BOOK_OHLC",
   "as_of": 864000000,
   "patterns": [
@@ -517,6 +517,56 @@
     },
     {
       "leg": "A",
+      "swings": 5,
+      "expected": "SHARP_CORRECTION_OR_LARGER_SIDEWAYS_COMPONENT"
+    },
+    {
+      "leg": "A",
+      "swings": 3,
+      "expected": "CORRECTION_STARTED_NOT_YET_CONFIRMED"
+    },
+    {
+      "leg": "B",
+      "swings": 3,
+      "expected": "SIDEWAYS_CORRECTION_CANDIDATE"
+    },
+    {
+      "leg": "B",
+      "swings": 5,
+      "expected": "EXTENDED_W5_OR_WRONG_CORRECTION_COUNT"
+    },
+    {
+      "leg": "C",
+      "swings": 3,
+      "expected": "TRIANGLE_OR_C_EXTENSION_OR_RECOUNT"
+    },
+    {
+      "leg": "C",
+      "swings": 5,
+      "expected": "ZIGZAG_OR_FLAT_CORRECTION_CANDIDATE"
+    },
+    {
+      "leg": "D",
+      "swings": 3,
+      "expected": "TRIANGLE_LEG_D_CANDIDATE"
+    },
+    {
+      "leg": "E",
+      "swings": 3,
+      "expected": "TRIANGLE_LEG_E_CANDIDATE"
+    },
+    {
+      "leg": "X",
+      "swings": 3,
+      "expected": "DOUBLE_OR_TRIPLE_CORRECTION_CANDIDATE"
+    },
+    {
+      "leg": "X",
+      "swings": 5,
+      "expected": "POSSIBLE_NEW_W1_OR_CORRECTION_TERMINATION"
+    },
+    {
+      "leg": "D",
       "swings": 5,
       "expected": "UNRESOLVED"
     }
