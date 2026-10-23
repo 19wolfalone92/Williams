@@ -428,6 +428,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
             val request=chain.request()
             val body=when(request.url.encodedPath) {
                 "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
                 "/fapi/v1/order" -> {
                     submitted=(request.body as FormBody).let { b ->
                         (0 until b.size).first { b.name(it)=="timestamp" }.let { b.value(it).toLong() }
@@ -489,9 +490,11 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
             val isPost=r.url.encodedPath=="/fapi/v1/order"
             if(isPost)posts++
             if(r.url.encodedPath=="/fapi/v1/time")syncs++
-            val body=if(r.url.encodedPath=="/fapi/v1/time") {
-                """{"serverTime":${System.currentTimeMillis()}}"""
-            } else """{"code":-1021,"msg":"Timestamp outside recvWindow"}"""
+            val body=when(r.url.encodedPath) {
+                "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
+                else -> """{"code":-1021,"msg":"Timestamp outside recvWindow"}"""
+            }
             Response.Builder().request(r).protocol(Protocol.HTTP_1_1)
                 .code(if(isPost)400 else 200).message("test")
                 .body(body.toResponseBody("application/json".toMediaType())).build()
