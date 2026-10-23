@@ -4,16 +4,18 @@ This module deliberately does not authorize orders. The five bullets are a
 trend-exhaustion / Point-Zero framework, not a substitute for the Wise-Men
 entry sequence.
 
-Canonical book-era bullets:
-1. price/AO divergence inside the wave;
-2. price in the Elliott target zone;
-3. terminal fractal;
-4. squat bar among the terminal top/bottom three bars;
-5. momentum change (AO colour change).
+Canonical *Trading Chaos 1st ed.* (PDF53-54/82-83) terminal bullets:
+1. divergence on the Profitunity MFI oscillator (NOT automatically AO);
+2. price inside the wave's target zone;
+3. terminal confirmed price fractal;
+4. Squat among the three extreme PRICE bars of the terminal movement;
+5. change of Profitunity 5/34/5 momentum.
 
-Modern Profitunity material later describes bullet #2 using a Wise Man
-bullish/bearish divergent bar. The caller can therefore supply either the
-book target-zone result or the modern replacement explicitly.
+The old functions in this module are historical boolean conveniences. AO
+divergence, candlestick proximity and a Binance base-volume Squat proxy do not
+certify the book MFI/tick-volume conditions. These booleans cannot validate a
+completed Elliott count or order a trade. See williams_tc1_terminal_evidence
+for the authoritative *read-only, provenance-aware* per-wave diagnostic.
 """
 
 from __future__ import annotations
@@ -46,6 +48,8 @@ class MagicBulletState:
 
     @property
     def all_five(self) -> bool:
+        # Only all five LEGACY flags, not five source-verified TC1 bullets.
+        # This must never be used as entry, stop, exit or reversal authority.
         return self.count == 5
 
 
@@ -103,7 +107,7 @@ def ao_price_divergence(
     wave3_ao: float,
     wave5_ao: float,
 ) -> bool:
-    """Williams' Wave-3/Wave-5 price-vs-AO divergence test."""
+    """AO price divergence proxy; NOT the canonical TC1 MFI bullet."""
     side = str(side).upper()
     if side == "LONG":
         return float(wave5_price) > float(wave3_price) and float(wave5_ao) < float(wave3_ao)
@@ -119,7 +123,11 @@ def terminal_squat(
     squat: bool,
     bars_from_terminal: int = 2,
 ) -> bool:
-    """A squat qualifies when it is within the terminal top/bottom three bars."""
+    """Legacy bar-distance helper, NOT TC1 top/bottom 3 by actual PRICE.
+
+    Use terminal_squat_volume_proxy or the Android ranked-price test for
+    canonical price-extreme scope; index adjacency is not equivalent.
+    """
     return bool(
         squat
         and 0 <= int(terminal_extreme_index) - int(candidate_index) <= int(bars_from_terminal)
@@ -151,3 +159,7 @@ def evaluate_magic_bullets(
         target_zone_source=str(target_zone_source).upper(),
         notes=tuple(notes or ()),
     )
+
+
+# Source-verified read-only result, independent of legacy five booleans.
+from williams_tc1_terminal_evidence import tc1_five_bullet_evidence as evaluate_tc1_source_bullets
