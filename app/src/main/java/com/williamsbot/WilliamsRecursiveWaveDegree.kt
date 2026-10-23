@@ -14,6 +14,12 @@ internal fun williamsCourseChecklistLeg(leg:String,observedSwings:Int):String = 
     "W2","W4" -> when(observedSwings) {3->"SIDEWAYS_CORRECTION_CANDIDATE";5->"SHARP_CORRECTION_CANDIDATE";else->"UNRESOLVED"}
     "W3" -> when(observedSwings) {3->"RECOUNT_W3_WRONG_WAVE_NUMBER";5->"W3_PRICE_SUBDIVISIONS_CANDIDATE";else->"UNRESOLVED"}
     "W5" -> when(observedSwings) {3->"DIAGONAL_OR_CONTINUATION_CANDIDATE";5->"MOTIVE_OR_DIAGONAL_CANDIDATE";else->"UNRESOLVED"}
+    "A" -> when(observedSwings) {3->"CORRECTION_STARTED_NOT_YET_CONFIRMED";5->"SHARP_CORRECTION_OR_LARGER_SIDEWAYS_COMPONENT";else->"UNRESOLVED"}
+    "B" -> when(observedSwings) {3->"SIDEWAYS_CORRECTION_CANDIDATE";5->"EXTENDED_W5_OR_WRONG_CORRECTION_COUNT";else->"UNRESOLVED"}
+    "C" -> when(observedSwings) {3->"TRIANGLE_OR_C_EXTENSION_OR_RECOUNT";5->"ZIGZAG_OR_FLAT_CORRECTION_CANDIDATE";else->"UNRESOLVED"}
+    "D" -> if(observedSwings==3) "TRIANGLE_LEG_D_CANDIDATE" else "UNRESOLVED"
+    "E" -> if(observedSwings==3) "TRIANGLE_LEG_E_CANDIDATE" else "UNRESOLVED"
+    "X" -> when(observedSwings) {3->"DOUBLE_OR_TRIPLE_CORRECTION_CANDIDATE";5->"POSSIBLE_NEW_W1_OR_CORRECTION_TERMINATION";else->"UNRESOLVED"}
     else -> "UNRESOLVED"
 }
 
@@ -63,7 +69,8 @@ internal fun traceWilliamsRecursivePriceGrammar(
         val proof=if(root) enrichWilliamsComplexSubdivisions(pattern,points,anchors,duration,asOf)
             else proveWilliamsWaveSubdivisions(points,anchors,expected,duration,asOf)
         val labels=when(proof.expected.size) {
-            5->listOf("W1","W2","W3","W4","W5")
+            5->if(root && pattern.contains("TRIANGLE")) listOf("A","B","C","D","E")
+               else listOf("W1","W2","W3","W4","W5")
             3->listOf("A","B","C")
             else->proof.expected.indices.map { "L${it+1}" }
         }
