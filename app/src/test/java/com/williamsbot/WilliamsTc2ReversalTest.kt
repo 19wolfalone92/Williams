@@ -8,6 +8,17 @@ import org.junit.Test
 class WilliamsTc2ReversalTest {
     private fun fixture()=JSONObject(javaClass.classLoader!!.getResource("williams_tc2_reversal_contract.json")!!.readText())
 
+    @Test fun reversalRecoveryIdentityRequiresTheDurableParentAndSignalNotJustPrefix() {
+        val id=williamsTc2ReversalClientId("parent","signal")
+        val valid=JSONObject().put("client_id",id).put("reversal_owner_id","parent").put("signal_id","signal")
+            .put("intent_role","ENTRY").put("kind","MARKET").put("strategy_profile",williamsTc2Profile)
+            .put("execution_semantics",WILLIAMS_TC2_REVERSAL)
+        assertTrue(williamsKnownDurableEntryIdentity(valid))
+        for(change in listOf("reversal_owner_id","signal_id","strategy_profile","execution_semantics","kind"))
+            assertFalse(williamsKnownDurableEntryIdentity(JSONObject(valid.toString()).put(change,"FOREIGN")))
+        assertFalse(williamsKnownDurableEntryIdentity(JSONObject().put("client_id",id)))
+    }
+
     @Test fun sharedTwoLegContractRejectsUnconfirmedFlatReplayAndPriceChasing() {
         val f=fixture();val examples=f.getJSONArray("examples");val cases=f.getJSONArray("cases")
         for(i in 0 until examples.length()) for(j in 0 until cases.length()) {

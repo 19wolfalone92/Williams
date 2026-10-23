@@ -15,6 +15,21 @@ internal fun williamsTc2ReversalClientId(ownerId:String,signalId:String):String 
     MessageDigest.getInstance("SHA-256").digest("$ownerId|$signalId".toByteArray())
         .joinToString("") { "%02x".format(it) }.take(28)
 
+/** Namespace is only a compatibility filter. Callers still require durable
+ * ownership, exact signed fills/quantity/average and the live position side.
+ * A filled reversal must regain protection even after entry-proof TTL expires. */
+internal fun williamsKnownDurableEntryIdentity(intent:JSONObject):Boolean {
+    val id=intent.optString("client_id")
+    if(listOf("W2E_","W2H_","W5E_","W2F_").any { id.startsWith(it) }) return true
+    val parent=intent.optString("reversal_owner_id")
+    val signal=intent.optString("signal_id")
+    return parent.isNotBlank() && signal.isNotBlank() &&
+        intent.optString("intent_role","ENTRY")=="ENTRY" && intent.optString("kind")=="MARKET" &&
+        intent.optString("strategy_profile")==williamsTc2Profile &&
+        intent.optString("execution_semantics")==WILLIAMS_TC2_REVERSAL &&
+        id==williamsTc2ReversalClientId(parent,signal)
+}
+
 /** Read-only durable handoff; partial fills and a close POST reply alone do not qualify. */
 internal fun williamsTc2ReversalCandidate(ledger:JSONArray,ownerId:String,now:Long,
     ignoreClientId:String=""):JSONObject? {

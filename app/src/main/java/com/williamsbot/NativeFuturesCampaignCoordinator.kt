@@ -1177,7 +1177,7 @@ internal class NativeFuturesCampaignCoordinator(
                 if (!owner.optBoolean("strategy_ownership_verified",false) ||
                     campaignLifecycleStatus(owner) !in ACTIVE_CAMPAIGN_STATUSES) continue
                 val entryId=owner.optString("client_id")
-                if (listOf("W2E_","W2H_","W5E_","W2F_").none { entryId.startsWith(it) } ||
+                if (!williamsKnownDurableEntryIdentity(owner) ||
                     owner.optString("protection_client_id").isNotBlank()) continue
                 // The simple 1-entry full-fill proof is intentionally strict:
                 // an ADD_ON or partial reduction must be reconciled using its
@@ -1642,21 +1642,14 @@ internal class NativeFuturesCampaignCoordinator(
                 val latestIntentIndex = latestEntryIndexBySymbol[symbol]
                 var matchingIntent = latestIntentIndex?.let { persisted.optJSONObject(it) }
                     ?.takeIf { intent ->
-                        val clientId = intent.optString("client_id")
                         intent.optString("intent_role", "ENTRY") == "ENTRY" &&
                             intent.optString("symbol").uppercase(Locale.US) == symbol &&
                             intent.optString("direction") == direction &&
                             campaignLifecycleStatus(intent) in ACTIVE_CAMPAIGN_STATUSES &&
-                            // Recovery is restricted to client IDs emitted by the
-                            // Williams campaign runtime, never a manual/unknown position.
-                            // BOOK_NATIVE_H1_TRIGGER emits W2H_, not legacy W2E_.
-                            // Without W2H_ a verified 1h WM3 fill became an orphan
-                            // here despite its durable structural stop; the bot
-                            // repeatedly refused to submit the protective Binance
-                            // STOP_MARKET. W2H_ still requires symbol, side, active
-                            // campaign, exchange-confirmed fill and owned intent.
-                            (clientId.startsWith("W2E_") || clientId.startsWith("W2H_") ||
-                                clientId.startsWith("W5E_") || clientId.startsWith("W2F_"))
+                            // Namespace alone is never ownership. Reversals also
+                            // bind their deterministic id to parent and H1 signal;
+                            // the signed fill ledger is verified immediately below.
+                            williamsKnownDurableEntryIdentity(intent)
                     }
                 var liveMark: Double? = null
                 if (matchingIntent?.optBoolean("strategy_ownership_verified", false) == true) {
