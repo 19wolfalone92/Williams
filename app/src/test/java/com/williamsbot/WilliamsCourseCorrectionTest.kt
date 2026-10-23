@@ -5,6 +5,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsCourseCorrectionTest {
+    @Test fun firstARetracementDoesNotRequireTheFutureEndOfA() {
+        val s=WilliamsCourseCorrectionState("correction","motive","LONG",100)
+        val e=WilliamsCourseCorrectionEvidence(120.0,100.0,Double.NaN,110.0,200,true,true)
+        val p=planWilliamsCourseCorrection(s,"A_ENTRY",e,300,301,true,true,true,true)
+        assertEquals("PROPOSED",p.status);assertEquals(3,p.targetUnits)
+    }
+
     @Test fun sharedSourceZonesRequireCausalEvidenceAndDistinctFlatOwner() {
         val payload=javaClass.classLoader!!.getResource("williams_course_correction_contract.json")!!.readText()
         val cases=JSONObject(payload).getJSONArray("cases")

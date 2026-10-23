@@ -55,12 +55,14 @@ internal fun planWilliamsCourseCorrection(
     if(!e.sameDegreeConfirmed || !e.motiveFiveComplete)
         return blocked("CORRECTION_WAVE_DEGREE_UNCONFIRMED")
     if(!exchangeReconciled) return blocked("EXCHANGE_RECONCILIATION_REQUIRED")
-    if(listOf(e.motiveExtreme,e.firstAExtreme,e.aEnd,e.price).any { !it.isFinite() || it<=0 })
+    // A's eventual end is not yet known at its first retracement entry.
+    val prices=listOf(e.motiveExtreme,e.firstAExtreme,e.price)+if(stage=="A_ENTRY") emptyList() else listOf(e.aEnd)
+    if(prices.any { !it.isFinite() || it<=0 })
         return blocked("CORRECTION_PRICE_UNVERIFIED")
     val sign=if(s.motiveSide=="LONG") 1.0 else -1.0
     val first=sign*(e.motiveExtreme-e.firstAExtreme)
     val aLength=sign*(e.motiveExtreme-e.aEnd)
-    if(first<=0 || aLength<=0) return blocked("CORRECTION_DIRECTION_UNVERIFIED")
+    if(first<=0 || (stage!="A_ENTRY" && aLength<=0)) return blocked("CORRECTION_DIRECTION_UNVERIFIED")
     when(stage) {
         "A_ENTRY" -> {
             val ratio=sign*(e.price-e.firstAExtreme)/first
@@ -89,6 +91,10 @@ internal fun acknowledgeWilliamsCourseCorrectionFill(
 ):WilliamsCourseCorrectionState {
     require(fillId.isNotBlank() && p.status=="PROPOSED" && !p.canPlaceOrders) { "CORRECTION_FILL_UNVERIFIED" }
     if(fillId in s.fillIds) return s
+    require(s.stage in courseCorrectionStages+listOf("") && s.revision>=0 &&
+        s.confirmedUnits==(if(s.stage.isEmpty()) 0 else courseCorrectionTargets[s.stage])) {
+        "INVALID_CORRECTIVE_OWNER_STATE"
+    }
     require(exchangeReconciled && protectionVerified && p.stage==nextCorrectionStage(s.stage) &&
         p.side==s.side && p.key==correctionKey(s,p.stage,closeMs) &&
         p.targetUnits==courseCorrectionTargets[p.stage] && units==p.targetUnits &&

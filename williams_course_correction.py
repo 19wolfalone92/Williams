@@ -83,12 +83,15 @@ def plan_correction(s, stage, e, close_ms, now_ms, *, motive_closed_and_flat,
         return blocked("CORRECTION_WAVE_DEGREE_UNCONFIRMED")
     if not exchange_reconciled:
         return blocked("EXCHANGE_RECONCILIATION_REQUIRED")
-    if not all(isfinite(x) and x > 0 for x in (e.motive_extreme, e.first_a_extreme, e.a_end, e.price)):
+    # The end of A is UNKNOWN at its first retracement entry. Never demand
+    # a future anchor to admit that earlier, causal observation.
+    prices = (e.motive_extreme, e.first_a_extreme, e.price) + (() if stage == "A_ENTRY" else (e.a_end,))
+    if not all(isfinite(x) and x > 0 for x in prices):
         return blocked("CORRECTION_PRICE_UNVERIFIED")
     sign = 1 if s.motive_side == "LONG" else -1
     first = sign * (e.motive_extreme-e.first_a_extreme)
     a_length = sign * (e.motive_extreme-e.a_end)
-    if first <= 0 or a_length <= 0:
+    if first <= 0 or (stage != "A_ENTRY" and a_length <= 0):
         return blocked("CORRECTION_DIRECTION_UNVERIFIED")
     if stage == "A_ENTRY":
         ratio = sign * (e.price-e.first_a_extreme)/first
@@ -119,6 +122,9 @@ def acknowledge_correction_fill(s, p, *, fill_id, delta, units, close_ms,
         raise ValueError("CORRECTION_FILL_UNVERIFIED")
     if fill_id in s.fill_ids:
         return s
+    if (s.stage not in ("",) + STAGES or s.revision < 0
+            or s.confirmed_units != (TARGETS[s.stage] if s.stage else 0)):
+        raise ValueError("INVALID_CORRECTIVE_OWNER_STATE")
     expected = STAGES[0] if not s.stage else (STAGES[STAGES.index(s.stage)+1] if s.stage != STAGES[-1] else None)
     if (not exchange_reconciled or not protection_verified or p.stage != expected
             or p.side != s.side or p.key != _key(s, p.stage, close_ms)

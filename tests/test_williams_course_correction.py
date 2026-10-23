@@ -66,3 +66,11 @@ def test_corrective_lifecycle_requires_exact_fills_and_rejects_foreign_or_partia
 def test_actual_market_phase_exposes_separate_source_corrective_policy():
     from williams_market_phase import market_phase_context
     assert market_phase_context({})["course_correction_policy"] == correction_policy_snapshot()
+
+
+def test_first_a_retracement_never_requires_future_a_end():
+    s = CorrectionState("correction", "motive", "LONG", 100)
+    e = CorrectionEvidence(120., 100., float("nan"), 110., 200, True, True)
+    p = plan_correction(s, "A_ENTRY", e, 300, 301, motive_closed_and_flat=True,
+        exchange_reconciled=True, protection_verified=True, risk_admitted=True)
+    assert p.status == "PROPOSED" and p.target_units == 3
