@@ -44,7 +44,8 @@ from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
 from williams_execution_policy import EXECUTION_PROFILES,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
 from williams_ntd_execution import FAMILIES as NTD_FAMILIES, close_entry_bound, require_close_entry
-from williams_course_campaign import course_active_context,course_next_stage,course_target,TARGETS as COURSE_TARGETS
+from williams_course_campaign import course_active_context,course_next_stage,course_target
+from williams_course_location import course_trim_proof
 from williams_edition_rules import course_initial_protection
 from williams_tc2_pyramid import (
     POLICY as TC2_PYRAMID_POLICY, initial_unit_risk_pct, require_profitable_position,
@@ -1379,6 +1380,8 @@ class FuturesWilliamsRuntime:
                 )
         elif purpose == "CAMPAIGN_EXIT":
             reason=campaign.tags.get("pending_exit_reason","")
+            if reason=="COURSE_STAGE_TRIM":
+                self._revalidate_course_trim(campaign,float(intent.quantity))
             if campaign.tags.get("strategy_profile")==NTD and reason not in {"MANUAL_EXIT","KILL_SWITCH"} and campaign.tags.get("pending_exit_authority")!="VERIFIED_RISK_REDUCTION":
                 self._revalidate_ntd_exit(campaign,reason)
             if pos_qty <= 0 or not self._position_matches(campaign, position):
@@ -2267,6 +2270,45 @@ class FuturesWilliamsRuntime:
             row.get("markPrice"),tick=self._tick(campaign.symbol))
         if blocker:raise RuntimeError(blocker)
 
+    def _course_trim_plan(self,campaign):
+        plan=campaign.tags.get("course_plan") or {}
+        if (campaign.tags.get("strategy_profile")!=COURSE or not plan.get("unit_is_actual") or
+                plan.get("unit_basis")!="CONFIRMED_INITIAL_FILL"):
+            return {"status":"BLOCKED","reason":"COURSE_ACTUAL_UNIT_BASIS_UNVERIFIED"}
+        now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+        closed=closed_strategy_frame(fetch_klines(self.client,campaign.symbol,"1h",limit=260),"1h",now)
+        bars=wave_bars_from_dataframe(closed)
+        blocker=closed_h1_history_blocker(bars,now)
+        if blocker:return {"status":"BLOCKED","reason":"COURSE_TRIM_H1_HISTORY_UNVERIFIED"}
+        report=self.scanner.wave_hierarchy(campaign.symbol,refresh=True)
+        proof=course_trim_proof(report.to_dict(),campaign.side,plan.get("origin_at",0),plan.get("stage",""),
+            int(campaign.tags.get("position_open_observed_at_ms",0)),now,bars)
+        if proof["status"]!="OBSERVED_SOURCE_PINNED_REDUCTION":return proof
+        unit=float(plan.get("unit_quantity",0));units=course_target(plan["stage"],plan.get("w3_to_w1_ratio"))
+        if (not math.isfinite(unit) or unit<=0 or not units or
+                not math.isclose(campaign.position_qty,self._normalize_qty(campaign.symbol,unit*units),rel_tol=1e-9,abs_tol=1e-9)):
+            return {"status":"BLOCKED","reason":"COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED"}
+        proof["target_quantity"]=self._normalize_qty(campaign.symbol,unit*proof["target_units"])
+        proof["reduction_quantity"]=self._normalize_qty(campaign.symbol,campaign.position_qty-proof["target_quantity"])
+        mark=self.client.mark_price(campaign.symbol)
+        if not isinstance(mark,dict) or mark.get("symbol")!=campaign.symbol:
+            return {"status":"BLOCKED","reason":"COURSE_TRIM_LIVE_MARK_UNVERIFIED"}
+        profit=tc2_opposite_exit_profit_blocker(campaign.side,campaign.average_entry_price,mark.get("markPrice"),
+            2*float(os.getenv("FEE_BUFFER_PER_SIDE_PCT","0.001"))+float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT","0.0015")),self._tick(campaign.symbol))
+        if profit:return {"status":"BLOCKED","reason":profit.replace("TC2_OPPOSITE_EXIT","COURSE_STAGE_TRIM")}
+        return proof
+
+    def _revalidate_course_trim(self,campaign,quantity):
+        proof=self._course_trim_plan(campaign)
+        if proof.get("status")!="OBSERVED_SOURCE_PINNED_REDUCTION":
+            raise RuntimeError(proof.get("reason","COURSE_SOURCE_TRIM_UNVERIFIED"))
+        if (campaign.tags.get("pending_course_stage")!=proof["stage"] or
+                not math.isfinite(quantity) or quantity<=0 or
+                Decimal(str(quantity))!=Decimal(str(proof["reduction_quantity"])) or
+                not 0<proof["target_quantity"]<campaign.position_qty):
+            raise RuntimeError("COURSE_SOURCE_TRIM_STAGE_OR_QUANTITY_CHANGED")
+        return proof
+
     @serialized_campaign_operation
     def _exit_market(self, campaign, reason, *, partial_quantity=None, risk_emergency=False):
         """Durable reduce-only market exit; protection is cancelled only after flat."""
@@ -2274,6 +2316,9 @@ class FuturesWilliamsRuntime:
                                      risk_emergency=risk_emergency)
         if blocker:
             raise RuntimeError(blocker)
+        if reason=="COURSE_STAGE_TRIM":
+            if partial_quantity is None:raise RuntimeError("COURSE_TRIM_MUST_BE_PARTIAL")
+            self._revalidate_course_trim(campaign,float(partial_quantity))
         if campaign.tags.get("strategy_profile")==NTD and campaign.state==CampaignState.ADD_ON_PENDING and not risk_emergency and reason not in {"MANUAL_EXIT","KILL_SWITCH"}:
             self._revalidate_ntd_exit(campaign,reason)
         ntd_opposite=(campaign.tags.get("strategy_profile")==NTD and not risk_emergency and
@@ -2408,6 +2453,7 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError(profit_blocker)
 
         is_partial=partial_quantity is not None
+        if reason=="COURSE_STAGE_TRIM":self._revalidate_course_trim(campaign,float(partial_quantity))
         if is_partial and (campaign.tags.get("strategy_profile")!=COURSE or reason!="COURSE_STAGE_TRIM"):
             raise RuntimeError("Partial reduction requires an owned Course campaign stage")
         qty = self._full_market_close_qty(symbol, float(partial_quantity) if is_partial else pos_qty)
@@ -3358,6 +3404,7 @@ class FuturesWilliamsRuntime:
                     if units:
                         course_plan["unit_quantity"]=campaign.position_qty/units
                         course_plan["unit_is_actual"]=True
+                        course_plan["unit_basis"]="CONFIRMED_INITIAL_FILL"
                 pending_stage=campaign.tags.get("course_pending_add_stage")
                 if pending_stage and math.isclose(campaign.position_qty,float(campaign.tags.get("course_pending_add_target",0)),rel_tol=1e-9,abs_tol=1e-9):
                     campaign.tags["course_plan"]["stage"]=pending_stage
@@ -3417,11 +3464,11 @@ class FuturesWilliamsRuntime:
             if profile==COURSE:
                 plan=tags.get("course_plan")
                 if plan and hasattr(self,"scanner"):
-                    context=course_active_context(self.scanner.wave_hierarchy(symbol),campaign.side,plan["origin_at"])
-                    stage=course_next_stage(plan["stage"],context["phase"]) if context else None
-                    if stage in {"W2","W4"}:
-                        target=plan["unit_quantity"]*COURSE_TARGETS[stage]
-                        reduction=self._normalize_qty(symbol,max(0,campaign.position_qty-target))
+                    try:proof=self._course_trim_plan(campaign)
+                    except Exception as exc:proof={"status":"BLOCKED","reason":"COURSE_TRIM_SOURCE_UNAVAILABLE","error":type(exc).__name__}
+                    tags["course_stage_admission"]=proof;self.db.save_campaign(campaign)
+                    if proof.get("status")=="OBSERVED_SOURCE_PINNED_REDUCTION":
+                        stage=proof["stage"];reduction=proof["reduction_quantity"]
                         if 0<reduction<campaign.position_qty:
                             tags["pending_course_stage"]=stage;self.db.save_campaign(campaign)
                             return self._exit_market(campaign,"COURSE_STAGE_TRIM",partial_quantity=reduction)

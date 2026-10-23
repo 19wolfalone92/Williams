@@ -759,6 +759,7 @@ internal class NativeFuturesCampaignCoordinator(
     var requireBookH1ProofForAutomatedEntries:Boolean = false
     var bookH1EntryVerifier:((EntryPlan)->Unit)? = null
     var bookNtdExitVerifier:((JSONObject,String)->Unit)? = null
+    var bookCourseTrimVerifier:((JSONObject,String)->Unit)? = null
     enum class Direction { LONG, SHORT }
     enum class EntryKind { STOP, TAKE_PROFIT, LIMIT, MARKET }
     enum class State {
@@ -3783,6 +3784,15 @@ internal class NativeFuturesCampaignCoordinator(
         }
         val ntdBookExit=!riskEmergencyVerified && exitOwner?.optString("strategy_profile")==williamsNtdProfile &&
             reason in williamsNtdBookExitReasons
+        val courseTrim=reason=="COURSE_STAGE_TRIM"
+        if(courseTrim) {
+            val proof=runCatching {
+                check(partialReduction && exitOwner?.optString("strategy_profile")==williamsCourseProfile) { "COURSE_TRIM_OWNER_OR_ROLE_UNVERIFIED" }
+                (bookCourseTrimVerifier ?: error("COURSE_FINAL_TRIM_VERIFIER_REQUIRED"))(JSONObject(exitOwner!!.toString()),quantity)
+            }
+            if(proof.isFailure) return@synchronized JSONObject().put("ok",false).put("safe_rejection",true)
+                .put("mutation_attempted",false).put("blocker",safeDiagnosticText(proof.exceptionOrNull()?.message.orEmpty()))
+        }
         if(ntdBookExit) {
             val proof=runCatching { (bookNtdExitVerifier ?: error("NTD_FINAL_EXIT_VERIFIER_REQUIRED"))(
                 JSONObject(exitOwner!!.toString()),reason) }
@@ -3968,6 +3978,12 @@ internal class NativeFuturesCampaignCoordinator(
             }
             if(ntdBookExit) (bookNtdExitVerifier ?: error("NTD_FINAL_EXIT_VERIFIER_REQUIRED"))(
                 JSONObject(managedEntry!!.toString()),reason)
+            if(courseTrim) {
+                val proof=runCatching { (bookCourseTrimVerifier ?: error("COURSE_FINAL_TRIM_VERIFIER_REQUIRED"))(
+                    JSONObject(managedEntry!!.toString()),quantity) }
+                if(proof.isFailure) return@synchronized JSONObject().put("ok",false).put("safe_rejection",true)
+                    .put("mutation_attempted",false).put("blocker",safeDiagnosticText(proof.exceptionOrNull()?.message.orEmpty()))
+            }
             if (emergencyWithoutStop) {
                 // Second read as close to POST as possible, because the
                 // previously missing STOP could have been replaced meanwhile.

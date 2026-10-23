@@ -478,7 +478,7 @@ def test_ntd_owned_zone_adds_once_and_keeps_protection_after_lost_reply(armed_ru
 
 @pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
 @pytest.mark.parametrize("lost",[False,True])
-def test_course_intentional_trim_is_attributed_once_and_keeps_its_exchange_stop(armed_runtime,lost):
+def test_course_intentional_trim_is_attributed_once_and_keeps_its_exchange_stop(armed_runtime,lost,monkeypatch):
     bot,exchange,armed=armed_runtime
     exchange.fill_entry();bot._reconcile_pending()
     campaign=bot.engine.load_campaign(armed["campaign_id"])
@@ -486,6 +486,9 @@ def test_course_intentional_trim_is_attributed_once_and_keeps_its_exchange_stop(
     # ownership/recovery, whose entry formation has independent source tests.
     campaign.tags["strategy_profile"]="COURSE_PROFITUNITY"
     campaign.tags["pending_course_stage"]="W4"
+    # Isolate signed fill/recovery here; the real source verifier is exercised
+    # independently below with matched parent/child pivot evidence.
+    monkeypatch.setattr(bot,"_revalidate_course_trim",lambda *a,**k:None)
     bot.db.save_campaign(campaign)
     original=campaign.position_qty
     quantity=bot._normalize_qty(campaign.symbol,original*.5)
@@ -509,7 +512,7 @@ def test_course_intentional_trim_is_attributed_once_and_keeps_its_exchange_stop(
 
 
 @pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
-def test_course_management_executes_an_observed_w4_trim_without_waiting_for_entry_session(armed_runtime,monkeypatch):
+def test_course_management_cannot_trim_on_a_wave_label_alone(armed_runtime,monkeypatch):
     import pandas as pd
     from tests.test_williams_wave_hierarchy import correction_report
     bot,exchange,armed=armed_runtime
@@ -525,14 +528,71 @@ def test_course_management_executes_an_observed_w4_trim_without_waiting_for_entr
         "high":[p+1 for p in prices],"low":[p-1 for p in prices],"close":prices,"volume":[1000]*80})
     monkeypatch.setattr("futures_williams_runtime.fetch_klines",lambda *a,**k:frame)
     monkeypatch.setattr("futures_williams_runtime.course_active_context",lambda *a,**k:{"phase":"W4"})
+    monkeypatch.setattr("futures_williams_runtime.course_airbag_stop",lambda *a,**k:None)
+    monkeypatch.setattr("futures_williams_runtime.course_two_fractal_stop",lambda *a,**k:None)
+    monkeypatch.setattr(bot,"_triggered_opposite_from_history",lambda *a,**k:None)
     bot.scanner.wave_hierarchy=lambda *a,**k:correction_report()
     bot.db.state_set("entry_admission_paused","true")
     result=bot._trail(campaign)
-    assert result["partial_reduction"]
+    assert result["action"]=="COURSE_AIRBAG_AND_TWO_FRACTAL_STOP"
     updated=bot.engine.load_campaign(campaign.campaign_id)
-    assert updated.tags["course_plan"]["stage"]=="W4"
-    assert 0<updated.position_qty<original
+    assert updated.tags["course_plan"]["stage"]=="W3_EXTENSION"
+    assert updated.tags["course_stage_admission"]["status"]=="BLOCKED"
+    assert updated.position_qty==original
+    assert not any(method=="POST" and path.endswith("/order") for method,path,p in exchange.calls)
     assert bot.recover()["ok"]
+
+
+@pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
+@pytest.mark.parametrize("fault",["VALID","QUANTITY","MISSING_TERMINAL","NOT_PROFITABLE","PROFIT_RACE","PROFIT_POST_RACE"])
+def test_course_real_source_verifier_rechecks_the_exact_trim_at_the_financial_door(armed_runtime,monkeypatch,fault):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    import pandas as pd
+    from tests.test_williams_course_location import trim_fixture,HOUR
+    bot,exchange,armed=armed_runtime
+    exchange.fill_entry();bot._reconcile_pending()
+    campaign=bot.engine.load_campaign(armed["campaign_id"])
+    original=campaign.position_qty
+    base=int(time.time()*1000)//HOUR*HOUR-112*HOUR
+    args=trim_fixture("W1",campaign.side,base)
+    monkeypatch.setattr(time,"time",lambda:args["now_ms"]/1000)
+    bars=args["bars"]
+    frame=pd.DataFrame({"open_time_ms":[b.t for b in bars],"open":[b.o for b in bars],
+        "high":[b.h for b in bars],"low":[b.l for b in bars],"close":[b.c for b in bars],"volume":[b.v for b in bars]})
+    monkeypatch.setattr("futures_williams_runtime.fetch_klines",lambda *a,**k:frame)
+    report=args["hierarchy"]
+    if fault=="MISSING_TERMINAL":report["scenarios"]=report["scenarios"][:1]
+    monkeypatch.setattr(bot.scanner,"wave_hierarchy",lambda *a,**k:SimpleNamespace(to_dict=lambda:deepcopy(report)))
+    campaign.tags.update(strategy_profile="COURSE_PROFITUNITY",position_open_observed_at_ms=args["opened_at"],pending_course_stage="W2",
+        course_plan={"stage":"W1","origin_at":args["origin_at"],"unit_quantity":original/3,
+                     "unit_is_actual":True,"unit_basis":"CONFIRMED_INITIAL_FILL"})
+    bot.db.save_campaign(campaign)
+    exchange.price=104 if campaign.side=="BUY" else 96
+    if fault=="NOT_PROFITABLE":exchange.price=100
+    if fault in {"PROFIT_RACE","PROFIT_POST_RACE"}:
+        original_mark=bot.client.mark_price;reads=[]
+        def mark(*a,**k):
+            reads.append(1)
+            if len(reads)> (1 if fault=="PROFIT_RACE" else 2):exchange.price=100
+            return original_mark(*a,**k)
+        monkeypatch.setattr(bot.client,"mark_price",mark)
+    target=bot._normalize_qty(campaign.symbol,original/3)
+    quantity=bot._normalize_qty(campaign.symbol,original-target)
+    if fault=="QUANTITY":quantity=bot._normalize_qty(campaign.symbol,quantity-.001)
+    stops=[r["clientAlgoId"] for r in exchange.algos.values() if r["algoStatus"]=="NEW"]
+    if fault=="VALID":
+        assert bot._exit_market(campaign,"COURSE_STAGE_TRIM",partial_quantity=quantity)["partial_reduction"]
+        updated=bot.engine.load_campaign(campaign.campaign_id)
+        assert updated.tags["course_plan"]["stage"]=="W2"
+        assert updated.position_qty==pytest.approx(target)
+        assert bot.recover()["ok"]
+    else:
+        with pytest.raises(RuntimeError,match="COURSE_"):
+            bot._exit_market(campaign,"COURSE_STAGE_TRIM",partial_quantity=quantity)
+        assert abs(exchange.amount)==pytest.approx(original)
+        assert not any(m=="POST" and p.endswith("/order") for m,p,_ in exchange.calls)
+    assert [r["clientAlgoId"] for r in exchange.algos.values() if r["algoStatus"]=="NEW"]==stops
 
 
 @pytest.mark.parametrize("armed_runtime",[{"side":"BUY","profile":"NTD_FIVE_DIMENSIONS"},{"side":"SELL","profile":"NTD_FIVE_DIMENSIONS"}],indirect=True)

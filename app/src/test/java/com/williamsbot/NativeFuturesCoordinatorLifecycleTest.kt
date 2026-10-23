@@ -881,6 +881,9 @@ class NativeFuturesCoordinatorLifecycleTest {
             exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
             markLegacySource(journal,coordinator,williamsCourseProfile,"COURSE_HUMP")
             val protection=exchange.algos.values.single { it.optString("closePosition")=="true" }.getString("clientAlgoId")
+            // This test isolates signed reduction/recovery. The production
+            // source gate has its own causal parent/terminal fixture tests.
+            coordinator.bookCourseTrimVerifier={ _,_ -> }
             exchange.loseCloseReply=lost
             val reduced=coordinator.closePosition("BTCUSDT",direction,"0.7","W2X_COURSE_TRIM_${direction.name}_$lost",
                 "COURSE_STAGE_TRIM",partialReduction=true)
@@ -898,6 +901,30 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals(.3,kotlin.math.abs(exchange.quantity),1e-8)
             assertEquals(protection,exchange.algos.values.single { it.optString("algoStatus")=="NEW" && it.optString("closePosition")=="true" }.getString("clientAlgoId"))
             assertEquals(2,exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+
+    @Test fun courseTrimRequiresASourceVerifierBeforeAnyMutationAndImmediatelyBeforePost() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) {
+            val journal=Journal();val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            coordinator.reconcile()
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
+            markLegacySource(journal,coordinator,williamsCourseProfile,"COURSE_HUMP")
+            val before=exchange.posts("/fapi/v1/order")
+            val missing=coordinator.closePosition("BTCUSDT",direction,"0.7","W2X_CRS_MISSING_${direction.name}","COURSE_STAGE_TRIM",true)
+            assertFalse(missing.getBoolean("ok"))
+            assertTrue(missing.getString("blocker").contains("COURSE_FINAL_TRIM_VERIFIER_REQUIRED"))
+            assertEquals(before,exchange.posts("/fapi/v1/order"))
+            var checks=0
+            coordinator.bookCourseTrimVerifier={ _,_ -> checks++;check(checks==1) { "COURSE_SOURCE_CHANGED_BEFORE_POST" } }
+            val raced=coordinator.closePosition("BTCUSDT",direction,"0.7","W2X_CRS_RACE_${direction.name}","COURSE_STAGE_TRIM",true)
+            assertFalse(raced.getBoolean("ok"));assertEquals(2,checks)
+            assertEquals("OPEN_PROTECTED",coordinator.state.name)
+            assertEquals(before,exchange.posts("/fapi/v1/order"))
+            assertEquals(1.0,kotlin.math.abs(exchange.quantity),1e-9)
+            assertTrue(exchange.algos.values.any { it.optString("algoStatus")=="NEW" && it.optString("closePosition")=="true" })
         }
     }
 

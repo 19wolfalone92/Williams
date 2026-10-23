@@ -34,7 +34,8 @@ internal data class WilliamsWaveScenario(
     var terminalFractal: Boolean = false, var squat: Boolean = false, var targetZone: Boolean = false,
     val alternatives: MutableList<String> = mutableListOf(),
     var legObservationStart:Long = 0L,
-    var thirdMomentum:JSONObject? = null
+    var thirdMomentum:JSONObject? = null,
+    var observedClosePrice:Double = 0.0
 ) {
     val activeLabel:String get()=when(anchors.size) { 2->"W2";3->"W3";4->"W4";5->"W5";6->"A";7->"B";8->"C";else->"NEXT_SEQUENCE_UNRESOLVED" }
     val activeDirection:String get()=if(activeLabel in listOf("W2","W4","A","C")) {
@@ -53,6 +54,7 @@ internal data class WilliamsWaveScenario(
         .put("momentum_shift", momentumShift).put("terminal_fractal", terminalFractal)
         .put("squat", squat).put("target_zone", targetZone).put("alternatives", JSONArray(alternatives))
         .put("third_momentum",thirdMomentum ?: JSONObject.NULL)
+        .put("observed_close_price",observedClosePrice)
 }
 internal data class WilliamsWaveLink(val parent: String, val child: String, val parentLeg: String, val relationship: String) {
     fun toJson(): JSONObject = JSONObject().put("parent", parent).put("child", child)
@@ -311,7 +313,8 @@ internal fun williamsHypothesesFromAnchors(
         val direction = if (sign == 1) "UP" else "DOWN"
         val h = WilliamsWaveScenario("$frame:$direction:${p.first().extremeAt}:$n",frame,direction,label,p,
             bars.last().t+duration,p.last().extremeAt,leg.minOf { it.l },leg.maxOf { it.h },inv,
-            if (reasons.isNotEmpty()) "INVALIDATED" else if (diagonalOverlap || w2OriginTouch) "ALTERNATIVE" else "PROVISIONAL",reasons)
+            if (reasons.isNotEmpty()) "INVALIDATED" else if (diagonalOverlap || w2OriginTouch) "ALTERNATIVE" else "PROVISIONAL",reasons,
+            observedClosePrice=bars.last().c)
         if (w2OriginTouch && reasons.isEmpty()) {
             h.alternatives += "W2_ORIGIN_TOUCH_100_PERCENT_UNCONFIRMED"
         }

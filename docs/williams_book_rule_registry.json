@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated": "2026-10-23",
-  "release": "4.59.0-tc2-confirmed-flat-reversal",
+  "updated": "2026-10-24",
+  "release": "4.61.0",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
   "source_review_complete": false,
@@ -723,12 +723,42 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_course_campaign.py",
-        "app/src/main/java/com/williamsbot/WilliamsCourseCampaign.kt"
+        "app/src/main/java/com/williamsbot/WilliamsCourseCampaign.kt",
+        "williams_course_location.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseLocation.kt"
       ],
-      "tests": [],
-      "fixtures": [],
-      "remaining_evidence": "Only selected stage/quantity constraints implemented; all price-location predicates not complete.",
-      "can_place_orders_from_registry": false
+      "tests": [
+        "tests/test_williams_course_location.py::test_shared_price_locations_use_the_correct_leg_origin_and_closed_pivots",
+        "app/src/test/java/com/williamsbot/WilliamsCourseLocationTest.kt::sharedPriceLocationsUseTheCorrectLegOriginAndClosedPivots"
+      ],
+      "fixtures": [
+        "cases/initial_half",
+        "cases/initial_62",
+        "cases/initial_shallow",
+        "cases/initial_deep",
+        "cases/third_half",
+        "cases/third_62",
+        "cases/third_shallow",
+        "cases/third_bad_confirmed_pivot",
+        "cases/extension_exact_110",
+        "cases/extension_below_110",
+        "cases/extension_wrong_origin_would_pass",
+        "cases/fifth_38",
+        "cases/fifth_half",
+        "cases/fifth_shallow",
+        "cases/fifth_deep",
+        "cases/fifth_bad_pivot",
+        "cases/future_pivot",
+        "cases/unordered_pivots",
+        "cases/wrong_side",
+        "cases/wrong_degree",
+        "cases/bare_w2_label",
+        "cases/bare_w4_label",
+        "cases/bare_w5_exit"
+      ],
+      "remaining_evidence": "4.61: mirrored 50-62/38-50 retracement and 110-percent extension predicates use causal source pivots and distinguish active labels from illustrative contract stages. Required terminal/turn qualifiers are reported explicitly. Complete independent degree proof, every entry/exit location, correction integration and Course new-risk execution remain unfinished.",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_course_location_contract.json"
     },
     {
       "id": "WAVE.AO.MINIMUM_W4",
@@ -1185,6 +1215,37 @@
       ],
       "fixtures": [],
       "remaining_evidence": "TC1 PDF53-54/58-59/82-83 terminology reconciled: volume MFI and the author-described 5/34 approximation stay distinguishable. Full independent degree labels, target zones and Squat tick-volume acceptance remain pending.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.STAGE_TRIM.SOURCE_PINNING",
+      "book": "COURSE",
+      "pdf_pages": [
+        77,
+        78,
+        79,
+        80,
+        81
+      ],
+      "rule": "A Course wave label alone cannot trim an owned position. Require its actual initial unit, pinned origin, a unique contained terminal five-leg count after entry, causal pivots and source proxy signs; W3 also requires a stronger observed 5/34 peak. Revalidate exact remaining quantity before POST.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_course_location.py",
+        "futures_williams_runtime.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseLocation.kt",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
+      ],
+      "tests": [
+        "tests/test_williams_course_location.py::test_matched_terminal_reductions_need_the_owned_origin_and_a_real_finer_degree",
+        "tests/test_williams_course_location.py::test_wave_labels_cannot_bypass_price_degree_time_and_momentum_guards",
+        "tests/test_futures_order_lifecycle.py::test_course_real_source_verifier_rechecks_the_exact_trim_at_the_financial_door",
+        "app/src/test/java/com/williamsbot/WilliamsCourseLocationTest.kt::matchedTerminalReductionsNeedTheOwnedOriginAndARealFinerDegree",
+        "app/src/test/java/com/williamsbot/WilliamsCourseLocationTest.kt::waveLabelsCannotBypassDegreeTimeAndMomentumGuards",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::courseTrimRequiresASourceVerifierBeforeAnyMutationAndImmediatelyBeforePost"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "The 5-hour terminal age window, positive after-cost-reserve trim requirement and kline base-volume proxy are explicit project policies/adaptations. Terminal counts remain provisional; synthetic source cases and 35 frozen historical H1-prefix regressions are not independent Elliott accuracy or physical Futures Demo acceptance. Course new-risk execution remains disabled.",
       "can_place_orders_from_registry": false
     }
   ],

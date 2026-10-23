@@ -79,6 +79,7 @@ class WaveHypothesis:
     alternatives: list[str] = field(default_factory=list)
     leg_observation_start: int = 0
     third_momentum: dict | None = None
+    observed_close_price: float = 0.0
 
     @property
     def active_label(self):
@@ -406,7 +407,8 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             frame, "UP" if sign == 1 else "DOWN", label, p,
             last_bar.t + duration, p[-1].extreme_at,
             min(b.l for b in leg), max(b.h for b in leg), inv,
-            "INVALIDATED" if reasons else ("ALTERNATIVE" if diagonal_overlap or w2_origin_touch else "PROVISIONAL"), reasons)
+            "INVALIDATED" if reasons else ("ALTERNATIVE" if diagonal_overlap or w2_origin_touch else "PROVISIONAL"), reasons,
+            observed_close_price=last_bar.c)
         if w2_origin_touch and not reasons:
             h.alternatives.append("W2_ORIGIN_TOUCH_100_PERCENT_UNCONFIRMED")
         if diagonal_overlap and not reasons:

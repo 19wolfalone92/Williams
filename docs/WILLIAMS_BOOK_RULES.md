@@ -95,6 +95,21 @@ same-colour candles within the explicit project age window; opposite/unknown
 colour or an observed breakout cancels them permanently. Optional blue-light
 price reanchoring is not implied by preserving the original level.
 
+Since 4.61, Course price-location observations distinguish illustrative contract
+stages from active wave labels: W1/W3 retracements use 50-62%, W5 uses 38-50%
+of W3, and the 110% W3 extension is measured from W2. Numerical zones expose
+their still-required source evidence; they cannot authorize new exposure.
+The 3/1/6/10/3/(6 or 8)/0 example uses contract units, not risk weights.
+Automatic Course W2/W4 reductions no longer accept a wave label alone. A
+confirmed initial unit, pinned H1 origin, unique matching contained terminal
+five-leg count, causal t+2 pivots, four terminal proxy signs and an end after
+entry are required. W3 reduction also recomputes its stronger 5/34 peak from
+contiguous real H1 bars. No particular junior timeframe is mandatory.
+The exact reduction and a positive mark after the project cost reserve are
+rechecked before any cancellation and before POST; missing or changing proof
+keeps exchange protection. Existing submitted reductions still reconcile by
+their client id. These are numerical/proxy guards, not independent wave truth.
+
 Course remains OBSERVE for new exposure. Transport-model tests do not certify
 all book figures, subjective chart angles or physical Android/Futures Demo
 acceptance; whole-book certification remains false.

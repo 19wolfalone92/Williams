@@ -59,6 +59,12 @@ class WilliamsCourseTerminalEvidenceTest {
             val evidence=JSONObject().put("label","W5").put("direction",side)
                 .put("scale_bars",120).put("target_zone",true).put("divergence",true)
                 .put("terminal_fractal",true).put("squat",true)
+                .put("frame","1h").put("status","PROVISIONAL").put("observed_at",160*hour)
+                .put("anchors",JSONArray((0..5).map { i -> JSONObject()
+                    .put("kind",if((i%2==0)==(side=="UP")) "LOW" else "HIGH")
+                    .put("price",if(side=="UP") listOf(100.0,110.0,105.0,130.0,120.0,140.0)[i]
+                        else 300-listOf(100.0,110.0,105.0,130.0,120.0,140.0)[i])
+                    .put("extreme_at",(100+i*10)*hour).put("known_at",(103+i*10)*hour) }))
             val all=williamsCourseFourSignEvidence(evidence)
             assertEquals("FOUR_PROXY_FLAGS_OBSERVED_NOT_CERTIFIED",all.getString("status"))
             assertEquals(4,all.getInt("observed_count"))

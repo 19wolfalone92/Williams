@@ -1370,6 +1370,7 @@ private class NativeEngine(
             coordinator.requireBookH1ProofForAutomatedEntries = true
             coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }
             coordinator.bookNtdExitVerifier = { owner,reason -> verifyNtdExitBeforeSubmit(owner,reason) }
+            coordinator.bookCourseTrimVerifier = { owner,quantity -> verifyCourseTrimBeforeSubmit(owner,quantity) }
             coordinator.setEditionSelectionProvider { williamsProfile }
             coordinator.setEntryTimePolicyProvider { entryTimePolicy }
             coordinator.setEntryPassportAuditSink { event -> auditStore.recordEntryPassportEvent(event) }
@@ -6424,9 +6425,11 @@ private class NativeEngine(
                 val setup=runCatching { JSONObject(intent.optString("setup_context")) }.getOrDefault(JSONObject())
                 val initialStage=setup.optString("course_initial_stage")
                 val initialUnits=williamsCourseTarget(initialStage,setup.optDouble("course_w3_to_w1_ratio",Double.NaN))
-                if(!management.has("course_unit_quantity") && initialUnits!=null && initialUnits>0 && setup.has("course_origin_at")) {
+                val originalFill=intent.optString("actual_entry_executed_qty").toDoubleOrNull()
+                if(!management.has("course_unit_quantity") && initialUnits!=null && initialUnits>0 && setup.has("course_origin_at") &&
+                    originalFill!=null && originalFill>0 && abs(originalFill-abs(signedQty))<=1e-9) {
                     management.put("course_stage",initialStage).put("course_origin_at",setup.getLong("course_origin_at"))
-                        .put("course_unit_quantity",abs(signedQty)/initialUnits)
+                        .put("course_unit_quantity",originalFill/initialUnits).put("course_unit_basis","CONFIRMED_INITIAL_FILL")
                         .put("policy","COURSE_BOOK_EXAMPLE_RATIOS_RISK_CAPPED")
                 }
                 fun filledIntent(cid:String):Boolean=(0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
@@ -6443,12 +6446,13 @@ private class NativeEngine(
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
                 intent.put("edition_management",management)
                 if(management.has("course_unit_quantity")) {
-                    val context=williamsCourseActiveContext(waveHierarchyFor(symbol),dir,management.getLong("course_origin_at"))
-                    val stage=context?.let { williamsCourseNextStage(management.getString("course_stage"),it.getString("phase")) }
-                    if(stage in listOf("W2","W4")) {
-                        val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
-                        val target=floorStep(management.getDouble("course_unit_quantity")*courseTargets.getValue(stage!!),step)
-                        val reduction=floorStep(maxOf(0.0,abs(signedQty)-target),step)
+                    val proof=runCatching { courseTrimPlan(intent) }.getOrElse { JSONObject().put("status","BLOCKED")
+                        .put("reason","COURSE_TRIM_SOURCE_UNAVAILABLE").put("error",it.javaClass.simpleName) }
+                    management.put("course_stage_admission",proof)
+                    futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+                    if(proof.optString("status")=="OBSERVED_SOURCE_PINNED_REDUCTION") {
+                        val stage=proof.getString("stage")
+                        val reduction=proof.getDouble("reduction_quantity")
                         if(reduction>0 && reduction<abs(signedQty)) {
                             val seed=intent.getString("client_id")+":"+stage+":"+candles.last().t+":"+abs(signedQty)
                             val digest=java.security.MessageDigest.getInstance("SHA-256").digest(seed.toByteArray()).joinToString("") { "%02x".format(it) }.take(20)
@@ -8712,6 +8716,49 @@ private class NativeEngine(
         check(executionStore.writeState("decision_h1_parent_lifecycle_"+symbol,JSONObject()
             .put("observed_at_ms",now).put("trigger_price_basis","CONTRACT_PRICE").put("parents",lifecycle).toString())) { "H1_LIFECYCLE_PROOF_NOT_DURABLE" }
         return valid
+    }
+
+    private fun courseTrimPlan(owner:JSONObject):JSONObject {
+        val management=owner.optJSONObject("edition_management") ?: JSONObject()
+        fun blocked(reason:String)=JSONObject().put("status","BLOCKED").put("reason",reason)
+        if(owner.optString("strategy_profile")!=williamsCourseProfile ||
+            management.optString("course_unit_basis")!="CONFIRMED_INITIAL_FILL")
+            return blocked("COURSE_ACTUAL_UNIT_BASIS_UNVERIFIED")
+        val symbol=owner.getString("symbol");val now=futuresMarketData.exchangeNowMs()
+        val bars=fetchCandles(symbol,"1h",260).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+            .filter { it.t+WILLIAMS_H1_MS<=now }
+        if(williamsClosedH1HistoryBlocker(bars,now)!=null) return blocked("COURSE_TRIM_H1_HISTORY_UNVERIFIED")
+        val proof=williamsCourseTrimProof(waveHierarchyFor(symbol,refresh=true).toJson(),owner.getString("direction"),
+            management.optLong("course_origin_at"),management.optString("course_stage"),
+            owner.optLong("position_open_observed_at_ms"),now,bars)
+        if(proof.optString("status")!="OBSERVED_SOURCE_PINNED_REDUCTION") return proof
+        val unit=management.optDouble("course_unit_quantity",Double.NaN)
+        val setup=runCatching { JSONObject(owner.optString("setup_context")) }.getOrDefault(JSONObject())
+        val units=williamsCourseTarget(management.optString("course_stage"),
+            management.optDouble("course_w3_to_w1_ratio",setup.optDouble("course_w3_to_w1_ratio",Double.NaN)))
+            ?: return blocked("COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED")
+        val owned=owner.optString("confirmed_position_qty").toDoubleOrNull() ?: return blocked("COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED")
+        val rules=symbolFilters(symbol);val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
+        if(!unit.isFinite() || unit<=0 || abs(owned-floorStep(unit*units,step))>maxOf(1e-9,owned*1e-9))
+            return blocked("COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED")
+        val target=floorStep(unit*proof.getInt("target_units"),step)
+        val profit=williamsTc2OppositeExitProfitBlocker(owner.getString("direction"),
+            owner.optString("actual_entry_price").toDoubleOrNull() ?: Double.NaN,futuresMarketData.markPrice(symbol),
+            2*feeBufferPerSidePct+maxSlippagePct,rules.tick)
+        if(profit!=null) return blocked(profit.replace("TC2_OPPOSITE_EXIT","COURSE_STAGE_TRIM"))
+        return proof.put("target_quantity",target).put("reduction_quantity",floorStep(owned-target,step))
+    }
+
+    private fun verifyCourseTrimBeforeSubmit(owner:JSONObject,quantity:String) {
+        val proof=courseTrimPlan(owner)
+        check(proof.optString("status")=="OBSERVED_SOURCE_PINNED_REDUCTION") { proof.optString("reason","COURSE_SOURCE_TRIM_UNVERIFIED") }
+        val management=owner.optJSONObject("edition_management") ?: error("COURSE_MANAGEMENT_MISSING")
+        val requested=quantity.toBigDecimalOrNull()
+        check(management.optString("course_pending_stage")==proof.getString("stage") && requested!=null &&
+            requested.signum()>0 && requested.compareTo(proof.getDouble("reduction_quantity").toString().toBigDecimal())==0 &&
+            proof.getDouble("target_quantity")>0 && proof.getDouble("target_quantity")<owner.getString("confirmed_position_qty").toDouble()) {
+            "COURSE_SOURCE_TRIM_STAGE_OR_QUANTITY_CHANGED"
+        }
     }
 
     private fun verifyNtdExitBeforeSubmit(owner:JSONObject,reason:String) {

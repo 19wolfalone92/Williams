@@ -38,7 +38,8 @@ internal fun buildWilliamsObservedMarketContext(history:Map<String,List<Williams
  * matching flags are NOT proof of a finished wave or authority to exit.
  */
 internal fun williamsCourseFourSignEvidence(scenario:JSONObject):JSONObject {
-    val completedProvisionalFifth=scenario.optString("label")=="W5"
+    val completedProvisionalFifth=scenario.optString("label")=="W5" &&
+        williamsCourseCausalAnchors(scenario,scenario.optLong("observed_at"))?.size==6
     val bars=scenario.optInt("scale_bars",0)
     val scaleObserved=bars in 100..140
     val checks=JSONObject()
@@ -97,6 +98,7 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
             .put("scale_bars",h.optInt("scale_bars"))
             .put("signs",JSONArray(signs.filterKeys { h.optBoolean(it) }.values.toList()))
             .put("course_four_signs",williamsCourseFourSignEvidence(h))
+            .put("course_stage_locations",williamsCourseStageLocations(h,asOf))
             .put("tc1_five_bullets",williamsTc1FiveBulletEvidence(h)) }
         val frameScenarios=all.filter { it.optString("frame")==frame }
         JSONObject().put("frame",frame).put("state",when {

@@ -1,0 +1,163 @@
+{
+  "source": "COURSE_PDF78_81_NUMERICAL_BOUNDARIES_NOT_HISTORICAL_GROUND_TRUTH",
+  "base_prices": [
+    100,
+    120,
+    108,
+    148,
+    130,
+    160
+  ],
+  "mirror_sum": 400,
+  "cases": [
+    {
+      "id": "initial_half",
+      "stage": "W1",
+      "price": 110,
+      "inside": true
+    },
+    {
+      "id": "initial_62",
+      "stage": "W1",
+      "price": 107.6,
+      "inside": true
+    },
+    {
+      "id": "initial_shallow",
+      "stage": "W1",
+      "price": 110.01,
+      "inside": false
+    },
+    {
+      "id": "initial_deep",
+      "stage": "W1",
+      "price": 107.59,
+      "inside": false
+    },
+    {
+      "id": "third_half",
+      "stage": "W3",
+      "price": 110,
+      "inside": true
+    },
+    {
+      "id": "third_62",
+      "stage": "W3",
+      "price": 107.6,
+      "inside": true
+    },
+    {
+      "id": "third_shallow",
+      "stage": "W3",
+      "price": 110.01,
+      "inside": false
+    },
+    {
+      "id": "third_bad_confirmed_pivot",
+      "stage": "W3",
+      "price": 109,
+      "inside": false,
+      "p2": 115,
+      "reason": "COURSE_CONFIRMED_RETRACEMENT_OUTSIDE_ZONE"
+    },
+    {
+      "id": "extension_exact_110",
+      "stage": "W3_EXTENSION",
+      "price": 130,
+      "inside": true
+    },
+    {
+      "id": "extension_below_110",
+      "stage": "W3_EXTENSION",
+      "price": 129.99,
+      "inside": false
+    },
+    {
+      "id": "extension_wrong_origin_would_pass",
+      "stage": "W3_EXTENSION",
+      "price": 123,
+      "inside": false
+    },
+    {
+      "id": "fifth_38",
+      "stage": "W5",
+      "price": 132.8,
+      "inside": true
+    },
+    {
+      "id": "fifth_half",
+      "stage": "W5",
+      "price": 128,
+      "inside": true
+    },
+    {
+      "id": "fifth_shallow",
+      "stage": "W5",
+      "price": 132.81,
+      "inside": false
+    },
+    {
+      "id": "fifth_deep",
+      "stage": "W5",
+      "price": 127.99,
+      "inside": false
+    },
+    {
+      "id": "fifth_bad_pivot",
+      "stage": "W5",
+      "price": 130,
+      "inside": false,
+      "p4": 137,
+      "reason": "COURSE_CONFIRMED_RETRACEMENT_OUTSIDE_ZONE"
+    },
+    {
+      "id": "future_pivot",
+      "stage": "W3",
+      "price": 110,
+      "inside": null,
+      "fault": "FUTURE"
+    },
+    {
+      "id": "unordered_pivots",
+      "stage": "W3",
+      "price": 110,
+      "inside": null,
+      "fault": "UNORDERED"
+    },
+    {
+      "id": "wrong_side",
+      "stage": "W3",
+      "price": 110,
+      "inside": null,
+      "fault": "WRONG_SIDE"
+    },
+    {
+      "id": "wrong_degree",
+      "stage": "W3",
+      "price": 110,
+      "inside": null,
+      "fault": "WRONG_DEGREE"
+    },
+    {
+      "id": "bare_w2_label",
+      "stage": "W2",
+      "price": 119,
+      "inside": false,
+      "reason": "COURSE_MATCHED_TERMINAL_STRUCTURE_REQUIRED"
+    },
+    {
+      "id": "bare_w4_label",
+      "stage": "W4",
+      "price": 146,
+      "inside": false,
+      "reason": "COURSE_MATCHED_TERMINAL_STRUCTURE_REQUIRED"
+    },
+    {
+      "id": "bare_w5_exit",
+      "stage": "EXIT",
+      "price": 158,
+      "inside": false,
+      "reason": "COURSE_MATCHED_TERMINAL_STRUCTURE_REQUIRED"
+    }
+  ]
+}

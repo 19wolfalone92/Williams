@@ -922,7 +922,7 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
 def test_h1_parent_invalidation_and_fractal_reanchor_use_the_candle_price_basis():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     context = runtime.split("private fun h1ContextCampaignSignals(", 1)[1].split(
-        "private fun verifyNtdExitBeforeSubmit(", 1)[0]
+        "private fun courseTrimPlan(", 1)[0]
     assert 'val contractPrice=futuresMarketData.price(symbol)' in context
     assert 'sourceEvidence.filter { it.profile==signal.strategyProfile },waveBars,contractPrice,now)' in context
     assert '},contractPrice,now)==null' in context

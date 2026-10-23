@@ -17,7 +17,7 @@ if (keystorePropertiesFile.exists()) {
 
 val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 // Local builds must not downgrade an installed CI build (the previous APK was code 3503).
-val resolvedVersionCode = maxOf(46000, ciRunNumber ?: 46000)
+val resolvedVersionCode = maxOf(46100, ciRunNumber ?: 46100)
 val sourceRevision = System.getenv("GITHUB_SHA")
     ?.takeIf { Regex("[0-9a-f]{40}").matches(it) } ?: "LOCAL_UNSTAMPED"
 val cockpitPreview = providers.gradleProperty("williamsCockpitPreview").orNull == "true"
@@ -44,7 +44,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = resolvedVersionCode
-        versionName = "4.60.0"
+        versionName = "4.61.0"
         buildConfigField("String", "SOURCE_REVISION", "\"$sourceRevision\"")
     }
 

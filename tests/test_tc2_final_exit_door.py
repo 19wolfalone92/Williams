@@ -70,8 +70,13 @@ def test_authorized_exit_still_reaches_existing_live_preflight(source, reason, e
             "signal_id":"book_opposite_1","event":tags["tc2_book_exit_proof"]["event"]}
     campaign = SimpleNamespace(symbol="BTCUSDT",side="BUY",state=CampaignState.TREND_ACTIVE,
                                tags=tags)
+    if source==COURSE:
+        # This test isolates the generic signed-position preflight, after
+        # the separate source gate. A trim is always explicitly partial.
+        runtime._revalidate_course_trim=lambda *a,**k:None
     with pytest.raises(ReachedLivePreflight):
-        runtime._exit_market(campaign, reason, risk_emergency=emergency)
+        runtime._exit_market(campaign, reason, risk_emergency=emergency,
+                             partial_quantity=.5 if source==COURSE else None)
 
 
 def test_unknown_edition_cannot_authorize_a_strategy_exit():
