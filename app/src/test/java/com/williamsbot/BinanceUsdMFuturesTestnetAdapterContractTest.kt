@@ -471,9 +471,9 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         val adapter=BinanceUsdMFuturesTestnetAdapter("key","secret",client)
         val pool=java.util.concurrent.Executors.newFixedThreadPool(6)
         try {
-            val tasks=(1..12).map { pool.submit<java.lang.Boolean> {
+            val tasks=(1..12).map { pool.submit(java.util.concurrent.Callable<Boolean> {
                 adapter.account();true
-            } }
+            }) }
             tasks.forEach { assertTrue(it.get(20,java.util.concurrent.TimeUnit.SECONDS)) }
         } finally { pool.shutdownNow() }
         assertEquals(1,calls.get())
