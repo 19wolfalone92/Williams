@@ -1040,11 +1040,14 @@
         "app/src/test/java/com/williamsbot/WilliamsWaveHierarchyTest.kt::unconfirmedRightBarCannotRevealEitherDirectionFractal"
       ],
       "fixtures": [
-        "synthetic/mirrored-W2-retrace-99_5-100-100_5",
-        "synthetic/fractal-two-closed-right-bars"
+        "cases/w2-above-origin",
+        "cases/w2-exact-origin",
+        "cases/w2-past-origin",
+        "fractals/two-right-bars"
       ],
       "remaining_evidence": "Verified directly against Course PDF46 and PDF48 raster pages. Synthetic mirrored boundary examples, not digitized book OHLC or independently verified recursive degrees.",
-      "can_place_orders_from_registry": false
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_w2_boundary_source_contract.json"
     }
   ],
   "required_remaining_evidence": [

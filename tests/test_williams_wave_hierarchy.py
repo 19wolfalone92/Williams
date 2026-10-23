@@ -390,8 +390,13 @@ def test_source_w4_zero_cross_excludes_touch_and_wrong_degree_scale(case):
 def test_course_w2_exact_100_percent_touch_is_unverified_not_invalidated(mirror):
     # Course PDF46: W2 cannot cross the W1 start; PDF48: 100% is possible.
     # The pivots are derived from causal synthetic closed candles, not invented labels.
-    for second_low,expected in [(100.5,"PROVISIONAL"),(100.0,"ALTERNATIVE"),(99.5,"INVALIDATED")]:
-        bars=rhythm_bars(mirror=mirror,w2=second_low)
+    fixture=json.loads((Path(__file__).parents[1]/"app/src/test/resources/williams_w2_boundary_source_contract.json").read_text())
+    assert fixture["can_place_orders"] is False
+    for case in fixture["cases"]:
+        second_low,expected=case["second_low"],case["expected"]
+        # Freeze history just after the two right-hand confirmation bars.
+        # Taking the latest suffix after W5 would instead examine another wave degree.
+        bars=rhythm_bars(mirror=mirror,w2=second_low)[:82]
         report=build_wave_hierarchy({"1h":bars},len(bars)*HOUR)
         counts=[s for s in report.scenarios if s.direction==("DOWN" if mirror else "UP")
                 and len(s.anchors)==3 and s.anchors[0].extreme_at==50*HOUR]
@@ -409,8 +414,9 @@ def test_course_w2_exact_100_percent_touch_is_unverified_not_invalidated(mirror)
 
 @pytest.mark.parametrize("mirror", [False, True])
 def test_book_fractal_requires_two_closed_right_bars_even_for_mirrored_high(mirror):
-    levels=[108,106,100,104,105]
-    bars=[WaveBar(i*HOUR,v,v+1,v-1,v,100) for i,v in enumerate(levels)]
+    fixture=json.loads((Path(__file__).parents[1]/"app/src/test/resources/williams_w2_boundary_source_contract.json").read_text())
+    case=fixture["fractals"][0]
+    bars=[WaveBar(i*HOUR,v,v+1,v-1,v,100) for i,v in enumerate(case["levels"])]
     if mirror:
         bars=[replace(b,o=300-b.o,h=300-b.l,l=300-b.h,c=300-b.c) for b in bars]
     assert confirmed_wave_anchors(bars[:4],HOUR)==[]
@@ -418,4 +424,4 @@ def test_book_fractal_requires_two_closed_right_bars_even_for_mirrored_high(mirr
     assert len(pivot)==1
     assert pivot[0].kind==("HIGH" if mirror else "LOW")
     assert pivot[0].extreme_at==2*HOUR
-    assert pivot[0].known_at==5*HOUR
+    assert pivot[0].known_at==case["known_at_bar"]*HOUR

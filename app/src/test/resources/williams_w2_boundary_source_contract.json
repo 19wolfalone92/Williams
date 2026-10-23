@@ -1,0 +1,35 @@
+{
+  "source": "Trading Chaos Course PDF46 / PDF48",
+  "book_ohlc_digitized": false,
+  "can_place_orders": false,
+  "cases": [
+    {
+      "id": "w2-above-origin",
+      "second_low": 100.5,
+      "expected": "PROVISIONAL"
+    },
+    {
+      "id": "w2-exact-origin",
+      "second_low": 100,
+      "expected": "ALTERNATIVE"
+    },
+    {
+      "id": "w2-past-origin",
+      "second_low": 99.5,
+      "expected": "INVALIDATED"
+    }
+  ],
+  "fractals": [
+    {
+      "id": "two-right-bars",
+      "levels": [
+        108,
+        106,
+        100,
+        104,
+        105
+      ],
+      "known_at_bar": 5
+    }
+  ]
+}
