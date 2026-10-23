@@ -9390,9 +9390,15 @@ private class NativeEngine(
         val line=alligator(candidate.candles,candidate.candles.lastIndex)
         val indicators=JSONObject().apply { mapOf("ao" to h1Ao,"ac" to h1Ac,"jaw" to line.jaw,"teeth" to line.teeth,"lips" to line.lips)
             .forEach { (name,value) -> put(name,if(value.isFinite()) value else JSONObject.NULL) } }
+        // Root cause in Diagnostics (15): candidate.waveHierarchy is null on the
+        // efficient H1 scan, even though observedHierarchy was fully built above.
+        // Passing {} made ALL five decision_trace.market_phase frames
+        // NOT_ANALYSED, while candidate.wave_hierarchy and market_readings
+        // contained actual closed-candle data. Use exactly the same observed
+        // hierarchy for the decision trace, never a guessed wave count.
         val trace=buildWilliamsDecisionTrace(candidate.symbol,williamsProfile,
             candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },futuresMarketData.exchangeNowMs(),
-            indicators,traceSignals,candidate.waveHierarchy?.toJson() ?: JSONObject())
+            indicators,traceSignals,observedHierarchy)
         // Read-only independent passports. Cached SQL history may be missing,
         // stale, or gapped; these are explicit states, never projected from H1.
         // Does not authorize or veto trading, and does not require M15 entry.
