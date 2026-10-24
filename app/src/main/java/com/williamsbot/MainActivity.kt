@@ -464,6 +464,7 @@ data class PositionView(
     val stop: Double?,
     val take: Double?,
     val riskPct: Double,
+    val riskPctVerified: Boolean = false,
     val currentPrice: Double? = null,
     val positionValueUsdt: Double = 0.0,
     val allocationPct: Double = 0.0,
@@ -2848,12 +2849,9 @@ private fun PositionScreen(
                                     Alignment.CenterVertically
                             ) {
                                 ModeChip(
-                                    "РИСК " +
-                                        fmt(
-                                            p.riskPct * 100,
-                                            2
-                                        ) +
-                                        "%",
+                                    "РИСК НА ВХОДЕ " + (if (p.riskPctVerified)
+                                            fmt(p.riskPct * 100, 2) + "%"
+                                        else "НЕ ПОДТВЕРЖДЁН"),
                                     AppColors.amber
                                 )
 
@@ -4197,6 +4195,8 @@ internal fun parseStatus(json: JSONObject): Status {
                 take = item.optDouble("take_profit", item.optDouble("take"))
                     .takeUnless { it.isNaN() || it == 0.0 },
                 riskPct = item.optDouble("risk_pct", 0.0),
+                riskPctVerified = !item.isNull("risk_pct") &&
+                    item.optDouble("risk_pct", 0.0) > 0.0,
                 currentPrice = currentPrice,
                 positionValueUsdt = positionValue,
                 allocationPct = allocation,
