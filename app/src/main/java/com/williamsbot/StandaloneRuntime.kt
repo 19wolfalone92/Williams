@@ -559,6 +559,20 @@ internal fun runtimeStartButtonEnabled(
 internal fun deferrableFuturesReconciliation(purpose: String): Boolean =
     purpose == "POSITION_MANAGEMENT_RECONCILIATION" || purpose == "USER_STREAM_RECONCILIATION"
 
+/** Read-only last-known signed positions fallback. The caller MUST set
+ * positions_snapshot_ok=false; these rows do not prove a current position,
+ * a working STOP, available risk budget or that the account is flat.
+ */
+internal fun lastKnownFuturesPositionsForDisplay(
+    envelope: Pair<String, Long>?, refreshError: String?
+): Triple<JSONArray, String, Long> {
+    val rows = envelope?.let { JSONArray(it.first) } ?: JSONArray()
+    val error = refreshError ?: if (envelope == null)
+        "Exchange position snapshot is loading; no cached snapshot yet"
+    else "Showing a stale cached Futures position snapshot while refresh runs"
+    return Triple(rows, error, envelope?.second ?: 0L)
+}
+
 internal fun shouldRetryUserStreamReconciliation(
     connected: Boolean,
     syncRequired: Boolean,
@@ -5314,21 +5328,6 @@ private class NativeEngine(
             name = "williams-futures-account-snapshot"
             start()
         }
-    }
-
-    /**
-     * Read-only fallback: never turn an in-flight or failed signed REST call
-     * into a claim that the Binance Futures account is flat.
-     * Caller must mark this fallback positions_snapshot_ok=false.
-     */
-    internal fun lastKnownFuturesPositionsForDisplay(
-        envelope: Pair<String, Long>?, refreshError: String?
-    ): Triple<JSONArray, String, Long> {
-        val rows = envelope?.let { JSONArray(it.first) } ?: JSONArray()
-        val error = refreshError ?: if (envelope == null)
-            "Exchange position snapshot is loading; no cached snapshot yet"
-        else "Showing a stale cached Futures position snapshot while refresh runs"
-        return Triple(rows, error, envelope?.second ?: 0L)
     }
 
     /**
