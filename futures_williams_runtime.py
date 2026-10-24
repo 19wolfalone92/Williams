@@ -42,7 +42,7 @@ from williams_signals import (
 from williams_decision_trace import build_decision_trace
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
-from williams_execution_policy import EXECUTION_PROFILES,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
+from williams_execution_policy import EXECUTION_PROFILES,OWNED_LIFECYCLE_PROFILES,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
 from williams_ntd_execution import FAMILIES as NTD_FAMILIES, close_entry_bound, require_close_entry
 from williams_course_campaign import course_active_context,course_next_stage,course_target
 from williams_course_quantity import (course_initial_quantity,course_stage_quantity,
@@ -1406,7 +1406,7 @@ class FuturesWilliamsRuntime:
             payload=(campaign.tags.get("pending_signal") or {}).get("signal") or {}
             if payload.get("strategy_profile",TC2)!=campaign.tags.get("strategy_profile",TC2):
                 raise RuntimeError("Add-on edition changed before submission")
-            if campaign.tags.get("strategy_profile",TC2) in EXECUTION_PROFILES:
+            if campaign.tags.get("strategy_profile",TC2) in OWNED_LIFECYCLE_PROFILES:
                 current=float(self.client.ticker_price(intent.symbol).get("price",0) or 0)
                 if intent.order_type!="MARKET":
                     reason=_pending_entry_preflight_reason(campaign.tags.get("pending_signal"),intent,current,
@@ -1970,7 +1970,7 @@ class FuturesWilliamsRuntime:
             trigger=close_entry_bound(signal.side,signal.trigger_price,self._tick(signal.symbol))
         elif (signal.side == "BUY" and current >= trigger) or (signal.side == "SELL" and current <= trigger):
             raise RuntimeError("add-on trigger already crossed")
-        if profile in EXECUTION_PROFILES:
+        if profile in OWNED_LIFECYCLE_PROFILES:
             require_profitable_position(campaign.side,campaign.average_entry_price,current,trigger)
         self._ensure_symbol_config(signal.symbol)
 
