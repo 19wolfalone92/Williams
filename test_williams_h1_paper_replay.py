@@ -144,3 +144,12 @@ def test_public_history_research_universe_is_15_verified_usdm_perpetual_pairs():
     with pytest.raises(ValueError,match="outside the approved"):
         replay.fetch_usdm_h1_history("UNKNOWNUSDT",1000,2000,session=None)
 
+
+def test_twenty_day_frozen_replay_cannot_claim_thirty_day_trend_or_normal_volatility():
+    n=480
+    idx=pd.date_range("2024-11-09",periods=n,freq="h",tz="UTC")
+    closes=[100+i*0.2 for i in range(n)]
+    data=pd.DataFrame({"close":closes},index=idx)
+    got=replay._market_regime_frame(data)
+    assert set(got["trend_regime"])=={"TREND_30D_HISTORY_UNAVAILABLE"}
+    assert set(got["volatility_regime"])=={"VOL_REGIME_HISTORY_UNAVAILABLE"}

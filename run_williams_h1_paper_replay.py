@@ -168,14 +168,18 @@ def _market_regime_frame(candles: pd.DataFrame) -> pd.DataFrame:
     # Rolling trailing thresholds avoid using future volatility to classify an older trade.
     low_q = volatility.rolling(24 * 90, min_periods=24 * 30).quantile(0.25)
     high_q = volatility.rolling(24 * 90, min_periods=24 * 30).quantile(0.75)
+    # A 20-day replay has NO 30-day trailing trend and NO 90-day
+    # volatility reference. Never misreport absent regime measurements as
+    # a genuine range or "normal volatility" market.
     trend_label = np.select(
-        [trend > 0.05, trend < -0.05],
-        ["TREND_UP_30D", "TREND_DOWN_30D"],
+        [trend.isna(), trend > 0.05, trend < -0.05],
+        ["TREND_30D_HISTORY_UNAVAILABLE", "TREND_UP_30D", "TREND_DOWN_30D"],
         default="RANGE_OR_WEAK_TREND",
     )
     vol_label = np.select(
-        [volatility <= low_q, volatility >= high_q],
-        ["LOW_VOL", "HIGH_VOL"],
+        [volatility.isna() | low_q.isna() | high_q.isna(),
+         volatility <= low_q, volatility >= high_q],
+        ["VOL_REGIME_HISTORY_UNAVAILABLE", "LOW_VOL", "HIGH_VOL"],
         default="NORMAL_VOL",
     )
     return pd.DataFrame({
