@@ -3336,10 +3336,29 @@ private fun SettingsScreen(
                     },enabled=!batteryExemptionGranted,modifier=Modifier.fillMaxWidth()) {
                         Text(if(batteryExemptionGranted) "СОН ANDROID: РАЗРЕШЕНИЕ УЖЕ ДАНО" else "ОТКРЫТЬ НАСТРОЙКИ ПИТАНИЯ ПРИЛОЖЕНИЯ")
                     }
-                    if(Build.MANUFACTURER.equals("samsung",ignoreCase=true)) Text(
-                        "Samsung: Батарея → Ограничения в фоновом режиме → Приложения, которые не переходят в спящий режим. " +
-                            "Добавьте Williams (Debug); в настройках батареи самого приложения выберите «Без ограничений».",
-                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                    if(Build.MANUFACTURER.equals("samsung",ignoreCase=true)) {
+                        Text(
+                            "Samsung: Батарея → Ограничения в фоновом режиме → Приложения, которые не переходят в спящий режим. " +
+                                "Добавьте Williams (Debug); в настройках батареи приложения выберите «Без ограничений».",
+                            style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                        OutlinedButton(onClick={
+                            // Samsung's officially documented deep link requires
+                            // an operator tap; the app NEVER silently changes
+                            // system battery exemptions or root settings.
+                            runCatching {
+                                context.startActivity(Intent(
+                                    "com.samsung.android.sm.ACTION_OPEN_CHECKABLE_LISTACTIVITY"
+                                ).setPackage("com.samsung.android.lool").putExtra("activity_type",2))
+                            }.onFailure {
+                                runCatching { context.startActivity(Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.fromParts("package",context.packageName,null)))
+                                }
+                            }
+                        },modifier=Modifier.fillMaxWidth()) {
+                            Text("SAMSUNG: ПРИЛОЖЕНИЯ БЕЗ РЕЖИМА СНА")
+                        }
+                    }
                     Text("Принудительная остановка в Android прекращает приложение. После неё откройте Williams снова. " +
                         "Причины завершения процесса теперь сохраняются в диагностике; непрерывная работа на этом телефоне ещё требует проверки.",
                         style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)

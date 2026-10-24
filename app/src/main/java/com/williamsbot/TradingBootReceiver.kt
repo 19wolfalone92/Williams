@@ -45,6 +45,14 @@ class TradingBootReceiver : BroadcastReceiver() {
     private fun resumeIfOptedIn(context:Context,action:String,withinDeadline:()->Boolean) {
 
         val appContext = context.applicationContext
+        val unlocked=(appContext.getSystemService(Context.USER_SERVICE) as android.os.UserManager).isUserUnlocked
+        if(!unlocked) {
+            // Credential-encrypted Keystore keys cannot be read before first
+            // unlock after reboot. Never mislabel this as corrupt credentials
+            // or copy secrets into device-protected storage.
+            RuntimeContinuityEvidence.event(appContext,"BOOT_WAITING_FOR_USER_UNLOCK")
+            return
+        }
         val autoRunEnabled = runCatching {
             val masterKey = MasterKey.Builder(appContext)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)

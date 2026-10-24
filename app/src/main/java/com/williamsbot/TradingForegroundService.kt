@@ -87,6 +87,8 @@ class TradingForegroundService : Service() {
             }
         )
         RuntimeServiceState.active = true
+        RuntimeServiceState.monitorHeartbeatStale=false
+        RuntimeServiceState.lastWorkerLoopElapsedMs=0L
         RuntimeServiceState.confirmedAtMs = System.currentTimeMillis()
         RuntimeServiceState.refreshLease=leaseCallback
         guard.scheduleWithFixedDelay({
@@ -95,8 +97,18 @@ class TradingForegroundService : Service() {
                 updateWakeLease()
                 val snapshot=StandaloneRuntime.backgroundSnapshot()
                 val now=SystemClock.elapsedRealtime()
+                RuntimeServiceState.lastWorkerLoopElapsedMs=snapshot.lastWorkerLoopElapsedMs
+                val stale=BackgroundRuntimePolicy.monitorStale(snapshot,now)
+                if(RuntimeServiceState.monitorHeartbeatStale!=stale) {
+                    RuntimeServiceState.monitorHeartbeatStale=stale
+                    RuntimeContinuityEvidence.event(applicationContext,
+                        if(stale) "WORKER_HEARTBEAT_STALE" else "WORKER_HEARTBEAT_RECOVERED")
+                }
+                // A live but wedged worker must not be started a second time.
+                // Existing exchange protection/monitor reconciliation remain
+                // independent of the new-entry liveness fence.
                 if(!destroyed && !stopping && (BackgroundRuntimePolicy.shouldRetry(snapshot,starting.get(),nextAttemptElapsed,now) ||
-                    initializationRetryNeeded && !starting.get() && now>=nextAttemptElapsed))
+                    snapshot.autoRunRequested && initializationRetryNeeded && !starting.get() && now>=nextAttemptElapsed))
                     requestRuntimeStart()
             }.onFailure { RuntimeServiceState.lastError="SERVICE_GUARD_FAILED: "+it.javaClass.simpleName }
         },0L,BackgroundRuntimePolicy.CHECK_MS,TimeUnit.MILLISECONDS)
@@ -112,7 +124,12 @@ class TradingForegroundService : Service() {
     ): Int {
         val action = intent?.action
         if(action!=ACTION_STOP) {
-            requestRuntimeStart()
+            // An Activity launch creates the foreground service before any
+            // user opt-in. Do not treat that as permission to start/retry
+            // the private-key trading engine. Sticky reboot auto-run is only
+            // recovered from its Keystore-backed persisted opt-in.
+            if(StandaloneRuntime.backgroundSnapshot().autoRunRequested)
+                requestRuntimeStart()
             return START_STICKY
         }
         stopping=true
@@ -191,7 +208,15 @@ class TradingForegroundService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent:Intent?) {
-        runCatching { lifecycleWorker.execute { RuntimeContinuityEvidence.event(applicationContext,"TASK_REMOVED_MONITOR_RETAINED") } }
+        val snapshot=StandaloneRuntime.backgroundSnapshot()
+        if(!snapshot.autoRunRequested && !(snapshot.running && snapshot.workerAlive)) {
+            // UI was closed without a monitoring request: avoid an idle
+            // permanent foreground service and unnecessary battery usage.
+            RuntimeContinuityEvidence.event(applicationContext,"TASK_REMOVED_IDLE_SERVICE_STOPPED")
+            stopSelf()
+        } else {
+            RuntimeContinuityEvidence.event(applicationContext,"TASK_REMOVED_MONITOR_RETAINED")
+        }
         super.onTaskRemoved(rootIntent)
     }
 
@@ -199,6 +224,8 @@ class TradingForegroundService : Service() {
         // Do not clear auto_run on unexpected teardown. START_STICKY recreation
         // re-enters autostart(), which reconciles the exchange state first.
         RuntimeServiceState.active = false
+        RuntimeServiceState.monitorHeartbeatStale=false
+        RuntimeServiceState.lastWorkerLoopElapsedMs=0L
         destroyed=true
         if(RuntimeServiceState.refreshLease===leaseCallback) RuntimeServiceState.refreshLease=null
         guard.shutdownNow()
