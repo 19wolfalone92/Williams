@@ -21,6 +21,7 @@ import requests
 from strategy import calculate_indicators, canonical_indicator_config_from_env
 from williams_signals import extract_long_signal_specs, extract_short_signal_specs
 from williams_paper_replay import PaperReplayConfig, run_williams_paper_replay
+from williams_trade_readiness_audit import audit_williams_h1_trade_quality
 
 FUTURES_REST = "https://fapi.binance.com"
 APPROVED_SYMBOLS = (
@@ -231,6 +232,9 @@ def run_symbol_replay(
     # Indicator warmup truncation changes the row coordinates, so all signal event
     # keys are now the indices of the matching closed-candle frame above.
     equity, trades, metrics = run_williams_paper_replay(candles, signals, config)
+    quality_audit = audit_williams_h1_trade_quality(
+        candles, signals, config, baseline=(equity,trades,metrics))
+
 
     regimes = _market_regime_frame(candles)
     if not trades.empty:
@@ -292,6 +296,7 @@ def run_symbol_replay(
         "ohlc_source": "public Binance USD-M Futures historical klines; closed H1 candles only",
         "execution_model": "independent causal paper replay; closed continuous H1; stop-entry, structural stop, no fixed TP; stop-first on intrabar ambiguity; discretionary TC2 opposite market exits require conservative fill profitability after project reserve + modeled fees",
         "trade_metrics": _metrics_for_trades(trades),
+        "read_only_chronological_quality": quality_audit,
         "regime_metrics": regime_summary,
         "quarterly_metrics": quarterly_summary,
         "trades_csv": str(trades_path),
