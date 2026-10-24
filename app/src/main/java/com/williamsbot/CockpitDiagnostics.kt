@@ -65,11 +65,19 @@ internal object CockpitDiagnostics {
             baselineReady=!dailyBaselineMissing,
             pendingEntries=pendingCount
         )
+        val unresolvedBookOrders=rows(coordinator.optJSONArray("external_open_orders"))
+            .filter { it.optString("client_id").startsWith("W2H_") }
+        val unresolvedSymbols=unresolvedBookOrders.map { it.optString("symbol") }
+            .filter { it.isNotBlank() }.distinct().joinToString(", ")
         val reason = when {
             !status.optBoolean("running") -> "Движок остановлен"
             status.optBoolean("kill_switch_latched") -> "Аварийная блокировка новых операций"
             dailyBaselineMissing -> "Не подтверждена суточная база риска Binance. " + resetExplanation
             status.optBoolean("paused") -> "Новые входы приостановлены; сопровождение продолжается"
+            unresolvedBookOrders.isNotEmpty() -> "Найдена неподтверждённая Binance H1-заявка" +
+                (if(unresolvedSymbols.isBlank()) "" else " по $unresolvedSymbols") +
+                ". Новые входы заблокированы: проверьте действующие заявки в Binance, " +
+                "не отменяйте стоп открытой позиции. Автоматическая отмена запрещена."
             !coordinatorReady && coordinator.optString("blocker") == "exchange_reconciliation_in_progress" ->
                 "Binance: выполняется текущая сверка позиций и заявок; новые входы временно ожидают проверки"
             !coordinatorReady -> russianExecutionBlocker(coordinator.optString("blocker"))

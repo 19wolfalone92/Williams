@@ -116,6 +116,39 @@ internal fun verifiedSupervisedStopClosure(record:JSONObject, algo:JSONObject, c
             .put("proof","EXACT_STOP_CHILD_AND_COMPLETE_USER_TRADES")
     }.getOrNull()
 
+/** A stopped operator-approved campaign retains the ORIGINAL stop,
+ * but may display the executed replacement stop ONLY from an exact, complete
+ * exchange-confirmed child order proof. An acknowledged POST, orphaned algo
+ * or proposed journal price is never display evidence of a completed trail. */
+internal fun confirmedSupervisionLastStop(record:JSONObject):String {
+    val original=record.getString("stop")
+    val closed=record.optJSONObject("confirmed_closure") ?: return original
+    if(record.optString("state")!="CLOSED_EXCHANGE_CONFIRMED" ||
+        closed.optString("proof")!="EXACT_STOP_CHILD_AND_COMPLETE_USER_TRADES")
+        return original
+    val filledClient=closed.optString("exit_algo_client_id")
+    val pendingClient=record.optString("pending_protection_client_id")
+    val pendingPrice=record.optString("pending_stop").toBigDecimalOrNull()
+    return if(pendingClient.isNotBlank() && filledClient==pendingClient &&
+        pendingPrice!=null && pendingPrice.signum()>0) pendingPrice.stripTrailingZeros().toPlainString()
+    else original
+}
+
+/** The POST/DELETE race from a newly tightened stop filling during exchange
+ * reconciliation is historical until a COMPLETE exact child-fill proof exists.
+ * Preserve the original exception for forensics; annotate its proven resolution
+ * without claiming the original entry or net PnL is known. */
+internal fun annotateVerifiedOperatorStopClosure(record:JSONObject,proof:JSONObject) {
+    val fail=record.optJSONObject("last_replacement_failure") ?: return
+    if(proof.optString("proof")!="EXACT_STOP_CHILD_AND_COMPLETE_USER_TRADES" ||
+        proof.optString("exit_algo_client_id")!=record.optString("pending_protection_client_id") ||
+        fail.optString("client_id")!=record.optString("pending_protection_client_id") ||
+        fail.optString("phase")!="AFTER_POST_ACK") return
+    fail.put("resolution","VERIFIED_REPLACEMENT_STOP_FILLED")
+        .put("resolution_evidence","EXACT_STOP_CHILD_AND_COMPLETE_USER_TRADES")
+        .put("resolved_at_ms",proof.optLong("closed_at"))
+}
+
 /** Read-only projection shared by the UI, exported diagnostics and history. Stored
  * reconciled journal rows win over placeholders by stable trade identity. */
 internal fun futuresVisibleTradeHistory(journal:JSONArray, supervisions:JSONArray, intents:JSONArray):JSONArray {
@@ -130,7 +163,7 @@ internal fun futuresVisibleTradeHistory(journal:JSONArray, supervisions:JSONArra
                 state=="SUSPENDED_CHANGED" -> "SUSPENDED";else -> "OPEN" })
             .put("entry_price",r.getString("entry_price").toDouble()).put("qty",r.getString("quantity").toDouble())
             .put("stop_price",r.optString("initial_stop",r.getString("stop")).toDouble())
-            .put("last_stop",r.getString("stop").toDouble()).put("supervision_started_at",r.getLong("approved_at_ms"))
+            .put("last_stop",confirmedSupervisionLastStop(r).toDouble()).put("supervision_started_at",r.getLong("approved_at_ms"))
             .put("opened_at",0L).put("entry_time_known",false).put("entry_reason","Исходный сигнал не сохранён; существующая позиция подключена к сопровождению SL")
             .put("closure_observed_at",r.optLong("position_absent_observed_at_ms"))
             .put("closed_at",closure?.optLong("closed_at") ?: 0L)

@@ -4476,6 +4476,7 @@ internal class NativeFuturesCampaignCoordinator(
                     "Биржа ещё не подтвердила полное исполнение точного SL; цена, время и PnL закрытия неизвестны"
                 }
                 val proof=proofs.first()
+                annotateVerifiedOperatorStopClosure(record,proof)
                 record.put("confirmed_closure",proof).put("state","CLOSED_EXCHANGE_CONFIRMED")
                     .put("closure_history_detail","Закрытие подтверждено точным стопом и его биржевыми исполнениями")
                     .put("last_evaluation_reason",proof.getString("exit_reason"))

@@ -37,6 +37,22 @@ class CockpitDiagnosticsTest {
         CockpitDiagnostics.rows(CockpitDiagnostics.checks(s, c, JSONObject(), now)).single { it.optString("id") == id }
     private fun severity(id: String, s: JSONObject, c: JSONObject = coordinator()) = check(id, s, c).optString("severity")
 
+    @Test fun diagnostics27OrphanLinkMustBeExplainedBeforeGenericReconciliationProgress() {
+        val order=JSONObject().put("symbol","LINKUSDT")
+            .put("client_id","W2H_LINKUSDT_061dd0339b76781d06e92b")
+        val c=coordinator().put("reconciliation_running",true)
+            .put("blocker","exchange_reconciliation_in_progress")
+            .put("ready_for_new_entry",false)
+            .put("external_open_orders",JSONArray().put(order))
+        val reason=CockpitDiagnostics.readiness(healthy(),c,now).getString("new_entries_reason")
+        assertTrue(reason.contains("LINKUSDT"))
+        assertTrue(reason.contains("заявка"))
+        assertTrue(reason.contains("заблокированы"))
+        assertEquals("FAIL",severity("EXE-11",healthy(),c))
+        c.put("external_open_orders",JSONArray())
+        val waiting=CockpitDiagnostics.readiness(healthy(),c,now).getString("new_entries_reason")
+        assertTrue(waiting.contains("сверка"))
+    }
     @Test fun liquidationCheckNeedsFreshMeasuredEvidenceAndReportsAnUnsafeStop() {
         val s = healthy().put("futures_positions", JSONArray().put(JSONObject()
             .put("symbol", "SOLUSDT").put("direction", "LONG").put("qty", 1)))
