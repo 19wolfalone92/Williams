@@ -55,6 +55,8 @@ internal fun williamsTc1FiveBulletEvidence(
         .put("status",when {
             !w5 -> "NO_PROVISIONAL_COMPLETED_FIVE_WAVE_PIVOT"
             !mfiVerified -> "MFI_DIVERGENCE_UNVERIFIED"
+            !scaleValid -> "WAVE_SCALE_UNVERIFIED"
+            !chronological -> "W5_PIVOT_NOT_CAUSALLY_CONFIRMED"
             observed<5 -> "TC1_FIVE_BULLETS_INCOMPLETE"
             else -> "FIVE_SIGNS_OBSERVED_UNCERTIFIED_WAVE_DEGREE"
         })

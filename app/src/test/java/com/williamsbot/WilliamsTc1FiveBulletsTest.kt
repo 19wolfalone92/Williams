@@ -29,7 +29,7 @@ class WilliamsTc1FiveBulletsTest {
             williamsTc1FiveBulletEvidence(e,true,null).getString("status"))
         assertEquals("MFI_DIVERGENCE_UNVERIFIED",
             williamsTc1FiveBulletEvidence(e,true,"BINANCE_BASE_VOLUME_PROXY").getString("status"))
-        assertEquals("FIVE_SIGNS_OBSERVED_UNCERTIFIED_WAVE_DEGREE",
+        assertEquals("WAVE_SCALE_UNVERIFIED",
             williamsTc1FiveBulletEvidence(e,true,"MANUALLY_VERIFIED_TC1_CHART")
                 .getString("status"))
         assertFalse(williamsTc1FiveBulletEvidence(e,true,
@@ -81,6 +81,7 @@ class WilliamsTc1FiveBulletsTest {
         scenario.put("observed_at",149L)
         val impossible=williamsTc1FiveBulletEvidence(scenario,true,"MANUALLY_VERIFIED_TC1_CHART")
         assertFalse(impossible.getBoolean("last_w5_pivot_causally_known"))
+        assertEquals("W5_PIVOT_NOT_CAUSALLY_CONFIRMED",impossible.getString("status"))
         assertFalse(impossible.getBoolean("can_close"))
     }
 

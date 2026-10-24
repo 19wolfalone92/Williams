@@ -183,9 +183,16 @@ private fun enrichWaveRhythm(h: WilliamsWaveScenario, frames: Map<String, List<W
     if (h.anchors.size < 4) return
     val start = h.anchors.first().extremeAt
     val stop = h.observedAt
+    // Wave degree belongs to the chart being analyzed. An H1 fourth-wave
+    // hypothesis must never borrow a seemingly perfect 100-140-bar H4 AO
+    // swing to proclaim its own minimum momentum evidence.
     val options = frames.mapNotNull { (frame, bars) ->
+        if(williamsWaveFrames.getValue(frame)>williamsWaveFrames.getValue(h.frame))
+            return@mapNotNull null
         val indexes = bars.indices.filter { bars[it].t >= start && bars[it].t < stop }
-        if (indexes.isEmpty() || indexes.first() < 33 || bars.first().t > start) null else frame to indexes
+        if (indexes.isEmpty() || indexes.first() < 33 || bars.first().t > start ||
+            bars[indexes.first()].t-start>=williamsWaveFrames.getValue(frame))
+            null else frame to indexes
     }
     val choice = options.minWithOrNull(compareBy<Pair<String, List<Int>>> { if (it.second.size in 100..140) 0 else 1 }
         .thenBy { abs(it.second.size - 120) }.thenBy { it.first })

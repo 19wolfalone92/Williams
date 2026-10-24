@@ -74,6 +74,34 @@ class WilliamsWaveHierarchyTest {
             assertFalse(williamsCorrectionEntryContext(report,"LONG",169*hour,"REVERSAL").allowed)
         }
     }
+    @Test fun h1WaveRhythmCannotBorrowASeniorH4AoScale() {
+        val hour=3_600_000L
+        val h1=(0 until 620).map { i ->
+            val v=100.0+20.0*kotlin.math.sin(i/15.0)
+            WilliamsWaveBar((i+1)*hour,v,v+1,v-1,v,1.0)
+        }
+        val h4=(0 until 155).map { i ->
+            val v=100.0+30.0*kotlin.math.sin(i/9.0)
+            WilliamsWaveBar(i*4*hour,v,v+1,v-1,v,1.0)
+        }
+        val scenario=WilliamsWaveScenario(
+            id="H1:CHILD",frame="1h",direction="UP",label="W3",
+            anchors=listOf(
+                WilliamsWaveAnchor("LOW",95.0,100,100*hour,103*hour),
+                WilliamsWaveAnchor("HIGH",110.0,180,180*hour,183*hour),
+                WilliamsWaveAnchor("LOW",100.0,260,260*hour,263*hour),
+                WilliamsWaveAnchor("HIGH",130.0,420,420*hour,423*hour)
+            ),observedAt=600*hour,legStart=420*hour,
+            legLow=95.0,legHigh=130.0,invalidation=100.0
+        )
+        val method=Class.forName("com.williamsbot.WilliamsWaveHierarchyKt")
+            .getDeclaredMethod("enrichWaveRhythm",WilliamsWaveScenario::class.java,Map::class.java)
+        method.isAccessible=true
+        method.invoke(null,scenario,mapOf("1h" to h1,"4h" to h4))
+        assertEquals("1h",scenario.scaleFrame)
+        assertTrue(scenario.scaleBars>140)
+        assertEquals("WRONG_SCALE",scenario.w4Zero)
+    }
     @Test fun fourthWaveOverlapRemainsResearchOnlyDiagonalAlternative() {
         val candles=(0 until 180).map { i ->
             WilliamsWaveBar(i*hour,130.0,131.0,129.0,130.0,1000.0)
