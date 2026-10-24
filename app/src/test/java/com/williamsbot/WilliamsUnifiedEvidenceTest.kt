@@ -105,7 +105,7 @@ class WilliamsUnifiedEvidenceTest {
             JSONObject().put("strategy_profile", williamsCourseProfile), now)
         assertEquals("WRONG_PROFILE", legacy.getString("status"))
     }
-    @Test fun independentTc2NtdExecutionStillDoesNotGrantOrdersToCachedObservations() {
+    @Test fun tc2LiveNtdCourseObservedSignalsNeverBecomeOrdersFromCache() {
         val signals=JSONArray()
             .put(signal("t1",williamsTc2Profile,"REVERSAL"))
             .put(signal("n1",williamsNtdProfile,"SHORT_FRACTAL"))
@@ -114,10 +114,10 @@ class WilliamsUnifiedEvidenceTest {
         assertEquals("COMPLETE_OBSERVATION_ONLY",evidence.getString("status"))
         val pair=evidence.getJSONArray("by_symbol").getJSONObject(0)
         val signalsOut=CockpitDiagnostics.rows(pair.getJSONArray("signals"))
-        assertEquals(listOf("LIVE","LIVE","OBSERVE"),signalsOut.map { it.getString("execution_role") })
+        assertEquals(listOf("LIVE","OBSERVE","OBSERVE"),signalsOut.map { it.getString("execution_role") })
         assertTrue(pair.getBoolean("fresh_opposing_entries_before_context"))
         assertFalse(pair.getBoolean("live_tc2_opposing_entries_before_context"))
-        assertTrue(pair.getBoolean("live_source_opposing_entries_before_context"))
+        assertFalse(pair.getBoolean("live_source_opposing_entries_before_context"))
     }
 
     @Test fun pinnedSourceOwnerDoesNotChangeWhenAnotherBookFindsASignal() {
