@@ -293,6 +293,8 @@ class CockpitDiagnosticsTest {
         assertEquals("PASS",severity("EXE-09",s,c))
         p.put("mark_price",106)
         assertEquals("FAIL",severity("EXE-09",s,c))
+        // Same-age UI can still contain a genuinely inconsistent signed
+        // acknowledgement; that remains FAIL, not a stale-screen excuse.
         p.put("mark_price",100).put("stop_confirmed_at_ms",now-1)
         assertEquals("FAIL",severity("EXE-08",s,c))
         p.put("stop_confirmed_at_ms",now)
@@ -304,6 +306,41 @@ class CockpitDiagnosticsTest {
         assertEquals("FAIL",severity("EXE-03",s,c))
     }
 
+    @Test fun diagnostics26NewerSignedStopIsStaleUiWarningNotFalseIdentityFailure() {
+        // The 4.64 diagnostics captured an earlier UI STOP confirmation and
+        // a later identical signed exchange STOP. A fresh but behind display
+        // must NOT be classified as Binance order-identity corruption.
+        val displayAt=now-11_000L
+        val previousConfirmed=now-13_000L
+        val proofAt=now-3_000L
+        val p=JSONObject().put("symbol","ETHUSDT").put("direction","SHORT")
+            .put("positionAmt","-0.395").put("qty",0.395).put("stop",2368.98)
+            .put("mark_price",2338.67).put("stop_verification_status","EXTERNAL_PROTECTED")
+            .put("stop_confirmed_at_ms",previousConfirmed)
+        val signed=JSONObject().put("symbol","ETHUSDT").put("direction","SHORT")
+            .put("quantity","-0.395").put("stop","2368.98")
+            .put("stop_proof","EXTERNAL_PROTECTED")
+            .put("protection_client_id","external_test_stop")
+            .put("observed_at_ms",proofAt)
+        val s=healthy().put("positions_snapshot_at_ms",displayAt)
+            .put("futures_positions",JSONArray().put(p))
+        val c=coordinator().put("exchange_protection_observations",JSONArray().put(signed))
+        assertEquals("WARNING",severity("EXE-08",s,c))
+        assertTrue(check("EXE-08",s,c).getString("detail").contains("ETHUSDT"))
+        assertEquals("PASS",severity("EXE-03",s,c))
+        // Once the UI consumes this signed observation the warning clears.
+        s.put("positions_snapshot_at_ms",now-2_000L)
+        p.put("stop_confirmed_at_ms",proofAt)
+        assertEquals("PASS",severity("EXE-08",s,c))
+        // Same-generation impossible status remains a real conflict.
+        p.put("stop_verification_status","UNVERIFIED_OR_STALE")
+        assertEquals("FAIL",severity("EXE-08",s,c))
+        p.put("stop_verification_status","EXTERNAL_PROTECTED")
+        // A different signed order price is NOT the same protection proof.
+        signed.put("stop","2369.99")
+        assertEquals("NOT_VERIFIED",severity("EXE-08",s,c))
+        assertEquals("FAIL",severity("EXE-03",s,c))
+    }
     @Test fun malformedOrDuplicatedSignedPositionSnapshotIsDetected() {
         val p=JSONObject().put("symbol","SOLUSDT").put("direction","LONG")
             .put("positionAmt","-1").put("qty",1)

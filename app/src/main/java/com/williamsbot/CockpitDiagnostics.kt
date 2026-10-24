@@ -263,7 +263,7 @@ internal object CockpitDiagnostics {
             else -> "PASS"
         }, "Запрещённых активных новых заявок=${unauthorizedNewExposure.size}; " +
             "подтверждённая область координатора=${coordinator.optString("engine")}; " +
-            "TC2 и NTD исполняют свои правила; Course наблюдает. Владелец кампании не меняется.")
+            "Новые входы разрешены только TC2; NTD и Course наблюдают. Уже открытые чужие кампании сохраняют собственное подтверждённое защитное управление.")
         val causalTraces = candidates.flatMap { candidate ->
             rows(candidate.optJSONObject("decision_trace")?.optJSONArray("signals"))
                 .map { candidate.optString("symbol") to it }
@@ -379,6 +379,19 @@ internal object CockpitDiagnostics {
         }, "Наблюдаемых подтверждённых переносов=${trailed.size}; проверяется текущая защита и отсутствие неразрешённого предшественника.")
         val livePositions = rows(status.optJSONArray("futures_positions"))
         val observedProofs = rows(coordinator.optJSONArray("exchange_protection_observations"))
+        // A later SIGNED exchange observation is not contradictory to an
+        // older 15-second dashboard snapshot. Diagnostics (26): ETH had the
+        // same symbol/side/qty/STOP, but the signed REST proof was ~8 seconds
+        // newer than the UI, which incorrectly created EXE-08=FAIL. Never
+        // rewrite timestamps, retroactively trust a journal, or call it PASS:
+        // record the UI race as WARNING until a dashboard refresh catches up.
+        val displayAt=status.optLong("positions_snapshot_at_ms")
+        fun proofAheadOfDisplay(p:JSONObject,proof:JSONObject):Boolean {
+            val observed=proof.optLong("observed_at_ms")
+            val cachedConfirmed=p.optLong("stop_confirmed_at_ms")
+            return displayAt>0L && displayAt<observed &&
+                cachedConfirmed>0L && cachedConfirmed<observed
+        }
         val currentProofConflicts = livePositions.filter { p ->
             val matching = matchingProtectionObservation(p,coordinator,now) ?: return@filter false
             val owner = entries.lastOrNull { intent ->
@@ -387,13 +400,19 @@ internal object CockpitDiagnostics {
                     intent.isNull("native_stop_replacement")
             }
             val expectedSuffix = owner?.optString("protection_client_id_suffix").orEmpty()
-            (expectedSuffix.isNotBlank() &&
-                !matching.optString("protection_client_id").endsWith(expectedSuffix)) ||
+            val ownedIdentityMismatch=expectedSuffix.isNotBlank() &&
+                !matching.optString("protection_client_id").endsWith(expectedSuffix)
+            val staleUI=proofAheadOfDisplay(p,matching)
+            ownedIdentityMismatch || (!staleUI && (
                 (p.has("stop_verification_status") &&
                     p.optString("stop_verification_status") != matching.optString("stop_proof")) ||
                 (p.has("stop_confirmed_at_ms") && !p.isNull("stop_confirmed_at_ms") &&
-                    p.optLong("stop_confirmed_at_ms") != matching.optLong("observed_at_ms"))
+                    p.optLong("stop_confirmed_at_ms") != matching.optLong("observed_at_ms"))))
         }
+        val newerSignedStopThanUI=livePositions.filter { p ->
+            val matching=matchingProtectionObservation(p,coordinator,now) ?: return@filter false
+            proofAheadOfDisplay(p,matching)
+        }.map { it.optString("symbol") }
         val duplicateProofs = observedProofs.groupBy { it.optString("symbol") }
             .filter { (symbol, items) ->
                 symbol.isNotBlank() && items.count {
@@ -407,9 +426,12 @@ internal object CockpitDiagnostics {
             livePositions.isEmpty() || livePositions.any {
                 matchingProtectionObservation(it,coordinator,now) == null
             } -> "NOT_VERIFIED"
+            newerSignedStopThanUI.isNotEmpty() -> "WARNING"
             else -> "PASS"
-        }, "Несовпадений идентификатора/уровня/времени=${currentProofConflicts.size}; " +
-            "дублированных подтверждений=${duplicateProofs.size}; сравнение ТОЛЬКО с подписанным Binance proof.")
+        }, "Подтверждённых конфликтов=${currentProofConflicts.size}; " +
+            "новых signed SL относительно UI=${newerSignedStopThanUI.joinToString().ifBlank { "нет" }}; " +
+            "дублированных подтверждений=${duplicateProofs.size}; " +
+            "новый Binance proof НЕ подтверждает свежесть более старого экрана.")
 
         val wrongSideStops = livePositions.filter { p ->
             val proof = matchingProtectionObservation(p,coordinator,now) ?: return@filter false
