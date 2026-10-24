@@ -11,6 +11,10 @@ from williams_course_exit import BOOK_EXIT_REASONS as COURSE_BOOK_EXIT_REASONS
 
 EXECUTION_PROFILE = TC2
 EXECUTION_PROFILES = (TC2,)
+# Existing NTD-owned campaigns still require source-specific price, profit and
+# protective-stop checks even while NEW NTD orders are never admitted.
+# Do not use this tuple for new-risk authorization.
+OWNED_LIFECYCLE_PROFILES = (TC2, NTD)
 OBSERVER_PROFILES = (NTD, COURSE)
 EXECUTION_POLICY = "TC2_ONLY_NEW_EXPOSURE_V3"
 
