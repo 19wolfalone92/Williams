@@ -2777,6 +2777,19 @@ private fun PositionScreen(
             )
         }
 
+        if (status.positions.isNotEmpty() &&
+            (!status.positionsSnapshotOk ||
+                !CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L))) {
+            item {
+                Text(
+                    "⚠️ ПОСЛЕДНИЙ ИЗВЕСТНЫЙ СНИМОК BINANCE — НЕ ПОДТВЕРЖДЁН СЕЙЧАС. " +
+                        "Позиции показаны для ориентирования; отсутствие свежего ответа не означает, " +
+                        "что они закрыты. Уровни SL требуют отдельной сверки с биржей.",
+                    color = AppColors.amber,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
         if (status.positions.isEmpty()) {
             item {
                 Card(
@@ -2794,7 +2807,8 @@ private fun PositionScreen(
                             style = MaterialTheme.typography.headlineMedium
                         )
                         Text(
-                            if (status.positionsSnapshotOk && CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L)) "Открытых позиций нет." else "Нет актуального подтверждения позиций Binance.",
+                            if (status.positionsSnapshotOk && CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L)) "Открытых позиций нет."
+                            else "Нет актуального подтверждения позиций Binance. Это НЕ означает, что позиции закрыты; проверь их на бирже.",
                             color = AppColors.textMuted
                         )
                     }
