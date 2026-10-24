@@ -9,6 +9,35 @@ import org.json.JSONObject
 
 class StandaloneRuntimeReconciliationTest {
     @Test
+    fun inFlightRefreshRetainsLastKnownSignedShortWithoutClaimingVerification() {
+        val lastSigned = JSONArray().put(
+            JSONObject().put("symbol", "ETHUSDT")
+                .put("positionAmt", -0.395).put("direction", "SHORT")
+                .put("stop_verification_status", "EXTERNAL_PROTECTED")
+        )
+        val (rows, error, observedAt) =
+            lastKnownFuturesPositionsForDisplay(lastSigned.toString() to 123456789L, null)
+        assertEquals(1, rows.length())
+        assertEquals("ETHUSDT", rows.getJSONObject(0).getString("symbol"))
+        assertEquals("SHORT", rows.getJSONObject(0).getString("direction"))
+        assertEquals(123456789L, observedAt)
+        assertTrue(error.contains("stale"))
+        // The non-empty error ensures status() cannot mark these rows as verified.
+    }
+
+    @Test
+    fun firstLoadMissingExchangeSnapshotIsUnknownNotConfirmedFlat() {
+        val (rows, error, observedAt) =
+            lastKnownFuturesPositionsForDisplay(null, null)
+        assertEquals(0, rows.length())
+        assertEquals(0L, observedAt)
+        assertTrue(error.contains("loading"))
+        val (_, timeoutError, _) =
+            lastKnownFuturesPositionsForDisplay(null, "signed REST timeout")
+        assertEquals("signed REST timeout", timeoutError)
+    }
+
+    @Test
     fun queuedUserStreamReconciliationCountsAsLiveWork() {
         val findings = diagnosticConsistencyFindings(
             coordinatorState = "RECONCILE_REQUIRED",
