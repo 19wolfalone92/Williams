@@ -25,6 +25,22 @@ class WilliamsExecutionPolicyTest {
         assertEquals(williamsUnifiedProfile,
             williamsRestoredExecutionSelection(williamsNtdProfile,WILLIAMS_EXECUTION_POLICY))
     }
+    @Test fun optionalTc2ExitRequiresProfitAtExecutableBidOrAskNotOnlyMark() {
+        assertNull(williamsOppositeExitBidAskBlocker("LONG",100.0,100.5,100.6))
+        assertNull(williamsOppositeExitBidAskBlocker("SHORT",100.0,99.4,99.5))
+        val noNet="WILLIAMS_OPPOSITE_EXIT_NET_PROFIT_NOT_CONFIRMED_AT_BID_ASK"
+        // A profitable MARK does not prove profitable execution at the spread.
+        assertEquals(noNet,williamsOppositeExitBidAskBlocker("LONG",100.0,100.2,100.6))
+        assertEquals(noNet,williamsOppositeExitBidAskBlocker("SHORT",100.0,99.4,99.8))
+        assertEquals(noNet,williamsOppositeExitBidAskBlocker("LONG",100.0,100.35,100.5))
+        assertEquals("WILLIAMS_OPPOSITE_EXIT_BID_ASK_UNVERIFIED",
+            williamsOppositeExitBidAskBlocker("LONG",100.0,101.0,100.0))
+        assertEquals("WILLIAMS_OPPOSITE_EXIT_BID_ASK_UNVERIFIED",
+            williamsOppositeExitBidAskBlocker("SHORT",100.0,Double.NaN,99.0))
+        assertEquals("WILLIAMS_OPPOSITE_EXIT_BID_ASK_UNVERIFIED",
+            williamsOppositeExitBidAskBlocker("UNKNOWN",100.0,101.0,101.1))
+    }
+
     @Test fun oldFractalNeedsCurrentStructuralProofInsteadOfAnAgeCutoff() {
         val at=480000L*h;val now=at+105*h
         for((direction,type,entry,stop) in listOf(

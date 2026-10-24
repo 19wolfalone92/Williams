@@ -4066,6 +4066,17 @@ internal class NativeFuturesCampaignCoordinator(
                     return@synchronized JSONObject().put("ok",false).put("state",state.name)
                         .put("safe_rejection",true).put("mutation_attempted",false)
                         .put("blocker",profitBlocker).put("symbol",symbol)
+                // MARK is not the executable exit quote. A LONG closes at BID,
+                // a SHORT closes at ASK. Preserve the exchange STOP and reject
+                // optional profit-taking if the actual quote does not clear
+                // the conservative fee/slippage reserve.
+                val (bidNow,askNow)=adapterPreflight.bestBidAsk(symbol)
+                val quoteBlocker=williamsOppositeExitBidAskBlocker(
+                    direction.name,liveEntry,bidNow,askNow)
+                if(quoteBlocker!=null)
+                    return@synchronized JSONObject().put("ok",false).put("state",state.name)
+                        .put("safe_rejection",true).put("mutation_attempted",false)
+                        .put("blocker",quoteBlocker).put("symbol",symbol)
             }
             if(ntdBookExit) (bookNtdExitVerifier ?: error("NTD_FINAL_EXIT_VERIFIER_REQUIRED"))(
                 JSONObject(managedEntry!!.toString()),reason)

@@ -158,6 +158,24 @@ internal fun williamsTc2OppositeExitProfitBlocker(
         else "TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE"
 }
 
+/** An exchange MARK estimate is not an executable MARKET exit price.
+ * Before an optional opposite-signal reduction, verify conservative profitability
+ * against the live selling BID for LONG or buying ASK for SHORT.
+ * The quote is a preflight veto, never a fill-price guarantee. Protective stops,
+ * operator exits and emergency risk reductions are not routed through this veto.
+ */
+internal fun williamsOppositeExitBidAskBlocker(
+    side:String, entry:Double, bid:Double, ask:Double, tick:Double=0.0
+):String? {
+    if(side !in setOf("LONG","SHORT") || !entry.isFinite() || entry<=0 ||
+        !bid.isFinite() || !ask.isFinite() || bid<=0 || ask<bid ||
+        !tick.isFinite() || tick<0)
+        return "WILLIAMS_OPPOSITE_EXIT_BID_ASK_UNVERIFIED"
+    val executable=if(side=="LONG") bid else ask
+    return if(williamsTc2OppositeExitProfitBlocker(side,entry,executable,tick=tick)==null) null
+        else "WILLIAMS_OPPOSITE_EXIT_NET_PROFIT_NOT_CONFIRMED_AT_BID_ASK"
+}
+
 /** Durable exchange-mutation fence for the TC2 ch11-12 opposite Wise-Man exit.
  * A caller-supplied reason is not proof: require exactly the closed H1 signal
  * persisted by the causal scenario scanner after entry, recently observed, and
