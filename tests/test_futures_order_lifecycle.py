@@ -167,9 +167,17 @@ def armed_runtime(monkeypatch, tmp_path, request):
         protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000,strategy_profile=profile,
         setup_context={"ntd_initial":{"eligible":True,"sleep_at_ms":now-10*3600000,"reason":"FIXTURE_OBSERVED_SLEEP"}} if profile=="NTD_FIVE_DIMENSIONS" else {})
     candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
-    # Transport lifecycle tests model the source-data peer separately. The
-    # final NTD source verifier itself is exercised with real detectors below.
+    # This old NTD transport suite models a LEGACY already-owned NTD
+    # campaign. Production now permits NEW risk only for TC2. Narrowly
+    # override the release *admission* gate in this offline exchange simulator
+    # so the historical NTD fill/restart/protection failure paths stay tested.
+    # monkeypatch is reverted after EACH test. Real production never bypasses
+    # new_exposure_blocker and has a separate fail-closed regression test.
     if profile=="NTD_FIVE_DIMENSIONS":
+        import futures_williams_runtime as runtime_module
+        production_policy = runtime_module.new_exposure_blocker
+        monkeypatch.setattr(runtime_module, "new_exposure_blocker",
+            lambda source: None if source=="NTD_FIVE_DIMENSIONS" else production_policy(source))
         monkeypatch.setattr(bot,"_revalidate_ntd_signal",lambda campaign,intent:None)
     if isinstance(option,dict) and option.get("course_units"):
         # Book-proportion tests need an initial quantity divisible by the
