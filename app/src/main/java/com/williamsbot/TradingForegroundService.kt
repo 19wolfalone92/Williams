@@ -9,8 +9,24 @@ import android.os.Build
 import android.app.Notification
 import androidx.core.app.ServiceCompat
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import android.os.PowerManager
+import android.os.SystemClock
 
 class TradingForegroundService : Service() {
+    @Volatile private var destroyed=false
+    @Volatile private var stopping=false
+    private val starting=AtomicBoolean(false)
+    @Volatile private var startElapsed=0L
+    @Volatile private var nextAttemptElapsed=0L
+    @Volatile private var initializationRetryNeeded=false
+    private var failures=0
+    private var wakeLock:PowerManager.WakeLock?=null
+    private val leaseCallback:()->Unit={ updateWakeLease() }
+    private val guard=Executors.newSingleThreadScheduledExecutor { task ->
+        Thread(task,"williams-service-guard").apply { isDaemon=true }
+    }
     private val lifecycleWorker = Executors.newSingleThreadExecutor { task ->
         Thread(task, "williams-service-lifecycle").apply { isDaemon = true }
     }
@@ -72,6 +88,18 @@ class TradingForegroundService : Service() {
         )
         RuntimeServiceState.active = true
         RuntimeServiceState.confirmedAtMs = System.currentTimeMillis()
+        RuntimeServiceState.refreshLease=leaseCallback
+        guard.scheduleWithFixedDelay({
+            runCatching {
+                RuntimeServiceState.lastGuardElapsedMs=SystemClock.elapsedRealtime()
+                updateWakeLease()
+                val snapshot=StandaloneRuntime.backgroundSnapshot()
+                val now=SystemClock.elapsedRealtime()
+                if(!destroyed && !stopping && (BackgroundRuntimePolicy.shouldRetry(snapshot,starting.get(),nextAttemptElapsed,now) ||
+                    initializationRetryNeeded && !starting.get() && now>=nextAttemptElapsed))
+                    requestRuntimeStart()
+            }.onFailure { RuntimeServiceState.lastError="SERVICE_GUARD_FAILED: "+it.javaClass.simpleName }
+        },0L,BackgroundRuntimePolicy.CHECK_MS,TimeUnit.MILLISECONDS)
         // Do not clear a BOOT_SECURE_PREFS_UNREADABLE/BOOT_FGS_START_BLOCKED
         // failure yet: foreground-service creation proves nothing about
         // Keystore access or successful NativeEngine reconciliation.
@@ -83,17 +111,37 @@ class TradingForegroundService : Service() {
         startId: Int
     ): Int {
         val action = intent?.action
+        if(action!=ACTION_STOP) {
+            requestRuntimeStart()
+            return START_STICKY
+        }
+        stopping=true
         // Keystore, SQLite and authenticated reconciliation may block. Never do them
         // on Android's main/service thread, including after START_STICKY recreation.
         lifecycleWorker.execute {
             if (action == ACTION_STOP) {
                 runCatching {
-                    StandaloneRuntime.stopTrading()
                     if (StandaloneRuntime.stop()) stopSelf()
+                    else stopping=false
                 }.onFailure {
+                    stopping=false
                     android.util.Log.e("WilliamsFutures", "Safe shutdown was refused; monitoring retained", it)
                 }
-            } else {
+            }
+        }
+
+        return START_STICKY
+    }
+
+    private fun requestRuntimeStart() {
+        if(destroyed || stopping || !starting.compareAndSet(false,true)) return
+        startElapsed=SystemClock.elapsedRealtime()
+        RuntimeServiceState.lastRecoveryAttemptMs=System.currentTimeMillis()
+        updateWakeLease()
+        try { lifecycleWorker.execute {
+            try {
+                RuntimeContinuityEvidence.refreshProcessExits(applicationContext)
+                RuntimeContinuityEvidence.event(applicationContext,"SERVICE_START_ATTEMPT")
                 runCatching {
                     StandaloneRuntime.start(applicationContext)
                     StandaloneRuntime.autostart(applicationContext)
@@ -101,6 +149,10 @@ class TradingForegroundService : Service() {
                     // Foreground notification is not proof the trading engine
                     // actually started. Clear only prior service startup errors.
                     RuntimeServiceState.lastError = null
+                    initializationRetryNeeded=false
+                    failures=0
+                    nextAttemptElapsed=SystemClock.elapsedRealtime()+BackgroundRuntimePolicy.CHECK_MS
+                    RuntimeContinuityEvidence.event(applicationContext,"SERVICE_RUNTIME_OBSERVED")
                 }.onFailure {
                     // Previously swallowed: UI showed a running Android service
                     // while Binance engine had never started after reboot.
@@ -109,17 +161,49 @@ class TradingForegroundService : Service() {
                         "Futures runtime autostart failed: " + (it.message ?: it.javaClass.simpleName)
                     )
                     android.util.Log.e("WilliamsFutures", "Local Futures runtime startup failed", it)
+                    RuntimeContinuityEvidence.event(applicationContext,"SERVICE_AUTOSTART_FAILED",it)
+                    failures++
+                    initializationRetryNeeded=true
+                    nextAttemptElapsed=SystemClock.elapsedRealtime()+BackgroundRuntimePolicy.retryDelay(failures)
                 }
+            } finally {
+                starting.set(false)
+                updateWakeLease()
             }
-        }
+        } } catch(failure:java.util.concurrent.RejectedExecutionException) { starting.set(false);updateWakeLease() }
+    }
 
-        return START_STICKY
+    @Synchronized private fun updateWakeLease() {
+        val keep=!destroyed && BackgroundRuntimePolicy.keepCpu(StandaloneRuntime.backgroundSnapshot(),starting.get(),startElapsed,SystemClock.elapsedRealtime())
+        try {
+            if(keep) {
+                val lock=wakeLock ?: (getSystemService(POWER_SERVICE) as PowerManager).newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,"Williams:Monitoring").apply { setReferenceCounted(false);wakeLock=this }
+                // Renew a bounded lease only while monitoring is requested.
+                // A dead service/guard cannot leak a permanent CPU lock.
+                lock.acquire(BackgroundRuntimePolicy.WAKE_TIMEOUT_MS)
+            } else if(wakeLock?.isHeld==true) wakeLock?.release()
+            RuntimeServiceState.wakeLockHeld=wakeLock?.isHeld==true
+        } catch(failure:RuntimeException) {
+            RuntimeServiceState.wakeLockHeld=false
+            RuntimeServiceState.lastError="CPU_WAKE_LEASE_FAILED: "+failure.javaClass.simpleName
+        }
+    }
+
+    override fun onTaskRemoved(rootIntent:Intent?) {
+        runCatching { lifecycleWorker.execute { RuntimeContinuityEvidence.event(applicationContext,"TASK_REMOVED_MONITOR_RETAINED") } }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
         // Do not clear auto_run on unexpected teardown. START_STICKY recreation
         // re-enters autostart(), which reconciles the exchange state first.
         RuntimeServiceState.active = false
+        destroyed=true
+        if(RuntimeServiceState.refreshLease===leaseCallback) RuntimeServiceState.refreshLease=null
+        guard.shutdownNow()
+        updateWakeLease()
+        runCatching { lifecycleWorker.execute { RuntimeContinuityEvidence.event(applicationContext,"SERVICE_DESTROYED") } }
         lifecycleWorker.shutdown()
         super.onDestroy()
     }

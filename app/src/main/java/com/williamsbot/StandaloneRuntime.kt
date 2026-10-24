@@ -32,7 +32,10 @@ import kotlin.math.ceil
 
 object StandaloneRuntime {
     @SuppressLint("StaticFieldLeak")
-    private var server: StandaloneServer? = null
+    @Volatile private var server: StandaloneServer? = null
+
+    /** No initialization, HTTP, SQLite, or exchange door on the service guard. */
+    internal fun backgroundSnapshot():BackgroundRuntimeSnapshot = server?.backgroundSnapshot() ?: BackgroundRuntimeSnapshot()
 
     @Synchronized
     fun start(context: Context) {
@@ -1135,7 +1138,10 @@ private class StandaloneServer(private val context: Context) {
         }
     )
 
-    private var engine: NativeEngine? = null
+    @Volatile private var engine: NativeEngine? = null
+
+    fun backgroundSnapshot():BackgroundRuntimeSnapshot = engine?.backgroundSnapshot() ?: BackgroundRuntimeSnapshot(
+        autoRunRequested=runCatching { prefs.getBoolean("auto_run",false) }.getOrDefault(false))
 
     fun stop(): Boolean = engine?.stop()?.optBoolean("stopped", false) ?: true
 
@@ -1543,7 +1549,9 @@ private class NativeEngine(
     @Volatile
     private var lastScanAt = 0L
 
-    private var worker: Thread? = null
+    @Volatile private var worker: Thread? = null
+    fun backgroundSnapshot():BackgroundRuntimeSnapshot = BackgroundRuntimeSnapshot(
+        runCatching { prefs.getBoolean("auto_run",false) }.getOrDefault(false),running,worker?.isAlive==true,runtimeGeneration)
     private var scanSymbols = mutableListOf<String>()
     private var candidates = JSONArray()
     private var primaryCandles = emptyList<CandleN>()
@@ -2353,7 +2361,13 @@ private class NativeEngine(
         require(key().isNotBlank() && secret().isNotBlank()) {
             "Configure Binance USD-M Futures Testnet credentials first"
         }
-        if (running) return JSONObject().put("started", false).put("reason", "already_running")
+        if (running && worker?.isAlive==true) return JSONObject().put("started", false).put("reason", "already_running")
+        if(running) {
+            // This synchronized start cannot race another start's initialization.
+            // A dead worker cannot be accepted as an already-running monitor.
+            running=false
+            ++runtimeGeneration
+        }
 
         // Reconciliation is allowed to run under a persisted kill latch because it
         // only queries exchange state and performs explicitly owned protection cleanup.
@@ -2583,6 +2597,7 @@ private class NativeEngine(
         }
         // A newly started monitoring worker proves the Android runtime can
         // initialize again. Execution gates remain separate and fail-closed.
+        RuntimeServiceState.refreshLease?.invoke()
         RuntimeStartupEvidence.clear(context)
         return JSONObject()
             .put("started", true)
@@ -2708,6 +2723,7 @@ private class NativeEngine(
         activeHistoryTasks.forEach { it.cancel(true) }
         activeHistoryTasks.clear()
 
+        RuntimeServiceState.refreshLease?.invoke()
         return JSONObject().put("stopped", true).put("state", "STOPPED")
             .put("pending_entry_cancellation", cancellation)
             .put("reconcile_required", reconcileRequired)

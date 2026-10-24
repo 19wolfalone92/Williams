@@ -3261,6 +3261,8 @@ private fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text("Фоновая работа Android", style = MaterialTheme.typography.titleMedium)
+                    InfoRow("Фоновый сервис",if(RuntimeServiceState.active) "Работает" else "Не подтверждён")
+                    InfoRow("Работа CPU при выключенном экране",if(RuntimeServiceState.wakeLockHeld) "Удержание активно" else "Не активно")
                     InfoRow(
                         "Разрешение на работу в режиме сна",
                         if (batteryExemptionGranted) "Разрешено" else "Не подтверждено системой"
@@ -3275,10 +3277,28 @@ private fun SettingsScreen(
                         }
                     )
                     Text(
-                        "Для автономной работы откройте системные настройки приложения и проверьте режим батареи/фоновой активности. Поведение также зависит от производителя телефона; этот статус не заменяет физический тест.",
+                        "При включённом движке сервис удерживает CPU и проверяет автозапуск каждые 30 секунд. " +
+                            "Это увеличивает расход батареи. Сверка Binance и торговые блокировки сохраняются при восстановлении.",
                         style = MaterialTheme.typography.bodySmall,
                         color = AppColors.textMuted
                     )
+                    OutlinedButton(onClick={
+                        runCatching {
+                            context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.fromParts("package",context.packageName,null)))
+                        }.onFailure {
+                            runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                        }
+                    },enabled=!batteryExemptionGranted,modifier=Modifier.fillMaxWidth()) {
+                        Text(if(batteryExemptionGranted) "СОН ANDROID: РАЗРЕШЕНИЕ УЖЕ ДАНО" else "РАЗРЕШИТЬ РАБОТУ ПРИ ВЫКЛЮЧЕННОМ ЭКРАНЕ")
+                    }
+                    if(Build.MANUFACTURER.equals("samsung",ignoreCase=true)) Text(
+                        "Samsung: Батарея → Ограничения в фоновом режиме → Приложения, которые не переходят в спящий режим. " +
+                            "Добавьте Williams (Debug); в настройках батареи самого приложения выберите «Без ограничений».",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                    Text("Принудительная остановка в Android прекращает приложение. После неё откройте Williams снова. " +
+                        "Причины завершения процесса теперь сохраняются в диагностике; непрерывная работа на этом телефоне ещё требует проверки.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
                     OutlinedButton(
                         onClick = {
                             runCatching {

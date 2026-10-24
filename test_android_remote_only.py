@@ -16,7 +16,8 @@ def test_android_starts_native_futures_runtime_from_foreground_service():
     assert "TradingForegroundService.ACTION_START" in main
     assert "StandaloneRuntime.start(applicationContext)" in service
     assert "StandaloneRuntime.autostart(applicationContext)" in service
-    assert "StandaloneRuntime.stopTrading()" in service
+    assert "if (StandaloneRuntime.stop()) stopSelf()" in service
+    assert "StandaloneRuntime.stopTrading()" not in service  # One shutdown, not two signed cancellation passes.
     assert 'android:name=".TradingForegroundService"' in manifest
     assert "Фоновое сопровождение Binance Futures Demo на этом устройстве" in service
 

@@ -7,6 +7,9 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Restarts the on-device Futures service after reboot or an app update only if
@@ -17,8 +20,29 @@ class TradingBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action ?: return
         if (action != Intent.ACTION_BOOT_COMPLETED &&
-            action != Intent.ACTION_MY_PACKAGE_REPLACED
+            action != Intent.ACTION_MY_PACKAGE_REPLACED && action != Intent.ACTION_USER_UNLOCKED
         ) return
+
+        // Keystore/disk access must not block Android's broadcast main thread.
+        // Also finish before the broadcast deadline if a hardware key stalls.
+        val pending=goAsync()
+        val finished=AtomicBoolean(false)
+        val timeout=deadline.schedule({
+            if(finished.compareAndSet(false,true)) {
+                pending.finish()
+                RuntimeStartupEvidence.failure(context.applicationContext,"BOOT_SECURE_PREFS_TIMEOUT",null)
+            }
+        },8,TimeUnit.SECONDS)
+        Thread({
+            try { resumeIfOptedIn(context,action) { !finished.get() } }
+            finally {
+                timeout.cancel(false)
+                if(finished.compareAndSet(false,true)) pending.finish()
+            }
+        },"williams-boot-recovery").apply { isDaemon=true;start() }
+    }
+
+    private fun resumeIfOptedIn(context:Context,action:String,withinDeadline:()->Boolean) {
 
         val appContext = context.applicationContext
         val autoRunEnabled = runCatching {
@@ -42,7 +66,7 @@ class TradingBootReceiver : BroadcastReceiver() {
             Log.e(TAG, "Could not verify persisted auto-run preference; service not resumed", it)
         }.getOrDefault(false)
 
-        if (!autoRunEnabled) return
+        if (!autoRunEnabled || !withinDeadline()) return
 
         runCatching {
             ContextCompat.startForegroundService(
@@ -60,5 +84,8 @@ class TradingBootReceiver : BroadcastReceiver() {
 
     private companion object {
         const val TAG = "WilliamsFutures"
+        val deadline=Executors.newSingleThreadScheduledExecutor { task ->
+            Thread(task,"williams-boot-deadline").apply { isDaemon=true }
+        }
     }
 }

@@ -476,8 +476,11 @@ internal object CockpitDiagnostics {
         check("AND-01", "runtime", "Работа в фоне", when {
             android == null -> "NOT_VERIFIED"
             !android.optBoolean("foreground_service_active") || android.optBoolean("background_restricted") || !android.optBoolean("battery_optimization_ignored") -> "WARNING"
-            else -> "PASS"
-        }, "Проверяются ограничения Android; длительный тест на устройстве отмечается отдельно.")
+            status.optBoolean("running") && (!android.optBoolean("cpu_wake_lock_held") ||
+                android.optLong("service_guard_age_ms",Long.MAX_VALUE)>90_000L) -> "WARNING"
+            else -> "NOT_VERIFIED"
+        }, "Сервис=${android?.optBoolean("foreground_service_active")}; CPU=${android?.optBoolean("cpu_wake_lock_held")}; " +
+            "контроль=${android?.optLong("service_guard_age_ms",-1)} мс. Эти признаки не доказывают непрерывную работу с выключенным экраном.")
         check("AND-02", "runtime", "Восстановление после перезапуска", "NOT_VERIFIED",
             "Проверка требует фактического перезапуска процесса и сверки с Binance; наличие recovery-кода не считается PASS.")
         check("AND-03", "ui", "Согласованность интерфейса", if (positionsFresh(status, now)) "PASS" else "WARNING",

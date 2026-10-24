@@ -12,6 +12,10 @@ internal object RuntimeServiceState {
     @Volatile var active = false
     @Volatile var confirmedAtMs = 0L
     @Volatile var lastError: String? = null
+    @Volatile var wakeLockHeld = false
+    @Volatile var lastGuardElapsedMs = 0L
+    @Volatile var lastRecoveryAttemptMs = 0L
+    @Volatile var refreshLease:(()->Unit)? = null
 }
 
 /**
@@ -67,10 +71,18 @@ object AndroidRuntimeHealth {
             .put("foreground_service_active", RuntimeServiceState.active)
             .put("foreground_service_confirmed_at_ms", RuntimeServiceState.confirmedAtMs)
             .put("foreground_service_error", RuntimeServiceState.lastError ?: JSONObject.NULL)
+            .put("cpu_wake_lock_held",RuntimeServiceState.wakeLockHeld)
+            .put("service_guard_elapsed_ms",RuntimeServiceState.lastGuardElapsedMs)
+            .put("service_guard_age_ms",if(RuntimeServiceState.lastGuardElapsedMs>0)
+                android.os.SystemClock.elapsedRealtime()-RuntimeServiceState.lastGuardElapsedMs else JSONObject.NULL)
+            .put("service_last_recovery_attempt_at_ms",RuntimeServiceState.lastRecoveryAttemptMs)
+            .put("continuity",RuntimeContinuityEvidence.snapshot(context))
             .put("last_boot_startup_failure", RuntimeStartupEvidence.snapshot(context))
             .put("battery_optimization_ignored", ignoring)
             .put("power_save_mode", pm.isPowerSaveMode)
             .put("interactive", pm.isInteractive)
+        if(Build.VERSION.SDK_INT>=33) result.put("low_power_standby_enabled",pm.isLowPowerStandbyEnabled)
+        if(Build.VERSION.SDK_INT>=34) result.put("low_power_standby_exempt",pm.isExemptFromLowPowerStandby)
 
         if (Build.VERSION.SDK_INT >= 28) {
             result.put("background_restricted", am.isBackgroundRestricted)

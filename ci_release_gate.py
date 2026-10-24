@@ -540,14 +540,19 @@ def main() -> None:
     for needle in (
         "StandaloneRuntime.start(applicationContext)",
         "StandaloneRuntime.autostart(applicationContext)",
-        "StandaloneRuntime.stopTrading()",
+        "if (StandaloneRuntime.stop()) stopSelf()",
+        "BackgroundRuntimePolicy.WAKE_TIMEOUT_MS",
+        "RuntimeContinuityEvidence.refreshProcessExits",
     ):
         must(service, needle, "TradingForegroundService.kt")
     must_not(service, "remote Futures backend", "TradingForegroundService.kt")
     must_not(service, "legacy native Spot runtime", "TradingForegroundService.kt")
+    must_not(service, "StandaloneRuntime.stopTrading()", "TradingForegroundService.kt")
 
     # Device reboot/update recovery must respect the user's persisted opt-in.
     manifest = read("app/src/main/AndroidManifest.xml")
+    for needle in ('android.permission.WAKE_LOCK', 'android:stopWithTask="false"'):
+        must(manifest, needle, "AndroidManifest.xml")
     for needle in (
         "android.permission.RECEIVE_BOOT_COMPLETED",
         'android:name=".TradingBootReceiver"',
