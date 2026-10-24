@@ -4755,6 +4755,14 @@ private class NativeEngine(
         }
     }
 
+    /** A user-stream session must not become a fatal exchange failure merely
+     * because a different signed reconciliation already owns the account lock.
+     * Only startup/operator safety paths require the strict bounded wait.
+     * A deferred user-stream check keeps its sync-required latch and retries.
+     */
+    internal fun deferrableFuturesReconciliation(purpose: String): Boolean =
+        purpose == "POSITION_MANAGEMENT_RECONCILIATION" || purpose == "USER_STREAM_RECONCILIATION"
+
     /**
      * Reconciliation can place, replace, or cancel protective algo orders. It therefore
      * belongs behind the same durable account-wide Execution Door as entries/exits.
@@ -4768,14 +4776,14 @@ private class NativeEngine(
         // Bound lock acquisition so a stalled account-wide reconciliation cannot strand
         // queued private-stream work indefinitely. Unknown exchange state remains blocked.
         val waitStartedAtMs = System.currentTimeMillis()
-        // Periodic management is a best-effort maintenance tick. If another
-        // authoritative reconciliation already owns the account lock, coalesce
-        // the tick rather than queue for 50s and falsely persist a fatal latch.
-        // Kill, startup, user-stream, and explicit recovery remain strict.
-        val maintenanceTick = purpose == "POSITION_MANAGEMENT_RECONCILIATION"
+        // Periodic management and private-stream snapshot checks are deferrable:
+        // another authoritative reconciliation may already own the account lock.
+        // Never make a mere lock collision a fatal private-stream timeout.
+        // Kill, startup, and explicit operator recovery remain strict.
+        val deferrable = deferrableFuturesReconciliation(purpose)
         val lockAcquired = try {
             futuresReconciliationLock.tryLock(
-                if (maintenanceTick) 0L else waitForDoorMs.coerceAtLeast(0L),
+                if (deferrable) 0L else waitForDoorMs.coerceAtLeast(0L),
                 TimeUnit.MILLISECONDS
             )
         } catch (interrupted: InterruptedException) {
@@ -4784,7 +4792,7 @@ private class NativeEngine(
             false
         }
         lastReconciliationLockWaitMs = (System.currentTimeMillis() - waitStartedAtMs).coerceAtLeast(0L)
-        if (!lockAcquired && maintenanceTick &&
+        if (!lockAcquired && deferrable &&
             !Thread.currentThread().isInterrupted && futuresReconciliationRunning) {
             // The owner continues to hold the Execution Door. No new entry is
             // enabled here; the periodic monitor rechecks on the next tick.
@@ -7654,6 +7662,12 @@ private class NativeEngine(
                         allowStopped = true,
                         allowKillLatched = true
                     )
+                    if (result.optBoolean("deferred_to_active_reconciliation", false)) {
+                        // No REST proof was taken; never clear sync-required or
+                        // persist a fatal latch for a harmless overlap. The worker
+                        // retries after its normal throttled interval.
+                        break
+                    }
                     check(futuresSignedSnapshotComplete(result)) {
                         result.optString("blocker", "Futures reconciliation returned not-ok")
                     }
