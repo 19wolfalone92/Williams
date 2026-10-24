@@ -3284,13 +3284,13 @@ private fun SettingsScreen(
                     )
                     OutlinedButton(onClick={
                         runCatching {
-                            context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                                 Uri.fromParts("package",context.packageName,null)))
                         }.onFailure {
                             runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
                         }
                     },enabled=!batteryExemptionGranted,modifier=Modifier.fillMaxWidth()) {
-                        Text(if(batteryExemptionGranted) "СОН ANDROID: РАЗРЕШЕНИЕ УЖЕ ДАНО" else "РАЗРЕШИТЬ РАБОТУ ПРИ ВЫКЛЮЧЕННОМ ЭКРАНЕ")
+                        Text(if(batteryExemptionGranted) "СОН ANDROID: РАЗРЕШЕНИЕ УЖЕ ДАНО" else "ОТКРЫТЬ НАСТРОЙКИ ПИТАНИЯ ПРИЛОЖЕНИЯ")
                     }
                     if(Build.MANUFACTURER.equals("samsung",ignoreCase=true)) Text(
                         "Samsung: Батарея → Ограничения в фоновом режиме → Приложения, которые не переходят в спящий режим. " +
