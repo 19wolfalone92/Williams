@@ -38,7 +38,7 @@ def test_reconciliation_retains_last_known_ui_rows_without_authorizing_stale_pos
     assert "CockpitDiagnostics.fresh(cachedAt, nowMs, 15_000L)" in fast
     assert "lastKnownFuturesPositionsForDisplay(" in fast
     assert '"Showing a stale cached Futures position snapshot' in runtime
-    assert "futuresPositionsSnapshotError == null" in runtime
+    assert "futuresPositionSnapshotError == null" in runtime
     assert '.put("positions_snapshot_ok", futuresPositionsSnapshotOk)' in runtime
     # Unknown or stale positions MUST still block new trading; the read-only
     # cached display cannot serve as position, ownership or STOP proof.
