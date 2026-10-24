@@ -342,6 +342,24 @@ class CockpitDiagnosticsTest {
         assertEquals("NOT_VERIFIED",severity("EXE-08",s,c))
         assertEquals("FAIL",severity("EXE-03",s,c))
     }
+    @Test fun diagnostics26OrphanBinanceConditionalOrderCannotBeIgnoredAsZeroPendingIntents() {
+        val s=healthy()
+        val externalEntry=JSONObject().put("symbol","LINKUSDT")
+            .put("client_id","W2H_LINKUSDT_orphan")
+            .put("kind","EXTERNAL_ALGO_ORDER")
+        val externalStop=JSONObject().put("symbol","ETHUSDT")
+            .put("client_id","W2T_ETHUSDT_external_stop")
+            .put("kind","EXTERNAL_ALGO_ORDER")
+        val c=coordinator().put("external_open_orders",
+            JSONArray().put(externalEntry).put(externalStop))
+            .put("pending_intents",0).put("pending_intent_details",JSONArray())
+        assertEquals("FAIL",severity("EXE-11",s,c))
+        assertTrue(check("EXE-11",s,c).getString("detail").contains("LINKUSDT"))
+        c.put("external_open_orders",JSONArray().put(externalStop))
+        assertEquals("PASS",severity("EXE-11",s,c))
+        c.remove("external_open_orders")
+        assertEquals("NOT_VERIFIED",severity("EXE-11",s,c))
+    }
     @Test fun malformedOrDuplicatedSignedPositionSnapshotIsDetected() {
         val p=JSONObject().put("symbol","SOLUSDT").put("direction","LONG")
             .put("positionAmt","-1").put("qty",1)

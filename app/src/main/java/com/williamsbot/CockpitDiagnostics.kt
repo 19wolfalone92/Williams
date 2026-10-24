@@ -433,6 +433,31 @@ internal object CockpitDiagnostics {
             "дублированных подтверждений=${duplicateProofs.size}; " +
             "новый Binance proof НЕ подтверждает свежесть более старого экрана.")
 
+        // Diagnostics (26): a W2H_* Binance conditional order can survive
+        // locally missing campaign journals. Even when ENTRY_PENDING=0,
+        // a live app-originated orphan may fill and create exposure while
+        // execution_enabled=false. Treat it as unresolved exchange risk,
+        // never assume it is cancelled; do not mutate or delete it here.
+        val openAlgoOrders=rows(coordinator.optJSONArray("external_open_orders"))
+        val orphanBookH1Orders=openAlgoOrders.filter { order ->
+            val symbol=order.optString("symbol")
+            val clientId=order.optString("client_id")
+            clientId.startsWith("W2H_") && symbol in APPROVED_FUTURES_SYMBOLS &&
+                !entries.any { intent ->
+                    intent.optString("symbol")==symbol &&
+                        (intent.optString("entry_client_id")==clientId ||
+                         intent.optString("client_id")==clientId)
+                }
+        }
+        check("EXE-11","execution","Биржевые условные заявки без подтверждённого владельца",when {
+            coordinator.optJSONArray("external_open_orders")==null -> "NOT_VERIFIED"
+            orphanBookH1Orders.isNotEmpty() -> "FAIL"
+            else -> "PASS"
+        },"Открытых H1-ордеров W2H_* без действующей записи кампании=" +
+            "${orphanBookH1Orders.size}; символы=" +
+            orphanBookH1Orders.map { it.optString("symbol") }.distinct().joinToString().ifBlank { "нет" } +
+            "; проверять в Binance вручную; диагностике ЗАПРЕЩЕНО автоматически отменять ордера.")
+
         val wrongSideStops = livePositions.filter { p ->
             val proof = matchingProtectionObservation(p,coordinator,now) ?: return@filter false
             val mark = p.optString("mark_price").toDoubleOrNull()
