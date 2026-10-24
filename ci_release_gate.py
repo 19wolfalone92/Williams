@@ -452,6 +452,10 @@ def main() -> None:
     policy_py = read("williams_execution_policy.py")
     must(policy_py, 'EXECUTION_PROFILES = (TC2,)', 'Python new-risk policy must match Android')
     must(policy_py, 'OBSERVER_PROFILES = (NTD, COURSE)', 'NTD and Course must only observe in Python')
+    must(policy_py, 'OWNED_LIFECYCLE_PROFILES = (TC2, NTD)',
+         'Legacy NTD campaign safety management is distinct from admission')
+    must(futures, 'if profile in OWNED_LIFECYCLE_PROFILES:',
+         'Legacy NTD add-on preflight still enforces profit requirement')
     ntd_execution = read("app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt")
     for needle in ("NTD_CLOSE_BOUND_CHANGED", "NTD_CLOSE_EXECUTABLE_QUOTE_OUTSIDE_BOUND", "NTD_FIRST_EXTERNAL_FRACTAL_REQUIRED"):
         must(ntd_execution, needle, "NTD final execution evidence")
