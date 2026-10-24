@@ -33,12 +33,12 @@ def test_opposite_formation_must_trigger_on_a_later_bar_under_the_owned_source(s
     from dataclasses import replace
     frame=candles([(100,100.5,99.5,100),(100.2,101.5,100.1,101.2),
         (101.2,102.5,101,102),(102,104,101.8,103.5),
-        (103.5,105,100.6 if crossed else 101.7,101 if crossed else 104.8)])
+        (103.5,105,100.6 if crossed else 101.9,101 if crossed else 104.8)])
     if short:
         frame=pd.DataFrame({"open":220-frame.open,"high":220-frame.low,
                             "low":220-frame.high,"close":220-frame.close},index=frame.index)
     initial=signal("SELL" if short else "BUY",trigger=119 if short else 101,stop=122 if short else 98)
-    opposite=signal("BUY" if short else "SELL",trigger=118.4 if short else 101.6,stop=110,ts=2)
+    opposite=signal("BUY" if short else "SELL",trigger=118.25 if short else 101.75,stop=110,ts=2)
     _,trades,_=run_williams_paper_replay(frame,{0:[initial],2:[opposite]})
     assert len(trades)==1
     assert trades.iloc[0].exit_reason==("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED" if crossed else "END_OF_DATA")
@@ -56,7 +56,8 @@ def test_tc2_opposite_signal_never_forces_a_discretionary_loss(short,unfavorable
     # justify a voluntary close only if post-fill profit exceeds project costs.
     frame=candles([(100,100.5,99.5,100),(100.2,101.5,100.1,101.2),
         (101.2,102.5,101,102),(102,104,101.8,103.5),
-        ((100.3 if unfavorable_gap else 103.5),104.0,100.6,101.0)])
+        ((100.3 if unfavorable_gap else 103.5),104.0,
+         (100.0 if unfavorable_gap else 100.6),101.0)])
     if short:
         frame=pd.DataFrame({"open":220-frame.open,"high":220-frame.low,
                             "low":220-frame.high,"close":220-frame.close},index=frame.index)
@@ -92,7 +93,7 @@ def test_opposite_profit_gate_requires_real_net_after_high_costs(short):
 
 def test_h1_replay_rejects_nonfinite_ohlc_and_missing_time_periods():
     frame=candles([(100,101,99,100),(100,102,99,101),(101,102,100,101)])
-    bad=frame.copy()
+    bad=frame.astype(float).copy()
     bad.loc[bad.index[1],"high"]=float("inf")
     with pytest.raises(ValueError,match="invalid OHLC"):
         run_williams_paper_replay(bad,{})
