@@ -3762,7 +3762,7 @@ internal class NativeFuturesCampaignCoordinator(
                     it.optString("symbol")==symbol && it.optString("reason")=="COURSE_W5_TERMINAL_CONFIRMED" &&
                     !it.optBoolean("partial_reduction",false) && it.optString("exchange_status")=="EXIT_CONFIRMED" && it.optString("order_status")=="FILLED" }
                     ?: return@runCatching
-                val order=adapter.queryOrder(symbol,exit.getString("client_id"))
+                val order=adapter.order(symbol,exit.getString("client_id"))
                 val expected=exit.getString("quantity").toBigDecimal()
                 check(order.optString("symbol")==symbol && order.optString("clientOrderId")==exit.getString("client_id") &&
                     order.optString("status")=="FILLED" && order.optString("reduceOnly")=="true" &&
