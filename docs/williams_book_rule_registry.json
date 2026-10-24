@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "updated": "2026-10-24",
-  "release": "4.62.0",
+  "release": "4.63.0",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
   "source_review_complete": false,
@@ -1330,6 +1330,48 @@
       ],
       "fixtures": [],
       "remaining_evidence": "Exchange proof fields and one-shot ownership are project execution requirements. Handoff publishing cannot place orders. Full automatic Course initial/corrective entries and stage integration still require an independently checked degree/price-location contract; no physical Demo certification.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.EXACT_CONTRACT_UNITS_AND_SIGNED_STAGE_FILLS",
+      "book": "COURSE",
+      "pdf_pages": [
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84
+      ],
+      "rule": "Preserve one original contract unit: 3/1/6/10/3/(6 or 8)/0 and a separate opposite-owner 3/1/4/0. Risk caps reject whole later tranches; established targets are not rounded. A full signed attributed fill and protected exact position, rather than current position size, confirm a stage.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_course_quantity.py",
+        "futures_williams_runtime.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseQuantity.kt",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
+      ],
+      "tests": [
+        "tests/test_williams_course_quantity.py::test_shared_book_proportions_never_round_or_clip_an_established_tranche",
+        "tests/test_williams_course_quantity.py::test_stage_confirmation_requires_its_exact_signed_order_and_protected_position",
+        "tests/test_williams_course_quantity.py::test_the_whole_motive_and_correction_sequences_preserve_one_actual_unit",
+        "tests/test_futures_order_lifecycle.py::test_course_initial_unit_is_minted_only_from_the_exact_signed_fill_and_survives_restart",
+        "app/src/test/java/com/williamsbot/WilliamsCourseQuantityTest.kt::sharedBookProportionsNeverRoundOrClipAnEstablishedTranche",
+        "app/src/test/java/com/williamsbot/WilliamsCourseQuantityTest.kt::stageConfirmationRequiresItsExactSignedOrderAndProtectedPosition",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::courseInitialUnitRequiresTheExactSignedFillAndDoesNotRescaleAfterRestart"
+      ],
+      "fixture_file": "app/src/test/resources/williams_course_quantity_contract.json",
+      "fixtures": [
+        "cases/w3_cannot_clip_to_four",
+        "cases/fractional_unit_cannot_round",
+        "cases/extension_cap_cannot_clip",
+        "cases/w5_exact_162_undefined",
+        "cases/correction_cannot_clip",
+        "cases/changed_common_grid"
+      ],
+      "remaining_evidence": "Exact decimal/lot adaptation and modeled signed-fill/restart tests do not establish source wave genealogy, independently adjudicated chart counts, full Course new-risk admission or physical Android/Futures Demo execution. Initial parent/child degree proof remains unfinished. Existing partial exposure stays protected; Course remains OBSERVE for new risk.",
       "can_place_orders_from_registry": false
     }
   ],

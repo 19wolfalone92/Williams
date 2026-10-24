@@ -45,6 +45,8 @@ from williams_profiles import extract_profile_signals,addition_signal_time_allow
 from williams_execution_policy import EXECUTION_PROFILES,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
 from williams_ntd_execution import FAMILIES as NTD_FAMILIES, close_entry_bound, require_close_entry
 from williams_course_campaign import course_active_context,course_next_stage,course_target
+from williams_course_quantity import (course_initial_quantity,course_stage_quantity,
+    course_owned_quantity_blocker,course_fill_blocker)
 from williams_course_location import course_trim_proof
 from williams_course_exit import (BOOK_EXIT_REASONS as COURSE_BOOK_EXIT_REASONS,
     OPPOSITE_REASONS as COURSE_OPPOSITE_REASONS, TERMINAL_REASONS as COURSE_TERMINAL_REASONS,
@@ -924,6 +926,59 @@ class FuturesWilliamsRuntime:
             return 0.0
         return value
 
+    def _course_quantity_grid(self,symbol):
+        filters=self._filters(symbol)
+        return ((filters.get("LOT_SIZE") or {}).get("stepSize",0),
+                (filters.get("MARKET_LOT_SIZE") or {}).get("stepSize",0))
+
+    def _record_course_entry_stage_fill(self,campaign,order,position,cid,*,addition):
+        """Protection and actual exposure survive a partial/unproved Course fill.
+
+        Stage authority does not: bind it to this intent's exact signed fill,
+        rather than reconstructing a unit from the current position on restart.
+        """
+        if campaign.tags.get("strategy_profile")!=COURSE:return
+        plan=campaign.tags.get("course_plan") or {}
+        proposal=campaign.tags.get("course_pending_add_quantity" if addition else "course_initial_quantity") or {}
+        blocker="COURSE_EXACT_QUANTITY_PROPOSAL_UNVERIFIED"
+        try:
+            expected=campaign.tags.get("course_pending_add_client_id" if addition else "course_initial_client_id",
+                campaign.tags.get("pending_order_client_id"))
+            if expected!=cid:
+                raise RuntimeError("COURSE_QUANTITY_FILL_OWNER_MISMATCH")
+            actual_id=order.get("actualOrderId")
+            actual=self.client.get_order(campaign.symbol,order_id=actual_id) if actual_id and str(actual_id)!="0" else order
+            # Conditional child identity is attributed through the signed algo
+            # parent above; a parent ACK cannot stand in for this actual fill.
+            expected_client=actual.get("clientOrderId","") if actual_id else cid
+            blocker=course_fill_blocker(proposal,actual,position,campaign.symbol,campaign.side,
+                expected_client_id=expected_client,expected_order_id=actual_id or order.get("orderId"),protection_verified=True)
+            if not blocker:
+                if proposal.get("from_stage")!=(plan.get("stage","") if addition else ""):
+                    raise RuntimeError("COURSE_QUANTITY_FILL_STAGE_CHANGED")
+                if addition and str(plan.get("unit_quantity"))!=str(proposal.get("unit_quantity")):
+                    # Decimal spelling may differ, its actual value must not.
+                    if Decimal(str(plan.get("unit_quantity")))!=Decimal(proposal["unit_quantity"]):
+                        raise RuntimeError("COURSE_QUANTITY_FILL_UNIT_CHANGED")
+                plan.update(stage=proposal["stage"],unit_quantity=proposal["unit_quantity"],
+                    unit_is_actual=True,unit_basis="CONFIRMED_INITIAL_FILL")
+                if "w3_to_w1_ratio" in proposal:plan["w3_to_w1_ratio"]=proposal["w3_to_w1_ratio"]
+                campaign.tags["course_plan"]=plan
+                receipts=campaign.tags.setdefault("course_stage_fills",[])
+                if not any(r.get("client_id")==cid for r in receipts):
+                    receipts.append({"source":"SIGNED_EXACT_COURSE_STAGE_FILL","client_id":cid,
+                        "order_id":str(actual.get("orderId")),"stage":proposal["stage"],
+                        "quantity":proposal["quantity"],"target_quantity":proposal["target_quantity"],
+                        "unit_quantity":proposal["unit_quantity"]})
+                campaign.tags.pop("course_quantity_blocker",None)
+                if addition:
+                    for key in ("course_pending_add_stage","course_pending_add_target","course_pending_add_quantity","course_pending_add_client_id"):
+                        campaign.tags.pop(key,None)
+                return
+        except Exception as exc:
+            blocker=str(exc) if str(exc).startswith("COURSE_") else "COURSE_SIGNED_STAGE_FILL_UNAVAILABLE"
+        campaign.tags["course_quantity_blocker"]=blocker
+
     def _full_market_close_qty(self, symbol, qty):
         value = Decimal(str(qty))
         if not value.is_finite() or value <= 0:
@@ -1734,6 +1789,20 @@ class FuturesWilliamsRuntime:
         qty, risk_quote, notional = self._size_from_risk(
             symbol, trigger, stop, initial_risk_pct
         )
+        course_quantity=None
+        course_context=None
+        if signal.strategy_profile==COURSE:
+            course_context=course_active_context(self.scanner.wave_hierarchy(symbol,refresh=True),signal.side)
+            # Current H1 W3/W5 labels do not prove genesis of the illustrated
+            # FIRST larger wave. Do not bootstrap a late campaign from them.
+            if not course_context or course_context["phase"]!="W1":
+                raise RuntimeError("COURSE_INITIAL_PARENT_CHILD_DEGREE_UNPROVEN")
+            course_quantity=course_initial_quantity(qty,*self._course_quantity_grid(symbol))
+            if course_quantity["status"]!="EXACT_COURSE_QUANTITY":raise RuntimeError(course_quantity["reason"])
+            admitted=float(course_quantity["quantity"])
+            if Decimal(str(self._normalize_qty(symbol,admitted)))!=Decimal(course_quantity["quantity"]):
+                raise RuntimeError("COURSE_FULL_INITIAL_QUANTITY_FILTER_CHANGED")
+            ratio=admitted/qty;qty=admitted;risk_quote*=ratio;notional*=ratio
         self._validate_entry_leverage(symbol, qty, trigger, stop, signal.side)
         campaign = self.engine.create_campaign(signal, initial_risk_pct=initial_risk_pct)
         if reentry:
@@ -1755,12 +1824,9 @@ class FuturesWilliamsRuntime:
             campaign.tags["tc2_reverse_pyramid"]={"policy":TC2_PYRAMID_POLICY,
                 "unit_quantity":None,"completed_quantities":[]}
         if signal.strategy_profile==COURSE:
-            context=course_active_context(self.scanner.wave_hierarchy(symbol),signal.side)
-            target=course_target(context["phase"],context.get("w3_to_w1_ratio")) if context else None
-            if target:
-                campaign.tags["course_plan"]={"stage":context["phase"],"origin_at":context["origin_at"],
-                    "unit_quantity":qty/target,"unit_is_actual":False,
-                    "w3_to_w1_ratio":context.get("w3_to_w1_ratio"),"policy":"COURSE_BOOK_EXAMPLE_RATIOS_RISK_CAPPED"}
+            campaign.tags["course_initial_quantity"]=course_quantity
+            campaign.tags["course_plan"]={"stage":"W1","origin_at":course_context["origin_at"],
+                "unit_is_actual":False,"policy":"COURSE_EXACT_CONTRACT_UNITS_V1"}
         campaign.tags["pending_order_type"] = "MARKET" if market_close else "STOP_MARKET"
         campaign.tags["correction_context"] = dict(candidate.correction_context)
         campaign.pending_risk_quote = risk_quote
@@ -1773,6 +1839,7 @@ class FuturesWilliamsRuntime:
         campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["pending_order_stop"] = stop
         campaign.tags["pending_order_client_id"] = self._client_id("ENTRY")
+        if signal.strategy_profile==COURSE:campaign.tags["course_initial_client_id"]=campaign.tags["pending_order_client_id"]
         self.db.save_campaign(campaign)
 
         cid = campaign.tags["pending_order_client_id"]
@@ -1939,16 +2006,23 @@ class FuturesWilliamsRuntime:
             ratio=admitted/qty;qty=admitted;risk_quote*=ratio;notional*=ratio
         if profile==COURSE and campaign.tags.get("course_plan"):
             plan=campaign.tags["course_plan"]
+            if campaign.tags.get("course_quantity_blocker") or not plan.get("unit_is_actual"):
+                raise RuntimeError("COURSE_PREVIOUS_EXACT_STAGE_FILL_UNVERIFIED")
             context=course_active_context(self.scanner.wave_hierarchy(signal.symbol),signal.side,plan["origin_at"])
             next_stage=course_next_stage(plan["stage"],context["phase"],True,context.get("w3_to_w1_ratio")) if context else None
             units=course_target(next_stage,context.get("w3_to_w1_ratio")) if context else None
             if units is None:raise RuntimeError("COURSE_STAGE_OR_W3_W1_RATIO_UNCONFIRMED")
-            target=self._normalize_qty(signal.symbol,plan["unit_quantity"]*units)
-            admitted=self._normalize_qty(signal.symbol,min(qty,max(0,target-campaign.position_qty)))
-            if admitted<=0:raise RuntimeError("COURSE_TARGET_QUANTITY_ALREADY_REACHED")
+            exact=course_stage_quantity(plan["unit_quantity"],plan["stage"],next_stage,campaign.position_qty,
+                *self._course_quantity_grid(signal.symbol),risk_cap=qty,w3_to_w1_ratio=context.get("w3_to_w1_ratio"))
+            if exact["status"]!="EXACT_COURSE_QUANTITY":raise RuntimeError(exact["reason"])
+            if exact["action"]!="ADD":raise RuntimeError("COURSE_ADDITION_MUST_INCREASE_OWNED_STAGE")
+            admitted=float(exact["quantity"]);target=float(exact["target_quantity"])
+            if Decimal(str(self._normalize_qty(signal.symbol,admitted)))!=Decimal(exact["quantity"]):
+                raise RuntimeError("COURSE_FULL_TRANCHE_QUANTITY_FILTER_CHANGED")
             ratio=admitted/qty;qty=admitted;risk_quote*=ratio;notional*=ratio
             campaign.tags["course_pending_add_stage"]=next_stage
             campaign.tags["course_pending_add_target"]=target
+            campaign.tags["course_pending_add_quantity"]=exact
         self._validate_entry_leverage(signal.symbol, qty, trigger, stop, signal.side)
         if not self.db.try_claim_state(admitted_key,"true"):
             raise RuntimeError("This campaign signal is already owned by another admission")
@@ -1960,6 +2034,7 @@ class FuturesWilliamsRuntime:
         campaign.pending_risk_quote = risk_quote
         campaign.capital_reserved_quote = notional / self.config.leverage_for(signal.symbol)
         campaign.tags["pending_order_client_id"] = self._client_id("ADD")
+        if profile==COURSE:campaign.tags["course_pending_add_client_id"]=campaign.tags["pending_order_client_id"]
         campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
         self.db.save_campaign(campaign)
         cid = campaign.tags["pending_order_client_id"]
@@ -2305,12 +2380,9 @@ class FuturesWilliamsRuntime:
         correction=self._course_correction_handoff(campaign) if plan.get("stage") in {"A_ENTRY","A_REDUCE","C_ADD"} else None
         if plan.get("unit_basis")!="CONFIRMED_INITIAL_FILL" or not plan.get("unit_is_actual"):
             return {"status":"BLOCKED","blocker":"COURSE_ACTUAL_UNIT_BASIS_UNVERIFIED"}
-        units=course_target(plan.get("stage"),plan.get("w3_to_w1_ratio"))
-        if correction:units={"A_ENTRY":3,"A_REDUCE":1,"C_ADD":4}.get(plan.get("stage"))
-        unit=float(plan.get("unit_quantity",0))
-        if (not units or not math.isfinite(unit) or unit<=0 or not math.isclose(campaign.position_qty,
-                self._normalize_qty(campaign.symbol,unit*units),rel_tol=1e-9,abs_tol=1e-9)):
-            return {"status":"BLOCKED","blocker":"COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED"}
+        quantity_blocker=course_owned_quantity_blocker(plan.get("unit_quantity"),plan.get("stage"),campaign.position_qty,
+            *self._course_quantity_grid(campaign.symbol),w3_to_w1_ratio=plan.get("w3_to_w1_ratio"))
+        if quantity_blocker:return {"status":"BLOCKED","blocker":quantity_blocker}
         hierarchy=self.scanner.wave_hierarchy(campaign.symbol,refresh=True).to_dict()
         return course_exit_plan(hierarchy,campaign.side,plan.get("origin_at",0),plan.get("stage",""),
             int(campaign.tags.get("position_open_observed_at_ms",0)),now,bars,contract,correction)
@@ -2401,12 +2473,13 @@ class FuturesWilliamsRuntime:
         proof=course_trim_proof(report.to_dict(),campaign.side,plan.get("origin_at",0),plan.get("stage",""),
             int(campaign.tags.get("position_open_observed_at_ms",0)),now,bars)
         if proof["status"]!="OBSERVED_SOURCE_PINNED_REDUCTION":return proof
-        unit=float(plan.get("unit_quantity",0));units=course_target(plan["stage"],plan.get("w3_to_w1_ratio"))
-        if (not math.isfinite(unit) or unit<=0 or not units or
-                not math.isclose(campaign.position_qty,self._normalize_qty(campaign.symbol,unit*units),rel_tol=1e-9,abs_tol=1e-9)):
-            return {"status":"BLOCKED","reason":"COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED"}
-        proof["target_quantity"]=self._normalize_qty(campaign.symbol,unit*proof["target_units"])
-        proof["reduction_quantity"]=self._normalize_qty(campaign.symbol,campaign.position_qty-proof["target_quantity"])
+        exact=course_stage_quantity(plan.get("unit_quantity"),plan["stage"],proof["stage"],campaign.position_qty,
+            *self._course_quantity_grid(campaign.symbol),w3_to_w1_ratio=plan.get("w3_to_w1_ratio"))
+        if exact["status"]!="EXACT_COURSE_QUANTITY":return {"status":"BLOCKED","reason":exact["reason"]}
+        if exact["action"]!="REDUCE":return {"status":"BLOCKED","reason":"COURSE_TRIM_MUST_REDUCE_OWNED_STAGE"}
+        proof["target_quantity"]=float(exact["target_quantity"])
+        proof["reduction_quantity"]=float(exact["quantity"])
+        proof["exact_quantity"]=exact
         mark=self.client.mark_price(campaign.symbol)
         if not isinstance(mark,dict) or mark.get("symbol")!=campaign.symbol:
             return {"status":"BLOCKED","reason":"COURSE_TRIM_LIVE_MARK_UNVERIFIED"}
@@ -2435,7 +2508,8 @@ class FuturesWilliamsRuntime:
             raise RuntimeError(blocker)
         if reason=="COURSE_STAGE_TRIM":
             if partial_quantity is None:raise RuntimeError("COURSE_TRIM_MUST_BE_PARTIAL")
-            self._revalidate_course_trim(campaign,float(partial_quantity))
+            trim=self._revalidate_course_trim(campaign,float(partial_quantity))
+            if isinstance(trim,dict):campaign.tags["course_pending_trim_quantity"]=trim.get("exact_quantity")
         if campaign.tags.get("strategy_profile")==COURSE and reason!="COURSE_STAGE_TRIM" and reason not in {"MANUAL_EXIT","KILL_SWITCH"} and not risk_emergency:
             self._revalidate_course_exit(campaign,reason,create=True)
         if campaign.tags.get("strategy_profile")==NTD and campaign.state==CampaignState.ADD_ON_PENDING and not risk_emergency and reason not in {"MANUAL_EXIT","KILL_SWITCH"}:
@@ -2940,6 +3014,19 @@ class FuturesWilliamsRuntime:
                 symbol=campaign.symbol, side=trade["side"], entry_price=entry, exit_price=price, quantity=executed,
                 pnl=pnl, pnl_pct=pnl / (entry * executed), fees=fees + float(trade.get("fees") or 0) * executed / original,
                 reason="PARTIAL_CAMPAIGN_EXIT:" + order["clientOrderId"])
+        course_blocker=None
+        course_proposal=campaign.tags.get("course_pending_trim_quantity") or {}
+        if campaign.tags.get("pending_exit_is_course_reduction",False):
+            protected=False
+            try:protected=any(self._protection_matches(campaign,row) for row in self.client.open_orders(campaign.symbol))
+            except Exception:pass
+            course_blocker=course_fill_blocker(course_proposal,order,position,campaign.symbol,campaign.side,
+                expected_client_id=campaign.tags.get("pending_exit_client_id",""),protection_verified=protected)
+            plan=campaign.tags.get("course_plan") or {}
+            if not course_blocker and (course_proposal.get("from_stage")!=plan.get("stage") or
+                    course_proposal.get("stage")!=campaign.tags.get("pending_course_stage") or
+                    Decimal(str(plan.get("unit_quantity")))!=Decimal(course_proposal["unit_quantity"])):
+                course_blocker="COURSE_QUANTITY_FILL_STAGE_OR_UNIT_CHANGED"
         with self.db.transaction():
             if partial is not None:
                 if self.db.conn.execute("SELECT 1 FROM trades WHERE reason=?", (partial["reason"],)).fetchone():
@@ -2949,11 +3036,17 @@ class FuturesWilliamsRuntime:
                 self.db.update_trade_position(trade["id"], remaining, campaign.average_entry_price)
                 self.db.conn.execute("UPDATE trades SET fees=? WHERE id=?", (float(trade.get("fees") or 0) * remaining / original, trade["id"]))
             if campaign.tags.get("pending_exit_is_course_reduction",False):
-                requested=float(campaign.tags.get("pending_exit_quantity",0) or 0)
                 pending_stage=campaign.tags.pop("pending_course_stage",None)
-                if pending_stage and math.isclose(executed,requested,rel_tol=1e-12,abs_tol=1e-12):
+                if pending_stage and not course_blocker:
                     campaign.tags.setdefault("course_plan",{})["stage"]=pending_stage
+                    campaign.tags.setdefault("course_stage_fills",[]).append({"source":"SIGNED_EXACT_COURSE_STAGE_FILL",
+                        "client_id":order["clientOrderId"],"order_id":str(order["orderId"]),"stage":pending_stage,
+                        "quantity":course_proposal["quantity"],"target_quantity":course_proposal["target_quantity"],
+                        "unit_quantity":course_proposal["unit_quantity"]})
+                    campaign.tags.pop("course_quantity_blocker",None)
+                elif course_blocker:campaign.tags["course_quantity_blocker"]=course_blocker
                 campaign.tags.pop("pending_exit_is_course_reduction",None)
+                campaign.tags.pop("course_pending_trim_quantity",None)
             campaign.open_risk_quote *= remaining / original
             campaign.position_qty = remaining
             if campaign.state == CampaignState.EXIT_PENDING:
@@ -3131,7 +3224,8 @@ class FuturesWilliamsRuntime:
                     self._set_pending_signal_state(
                         campaign, SignalState.FILLED, filled_quantity=executed
                     )
-                    if purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING:
+                    is_addition_fill=purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING
+                    if is_addition_fill:
                         expected_delta = float(executed)
                         old_qty = float(campaign.position_qty)
                         actual_delta = max(0.0, pos_qty - old_qty)
@@ -3266,6 +3360,8 @@ class FuturesWilliamsRuntime:
                             continue
                         self._set_state(symbol, "OPEN")
 
+                    self._record_course_entry_stage_fill(campaign,order,position,cid,addition=is_addition_fill)
+                    self.db.save_campaign(campaign)
                     components=campaign.tags.setdefault("verified_entry_risk_components",[])
                     if not any(fill["client_id"]==cid for fill in components):
                         components.append({"client_id":cid,"quantity":executed,"price":execution_price,
@@ -3525,17 +3621,20 @@ class FuturesWilliamsRuntime:
                     campaign.current_stop_price = float(managed[0].get("stopPrice", campaign.current_stop_price) or campaign.current_stop_price)
                     campaign.tags.pop("pending_protection_client_id", None)
                     campaign.tags.pop("pending_protection_price", None)
-                course_plan=campaign.tags.get("course_plan")
-                if course_plan and not course_plan.get("unit_is_actual",False) and campaign.additions==0:
-                    units=course_target(course_plan["stage"],course_plan.get("w3_to_w1_ratio"))
-                    if units:
-                        course_plan["unit_quantity"]=campaign.position_qty/units
-                        course_plan["unit_is_actual"]=True
-                        course_plan["unit_basis"]="CONFIRMED_INITIAL_FILL"
-                pending_stage=campaign.tags.get("course_pending_add_stage")
-                if pending_stage and math.isclose(campaign.position_qty,float(campaign.tags.get("course_pending_add_target",0)),rel_tol=1e-9,abs_tol=1e-9):
-                    campaign.tags["course_plan"]["stage"]=pending_stage
-                    campaign.tags.pop("course_pending_add_stage",None);campaign.tags.pop("course_pending_add_target",None)
+                # Never infer an initial unit or a completed addition merely
+                # from a target-shaped position. Exact signed fill receipts are
+                # recorded in _reconcile_pending after protection succeeds.
+                if campaign.tags.get("strategy_profile")==COURSE:
+                    plan=campaign.tags.get("course_plan") or {}
+                    addition=bool(campaign.tags.get("course_pending_add_quantity"))
+                    if addition or campaign.tags.get("course_initial_quantity") and not plan.get("unit_is_actual"):
+                        cid=campaign.tags.get("course_pending_add_client_id" if addition else "course_initial_client_id",
+                            campaign.tags.get("pending_order_client_id",""))
+                        try:
+                            order=self.client.get_order(symbol,orig_client_order_id=cid,
+                                conditional=campaign.tags.get("pending_order_type","STOP_MARKET")!="MARKET")
+                            self._record_course_entry_stage_fill(campaign,order,position,cid,addition=addition)
+                        except Exception:campaign.tags["course_quantity_blocker"]="COURSE_SIGNED_STAGE_FILL_UNAVAILABLE"
                 campaign.reconciliation_state = "CLEAN"
                 campaign.health = "GREEN"
                 self.db.save_campaign(campaign)

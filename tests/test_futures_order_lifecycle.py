@@ -100,7 +100,8 @@ class DemoExchangeModel:
                 assert quantity<=abs(self.amount)
                 assert p["reduceOnly"] == "true"
                 assert p["side"] == ("SELL" if self.amount > 0 else "BUY")
-                self.amount -= quantity*self.close_fraction*(1 if self.amount>0 else -1)
+                from decimal import Decimal
+                self.amount=float(Decimal(str(self.amount))-Decimal(str(quantity))*Decimal(str(self.close_fraction))*(1 if self.amount>0 else -1))
                 self.orders[oid] = {**p, "orderId": oid, "clientOrderId": p["newClientOrderId"], "status": "FILLED",
                                     "executedQty": str(quantity * self.close_fraction), "origQty": str(quantity), "avgPrice": str(self.price)}
                 self.orders[oid]["status"] = self.close_status
@@ -129,6 +130,7 @@ class DemoExchangeModel:
         self.amount = quantity * fraction * (1 if row["side"] == "BUY" else -1)
         row.update(algoStatus="FINISHED", actualOrderId=str(oid))
         self.orders[oid] = {"orderId": oid, "symbol": "BTCUSDT", "side": row["side"],
+                            "clientOrderId":"actual-child-"+str(oid),"reduceOnly":False,"positionSide":"BOTH",
                             "status": "FILLED" if fraction == 1 else "PARTIALLY_FILLED",
                             "origQty": str(quantity), "executedQty": str(quantity * fraction), "avgPrice": str(self.entry_price)}
 
@@ -142,6 +144,7 @@ class DemoExchangeModel:
         oid=max([42,*self.orders])+1
         row.update(algoStatus="FINISHED",actualOrderId=str(oid))
         self.orders[oid]={"orderId":oid,"symbol":"BTCUSDT","side":row["side"],"status":"FILLED" if fraction==1 else "CANCELED",
+            "clientOrderId":"actual-child-"+str(oid),"reduceOnly":False,"positionSide":"BOTH",
             "origQty":str(row["quantity"]),"executedQty":str(quantity),"avgPrice":str(price)}
 
 
@@ -168,6 +171,17 @@ def armed_runtime(monkeypatch, tmp_path, request):
     # final NTD source verifier itself is exercised with real detectors below.
     if profile=="NTD_FIVE_DIMENSIONS":
         monkeypatch.setattr(bot,"_revalidate_ntd_signal",lambda campaign,intent:None)
+    if isinstance(option,dict) and option.get("course_units"):
+        # Book-proportion tests need an initial quantity divisible by the
+        # actual unit grid. Other transport tests keep their original sizing.
+        from decimal import Decimal
+        size=bot._size_from_risk
+        def size_in_course_units(*args,**kwargs):
+            qty,risk,notional=size(*args,**kwargs)
+            grid=Decimal("0.001")*option["course_units"]
+            admitted=float(Decimal(str(qty))//grid*grid)
+            return admitted,risk*admitted/qty,notional*admitted/qty
+        monkeypatch.setattr(bot,"_size_from_risk",size_in_course_units)
     armed=bot._arm_entry(candidate)
     trace=bot.db.conn.execute("SELECT raw_json FROM events WHERE event='decision_trace_execution' ORDER BY id DESC LIMIT 1").fetchone()
     assert trace and '"stage": "_arm_entry"' in trace[0]
@@ -195,6 +209,62 @@ def test_unknown_liquidation_protects_the_fill_without_automatic_flatten(armed_r
     exchange.liquidation_price = "MODEL"
     assert bot.recover()["ok"]
     assert bot.state("BTCUSDT") == "OPEN"
+
+
+@pytest.mark.parametrize("armed_runtime",[{"side":"BUY","course_units":3},{"side":"SELL","course_units":3}],indirect=True)
+@pytest.mark.parametrize("mode",["FULL","PARTIAL_CANCELED","OBSERVATION_LOST","RECEIPT_OBSERVATION_LOST"])
+def test_course_initial_unit_is_minted_only_from_the_exact_signed_fill_and_survives_restart(armed_runtime,monkeypatch,mode):
+    from williams_course_quantity import course_initial_quantity
+    bot,exchange,armed=armed_runtime
+    campaign=bot.engine.load_campaign(armed["campaign_id"])
+    proposal=course_initial_quantity(str(armed["quantity"]),"0.001")
+    assert proposal["quantity"]==str(armed["quantity"])
+    # Arrange a legacy Course intent, without enabling new Course exposure.
+    # Its wave/source admission is intentionally outside this fill-ledger test.
+    campaign.tags.update(strategy_profile="COURSE_PROFITUNITY",course_initial_quantity=proposal,
+        course_plan={"stage":"W1","origin_at":10,"unit_is_actual":False})
+    bot.db.save_campaign(campaign)
+    exchange.fill_entry(fraction=.5 if mode=="PARTIAL_CANCELED" else 1)
+    if mode=="PARTIAL_CANCELED":exchange.orders[42]["status"]="CANCELED"
+    if mode=="OBSERVATION_LOST":
+        query=bot.client.get_order;calls=[]
+        def lose_one_query(*a,**k):
+            calls.append(1)
+            if len(calls)==1:raise BinanceAPIError("modeled lost signed observation")
+            return query(*a,**k)
+        monkeypatch.setattr(bot.client,"get_order",lose_one_query)
+        bot._reconcile_pending()
+    if mode=="RECEIPT_OBSERVATION_LOST":
+        query=bot.client.get_order;lost=[]
+        def lose_receipt_query(*a,**k):
+            # Target the receipt read after the real protective order exists.
+            if str(k.get("order_id"))=="42" and not lost and any(r.get("closePosition")=="true" and r["algoStatus"]=="NEW" for r in exchange.algos.values()):
+                lost.append(1);raise BinanceAPIError("modeled lost receipt observation")
+            return query(*a,**k)
+        monkeypatch.setattr(bot.client,"get_order",lose_receipt_query)
+    bot._reconcile_pending()
+    owner=bot.engine.load_campaign(campaign.campaign_id)
+    assert any(r.get("closePosition")=="true" and r["algoStatus"]=="NEW" for r in exchange.algos.values())
+    initial_posts=sum(m=="POST" and p.endswith("algoOrder") and not data.get("closePosition") for m,p,data in exchange.calls)
+    assert initial_posts==1
+    if mode=="RECEIPT_OBSERVATION_LOST":
+        assert not owner.tags["course_plan"].get("unit_is_actual")
+        assert owner.tags["course_quantity_blocker"]=="COURSE_SIGNED_STAGE_FILL_UNAVAILABLE"
+        assert bot.recover()["ok"]
+        owner=bot.engine.load_campaign(campaign.campaign_id)
+    if mode=="PARTIAL_CANCELED":
+        assert not owner.tags["course_plan"].get("unit_is_actual")
+        assert owner.tags["course_quantity_blocker"]=="COURSE_STAGE_REQUIRES_FULL_TERMINAL_FILL"
+        assert not owner.tags.get("course_stage_fills")
+    else:
+        assert owner.tags["course_plan"]["unit_quantity"]==proposal["unit_quantity"]
+        assert owner.tags["course_plan"]["unit_basis"]=="CONFIRMED_INITIAL_FILL"
+        assert len(owner.tags["course_stage_fills"])==1
+    assert bot.recover()["ok"]
+    restarted=bot.engine.load_campaign(campaign.campaign_id)
+    assert restarted.tags["course_plan"]==owner.tags["course_plan"]
+    assert restarted.tags.get("course_stage_fills")==owner.tags.get("course_stage_fills")
+    assert sum(m=="POST" and p.endswith("algoOrder") and not data.get("closePosition") for m,p,data in exchange.calls)==1
 
 
 @pytest.mark.parametrize("armed_runtime", ["BUY", "SELL"], indirect=True)
@@ -429,7 +499,7 @@ def test_leverage_failure_never_sends_an_entry(monkeypatch, tmp_path, failure, s
         bot.db.conn.close()
 
 
-@pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
+@pytest.mark.parametrize("armed_runtime",[{"side":"BUY","course_units":6},{"side":"SELL","course_units":6}],indirect=True)
 @pytest.mark.parametrize("change",["NORMAL","LOST_REPLY","PARTIAL","SOURCE_RACE","PROFIT_RACE","ARBITRARY_REASON"])
 def test_course_terminal_exit_uses_real_source_and_grants_handoff_only_after_exact_clean_flat(armed_runtime,monkeypatch,change):
     from copy import deepcopy
@@ -453,7 +523,7 @@ def test_course_terminal_exit_uses_real_source_and_grants_handoff_only_after_exa
         return SimpleNamespace(to_dict=lambda:report)
     monkeypatch.setattr(bot.scanner,"wave_hierarchy",hierarchy)
     campaign.tags.update(strategy_profile="COURSE_PROFITUNITY",position_open_observed_at_ms=args["opened_at"],
-        course_plan={"stage":"W5","origin_at":args["origin_at"],"unit_quantity":original/6,"unit_is_actual":True,
+        course_plan={"stage":"W5","origin_at":args["origin_at"],"unit_quantity":str(__import__('decimal').Decimal(str(original))/6),"unit_is_actual":True,
                      "unit_basis":"CONFIRMED_INITIAL_FILL","w3_to_w1_ratio":2.0})
     bot.db.save_campaign(campaign);exchange.price=args["contract"]
     if change=="PROFIT_RACE":
@@ -536,7 +606,7 @@ def test_ntd_owned_zone_adds_once_and_keeps_protection_after_lost_reply(armed_ru
 
 
 
-@pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
+@pytest.mark.parametrize("armed_runtime",[{"side":"BUY","course_units":10},{"side":"SELL","course_units":10}],indirect=True)
 @pytest.mark.parametrize("lost",[False,True])
 def test_course_intentional_trim_is_attributed_once_and_keeps_its_exchange_stop(armed_runtime,lost,monkeypatch):
     bot,exchange,armed=armed_runtime
@@ -544,14 +614,20 @@ def test_course_intentional_trim_is_attributed_once_and_keeps_its_exchange_stop(
     campaign=bot.engine.load_campaign(armed["campaign_id"])
     # Arrange an already-owned Course position; this test concerns reduction
     # ownership/recovery, whose entry formation has independent source tests.
+    from williams_course_quantity import course_stage_quantity
+    from decimal import Decimal
     campaign.tags["strategy_profile"]="COURSE_PROFITUNITY"
+    original=campaign.position_qty
+    unit=str(Decimal(str(original))/10)
+    campaign.tags["course_plan"]={"stage":"W3_EXTENSION","unit_quantity":unit,"unit_is_actual":True,"w3_to_w1_ratio":2.0}
+    exact=course_stage_quantity(unit,"W3_EXTENSION","W4",str(original),"0.001",w3_to_w1_ratio=2.0)
+    campaign.tags["course_pending_trim_quantity"]=exact
     campaign.tags["pending_course_stage"]="W4"
     # Isolate signed fill/recovery here; the real source verifier is exercised
     # independently below with matched parent/child pivot evidence.
     monkeypatch.setattr(bot,"_revalidate_course_trim",lambda *a,**k:None)
     bot.db.save_campaign(campaign)
-    original=campaign.position_qty
-    quantity=bot._normalize_qty(campaign.symbol,original*.5)
+    quantity=float(exact["quantity"])
     stop=next(row for row in exchange.algos.values() if row.get("closePosition")=="true")
     stopid=stop["clientAlgoId"]
     exchange.market_close_timeout_after_fill=lost
@@ -603,7 +679,7 @@ def test_course_management_cannot_trim_on_a_wave_label_alone(armed_runtime,monke
     assert bot.recover()["ok"]
 
 
-@pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
+@pytest.mark.parametrize("armed_runtime",[{"side":"BUY","course_units":3},{"side":"SELL","course_units":3}],indirect=True)
 @pytest.mark.parametrize("fault",["VALID","QUANTITY","MISSING_TERMINAL","NOT_PROFITABLE","PROFIT_RACE","PROFIT_POST_RACE"])
 def test_course_real_source_verifier_rechecks_the_exact_trim_at_the_financial_door(armed_runtime,monkeypatch,fault):
     from copy import deepcopy
@@ -625,7 +701,7 @@ def test_course_real_source_verifier_rechecks_the_exact_trim_at_the_financial_do
     if fault=="MISSING_TERMINAL":report["scenarios"]=report["scenarios"][:1]
     monkeypatch.setattr(bot.scanner,"wave_hierarchy",lambda *a,**k:SimpleNamespace(to_dict=lambda:deepcopy(report)))
     campaign.tags.update(strategy_profile="COURSE_PROFITUNITY",position_open_observed_at_ms=args["opened_at"],pending_course_stage="W2",
-        course_plan={"stage":"W1","origin_at":args["origin_at"],"unit_quantity":original/3,
+        course_plan={"stage":"W1","origin_at":args["origin_at"],"unit_quantity":str(__import__('decimal').Decimal(str(original))/3),
                      "unit_is_actual":True,"unit_basis":"CONFIRMED_INITIAL_FILL"})
     bot.db.save_campaign(campaign)
     exchange.price=104 if campaign.side=="BUY" else 96

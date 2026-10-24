@@ -138,6 +138,26 @@ Course remains OBSERVE for new exposure. Transport-model tests do not certify
 all book figures, subjective chart angles or physical Android/Futures Demo
 acceptance; whole-book certification remains false.
 
+Since 4.63, established Course contract units, targets and deltas use exact
+decimal arithmetic on the common LOT_SIZE/MARKET_LOT_SIZE grid. An initial
+three-unit allocation may be rounded DOWN as a whole before submission; after
+its complete signed fill the unit cannot be resized. A risk or margin cap
+rejects an entire later tranche instead of silently clipping five units into
+a smaller order. W3's optional expansion, W5's six/eight totals and the separate
+corrective 3/1/4/0 sequence retain their own sequential quantities.
+
+Stage authority requires an attributed, fully FILLED matching-engine order,
+exact submitted/executed quantity, exact remaining one-way position and verified
+protection. Native conditional parent/actual-child association is checked before
+the receipt is accepted. Python recovery rereads the original signed identity
+if receipt observation failed. An ACK, cancelled partial fill or target-shaped
+position cannot mint an initial unit or complete an addition on restart. Real
+partial exposure remains protected; it cannot authorize the next book stage.
+New Course entries cannot borrow a late active H1 W3/W5 label as the illustrated
+first-wave genesis. Complete independent parent/child genesis remains open,
+and Course new-risk execution remains OBSERVE. Exact quantity tests are not
+independent wave truth or physical Futures Demo acceptance.
+
 ## Common evidence and execution boundaries
 
 Closed real-timeframe candles; displaced Alligator; no look-ahead; independent

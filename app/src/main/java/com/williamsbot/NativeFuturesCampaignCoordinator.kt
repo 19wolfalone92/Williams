@@ -2609,6 +2609,7 @@ internal class NativeFuturesCampaignCoordinator(
                     }
                 }
             }
+            recordCourseStageFills(persisted,entryExecutions,openBySymbol,adapter)
             recordCourseFlatHandoffs(persisted,adapter)
             saveIntents(persisted)
             externalProtectionObservationsJson=protectionObservations.toString()
@@ -3247,6 +3248,7 @@ internal class NativeFuturesCampaignCoordinator(
                 management.put("course_pending_stage",setup.getString("course_target_stage"))
                     .put("course_pending_target",setup.getDouble("course_target_quantity"))
                     .put("course_pending_client_id",plan.clientId)
+                    .put("course_pending_quantity",setup.optJSONObject("course_exact_quantity"))
                 primary.put("edition_management",management)
             }
         }
@@ -3751,7 +3753,55 @@ internal class NativeFuturesCampaignCoordinator(
         result.put("state", state.name)
     }
 
-    /** Exchange-confirmed reduce-only exit; it can never reverse the one-way position. */
+    /** Accounting authority requires an exact attributed fill and verified protection. */
+    private fun recordCourseStageFills(rows:JSONArray,executions:Map<String,JSONObject>,positions:Map<String,JSONObject>,
+        adapter:BinanceUsdMFuturesTestnetAdapter) {
+        val all=(0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+        for(owner in all.filter { it.optString("intent_role","ENTRY")=="ENTRY" && it.optString("strategy_profile")==williamsCourseProfile &&
+            campaignLifecycleStatus(it)=="OPEN_PROTECTED" && it.optString("protection_status")=="PROTECTED" }) {
+            val management=owner.optJSONObject("edition_management") ?: JSONObject()
+            owner.put("edition_management",management)
+            val initial=!management.has("course_unit_quantity")
+            val pendingId=management.optString("course_pending_client_id")
+            if(!initial && pendingId.isBlank()) continue
+            val id=owner.getString("client_id");val symbol=owner.getString("symbol")
+            val setup=runCatching { JSONObject(owner.optString("setup_context")) }.getOrDefault(JSONObject())
+            val proposal=(if(initial) setup.optJSONObject("course_exact_quantity") else management.optJSONObject("course_pending_quantity"))
+            if(proposal==null) { management.put("course_quantity_blocker","COURSE_EXACT_QUANTITY_PROPOSAL_UNVERIFIED");continue }
+            val fillId=if(initial) id else pendingId
+            val fillIntent=all.singleOrNull { it.optString("client_id")==fillId && it.optString("symbol")==symbol &&
+                (initial && it===owner || !initial && it.optString("entry_client_id")==id && it.optString("intent_role") in setOf("ADD_ON","EXIT")) }
+            val position=positions[symbol] ?: continue
+            runCatching {
+                check(fillIntent!=null) { "COURSE_QUANTITY_FILL_OWNER_MISMATCH" }
+                val reduce=proposal.optString("action")=="REDUCE"
+                val actual=if(reduce) adapter.order(symbol,fillId) else executions[fillId]
+                check(actual!=null) { "COURSE_SIGNED_STAGE_FILL_UNAVAILABLE" }
+                val expectedId=if(reduce) fillIntent.optString("exchange_order_id") else fillIntent.optString("actual_entry_order_id")
+                check(expectedId.isNotBlank()) { "COURSE_SIGNED_STAGE_FILL_IDENTITY_UNVERIFIED" }
+                val blocker=williamsCourseFillBlocker(proposal,actual,position,symbol,owner.getString("direction"),
+                    if(reduce) fillId else actual.optString("clientOrderId"),expectedId,true)
+                check(blocker==null) { blocker!! }
+                check(proposal.optString("from_stage")==if(initial) "" else management.optString("course_stage")) { "COURSE_QUANTITY_FILL_STAGE_CHANGED" }
+                if(initial) check(setup.optLong("course_origin_at")>0 && setup.optString("course_initial_stage")==proposal.getString("stage")) {
+                    "COURSE_INITIAL_PARENT_CHILD_DEGREE_UNPROVEN" }
+                else check(management.optString("course_unit_quantity").toBigDecimalOrNull()?.compareTo(proposal.getString("unit_quantity").toBigDecimal())==0) {
+                    "COURSE_QUANTITY_FILL_UNIT_CHANGED" }
+                management.put("course_stage",proposal.getString("stage")).put("course_unit_quantity",proposal.getString("unit_quantity"))
+                    .put("course_unit_basis","CONFIRMED_INITIAL_FILL").put("policy",WILLIAMS_COURSE_QUANTITY_POLICY)
+                if(initial) management.put("course_origin_at",setup.getLong("course_origin_at"))
+                if(proposal.has("w3_to_w1_ratio")) management.put("course_w3_to_w1_ratio",proposal.getDouble("w3_to_w1_ratio"))
+                val receipts=management.optJSONArray("course_stage_fills") ?: JSONArray()
+                if((0 until receipts.length()).none { receipts.getJSONObject(it).optString("client_id")==fillId })
+                    receipts.put(JSONObject().put("source","SIGNED_EXACT_COURSE_STAGE_FILL").put("client_id",fillId)
+                        .put("order_id",expectedId).put("stage",proposal.getString("stage")).put("quantity",proposal.getString("quantity"))
+                        .put("target_quantity",proposal.getString("target_quantity")).put("unit_quantity",proposal.getString("unit_quantity")))
+                management.put("course_stage_fills",receipts)
+                for(key in listOf("course_quantity_blocker","course_pending_stage","course_pending_target","course_pending_client_id","course_pending_quantity")) management.remove(key)
+            }.onFailure { failure -> management.put("course_quantity_blocker",safeDiagnosticText(failure.message ?: "COURSE_SIGNED_STAGE_FILL_UNAVAILABLE")) }
+        }
+    }
+
     private fun recordCourseFlatHandoffs(rows:JSONArray,adapter:BinanceUsdMFuturesTestnetAdapter) {
         val all=(0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
         for(owner in all.filter { it.optString("intent_role","ENTRY")=="ENTRY" && it.optString("strategy_profile")==williamsCourseProfile &&

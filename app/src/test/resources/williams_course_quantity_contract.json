@@ -1,0 +1,280 @@
+{
+  "source": "COURSE_PDF78_84_EXACT_UNITS_ENGINEERING_ADAPTATION",
+  "wave_truth": false,
+  "can_place_orders": false,
+  "cases": [
+    {
+      "id": "initial_three_whole_units",
+      "kind": "INITIAL",
+      "cap": "0.010",
+      "lot": "0.001",
+      "quantity": "0.009",
+      "unit": "0.003"
+    },
+    {
+      "id": "initial_two_different_grids",
+      "kind": "INITIAL",
+      "cap": "0.100",
+      "lot": "0.002",
+      "market": "0.003",
+      "quantity": "0.09",
+      "unit": "0.03"
+    },
+    {
+      "id": "initial_insufficient_for_three",
+      "kind": "INITIAL",
+      "cap": "0.017",
+      "lot": "0.002",
+      "market": "0.003",
+      "reason": "COURSE_THREE_UNITS_BELOW_EXCHANGE_GRID"
+    },
+    {
+      "id": "initial_must_not_start_at_w3",
+      "kind": "INITIAL",
+      "cap": "0.1",
+      "lot": "0.001",
+      "stage": "W3",
+      "reason": "COURSE_INITIAL_STAGE_MUST_START_WITH_THREE_UNITS"
+    },
+    {
+      "id": "initial_correction_three_units",
+      "kind": "INITIAL",
+      "cap": "0.01",
+      "lot": "0.001",
+      "stage": "A_ENTRY",
+      "quantity": "0.009",
+      "unit": "0.003"
+    },
+    {
+      "id": "initial_nan",
+      "kind": "INITIAL",
+      "cap": "NaN",
+      "lot": "0.001",
+      "reason": "COURSE_QUANTITY_OR_GRID_MALFORMED"
+    },
+    {
+      "id": "initial_bool",
+      "kind": "INITIAL",
+      "cap": true,
+      "lot": "0.001",
+      "reason": "COURSE_QUANTITY_OR_GRID_MALFORMED"
+    },
+    {
+      "id": "negative_market_grid",
+      "kind": "INITIAL",
+      "cap": "0.01",
+      "lot": "0.001",
+      "market": "-0.001",
+      "reason": "COURSE_QUANTITY_OR_GRID_MALFORMED"
+    },
+    {
+      "id": "w1_reduce_two",
+      "from": "W1",
+      "stage": "W2",
+      "owned": "0.003",
+      "quantity": "0.002",
+      "target": "0.001",
+      "action": "REDUCE"
+    },
+    {
+      "id": "w3_add_five",
+      "from": "W2",
+      "stage": "W3",
+      "owned": "0.001",
+      "cap": "0.005",
+      "quantity": "0.005",
+      "target": "0.006",
+      "action": "ADD"
+    },
+    {
+      "id": "w3_cannot_clip_to_four",
+      "from": "W2",
+      "stage": "W3",
+      "owned": "0.001",
+      "cap": "0.004",
+      "reason": "COURSE_FULL_TRANCHE_EXCEEDS_RISK_OR_MARGIN_CAP"
+    },
+    {
+      "id": "w3_cannot_skip_risk",
+      "from": "W2",
+      "stage": "W3",
+      "owned": "0.001",
+      "reason": "COURSE_FULL_TRANCHE_EXCEEDS_RISK_OR_MARGIN_CAP"
+    },
+    {
+      "id": "partial_previous_stage",
+      "from": "W2",
+      "stage": "W3",
+      "owned": "0.001001",
+      "cap": "0.005",
+      "reason": "COURSE_OWNED_STAGE_QUANTITY_CHANGED"
+    },
+    {
+      "id": "fractional_unit_cannot_round",
+      "from": "W1",
+      "stage": "W2",
+      "unit": "0.0015",
+      "owned": "0.0045",
+      "reason": "COURSE_UNIT_NOT_ON_EXCHANGE_GRID"
+    },
+    {
+      "id": "extension_add_four",
+      "from": "W3",
+      "stage": "W3_EXTENSION",
+      "owned": "0.006",
+      "cap": "0.004",
+      "ratio": 1.1,
+      "quantity": "0.004",
+      "target": "0.01",
+      "action": "ADD"
+    },
+    {
+      "id": "extension_before_110",
+      "from": "W3",
+      "stage": "W3_EXTENSION",
+      "owned": "0.006",
+      "cap": "0.004",
+      "ratio": 1.09,
+      "reason": "COURSE_STAGE_OR_W3_W1_RATIO_UNCONFIRMED"
+    },
+    {
+      "id": "extension_cap_cannot_clip",
+      "from": "W3",
+      "stage": "W3_EXTENSION",
+      "owned": "0.006",
+      "cap": "0.003",
+      "ratio": 1.1,
+      "reason": "COURSE_FULL_TRANCHE_EXCEEDS_RISK_OR_MARGIN_CAP"
+    },
+    {
+      "id": "w4_reduce_seven",
+      "from": "W3_EXTENSION",
+      "stage": "W4",
+      "owned": "0.01",
+      "ratio": 2.0,
+      "quantity": "0.007",
+      "target": "0.003",
+      "action": "REDUCE"
+    },
+    {
+      "id": "optional_extension_can_be_skipped",
+      "from": "W3",
+      "stage": "W4",
+      "owned": "0.006",
+      "quantity": "0.003",
+      "target": "0.003",
+      "action": "REDUCE"
+    },
+    {
+      "id": "w5_long_w3_add_three",
+      "from": "W4",
+      "stage": "W5",
+      "owned": "0.003",
+      "cap": "0.003",
+      "ratio": 2.0,
+      "quantity": "0.003",
+      "target": "0.006",
+      "action": "ADD"
+    },
+    {
+      "id": "w5_short_w3_add_five",
+      "from": "W4",
+      "stage": "W5",
+      "owned": "0.003",
+      "cap": "0.005",
+      "ratio": 1.5,
+      "quantity": "0.005",
+      "target": "0.008",
+      "action": "ADD"
+    },
+    {
+      "id": "w5_exact_162_undefined",
+      "from": "W4",
+      "stage": "W5",
+      "owned": "0.003",
+      "cap": "0.005",
+      "ratio": 1.62,
+      "reason": "COURSE_STAGE_OR_W3_W1_RATIO_UNCONFIRMED"
+    },
+    {
+      "id": "motive_exit",
+      "from": "W5",
+      "stage": "EXIT",
+      "owned": "0.006",
+      "ratio": 2.0,
+      "quantity": "0.006",
+      "target": "0",
+      "action": "REDUCE"
+    },
+    {
+      "id": "correction_reduce_two",
+      "from": "A_ENTRY",
+      "stage": "A_REDUCE",
+      "owned": "0.003",
+      "quantity": "0.002",
+      "target": "0.001",
+      "action": "REDUCE"
+    },
+    {
+      "id": "correction_add_three",
+      "from": "A_REDUCE",
+      "stage": "C_ADD",
+      "owned": "0.001",
+      "cap": "0.003",
+      "quantity": "0.003",
+      "target": "0.004",
+      "action": "ADD"
+    },
+    {
+      "id": "correction_cannot_clip",
+      "from": "A_REDUCE",
+      "stage": "C_ADD",
+      "owned": "0.001",
+      "cap": "0.002",
+      "reason": "COURSE_FULL_TRANCHE_EXCEEDS_RISK_OR_MARGIN_CAP"
+    },
+    {
+      "id": "correction_exit",
+      "from": "C_ADD",
+      "stage": "CORRECTION_EXIT",
+      "owned": "0.004",
+      "quantity": "0.004",
+      "target": "0",
+      "action": "REDUCE"
+    },
+    {
+      "id": "no_skip_motive_stages",
+      "from": "W1",
+      "stage": "W3",
+      "owned": "0.003",
+      "cap": "0.006",
+      "reason": "COURSE_NON_SEQUENTIAL_QUANTITY_STAGE"
+    },
+    {
+      "id": "no_mix_corrective_owner",
+      "from": "W5",
+      "stage": "A_ENTRY",
+      "owned": "0.006",
+      "ratio": 2.0,
+      "cap": "0.003",
+      "reason": "COURSE_NON_SEQUENTIAL_QUANTITY_STAGE"
+    },
+    {
+      "id": "changed_common_grid",
+      "from": "W2",
+      "stage": "W3",
+      "owned": "0.001",
+      "lot": "0.002",
+      "market": "0.003",
+      "cap": "0.005",
+      "reason": "COURSE_UNIT_NOT_ON_EXCHANGE_GRID"
+    },
+    {
+      "id": "malformed_exponent",
+      "kind": "INITIAL",
+      "cap": "1e100000",
+      "lot": "0.001",
+      "reason": "COURSE_QUANTITY_OR_GRID_MALFORMED"
+    }
+  ]
+}

@@ -6423,27 +6423,9 @@ private class NativeEngine(
                     editionExit="NTD_FIVE_ZONE_PROTECTION_CROSSED"
             } else if(profile==williamsCourseProfile) {
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
-                val setup=runCatching { JSONObject(intent.optString("setup_context")) }.getOrDefault(JSONObject())
-                val initialStage=setup.optString("course_initial_stage")
-                val initialUnits=williamsCourseTarget(initialStage,setup.optDouble("course_w3_to_w1_ratio",Double.NaN))
-                val originalFill=intent.optString("actual_entry_executed_qty").toDoubleOrNull()
-                if(!management.has("course_unit_quantity") && initialUnits!=null && initialUnits>0 && setup.has("course_origin_at") &&
-                    originalFill!=null && originalFill>0 && abs(originalFill-abs(signedQty))<=1e-9) {
-                    management.put("course_stage",initialStage).put("course_origin_at",setup.getLong("course_origin_at"))
-                        .put("course_unit_quantity",originalFill/initialUnits).put("course_unit_basis","CONFIRMED_INITIAL_FILL")
-                        .put("policy","COURSE_BOOK_EXAMPLE_RATIOS_RISK_CAPPED")
-                }
-                fun filledIntent(cid:String):Boolean=(0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
-                    it.optString("client_id")==cid && it.optString("order_status")=="FILLED" &&
-                        (it.optString("intent_role")=="ADD_ON" || it.optString("exchange_status")=="EXIT_CONFIRMED")
-                }
-                val pendingStage=management.optString("course_pending_stage")
-                val pendingTarget=management.optDouble("course_pending_target",Double.NaN)
-                if(pendingStage.isNotEmpty() && pendingTarget.isFinite() && abs(abs(signedQty)-pendingTarget)<=maxOf(1e-9,pendingTarget*1e-9) &&
-                    filledIntent(management.optString("course_pending_client_id"))) {
-                    management.put("course_stage",pendingStage).remove("course_pending_stage")
-                    management.remove("course_pending_target");management.remove("course_pending_client_id")
-                }
+                // Only coordinator reconciliation can publish an exact signed
+                // stage receipt. A target-shaped position or partial initial
+                // fill must never manufacture a unit or advance this stage.
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
                 intent.put("edition_management",management)
                 if(management.has("course_unit_quantity")) {
@@ -6459,7 +6441,7 @@ private class NativeEngine(
                             val digest=java.security.MessageDigest.getInstance("SHA-256").digest(seed.toByteArray()).joinToString("") { "%02x".format(it) }.take(20)
                             val cid="W2R_${symbol.take(7)}_$digest"
                             management.put("course_pending_stage",stage).put("course_pending_target",abs(signedQty)-reduction)
-                                .put("course_pending_client_id",cid)
+                                .put("course_pending_client_id",cid).put("course_pending_quantity",proof.getJSONObject("exact_quantity"))
                             futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
                             val trimmed=withCampaignMutation(symbol,"COURSE_STAGE_REDUCTION",allowPaused=true, allowReconcileRequired=riskOnly) {
                                 futuresCampaignCoordinator.closePosition(symbol,direction,fmtQty(reduction,rules.decimals),cid,"COURSE_STAGE_TRIM",partialReduction=true)
@@ -6714,14 +6696,18 @@ private class NativeEngine(
         }
         val courseManagement=owner.optJSONObject("edition_management")
         if(profile==williamsCourseProfile && courseManagement?.has("course_unit_quantity")==true) {
+            if(courseManagement.has("course_quantity_blocker")) return rejectDecision(symbol,"COURSE_PREVIOUS_EXACT_STAGE_FILL_UNVERIFIED")
             val context=williamsCourseActiveContext(waveHierarchyFor(symbol),direction,courseManagement.getLong("course_origin_at")) ?: return
             val targetStage=williamsCourseNextStage(courseManagement.getString("course_stage"),context.getString("phase"),true,
                 context.optDouble("w3_to_w1_ratio",Double.NaN)) ?: return
-            val units=williamsCourseTarget(targetStage,context.optDouble("w3_to_w1_ratio",Double.NaN))
-                ?: return rejectDecision(symbol,"COURSE_W5_W3_W1_RATIO_UNCONFIRMED")
-            val target=floorStep(courseManagement.getDouble("course_unit_quantity")*units,step)
-            quantity=floorStep(minOf(quantity,maxOf(0.0,target-owner.getString("confirmed_position_qty").toDouble())),step)
-            setup.put("course_target_stage",targetStage).put("course_target_quantity",target)
+            val exact=williamsCourseStageQuantity(courseManagement.opt("course_unit_quantity"),courseManagement.getString("course_stage"),
+                targetStage,owner.getString("confirmed_position_qty"),rules.step,rules.marketStep,quantity,
+                context.optDouble("w3_to_w1_ratio",Double.NaN))
+            if(exact.optString("status")!="EXACT_COURSE_QUANTITY") return rejectDecision(symbol,exact.getString("reason"))
+            if(exact.getString("action")!="ADD") return rejectDecision(symbol,"COURSE_ADDITION_MUST_INCREASE_OWNED_STAGE")
+            quantity=exact.getString("quantity").toDouble()
+            setup.put("course_target_stage",targetStage).put("course_target_quantity",exact.getString("target_quantity"))
+                .put("course_exact_quantity",exact)
         }
         if(!quantity.isFinite() || quantity<=0) return
         if(profile in williamsExecutionProfiles) setup.put("book_h1_entry",williamsBookH1Proof(
@@ -7089,7 +7075,15 @@ private class NativeEngine(
         val quantityStep = ExecutionMath.commonQuantityStep(rules.step, rules.marketStep)
         val minQuantity = if (marketLotEnabled) max(rules.minQty, rules.marketMinQty) else rules.minQty
         val maxQuantity = if (marketLotEnabled) min(rules.maxQty, rules.marketMaxQty) else rules.maxQty
-        val qty = floorStep(notional / trigger, quantityStep)
+        var qty = floorStep(notional / trigger, quantityStep)
+        val courseInitial=if(signal.strategyProfile==williamsCourseProfile) {
+            val context=williamsCourseActiveContext(hierarchy,direction.name)
+            if(context?.optString("phase")!="W1") return rejectDecision(symbol,"COURSE_INITIAL_PARENT_CHILD_DEGREE_UNPROVEN")
+            val exact=williamsCourseInitialQuantity(qty,rules.step,rules.marketStep)
+            if(exact.optString("status")!="EXACT_COURSE_QUANTITY") return rejectDecision(symbol,exact.getString("reason"))
+            qty=exact.getString("quantity").toDouble()
+            exact
+        } else null
         if (!qty.isFinite() || qty < minQuantity || qty > maxQuantity ||
             !ExecutionMath.isMultiple(qty, rules.step) ||
             (marketLotEnabled && !ExecutionMath.isMultiple(qty, rules.marketStep)) ||
@@ -7128,6 +7122,7 @@ private class NativeEngine(
                     executionSemantics=signal.executionSemantics,referenceClose=if(marketReentry) reference else 0.0,
                     reentryOwnerId=if(profitReentry(signal)) owned!!.getString("client_id") else ""))
                 if(signal.strategyProfile==williamsCourseProfile) {
+                    put("course_exact_quantity",courseInitial)
                     williamsCourseActiveContext(hierarchy,direction.name)?.let { context ->
                         put("course_origin_at",context.getLong("origin_at")).put("course_initial_stage",context.getString("phase"))
                         if(!context.isNull("w3_to_w1_ratio")) put("course_w3_to_w1_ratio",context.getDouble("w3_to_w1_ratio"))
@@ -8752,21 +8747,19 @@ private class NativeEngine(
             management.optLong("course_origin_at"),management.optString("course_stage"),
             owner.optLong("position_open_observed_at_ms"),now,bars)
         if(proof.optString("status")!="OBSERVED_SOURCE_PINNED_REDUCTION") return proof
-        val unit=management.optDouble("course_unit_quantity",Double.NaN)
         val setup=runCatching { JSONObject(owner.optString("setup_context")) }.getOrDefault(JSONObject())
-        val units=williamsCourseTarget(management.optString("course_stage"),
-            management.optDouble("course_w3_to_w1_ratio",setup.optDouble("course_w3_to_w1_ratio",Double.NaN)))
-            ?: return blocked("COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED")
-        val owned=owner.optString("confirmed_position_qty").toDoubleOrNull() ?: return blocked("COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED")
-        val rules=symbolFilters(symbol);val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
-        if(!unit.isFinite() || unit<=0 || abs(owned-floorStep(unit*units,step))>maxOf(1e-9,owned*1e-9))
-            return blocked("COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED")
-        val target=floorStep(unit*proof.getInt("target_units"),step)
+        val rules=symbolFilters(symbol)
+        val exact=williamsCourseStageQuantity(management.opt("course_unit_quantity"),management.optString("course_stage"),
+            proof.getString("stage"),owner.optString("confirmed_position_qty"),rules.step,rules.marketStep,
+            w3ToW1Ratio=management.optDouble("course_w3_to_w1_ratio",setup.optDouble("course_w3_to_w1_ratio",Double.NaN)))
+        if(exact.optString("status")!="EXACT_COURSE_QUANTITY") return blocked(exact.getString("reason"))
+        if(exact.getString("action")!="REDUCE") return blocked("COURSE_TRIM_MUST_REDUCE_OWNED_STAGE")
         val profit=williamsTc2OppositeExitProfitBlocker(owner.getString("direction"),
             owner.optString("actual_entry_price").toDoubleOrNull() ?: Double.NaN,futuresMarketData.markPrice(symbol),
             2*feeBufferPerSidePct+maxSlippagePct,rules.tick)
         if(profit!=null) return blocked(profit.replace("TC2_OPPOSITE_EXIT","COURSE_STAGE_TRIM"))
-        return proof.put("target_quantity",target).put("reduction_quantity",floorStep(owned-target,step))
+        return proof.put("target_quantity",exact.getString("target_quantity").toDouble())
+            .put("reduction_quantity",exact.getString("quantity").toDouble()).put("exact_quantity",exact)
     }
 
     private fun verifyCourseTrimBeforeSubmit(owner:JSONObject,quantity:String) {
@@ -8807,13 +8800,10 @@ private class NativeEngine(
         val stage=management.optString("course_stage");val symbol=owner.getString("symbol")
         val correction=if(stage in setOf("A_ENTRY","A_REDUCE","C_ADD")) courseCorrectionHandoff(owner) else JSONObject()
         val setup=runCatching { JSONObject(owner.optString("setup_context")) }.getOrDefault(JSONObject())
-        val units=if(correction.length()>0) mapOf("A_ENTRY" to 3,"A_REDUCE" to 1,"C_ADD" to 4)[stage]
-            else williamsCourseTarget(stage,management.optDouble("course_w3_to_w1_ratio",setup.optDouble("course_w3_to_w1_ratio",Double.NaN)))
-        val unit=management.optDouble("course_unit_quantity",Double.NaN)
-        val quantity=owner.optString("confirmed_position_qty").toDoubleOrNull() ?: return blocked("COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED")
-        val rules=symbolFilters(symbol);val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
-        if(units==null || !unit.isFinite() || unit<=0 || abs(quantity-floorStep(unit*units,step))>maxOf(1e-9,quantity*1e-9))
-            return blocked("COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED")
+        val rules=symbolFilters(symbol)
+        williamsCourseOwnedQuantityBlocker(management.opt("course_unit_quantity"),stage,owner.optString("confirmed_position_qty"),
+            rules.step,rules.marketStep,management.optDouble("course_w3_to_w1_ratio",setup.optDouble("course_w3_to_w1_ratio",Double.NaN)))
+            ?.let { return blocked(it) }
         val now=futuresMarketData.exchangeNowMs()
         val bars=fetchCandles(symbol,"1h",260).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }.filter { it.t+WILLIAMS_H1_MS<=now }
         if(williamsClosedH1HistoryBlocker(bars,now)!=null) return blocked("COURSE_EXIT_H1_HISTORY_UNVERIFIED")

@@ -196,7 +196,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("clientOrderId", childClientId ?: pending.getString("clientAlgoId"))
                 .put("status", if (fraction == 1.0) "FILLED" else "PARTIALLY_FILLED")
                 .put("origQty", pending.getString("quantity")).put("executedQty", kotlin.math.abs(quantity).toString())
-                .put("side", pending.getString("side")).put("avgPrice", entry.toString())
+                .put("side", pending.getString("side")).put("avgPrice", entry.toString()).put("reduceOnly",false).put("positionSide","BOTH")
         }
         fun fillAddition(clientId:String) {
             val parent=algos.values.single { it.optString("clientAlgoId")==clientId }
@@ -207,7 +207,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             parent.put("algoStatus","FINISHED").put("actualOrderId",id)
             orders[id]=JSONObject().put("symbol","BTCUSDT").put("orderId",id).put("clientOrderId",clientId)
                 .put("status","FILLED").put("origQty",qty.toString()).put("executedQty",qty.toString())
-                .put("side",parent.getString("side")).put("avgPrice",price.toString())
+                .put("side",parent.getString("side")).put("avgPrice",price.toString()).put("reduceOnly",false).put("positionSide","BOTH")
         }
         fun posts(path: String) = requests.count { it.method == "POST" && it.url.encodedPath == path }
         fun adapter(admission: () -> Unit = {}) = BinanceUsdMFuturesTestnetAdapter("key", "secret", client,
@@ -880,18 +880,27 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertTrue(coordinator.submitPendingEntry(initial.copy(strategyProfile=williamsTc2Profile,signalType="FRACTAL")).getBoolean("accepted"))
             exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
             markLegacySource(journal,coordinator,williamsCourseProfile,"COURSE_HUMP")
+            val closeId="W2X_COURSE_TRIM_${direction.name}_$lost"
+            coordinator.saveManagementState("BTCUSDT",initial.clientId,JSONObject().put("course_stage","W3_EXTENSION")
+                .put("course_unit_quantity","0.1").put("course_unit_basis","CONFIRMED_INITIAL_FILL").put("course_w3_to_w1_ratio",2.0)
+                .put("course_pending_client_id",closeId).put("course_pending_stage","W4")
+                .put("course_pending_quantity",williamsCourseStageQuantity("0.1","W3_EXTENSION","W4","1","0.001",w3ToW1Ratio=2.0)))
             val protection=exchange.algos.values.single { it.optString("closePosition")=="true" }.getString("clientAlgoId")
             // This test isolates signed reduction/recovery. The production
             // source gate has its own causal parent/terminal fixture tests.
             coordinator.bookCourseTrimVerifier={ _,_ -> }
             exchange.loseCloseReply=lost
-            val reduced=coordinator.closePosition("BTCUSDT",direction,"0.7","W2X_COURSE_TRIM_${direction.name}_$lost",
+            val reduced=coordinator.closePosition("BTCUSDT",direction,"0.7",closeId,
                 "COURSE_STAGE_TRIM",partialReduction=true)
             if(!lost) assertTrue(reduced.toString(),reduced.getBoolean("ok"))
             coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
             assertTrue(coordinator.reconcile().getBoolean("ok"))
             assertEquals(.3,kotlin.math.abs(exchange.quantity),1e-8)
             assertEquals("OPEN_PROTECTED",coordinator.state.name)
+            val management=coordinator.intentsSnapshot().getJSONObject(0).getJSONObject("edition_management")
+            assertEquals("W4",management.getString("course_stage"))
+            assertEquals("0.1",management.getString("course_unit_quantity"))
+            assertEquals(1,management.getJSONArray("course_stage_fills").length())
             val trigger=exchange.mark+if(direction.name=="LONG") 1 else -1
             val addition=initial.copy(quantity="0.4",entryPrice=trigger.toString(),riskPct=.001,
                 clientId="W2A_COURSE_${direction.name}_$lost",entryClientId=initial.clientId,
@@ -925,6 +934,44 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals(before,exchange.posts("/fapi/v1/order"))
             assertEquals(1.0,kotlin.math.abs(exchange.quantity),1e-9)
             assertTrue(exchange.algos.values.any { it.optString("algoStatus")=="NEW" && it.optString("closePosition")=="true" })
+        }
+    }
+
+    @Test fun courseInitialUnitRequiresTheExactSignedFillAndDoesNotRescaleAfterRestart() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) for(partial in listOf(false,true)) {
+            val journal=Journal();val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            coordinator.reconcile()
+            val proposal=williamsCourseInitialQuantity("0.9","0.001")
+            val initial=plan(direction).copy(quantity="0.9")
+            assertTrue(coordinator.submitPendingEntry(initial).getBoolean("accepted"))
+            val rows=coordinator.intentsSnapshot()
+            // Legacy filled intent fixture. Course new-risk execution remains
+            // disabled; source/degree admission is not claimed by this test.
+            rows.getJSONObject(0).put("strategy_profile",williamsCourseProfile).put("signal_type","COURSE_HUMP")
+                .put("setup_context",JSONObject().put("course_exact_quantity",proposal).put("course_initial_stage","W1")
+                    .put("course_origin_at",10L).toString())
+            journal.writeState("futures_campaign_intents_v2",rows.toString())
+            exchange.fill(if(partial) .5 else 1.0,childClientId="SIGNED_ACTUAL_CHILD")
+            if(partial) exchange.orders.getValue("42").put("status","CANCELED")
+            val reconciled=coordinator.reconcile()
+            assertTrue(reconciled.toString(),reconciled.getBoolean("ok"))
+            val owner=coordinator.intentsSnapshot().getJSONObject(0);val management=owner.getJSONObject("edition_management")
+            assertEquals("OPEN_PROTECTED",coordinator.state.name)
+            if(partial) {
+                assertFalse(management.has("course_unit_quantity"))
+                assertEquals("COURSE_STAGE_REQUIRES_FULL_TERMINAL_FILL",management.getString("course_quantity_blocker"))
+            } else {
+                assertEquals("0.3",management.getString("course_unit_quantity"))
+                assertEquals("W1",management.getString("course_stage"))
+                assertEquals(1,management.getJSONArray("course_stage_fills").length())
+            }
+            val posts=exchange.posts("/fapi/v1/algoOrder")
+            val restarted=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(restarted.reconcile().toString(),restarted.reconcile().getBoolean("ok"))
+            val after=restarted.intentsSnapshot().getJSONObject(0).getJSONObject("edition_management")
+            assertEquals(management.toString(),after.toString())
+            assertEquals(posts,exchange.posts("/fapi/v1/algoOrder"))
         }
     }
 
