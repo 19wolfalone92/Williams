@@ -13,10 +13,17 @@ class WilliamsExecutionPolicyTest {
         for(profile in williamsExecutionProfiles+williamsUnifiedProfile)
             assertEquals(profile,williamsRestoredExecutionSelection(profile,WILLIAMS_EXECUTION_POLICY))
     }
-    @Test fun tc2AndNtdOwnNewRiskWhileCourseRemainsObservationOnly() {
+    @Test fun tc2AloneOwnsNewRiskAndNtdCourseObserveOnly() {
+        assertEquals(listOf(williamsTc2Profile),williamsExecutionProfiles)
+        assertEquals(listOf(williamsNtdProfile,williamsCourseProfile),williamsObserverProfiles)
+        assertEquals("TC2_ONLY_NEW_EXPOSURE_V3",WILLIAMS_EXECUTION_POLICY)
         assertNull(williamsNewExposureBlocker(williamsTc2Profile))
-        for(source in listOf(williamsCourseProfile,williamsUnifiedProfile,""))
+        for(source in listOf(williamsNtdProfile,williamsCourseProfile,williamsUnifiedProfile,""))
             assertEquals("WILLIAMS_SOURCE_OBSERVATION_ONLY",williamsNewExposureBlocker(source))
+        assertEquals(williamsUnifiedProfile,
+            williamsRestoredExecutionSelection(williamsNtdProfile,"TC2_NTD_OWNED_LIFECYCLES_V2"))
+        assertEquals(williamsUnifiedProfile,
+            williamsRestoredExecutionSelection(williamsNtdProfile,WILLIAMS_EXECUTION_POLICY))
     }
     @Test fun oldFractalNeedsCurrentStructuralProofInsteadOfAnAgeCutoff() {
         val at=480000L*h;val now=at+105*h
@@ -81,13 +88,13 @@ class WilliamsExecutionPolicyTest {
 
     @Test fun tc2H1WiseMenCanAddBeforeDailyOrH4AlligatorAlignment() {
         assertFalse(williamsAdditionRequiresHigherFrameTrendVeto(williamsTc2Profile))
-        assertFalse(williamsAdditionRequiresHigherFrameTrendVeto(williamsNtdProfile))
+        assertTrue(williamsAdditionRequiresHigherFrameTrendVeto(williamsNtdProfile))
         assertTrue(williamsAdditionRequiresHigherFrameTrendVeto(williamsCourseProfile))
         assertTrue(williamsAdditionRequiresHigherFrameTrendVeto(williamsUnifiedProfile))
         // Executable exposure permission is a separate gate: NTD & Course
         // may observe H1 signals but cannot create new live risk.
         assertNull(williamsNewExposureBlocker(williamsTc2Profile))
-        assertNull(williamsNewExposureBlocker(williamsNtdProfile))
+        assertNotNull(williamsNewExposureBlocker(williamsNtdProfile))
         assertNotNull(williamsNewExposureBlocker(williamsCourseProfile))
     }
     @Test fun tc2AllThreeOriginalH1InitialSignalsAreAllowedWithoutD1H4Alignment() {
@@ -131,7 +138,7 @@ class WilliamsExecutionPolicyTest {
 
     @Test fun tc2InitialEntryDoesNotRequire45D1OrH4Bars() {
         assertFalse(williamsInitialHigherFrameHistoryRequired(williamsTc2Profile))
-        assertFalse(williamsInitialHigherFrameHistoryRequired(williamsNtdProfile))
+        assertTrue(williamsInitialHigherFrameHistoryRequired(williamsNtdProfile))
         assertTrue(williamsInitialHigherFrameHistoryRequired(williamsCourseProfile))
         assertTrue(williamsInitialHigherFrameHistoryRequired(williamsUnifiedProfile))
     }
