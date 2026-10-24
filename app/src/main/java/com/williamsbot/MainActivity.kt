@@ -2852,6 +2852,36 @@ private fun PositionScreen(
                                 }
                             }
                         }
+                        val oldOppositeCampaign = status.futuresIntents.firstOrNull { stored ->
+                            stored.optString("symbol") == p.symbol &&
+                                stored.optString("direction") in setOf("LONG", "SHORT") &&
+                                stored.optString("direction") != p.direction &&
+                                stored.optString("campaign_status") in setOf(
+                                    "OPEN_PROTECTED", "POSITION_OPEN", "EXIT_PENDING",
+                                    "ADD_ON_PENDING", "FILL_CONFIRMATION_PENDING"
+                                )
+                        }
+                        if (oldOppositeCampaign != null) {
+                            Text(
+                                "⚠️ BINANCE: ${p.direction} • СТАРАЯ КАМПАНИЯ: " +
+                                    oldOppositeCampaign.optString("direction") +
+                                    ". Это разные состояния. Старая запись НЕ является " +
+                                    "действующей позицией. Автоматическое сопровождение " +
+                                    "заблокировано до подтверждённой сверки.",
+                                color = AppColors.amber,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        if (p.stop == null || p.stopVerificationStatus == "UNVERIFIED_OR_STALE") {
+                            Text(
+                                "🚨 Защитный STOP на Binance не подтверждён. " +
+                                    "Проверь позицию непосредственно на бирже!",
+                                color = AppColors.amber,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        InfoRow("Источник направления", "Биржевая позиция Binance • " +
+                            if (status.positionsSnapshotOk) "проверенный снимок" else "снимок устарел или не подтверждён")
                         InfoRow(
                             "Объём позиции",
                             fmt(p.qty, 6)
@@ -4081,6 +4111,19 @@ private fun parsePortfolio(json: JSONObject): PortfolioSummary {
     )
 }
 
+/** Read-only UI interpretation of a confirmed Binance one-way position.
+ * Positive positionAmt = LONG, negative = SHORT, zero/invalid = unknown.
+ * This never assigns strategy ownership or authorizes exchange orders.
+ */
+internal fun signedBinancePositionDirection(position: JSONObject): String? {
+    val qty = position.optString("positionAmt").toBigDecimalOrNull() ?: return null
+    return when (qty.signum()) {
+        1 -> "LONG"
+        -1 -> "SHORT"
+        else -> null
+    }
+}
+
 internal fun parseStatus(json: JSONObject): Status {
     val legacy = json.optJSONObject("position")
     val array = json.optJSONArray("positions")
@@ -4123,7 +4166,12 @@ internal fun parseStatus(json: JSONObject): Status {
             parsed += PositionView(
                 symbol = symbol,
                 qty = quantity,
-                direction = item.optString("direction", "").uppercase(Locale.US),
+                // Signed USD-M one-way positionAmt is the authoritative exchange
+                // direction. Never let a stale local campaign label reverse it.
+                direction = signedBinancePositionDirection(item)
+                    ?: item.optString("direction", "").uppercase(Locale.US).takeIf {
+                        it == "LONG" || it == "SHORT"
+                    }.orEmpty(),
                 entry = entryPrice,
                 stop = item.optDouble("stop_loss", item.optDouble("stop"))
                     .takeUnless { it.isNaN() || it == 0.0 },
@@ -4493,9 +4541,10 @@ private fun parseTrades(array: JSONArray): List<Trade> =
             score = snap?.optDouble("score", 0.0) ?: 0.0,
             mfeR = x.optDouble("mfe_r", 0.0),
             maeR = x.optDouble("mae_r", 0.0),
-            direction = x.optString("direction").ifBlank {
-                if (x.optString("side").equals("SELL", true)) "SHORT" else "LONG"
-            },
+            // An exchange SELL can also be a LONG exit. A blank historical
+            // direction must remain UNKNOWN instead of silently becoming LONG.
+            direction = x.optString("direction").uppercase(Locale.US)
+                .takeIf { it == "LONG" || it == "SHORT" } ?: "UNKNOWN",
             feeUsdt = x.optDouble("fee_usdt", Double.NaN).takeUnless { it.isNaN() },
             feeKnown = x.optBoolean("fee_known", true),
             initialRiskUsdt = x.optDouble("initial_risk_usdt", Double.NaN).takeUnless { it.isNaN() },
