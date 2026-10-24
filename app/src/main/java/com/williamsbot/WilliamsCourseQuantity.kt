@@ -6,7 +6,7 @@ import org.json.JSONObject
 
 /** Course PDF78-84 proportions, independent of wave proof and order authority. */
 internal const val WILLIAMS_COURSE_QUANTITY_POLICY="COURSE_EXACT_CONTRACT_UNITS_V1"
-private val courseCorrectionTargets=mapOf("A_ENTRY" to 3,"A_REDUCE" to 1,"C_ADD" to 4,"CORRECTION_EXIT" to 0)
+private val courseQuantityCorrectionTargets=mapOf("A_ENTRY" to 3,"A_REDUCE" to 1,"C_ADD" to 4,"CORRECTION_EXIT" to 0)
 private val courseQuantityNext=mapOf("W1" to listOf("W2"),"W2" to listOf("W3"),"W3" to listOf("W3_EXTENSION","W4"),
     "W3_EXTENSION" to listOf("W4"),"W4" to listOf("W5"),"W5" to listOf("EXIT"),
     "A_ENTRY" to listOf("A_REDUCE"),"A_REDUCE" to listOf("C_ADD"),"C_ADD" to listOf("CORRECTION_EXIT"))
@@ -46,8 +46,8 @@ internal fun williamsCourseInitialQuantity(riskCap:Any?,lotStep:Any?,marketStep:
 internal fun williamsCourseStageQuantity(unitQuantity:Any?,fromStage:String,stage:String,ownedQuantity:Any?,lotStep:Any?,
     marketStep:Any?="0",riskCap:Any?=null,w3ToW1Ratio:Double?=null):JSONObject {
     if(stage !in courseQuantityNext[fromStage].orEmpty()) return courseQuantityBlocked("COURSE_NON_SEQUENTIAL_QUANTITY_STAGE")
-    val units=courseCorrectionTargets[fromStage] ?: williamsCourseTarget(fromStage,w3ToW1Ratio)
-    val targetUnits=courseCorrectionTargets[stage] ?: williamsCourseTarget(stage,w3ToW1Ratio)
+    val units=courseQuantityCorrectionTargets[fromStage] ?: williamsCourseTarget(fromStage,w3ToW1Ratio)
+    val targetUnits=courseQuantityCorrectionTargets[stage] ?: williamsCourseTarget(stage,w3ToW1Ratio)
     if(units==null || targetUnits==null) return courseQuantityBlocked("COURSE_STAGE_OR_W3_W1_RATIO_UNCONFIRMED")
     return try {
         val unit=courseDecimal(unitQuantity);val owned=courseDecimal(ownedQuantity);val step=williamsCourseQuantityStep(lotStep,marketStep)
@@ -71,7 +71,7 @@ internal fun williamsCourseStageQuantity(unitQuantity:Any?,fromStage:String,stag
 /** Signed actual child/order identity must already be attributed by the caller. */
 internal fun williamsCourseOwnedQuantityBlocker(unitQuantity:Any?,stage:String,ownedQuantity:Any?,lotStep:Any?,
     marketStep:Any?="0",w3ToW1Ratio:Double?=null):String?=try {
-    val units=courseCorrectionTargets[stage] ?: williamsCourseTarget(stage,w3ToW1Ratio)
+    val units=courseQuantityCorrectionTargets[stage] ?: williamsCourseTarget(stage,w3ToW1Ratio)
     val unit=courseDecimal(unitQuantity);val owned=courseDecimal(ownedQuantity);val step=williamsCourseQuantityStep(lotStep,marketStep)
     when {
         units==null || units<=0 || unit.signum()<=0 || owned.signum()<=0 -> "COURSE_ACTUAL_UNIT_OR_OWNED_QUANTITY_UNVERIFIED"
