@@ -28,6 +28,9 @@ FUTURES_REST = "https://fapi.binance.com"
 APPROVED_SYMBOLS = (
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
     "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+    # Public-data RESEARCH scope only; this never changes Android's
+    # independently configured live-account trading universe.
+    "TRXUSDT", "DOTUSDT", "UNIUSDT", "BCHUSDT", "NEARUSDT",
 )
 KLINE_COLUMNS = (
     "open_time", "open", "high", "low", "close", "volume",
@@ -332,7 +335,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     symbols = [x.strip().upper() for x in args.symbols.split(",") if x.strip()]
     if not symbols or len(set(symbols)) != len(symbols) or any(x not in APPROVED_SYMBOLS for x in symbols):
-        parser.error("--symbols must be a unique subset of the approved ten USD-M contracts")
+        parser.error("--symbols must be a unique subset of the approved fifteen USD-M research contracts")
     start_ms = int(pd.Timestamp(args.start, tz="UTC").timestamp() * 1000)
     end_ms = int(pd.Timestamp(args.end, tz="UTC").timestamp() * 1000)
     config = PaperReplayConfig(

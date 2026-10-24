@@ -133,3 +133,14 @@ def test_replay_keeps_each_symbol_tick_through_execution_and_stress_audit(monkey
     with pytest.raises(ValueError,match="tick size"):
         replay.run_symbol_replay("XRPUSDT",candles,tick_size=float("nan"),
             output_dir=tmp_path/"bad",config=config)
+
+def test_public_history_research_universe_is_15_verified_usdm_perpetual_pairs():
+    symbols={
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+        "TRXUSDT", "DOTUSDT", "UNIUSDT", "BCHUSDT", "NEARUSDT",
+    }
+    assert len(symbols)==15 and set(replay.APPROVED_SYMBOLS)==symbols
+    with pytest.raises(ValueError,match="outside the approved"):
+        replay.fetch_usdm_h1_history("UNKNOWNUSDT",1000,2000,session=None)
+

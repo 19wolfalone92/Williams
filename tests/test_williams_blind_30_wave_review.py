@@ -41,3 +41,17 @@ def test_blind_review_produces_same_reference_with_future_poisoning():
     for r in suffix:r[4]="-999999"
     r2=blind_reference((prefix+suffix)[:160])
     assert r1==r2
+
+def test_fifteen_real_assets_expand_the_causal_blind_wave_sample_without_fake_experts(tmp_path):
+    assert len(mod.ALL_15)==15 and len(set(mod.ALL_15))==15
+    for symbol in mod.ALL_15:
+        rows,checksum=mod.load_source(symbol)
+        assert len(rows)==480 and len(checksum)==64
+    got=mod.run(tmp_path,symbols=mod.ALL_15)
+    assert got["schema"]=="WILLIAMS_BLIND_H1_RULE_PROXY_90_V1"
+    assert got["snapshot_count"]==90 and len(got["instruments"])==15
+    assert got["classified"]+got["abstained"]==90
+    assert got["independent_expert_annotations"]==0
+    assert got["accuracy_vs_human_expert"] is None
+    assert got["independent_accuracy_certified"] is False
+    assert not got["can_place_orders"] and not got["can_close"] and not got["can_reverse"]
