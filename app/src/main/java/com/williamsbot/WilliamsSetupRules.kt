@@ -25,10 +25,13 @@ internal fun selectWilliamsPendingFractal(
     if (direction !in listOf("LONG","SHORT") || bars.size<5 || teeth.size!=bars.size ||
         !tick.isFinite() || tick<=0 || !teeth.last().isFinite() || teeth.last()<=0 ||
         !validWilliamsEditionBars(bars) ||
-        // WM3 requires two consecutive actual closed H1 bars to the right.
-        // Missing hours and non-exchange-aligned timestamps are not t+2.
-        bars.any { it.t<0L || it.t%WILLIAMS_H1_MS!=0L } ||
-        bars.zipWithNext().any { (a,b) -> b.t-a.t!=WILLIAMS_H1_MS }) return null
+        // The same selector also serves the legacy read-only M15
+        // refinement. Demand consecutive REAL bars at their genuine
+        // resolution (1h, 15m, 5m, ...), never assume a missing H1/M15
+        // candle counts toward the two right-side fractal confirmations.
+        bars[1].t-bars[0].t !in williamsWaveFrames.values ||
+        bars.any { it.t<0L || it.t%(bars[1].t-bars[0].t)!=0L } ||
+        bars.zipWithNext().any { (a,b) -> b.t-a.t!=bars[1].t-bars[0].t }) return null
     val long=direction=="LONG"
     fun extreme(i:Int)=if (long) bars[i].h else bars[i].l
     for (i in bars.lastIndex-2 downTo 2) {
