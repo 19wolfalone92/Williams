@@ -295,6 +295,7 @@ class CockpitDiagnosticsTest {
         assertEquals("FAIL",severity("EXE-09",s,c))
         // Same-age UI can still contain a genuinely inconsistent signed
         // acknowledgement; that remains FAIL, not a stale-screen excuse.
+        s.put("positions_snapshot_at_ms",now)
         p.put("mark_price",100).put("stop_confirmed_at_ms",now-1)
         assertEquals("FAIL",severity("EXE-08",s,c))
         p.put("stop_confirmed_at_ms",now)
