@@ -563,6 +563,25 @@ internal fun deferrableFuturesReconciliation(purpose: String): Boolean =
  * positions_snapshot_ok=false; these rows do not prove a current position,
  * a working STOP, available risk budget or that the account is flat.
  */
+/**
+ * Stop movement is permitted only with fresh, quantity+side-matched signed
+ * exchange evidence (the caller performs that match before invoking this).
+ * An operator-approved, STOP-only observation is distinct from strategy
+ * ownership. Arbitrary 'external stop exists' does not authorize trailing.
+ */
+internal fun williamsObservedStopCanTrail(observation: JSONObject?): Boolean {
+    if (observation == null || !observation.optBoolean("automatic_trailing_authorized",false)) return false
+    return when (observation.optString("stop_proof")) {
+        "OWNED_STOP_SEEN" ->
+            observation.optBoolean("strategy_ownership_verified",false) &&
+                observation.optString("management_mode") == "STRATEGY_OWNED"
+        "EXTERNAL_PROTECTED" ->
+            !observation.optBoolean("strategy_ownership_verified",false) &&
+                observation.optString("management_mode") == "OPERATOR_APPROVED_STOP_ONLY"
+        else -> false
+    }
+}
+
 internal fun lastKnownFuturesPositionsForDisplay(
     envelope: Pair<String, Long>?, refreshError: String?
 ): Triple<JSONArray, String, Long> {
@@ -5444,7 +5463,13 @@ private class NativeEngine(
                 .put("mark_price", mark).put("stop", stop)
                 .put("stop_verification_status",stopProof)
                 .put("stop_confirmed_at_ms",exchangeStop?.optLong("observed_at_ms") ?: JSONObject.NULL)
-                .put("stop_can_be_auto_trailed",stopProof=="OWNED_STOP_SEEN")
+                // An explicitly operator-approved stop-only supervisor is a
+                // separate, limited authority from strategy campaign ownership.
+                // It can trail an exchange-verified STOP without adding risk.
+                .put("stop_can_be_auto_trailed",williamsObservedStopCanTrail(exchangeStop))
+                .put("stop_management_mode",exchangeStop?.optString("management_mode") ?: "UNVERIFIED")
+                .put("strategy_ownership_verified",exchangeStop?.optBoolean(
+                    "strategy_ownership_verified",false) ?: false)
                 .put("risk_pct", intent?.optDouble("risk_pct", 0.0) ?: 0.0)
                 .put("unrealized_pnl_usdt", pnl).put("margin_type", row.optString("marginType"))
                 .put("leverage", row.optString("leverage")).put("exchange_confirmed", true))
