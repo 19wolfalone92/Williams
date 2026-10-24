@@ -5470,7 +5470,12 @@ private class NativeEngine(
                 .put("stop_management_mode",exchangeStop?.optString("management_mode") ?: "UNVERIFIED")
                 .put("strategy_ownership_verified",exchangeStop?.optBoolean(
                     "strategy_ownership_verified",false) ?: false)
-                .put("risk_pct", intent?.optDouble("risk_pct", 0.0) ?: 0.0)
+                // An unowned / operator-supervised position has no trusted
+                // initial campaign risk. Null is UNKNOWN, never 0% risk.
+                .put("risk_pct", if(intent?.optBoolean("strategy_ownership_verified",false)==true)
+                    intent.optDouble("risk_pct", Double.NaN).takeIf { it.isFinite() && it>0 }
+                        ?: JSONObject.NULL
+                    else JSONObject.NULL)
                 .put("unrealized_pnl_usdt", pnl).put("margin_type", row.optString("marginType"))
                 .put("leverage", row.optString("leverage")).put("exchange_confirmed", true))
         }
