@@ -168,6 +168,9 @@ def run_williams_paper_replay(
         candidates = [
             x for x in signals_by_bar.get(i, ())
             if isinstance(x, SignalSpec) and _valid_signal(x, close)
+            # A historical replay cannot consume a signal whose forming
+            # candle has not even opened at this evaluation time.
+            and 0 <= x.signal_bar_time_ms <= bar_open_ms
             and (not x.expires_at_ms or bar_close_ms < x.expires_at_ms)
         ]
         exited = False

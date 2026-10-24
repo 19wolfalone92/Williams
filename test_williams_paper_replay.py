@@ -202,3 +202,21 @@ def test_paper_replay_rejects_risk_above_entry_cap_and_bad_candles():
         )
     with pytest.raises(ValueError, match="invalid OHLC"):
         run_williams_paper_replay(candles([(100, 99, 101, 100)]), {})
+
+@pytest.mark.parametrize("short",[False,True])
+def test_future_dated_wise_man_cannot_trade_on_past_closed_h1(short):
+    from dataclasses import replace
+    frame=candles([(100,100.5,99.5,100),(100,101.5,98.5,100.5),
+        (100.5,105,97.0,101.0),(101,106,97.0,102.0)])
+    if short:
+        frame=pd.DataFrame({"open":220-frame.open,"high":220-frame.low,
+            "low":220-frame.high,"close":220-frame.close},index=frame.index)
+    side="SELL" if short else "BUY"
+    future=signal(side,trigger=119 if short else 101,
+        stop=122 if short else 98,ts=int(frame.index[3].timestamp()*1000))
+    _,unearned,_=run_williams_paper_replay(frame,{0:[future]})
+    assert unearned.empty
+    genuine=replace(future,signal_bar_time_ms=int(frame.index[0].timestamp()*1000))
+    _,actual,_=run_williams_paper_replay(frame,{0:[genuine]})
+    assert len(actual)==1
+    assert actual.iloc[0].entry_time>=frame.index[1]

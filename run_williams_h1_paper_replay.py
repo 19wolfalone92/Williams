@@ -8,6 +8,7 @@ passed to the exchange-free execution simulator.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import math
 import time
@@ -216,6 +217,11 @@ def run_symbol_replay(
 ) -> dict:
     if len(candles) < 60:
         raise ValueError(f"{symbol}: need at least 60 closed H1 bars; got {len(candles)}")
+    # Use the symbol's actual tick for both creation and simulated execution.
+    if not math.isfinite(tick_size) or tick_size <= 0:
+        raise ValueError(f"{symbol}: missing/invalid exchange tick size")
+    replay_config = replace(config, tick_size=tick_size)
+    replay_config.validate()
     cfg = canonical_indicator_config_from_env()
     indicators = calculate_indicators(candles, cfg)
     indicators = indicators.iloc[54:].copy()
@@ -231,9 +237,9 @@ def run_symbol_replay(
     )
     # Indicator warmup truncation changes the row coordinates, so all signal event
     # keys are now the indices of the matching closed-candle frame above.
-    equity, trades, metrics = run_williams_paper_replay(candles, signals, config)
+    equity, trades, metrics = run_williams_paper_replay(candles, signals, replay_config)
     quality_audit = audit_williams_h1_trade_quality(
-        candles, signals, config, baseline=(equity,trades,metrics))
+        candles, signals, replay_config, baseline=(equity,trades,metrics))
 
 
     regimes = _market_regime_frame(candles)
@@ -292,7 +298,8 @@ def run_symbol_replay(
         "entry_risk_pct": config.risk_pct_per_entry,
         "fee_rate_per_side": config.fee_rate_per_side,
         "adverse_slippage_rate_per_side": config.slippage_rate_per_side,
-        "tick_size_source": "Binance USD-M current exchangeInfo",
+        "tick_size": tick_size,
+        "tick_size_source": "Caller-supplied USD-M exchangeInfo tick; historical tick regime not verified",
         "ohlc_source": "public Binance USD-M Futures historical klines; closed H1 candles only",
         "execution_model": "independent causal paper replay; closed continuous H1; stop-entry, structural stop, no fixed TP; stop-first on intrabar ambiguity; discretionary TC2 opposite market exits require conservative fill profitability after project reserve + modeled fees",
         "trade_metrics": _metrics_for_trades(trades),

@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 import run_williams_h1_paper_replay as replay
 
@@ -106,3 +107,29 @@ def test_market_regimes_use_trailing_trend_and_volatility_only():
         "trend_30d_pct", "realized_vol_14d_annualized", "trend_regime", "volatility_regime"
     ]
     assert regimes.iloc[-1]["trend_regime"] == "TREND_UP_30D"
+
+def test_replay_keeps_each_symbol_tick_through_execution_and_stress_audit(monkeypatch,tmp_path):
+    from williams_paper_replay import PaperReplayConfig
+    idx=pd.date_range("2024-11-09",periods=80,freq="h",tz="UTC")
+    candles=pd.DataFrame({"open":[100.0]*80,"high":[100.2]*80,
+        "low":[99.8]*80,"close":[100.0]*80,"volume":[1000.0]*80},index=idx)
+    seen=[]
+    monkeypatch.setattr(replay,"calculate_indicators",lambda c,cfg:c.copy())
+    monkeypatch.setattr(replay,"extract_causal_h1_signals",lambda *a,**k:{})
+    original=replay.run_williams_paper_replay
+    def spy(c,s,cfg):
+        seen.append(cfg.tick_size)
+        return original(c,s,cfg)
+    monkeypatch.setattr(replay,"run_williams_paper_replay",spy)
+    config=PaperReplayConfig(tick_size=0.1)
+    xrp=replay.run_symbol_replay("XRPUSDT",candles,tick_size=0.0001,
+        output_dir=tmp_path/"xrp",config=config)
+    btc=replay.run_symbol_replay("BTCUSDT",candles,tick_size=0.1,
+        output_dir=tmp_path/"btc",config=config)
+    assert seen==[0.0001,0.1]
+    assert xrp["tick_size"]==0.0001 and btc["tick_size"]==0.1
+    assert xrp["read_only_chronological_quality"]["execution_authority"] is False
+    assert config.tick_size==0.1
+    with pytest.raises(ValueError,match="tick size"):
+        replay.run_symbol_replay("XRPUSDT",candles,tick_size=float("nan"),
+            output_dir=tmp_path/"bad",config=config)
