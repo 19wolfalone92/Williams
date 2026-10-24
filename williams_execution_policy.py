@@ -1,16 +1,18 @@
 """Release execution policy, separate from book signal detection.
 
-TC2 and NTD retain independent entry and management rules. Course stays an
-observation. Previously filled campaigns retain their owning source; automatic
-exits must pass the fresh source-specific execution gate.
+Only TC2 may create NEW exchange exposure. NTD and Course remain independent
+read-only signal observers. Previously filled NTD/Course campaigns retain
+their original source and source-authenticated risk-reducing management:
+the new-exposure restriction must never remove protective stops or prevent
+authorized risk reduction.
 """
 from williams_edition_rules import TC2, NTD, COURSE
 from williams_course_exit import BOOK_EXIT_REASONS as COURSE_BOOK_EXIT_REASONS
 
 EXECUTION_PROFILE = TC2
-EXECUTION_PROFILES = (TC2, NTD)
-OBSERVER_PROFILES = (COURSE,)
-EXECUTION_POLICY = "TC2_NTD_OWNED_LIFECYCLES_V2"
+EXECUTION_PROFILES = (TC2,)
+OBSERVER_PROFILES = (NTD, COURSE)
+EXECUTION_POLICY = "TC2_ONLY_NEW_EXPOSURE_V3"
 
 
 def new_exposure_blocker(source):
