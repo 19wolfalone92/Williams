@@ -84,6 +84,23 @@ class StandaloneRuntimeReconciliationTest {
     }
 
     @Test
+    fun privateStreamLockContentionIsDeferredWithoutApprovingExchangeState() {
+        assertTrue(deferrableFuturesReconciliation("USER_STREAM_RECONCILIATION"))
+        assertTrue(deferrableFuturesReconciliation("POSITION_MANAGEMENT_RECONCILIATION"))
+        for (purpose in listOf("STARTUP_RECONCILIATION", "USER_APPROVED_RECOVERY",
+                "KILL_SWITCH_RECONCILIATION", "LIQUIDATION_GUARD_EXIT")) {
+            assertFalse(deferrableFuturesReconciliation(purpose))
+        }
+        val deferred = JSONObject()
+            .put("ok", false)
+            .put("deferred_to_active_reconciliation", true)
+            .put("blocker", "exchange_reconciliation_in_progress")
+        // Deferred is never an exchange-authenticated sync or release approval.
+        assertFalse(futuresSignedSnapshotComplete(deferred))
+        assertFalse(deferred.getBoolean("ok"))
+    }
+
+    @Test
     fun reconciliationLifecycleHasAnExplicitTimeout() {
         assertTrue(reconciliationTaskLifecycleHealthy(false, 0L, 500_000L))
         assertTrue(reconciliationTaskLifecycleHealthy(true, 100_000L, 400_000L))
