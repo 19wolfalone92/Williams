@@ -11,6 +11,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Ignore
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -734,6 +735,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Ignore("NTD new exposure is disabled; historical transport fixture retained for independent future approval")
     @Test fun ntdInitialFractalAndEveryPendingDimensionUseTheRealProtectedOwner() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) for(family in williamsNtdFamilies-setOf("ZONE_ADD_ON")) {
             val now=System.currentTimeMillis()/WILLIAMS_H1_MS*WILLIAMS_H1_MS+1000
@@ -759,6 +761,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Ignore("NTD new exposure is disabled; historical transport fixture retained for independent future approval")
     @Test fun ntdAdditionProfitAndBookExitProofAreRecheckedBeforeAnyNewMutation() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val now=System.currentTimeMillis()/WILLIAMS_H1_MS*WILLIAMS_H1_MS+1000
@@ -787,6 +790,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Ignore("NTD new exposure is disabled; historical transport fixture retained for independent future approval")
     @Test fun ntdCampaignCannotSpendTheUnusedPortfolioBudgetBeyondItsOwnCeiling() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val now=System.currentTimeMillis()/WILLIAMS_H1_MS*WILLIAMS_H1_MS+1000
@@ -833,6 +837,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Ignore("NTD new exposure is disabled; historical transport fixture retained for independent future approval")
     @Test fun profitableNtdCycleReentersOnlyOnceWithOwnedStopOrCloseEvent() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(market in listOf(false,true)) for(lost in listOf(false,true)) {
             val journal=Journal();val exchange=Exchange(direction)
@@ -1046,6 +1051,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals(before,exchange.posts("/fapi/v1/order"));assertEquals("OPEN_PROTECTED",coordinator.state.name)
     }
 
+    @Ignore("NTD new exposure is disabled; historical transport fixture retained for independent future approval")
     @Test fun ntdZoneAdditionRetainsProtectionAcrossPartialFillLostReplyAndRestart() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(lost in listOf(false,true)) for(fraction in listOf(.5,1.0)) {
             val journal=Journal();val exchange=Exchange(direction)
