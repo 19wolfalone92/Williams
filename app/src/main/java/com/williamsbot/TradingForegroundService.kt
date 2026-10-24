@@ -208,15 +208,17 @@ class TradingForegroundService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent:Intent?) {
-        val snapshot=StandaloneRuntime.backgroundSnapshot()
-        if(!snapshot.autoRunRequested && !(snapshot.running && snapshot.workerAlive)) {
-            // UI was closed without a monitoring request: avoid an idle
-            // permanent foreground service and unnecessary battery usage.
-            RuntimeContinuityEvidence.event(applicationContext,"TASK_REMOVED_IDLE_SERVICE_STOPPED")
-            stopSelf()
-        } else {
-            RuntimeContinuityEvidence.event(applicationContext,"TASK_REMOVED_MONITOR_RETAINED")
-        }
+        // Never block Android's onTaskRemoved main callback on encrypted
+        // preferences or a synchronous SharedPreferences audit commit.
+        runCatching { lifecycleWorker.execute {
+            val snapshot=StandaloneRuntime.backgroundSnapshot()
+            if(!starting.get() && !snapshot.autoRunRequested && !(snapshot.running && snapshot.workerAlive)) {
+                RuntimeContinuityEvidence.event(applicationContext,"TASK_REMOVED_IDLE_SERVICE_STOPPED")
+                stopSelf()
+            } else {
+                RuntimeContinuityEvidence.event(applicationContext,"TASK_REMOVED_MONITOR_RETAINED")
+            }
+        } }
         super.onTaskRemoved(rootIntent)
     }
 
