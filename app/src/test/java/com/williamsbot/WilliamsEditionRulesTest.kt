@@ -5,6 +5,39 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsEditionRulesTest {
+    @Test fun courseAirbagPreservesFormationProtectionAndRejectsAlreadyCrossedBoundaries() {
+        assertEquals(95.0,williamsCourseInitialProtection("LONG",95.0,90.0,100.0)!!,1e-10)
+        assertEquals(97.0,williamsCourseInitialProtection("LONG",95.0,97.0,100.0)!!,1e-10)
+        assertEquals(105.0,williamsCourseInitialProtection("SHORT",105.0,110.0,100.0)!!,1e-10)
+        assertEquals(103.0,williamsCourseInitialProtection("SHORT",105.0,103.0,100.0)!!,1e-10)
+        assertNull(williamsCourseInitialProtection("LONG",95.0,101.0,100.0))
+        assertNull(williamsCourseInitialProtection("SHORT",105.0,99.0,100.0))
+        assertNull(williamsCourseInitialProtection("LONG",Double.NaN,90.0,100.0))
+        assertNull(williamsCourseInitialProtection("SHORT",105.0,Double.POSITIVE_INFINITY,100.0))
+    }
+
+    @Test fun ntdPdf43OldFractalPersistsUntilTriggerOrNewValidFractal() {
+        val start=1_700_002_800_000L/WILLIAMS_H1_MS*WILLIAMS_H1_MS
+        for(side in listOf("LONG","SHORT")) {
+            fun mirror(b:WilliamsWaveBar)=if(side=="LONG") b else WilliamsWaveBar(b.t,220-b.o,220-b.l,220-b.h,220-b.c,b.v)
+            val heights=List(45) {104.0}+listOf(104.0,105.0,110.0,106.0,105.0)+List(100) {104.0}
+            val bars=heights.mapIndexed { i,h -> mirror(WilliamsWaveBar(start+i*WILLIAMS_H1_MS,101.0,h,99.0,101.0,100.0)) }
+            fun detect(series:List<WilliamsWaveBar>):List<WilliamsEditionSetup> {
+                val line=List(series.size) {if(side=="LONG") 100.0 else 120.0}
+                val osc=List(series.size) {1.0}
+                return williamsNtdSetups(side,series,line,line,line,osc,osc,.1).filter { it.kind=="FRACTAL" }
+            }
+            val old=detect(bars).single()
+            assertEquals(49,old.knownIndex)
+            assertEquals(0L,williamsH1SignalExpiry(bars[49].t,"FRACTAL",williamsNtdProfile))
+            val extra=listOf(104.0,105.0,104.0,103.0).mapIndexed { i,h ->
+                mirror(WilliamsWaveBar(bars.last().t+(i+1)*WILLIAMS_H1_MS,101.0,h,99.0,101.0,100.0)) }
+            assertEquals(bars.size+extra.size-1,detect(bars+extra).single().knownIndex)
+            val crossed=if(side=="LONG") bars.last().copy(h=111.0) else bars.last().copy(l=109.0)
+            assertTrue(detect(bars.dropLast(1)+crossed).isEmpty())
+        }
+    }
+
     @Test fun allThreeBookSignalEnginesRequireUnbrokenGenuineCandleIntervals() {
         val bars=(1..50).map { i ->
             WilliamsWaveBar(i*WILLIAMS_H1_MS,100.0,103.0,97.0,100.0,10.0)
@@ -35,9 +68,9 @@ class WilliamsEditionRulesTest {
         assertFalse(williamsProfileAllowsSource(williamsUnifiedProfile,williamsUnifiedProfile))
     }
 
-    @Test fun researchSourcesNeverReceiveNewAutomatedRiskEvenInUnifiedMode() {
+    @Test fun courseRemainsObservationOnlyWhileTc2AndNtdOwnTheirExecution() {
         assertTrue(williamsVerifiedNewRiskSource(williamsTc2Profile))
-        assertFalse(williamsVerifiedNewRiskSource(williamsNtdProfile))
+        assertTrue(williamsVerifiedNewRiskSource(williamsNtdProfile))
         assertFalse(williamsVerifiedNewRiskSource(williamsCourseProfile))
         assertFalse(williamsVerifiedNewRiskSource(williamsUnifiedProfile))
         // The same disabled sources must remain available for independent

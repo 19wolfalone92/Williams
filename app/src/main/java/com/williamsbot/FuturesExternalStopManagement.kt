@@ -48,3 +48,36 @@ internal fun verifiedExternalStopManagementScope(
     }
     return supported
 }
+
+/** A quarantined opposite-side campaign on one pair cannot freeze verified
+ * TC2 protection on another. This capability permits STOP TIGHTENING only.
+ * The whole signed audit must have completed before calling this function. */
+internal fun verifiedQuarantineStopManagementScope(
+    protectionObservations: JSONArray,
+    externalOrders: JSONArray,
+    durableIntents: JSONArray,
+    quarantinedSymbols: Set<String>,
+    nowMs: Long
+): Set<String> {
+    if (quarantinedSymbols.isEmpty() || nowMs <= 0L) return emptySet()
+    val conflicts=JSONArray(externalOrders.toString())
+    quarantinedSymbols.forEach { conflicts.put(org.json.JSONObject().put("symbol",it)) }
+    return verifiedExternalStopManagementScope(protectionObservations,conflicts,durableIntents)
+        .filter { symbol ->
+            val owner=(0 until durableIntents.length()).mapNotNull { durableIntents.optJSONObject(it) }
+                .last { it.optString("symbol")==symbol && it.optString("intent_role","ENTRY")=="ENTRY" }
+            val proof=(0 until protectionObservations.length()).mapNotNull { protectionObservations.optJSONObject(it) }
+                .singleOrNull { it.optString("symbol")==symbol } ?: return@filter false
+            fun fresh(at:Long)=at>0L && nowMs>=at && nowMs-at<=30_000L
+            owner.optString("actual_risk_audit_status") in setOf("PASS","PASS_RESERVATION_ADJUSTED") &&
+                owner.optString("actual_risk_audit_blocker").isBlank() &&
+                owner.optString("liquidation_guard_status")=="PASS" &&
+                !owner.has("native_stop_replacement") &&
+                fresh(owner.optLong("actual_risk_audited_at_ms")) && fresh(proof.optLong("observed_at_ms")) &&
+                (0 until durableIntents.length()).mapNotNull { durableIntents.optJSONObject(it) }.none {
+                    it.optString("symbol")==symbol &&
+                        (it.optString("intent_role")=="ADD_ON" && exchangeOrderStatus(it) !in ENTRY_ORDER_TERMINAL_STATUSES ||
+                            it.optString("intent_role")=="EXIT" && it.optString("exchange_status")!="EXIT_CONFIRMED")
+                }
+        }.toSet()
+}

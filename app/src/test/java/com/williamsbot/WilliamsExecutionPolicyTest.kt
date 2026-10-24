@@ -7,9 +7,15 @@ import org.junit.Test
 
 class WilliamsExecutionPolicyTest {
     private val h=3_600_000L
-    @Test fun onlyTc2MayCreateNewRisk() {
+    @Test fun legacyFixedTc2SelectionMigratesWhileExplicitNewPolicySelectionsSurviveRestart() {
+        assertEquals(williamsUnifiedProfile,williamsRestoredExecutionSelection(williamsTc2Profile,null))
+        assertEquals(williamsUnifiedProfile,williamsRestoredExecutionSelection(williamsCourseProfile,WILLIAMS_EXECUTION_POLICY))
+        for(profile in williamsExecutionProfiles+williamsUnifiedProfile)
+            assertEquals(profile,williamsRestoredExecutionSelection(profile,WILLIAMS_EXECUTION_POLICY))
+    }
+    @Test fun tc2AndNtdOwnNewRiskWhileCourseRemainsObservationOnly() {
         assertNull(williamsNewExposureBlocker(williamsTc2Profile))
-        for(source in listOf(williamsNtdProfile,williamsCourseProfile,williamsUnifiedProfile,""))
+        for(source in listOf(williamsCourseProfile,williamsUnifiedProfile,""))
             assertEquals("WILLIAMS_SOURCE_OBSERVATION_ONLY",williamsNewExposureBlocker(source))
     }
     @Test fun oldFractalNeedsCurrentStructuralProofInsteadOfAnAgeCutoff() {
@@ -22,7 +28,7 @@ class WilliamsExecutionPolicyTest {
                 direction,"f",type,williamsTc2Profile,entry.toDouble(),stop.toDouble(),now))
         }
         assertFalse(williamsH1SignalTimeEligible(at,"REVERSAL",williamsTc2Profile,now))
-        assertFalse(williamsH1SignalTimeEligible(at,"FRACTAL",williamsNtdProfile,now))
+        assertTrue(williamsH1SignalTimeEligible(at,"FRACTAL",williamsNtdProfile,now))
         val bars=(0..44).map { i -> WilliamsWaveBar(at+i*h,100.0,101.0,99.0,100.0,1.0) }
         assertNull(williamsClosedH1HistoryBlocker(bars,at+45*h+1000))
         assertEquals("H1_SNAPSHOT_STALE",williamsClosedH1HistoryBlocker(bars,at+46*h+1000))
@@ -75,13 +81,13 @@ class WilliamsExecutionPolicyTest {
 
     @Test fun tc2H1WiseMenCanAddBeforeDailyOrH4AlligatorAlignment() {
         assertFalse(williamsAdditionRequiresHigherFrameTrendVeto(williamsTc2Profile))
-        assertTrue(williamsAdditionRequiresHigherFrameTrendVeto(williamsNtdProfile))
+        assertFalse(williamsAdditionRequiresHigherFrameTrendVeto(williamsNtdProfile))
         assertTrue(williamsAdditionRequiresHigherFrameTrendVeto(williamsCourseProfile))
         assertTrue(williamsAdditionRequiresHigherFrameTrendVeto(williamsUnifiedProfile))
         // Executable exposure permission is a separate gate: NTD & Course
         // may observe H1 signals but cannot create new live risk.
         assertNull(williamsNewExposureBlocker(williamsTc2Profile))
-        assertNotNull(williamsNewExposureBlocker(williamsNtdProfile))
+        assertNull(williamsNewExposureBlocker(williamsNtdProfile))
         assertNotNull(williamsNewExposureBlocker(williamsCourseProfile))
     }
     @Test fun tc2AllThreeOriginalH1InitialSignalsAreAllowedWithoutD1H4Alignment() {
@@ -105,11 +111,11 @@ class WilliamsExecutionPolicyTest {
     }
 
     @Test fun legacyOtherEditionsAreNotGrantedTc2InitialEntryException() {
-        assertEquals(0,williamsBookInitialContextRank(williamsNtdProfile,"FRACTAL",
+        assertEquals(1,williamsBookInitialContextRank(williamsNtdProfile,"FRACTAL",
             false,true,false,true))
         assertEquals(0,williamsBookInitialContextRank(williamsCourseProfile,"COURSE_THUMB",
             false,true,false,true))
-        assertEquals(2,williamsBookInitialContextRank(williamsNtdProfile,"FRACTAL",
+        assertEquals(1,williamsBookInitialContextRank(williamsNtdProfile,"FRACTAL",
             false,true,false,true,validatedCorrection=true))
         assertEquals(0,williamsBookInitialContextRank(williamsTc2Profile,"BROKEN_UNKNOWN_SIGNAL",
             false,false,false,false))
@@ -125,7 +131,7 @@ class WilliamsExecutionPolicyTest {
 
     @Test fun tc2InitialEntryDoesNotRequire45D1OrH4Bars() {
         assertFalse(williamsInitialHigherFrameHistoryRequired(williamsTc2Profile))
-        assertTrue(williamsInitialHigherFrameHistoryRequired(williamsNtdProfile))
+        assertFalse(williamsInitialHigherFrameHistoryRequired(williamsNtdProfile))
         assertTrue(williamsInitialHigherFrameHistoryRequired(williamsCourseProfile))
         assertTrue(williamsInitialHigherFrameHistoryRequired(williamsUnifiedProfile))
     }

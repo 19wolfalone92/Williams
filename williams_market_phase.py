@@ -3,6 +3,8 @@ from williams_wave_hierarchy import FRAME_MS, REQUIRED_FRAMES, build_wave_hierar
 from williams_market_reading import market_reading
 from williams_wave_interpretation import wave_interpretation
 from williams_tc1_terminal_evidence import tc1_five_bullet_evidence
+from williams_course_correction import correction_policy_snapshot
+from williams_course_location import course_four_sign_evidence, course_stage_locations
 
 OBSERVED_MARKET_FRAMES=("1d","6h","4h","1h","15m")
 
@@ -49,6 +51,8 @@ def market_phase_context(hierarchy):
             "w4_zero":h.get("w4_zero",""),"scale_frame":h.get("scale_frame",""),
             "third_momentum":h.get("third_momentum"),
             "tc1_five_bullets":tc1_five_bullet_evidence(h),
+            "course_four_signs":course_four_sign_evidence(h,as_of),
+            "course_stage_locations":course_stage_locations(h,as_of),
             "scale_bars":h.get("scale_bars",0),"signs":[name for key,name in signs.items() if h.get(key,False)]}
             for h in usable]
         state=("NOT_ANALYSED" if as_of<=0 else "UNAVAILABLE" if frame in errors or (frame=="4h" and frame not in counts and not usable)
@@ -87,6 +91,7 @@ def market_phase_context(hierarchy):
         if len(recursive)>=16:
             break
     return {"schema":"WILLIAMS_MARKET_PHASE_V1","as_of":as_of,"frames":frames,"warning_scope":scope,
+        "course_correction_policy":correction_policy_snapshot(),
         "recursive_degree_evidence":recursive,
         "wave_interpretation":wave_interpretation(hierarchy),
         "wave_genealogy_confirmed":False,"probability_calibrated":False,

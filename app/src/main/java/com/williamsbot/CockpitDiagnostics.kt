@@ -250,12 +250,12 @@ internal object CockpitDiagnostics {
         val signals = candidates.flatMap { rows(it.optJSONArray("campaign_signals")) }
         // The profiles are NOT interchangeable: TC1 Zero Point/stop-and-reverse,
         // NTD dimension sequencing and TC2 Wise Men use different management
-        // contracts. NTD/Course remain observers, not sources of new exposure.
+        // contracts. Course remains an observer, never a source of new exposure.
         val unauthorizedNewExposure = rows(coordinator.optJSONArray("pending_intent_details"))
             .filter { it.optString("role", "ENTRY") in setOf("ENTRY", "ADD_ON") &&
                 it.optString("campaign_status") in setOf("ENTRY_PENDING","FILL_CONFIRMATION_PENDING") &&
-                it.optString("strategy_profile") != williamsTc2Profile }
-        check("STR-10", "strategy", "Отсутствие новых NTD/Course ордеров", when {
+                !williamsVerifiedNewRiskSource(it.optString("strategy_profile")) }
+        check("STR-10", "strategy", "Запрет ордеров неподтверждённых источников", when {
             unauthorizedNewExposure.isNotEmpty() -> "FAIL"
             coordinator.optJSONArray("pending_intent_details") == null ||
                 coordinator.optString("engine") !in setOf("USD_M_FUTURES_TESTNET", "USD_M_FUTURES") ->
@@ -263,7 +263,7 @@ internal object CockpitDiagnostics {
             else -> "PASS"
         }, "Запрещённых активных новых заявок=${unauthorizedNewExposure.size}; " +
             "подтверждённая область координатора=${coordinator.optString("engine")}; " +
-            "TC2 исполняет, NTD и Course наблюдают; прежние владельцы не меняются.")
+            "TC2 и NTD исполняют свои правила; Course наблюдает. Владелец кампании не меняется.")
         val causalTraces = candidates.flatMap { candidate ->
             rows(candidate.optJSONObject("decision_trace")?.optJSONArray("signals"))
                 .map { candidate.optString("symbol") to it }
@@ -476,8 +476,11 @@ internal object CockpitDiagnostics {
         check("AND-01", "runtime", "Работа в фоне", when {
             android == null -> "NOT_VERIFIED"
             !android.optBoolean("foreground_service_active") || android.optBoolean("background_restricted") || !android.optBoolean("battery_optimization_ignored") -> "WARNING"
-            else -> "PASS"
-        }, "Проверяются ограничения Android; длительный тест на устройстве отмечается отдельно.")
+            status.optBoolean("running") && (!android.optBoolean("cpu_wake_lock_held") ||
+                android.optLong("service_guard_age_ms",Long.MAX_VALUE)>90_000L) -> "WARNING"
+            else -> "NOT_VERIFIED"
+        }, "Сервис=${android?.optBoolean("foreground_service_active")}; CPU=${android?.optBoolean("cpu_wake_lock_held")}; " +
+            "контроль=${android?.optLong("service_guard_age_ms",-1)} мс. Эти признаки не доказывают непрерывную работу с выключенным экраном.")
         check("AND-02", "runtime", "Восстановление после перезапуска", "NOT_VERIFIED",
             "Проверка требует фактического перезапуска процесса и сверки с Binance; наличие recovery-кода не считается PASS.")
         check("AND-03", "ui", "Согласованность интерфейса", if (positionsFresh(status, now)) "PASS" else "WARNING",

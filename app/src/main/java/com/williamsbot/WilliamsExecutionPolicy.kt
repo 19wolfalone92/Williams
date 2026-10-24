@@ -3,22 +3,32 @@ package com.williamsbot
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** New risk belongs to TC2; other editions remain independently observable.
- * Filled legacy campaigns keep their original management, without new adds. */
-internal const val WILLIAMS_EXECUTION_POLICY = "TC2_LIVE_EDITIONS_OBSERVE_V1"
+/** Independent source-owned lifecycles; Course remains observation-only. */
+internal const val WILLIAMS_EXECUTION_POLICY = "TC2_NTD_OWNED_LIFECYCLES_V2"
 internal const val williamsExecutionProfile = williamsTc2Profile
-internal val williamsObserverProfiles = listOf(williamsNtdProfile,williamsCourseProfile)
+internal val williamsExecutionProfiles = listOf(williamsTc2Profile,williamsNtdProfile)
+internal val williamsObserverProfiles = listOf(williamsCourseProfile)
+/** Old releases persisted TC2 as a fixed, non-selectable value. It must not
+ * silently disable NTD after the source lifecycle upgrade. Explicit selections
+ * saved under this policy retain their meaning across process restarts. */
+internal fun williamsRestoredExecutionSelection(stored:String?,policy:String?):String =
+    if(policy==WILLIAMS_EXECUTION_POLICY && stored!=null &&
+        (stored==williamsUnifiedProfile || stored in williamsExecutionProfiles)) stored else williamsUnifiedProfile
 internal fun williamsNewExposureBlocker(source:String):String? =
-    if(source==williamsExecutionProfile) null else "WILLIAMS_SOURCE_OBSERVATION_ONLY"
+    if(source in williamsExecutionProfiles) null else "WILLIAMS_SOURCE_OBSERVATION_ONLY"
 internal fun williamsExecutionPolicySnapshot():JSONObject = JSONObject()
     .put("mode",WILLIAMS_EXECUTION_POLICY).put("execution_profile",williamsExecutionProfile)
+    .put("execution_profiles",JSONArray(williamsExecutionProfiles))
     .put("observer_profiles",JSONArray(williamsObserverProfiles)).put("one_campaign_per_symbol",true)
-    .put("legacy_management","PINNED_SOURCE_NO_NEW_EXPOSURE")
+    .put("tc2_reversal_policy",WILLIAMS_TC2_REVERSAL)
+    .put("tc2_reversal_requires",JSONArray(listOf("OWNED_EXIT_FILLED","SIGNED_FLAT","OLD_ORDERS_CLEANED",
+        "FRESH_H1_SIGNAL","NEW_RISK_BUDGET","NEW_PROTECTIVE_STOP")))
+    .put("legacy_management","PINNED_SOURCE_VALIDATED_CYCLE_REQUIRED_FOR_ADDITIONS")
 
 internal fun williamsStructuralFractal(type:String,source:String):Boolean =
-    source==williamsTc2Profile && type.removePrefix("SHORT_").removePrefix("LONG_")=="FRACTAL"
+    source in setOf(williamsTc2Profile,williamsNtdProfile) && type.removePrefix("SHORT_").removePrefix("LONG_")=="FRACTAL"
 
-/** TC2 ch11 PDF149: until trigger or replacement; zero is structural validity.
+/** TC2 PDF149 / NTD PDF43: until trigger or replacement; zero is structural validity.
  * Fresh closed-bar proof is still required at the Binance submission door. */
 internal fun williamsH1SignalExpiry(at:Long,type:String,source:String):Long =
     if(williamsStructuralFractal(type,source)) 0L else at+5*WILLIAMS_H1_MS
@@ -56,7 +66,7 @@ internal fun williamsOpposingSignalCanMarketClose(ownerProfile:String):Boolean =
  * account/reconciliation checks are ALWAYS mandatory.
  */
 internal fun williamsAdditionRequiresHigherFrameTrendVeto(ownerProfile:String):Boolean =
-    ownerProfile != williamsTc2Profile
+    ownerProfile !in williamsExecutionProfiles
 
 
 /** Trading Chaos 2nd ed. chapter 12 (three possible FIRST presenting
@@ -75,6 +85,8 @@ internal fun williamsBookInitialContextRank(
     validatedCorrection:Boolean=false
 ):Int {
     val prior=directionalSignalContextRank(signalType,d1Bull,d1Bear,h4Bull,h4Bear)
+    if(source==williamsNtdProfile) return if(signalType.removePrefix("SHORT_").removePrefix("LONG_") in williamsNtdFamilies &&
+        campaignSignalDirection(signalType)!=null) maxOf(prior,1) else 0
     if(source!=williamsTc2Profile) return maxOf(prior,if(validatedCorrection) 2 else 0)
     val side=campaignSignalDirection(signalType) ?: return 0
     if(side !in setOf("LONG","SHORT")) return 0
@@ -94,7 +106,7 @@ internal fun williamsBookInitialContextRank(
  * exchange account/mark freshness, risk and stop gates are unaffected.
  */
 internal fun williamsInitialHigherFrameHistoryRequired(source:String):Boolean =
-    source!=williamsTc2Profile
+    source !in williamsExecutionProfiles
 
 /** Reject discretionary TC2 closes that lack a book-authenticated opposite
  * H1 price trigger. The coordinator independently binds this reason to the
@@ -107,7 +119,8 @@ internal fun williamsMarketExitBlocker(owner: String, reason: String): String? {
             "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
             "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
         )) null else "TC2_EXIT_REQUIRES_BOOK_OPPOSITE_TRIGGER"
-        williamsNtdProfile,williamsCourseProfile -> null
+        williamsNtdProfile -> if(reason in williamsNtdBookExitReasons) null else "NTD_EXIT_REQUIRES_OWN_BOOK_RULE"
+        williamsCourseProfile -> if(reason in williamsCourseBookExitReasons) null else "COURSE_EXIT_REQUIRES_OWN_BOOK_RULE"
         else -> "EXIT_STRATEGY_OWNER_UNVERIFIED"
     }
 }
@@ -145,20 +158,20 @@ internal fun williamsTc2OppositeExitProfitBlocker(
 /** Durable exchange-mutation fence for the TC2 ch11-12 opposite Wise-Man exit.
  * A caller-supplied reason is not proof: require exactly the closed H1 signal
  * persisted by the causal scenario scanner after entry, recently observed, and
- * a fresh Binance MARK price STILL beyond that signal's stop trigger.
+ * a fresh Binance CONTRACT price STILL beyond that signal's stop trigger.
  * No reverse entry is authorized by a close. Ambiguous history never passes.
  */
 internal fun williamsTc2OppositeExitEvidenceBlocker(
     owner:JSONObject?, signedDecision:String?, symbol:String, currentDirection:String,
-    reason:String, openedAt:Long, now:Long, mark:Double
+    reason:String, openedAt:Long, now:Long, contractPrice:Double
 ):String? {
     if(williamsMarketExitBlocker(williamsTc2Profile,reason)!=null)
         return "TC2_EXIT_REASON_NOT_BOOK_APPROVED"
     if(owner==null || owner.optString("symbol")!=symbol ||
         owner.optString("direction")!=currentDirection ||
         owner.optString("strategy_profile")!=williamsTc2Profile ||
-        openedAt<=0L || now<=0L || !mark.isFinite() || mark<=0)
-        return "TC2_OPPOSITE_EXIT_OWNER_OR_MARK_UNVERIFIED"
+        openedAt<=0L || now<=0L || !contractPrice.isFinite() || contractPrice<=0)
+        return "TC2_OPPOSITE_EXIT_OWNER_OR_CONTRACT_UNVERIFIED"
     val decision=runCatching { JSONObject(signedDecision.orEmpty()) }.getOrNull()
         ?: return "TC2_OPPOSITE_EXIT_DECISION_NOT_DURABLE"
     val opposite=decision.optJSONObject("opposition")
@@ -174,7 +187,8 @@ internal fun williamsTc2OppositeExitEvidenceBlocker(
     val level=opposite.optDouble("trigger",Double.NaN)
     val side=opposite.optString("direction")
     val signalId=opposite.optString("signal_id")
-    if(decision.optString("direction")!=currentDirection ||
+    if(decision.optString("trigger_price_basis")!="CONTRACT_PRICE" ||
+        decision.optString("direction")!=currentDirection ||
         decision.optLong("scope_started_at_ms")!=openedAt ||
         opposite.optString("strategy_profile")!=williamsTc2Profile ||
         opposite.optString("execution_semantics")!="STOP_ENTRY" ||
@@ -185,8 +199,8 @@ internal fun williamsTc2OppositeExitEvidenceBlocker(
         eventAt>examinedAt || examinedAt>now ||
         now-examinedAt !in 0L..120_000L ||
         !level.isFinite() || level<=0 ||
-        !(currentDirection=="LONG" && side=="SHORT" && mark<=level ||
-          currentDirection=="SHORT" && side=="LONG" && mark>=level))
+        !(currentDirection=="LONG" && side=="SHORT" && contractPrice<=level ||
+          currentDirection=="SHORT" && side=="LONG" && contractPrice>=level))
         return "TC2_OPPOSITE_EXIT_TRIGGER_NOT_CURRENT_AND_PROVEN"
     // This record is persisted by management before requesting a mutation,
     // and is bound to this exact durable signal (not a guessed wave count).

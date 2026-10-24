@@ -216,12 +216,18 @@ def main() -> None:
     must(futures, 'market_on_close_reason(', "futures_williams_runtime.py")
     coordinator_editions=read("app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     must(coordinator_editions,'Addition campaign/profile identity mismatch',"NativeFuturesCampaignCoordinator.kt")
-    must(coordinator_editions,'Market exposure is only a verified NTD zone addition',"NativeFuturesCampaignCoordinator.kt")
+    must(coordinator_editions,'Market exposure requires an owned NTD close event or TC2 confirmed-flat reversal',"NativeFuturesCampaignCoordinator.kt")
+    must(coordinator_editions,'if(isReversal) checkBookReversalDoor(plan,currentIntents,adapter,true)',"TC2 reversal final exchange door")
+    must(coordinator_editions,'"TC2_REVERSAL_OLD_ORDERS_NOT_CLEANED_UP"',"TC2 reversal cleanup fence")
+    reversal=read("app/src/main/java/com/williamsbot/WilliamsTc2Reversal.kt")
+    for proof in ('"EXIT_CONFIRMED"','"FILLED"','"executed_qty"','"position_before_qty"',
+                  '"reversal_owner_id"','"TC2_REVERSAL_TRIGGER_TOO_FAR_NO_CHASING"'):
+        must(reversal,proof,"TC2 confirmed-flat reversal contract")
     must(coordinator_editions,'exchange quantity cannot be attributed',"NativeFuturesCampaignCoordinator.kt")
     must(futures, "default_symbols = DEFAULT_FUTURES_SYMBOLS", "futures_williams_runtime.py")
     must(futures, "tuple(approved) != DEFAULT_FUTURES_SYMBOLS", "futures_williams_runtime.py")
-    must(futures, '("LONG", long_specs, long_htf)', "futures_williams_runtime.py")
-    must(futures, '("SHORT", short_specs, short_htf)', "futures_williams_runtime.py")
+    must(futures, '("LONG",long_specs,long_htf)', "futures_williams_runtime.py")
+    must(futures, '("SHORT",short_specs,short_htf)', "futures_williams_runtime.py")
     must(futures, '_env_bool("ALLOW_LONG", True)', "futures_williams_runtime.py")
     must(futures, '_env_bool("ALLOW_SHORT", True)', "futures_williams_runtime.py")
     must(futures, 'result.sort(key=lambda c: (-c.score, -c.signal.signal_bar_time_ms, c.symbol, c.side))', "futures_williams_runtime.py")
@@ -435,8 +441,15 @@ def main() -> None:
     must(runtime_source, "val freshSignals = candidate.campaignSignals.filter", "StandaloneRuntime.kt directional hypotheses")
     must(runtime_source, "williamsH1SignalTimeEligible(it.signalBarTimeMs,it.type,it.strategyProfile,contextNow)", "StandaloneRuntime.kt source-specific H1 validity")
     execution_policy = read("app/src/main/java/com/williamsbot/WilliamsExecutionPolicy.kt")
-    must(execution_policy, "WILLIAMS_SOURCE_OBSERVATION_ONLY", "TC2-only new risk policy")
+    must(execution_policy, "WILLIAMS_SOURCE_OBSERVATION_ONLY", "Source lifecycle admission policy")
     must(execution_policy, "H1_SNAPSHOT_STALE", "Structural validity still requires fresh H1 data")
+    must(execution_policy, 'listOf(williamsTc2Profile,williamsNtdProfile)', 'Only validated source lifecycles may create exposure')
+    ntd_execution = read("app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt")
+    for needle in ("NTD_CLOSE_BOUND_CHANGED", "NTD_CLOSE_EXECUTABLE_QUOTE_OUTSIDE_BOUND", "NTD_FIRST_EXTERNAL_FRACTAL_REQUIRED"):
+        must(ntd_execution, needle, "NTD final execution evidence")
+    must(coordinator_editions, 'ntdCloseEntryDoor(plan,adapter)?.let { error(it) }', 'NTD final quote/bound guard')
+    must(futures, 'self._revalidate_ntd_signal(campaign,intent)', 'Python NTD final closed-H1 source guard')
+    must(runtime_source, 'sourceEvidence.filter { it.profile==signal.strategyProfile }', 'No cross-source opposition hybrid')
 
     must(runtime_source, "williamsBookInitialContextRank(", "StandaloneRuntime.kt TC2 H1 book-native initial-entry selection")
     must(runtime_source, "H1_CONTEXT_EVIDENCE_NOT_DURABLE", "StandaloneRuntime.kt source-context provenance")
@@ -527,14 +540,19 @@ def main() -> None:
     for needle in (
         "StandaloneRuntime.start(applicationContext)",
         "StandaloneRuntime.autostart(applicationContext)",
-        "StandaloneRuntime.stopTrading()",
+        "if (StandaloneRuntime.stop()) stopSelf()",
+        "BackgroundRuntimePolicy.WAKE_TIMEOUT_MS",
+        "RuntimeContinuityEvidence.refreshProcessExits",
     ):
         must(service, needle, "TradingForegroundService.kt")
     must_not(service, "remote Futures backend", "TradingForegroundService.kt")
     must_not(service, "legacy native Spot runtime", "TradingForegroundService.kt")
+    must_not(service, "StandaloneRuntime.stopTrading()", "TradingForegroundService.kt")
 
     # Device reboot/update recovery must respect the user's persisted opt-in.
     manifest = read("app/src/main/AndroidManifest.xml")
+    for needle in ('android.permission.WAKE_LOCK', 'android:stopWithTask="false"'):
+        must(manifest, needle, "AndroidManifest.xml")
     for needle in (
         "android.permission.RECEIVE_BOOT_COMPLETED",
         'android:name=".TradingBootReceiver"',

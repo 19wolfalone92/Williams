@@ -464,6 +464,7 @@ data class PositionView(
     val stop: Double?,
     val take: Double?,
     val riskPct: Double,
+    val riskPctVerified: Boolean = false,
     val currentPrice: Double? = null,
     val positionValueUsdt: Double = 0.0,
     val allocationPct: Double = 0.0,
@@ -2777,6 +2778,19 @@ private fun PositionScreen(
             )
         }
 
+        if (status.positions.isNotEmpty() &&
+            (!status.positionsSnapshotOk ||
+                !CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L))) {
+            item {
+                Text(
+                    "⚠️ ПОСЛЕДНИЙ ИЗВЕСТНЫЙ СНИМОК BINANCE — НЕ ПОДТВЕРЖДЁН СЕЙЧАС. " +
+                        "Позиции показаны для ориентирования; отсутствие свежего ответа не означает, " +
+                        "что они закрыты. Уровни SL требуют отдельной сверки с биржей.",
+                    color = AppColors.amber,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
         if (status.positions.isEmpty()) {
             item {
                 Card(
@@ -2794,7 +2808,8 @@ private fun PositionScreen(
                             style = MaterialTheme.typography.headlineMedium
                         )
                         Text(
-                            if (status.positionsSnapshotOk && CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L)) "Открытых позиций нет." else "Нет актуального подтверждения позиций Binance.",
+                            if (status.positionsSnapshotOk && CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L)) "Открытых позиций нет."
+                            else "Нет актуального подтверждения позиций Binance. Это НЕ означает, что позиции закрыты; проверь их на бирже.",
                             color = AppColors.textMuted
                         )
                     }
@@ -2821,7 +2836,7 @@ private fun PositionScreen(
                         ) {
                             Text(
                                 (p.direction.takeIf { it == "LONG" || it == "SHORT" }
-                                    ?: if (p.qty < 0.0) "SHORT" else "LONG") + " " + p.symbol,
+                                    ?: "НАПРАВЛЕНИЕ НЕ ПОДТВЕРЖДЕНО") + " " + p.symbol,
                                 modifier = Modifier.weight(1f).clickable { onSelect(p.symbol) },
                                 style =
                                     MaterialTheme.typography.headlineSmall
@@ -2834,12 +2849,9 @@ private fun PositionScreen(
                                     Alignment.CenterVertically
                             ) {
                                 ModeChip(
-                                    "РИСК " +
-                                        fmt(
-                                            p.riskPct * 100,
-                                            2
-                                        ) +
-                                        "%",
+                                    "РИСК НА ВХОДЕ " + (if (p.riskPctVerified)
+                                            fmt(p.riskPct * 100, 2) + "%"
+                                        else "НЕ ПОДТВЕРЖДЁН"),
                                     AppColors.amber
                                 )
 
@@ -2852,6 +2864,38 @@ private fun PositionScreen(
                                 }
                             }
                         }
+                        val oldOppositeCampaign = status.futuresIntents.firstOrNull { stored ->
+                            stored.optString("symbol") == p.symbol &&
+                                stored.optString("direction") in setOf("LONG", "SHORT") &&
+                                stored.optString("direction") != p.direction &&
+                                stored.optString("campaign_status") in setOf(
+                                    "OPEN_PROTECTED", "POSITION_OPEN", "EXIT_PENDING",
+                                    "ADD_ON_PENDING", "FILL_CONFIRMATION_PENDING"
+                                )
+                        }
+                        if (oldOppositeCampaign != null) {
+                            Text(
+                                "⚠️ BINANCE: ${p.direction} • СТАРАЯ КАМПАНИЯ: " +
+                                    oldOppositeCampaign.optString("direction") +
+                                    ". Это разные состояния. Старая запись НЕ является " +
+                                    "действующей позицией. Автоматическое сопровождение " +
+                                    "заблокировано до подтверждённой сверки.",
+                                color = AppColors.amber,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        if (p.stop == null || p.stopVerificationStatus == "UNVERIFIED_OR_STALE") {
+                            Text(
+                                "🚨 Защитный STOP на Binance не подтверждён. " +
+                                    "Проверь позицию непосредственно на бирже!",
+                                color = AppColors.amber,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        InfoRow("Источник направления", "Биржевая позиция Binance • " +
+                            if (status.positionsSnapshotOk &&
+                                CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L))
+                                "актуальный подписанный снимок" else "снимок устарел или не подтверждён")
                         InfoRow(
                             "Объём позиции",
                             fmt(p.qty, 6)
@@ -3261,6 +3305,8 @@ private fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text("Фоновая работа Android", style = MaterialTheme.typography.titleMedium)
+                    InfoRow("Фоновый сервис",if(RuntimeServiceState.active) "Работает" else "Не подтверждён")
+                    InfoRow("Работа CPU при выключенном экране",if(RuntimeServiceState.wakeLockHeld) "Удержание активно" else "Не активно")
                     InfoRow(
                         "Разрешение на работу в режиме сна",
                         if (batteryExemptionGranted) "Разрешено" else "Не подтверждено системой"
@@ -3275,10 +3321,28 @@ private fun SettingsScreen(
                         }
                     )
                     Text(
-                        "Для автономной работы откройте системные настройки приложения и проверьте режим батареи/фоновой активности. Поведение также зависит от производителя телефона; этот статус не заменяет физический тест.",
+                        "При включённом движке сервис удерживает CPU и проверяет автозапуск каждые 30 секунд. " +
+                            "Это увеличивает расход батареи. Сверка Binance и торговые блокировки сохраняются при восстановлении.",
                         style = MaterialTheme.typography.bodySmall,
                         color = AppColors.textMuted
                     )
+                    OutlinedButton(onClick={
+                        runCatching {
+                            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package",context.packageName,null)))
+                        }.onFailure {
+                            runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                        }
+                    },enabled=!batteryExemptionGranted,modifier=Modifier.fillMaxWidth()) {
+                        Text(if(batteryExemptionGranted) "СОН ANDROID: РАЗРЕШЕНИЕ УЖЕ ДАНО" else "ОТКРЫТЬ НАСТРОЙКИ ПИТАНИЯ ПРИЛОЖЕНИЯ")
+                    }
+                    if(Build.MANUFACTURER.equals("samsung",ignoreCase=true)) Text(
+                        "Samsung: Батарея → Ограничения в фоновом режиме → Приложения, которые не переходят в спящий режим. " +
+                            "Добавьте Williams (Debug); в настройках батареи самого приложения выберите «Без ограничений».",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                    Text("Принудительная остановка в Android прекращает приложение. После неё откройте Williams снова. " +
+                        "Причины завершения процесса теперь сохраняются в диагностике; непрерывная работа на этом телефоне ещё требует проверки.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
                     OutlinedButton(
                         onClick = {
                             runCatching {
@@ -4061,6 +4125,19 @@ private fun parsePortfolio(json: JSONObject): PortfolioSummary {
     )
 }
 
+/** Read-only UI interpretation of a confirmed Binance one-way position.
+ * Positive positionAmt = LONG, negative = SHORT, zero/invalid = unknown.
+ * This never assigns strategy ownership or authorizes exchange orders.
+ */
+internal fun signedBinancePositionDirection(position: JSONObject): String? {
+    val qty = position.optString("positionAmt").toBigDecimalOrNull() ?: return null
+    return when (qty.signum()) {
+        1 -> "LONG"
+        -1 -> "SHORT"
+        else -> null
+    }
+}
+
 internal fun parseStatus(json: JSONObject): Status {
     val legacy = json.optJSONObject("position")
     val array = json.optJSONArray("positions")
@@ -4103,13 +4180,23 @@ internal fun parseStatus(json: JSONObject): Status {
             parsed += PositionView(
                 symbol = symbol,
                 qty = quantity,
-                direction = item.optString("direction", "").uppercase(Locale.US),
+                // Signed USD-M one-way positionAmt is the authoritative exchange
+                // direction. Never let a stale local campaign label reverse it.
+                direction = if (item.has("positionAmt")) {
+                    signedBinancePositionDirection(item).orEmpty()
+                } else {
+                    item.optString("direction", "").uppercase(Locale.US).takeIf {
+                        it == "LONG" || it == "SHORT"
+                    }.orEmpty()
+                },
                 entry = entryPrice,
                 stop = item.optDouble("stop_loss", item.optDouble("stop"))
                     .takeUnless { it.isNaN() || it == 0.0 },
                 take = item.optDouble("take_profit", item.optDouble("take"))
                     .takeUnless { it.isNaN() || it == 0.0 },
                 riskPct = item.optDouble("risk_pct", 0.0),
+                riskPctVerified = !item.isNull("risk_pct") &&
+                    item.optDouble("risk_pct", 0.0) > 0.0,
                 currentPrice = currentPrice,
                 positionValueUsdt = positionValue,
                 allocationPct = allocation,
@@ -4473,9 +4560,10 @@ private fun parseTrades(array: JSONArray): List<Trade> =
             score = snap?.optDouble("score", 0.0) ?: 0.0,
             mfeR = x.optDouble("mfe_r", 0.0),
             maeR = x.optDouble("mae_r", 0.0),
-            direction = x.optString("direction").ifBlank {
-                if (x.optString("side").equals("SELL", true)) "SHORT" else "LONG"
-            },
+            // An exchange SELL can also be a LONG exit. A blank historical
+            // direction must remain UNKNOWN instead of silently becoming LONG.
+            direction = x.optString("direction").uppercase(Locale.US)
+                .takeIf { it == "LONG" || it == "SHORT" } ?: "UNKNOWN",
             feeUsdt = x.optDouble("fee_usdt", Double.NaN).takeUnless { it.isNaN() },
             feeKnown = x.optBoolean("fee_known", true),
             initialRiskUsdt = x.optDouble("initial_risk_usdt", Double.NaN).takeUnless { it.isNaN() },

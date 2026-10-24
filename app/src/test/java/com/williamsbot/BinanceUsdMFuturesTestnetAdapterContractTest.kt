@@ -11,6 +11,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.fail
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -300,7 +302,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals("BUY", longParams["side"])
         assertEquals("STOP_MARKET", longParams["type"])
         assertEquals("101", longParams["triggerPrice"])
-        assertEquals("MARK_PRICE", longParams["workingType"])
+        assertEquals("CONTRACT_PRICE", longParams["workingType"])
         assertEquals("TEST_LONG_ENTRY", longParams["clientAlgoId"])
         assertTrue(!longParams.containsKey("reduceOnly"))
         assertTrue(!longParams.containsKey("closePosition"))
@@ -376,14 +378,52 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals(3L, guard.orderCount10s)
     }
 
-    private fun testAdapter(captured: MutableList<Request>): BinanceUsdMFuturesTestnetAdapter {
+    @Test fun bookEntriesUseContractBreakoutsWhenMarkDivergesInEitherDirection() {
+        for(side in listOf("LONG","SHORT")) for(kind in listOf("STOP","TAKE_PROFIT")) {
+            val above=(side=="LONG")== (kind=="STOP")
+            val trigger=if(above) "101" else "99"
+            val requests=mutableListOf<Request>()
+            // MARK already crossed; the trade-price H1 breakout has NOT.
+            testAdapter(requests,mark=if(above) 103.0 else 97.0)
+                .placeConditionalEntry("BTCUSDT",side,kind,"0.01",trigger,"BASIS_${side}_$kind")
+            val submitted=formParams(requests.single { it.method=="POST" && it.url.encodedPath=="/fapi/v1/algoOrder" })
+            assertEquals("CONTRACT_PRICE",submitted["workingType"])
+            assertFalse(requests.any { it.url.encodedPath=="/fapi/v1/premiumIndex" })
+
+            val consumed=mutableListOf<Request>()
+            val quote="""{"symbol":"BTCUSDT","price":"${if(above) 102 else 98}"}"""
+            try {
+                testAdapter(consumed,contractJson=quote)
+                    .placeConditionalEntry("BTCUSDT",side,kind,"0.01",trigger,"CONSUMED_${side}_$kind")
+                fail("A consumed CONTRACT trigger must not reach Binance POST")
+            } catch(_:IllegalArgumentException) { }
+            assertFalse(consumed.any { it.method=="POST" })
+        }
+    }
+
+    @Test fun missingInvalidOrForeignContractQuotesCannotAuthorizeAnEntry() {
+        for(quote in listOf("{}", """{"symbol":"ETHUSDT","price":"100"}""",
+            """{"symbol":"BTCUSDT","price":"NaN"}""", """{"symbol":"BTCUSDT","price":"0"}""")) {
+            val requests=mutableListOf<Request>()
+            try {
+                testAdapter(requests,contractJson=quote)
+                    .placeConditionalEntry("BTCUSDT","LONG","STOP","0.01","101","INVALID_BASIS")
+                fail("Unverified contract quote must not reach POST")
+            } catch(_:Exception) { }
+            assertFalse(requests.any { it.method=="POST" })
+        }
+    }
+
+    private fun testAdapter(captured: MutableList<Request>, mark:Double=100.0,
+        contractJson:String="""{"symbol":"BTCUSDT","price":"100"}"""): BinanceUsdMFuturesTestnetAdapter {
         val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
             val request = chain.request()
             captured += request
             val body = when (request.url.encodedPath) {
                 "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
                 "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
-                "/fapi/v1/premiumIndex" -> """{"symbol":"BTCUSDT","markPrice":"100"}"""
+                "/fapi/v1/premiumIndex" -> """{"symbol":"BTCUSDT","markPrice":"$mark"}"""
+                "/fapi/v2/ticker/price" -> contractJson
                 "/fapi/v1/algoOrder" -> """{"algoId":1,"algoStatus":"NEW","orderType":"STOP_MARKET"}"""
                 else -> "{}"
             }

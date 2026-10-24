@@ -16,7 +16,8 @@ def test_android_starts_native_futures_runtime_from_foreground_service():
     assert "TradingForegroundService.ACTION_START" in main
     assert "StandaloneRuntime.start(applicationContext)" in service
     assert "StandaloneRuntime.autostart(applicationContext)" in service
-    assert "StandaloneRuntime.stopTrading()" in service
+    assert "if (StandaloneRuntime.stop()) stopSelf()" in service
+    assert "StandaloneRuntime.stopTrading()" not in service  # One shutdown, not two signed cancellation passes.
     assert 'android:name=".TradingForegroundService"' in manifest
     assert "Фоновое сопровождение Binance Futures Demo на этом устройстве" in service
 
@@ -406,8 +407,9 @@ def test_android_book_native_h1_entry_does_not_require_m15_fractal():
     final_check = coordinator.split("finalContextCheckStarted = true", 1)[1].split(
         "orderSubmissionAttempted = true", 1
     )[0]
-    assert 'if(requireBookH1ProofForAutomatedEntries && plan.signalType!="OPERATOR_FORCED_DIRECTION")' in final_check
-    assert "plan.protectiveStop.toDouble(),clock(),plan.entryClientId)" in final_check
+    assert 'if((requireBookH1ProofForAutomatedEntries || isReversal) && plan.signalType!="OPERATOR_FORCED_DIRECTION")' in final_check
+    assert 'if(isReversal) checkBookReversalDoor(plan,currentIntents,adapter,true)' in final_check
+    assert "plan.protectiveStop.toDouble(),clock(),plan.entryClientId,plan.reentryOwnerId," in final_check
     assert "williamsBookH1ObservedBreakoutBlocker(" in runtime
     assert "val recent=futuresMarketData.klines(plan.symbol,\"1h\",2)" in runtime
     assert "val verifier=bookH1EntryVerifier ?: error" in coordinator
@@ -686,7 +688,8 @@ def test_android_super_ao_uses_the_third_rising_bar_and_not_the_oldest_of_three(
     assert "williamsTc2SuperAoInitialStop(" in wm2
     assert "streak == 3" not in wm2
     assert "val structuralStop = williamsTc2SuperAoInitialStop(" in wm2
-    assert '.put("initial_stop_window",5)' in wm2
+    assert '.put("initial_stop_window",1)' in wm2
+    assert 'TC2_SUPER_AO_SIGNAL_BAR' in wm2
     # SHORT context reflection was centralized to reject malformed proofs and
     # allow only the explicitly documented legacy-empty WM3 source context.
     assert "reflectedTc2SetupContext(signal.type, signal.setupContext, reflection)" in runtime
@@ -917,7 +920,20 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
     assert 'p?.activeLabel == "W5" && c?.activeLabel == "W3"' in enrich
 
 
-def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_mark():
+def test_h1_parent_invalidation_and_fractal_reanchor_use_the_candle_price_basis():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    context = runtime.split("private fun h1ContextCampaignSignals(", 1)[1].split(
+        "private fun courseTrimPlan(", 1)[0]
+    assert 'val contractPrice=futuresMarketData.price(symbol)' in context
+    assert 'sourceEvidence.filter { it.profile==signal.strategyProfile },waveBars,contractPrice,now)' in context
+    assert '},contractPrice,now)==null' in context
+    assert 'futuresMarketData.markPrice' not in context
+    reanchor = runtime.split('val proposal=confirmedBetterFractal(', 1)[1].split('proposal?.let', 1)[0]
+    assert 'futuresMarketData.price(symbol)' in reanchor
+    assert 'futuresMarketData.markPrice' not in reanchor
+
+
+def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_contract():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     policy = _read(ANDROID / "java/com/williamsbot/WilliamsExecutionPolicy.kt")
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
@@ -929,13 +945,17 @@ def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_mark
     assert "oppositeProfitBlocker==null" in manage
     assert "williamsTc2OppositeExitProfitBlocker(" in policy
     assert "williamsTc2OppositeExitProfitBlocker(" in coordinator
-    assert 'profile!=williamsTc2Profile && (boundaryExit || editionExit.isNotEmpty())' in manage
+    assert '(profile!=williamsCourseProfile || courseProof!=null)' in manage
+    assert 'profile!=williamsTc2Profile && editionExit.isNotEmpty()' in manage
+    assert 'else if(profile==williamsCourseProfile && boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"' not in manage
     assert '"tc2_correction_boundary_advisory"' in manage
     assert 'market_close_authorized",false' in manage
     assert 'williamsTc2OppositeExitEvidenceBlocker(' in policy
     assert 'williamsTc2OppositeExitEvidenceBlocker(' in coordinator
-    assert 'managedEntry.optLong("position_open_observed_at_ms"),clock(),markNow' in coordinator
+    assert 'managedEntry.optLong("position_open_observed_at_ms"),clock(),contractNow' in coordinator
     assert 'adapterPreflight.markPrice(symbol)' in coordinator
+    assert 'adapterPreflight.contractPrice(symbol)' in coordinator
+    assert 'decision.optString("trigger_price_basis")!="CONTRACT_PRICE"' in policy
     assert "futuresCampaignCoordinator.saveManagementState(" in manage
     assert "planWilliamsCampaignStop(" in manage
     assert 'ownerProfile in williamsSourceProfiles' in policy

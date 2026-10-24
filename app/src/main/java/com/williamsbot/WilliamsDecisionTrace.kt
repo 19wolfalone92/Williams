@@ -45,7 +45,7 @@ internal fun buildWilliamsDecisionTrace(symbol:String,profile:String,input:List<
             else if(row.optString("strategy_profile")==source) listOf(JSONObject(row.toString())) else emptyList()
         }
         JSONObject().put("profile",source).put("state",if(evidence.isEmpty()) "NO_VALID_FORMATION" else "FORMATION_OBSERVED")
-            .put("execution_role",if(source==williamsExecutionProfile) "LIVE" else "OBSERVE").put("can_place_orders",false)
+            .put("execution_role",if(williamsVerifiedNewRiskSource(source)) "LIVE" else "OBSERVE").put("can_place_orders",false)
             .put("evidence",JSONArray(evidence))
     })
     val scenarios=hierarchy.optJSONArray("scenarios") ?: JSONArray()

@@ -49,11 +49,13 @@ internal fun williamsBookH1RetryGeneration(intents:JSONArray,parentId:String):In
 internal fun williamsBookH1Proof(
     signalId:String, direction:String,signalType:String,source:String,
     signalAtMs:Long,bookTrigger:Double,bookStop:Double,
-    tick:Double,entryClientId:String="",campaignStop:Double=bookStop
+    tick:Double,entryClientId:String="",campaignStop:Double=bookStop,
+    executionSemantics:String="STOP_ENTRY",referenceClose:Double=0.0,reentryOwnerId:String=""
 ):JSONObject = JSONObject()
     .put("mode",WILLIAMS_BOOK_H1_ENTRY_MODE).put("frame","1h")
     .put("signal_id",signalId).put("direction",direction)
     .put("signal_type",signalType).put("source",source)
+    .put("trigger_price_basis","CONTRACT_PRICE")
     .put("signal_bar_time_ms",signalAtMs)
     .put("known_at_ms",signalAtMs+WILLIAMS_H1_MS)
     .put("expires_at_ms",williamsH1SignalExpiry(signalAtMs,signalType,source))
@@ -61,6 +63,8 @@ internal fun williamsBookH1Proof(
     .put("book_trigger",bookTrigger).put("book_stop",bookStop)
     .put("intent_role",if(entryClientId.isBlank()) "ENTRY" else "ADD_ON")
     .put("entry_client_id",entryClientId).put("campaign_stop",campaignStop)
+    .put("execution_semantics",executionSemantics).put("reference_close",referenceClose)
+    .put("reentry_owner_id",reentryOwnerId)
     .put("tick",tick)
 
 /** Structural, identity and price schema checks; NOT a replacement for
@@ -68,7 +72,8 @@ internal fun williamsBookH1Proof(
  */
 internal fun williamsBookH1ProofBlocker(
     setup:String,direction:String,signalId:String,signalType:String,source:String,
-    entry:Double,stop:Double,now:Long,entryClientId:String=""
+    entry:Double,stop:Double,now:Long,entryClientId:String="",reentryOwnerId:String="",
+    executionSemantics:String="STOP_ENTRY",referenceClose:Double=0.0
 ):String? {
     val proof=runCatching { JSONObject(setup).getJSONObject("book_h1_entry") }.getOrNull()
         ?:return "H1_BOOK_PROOF_REQUIRED"
@@ -82,18 +87,31 @@ internal fun williamsBookH1ProofBlocker(
     val bookTrigger=proof.optDouble("book_trigger",Double.NaN)
     val bookStop=proof.optDouble("book_stop",Double.NaN)
     val addition=entryClientId.isNotBlank()
+    val closeEvent=executionSemantics=="MARKET_ON_CLOSE"
+    val family=signalType.removePrefix("SHORT_").removePrefix("LONG_")
     if(proof.optString("intent_role","ENTRY")!=(if(addition) "ADD_ON" else "ENTRY") ||
         proof.optString("entry_client_id")!=entryClientId ||
-        addition && (source!=williamsTc2Profile ||
-            signalType.removePrefix("SHORT_").removePrefix("LONG_") !in setOf("SUPER_AO","FRACTAL") ||
+        proof.optString("reentry_owner_id")!=reentryOwnerId ||
+        proof.optString("execution_semantics","STOP_ENTRY")!=executionSemantics ||
+        executionSemantics !in setOf("STOP_ENTRY","MARKET_ON_CLOSE") ||
+        closeEvent && (source!=williamsNtdProfile || family!="ZONE_ADD_ON" || !addition && reentryOwnerId.isBlank() ||
+            !referenceClose.isFinite() || referenceClose<=0 ||
+            !proof.optDouble("reference_close",Double.NaN).isFinite() ||
+            abs(proof.optDouble("reference_close",Double.NaN)-referenceClose)>tick*.11 ||
+            abs(bookTrigger-referenceClose)>tick*.11 ||
+            williamsNtdCloseEntryBound(direction,referenceClose,tick)?.let { abs(it-entry)>tick*.11 }!=false ||
+            williamsMarketOnCloseReason(start,WILLIAMS_H1_MS,now,referenceClose,referenceClose)!=null) ||
+        addition && (!((source==williamsTc2Profile && family in setOf("SUPER_AO","FRACTAL")) ||
+            source==williamsNtdProfile && family in williamsNtdFamilies) ||
             !proof.optDouble("campaign_stop",Double.NaN).isFinite() ||
             abs(proof.optDouble("campaign_stop")-stop)>tick*.11))
         return "H1_BOOK_CAMPAIGN_PROOF_MISMATCH"
     if(proof.optString("mode")!=WILLIAMS_BOOK_H1_ENTRY_MODE ||
+        proof.optString("trigger_price_basis")!="CONTRACT_PRICE" ||
         proof.optString("frame")!="1h" ||
         proof.optString("signal_id")!=signalId || signalId.isBlank() ||
         proofDirection!=direction || direction !in setOf("LONG","SHORT") ||
-        type!=signalType || type.isBlank() ||
+        type!=signalType || type.isBlank() || campaignSignalDirection(type)!=direction ||
         proofSource!=source || source !in williamsSourceProfiles ||
         start<=0 || start%WILLIAMS_H1_MS!=0L ||
         known!=start+WILLIAMS_H1_MS || expires!=williamsH1SignalExpiry(start,type,source) ||
@@ -101,7 +119,7 @@ internal fun williamsBookH1ProofBlocker(
         !williamsH1SignalTimeEligible(start,type,source,now) ||
         !tick.isFinite() || tick<=0 ||
         listOf(bookTrigger,bookStop,entry,stop).any { !it.isFinite() || it<=0 } ||
-        abs(bookTrigger-entry)>tick*.11 ||
+        !closeEvent && abs(bookTrigger-entry)>tick*.11 ||
         (if(direction=="LONG") bookStop>=bookTrigger || stop>=entry || !addition && stop<bookStop-tick*.11
          else bookStop<=bookTrigger || stop<=entry || !addition && stop>bookStop+tick*.11)) return "H1_BOOK_PROOF_MISMATCH_OR_EXPIRED"
     // Only Course may tighten the original stop using its independent higher

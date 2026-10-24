@@ -24,7 +24,7 @@ class WilliamsUnifiedEvidenceTest {
             for(source in williamsSourceProfiles) {
                 val observed=CockpitDiagnostics.rows(pairSignals).count { it.optString("strategy_profile")==source }
                 independentProof.put(JSONObject().put("profile",source)
-                    .put("execution_role",if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
+                    .put("execution_role",if(williamsVerifiedNewRiskSource(source)) "LIVE" else "OBSERVE")
                     .put("state",if(observed>0) "FORMATION_OBSERVED" else "NO_VALID_FORMATION")
                     .put("as_of_close_ms",now).put("signal_count",observed))
             }
@@ -102,10 +102,10 @@ class WilliamsUnifiedEvidenceTest {
         val late = buildWilliamsUnifiedEvidence(scanner().put("last_scan_at", now - 130_000L), status(), now)
         assertEquals("STALE_OR_MISSING_SCAN", late.getString("status"))
         val legacy = buildWilliamsUnifiedEvidence(scanner(),
-            JSONObject().put("strategy_profile", williamsUnifiedProfile), now)
+            JSONObject().put("strategy_profile", williamsCourseProfile), now)
         assertEquals("WRONG_PROFILE", legacy.getString("status"))
     }
-    @Test fun tc2LiveIsExpectedWhileOtherEditionsCanOnlyObserve() {
+    @Test fun independentTc2NtdExecutionStillDoesNotGrantOrdersToCachedObservations() {
         val signals=JSONArray()
             .put(signal("t1",williamsTc2Profile,"REVERSAL"))
             .put(signal("n1",williamsNtdProfile,"SHORT_FRACTAL"))
@@ -114,9 +114,10 @@ class WilliamsUnifiedEvidenceTest {
         assertEquals("COMPLETE_OBSERVATION_ONLY",evidence.getString("status"))
         val pair=evidence.getJSONArray("by_symbol").getJSONObject(0)
         val signalsOut=CockpitDiagnostics.rows(pair.getJSONArray("signals"))
-        assertEquals(listOf("LIVE","OBSERVE","OBSERVE"),signalsOut.map { it.getString("execution_role") })
+        assertEquals(listOf("LIVE","LIVE","OBSERVE"),signalsOut.map { it.getString("execution_role") })
         assertTrue(pair.getBoolean("fresh_opposing_entries_before_context"))
         assertFalse(pair.getBoolean("live_tc2_opposing_entries_before_context"))
+        assertTrue(pair.getBoolean("live_source_opposing_entries_before_context"))
     }
 
     @Test fun pinnedSourceOwnerDoesNotChangeWhenAnotherBookFindsASignal() {

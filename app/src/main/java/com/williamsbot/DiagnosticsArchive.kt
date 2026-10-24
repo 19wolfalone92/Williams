@@ -77,6 +77,7 @@ object DiagnosticsArchive {
                 renderTests(report, "ui")
             )
             add(zip, "event_timeline.json", report.optJSONArray("event_timeline")?.toString(2) ?: "[]")
+            add(zip, "android_background_health.json",report.optJSONObject("status")?.optJSONObject("android_runtime")?.toString(2) ?: "{}")
             add(zip, "last_incident.json", report.optJSONObject("last_incident")?.toString(2) ?: "{}")
             add(zip, "sqlite_health.json", report.optJSONObject("sqlite_health")?.toString(2) ?: "{}")
             add(zip, "strategy.log", renderTests(report, "strategy"))

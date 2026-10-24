@@ -1,0 +1,151 @@
+{
+  "source": "COURSE_PDF80_84_SYNTHETIC_MECHANICAL_CASES_NOT_EXPERT_WAVE_TRUTH",
+  "mirror_sum": 400,
+  "cases": [
+    {
+      "id": "w5_complete",
+      "kind": "W5",
+      "expected": "COURSE_W5_TERMINAL_CONFIRMED"
+    },
+    {
+      "id": "c_complete",
+      "kind": "C_ADD",
+      "expected": "COURSE_C_TERMINAL_CONFIRMED"
+    },
+    {
+      "id": "w3_stall",
+      "kind": "W3",
+      "expected": "COURSE_W3_STALL_INVALIDATED"
+    },
+    {
+      "id": "w5_stall",
+      "kind": "W5_STALL",
+      "expected": "COURSE_W5_STALL_INVALIDATED"
+    },
+    {
+      "id": "correction_break",
+      "kind": "C_INVALID",
+      "expected": "COURSE_CORRECTION_INVALIDATED"
+    },
+    {
+      "id": "w5_child_missing",
+      "kind": "W5",
+      "fault": "CHILD_MISSING",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w5_child_ambiguous",
+      "kind": "W5",
+      "fault": "CHILD_AMBIGUOUS",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w5_parent_ambiguous",
+      "kind": "W5",
+      "fault": "PARENT_AMBIGUOUS",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w5_parent_sign_missing",
+      "kind": "W5",
+      "fault": "PARENT_SIGN_MISSING",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w5_child_sign_missing",
+      "kind": "W5",
+      "fault": "CHILD_SIGN_MISSING",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w5_future_child",
+      "kind": "W5",
+      "fault": "FUTURE_CHILD",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w5_preentry",
+      "kind": "W5",
+      "fault": "PREENTRY",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w5_wrong_origin",
+      "kind": "W5",
+      "fault": "ORIGIN",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w5_history_gap",
+      "kind": "W5",
+      "fault": "GAP",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w5_parent_error",
+      "kind": "W5",
+      "fault": "H1_ERROR",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w5_child_error",
+      "kind": "W5",
+      "fault": "CHILD_ERROR",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w5_stale",
+      "kind": "W5",
+      "fault": "STALE",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "c_without_flat",
+      "kind": "C_ADD",
+      "fault": "NO_HANDOFF",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "c_flat_after_entry",
+      "kind": "C_ADD",
+      "fault": "LATE_FLAT",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w3_not_reached",
+      "kind": "W3",
+      "fault": "NOT_REACHED",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w3_expansion_completed",
+      "kind": "W3",
+      "fault": "EXTENDED",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w3_boundary_not_broken",
+      "kind": "W3",
+      "fault": "NOT_CROSSED",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w5_stall_invalidated_live",
+      "kind": "W5_STALL",
+      "fault": "LIVE_INVALIDATED",
+      "expected": "COURSE_W5_STALL_INVALIDATED"
+    },
+    {
+      "id": "w5_stall_other_invalid",
+      "kind": "W5_STALL",
+      "fault": "OTHER_INVALIDATED",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "w3_old_peak_still_invalidates",
+      "kind": "W3",
+      "fault": "OLD_REACH",
+      "expected": "COURSE_W3_STALL_INVALIDATED"
+    }
+  ]
+}

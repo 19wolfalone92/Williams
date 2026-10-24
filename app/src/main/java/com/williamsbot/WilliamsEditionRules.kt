@@ -17,8 +17,8 @@ internal fun williamsProfileAllowsSource(selected:String,source:String):Boolean 
     source in williamsSourceProfiles && (selected==williamsUnifiedProfile || selected==source)
 
 /** Live new exposure is deliberately narrower than signal-source visibility.
- * NTD and Course continue independent OBSERVE analysis and stop-only ownership
- * of legacy exposure, but cannot create new automated risk until exchange E2E.
+ * TC2 and NTD retain independent source lifecycles. Course remains OBSERVE;
+ * an observation cannot acquire order authority through the unified selector.
  */
 internal fun williamsVerifiedNewRiskSource(source:String):Boolean =
     williamsNewExposureBlocker(source)==null
@@ -217,6 +217,14 @@ internal fun williamsCourseAirbagStop(side:String,higher:List<WilliamsWaveBar>,t
     return stop.takeIf { it>0 }
 }
 
+/** Preserve BOTH the formation invalidation and higher-frame Air Bag.
+ * A crossed Air Bag blocks new exposure instead of widening the local stop. */
+internal fun williamsCourseInitialProtection(side:String,formation:Double,airbag:Double,entry:Double):Double? {
+    if(side !in listOf("LONG","SHORT") || listOf(formation,airbag,entry).any { !it.isFinite() || it<=0 }) return null
+    return if(side=="LONG") maxOf(formation,airbag).takeIf { it<entry }
+        else minOf(formation,airbag).takeIf { it>entry }
+}
+
 internal fun williamsCourseRhythm(bars:List<WilliamsWaveBar>):Pair<String,String> {
     if (bars.size<34 || !validWilliamsEditionBars(bars)) return "UNKNOWN" to "UNKNOWN"
     val mids=bars.map { (it.h+it.l)/2 }
@@ -259,7 +267,8 @@ internal fun williamsMarketOnCloseReason(
 
 /** Five independent NTD dimensions; only the external fractal initiates a cycle. */
 internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<Double>,teeth:List<Double>,
-    lips:List<Double>,ao:List<Double>,ac:List<Double>,tick:Double,exitMode:Boolean=false):List<WilliamsEditionSetup> {
+    lips:List<Double>,ao:List<Double>,ac:List<Double>,tick:Double,exitMode:Boolean=false,
+    includePendingAo:Boolean=true):List<WilliamsEditionSetup> {
     val n=bars.size
     if (side !in listOf("LONG","SHORT") || n<45 || !validWilliamsEditionBars(bars) || tick<=0 ||
         listOf(jaw,teeth,lips,ao,ac).any { it.size!=n }) return emptyList()
@@ -277,7 +286,7 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
     }
     val fractalKind=if (sign==1) "HIGH" else "LOW"
     confirmedWilliamsEditionFractals(bars).asReversed().firstOrNull { f ->
-        f.kind==fractalKind && bars.last().t-bars[f.confirmation].t<18_000_000L &&
+        f.kind==fractalKind &&
             // NTD ch4 / TC2 ch11: qualify the actual +1/-1 tick
             // BREAKOUT beyond red Teeth, not the earlier pivot price.
             sign*(f.price+sign*tick-teeth.last())>0 &&
@@ -304,6 +313,18 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
             a[i-1]<=0 && a[i]>0 -> add("AO_ZERO_LINE",i)
         }
     }
+    // NTD PDF63-67: failure to break the signal bar on the very next
+    // candle does not delete the AO stop. Preserve the original causal
+    // formation while its AO colour continues and its level is unconsumed.
+    // A recovered colour must never resurrect a previously cancelled signal.
+    if(includePendingAo) for(end in n-1 downTo maxOf(45,n-4)) {
+        val prior=williamsNtdSetups(side,bars.take(end),jaw.take(end),teeth.take(end),lips.take(end),
+            ao.take(end),ac.take(end),tick,exitMode,includePendingAo=false)
+        for(setup in prior.filter { it.kind in setOf("AO_SAUCER","AO_ZERO_LINE","AO_TWIN_PEAKS") }) {
+            if((setup.knownIndex+1 until n).all { j -> ao[j].isFinite() && ao[j-1].isFinite() &&
+                sign*(ao[j]-ao[j-1])>0 } && pending(setup.knownIndex,setup.trigger)) out+=setup
+        }
+    }
     for (j in i downTo maxOf(1,n-10)) {
         if (!c[j].isFinite() || c[j]<=c[j-1]) continue
         // NTD PDF89: an unhit AC signal is cancelled by an opposite colour.
@@ -328,7 +349,7 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
         add("ZONE_ADD_ON",i,execution="MARKET_ON_CLOSE",reference=bars[i].c)
     williamsNtdBalanceLineSetup(side,bars,jaw,teeth,lips,ao,ac,tick,requireMouth=!exitMode)?.let { out+=it }
     val mouth=if(sign==1) maxOf(jaw.last(),teeth.last(),lips.last()) else minOf(jaw.last(),teeth.last(),lips.last())
-    return out.filter { bars.last().t-bars[it.knownIndex].t<18_000_000L &&
+    return out.filter { (it.kind=="FRACTAL" || bars.last().t-bars[it.knownIndex].t<18_000_000L) &&
         (exitMode || it.role=="ENTRY" || mouth.isFinite() && sign*(it.trigger-mouth)>0) }
 }
 
@@ -339,6 +360,7 @@ internal fun williamsNtdManagementPlan(side:String,bars:List<WilliamsWaveBar>,te
     val s=JSONObject(state.toString());val n=bars.size;val sign=if(side=="LONG") 1 else -1
     if(side !in listOf("LONG","SHORT") || n<6 || !validWilliamsEditionBars(bars) || tick<=0 || openedAt<=0 ||
         listOf(teeth,lips,ao,ac).any { it.size!=n }) return WilliamsNtdManagement(s)
+    if(bars.last().t+WILLIAMS_H1_MS<=openedAt) return WilliamsNtdManagement(s)
     var run=0
     for(i in 1 until n) {
         if(bars[i].t+3_600_000L<=openedAt) continue

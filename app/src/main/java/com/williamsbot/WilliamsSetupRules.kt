@@ -61,27 +61,25 @@ internal fun selectWilliamsPendingFractal(
 /**
  * Trading Chaos 2nd ed., chapter 12 (PDF pp. 156-161):
  * when Super AO is the first presenting Wise Man, the initial protective
- * stop is behind the LOWEST low (LONG) / HIGHEST high (SHORT) of the last
- * three-to-five price bars, not merely the low/high of the third AO bar.
+ * stop may be at the reversal base or, more conservatively, just beyond
+ * the signal price bar. The three-to-five-bar rule describes SUBSEQUENT
+ * trailing, not a mandatory initial stop window (PDF p.156, printed p.141).
  *
- * Choose five CLOSED H1 price bars ending with that third AO bar, retaining
- * the original time and series causality; this is a documented, consistent
- * choice inside the book's 3–5 bar range. Never examine subsequent bars.
+ * Choose the explicitly described signal-bar variant. Retain the third AO
+ * bar as the original risk anchor even after later bars become available.
  */
 internal fun williamsTc2SuperAoInitialStop(
-    direction:String,bars:List<WilliamsWaveBar>,thirdAoBarIndex:Int,tick:Double,
-    window:Int=5
+    direction:String,bars:List<WilliamsWaveBar>,thirdAoBarIndex:Int,tick:Double
 ):Double? {
-    if(direction !in setOf("LONG","SHORT") || window !in 3..5 ||
-        thirdAoBarIndex !in (window-1)..bars.lastIndex || !tick.isFinite() || tick<=0)
+    if(direction !in setOf("LONG","SHORT") ||
+        thirdAoBarIndex !in bars.indices || !tick.isFinite() || tick<=0)
         return null
-    val history=bars.subList(thirdAoBarIndex-window+1,thirdAoBarIndex+1)
-    if(history.any { b ->
-            !b.h.isFinite() || !b.l.isFinite() || b.l<=0 ||
+    val b=bars[thirdAoBarIndex]
+    if(listOf(b.o,b.h,b.l,b.c).any { !it.isFinite() } ||
+            minOf(b.o,b.l,b.c)<=0 ||
                 b.h<b.l || b.h<maxOf(b.o,b.c) || b.l>minOf(b.o,b.c)
-        }) return null
-    val price=if(direction=="LONG") history.minOf { it.l }-tick
-        else history.maxOf { it.h }+tick
+        ) return null
+    val price=if(direction=="LONG") b.l-tick else b.h+tick
     if(!price.isFinite() || price<=0) return null
     return price
 }

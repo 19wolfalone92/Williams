@@ -101,5 +101,5 @@ def test_android_runtime_does_not_promote_observation_sources_to_live_new_risk()
     runtime = (Path(__file__).resolve().parents[1] /
                "app/src/main/java/com/williamsbot/StandaloneRuntime.kt").read_text(encoding="utf-8")
     assert 'if(!williamsVerifiedNewRiskSource(profile))' in runtime
-    assert 'if(williamsProfile !in setOf(williamsTc2Profile,williamsUnifiedProfile))' in runtime
+    assert 'if(williamsProfile!=williamsUnifiedProfile && !williamsVerifiedNewRiskSource(williamsProfile))' in runtime
     assert 'williamsVerifiedNewRiskSource(it.strategyProfile)' in runtime

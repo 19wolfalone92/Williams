@@ -6,6 +6,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CockpitDiagnosticsTest {
+    @Test fun currentAndroidFlagsCannotCertifyUninterruptedBackgroundOperation() {
+        val s=healthy().put("android_runtime",JSONObject().put("foreground_service_active",true)
+            .put("battery_optimization_ignored",true).put("background_restricted",false)
+            .put("cpu_wake_lock_held",true).put("service_guard_age_ms",1000))
+        assertEquals("NOT_VERIFIED",severity("AND-01",s))
+        s.getJSONObject("android_runtime").put("cpu_wake_lock_held",false)
+        assertEquals("WARNING",severity("AND-01",s))
+        s.getJSONObject("android_runtime").put("cpu_wake_lock_held",true).put("service_guard_age_ms",120_000)
+        assertEquals("WARNING",severity("AND-01",s))
+    }
     private val now = 1_800_000_000_000L
     private fun healthy() = JSONObject().put("running", true).put("rest_market_ready", true)
         .put("market_ws_connected", true).put("user_ws_connected", true)
@@ -305,12 +315,16 @@ class CockpitDiagnosticsTest {
         assertEquals("FAIL",severity("DATA-05",s))
     }
 
-    @Test fun independentNtdCourseObserversMayNotCreatePendingExposure() {
+    @Test fun onlyVerifiedSourcesMayCreatePendingExposure() {
         val foreign=entry().put("strategy_profile","NTD")
         val c=coordinator().put("pending_intent_details",JSONArray().put(foreign))
         assertEquals("FAIL",severity("STR-10",healthy(),c))
         foreign.put("strategy_profile",williamsTc2Profile)
         assertEquals("PASS",severity("STR-10",healthy(),c))
+        foreign.put("strategy_profile",williamsNtdProfile)
+        assertEquals("PASS",severity("STR-10",healthy(),c))
+        foreign.put("strategy_profile",williamsCourseProfile)
+        assertEquals("FAIL",severity("STR-10",healthy(),c))
         foreign.put("campaign_status","OPEN_PROTECTED").put("strategy_profile","COURSE")
         assertEquals("PASS",severity("STR-10",healthy(),c))
     }

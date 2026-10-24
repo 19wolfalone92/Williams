@@ -4,8 +4,39 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.json.JSONArray
+import org.json.JSONObject
 
 class StandaloneRuntimeReconciliationTest {
+    @Test
+    fun inFlightRefreshRetainsLastKnownSignedShortWithoutClaimingVerification() {
+        val lastSigned = JSONArray().put(
+            JSONObject().put("symbol", "ETHUSDT")
+                .put("positionAmt", -0.395).put("direction", "SHORT")
+                .put("stop_verification_status", "EXTERNAL_PROTECTED")
+        )
+        val (rows, error, observedAt) =
+            lastKnownFuturesPositionsForDisplay(lastSigned.toString() to 123456789L, null)
+        assertEquals(1, rows.length())
+        assertEquals("ETHUSDT", rows.getJSONObject(0).getString("symbol"))
+        assertEquals("SHORT", rows.getJSONObject(0).getString("direction"))
+        assertEquals(123456789L, observedAt)
+        assertTrue(error.contains("stale"))
+        // The non-empty error ensures status() cannot mark these rows as verified.
+    }
+
+    @Test
+    fun firstLoadMissingExchangeSnapshotIsUnknownNotConfirmedFlat() {
+        val (rows, error, observedAt) =
+            lastKnownFuturesPositionsForDisplay(null, null)
+        assertEquals(0, rows.length())
+        assertEquals(0L, observedAt)
+        assertTrue(error.contains("loading"))
+        val (_, timeoutError, _) =
+            lastKnownFuturesPositionsForDisplay(null, "signed REST timeout")
+        assertEquals("signed REST timeout", timeoutError)
+    }
+
     @Test
     fun queuedUserStreamReconciliationCountsAsLiveWork() {
         val findings = diagnosticConsistencyFindings(
@@ -64,6 +95,38 @@ class StandaloneRuntimeReconciliationTest {
         assertFalse(mayCommitUserStreamSync(false, false, 7L, 7L))
         assertFalse(mayCommitUserStreamSync(true, true, 7L, 7L))
         assertFalse(mayCommitUserStreamSync(true, false, 6L, 7L))
+    }
+
+    @Test
+    fun completeSignedDataCanSynchronizeWhileNewEntriesStayBlocked() {
+        val blocked=JSONObject().put("ok",false).put("state","POSITION_UNPROTECTED")
+            .put("exchange_snapshot_complete",true).put("positions_checked",3)
+            .put("exchange_protection_observations",JSONArray())
+        assertTrue(futuresSignedSnapshotComplete(blocked))
+        assertFalse(blocked.getBoolean("ok"))
+        assertEquals("POSITION_UNPROTECTED",blocked.getString("state"))
+        blocked.remove("exchange_protection_observations")
+        assertFalse(futuresSignedSnapshotComplete(blocked))
+        assertFalse(futuresSignedSnapshotComplete(JSONObject().put("ok",true)))
+        assertFalse(futuresSignedSnapshotComplete(JSONObject()
+            .put("ok",false).put("blocker","signed REST timeout")))
+    }
+
+    @Test
+    fun privateStreamLockContentionIsDeferredWithoutApprovingExchangeState() {
+        assertTrue(deferrableFuturesReconciliation("USER_STREAM_RECONCILIATION"))
+        assertTrue(deferrableFuturesReconciliation("POSITION_MANAGEMENT_RECONCILIATION"))
+        for (purpose in listOf("STARTUP_RECONCILIATION", "USER_APPROVED_RECOVERY",
+                "KILL_SWITCH_RECONCILIATION", "LIQUIDATION_GUARD_EXIT")) {
+            assertFalse(deferrableFuturesReconciliation(purpose))
+        }
+        val deferred = JSONObject()
+            .put("ok", false)
+            .put("deferred_to_active_reconciliation", true)
+            .put("blocker", "exchange_reconciliation_in_progress")
+        // Deferred is never an exchange-authenticated sync or release approval.
+        assertFalse(futuresSignedSnapshotComplete(deferred))
+        assertFalse(deferred.getBoolean("ok"))
     }
 
     @Test

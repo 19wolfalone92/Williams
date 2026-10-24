@@ -173,23 +173,18 @@ def _latest_super_ao(
             trigger_base = float(
                 signal_row["high"] if side == "LONG" else signal_row["low"]
             )
-            # TC2 chapter 12 (PDF pp.156-157): when Super AO presents first,
-            # the protective stop belongs beyond the lowest/highest of the
-            # previous 3-5 CLOSED price bars, not just the third AO bar.
-            # Use five bars when history permits (the warmed Android H1 path),
-            # otherwise 3-4 valid bars as allowed by TC2. Later bars must
-            # never change the original risk anchor (no look-ahead).
-            if third_i < 2:
-                continue
-            window = ind.iloc[max(0, third_i - 4):third_i + 1]
-            extremes = pd.to_numeric(
-                window["low" if side == "LONG" else "high"], errors="coerce"
-            )
-            if len(extremes) not in (3, 4, 5) or not all(
-                math.isfinite(float(v)) and float(v) > 0 for v in extremes
+            # TC2 ch12, PDF p.156 (printed p.141): first Super AO may
+            # use the reversal base OR the opposite end of its signal bar.
+            # Select the signal-bar variant, matching native Android. The
+            # 3-5-bar window is subsequent trailing, not this initial anchor.
+            values = [float(signal_row[k]) for k in ("open", "high", "low", "close")
+                      if k in signal_row.index]
+            high, low = float(signal_row["high"]), float(signal_row["low"])
+            if not all(math.isfinite(v) and v > 0 for v in values) or high < low or any(
+                v < low or v > high for v in values
             ):
                 continue
-            protective = float(extremes.min() if side == "LONG" else extremes.max())
+            protective = low if side == "LONG" else high
             return third_i, trigger_base, protective
     return None
 
@@ -729,7 +724,7 @@ def extract_ntd_fractal_signal_specs(
     side: str,
     timeframe: str,
     tick_size: float,
-    max_age_bars: int = 80,
+    max_age_bars: int | None = None,
 ) -> list[SignalSpec]:
     """Return the NTD first external-fractal breakout as a conditional entry.
 
@@ -750,7 +745,9 @@ def extract_ntd_fractal_signal_specs(
     current_close = float(ind.iloc[-1].get("close", 0.0) or 0.0)
     if not math.isfinite(current_close) or current_close <= 0:
         return []
-    earliest_center = max(2, len(ind) - max(3, int(max_age_bars)) - 2)
+    # NTD PDF43: validity ends on trigger or replacement, never on age.
+    # A supplied scan-depth limit only bounds the caller's history search.
+    earliest_center = 2 if max_age_bars is None else max(2, len(ind) - max(3, int(max_age_bars)) - 2)
     confirmed_col = "fractal_up_confirmed" if is_long else "fractal_down_confirmed"
     center_col = "confirmed_up_center_index" if is_long else "confirmed_down_center_index"
     group_start_col = "confirmed_up_group_start_index" if is_long else "confirmed_down_group_start_index"
@@ -846,7 +843,7 @@ def extract_ntd_fractal_signal_specs(
                 + " the fractal extreme"
             ),
             source_candle_index=center_i,
-            expires_at_ms=_expiry(signal_time, timeframe, max_age_bars),
+            expires_at_ms=0,
         )]
     return []
 

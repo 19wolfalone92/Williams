@@ -40,7 +40,7 @@ def build_decision_trace(symbol,profile,input_bars,now,indicators,signals,hierar
                 if item["profile"]==source:evidence.append(dict(item,signal_bar_time_ms=s.signal_bar_time_ms,
                     direction="LONG" if s.side=="BUY" else "SHORT",selected=s.setup_context.get("source_signal_id",s.signal_id)==item["signal_id"]))
         books.append({"profile":source,"state":"FORMATION_OBSERVED" if evidence else "NO_VALID_FORMATION","evidence":evidence,
-            "execution_role":"LIVE" if source==TC2 else "OBSERVE","can_place_orders":False})
+            "execution_role":"LIVE" if source in (TC2,NTD) else "OBSERVE","can_place_orders":False})
     active=[s for s in hierarchy.get("scenarios",[]) if s.get("frame")=="1h" and s.get("status")=="PROVISIONAL"]
     return {"schema":"WILLIAMS_DECISION_TRACE_V1","engine":"PYTHON","symbol":symbol,"strategy_profile":profile,
         "frame":"1h","observed_at_ms":now,"as_of_close_ms":bars[-1].t+3_600_000 if bars else 0,

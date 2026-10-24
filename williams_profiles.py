@@ -30,17 +30,18 @@ def observe_edition_signals(symbol,ind,*,timeframe,tick_size):
     """
     signals=[]
     observations=[]
+    from williams_execution_policy import new_exposure_blocker
     for source in SOURCE_PROFILES:
         try:
             found=[s for side in ("LONG","SHORT") for s in extract_profile_signals(
                 symbol,ind,profile=source,side=side,timeframe=timeframe,tick_size=tick_size)]
             signals.extend(found)
             observations.append({"profile":source,"state":"FORMATION_OBSERVED" if found else "NO_VALID_FORMATION",
-                "signal_count":len(found),"execution_role":"LIVE" if source==TC2 else "OBSERVE",
+                "signal_count":len(found),"execution_role":"LIVE" if new_exposure_blocker(source) is None else "OBSERVE",
                 "can_place_orders":False})
         except Exception as exc:
             observations.append({"profile":source,"state":"ANALYSIS_FAILED","error_type":type(exc).__name__,
-                "execution_role":"LIVE" if source==TC2 else "OBSERVE","can_place_orders":False})
+                "execution_role":"LIVE" if new_exposure_blocker(source) is None else "OBSERVE","can_place_orders":False})
     return signals,observations
 
 
@@ -78,7 +79,22 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
             # detector consumes the REAL long/short_fractal_outside field
             # from strategy.py. Missing or false evidence fails closed,
             # independently of exchange campaign ownership and risk checks.
-            specs.extend(detector(symbol,work,**kwargs,**({"exit_mode":exit_mode} if detector==extract_ntd_zone_add_on_specs else {})))
+            if detector==extract_ntd_ao_signal_specs:
+                # NTD PDF63-67: keep an unhit AO formation after its signal
+                # candle. A later colour recovery cannot revive a cancelled stop.
+                sign=1 if side=="LONG" else -1
+                for omitted in range(min(4,max(0,len(work)-3))+1):
+                    prefix=work if not omitted else work.iloc[:-omitted]
+                    for signal in detector(symbol,prefix,**kwargs):
+                        later=work.iloc[len(prefix):]
+                        osc=[float(v) for v in work.ao]
+                        colour=all(isfinite(osc[j]) and isfinite(osc[j-1]) and sign*(osc[j]-osc[j-1])>0
+                            for j in range(len(prefix),len(work)))
+                        unhit=not any((float(b.high)>=signal.trigger_price if side=="LONG" else float(b.low)<=signal.trigger_price)
+                            for b in later.itertuples())
+                        if colour and unhit:specs.append(signal)
+            else:
+                specs.extend(detector(symbol,work,**kwargs,**({"exit_mode":exit_mode} if detector==extract_ntd_zone_add_on_specs else {})))
         def line(name):
             col=next((c for c in (name+"_current",name+"_shifted",name) if c in ind),None)
             return [float(v) for v in ind[col]] if col else [float("nan")]*len(ind)
@@ -134,5 +150,9 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
     # A single-tick buffer also protects AO/AC/fractal signal-bar extrema.
     specs=[replace(s,protective_reference=s.protective_reference+(-tick_size if side=="LONG" else tick_size))
         if s.signal_type not in {SignalType.BALANCE_LINE,SignalType.COURSE_HUMP,SignalType.COURSE_THUMB,SignalType.COURSE_SQUAT} else s for s in specs]
+    if profile==NTD and timeframe=="1h":
+        from williams_execution_policy import h1_signal_expiry
+        specs=[replace(s,expires_at_ms=h1_signal_expiry(s.signal_bar_time_ms,s.signal_type,NTD))
+            if s.execution_semantics=="STOP_ENTRY" else s for s in specs]
     return sorted([replace(s,strategy_profile=profile,signal_id=f"{profile}:{s.signal_id}") for s in specs],
                   key=lambda s:(s.signal_bar_time_ms,s.signal_type.value))
