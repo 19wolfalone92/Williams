@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
 import android.os.SystemClock
+import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -22,7 +23,7 @@ internal object RuntimeContinuityEvidence {
             rows.put(JSONObject().put("code",code.filter { it.isUpperCase() || it=='_' }.take(64))
                 .put("type",cause?.javaClass?.simpleName.orEmpty().take(64))
                 .put("at_ms",System.currentTimeMillis()).put("elapsed_ms",SystemClock.elapsedRealtime()))
-            prefs.edit().putString("events",rows.toString()).commit()
+            prefs.edit(commit = true) { putString("events", rows.toString()) }
         }
     }
     fun refreshProcessExits(context:Context) {
