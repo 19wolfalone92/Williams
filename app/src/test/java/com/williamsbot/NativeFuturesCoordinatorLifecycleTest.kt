@@ -735,6 +735,28 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun finalSignedFuturesDoorRejectsNtdAndCourseNewOrdersForBothSides() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            for(profile in listOf(williamsNtdProfile,williamsCourseProfile)) {
+                val journal=Journal();val exchange=Exchange(direction)
+                val c=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+                assertTrue(c.reconcile().getBoolean("ok"))
+                val plan=plan(direction).copy(
+                    strategyProfile=profile,
+                    signalType=if(profile==williamsNtdProfile) "FRACTAL" else "COURSE_THUMB")
+                val beforeAlgo=exchange.posts("/fapi/v1/algoOrder")
+                val beforeMarket=exchange.posts("/fapi/v1/order")
+                val result=c.submitPendingEntry(plan)
+                assertFalse(result.toString(),result.optBoolean("accepted"))
+                assertTrue(result.toString(),
+                    result.optString("blocker").contains("WILLIAMS_SOURCE_OBSERVATION_ONLY"))
+                assertEquals(beforeAlgo,exchange.posts("/fapi/v1/algoOrder"))
+                assertEquals(beforeMarket,exchange.posts("/fapi/v1/order"))
+                assertEquals("READY",c.state.name)
+            }
+        }
+    }
+
     @Ignore("NTD new exposure is disabled; historical transport fixture retained for independent future approval")
     @Test fun ntdInitialFractalAndEveryPendingDimensionUseTheRealProtectedOwner() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) for(family in williamsNtdFamilies-setOf("ZONE_ADD_ON")) {
