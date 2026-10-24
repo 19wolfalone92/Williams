@@ -322,7 +322,7 @@ class CockpitDiagnosticsTest {
         foreign.put("strategy_profile",williamsTc2Profile)
         assertEquals("PASS",severity("STR-10",healthy(),c))
         foreign.put("strategy_profile",williamsNtdProfile)
-        assertEquals("PASS",severity("STR-10",healthy(),c))
+        assertEquals("FAIL",severity("STR-10",healthy(),c))
         foreign.put("strategy_profile",williamsCourseProfile)
         assertEquals("FAIL",severity("STR-10",healthy(),c))
         foreign.put("campaign_status","OPEN_PROTECTED").put("strategy_profile","COURSE")
