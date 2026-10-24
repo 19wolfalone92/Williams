@@ -552,6 +552,13 @@ internal fun runtimeStartButtonEnabled(
  * Permit a throttled retry when a connected private stream remains unsynchronized.
  * This schedules reconciliation only; it never clears the safety barrier itself.
  */
+/** A private-stream REST sync may defer behind another account-wide reconciliation.
+ * Deferred never means exchange-verified; caller retains the sync-required latch.
+ * Startup and operator recovery deliberately require a strict lock wait.
+ */
+internal fun deferrableFuturesReconciliation(purpose: String): Boolean =
+    purpose == "POSITION_MANAGEMENT_RECONCILIATION" || purpose == "USER_STREAM_RECONCILIATION"
+
 internal fun shouldRetryUserStreamReconciliation(
     connected: Boolean,
     syncRequired: Boolean,
@@ -4754,14 +4761,6 @@ private class NativeEngine(
             executionGate.release(reservationKey)
         }
     }
-
-    /** A user-stream session must not become a fatal exchange failure merely
-     * because a different signed reconciliation already owns the account lock.
-     * Only startup/operator safety paths require the strict bounded wait.
-     * A deferred user-stream check keeps its sync-required latch and retries.
-     */
-    internal fun deferrableFuturesReconciliation(purpose: String): Boolean =
-        purpose == "POSITION_MANAGEMENT_RECONCILIATION" || purpose == "USER_STREAM_RECONCILIATION"
 
     /**
      * Reconciliation can place, replace, or cancel protective algo orders. It therefore
