@@ -2821,7 +2821,7 @@ private fun PositionScreen(
                         ) {
                             Text(
                                 (p.direction.takeIf { it == "LONG" || it == "SHORT" }
-                                    ?: if (p.qty < 0.0) "SHORT" else "LONG") + " " + p.symbol,
+                                    ?: "НАПРАВЛЕНИЕ НЕ ПОДТВЕРЖДЕНО") + " " + p.symbol,
                                 modifier = Modifier.weight(1f).clickable { onSelect(p.symbol) },
                                 style =
                                     MaterialTheme.typography.headlineSmall
@@ -2881,7 +2881,9 @@ private fun PositionScreen(
                             )
                         }
                         InfoRow("Источник направления", "Биржевая позиция Binance • " +
-                            if (status.positionsSnapshotOk) "проверенный снимок" else "снимок устарел или не подтверждён")
+                            if (status.positionsSnapshotOk &&
+                                CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L))
+                                "актуальный подписанный снимок" else "снимок устарел или не подтверждён")
                         InfoRow(
                             "Объём позиции",
                             fmt(p.qty, 6)
@@ -4168,10 +4170,13 @@ internal fun parseStatus(json: JSONObject): Status {
                 qty = quantity,
                 // Signed USD-M one-way positionAmt is the authoritative exchange
                 // direction. Never let a stale local campaign label reverse it.
-                direction = signedBinancePositionDirection(item)
-                    ?: item.optString("direction", "").uppercase(Locale.US).takeIf {
+                direction = if (item.has("positionAmt")) {
+                    signedBinancePositionDirection(item).orEmpty()
+                } else {
+                    item.optString("direction", "").uppercase(Locale.US).takeIf {
                         it == "LONG" || it == "SHORT"
-                    }.orEmpty(),
+                    }.orEmpty()
+                },
                 entry = entryPrice,
                 stop = item.optDouble("stop_loss", item.optDouble("stop"))
                     .takeUnless { it.isNaN() || it == 0.0 },
