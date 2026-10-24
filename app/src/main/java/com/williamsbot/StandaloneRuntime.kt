@@ -1590,8 +1590,10 @@ private class NativeEngine(
     private var lastScanAt = 0L
 
     @Volatile private var worker: Thread? = null
+    @Volatile private var lastWorkerLoopElapsedMs=0L
     fun backgroundSnapshot():BackgroundRuntimeSnapshot = BackgroundRuntimeSnapshot(
-        runCatching { prefs.getBoolean("auto_run",false) }.getOrDefault(false),running,worker?.isAlive==true,runtimeGeneration)
+        runCatching { prefs.getBoolean("auto_run",false) }.getOrDefault(false),running,
+        worker?.isAlive==true,runtimeGeneration,lastWorkerLoopElapsedMs)
     private var scanSymbols = mutableListOf<String>()
     private var candidates = JSONArray()
     private var primaryCandles = emptyList<CandleN>()
@@ -1892,6 +1894,7 @@ private class NativeEngine(
     private fun executionReady(): Boolean =
         futuresExecutionAdapterReady &&
             RuntimeServiceState.active &&
+            !RuntimeServiceState.monitorHeartbeatStale &&
             campaignCoordinatorReadyForEntry() &&
             running &&
             !paused &&
@@ -1915,6 +1918,7 @@ private class NativeEngine(
         buildList {
             if (!futuresExecutionAdapterReady) add("futures_execution_adapter_disabled")
             if (!RuntimeServiceState.active) add("foreground_service_not_confirmed")
+            if (RuntimeServiceState.monitorHeartbeatStale) add("runtime_worker_heartbeat_stale")
             if (!campaignCoordinatorReadyForEntry()) {
                 val coordinator = runCatching { futuresCampaignCoordinator.status() }.getOrNull()
                 add("futures_campaign_coordinator_not_ready:" +
@@ -2556,9 +2560,11 @@ private class NativeEngine(
         scanProgressSymbols = 0
         warmCoreHistoryAsync(generation)
 
+        lastWorkerLoopElapsedMs=0L
         worker = Thread {
             try {
                 while (running && generation == runtimeGeneration) {
+                    lastWorkerLoopElapsedMs=android.os.SystemClock.elapsedRealtime()
                     try {
                         repairStaleMarketStreams()
                         // A connected private stream can still be unsynchronized after a
@@ -2622,6 +2628,7 @@ private class NativeEngine(
                 }
             } finally {
                 if (running && generation == runtimeGeneration) {
+                    lastWorkerLoopElapsedMs=0L
                     running = false
                     scannerState = "FAILED"
                     scannerError = "Runtime worker exited unexpectedly"

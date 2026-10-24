@@ -14,6 +14,8 @@ internal object RuntimeServiceState {
     @Volatile var lastError: String? = null
     @Volatile var wakeLockHeld = false
     @Volatile var lastGuardElapsedMs = 0L
+    @Volatile var monitorHeartbeatStale = false
+    @Volatile var lastWorkerLoopElapsedMs = 0L
     @Volatile var lastRecoveryAttemptMs = 0L
     @Volatile var refreshLease:(()->Unit)? = null
 }
@@ -73,6 +75,12 @@ object AndroidRuntimeHealth {
             .put("foreground_service_error", RuntimeServiceState.lastError ?: JSONObject.NULL)
             .put("cpu_wake_lock_held",RuntimeServiceState.wakeLockHeld)
             .put("service_guard_elapsed_ms",RuntimeServiceState.lastGuardElapsedMs)
+            .put("runtime_worker_heartbeat_stale",RuntimeServiceState.monitorHeartbeatStale)
+            .put("runtime_worker_last_loop_elapsed_ms",RuntimeServiceState.lastWorkerLoopElapsedMs)
+            .put("runtime_worker_heartbeat_age_ms",
+                if(RuntimeServiceState.lastWorkerLoopElapsedMs>0L)
+                    (android.os.SystemClock.elapsedRealtime()-RuntimeServiceState.lastWorkerLoopElapsedMs).coerceAtLeast(0L)
+                else JSONObject.NULL)
             .put("service_guard_age_ms",if(RuntimeServiceState.lastGuardElapsedMs>0)
                 android.os.SystemClock.elapsedRealtime()-RuntimeServiceState.lastGuardElapsedMs else JSONObject.NULL)
             .put("service_last_recovery_attempt_at_ms",RuntimeServiceState.lastRecoveryAttemptMs)

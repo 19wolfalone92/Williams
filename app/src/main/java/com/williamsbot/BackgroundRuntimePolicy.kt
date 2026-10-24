@@ -2,15 +2,25 @@ package com.williamsbot
 
 /** Liveness only. These observations never grant an exchange mutation. */
 internal data class BackgroundRuntimeSnapshot(val autoRunRequested:Boolean=false,val running:Boolean=false,
-    val workerAlive:Boolean=false,val generation:Long=0L)
+    val workerAlive:Boolean=false,val generation:Long=0L,
+    val lastWorkerLoopElapsedMs:Long=0L)
 
 internal object BackgroundRuntimePolicy {
     const val CHECK_MS=30_000L
     const val WAKE_TIMEOUT_MS=120_000L
     const val STARTUP_LEASE_MS=300_000L
+    const val MONITOR_STALE_MS=180_000L
     fun keepCpu(snapshot:BackgroundRuntimeSnapshot,startInFlight:Boolean,startAt:Long,now:Long):Boolean =
-        snapshot.autoRunRequested ||
+        snapshot.autoRunRequested || snapshot.running && snapshot.workerAlive ||
             startInFlight && startAt>=0 && now>=startAt && now-startAt<STARTUP_LEASE_MS
+    // Detect an alive worker whose processing loop stopped advancing.
+    // Its existence forbids a duplicate runtime start; new entry admission
+    // is separately fenced while protective exchange orders remain intact.
+    fun monitorStale(snapshot:BackgroundRuntimeSnapshot,now:Long):Boolean =
+        snapshot.running && snapshot.workerAlive &&
+            snapshot.lastWorkerLoopElapsedMs>0L &&
+            now>=snapshot.lastWorkerLoopElapsedMs &&
+            now-snapshot.lastWorkerLoopElapsedMs>=MONITOR_STALE_MS
     fun shouldRetry(snapshot:BackgroundRuntimeSnapshot,inFlight:Boolean,nextAttemptAt:Long,now:Long):Boolean =
         snapshot.autoRunRequested && (!snapshot.running || !snapshot.workerAlive) && !inFlight && now>=nextAttemptAt
     fun retryDelay(failures:Int):Long=when {
