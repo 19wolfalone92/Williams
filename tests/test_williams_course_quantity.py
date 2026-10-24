@@ -100,3 +100,18 @@ def test_an_order_ack_or_target_shaped_position_is_not_a_fill():
         candidate = deepcopy(order);candidate["status"] = status
         assert course_fill_blocker(proposal, candidate, position, "BTCUSDT", "BUY",
             expected_client_id="actual-child", expected_order_id="42", protection_verified=True)
+
+
+@pytest.mark.parametrize("exact", ["0.01234567890123456789", "0.123456789012345678"])
+def test_reduction_door_compares_the_original_decimal_not_a_rounded_float(monkeypatch, exact):
+    from types import SimpleNamespace
+    from futures_williams_runtime import FuturesWilliamsRuntime
+    bot = FuturesWilliamsRuntime.__new__(FuturesWilliamsRuntime)
+    campaign = SimpleNamespace(tags={"pending_course_stage": "W2"}, position_qty=1.0)
+    rounded = float(exact)
+    assert Decimal(str(rounded)) != Decimal(exact)
+    proof = {"status": "OBSERVED_SOURCE_PINNED_REDUCTION", "stage": "W2", "target_quantity": .3,
+             "reduction_quantity": rounded, "exact_quantity": {"quantity": exact}}
+    monkeypatch.setattr(bot, "_course_trim_plan", lambda owner:proof)
+    with pytest.raises(RuntimeError, match="COURSE_SOURCE_TRIM_STAGE_OR_QUANTITY_CHANGED"):
+        bot._revalidate_course_trim(campaign, rounded)

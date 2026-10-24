@@ -2494,7 +2494,7 @@ class FuturesWilliamsRuntime:
             raise RuntimeError(proof.get("reason","COURSE_SOURCE_TRIM_UNVERIFIED"))
         if (campaign.tags.get("pending_course_stage")!=proof["stage"] or
                 not math.isfinite(quantity) or quantity<=0 or
-                Decimal(str(quantity))!=Decimal(str(proof["reduction_quantity"])) or
+                Decimal(str(quantity))!=Decimal(proof["exact_quantity"]["quantity"]) or
                 not 0<proof["target_quantity"]<campaign.position_qty):
             raise RuntimeError("COURSE_SOURCE_TRIM_STAGE_OR_QUANTITY_CHANGED")
         return proof

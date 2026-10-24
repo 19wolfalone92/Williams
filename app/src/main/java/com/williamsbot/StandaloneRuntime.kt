@@ -8768,7 +8768,7 @@ private class NativeEngine(
         val management=owner.optJSONObject("edition_management") ?: error("COURSE_MANAGEMENT_MISSING")
         val requested=quantity.toBigDecimalOrNull()
         check(management.optString("course_pending_stage")==proof.getString("stage") && requested!=null &&
-            requested.signum()>0 && requested.compareTo(proof.getDouble("reduction_quantity").toString().toBigDecimal())==0 &&
+            requested.signum()>0 && requested.compareTo(proof.getJSONObject("exact_quantity").getString("quantity").toBigDecimal())==0 &&
             proof.getDouble("target_quantity")>0 && proof.getDouble("target_quantity")<owner.getString("confirmed_position_qty").toDouble()) {
             "COURSE_SOURCE_TRIM_STAGE_OR_QUANTITY_CHANGED"
         }
