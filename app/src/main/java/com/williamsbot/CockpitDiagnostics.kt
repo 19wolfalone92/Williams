@@ -439,19 +439,17 @@ internal object CockpitDiagnostics {
         // execution_enabled=false. Treat it as unresolved exchange risk,
         // never assume it is cancelled; do not mutate or delete it here.
         val openAlgoOrders=rows(coordinator.optJSONArray("external_open_orders"))
+        // The coordinator's EXTERNAL_ALGO_ORDER set ALREADY excludes all
+        // currently verified owned order identities. A historical CLOSED
+        // intent with the same clientId cannot legitimize a live Binance
+        // order that survived its durable campaign.
         val orphanBookH1Orders=openAlgoOrders.filter { order ->
-            val symbol=order.optString("symbol")
-            val clientId=order.optString("client_id")
-            clientId.startsWith("W2H_") && symbol in APPROVED_FUTURES_SYMBOLS &&
-                !entries.any { intent ->
-                    intent.optString("symbol")==symbol &&
-                        (intent.optString("entry_client_id")==clientId ||
-                         intent.optString("client_id")==clientId)
-                }
+            order.optString("client_id").startsWith("W2H_")
         }
         check("EXE-11","execution","Биржевые условные заявки без подтверждённого владельца",when {
             coordinator.optJSONArray("external_open_orders")==null -> "NOT_VERIFIED"
             orphanBookH1Orders.isNotEmpty() -> "FAIL"
+            !positionsFresh(status,now) -> "NOT_VERIFIED"
             else -> "PASS"
         },"Открытых H1-ордеров W2H_* без действующей записи кампании=" +
             "${orphanBookH1Orders.size}; символы=" +
