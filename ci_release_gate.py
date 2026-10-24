@@ -443,7 +443,15 @@ def main() -> None:
     execution_policy = read("app/src/main/java/com/williamsbot/WilliamsExecutionPolicy.kt")
     must(execution_policy, "WILLIAMS_SOURCE_OBSERVATION_ONLY", "Source lifecycle admission policy")
     must(execution_policy, "H1_SNAPSHOT_STALE", "Structural validity still requires fresh H1 data")
-    must(execution_policy, 'listOf(williamsTc2Profile,williamsNtdProfile)', 'Only validated source lifecycles may create exposure')
+    must(execution_policy, 'williamsExecutionProfiles = listOf(williamsTc2Profile)', 'TC2-only new exposure authority')
+    must(execution_policy, 'williamsObserverProfiles = listOf(williamsNtdProfile,williamsCourseProfile)',
+         'NTD and Course observation only')
+    must(execution_policy, 'TC2_ONLY_NEW_EXPOSURE_V3', 'Source ownership policy version must revoke old NTD admission')
+    must(coordinator_editions, 'williamsNewExposureBlocker(plan.strategyProfile)==null',
+         'Exchange mutation door must reject NTD and Course entry plans')
+    policy_py = read("williams_execution_policy.py")
+    must(policy_py, 'EXECUTION_PROFILES = (TC2,)', 'Python new-risk policy must match Android')
+    must(policy_py, 'OBSERVER_PROFILES = (NTD, COURSE)', 'NTD and Course must only observe in Python')
     ntd_execution = read("app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt")
     for needle in ("NTD_CLOSE_BOUND_CHANGED", "NTD_CLOSE_EXECUTABLE_QUOTE_OUTSIDE_BOUND", "NTD_FIRST_EXTERNAL_FRACTAL_REQUIRED"):
         must(ntd_execution, needle, "NTD final execution evidence")
