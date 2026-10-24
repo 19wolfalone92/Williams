@@ -4879,35 +4879,20 @@ private class NativeEngine(
             // private-stream reconciliation and never reach its failure branch.
             // Neither the reconciliation result nor entry authority is relaxed.
             runOperatorStopSupervisionIfDue()
-            if (result.has("exchange_protection_observations")) {
-                // A complete signed audit may confirm BTC/ADA stops while an
-                // unrelated ETH owner conflict still blocks new entries.
-                // Refresh display evidence on that result too; never clear the
-                // trading latch merely because a stop observation is available.
-                synchronized(this) {
-                    futuresPositionSnapshotEpoch++
-                    cachedFuturesPositionEnvelope = null
-                    futuresPositionSnapshotLastAttemptMs = 0L
-                    futuresPositionSnapshotRefreshError = null
-                }
-            }
+            // Diagnostics 24: maintenance reconciliation repeats every ~6-7s.
+            // Clearing the read-only signed position cache on EVERY result
+            // (including blocked/unowned-stop results) made the Active screen
+            // alternate between real positions and an empty loading state.
+            // Keep last-known rows for display, including during failed/ongoing
+            // REST refresh. The fast-status path marks them UNVERIFIED as soon
+            // as their 15s signed-snapshot freshness window expires. It also
+            // schedules another signed refresh. This display cache is NEVER an
+            // execution admission, stop-proof, ownership or FLAT confirmation.
+            // Explicit credential reset and acknowledged stop replacement still
+            // clear or invalidate the cache through their own separate paths.
             if (result.optBoolean("ok", false)) {
                 lastRestReconcileMs = System.currentTimeMillis()
                 lastReconciliationResult = "SUCCESS"
-                // Diagnostic 12: the BNBUSDT STOP was observed by signed REST
-                // after the dashboard cached its older unverified row. Each
-                // successful signed reconciliation invalidates only the
-                // DISPLAY cache, so the next cockpit refresh recomputes from
-                // current positions and protective order observations. Never
-                // use this cache to authorize trading or label a stale STOP
-                // exchange-confirmed. Epoch prevents in-flight old snapshots
-                // from resurrecting stale protection after this invalidation.
-                synchronized(this) {
-                    futuresPositionSnapshotEpoch++
-                    cachedFuturesPositionEnvelope = null
-                    futuresPositionSnapshotLastAttemptMs = 0L
-                    futuresPositionSnapshotRefreshError = null
-                }
             } else {
                 lastReconciliationResult = "BLOCKED: " +
                     result.optString("blocker", result.optString("error", "unknown"))
@@ -5332,6 +5317,21 @@ private class NativeEngine(
     }
 
     /**
+     * Read-only fallback: never turn an in-flight or failed signed REST call
+     * into a claim that the Binance Futures account is flat.
+     * Caller must mark this fallback positions_snapshot_ok=false.
+     */
+    internal fun lastKnownFuturesPositionsForDisplay(
+        envelope: Pair<String, Long>?, refreshError: String?
+    ): Triple<JSONArray, String, Long> {
+        val rows = envelope?.let { JSONArray(it.first) } ?: JSONArray()
+        val error = refreshError ?: if (envelope == null)
+            "Exchange position snapshot is loading; no cached snapshot yet"
+        else "Showing a stale cached Futures position snapshot while refresh runs"
+        return Triple(rows, error, envelope?.second ?: 0L)
+    }
+
+    /**
      * The dashboard polls fast status together with tickers/scanner. Do not make every
      * UI refresh wait on a signed position REST call: serve a bounded-age snapshot and
      * refresh it on a worker. Trading/reconciliation mutations still query Binance
@@ -5378,14 +5378,11 @@ private class NativeEngine(
             }
         }
 
-        val fallback = cachedFuturesPositionEnvelope
-        val error = futuresPositionSnapshotRefreshError
-            ?: if (fallback == null) {
-                "Exchange position snapshot is loading; no cached snapshot yet"
-            } else {
-                "Showing a stale cached Futures position snapshot while refresh runs"
-            }
-        return Triple(fallback?.let { JSONArray(it.first) } ?: JSONArray(), error, fallback?.second ?: 0L)
+        // In-flight refresh is not a verified FLAT. A previously signed row
+        // remains visible as LAST KNOWN, but snapshot_ok stays false.
+        return lastKnownFuturesPositionsForDisplay(
+            cachedFuturesPositionEnvelope, futuresPositionSnapshotRefreshError
+        )
     }
 
     private fun futuresPositionSnapshot(): JSONArray {
