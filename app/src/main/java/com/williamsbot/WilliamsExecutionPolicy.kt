@@ -3,14 +3,17 @@ package com.williamsbot
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Independent source-owned lifecycles; Course remains observation-only. */
-internal const val WILLIAMS_EXECUTION_POLICY = "TC2_NTD_OWNED_LIFECYCLES_V2"
+/** Only TC2 may introduce new Futures risk; NTD and Course observe.
+ * The final coordinator admission door rechecks this allowlist. Existing
+ * exchange-owned NTD positions retain STOP/EXIT management under their
+ * pinned source: revoking NEW exposure must not orphan protective exits.
+ */
+internal const val WILLIAMS_EXECUTION_POLICY = "TC2_ONLY_NEW_EXPOSURE_V3"
 internal const val williamsExecutionProfile = williamsTc2Profile
-internal val williamsExecutionProfiles = listOf(williamsTc2Profile,williamsNtdProfile)
-internal val williamsObserverProfiles = listOf(williamsCourseProfile)
-/** Old releases persisted TC2 as a fixed, non-selectable value. It must not
- * silently disable NTD after the source lifecycle upgrade. Explicit selections
- * saved under this policy retain their meaning across process restarts. */
+internal val williamsExecutionProfiles = listOf(williamsTc2Profile)
+internal val williamsObserverProfiles = listOf(williamsNtdProfile,williamsCourseProfile)
+/** Do not silently restore an old TC2+NTD trading selection. Migrate a
+ * previously selected NTD execution source to unified observation mode. */
 internal fun williamsRestoredExecutionSelection(stored:String?,policy:String?):String =
     if(policy==WILLIAMS_EXECUTION_POLICY && stored!=null &&
         (stored==williamsUnifiedProfile || stored in williamsExecutionProfiles)) stored else williamsUnifiedProfile
