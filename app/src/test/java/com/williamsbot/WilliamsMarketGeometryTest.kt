@@ -31,6 +31,46 @@ class WilliamsMarketGeometryTest {
         assertFalse(williamsAngulation("SHORT",mirror(b),j.map { 250-it },j.map { 250-it },j.map { 250-it }).valid)
         assertEquals("MOUTH_CROSSING_UNOBSERVED",williamsAngulation("LONG",bars(listOf(91.0,88.0,84.0)),List(3){100.0},List(3){100.0},List(3){100.0}).reason)
     }
+    @Test fun tc2AngulationBookCounterexamplesRejectParallelAndMouthTouch() {
+        // Qualitative TC2 ch9 figs 9.5 and 9.11 are hand-labelled
+        // concepts, NOT digitizations of the printed graph pixels.
+        val parallel=bars(listOf(101.0,96.0,93.0,90.0,87.0))
+        val jaw=listOf(100.0,99.0,96.0,93.0,90.0)
+        for(short in listOf(false,true)) {
+            val input=if(short) mirror(parallel) else parallel
+            val lines=if(short) jaw.map {250-it} else jaw
+            val side=if(short) "SHORT" else "LONG"
+            val proof=williamsAngulation(side,input,lines,lines,lines)
+            assertFalse(proof.valid)
+            assertEquals("PARALLEL_AFTER_MOUTH_EXIT",proof.reason)
+        }
+        val decline=bars(listOf(101.0,98.0,94.0,89.0,84.0))
+        val jawDown=listOf(100.0,99.0,98.0,97.0,96.0)
+        val teeth=listOf(100.0,99.2,98.4,97.6,96.8)
+        val lips=listOf(100.0,99.5,99.0,98.5,98.0)
+        val touching=decline.dropLast(1)+decline.last().copy(o=96.0,h=97.0,l=95.0,c=96.0)
+        assertEquals("SIGNAL_BAR_TOUCHES_MOUTH",
+            williamsAngulation("LONG",touching,jawDown,teeth,lips).reason)
+        assertTrue(williamsAngulation("LONG",decline,jawDown,teeth,lips).valid)
+    }
+    @Test fun tc2AngulationClosedCandleContinuityAndEvidenceAreRequired() {
+        val input=bars(listOf(101.0,98.0,94.0,89.0,84.0))
+        val jaw=listOf(100.0,99.0,98.0,97.0,96.0)
+        val t=listOf(100.0,99.2,98.4,97.6,96.8)
+        val lips=listOf(100.0,99.5,99.0,98.5,98.0)
+        val proof=williamsAngulation("LONG",input,jaw,t,lips,3_600_000L)
+        assertTrue(proof.valid)
+        assertEquals(1,proof.firstOutside)
+        assertTrue(proof.outsideGapGrowthPct!!>0)
+        assertEquals("MOUTH_ANCHORED_EDGE_SLOPES",proof.toJson().getString("method"))
+        val missing=input.mapIndexed { i,b ->
+            if(i>=2) b.copy(t=b.t+3_600_000L) else b
+        }
+        assertEquals("CANDLE_PATH_GAP",
+            williamsAngulation("LONG",missing,jaw,t,lips,3_600_000L).reason)
+        assertEquals("CANDLE_PATH_GAP",
+            williamsAngulation("LONG",input,jaw,t,lips,900_000L).reason)
+    }
     @Test fun narrowingOrderedTrendIsNotSleeping() {
         val b=bars(listOf(113.0,114.0,115.0,116.0,117.0))
         val j=listOf(100.0,102.0,104.0,106.0,108.0);val t=listOf(105.0,106.0,107.0,108.0,109.0);val l=listOf(110.0,110.5,111.0,111.5,112.0)

@@ -46,6 +46,46 @@ def test_missing_crossing_and_nan_path_are_explicitly_unverified():
     assert not angulation_evidence("LONG",series,line,line,line)["valid"]
 
 
+
+@pytest.mark.parametrize("short",[False,True])
+def test_tc2_fig_9_5_parallel_after_departure_has_no_opening_angle(short):
+    # Conceptual hand labels from TC2 ch9; not chart-pixel digitizations.
+    series=bars([101,96,93,90,87])
+    jaw=[100,99,96,93,90]
+    if short:
+        series=mirror(series);jaw=[250-v for v in jaw]
+    p=angulation_evidence("SHORT" if short else "LONG",series,jaw,jaw,jaw)
+    assert not p["valid"] and p["reason"]=="PARALLEL_AFTER_MOUTH_EXIT"
+
+
+@pytest.mark.parametrize("short",[False,True])
+def test_tc2_fig_9_11_mouth_touch_invalid_even_if_prior_path_diverges(short):
+    series=bars([101,98,94,89,84])
+    line=[100,99,98,97,96]
+    teeth=[100,99.2,98.4,97.6,96.8]
+    lips=[100,99.5,99,98.5,98]
+    last=series[-1]
+    series[-1]=WaveBar(last.t,96,97,95,96,10)
+    if short:
+        series=mirror(series);line,teeth,lips=([250-v for v in x] for x in (line,teeth,lips))
+    p=angulation_evidence("SHORT" if short else "LONG",series,line,teeth,lips)
+    assert not p["valid"] and p["reason"]=="SIGNAL_BAR_TOUCHES_MOUTH"
+
+
+@pytest.mark.parametrize("short",[False,True])
+def test_tc2_angle_requires_continuous_history_and_reusable_evidence(short):
+    series=bars([101,98,94,89,84])
+    j=[100,99,98,97,96];t=[100,99.2,98.4,97.6,96.8];l=[100,99.5,99,98.5,98]
+    if short:
+        series=mirror(series);j,t,l=([250-v for v in x] for x in (j,t,l))
+    side="SHORT" if short else "LONG"
+    proof=angulation_evidence(side,series,j,t,l,expected_step_ms=H)
+    assert proof["valid"] and proof["first_outside_index"]==1
+    assert proof["outside_gap_growth_pct"]>0
+    assert not angulation_evidence(side,series,j,t,l,expected_step_ms=H//4)["valid"]
+    missing=[WaveBar(b.t+(H if i>=2 else 0),b.o,b.h,b.l,b.c,b.v) for i,b in enumerate(series)]
+    assert angulation_evidence(side,missing,j,t,l,expected_step_ms=H)["reason"]=="CANDLE_PATH_GAP"
+
 @pytest.mark.parametrize("short",[False,True])
 def test_ordered_narrowing_is_satiation_and_does_not_license_new_ntd_cycle(short):
     series=bars([113,114,115,116,117])

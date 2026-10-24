@@ -33,38 +33,71 @@ def _slope(values):
     return sum((i-x)*(v-mean) for i,v in enumerate(values)) / sum((i-x)**2 for i in range(n))
 
 
-def angulation_evidence(side, bars, jaw, teeth, lips):
+def angulation_evidence(side, bars, jaw, teeth, lips, *, expected_step_ms=None):
+    """TC2 ch9 figs 9.3–9.11: mouth passage, price-facing edge, Jaw/Teeth
+    slopes and continued angular opening AFTER the first fully outside bar.
+
+    No arbitrary angle threshold. Regression and gap growth are declared
+    conservative numerical proxies, not exact author-defined formulas.
+    """
     result = dict(valid=False, score=0.0, reason="MOUTH_CROSSING_UNOBSERVED",
-                  anchor_index=None, method="MOUTH_ANCHORED_EDGE_SLOPES", numerical_interpretation=True)
+                  anchor_index=None, method="MOUTH_ANCHORED_EDGE_SLOPES",
+                  numerical_interpretation=True, first_outside_index=None,
+                  outside_gap_growth_pct=None, book_reference="TC2_CH9_FIG_9_3_TO_9_11")
     n = len(bars)
     if (side not in {"LONG", "SHORT"} or n < 3 or
-            any(len(x) != n for x in (jaw, teeth, lips))):
+            any(len(x) != n for x in (jaw, teeth, lips)) or
+            (expected_step_ms is not None and (not isinstance(expected_step_ms, int) or expected_step_ms <= 0))):
         return result | {"reason": "INVALID_GEOMETRY_INPUT"}
     def usable(i):
         b = bars[i]
-        return all(isfinite(v) and v > 0 for v in (b.h,b.l,b.c,jaw[i],teeth[i],lips[i])) and b.l <= b.c <= b.h
+        return (all(isfinite(v) and v > 0 for v in
+                    (b.o,b.h,b.l,b.c,jaw[i],teeth[i],lips[i])) and
+                b.h >= max(b.o,b.c,b.l) and b.l <= min(b.o,b.c))
+    def crosses_mouth(i):
+        return bars[i].h >= min(jaw[i],teeth[i],lips[i]) and bars[i].l <= max(jaw[i],teeth[i],lips[i])
+    def outside_mouth(i):
+        return (bars[i].h < min(jaw[i],teeth[i],lips[i]) if side == "LONG"
+                else bars[i].l > max(jaw[i],teeth[i],lips[i]))
+    if not usable(n-1):
+        return result | {"reason":"INVALID_SIGNAL_CANDLE_OR_LINES"}
+    if not outside_mouth(n-1):
+        return result | {"reason":"SIGNAL_BAR_TOUCHES_MOUTH"}
     anchor = None
     for i in range(n-2, -1, -1):
         if not usable(i):
-            break  # Never bridge an unobserved part of the path.
-        if bars[i].h >= min(jaw[i],teeth[i],lips[i]) and bars[i].l <= max(jaw[i],teeth[i],lips[i]):
+            break
+        if crosses_mouth(i):
             anchor = i
             break
     if anchor is None:
         return result
     if n-anchor < 3 or not all(usable(i) for i in range(anchor,n)):
-        return result | {"anchor_index": anchor, "reason": "INSUFFICIENT_PATH"}
-    # LONG reverses a downward path; SHORT reverses an upward path.
+        return result | {"anchor_index":anchor,"reason":"INSUFFICIENT_PATH"}
+    step = expected_step_ms if expected_step_ms is not None else bars[-1].t-bars[-2].t
+    if step <= 0 or any(bars[i].t-bars[i-1].t != step for i in range(anchor+1,n)):
+        return result | {"anchor_index":anchor,"examined_bars":n-anchor,"reason":"CANDLE_PATH_GAP"}
+    first_outside = next((i for i in range(anchor+1,n) if outside_mouth(i)),None)
+    if first_outside is None or first_outside==n-1:
+        return result | {"anchor_index":anchor,"examined_bars":n-anchor,"reason":"INSUFFICIENT_OUTSIDE_PATH"}
     sign = -1 if side == "LONG" else 1
     edge = [b.h if side == "LONG" else b.l for b in bars[anchor:]]
-    price_slope, jaw_slope, teeth_slope = map(_slope, (edge,jaw[anchor:],teeth[anchor:]))
+    price_slope, jaw_slope, teeth_slope = map(_slope,(edge,jaw[anchor:],teeth[anchor:]))
     separation = min(sign*(price_slope-jaw_slope),sign*(price_slope-teeth_slope))
     endpoint = min(sign*((edge[-1]-edge[0])-(line[-1]-line[anchor])) for line in (jaw,teeth))
-    valid = sign*price_slope > 0 and sign*(edge[-1]-edge[0]) > 0 and separation > 0 and endpoint > 0
+    basic = sign*price_slope > 0 and sign*(edge[-1]-edge[0]) > 0 and separation > 0 and endpoint > 0
+    def gap(line,i):
+        return sign*((bars[i].h if side=="LONG" else bars[i].l)-line[i])
+    post_growth = min(gap(jaw,n-1)-gap(jaw,first_outside),
+                      gap(teeth,n-1)-gap(teeth,first_outside))
+    valid = basic and post_growth>0
+    reason = ("PRICE_PATH_NOT_STEEPER" if not basic
+              else "PARALLEL_AFTER_MOUTH_EXIT" if post_growth<=0
+              else "DIVERGING_PRICE_PATH")
     return result | dict(valid=valid, score=separation/bars[-1].c*100 if valid else 0.0,
-        reason="DIVERGING_PRICE_PATH" if valid else "PRICE_PATH_NOT_STEEPER",
-        anchor_index=anchor, examined_bars=n-anchor, price_slope=price_slope,
-        jaw_slope=jaw_slope, teeth_slope=teeth_slope)
+        reason=reason,anchor_index=anchor,examined_bars=n-anchor,
+        price_slope=price_slope,jaw_slope=jaw_slope,teeth_slope=teeth_slope,
+        first_outside_index=first_outside,outside_gap_growth_pct=post_growth/bars[-1].c*100)
 
 
 def alligator_phases(bars, jaw, teeth, lips):

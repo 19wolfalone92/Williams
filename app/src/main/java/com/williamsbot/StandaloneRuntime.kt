@@ -8569,7 +8569,8 @@ private class NativeEngine(
 
         val waveBars = candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
         fun angulationProof(i:Int)=williamsAngulation("LONG",waveBars.take(i+1),
-            jawS.take(i+1),teethS.take(i+1),lipsS.take(i+1))
+            jawS.take(i+1),teethS.take(i+1),lipsS.take(i+1),
+            expectedStepMs=if(frame=="1h") WILLIAMS_H1_MS else null)
 
         val current = candles.lastIndex
         val out = mutableListOf<CampaignSignalN>()
