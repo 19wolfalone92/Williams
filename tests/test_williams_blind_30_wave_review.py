@@ -55,3 +55,22 @@ def test_fifteen_real_assets_expand_the_causal_blind_wave_sample_without_fake_ex
     assert got["accuracy_vs_human_expert"] is None
     assert got["independent_accuracy_certified"] is False
     assert not got["can_place_orders"] and not got["can_close"] and not got["can_reverse"]
+
+def test_unresolved_completed_wave_still_exports_read_only_live_phase_alternatives(tmp_path):
+    mod.run(tmp_path)
+    import json
+    rows=json.loads((tmp_path/"model_vs_proxy_results.json").read_text())["cases"]
+    assert any(x["model_label"]=="UNRESOLVED" for x in rows)
+    for x in rows:
+        if x["model_label"]!="UNRESOLVED":
+            continue
+        evidence=x["model_evidence"]
+        assert isinstance(evidence["developing_phase_candidates"],list)
+        assert isinstance(evidence["developing_direction_candidates"],list)
+        assert isinstance(evidence["partial_hypothesis_count"],int)
+        assert evidence["partial_hypothesis_count"]>=0
+        assert evidence["book_wave_degree_certified"] is False
+        assert evidence["can_place_orders"] is False
+        assert evidence["can_close"] is False and evidence["can_reverse"] is False
+        assert all(p in {"W2","W3","W4","W5","A","B","C",
+            "NEXT_SEQUENCE_UNRESOLVED"} for p in evidence["developing_phase_candidates"])

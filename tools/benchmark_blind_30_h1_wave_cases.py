@@ -49,9 +49,25 @@ def model_label(rows,now):
         return ("COMPLEX_CORRECTION" if "TRIANGLE" in pat or "COMBINATION" in pat
             else "CORRECTION_ABC"),{"reason":"ONE_COMPLEX_PRICE_HYPOTHESIS",
                                     "pattern":pat,"num_hypotheses":len(report.scenarios)}
+    # Reporting only: many 160-H1 windows depict a DEVELOPING W2/W3/W4
+    # rather than a completed unique W5/ABC. Preserve the correct abstention
+    # from a completed-wave label, but expose causal partial alternatives
+    # so expert reviewers can see exactly what needs to be resolved. No
+    # candidate in this field can ever open/close/reverse an exchange order.
+    partial=[s for s in report.scenarios if s.frame=="1h" and
+        s.status=="PROVISIONAL" and s.anchors and
+        s.anchors[-1].known_at<=now]
+    phases=sorted({s.active_label for s in partial})
+    directions=sorted({s.active_direction for s in partial})
     return "UNRESOLVED",{"reason":"NO_UNIQUE_CAUSAL_WAVE_HYPOTHESIS",
         "num_hypotheses":len(report.scenarios),"candidate_w5":len(five),
-        "complex_correction_candidates":len(corrections)}
+        "complex_correction_candidates":len(corrections),
+        "developing_phase_candidates":phases,
+        "developing_direction_candidates":directions,
+        "partial_hypothesis_count":len(partial),
+        "multi_degree_ambiguity_unresolved":len(phases)>1 or len(directions)>1,
+        "book_wave_degree_certified":False,
+        "can_place_orders":False,"can_close":False,"can_reverse":False}
 
 def load_source(symbol):
     f=ROOT/f"app/src/test/resources/blind_wave_20241109_29_{symbol}.json"
