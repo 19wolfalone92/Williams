@@ -290,7 +290,7 @@ def run_symbol_replay(
         "adverse_slippage_rate_per_side": config.slippage_rate_per_side,
         "tick_size_source": "Binance USD-M current exchangeInfo",
         "ohlc_source": "public Binance USD-M Futures historical klines; closed H1 candles only",
-        "execution_model": "independent causal paper replay; stop-entry, structural stop, no fixed TP; conservative stop-first on intrabar ambiguity",
+        "execution_model": "independent causal paper replay; closed continuous H1; stop-entry, structural stop, no fixed TP; stop-first on intrabar ambiguity; discretionary TC2 opposite market exits require conservative fill profitability after project reserve + modeled fees",
         "trade_metrics": _metrics_for_trades(trades),
         "regime_metrics": regime_summary,
         "quarterly_metrics": quarterly_summary,

@@ -12,6 +12,7 @@ from typing import Mapping, Sequence
 
 import pandas as pd
 from campaign_model import SignalRole, SignalSpec
+from williams_execution_policy import tc2_opposite_exit_profit_blocker
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,9 @@ class PaperReplayConfig:
     trailing_lookback_bars: int = 5
     max_pending_bars: int = 20
     exit_on_opposite_signal: bool = True
+    # Project-only discretionary exit reserve, aligned to signed Binance gate;
+    # distinct from a Williams book rule and from modeled exchange fees.
+    opposite_exit_cost_buffer: float = 0.0035
 
     def validate(self) -> None:
         positive = (self.starting_equity_usdt, self.risk_pct_per_entry, self.leverage, self.tick_size)
@@ -41,6 +45,8 @@ class PaperReplayConfig:
             raise ValueError("trailing lookback must be 3, 4 or 5 closed bars")
         if self.max_pending_bars < 1:
             raise ValueError("max pending bars must be positive")
+        if not math.isfinite(self.opposite_exit_cost_buffer) or self.opposite_exit_cost_buffer < 0:
+            raise ValueError("opposite exit cost reserve must be finite and nonnegative")
 
 
 def _move(side: str, entry: float, exit_price: float) -> float:
@@ -54,7 +60,7 @@ def _valid_signal(signal: SignalSpec, close: float) -> bool:
         trigger, stop = float(signal.trigger_price), float(signal.protective_reference)
     except (TypeError, ValueError):
         return False
-    if min(trigger, stop) <= 0 or not pd.notna(trigger + stop):
+    if not all(math.isfinite(x) and x > 0 for x in (trigger,stop)):
         return False
     side = signal.side.upper()
     return (side == "BUY" and stop < trigger and close < trigger) or (
@@ -111,8 +117,13 @@ def run_williams_paper_replay(
     valid = work[list(required)].notna().all(axis=1) & (work[list(required)] > 0).all(axis=1)
     valid &= work.high >= work[["open", "close", "low"]].max(axis=1)
     valid &= work.low <= work[["open", "close", "high"]].min(axis=1)
-    if not bool(valid.all()):
+    if not bool(valid.all()) or not work[list(required)].apply(lambda col: col.map(math.isfinite)).all().all():
         raise ValueError("invalid OHLC data in paper replay")
+    if not isinstance(work.index,pd.DatetimeIndex) or work.index.tz is None or (
+        not work.index.is_monotonic_increasing or work.index.has_duplicates or
+        (len(work)>1 and not (work.index.to_series().diff().iloc[1:]==pd.Timedelta(hours=1)).all())
+    ):
+        raise ValueError("causal paper replay requires continuous ordered timezone-aware H1 candles")
 
     balance = cfg.starting_equity_usdt
     pending = None
@@ -120,6 +131,8 @@ def run_williams_paper_replay(
     used: set[str] = set()
     opposition: dict[str, tuple[int, SignalSpec]] = {}
     ambiguous_opposition_bars = 0
+    opposite_exits_blocked_by_profit_reserve = 0
+    expired_pending_entries = 0
     equity_rows, trade_rows = [], []
     fee, slip = cfg.fee_rate_per_side, cfg.slippage_rate_per_side
 
@@ -150,9 +163,12 @@ def run_williams_paper_replay(
 
     for i, (timestamp, row) in enumerate(work.iterrows()):
         close = float(row.close)
+        bar_open_ms = int(timestamp.timestamp()*1000)
+        bar_close_ms = bar_open_ms + 3_600_000
         candidates = [
             x for x in signals_by_bar.get(i, ())
             if isinstance(x, SignalSpec) and _valid_signal(x, close)
+            and (not x.expires_at_ms or bar_close_ms < x.expires_at_ms)
         ]
         exited = False
         entered = False
@@ -185,8 +201,27 @@ def run_williams_paper_replay(
                             ambiguous_opposition_bars+=1
                             opposition.pop(sid,None);continue
                         if hit:
-                            opposite_fill=_entry_fill(signal.side,row,trigger,slip)
-                            break
+                            proposed=_entry_fill(signal.side,row,trigger,slip)
+                            # The signed live TC2 gate rejects loss-making
+                            # voluntary exits at both MARK and executable BID/ASK.
+                            # OHLC has no live quote; model a pessimistic fill,
+                            # then apply the SAME reserve plus one tick and fees.
+                            # Once triggered, an unprofitable setup is consumed;
+                            # do not repeatedly harvest it on later candles.
+                            opposition.pop(sid,None)
+                            p=position
+                            permitted=proposed is not None and tc2_opposite_exit_profit_blocker(
+                                p["side"],p["entry"],proposed,
+                                cost_buffer=cfg.opposite_exit_cost_buffer,tick=cfg.tick_size
+                            ) is None
+                            if permitted:
+                                estimated_net=(_move(p["side"],p["entry"],proposed)*p["qty"]
+                                    -p["entry_fee"]-proposed*p["qty"]*fee)
+                                permitted=estimated_net>0
+                            if permitted:
+                                opposite_fill=proposed
+                                break
+                            opposite_exits_blocked_by_profit_reserve+=1
                         if broken:opposition.pop(sid,None)
                 if opposite_fill is not None:
                     close_pos(opposite_fill,timestamp,i,"OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
@@ -204,7 +239,10 @@ def run_williams_paper_replay(
                         position["stop"] = proposal
 
         if position is None and pending is not None and not exited:
-            if i - pending["created_i"] > cfg.max_pending_bars:
+            if pending["expires_at_ms"] and bar_open_ms >= pending["expires_at_ms"]:
+                expired_pending_entries += 1
+                pending = None
+            elif i - pending["created_i"] > cfg.max_pending_bars:
                 pending = None
             elif i > pending["created_i"]:
                 entry = _entry_fill(pending["side"], row, pending["trigger"], slip)
@@ -253,6 +291,7 @@ def run_williams_paper_replay(
                         "symbol": signal.symbol, "side": signal.side.upper(),
                         "signal_id": signal.signal_id, "signal_type": signal.signal_type.value,
                         "signal_time_ms": signal.signal_bar_time_ms, "created_i": i,
+                        "expires_at_ms": signal.expires_at_ms,
                         "strategy_profile":signal.strategy_profile,
                         "trigger": float(signal.trigger_price), "stop": float(signal.protective_reference),
                     }
@@ -305,13 +344,17 @@ def run_williams_paper_replay(
         "net_pnl_usdt": ending - cfg.starting_equity_usdt,
         "net_return_pct": (ending / cfg.starting_equity_usdt - 1) * 100,
         "max_drawdown_pct": float(drawdown.min() * 100) if len(drawdown) else 0.0,
-        "trades": len(trades), "ambiguous_opposition_bars": ambiguous_opposition_bars, "wins": wins, "losses": losses,
+        "trades": len(trades), "ambiguous_opposition_bars": ambiguous_opposition_bars,
+        "opposite_exits_blocked_by_profit_reserve": opposite_exits_blocked_by_profit_reserve,
+        "expired_pending_entries": expired_pending_entries, "wins": wins, "losses": losses,
         "win_rate_pct": wins / len(trades) * 100 if len(trades) else 0.0,
         "profit_factor": gross_win / gross_loss if gross_loss else (float("inf") if wins else 0.0),
         "fees_usdt": float(trades.fees_usdt.sum()) if len(trades) else 0.0,
         "avg_r_multiple": float(trades.r_multiple.mean()) if len(trades) else 0.0,
         "fee_rate_per_side": fee, "adverse_slippage_rate_per_side": slip,
         "risk_pct_per_entry": cfg.risk_pct_per_entry,
+        "opposite_exit_cost_buffer": cfg.opposite_exit_cost_buffer,
+        "opposite_exit_policy": "TC2_CONTRACT_TRIGGER_PLUS_CONSERVATIVE_FILL_PROFIT_AFTER_FEES_V1",
         "methodology": "CAUSAL_H1_STOP_ENTRY_STRUCTURAL_STOP_NO_FIXED_TP_STOP_FIRST_INTRABAR",
     }
     return equity, trades, metrics
