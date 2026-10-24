@@ -1371,6 +1371,7 @@ private class NativeEngine(
             coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }
             coordinator.bookNtdExitVerifier = { owner,reason -> verifyNtdExitBeforeSubmit(owner,reason) }
             coordinator.bookCourseTrimVerifier = { owner,quantity -> verifyCourseTrimBeforeSubmit(owner,quantity) }
+            coordinator.bookCourseExitVerifier = { owner,reason -> verifyCourseExitBeforeSubmit(owner,reason) }
             coordinator.setEditionSelectionProvider { williamsProfile }
             coordinator.setEntryTimePolicyProvider { entryTimePolicy }
             coordinator.setEntryPassportAuditSink { event -> auditStore.recordEntryPassportEvent(event) }
@@ -6468,10 +6469,18 @@ private class NativeEngine(
                         }
                     }
                 }
+                if(management.optString("course_stage") in setOf("W3","W5","A_ENTRY","A_REDUCE","C_ADD")) {
+                    val terminal=runCatching { courseExitObservation(intent) }.getOrElse {
+                        JSONObject().put("status","BLOCKED").put("blocker","COURSE_EXIT_SOURCE_UNAVAILABLE") }
+                    management.put("course_terminal_admission",terminal)
+                    futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+                    if(terminal.optString("status")=="OBSERVED_COURSE_SOURCE_RULE") editionExit=terminal.getString("reason")
+                }
                 val higher=fetchCandles(symbol,"6h",100).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
                 val checked=closedWilliamsWaveBars(higher,"6h",futuresMarketData.exchangeNowMs())
                 val airbag=williamsCourseAirbagStop(dir,checked,rules.tick)
-                if(airbag!=null && (if(dir=="LONG") mark<=airbag else mark>=airbag)) editionExit="COURSE_HIGHER_FRAME_AIRBAG_TRIGGERED"
+                val courseContract=futuresMarketData.price(symbol)
+                if(airbag!=null && (if(dir=="LONG") courseContract<=airbag else courseContract>=airbag)) editionExit="COURSE_HIGHER_FRAME_AIRBAG_TRIGGERED"
                 val old=intent.getString("protective_stop").toDouble()
                 val candidates=listOfNotNull(airbag,williamsCourseTwoFractalStop(dir,bars,rules.tick)).filter {
                     if(dir=="LONG") it>old && it<mark else it<old && it>mark
@@ -6488,11 +6497,12 @@ private class NativeEngine(
                 runCatching { triggeredOpposingSignal(symbol,direction,candles,rules.tick,futuresMarketData.price(symbol),openedAt,profile) }
                     .onFailure { lastError="TC2_OPPOSITION_EVIDENCE_UNAVAILABLE: $symbol: "+
                         (it.message ?: it.javaClass.simpleName) }.getOrNull()
-            } else triggeredOpposingSignal(symbol,direction,candles,rules.tick,futuresMarketData.price(symbol),openedAt,profile)
-            if(profile==williamsTc2Profile && boundaryExit) {
+            } else runCatching { triggeredOpposingSignal(symbol,direction,candles,rules.tick,futuresMarketData.price(symbol),openedAt,profile) }
+                .onFailure { lastError="SOURCE_OPPOSITION_EVIDENCE_UNAVAILABLE: $symbol: "+(it.message ?: it.javaClass.simpleName) }.getOrNull()
+            if(profile in setOf(williamsTc2Profile,williamsCourseProfile) && boundaryExit) {
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
-                    .put("tc2_correction_boundary_advisory",JSONObject()
-                        .put("policy","TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED")
+                    .put(if(profile==williamsCourseProfile) "course_boundary_advisory" else "tc2_correction_boundary_advisory",JSONObject()
+                        .put("policy",if(profile==williamsCourseProfile) "COURSE_SOURCE_PRICE_RULE_REQUIRED" else "TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED")
                         .put("observed_at_ms",futuresMarketData.exchangeNowMs())
                         .put("mark_price",mark).put("market_close_authorized",false))
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
@@ -6508,7 +6518,7 @@ private class NativeEngine(
                         (if(dir=="LONG") quote<=opposing.triggerPrice else quote>=opposing.triggerPrice)
                 }==true)
             val exchangeEntryForExit=row.optString("entryPrice").toDoubleOrNull() ?: Double.NaN
-            val oppositeProfitBlocker=if(profile in williamsExecutionProfiles)
+            val oppositeProfitBlocker=if(profile in williamsSourceProfiles)
                 williamsTc2OppositeExitProfitBlocker(dir,exchangeEntryForExit,mark,
                     2.0*feeBufferPerSidePct+maxSlippagePct,rules.tick) else null
             val actionableOpposing = opposing?.takeIf {
@@ -6518,6 +6528,16 @@ private class NativeEngine(
                         (!riskOnly && eligibleSymbols==null && tc2TriggerNow &&
                             oppositeProfitBlocker==null))
             }
+            val courseReason=if(profile==williamsCourseProfile) {
+                if(editionExit.isNotEmpty()) editionExit else if(actionableOpposing!=null) "COURSE_OPPOSITE_FORMATION_TRIGGERED" else null
+            } else null
+            val courseProof=if(courseReason!=null) runCatching { courseExitSourceProof(intent,courseReason) }.onFailure {
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                    .put("course_exit_advisory",JSONObject().put("reason",courseReason).put("blocker",it.message ?: it.javaClass.simpleName)
+                        .put("market_close_authorized",false))
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+                intent.put("edition_management",management)
+            }.getOrNull() else null
             if(profile==williamsTc2Profile && opposing!=null && actionableOpposing==null) {
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
                     .put("tc2_opposing_signal_advisory",JSONObject()
@@ -6530,12 +6550,12 @@ private class NativeEngine(
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
             }
             if (williamsStrategyCanMarketClose(profile) &&
+                (profile!=williamsCourseProfile || courseProof!=null) &&
                 (actionableOpposing != null ||
-                    profile!=williamsTc2Profile && (profile==williamsCourseProfile && boundaryExit || editionExit.isNotEmpty()))) {
+                    profile!=williamsTc2Profile && editionExit.isNotEmpty())) {
                 val correction = if (actionableOpposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
                     if (dir == "LONG") "SHORT" else "LONG",actionableOpposing.signalBarTimeMs,actionableOpposing.type) else WilliamsCorrectionContext()
-                val exitReason = if(profile!=williamsTc2Profile && editionExit.isNotEmpty()) editionExit
-                    else if(profile==williamsCourseProfile && boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
+                val exitReason = if(profile==williamsCourseProfile) courseReason!! else if(profile!=williamsTc2Profile && editionExit.isNotEmpty()) editionExit
                     else if (correction.allowed) "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
                     else "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
                 val decision = if(profile==williamsTc2Profile)
@@ -6543,7 +6563,7 @@ private class NativeEngine(
                 val proofAt = if(profile==williamsTc2Profile)
                     decision.optLong("observed_at_ms") else futuresMarketData.exchangeNowMs()
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
-                management.put("exit_evidence",JSONObject().put("reason",exitReason)
+                management.put("exit_evidence",(courseProof?.let { JSONObject(it.toString()) } ?: JSONObject()).put("reason",exitReason)
                     .put("signal_id",actionableOpposing?.signalId ?: JSONObject.NULL)
                     .put("observed_at_ms",proofAt).put("edition_exit",editionExit)
                     .put("correction_boundary_broken",boundaryExit).put("higher_correction",correction.toJson())
@@ -8761,6 +8781,98 @@ private class NativeEngine(
         }
     }
 
+    private fun courseCorrectionHandoff(owner:JSONObject):JSONObject {
+        val management=owner.optJSONObject("edition_management") ?: JSONObject()
+        val motiveId=management.optString("course_motive_owner_id")
+        val all=futuresCampaignCoordinator.intentsSnapshot()
+        val previous=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.singleOrNull {
+            it.optString("client_id")==motiveId && it.optString("intent_role","ENTRY")=="ENTRY" }
+        val proof=previous?.optJSONObject("edition_management")?.optJSONObject("course_flat_handoff")
+        check(previous!=null && campaignLifecycleStatus(previous)=="CLOSED_OR_STOPPED" && previous.optString("symbol")==owner.optString("symbol") &&
+            previous.optString("direction")!=owner.optString("direction") && previous.optString("strategy_profile")==williamsCourseProfile &&
+            previous.optString("close_reason")=="COURSE_W5_TERMINAL_CONFIRMED" && proof!=null &&
+            proof.optString("source")=="SIGNED_FLAT_COURSE_MOTIVE" && proof.optString("motive_campaign_id")==motiveId &&
+            proof.optLong("flat_confirmed_at_ms")>0 && proof.optLong("flat_confirmed_at_ms")<owner.optLong("position_open_observed_at_ms") &&
+            previous.optString("course_correction_consumed_by")==owner.optString("client_id")) {
+            "COURSE_CORRECTION_DURABLE_FLAT_HANDOFF_UNVERIFIED"
+        }
+        return JSONObject(proof!!.toString()).put("tick",symbolFilters(owner.getString("symbol")).tick)
+    }
+
+    private fun courseExitObservation(owner:JSONObject):JSONObject {
+        check(owner.optString("strategy_profile")==williamsCourseProfile) { "COURSE_EXIT_OWNER_UNVERIFIED" }
+        fun blocked(why:String)=JSONObject().put("status","BLOCKED").put("blocker",why)
+        val management=owner.optJSONObject("edition_management") ?: JSONObject()
+        if(management.optString("course_unit_basis")!="CONFIRMED_INITIAL_FILL") return blocked("COURSE_ACTUAL_UNIT_BASIS_UNVERIFIED")
+        val stage=management.optString("course_stage");val symbol=owner.getString("symbol")
+        val correction=if(stage in setOf("A_ENTRY","A_REDUCE","C_ADD")) courseCorrectionHandoff(owner) else JSONObject()
+        val setup=runCatching { JSONObject(owner.optString("setup_context")) }.getOrDefault(JSONObject())
+        val units=if(correction.length()>0) mapOf("A_ENTRY" to 3,"A_REDUCE" to 1,"C_ADD" to 4)[stage]
+            else williamsCourseTarget(stage,management.optDouble("course_w3_to_w1_ratio",setup.optDouble("course_w3_to_w1_ratio",Double.NaN)))
+        val unit=management.optDouble("course_unit_quantity",Double.NaN)
+        val quantity=owner.optString("confirmed_position_qty").toDoubleOrNull() ?: return blocked("COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED")
+        val rules=symbolFilters(symbol);val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
+        if(units==null || !unit.isFinite() || unit<=0 || abs(quantity-floorStep(unit*units,step))>maxOf(1e-9,quantity*1e-9))
+            return blocked("COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED")
+        val now=futuresMarketData.exchangeNowMs()
+        val bars=fetchCandles(symbol,"1h",260).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }.filter { it.t+WILLIAMS_H1_MS<=now }
+        if(williamsClosedH1HistoryBlocker(bars,now)!=null) return blocked("COURSE_EXIT_H1_HISTORY_UNVERIFIED")
+        return williamsCourseExitPlan(waveHierarchyFor(symbol,refresh=true).toJson(),owner.getString("direction"),
+            management.optLong("course_origin_at"),stage,owner.optLong("position_open_observed_at_ms"),now,bars,futuresMarketData.price(symbol),correction)
+    }
+
+    private fun courseExitSourceProof(owner:JSONObject,reason:String):JSONObject {
+        check(owner.optString("strategy_profile")==williamsCourseProfile && reason in williamsCourseBookExitReasons && reason!="COURSE_STAGE_TRIM") {
+            "COURSE_EXIT_REQUIRES_OWN_BOOK_RULE"
+        }
+        val symbol=owner.getString("symbol");val direction=owner.getString("direction")
+        val now=futuresMarketData.exchangeNowMs();val tick=symbolFilters(symbol).tick
+        val proof=if(reason in williamsCourseTerminalReasons+williamsCourseFailureReasons) {
+            courseExitObservation(owner).also {
+                check(it.optString("status")=="OBSERVED_COURSE_SOURCE_RULE" && it.optString("reason")==reason) {
+                    it.optString("blocker","COURSE_SOURCE_EXIT_NO_LONGER_VALID") }
+            }
+        } else {
+            val candles=fetchCandles(symbol,"1h",260).filter { it.t+WILLIAMS_H1_MS<=now }
+            check(williamsClosedH1HistoryBlocker(candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)==null) { "COURSE_EXIT_H1_HISTORY_UNVERIFIED" }
+            val contract=futuresMarketData.price(symbol)
+            check(contract.isFinite() && contract>0) { "COURSE_EXIT_LIVE_CONTRACT_UNVERIFIED" }
+            if(reason=="COURSE_HIGHER_FRAME_AIRBAG_TRIGGERED") {
+                val higher=closedWilliamsWaveBars(fetchCandles(symbol,"6h",80).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },"6h",now)
+                check(now-(higher.last().t+21_600_000L) in 0 until 21_600_000L) { "COURSE_AIRBAG_HISTORY_UNVERIFIED" }
+                val boundary=williamsCourseAirbagStop(direction,higher,tick) ?: error("COURSE_AIRBAG_HISTORY_UNVERIFIED")
+                check(if(direction=="LONG") contract<=boundary else contract>=boundary) { "COURSE_AIRBAG_NO_LONGER_CROSSED" }
+                JSONObject().put("rule_id","COURSE:AIRBAG:${higher.last().t}").put("boundary",boundary)
+            } else {
+                val signal=triggeredOpposingSignal(symbol,NativeFuturesCampaignCoordinator.Direction.valueOf(direction),candles,tick,contract,
+                    owner.optLong("position_open_observed_at_ms"),williamsCourseProfile) ?: error("COURSE_OPPOSITE_SOURCE_TRIGGER_UNVERIFIED")
+                check(signal.strategyProfile==williamsCourseProfile && signal.role=="ENTRY" && signal.executionSemantics=="STOP_ENTRY" &&
+                    campaignSignalDirection(signal.type)!=direction) { "COURSE_OPPOSITE_SOURCE_TRIGGER_UNVERIFIED" }
+                JSONObject().put("rule_id","COURSE:OPPOSITION:${signal.signalId}").put("signal_id",signal.signalId).put("boundary",signal.triggerPrice)
+            }
+        }
+        if(reason in williamsCourseTerminalReasons+williamsCourseOppositeReasons) {
+            val blocker=williamsTc2OppositeExitProfitBlocker(direction,owner.optString("actual_entry_price").toDoubleOrNull() ?: Double.NaN,
+                futuresMarketData.markPrice(symbol),2*feeBufferPerSidePct+maxSlippagePct,tick)
+            check(blocker==null) { blocker!!.replace("TC2_OPPOSITE_EXIT","COURSE_DISCRETIONARY_EXIT") }
+        }
+        return proof.put("reason",reason).put("owner_id",owner.getString("client_id")).put("symbol",symbol).put("side",direction)
+            .put("observed_at_ms",now).put("trigger_price_basis","CONTRACT_PRICE")
+    }
+
+    private fun verifyCourseExitBeforeSubmit(owner:JSONObject,reason:String) {
+        val old=owner.optJSONObject("edition_management")?.optJSONObject("exit_evidence")
+        val blocker=williamsCourseExitProofBlocker(old,owner.getString("client_id"),owner.getString("symbol"),owner.getString("direction"),
+            reason,owner.optLong("position_open_observed_at_ms"),futuresMarketData.exchangeNowMs())
+        check(blocker==null) { blocker!! }
+        val fresh=courseExitSourceProof(owner,reason)
+        val sameBoundary=old!!.has("boundary")==fresh.has("boundary") &&
+            (!old.has("boundary") || old.optDouble("boundary",Double.NaN)==fresh.optDouble("boundary",Double.NaN))
+        check(old.optString("rule_id")==fresh.optString("rule_id") && sameBoundary) {
+            "COURSE_EXIT_SOURCE_CHANGED_BEFORE_SUBMIT"
+        }
+    }
+
     private fun verifyNtdExitBeforeSubmit(owner:JSONObject,reason:String) {
         check(owner.optString("strategy_profile")==williamsNtdProfile && reason in williamsNtdBookExitReasons) {
             "NTD_EXIT_OWNER_OR_RULE_CHANGED"
@@ -9366,7 +9478,7 @@ private class NativeEngine(
             .put("trigger_price_basis","CONTRACT_PRICE").put("contract_price",contractPrice)
             .put("opposition",evidence?.toJson() ?: JSONObject.NULL)
             .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })).toString())) { "H1_EXIT_PROOF_NOT_DURABLE" }
-        if(profile==williamsTc2Profile && assessment.uncertain.isNotEmpty()) return null
+        if(assessment.uncertain.isNotEmpty()) return null
         return candidates.firstOrNull { it.signalId==evidence?.signal?.id }
     }
 

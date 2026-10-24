@@ -120,7 +120,7 @@ internal fun williamsMarketExitBlocker(owner: String, reason: String): String? {
             "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
         )) null else "TC2_EXIT_REQUIRES_BOOK_OPPOSITE_TRIGGER"
         williamsNtdProfile -> if(reason in williamsNtdBookExitReasons) null else "NTD_EXIT_REQUIRES_OWN_BOOK_RULE"
-        williamsCourseProfile -> null
+        williamsCourseProfile -> if(reason in williamsCourseBookExitReasons) null else "COURSE_EXIT_REQUIRES_OWN_BOOK_RULE"
         else -> "EXIT_STRATEGY_OWNER_UNVERIFIED"
     }
 }

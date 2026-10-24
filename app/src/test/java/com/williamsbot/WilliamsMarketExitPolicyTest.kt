@@ -21,6 +21,11 @@ class WilliamsMarketExitPolicyTest {
         assertNull(williamsMarketExitBlocker(williamsNtdProfile,"TEETH_CLOSE_EXIT"))
         assertNull(williamsMarketExitBlocker(williamsCourseProfile,"COURSE_STAGE_TRIM"))
     }
+    @Test fun courseRejectsGenericReasonsAndRetainsItsOwnExactBookRules() {
+        for(reason in listOf("TAKE_PROFIT","STRATEGY_EXIT","CORRECTION_PARENT_PRICE_INVALIDATED","LIPS_CLOSE_EXIT"))
+            assertEquals("COURSE_EXIT_REQUIRES_OWN_BOOK_RULE",williamsMarketExitBlocker(williamsCourseProfile,reason))
+        for(reason in williamsCourseBookExitReasons) assertNull(williamsMarketExitBlocker(williamsCourseProfile,reason))
+    }
     @Test fun tc2BookExitRequiresActualPersistedSignalAndCurrentExchangeContract() {
         val now=10_000L*3_600_000L
         val opened=now-3*3_600_000L

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "updated": "2026-10-24",
-  "release": "4.61.0",
+  "release": "4.62.0",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
   "source_review_complete": false,
@@ -888,7 +888,7 @@
         "cases/motive-not-flat",
         "cases/future-evidence"
       ],
-      "remaining_evidence": "Read-only mirrored corrective planner now separates flat motive ownership and 3->1->4->0 abstract units, 50-62% first A retracement, 38-50% B retracement, causal wave proof and exact fill transitions. PDF84 leaving 1 long contradicts the short-sale arithmetic and diagram; discrepancy is explicit. Dynamic first-leg/terminal target identification, stop-and-reverse execution, independent historical source labels and full Demo lifecycle remain unaccepted.",
+      "remaining_evidence": "Read-only mirrored corrective planner now separates flat motive ownership and 3->1->4->0 abstract units, 50-62% first A retracement, 38-50% B retracement, causal wave proof and exact fill transitions. PDF84 leaving 1 long contradicts the short-sale arithmetic and diagram; discrepancy is explicit. Dynamic first-leg/terminal target identification, stop-and-reverse execution, independent historical source labels and full Demo lifecycle remain unaccepted. 4.62 adds independently gated C terminal/failure observations and signed-flat motive handoff; corrective new-risk entry/stage execution remains incomplete.",
       "can_place_orders_from_registry": false,
       "fixture_file": "app/src/test/resources/williams_course_correction_contract.json"
     },
@@ -1246,6 +1246,90 @@
       ],
       "fixtures": [],
       "remaining_evidence": "The 5-hour terminal age window, positive after-cost-reserve trim requirement and kline base-volume proxy are explicit project policies/adaptations. Terminal counts remain provisional; synthetic source cases and 35 frozen historical H1-prefix regressions are not independent Elliott accuracy or physical Futures Demo acceptance. Course new-risk execution remains disabled.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.TERMINAL_AND_FAILED_COUNT_EXIT",
+      "book": "COURSE",
+      "pdf_pages": [
+        77,
+        80,
+        81,
+        82,
+        83,
+        84
+      ],
+      "rule": "Course automatic full exits require an owned source rule: matched W5/C terminal subdivisions or explicit W3/W5/corrective price invalidation. A generic correction-range break or arbitrary reason is not authority. Every rule is rederived before mutations and POST, using CONTRACT price and causal source evidence.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_course_exit.py",
+        "futures_williams_runtime.py",
+        "williams_execution_policy.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseExit.kt",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
+      ],
+      "tests": [
+        "tests/test_williams_course_exit.py::test_shared_source_terminal_and_failed_count_cases_require_causal_pinned_evidence",
+        "tests/test_williams_course_exit.py::test_course_policy_rejects_unqualified_exit_reasons",
+        "tests/test_futures_order_lifecycle.py::test_course_terminal_exit_uses_real_source_and_grants_handoff_only_after_exact_clean_flat",
+        "app/src/test/java/com/williamsbot/WilliamsCourseExitTest.kt::sharedTerminalAndFailedCountCasesRequireCausalPinnedEvidence",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::courseTerminalExitPreservesExactlyOnceAndRequiresCleanSignedFlatForHandoff"
+      ],
+      "fixture_file": "app/src/test/resources/williams_course_exit_contract.json",
+      "fixtures": [
+        "cases/w5_complete",
+        "cases/c_complete",
+        "cases/w3_stall",
+        "cases/w5_stall",
+        "cases/correction_break",
+        "cases/w5_child_missing",
+        "cases/w5_child_ambiguous",
+        "cases/w5_parent_ambiguous",
+        "cases/w5_parent_sign_missing",
+        "cases/w5_child_sign_missing",
+        "cases/w5_future_child",
+        "cases/w5_preentry",
+        "cases/w5_wrong_origin",
+        "cases/w5_history_gap",
+        "cases/w5_parent_error",
+        "cases/w5_child_error",
+        "cases/w5_stale",
+        "cases/c_without_flat",
+        "cases/c_flat_after_entry",
+        "cases/w3_not_reached",
+        "cases/w3_expansion_completed",
+        "cases/w3_boundary_not_broken",
+        "cases/w5_stall_invalidated_live",
+        "cases/w5_stall_other_invalid",
+        "cases/w3_old_peak_still_invalidates"
+      ],
+      "remaining_evidence": "Mirrored artificial source cases and signed-transport models do not certify independent wave genealogy, canonical tick volume, the external Compututorial projections or physical Android/Futures Demo acceptance. Positive after-cost-reserve profit-taking and the 5-hour terminal proposal window are explicit project policies; current failed-count risk exits do not expire with the peak. Course new-risk execution remains disabled.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.SIGNED_FLAT_CORRECTION_HANDOFF",
+      "book": "COURSE",
+      "pdf_pages": [
+        83,
+        84
+      ],
+      "rule": "A separate corrective owner can be proposed only after exact signed exit FILL, signed FLAT and clean old orders. Persist handoff once after recovery and require durable consumption by the subsequent owner; never reverse via an oversized close order.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_course_exit.py",
+        "futures_williams_runtime.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseExit.kt",
+        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
+      ],
+      "tests": [
+        "tests/test_williams_course_exit.py::test_correction_handoff_requires_all_three_independent_exchange_confirmations",
+        "tests/test_futures_order_lifecycle.py::test_course_terminal_exit_uses_real_source_and_grants_handoff_only_after_exact_clean_flat",
+        "app/src/test/java/com/williamsbot/WilliamsCourseExitTest.kt::correctionHandoffNeedsFilledExitSignedFlatAndCleanOrdersIndependently",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::courseTerminalExitPreservesExactlyOnceAndRequiresCleanSignedFlatForHandoff"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Exchange proof fields and one-shot ownership are project execution requirements. Handoff publishing cannot place orders. Full automatic Course initial/corrective entries and stage integration still require an independently checked degree/price-location contract; no physical Demo certification.",
       "can_place_orders_from_registry": false
     }
   ],

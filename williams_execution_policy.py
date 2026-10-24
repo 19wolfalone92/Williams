@@ -1,9 +1,11 @@
 """Release execution policy, separate from book signal detection.
 
 TC2 and NTD retain independent entry and management rules. Course stays an
-observation. Previously filled campaigns retain their original exit policy.
+observation. Previously filled campaigns retain their owning source; automatic
+exits must pass the fresh source-specific execution gate.
 """
 from williams_edition_rules import TC2, NTD, COURSE
+from williams_course_exit import BOOK_EXIT_REASONS as COURSE_BOOK_EXIT_REASONS
 
 EXECUTION_PROFILE = TC2
 EXECUTION_PROFILES = (TC2, NTD)
@@ -150,4 +152,6 @@ def market_exit_blocker(source, reason, *, risk_emergency=False):
             "NTD_OPPOSITE_SIGNAL_TRIGGERED", "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
             "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION",
         } else "NTD_EXIT_REQUIRES_OWN_BOOK_RULE"
-    return None if source == COURSE else "EXIT_STRATEGY_OWNER_UNVERIFIED"
+    if source == COURSE:
+        return None if reason in COURSE_BOOK_EXIT_REASONS else "COURSE_EXIT_REQUIRES_OWN_BOOK_RULE"
+    return "EXIT_STRATEGY_OWNER_UNVERIFIED"

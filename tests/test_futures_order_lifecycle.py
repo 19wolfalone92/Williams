@@ -429,6 +429,66 @@ def test_leverage_failure_never_sends_an_entry(monkeypatch, tmp_path, failure, s
         bot.db.conn.close()
 
 
+@pytest.mark.parametrize("armed_runtime",["BUY","SELL"],indirect=True)
+@pytest.mark.parametrize("change",["NORMAL","LOST_REPLY","PARTIAL","SOURCE_RACE","PROFIT_RACE","ARBITRARY_REASON"])
+def test_course_terminal_exit_uses_real_source_and_grants_handoff_only_after_exact_clean_flat(armed_runtime,monkeypatch,change):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    import pandas as pd
+    from tests.test_williams_course_exit import exit_fixture,H
+    bot,exchange,armed=armed_runtime
+    exchange.fill_entry();bot._reconcile_pending()
+    campaign=bot.engine.load_campaign(armed["campaign_id"]);original=campaign.position_qty
+    base=int(time.time()*1000)//H*H-153*H
+    args=exit_fixture({"kind":"W5"},"LONG" if campaign.side=="BUY" else "SHORT",base,mirror_sum=200)
+    monkeypatch.setattr(time,"time",lambda:args["now_ms"]/1000)
+    rows=args["bars"]
+    frame=pd.DataFrame({"open_time_ms":[b.t for b in rows],"open":[b.o for b in rows],"high":[b.h for b in rows],
+        "low":[b.l for b in rows],"close":[b.c for b in rows],"volume":[b.v for b in rows]})
+    monkeypatch.setattr("futures_williams_runtime.fetch_klines",lambda *a,**k:frame)
+    calls=[]
+    def hierarchy(*a,**k):
+        calls.append(1);report=deepcopy(args["hierarchy"])
+        if change=="SOURCE_RACE" and len(calls)>1:report["scenarios"]=report["scenarios"][:1]
+        return SimpleNamespace(to_dict=lambda:report)
+    monkeypatch.setattr(bot.scanner,"wave_hierarchy",hierarchy)
+    campaign.tags.update(strategy_profile="COURSE_PROFITUNITY",position_open_observed_at_ms=args["opened_at"],
+        course_plan={"stage":"W5","origin_at":args["origin_at"],"unit_quantity":original/6,"unit_is_actual":True,
+                     "unit_basis":"CONFIRMED_INITIAL_FILL","w3_to_w1_ratio":2.0})
+    bot.db.save_campaign(campaign);exchange.price=args["contract"]
+    if change=="PROFIT_RACE":
+        mark=bot.client.mark_price;reads=[]
+        def mark_quote(*a,**k):
+            reads.append(1)
+            if len(reads)>1:exchange.price=100
+            return mark(*a,**k)
+        monkeypatch.setattr(bot.client,"mark_price",mark_quote)
+    if change=="LOST_REPLY":exchange.market_close_timeout_after_fill=True
+    if change=="PARTIAL":exchange.close_fraction=.5
+    reason="TAKE_PROFIT" if change=="ARBITRARY_REASON" else "COURSE_W5_TERMINAL_CONFIRMED"
+    if change=="NORMAL":assert bot._exit_market(campaign,reason)["state"]=="CLOSED"
+    else:
+        with pytest.raises(Exception):bot._exit_market(campaign,reason)
+    if change in {"NORMAL","LOST_REPLY"}:
+        assert bot.recover()["ok"]
+        owner=bot.engine.load_campaign(campaign.campaign_id)
+        assert exchange.amount==0 and owner.state.value=="CLOSED"
+        assert owner.exit_reason=="COURSE_W5_TERMINAL_CONFIRMED"
+        handoff=owner.tags["course_flat_handoff"]
+        assert handoff["motive_campaign_id"]==owner.campaign_id and not handoff["can_place_orders"]
+        assert not bot.client.open_orders(owner.symbol)
+        assert len([1 for m,p,_ in exchange.calls if m=="POST" and p.endswith("/order")])==1
+    elif change=="PARTIAL":
+        bot._reconcile_pending_exits()
+        owner=bot.engine.load_campaign(campaign.campaign_id)
+        assert abs(exchange.amount)>0 and "course_flat_handoff" not in owner.tags
+        assert any(r["algoStatus"]=="NEW" and r.get("closePosition")=="true" for r in exchange.algos.values())
+    else:
+        assert abs(exchange.amount)==pytest.approx(original)
+        assert not any(m=="POST" and p.endswith("/order") for m,p,_ in exchange.calls)
+        assert any(r["algoStatus"]=="NEW" and r.get("closePosition")=="true" for r in exchange.algos.values())
+
+
 @pytest.mark.parametrize("armed_runtime",[{"side":"BUY","profile":"NTD_FIVE_DIMENSIONS"},{"side":"SELL","profile":"NTD_FIVE_DIMENSIONS"}],indirect=True)
 @pytest.mark.parametrize("lost_response",[False,True])
 def test_ntd_owned_zone_adds_once_and_keeps_protection_after_lost_reply(armed_runtime,monkeypatch,lost_response):

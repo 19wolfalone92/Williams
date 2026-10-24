@@ -928,6 +928,77 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun courseTerminalExitPreservesExactlyOnceAndRequiresCleanSignedFlatForHandoff() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(change in listOf("NORMAL","LOST_REPLY","PARTIAL","SOURCE_RACE","PROFIT_RACE")) {
+            val hour=3_600_000L
+            val base=System.currentTimeMillis()/hour*hour-153*hour
+            val source=courseExitCase(JSONObject().put("kind","W5"),direction.name,base,200.0)
+            val journal=Journal();val exchange=Exchange(direction)
+            var coordinator=NativeFuturesCampaignCoordinator(journal,clock={ source.now }) { exchange.adapter() }
+            coordinator.reconcile()
+            val initial=plan(direction).copy(signalBarTimeMs=source.now-7_200_000L)
+            assertTrue(coordinator.submitPendingEntry(initial).getBoolean("accepted"))
+            exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
+            markLegacySource(journal,coordinator,williamsCourseProfile,"COURSE_HUMP")
+            val rows=coordinator.intentsSnapshot();val owner=rows.getJSONObject(0)
+            val evidence=source.observe().put("owner_id",initial.clientId).put("symbol","BTCUSDT").put("side",direction.name)
+                .put("observed_at_ms",source.now)
+            assertEquals("OBSERVED_COURSE_SOURCE_RULE",evidence.getString("status"))
+            owner.put("position_open_observed_at_ms",source.opened).put("edition_management",JSONObject()
+                .put("course_origin_at",source.origin).put("course_stage","W5").put("course_unit_quantity",1.0/6)
+                .put("course_unit_basis","CONFIRMED_INITIAL_FILL").put("course_w3_to_w1_ratio",2.0).put("exit_evidence",evidence))
+            assertTrue(journal.writeState("futures_campaign_intents_v2",rows.toString()))
+            exchange.mark=source.contract
+            var checks=0
+            coordinator.bookCourseExitVerifier={ current,reason ->
+                checks++
+                check(williamsCourseExitProofBlocker(current.getJSONObject("edition_management").getJSONObject("exit_evidence"),
+                    current.getString("client_id"),"BTCUSDT",direction.name,reason,source.opened,source.now)==null)
+                val proof=if(change=="SOURCE_RACE" && checks>1) JSONObject().put("status","BLOCKED") else source.observe()
+                check(proof.optString("status")=="OBSERVED_COURSE_SOURCE_RULE" && proof.optString("reason")==reason) { "COURSE_SOURCE_CHANGED" }
+                if(change=="PROFIT_RACE" && checks>1) exchange.mark=100.0
+                check(williamsTc2OppositeExitProfitBlocker(direction.name,current.getString("actual_entry_price").toDouble(),exchange.mark)==null) { "COURSE_PROFIT_CHANGED" }
+            }
+            if(change=="LOST_REPLY") exchange.loseCloseReply=true
+            if(change=="PARTIAL") exchange.closeFraction=.5
+            val before=exchange.posts("/fapi/v1/order")
+            val result=coordinator.closePosition("BTCUSDT",direction,"1","W2X_CRSEND_${direction.name}_$change","COURSE_W5_TERMINAL_CONFIRMED")
+            if(change=="NORMAL") assertTrue(result.toString(),result.getBoolean("ok"))
+            else assertFalse(result.getBoolean("ok"))
+            coordinator=NativeFuturesCampaignCoordinator(journal,clock={ source.now }) { exchange.adapter() }
+            if(change in setOf("NORMAL","LOST_REPLY")) {
+                assertTrue(coordinator.reconcile().toString(),coordinator.status().optBoolean("ready_for_new_entry"))
+                val closed=coordinator.intentsSnapshot().getJSONObject(0)
+                val handoff=closed.getJSONObject("edition_management").getJSONObject("course_flat_handoff")
+                assertEquals(initial.clientId,handoff.getString("motive_campaign_id"));assertFalse(handoff.getBoolean("can_place_orders"))
+                assertEquals(0.0,kotlin.math.abs(exchange.quantity),1e-9)
+                assertEquals(before+1,exchange.posts("/fapi/v1/order"))
+            } else if(change=="PARTIAL") {
+                coordinator.reconcile()
+                assertTrue(kotlin.math.abs(exchange.quantity)>0)
+                assertFalse(coordinator.intentsSnapshot().getJSONObject(0).getJSONObject("edition_management").has("course_flat_handoff"))
+            } else {
+                assertEquals(1.0,kotlin.math.abs(exchange.quantity),1e-9)
+                assertEquals(before,exchange.posts("/fapi/v1/order"))
+            }
+            if(change !in setOf("NORMAL","LOST_REPLY")) assertTrue(exchange.algos.values.any {
+                it.optString("algoStatus")=="NEW" && it.optString("closePosition")=="true" })
+        }
+    }
+
+    @Test fun courseTerminalDoorRejectsMissingVerifierAndArbitraryReasonsBeforeMutation() {
+        val journal=Journal();val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        coordinator.reconcile();assertTrue(coordinator.submitPendingEntry(plan(exchange.direction)).getBoolean("accepted"))
+        exchange.fill();coordinator.reconcile();markLegacySource(journal,coordinator,williamsCourseProfile,"COURSE_HUMP")
+        val before=exchange.posts("/fapi/v1/order")
+        for(reason in listOf("TAKE_PROFIT","CORRECTION_PARENT_PRICE_INVALIDATED","COURSE_W5_TERMINAL_CONFIRMED")) {
+            val result=coordinator.closePosition("BTCUSDT",exchange.direction,"1","W2X_CRS_BAD_${reason.take(15)}",reason)
+            assertFalse(result.getBoolean("ok"));assertTrue(result.optBoolean("safe_rejection"))
+        }
+        assertEquals(before,exchange.posts("/fapi/v1/order"));assertEquals("OPEN_PROTECTED",coordinator.state.name)
+    }
+
     @Test fun ntdZoneAdditionRetainsProtectionAcrossPartialFillLostReplyAndRestart() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(lost in listOf(false,true)) for(fraction in listOf(.5,1.0)) {
             val journal=Journal();val exchange=Exchange(direction)

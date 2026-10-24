@@ -944,7 +944,9 @@ def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_cont
     assert "oppositeProfitBlocker==null" in manage
     assert "williamsTc2OppositeExitProfitBlocker(" in policy
     assert "williamsTc2OppositeExitProfitBlocker(" in coordinator
-    assert 'profile!=williamsTc2Profile && (profile==williamsCourseProfile && boundaryExit || editionExit.isNotEmpty())' in manage
+    assert '(profile!=williamsCourseProfile || courseProof!=null)' in manage
+    assert 'profile!=williamsTc2Profile && editionExit.isNotEmpty()' in manage
+    assert 'else if(profile==williamsCourseProfile && boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"' not in manage
     assert '"tc2_correction_boundary_advisory"' in manage
     assert 'market_close_authorized",false' in manage
     assert 'williamsTc2OppositeExitEvidenceBlocker(' in policy

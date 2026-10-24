@@ -46,6 +46,9 @@ from williams_execution_policy import EXECUTION_PROFILES,new_exposure_blocker,ex
 from williams_ntd_execution import FAMILIES as NTD_FAMILIES, close_entry_bound, require_close_entry
 from williams_course_campaign import course_active_context,course_next_stage,course_target
 from williams_course_location import course_trim_proof
+from williams_course_exit import (BOOK_EXIT_REASONS as COURSE_BOOK_EXIT_REASONS,
+    OPPOSITE_REASONS as COURSE_OPPOSITE_REASONS, TERMINAL_REASONS as COURSE_TERMINAL_REASONS,
+    course_exit_plan,course_exit_proof_blocker,course_closed_motive_handoff)
 from williams_edition_rules import course_initial_protection
 from williams_tc2_pyramid import (
     POLICY as TC2_PYRAMID_POLICY, initial_unit_risk_pct, require_profitable_position,
@@ -1382,6 +1385,9 @@ class FuturesWilliamsRuntime:
             reason=campaign.tags.get("pending_exit_reason","")
             if reason=="COURSE_STAGE_TRIM":
                 self._revalidate_course_trim(campaign,float(intent.quantity))
+            if (campaign.tags.get("strategy_profile")==COURSE and reason!="COURSE_STAGE_TRIM" and
+                    reason not in {"MANUAL_EXIT","KILL_SWITCH"} and campaign.tags.get("pending_exit_authority")!="VERIFIED_RISK_REDUCTION"):
+                self._revalidate_course_exit(campaign,reason)
             if campaign.tags.get("strategy_profile")==NTD and reason not in {"MANUAL_EXIT","KILL_SWITCH"} and campaign.tags.get("pending_exit_authority")!="VERIFIED_RISK_REDUCTION":
                 self._revalidate_ntd_exit(campaign,reason)
             if pos_qty <= 0 or not self._position_matches(campaign, position):
@@ -2270,6 +2276,117 @@ class FuturesWilliamsRuntime:
             row.get("markPrice"),tick=self._tick(campaign.symbol))
         if blocker:raise RuntimeError(blocker)
 
+    def _course_correction_handoff(self,campaign):
+        plan=campaign.tags.get("course_plan") or {}
+        previous=self.engine.load_campaign(plan.get("motive_campaign_id","")) if plan.get("motive_campaign_id") else None
+        proof=previous.tags.get("course_flat_handoff") if previous else None
+        opened=int(campaign.tags.get("position_open_observed_at_ms",0))
+        if (previous is None or previous.state!=CampaignState.CLOSED or previous.position_qty!=0 or
+                previous.symbol!=campaign.symbol or previous.side==campaign.side or previous.tags.get("strategy_profile")!=COURSE or
+                previous.exit_reason!="COURSE_W5_TERMINAL_CONFIRMED" or not isinstance(proof,dict) or
+                proof.get("source")!="SIGNED_FLAT_COURSE_MOTIVE" or proof.get("motive_campaign_id")!=previous.campaign_id or
+                not 0<proof.get("flat_confirmed_at_ms",0)<opened or
+                self.db.state_get("course_correction_consumed:"+previous.campaign_id)!=campaign.campaign_id):
+            raise RuntimeError("COURSE_CORRECTION_DURABLE_FLAT_HANDOFF_UNVERIFIED")
+        return dict(proof,tick=self._tick(campaign.symbol))
+
+    def _course_exit_observation(self,campaign):
+        if campaign.tags.get("strategy_profile")!=COURSE:raise RuntimeError("COURSE_EXIT_OWNER_UNVERIFIED")
+        now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+        frame=closed_strategy_frame(fetch_klines(self.client,campaign.symbol,"1h",limit=260),"1h",now)
+        bars=wave_bars_from_dataframe(frame)
+        if closed_h1_history_blocker(bars,now):raise RuntimeError("COURSE_EXIT_H1_HISTORY_UNVERIFIED")
+        quote=self.client.ticker_price(campaign.symbol)
+        if not isinstance(quote,dict) or quote.get("symbol")!=campaign.symbol:
+            raise RuntimeError("COURSE_EXIT_LIVE_CONTRACT_UNVERIFIED")
+        contract=float(quote.get("price",0))
+        if not math.isfinite(contract) or contract<=0:raise RuntimeError("COURSE_EXIT_LIVE_CONTRACT_UNVERIFIED")
+        plan=campaign.tags.get("course_plan") or {}
+        correction=self._course_correction_handoff(campaign) if plan.get("stage") in {"A_ENTRY","A_REDUCE","C_ADD"} else None
+        if plan.get("unit_basis")!="CONFIRMED_INITIAL_FILL" or not plan.get("unit_is_actual"):
+            return {"status":"BLOCKED","blocker":"COURSE_ACTUAL_UNIT_BASIS_UNVERIFIED"}
+        units=course_target(plan.get("stage"),plan.get("w3_to_w1_ratio"))
+        if correction:units={"A_ENTRY":3,"A_REDUCE":1,"C_ADD":4}.get(plan.get("stage"))
+        unit=float(plan.get("unit_quantity",0))
+        if (not units or not math.isfinite(unit) or unit<=0 or not math.isclose(campaign.position_qty,
+                self._normalize_qty(campaign.symbol,unit*units),rel_tol=1e-9,abs_tol=1e-9)):
+            return {"status":"BLOCKED","blocker":"COURSE_OWNED_STAGE_QUANTITY_UNVERIFIED"}
+        hierarchy=self.scanner.wave_hierarchy(campaign.symbol,refresh=True).to_dict()
+        return course_exit_plan(hierarchy,campaign.side,plan.get("origin_at",0),plan.get("stage",""),
+            int(campaign.tags.get("position_open_observed_at_ms",0)),now,bars,contract,correction)
+
+    def _revalidate_course_exit(self,campaign,reason,*,create=False):
+        if reason not in COURSE_BOOK_EXIT_REASONS or reason=="COURSE_STAGE_TRIM":
+            raise RuntimeError("COURSE_EXIT_REQUIRES_OWN_BOOK_RULE")
+        now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+        if campaign.tags.get("strategy_profile")!=COURSE:raise RuntimeError("COURSE_EXIT_OWNER_UNVERIFIED")
+        opened=int(campaign.tags.get("position_open_observed_at_ms",0))
+        old=campaign.tags.get("course_exit_evidence")
+        if not create:
+            blocker=course_exit_proof_blocker(old,campaign.campaign_id,campaign.symbol,campaign.side,reason,opened,now)
+            if blocker:raise RuntimeError(blocker)
+        if reason in COURSE_TERMINAL_REASONS or reason.startswith("COURSE_W3_") or reason.startswith("COURSE_W5_") or reason=="COURSE_CORRECTION_INVALIDATED":
+            proof=self._course_exit_observation(campaign)
+            if proof.get("status")!="OBSERVED_COURSE_SOURCE_RULE" or proof.get("reason")!=reason:
+                raise RuntimeError(proof.get("blocker") or "COURSE_SOURCE_EXIT_NO_LONGER_VALID")
+        else:
+            frame=closed_strategy_frame(fetch_klines(self.client,campaign.symbol,"1h",limit=260),"1h",now)
+            if closed_h1_history_blocker(wave_bars_from_dataframe(frame),now):raise RuntimeError("COURSE_EXIT_H1_HISTORY_UNVERIFIED")
+            quote=self.client.ticker_price(campaign.symbol)
+            if not isinstance(quote,dict) or quote.get("symbol")!=campaign.symbol:raise RuntimeError("COURSE_EXIT_LIVE_CONTRACT_UNVERIFIED")
+            contract=float(quote.get("price",0))
+            if not math.isfinite(contract) or contract<=0:raise RuntimeError("COURSE_EXIT_LIVE_CONTRACT_UNVERIFIED")
+            if reason=="COURSE_HIGHER_FRAME_AIRBAG_TRIGGERED":
+                higher=wave_bars_from_dataframe(closed_strategy_frame(fetch_klines(self.client,campaign.symbol,"6h",limit=80),"6h",now))
+                if (len(higher)<40 or any(y.t-x.t!=FRAME_MS["6h"] for x,y in zip(higher,higher[1:])) or
+                        not 0<=now-(higher[-1].t+FRAME_MS["6h"])<FRAME_MS["6h"]):
+                    raise RuntimeError("COURSE_AIRBAG_HISTORY_UNVERIFIED")
+                boundary=course_airbag_stop("LONG" if campaign.side=="BUY" else "SHORT",higher,self._tick(campaign.symbol))
+                if boundary is None or not (contract<=boundary if campaign.side=="BUY" else contract>=boundary):
+                    raise RuntimeError("COURSE_AIRBAG_NO_LONGER_CROSSED")
+                proof={"rule_id":"COURSE:AIRBAG:"+str(higher[-1].t),"boundary":boundary}
+            else:
+                signal=self._triggered_opposite_from_history(campaign,frame,self._tick(campaign.symbol),contract)
+                if (signal is None or signal.strategy_profile!=COURSE or signal.side==campaign.side or
+                        signal.role!=SignalRole.ENTRY or signal.execution_semantics!="STOP_ENTRY"):
+                    raise RuntimeError("COURSE_OPPOSITE_SOURCE_TRIGGER_UNVERIFIED")
+                proof={"rule_id":"COURSE:OPPOSITION:"+signal.signal_id,"signal_id":signal.signal_id,"boundary":signal.trigger_price}
+        if reason in COURSE_TERMINAL_REASONS|COURSE_OPPOSITE_REASONS:
+            mark=self.client.mark_price(campaign.symbol)
+            if not isinstance(mark,dict) or mark.get("symbol")!=campaign.symbol:raise RuntimeError("COURSE_EXIT_LIVE_MARK_UNVERIFIED")
+            profit=tc2_opposite_exit_profit_blocker(campaign.side,campaign.average_entry_price,mark.get("markPrice"),
+                2*float(os.getenv("FEE_BUFFER_PER_SIDE_PCT","0.001"))+float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT","0.0015")),self._tick(campaign.symbol))
+            if profit:raise RuntimeError(profit.replace("TC2_OPPOSITE_EXIT","COURSE_DISCRETIONARY_EXIT"))
+        proof.update(reason=reason,owner_id=campaign.campaign_id,symbol=campaign.symbol,side=campaign.side,
+                     observed_at_ms=now,trigger_price_basis="CONTRACT_PRICE")
+        if create:
+            campaign.tags["course_exit_evidence"]=proof;self.db.save_campaign(campaign)
+        elif old.get("rule_id")!=proof.get("rule_id") or old.get("boundary")!=proof.get("boundary"):
+            raise RuntimeError("COURSE_EXIT_SOURCE_CHANGED_BEFORE_SUBMIT")
+        return proof
+
+    def _record_course_flat_handoff(self,campaign,order):
+        if campaign.tags.get("strategy_profile")!=COURSE or campaign.exit_reason!="COURSE_W5_TERMINAL_CONFIRMED":return False
+        if campaign.tags.get("course_flat_handoff"):return True
+        try:
+            qty=float(order.get("executedQty",0))
+            cid=str(order.get("clientOrderId",""))
+            row=self.db.conn.execute("SELECT campaign_id,purpose,quantity FROM campaign_orders WHERE client_order_id=? ORDER BY id DESC LIMIT 1",(cid,)).fetchone()
+            if (campaign.state!=CampaignState.CLOSED or campaign.position_qty!=0 or order.get("status")!="FILLED" or
+                    order.get("symbol")!=campaign.symbol or order.get("side")==campaign.side or not math.isfinite(qty) or qty<=0 or
+                    str(order.get("reduceOnly","")).lower()!="true" or not row or row["campaign_id"]!=campaign.campaign_id or row["purpose"]!="CAMPAIGN_EXIT" or
+                    not math.isclose(qty,float(row["quantity"]),rel_tol=1e-12,abs_tol=1e-12) or
+                    self._signed_position_qty(self._position(campaign.symbol))!=0 or self.client.open_orders(campaign.symbol)):
+                return False
+            proof=course_closed_motive_handoff(campaign.campaign_id,campaign.side,
+                (campaign.tags.get("course_plan") or {}).get("origin_at",0),campaign.exit_reason,
+                int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)),
+                signed_exit_filled=True,signed_flat=True,orders_clean=True)
+            if proof is None:return False
+            proof["exit_client_id"]=str(order.get("clientOrderId",""))
+            campaign.tags["course_flat_handoff"]=proof;self.db.save_campaign(campaign);return True
+        except Exception:return False
+
     def _course_trim_plan(self,campaign):
         plan=campaign.tags.get("course_plan") or {}
         if (campaign.tags.get("strategy_profile")!=COURSE or not plan.get("unit_is_actual") or
@@ -2319,6 +2436,8 @@ class FuturesWilliamsRuntime:
         if reason=="COURSE_STAGE_TRIM":
             if partial_quantity is None:raise RuntimeError("COURSE_TRIM_MUST_BE_PARTIAL")
             self._revalidate_course_trim(campaign,float(partial_quantity))
+        if campaign.tags.get("strategy_profile")==COURSE and reason!="COURSE_STAGE_TRIM" and reason not in {"MANUAL_EXIT","KILL_SWITCH"} and not risk_emergency:
+            self._revalidate_course_exit(campaign,reason,create=True)
         if campaign.tags.get("strategy_profile")==NTD and campaign.state==CampaignState.ADD_ON_PENDING and not risk_emergency and reason not in {"MANUAL_EXIT","KILL_SWITCH"}:
             self._revalidate_ntd_exit(campaign,reason)
         ntd_opposite=(campaign.tags.get("strategy_profile")==NTD and not risk_emergency and
@@ -2453,6 +2572,8 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError(profit_blocker)
 
         is_partial=partial_quantity is not None
+        if campaign.tags.get("strategy_profile")==COURSE and reason!="COURSE_STAGE_TRIM" and reason not in {"MANUAL_EXIT","KILL_SWITCH"} and not risk_emergency:
+            self._revalidate_course_exit(campaign,reason)
         if reason=="COURSE_STAGE_TRIM":self._revalidate_course_trim(campaign,float(partial_quantity))
         if is_partial and (campaign.tags.get("strategy_profile")!=COURSE or reason!="COURSE_STAGE_TRIM"):
             raise RuntimeError("Partial reduction requires an owned Course campaign stage")
@@ -2631,6 +2752,7 @@ class FuturesWilliamsRuntime:
             self.db.state_delete(f"entry_client_order_id:{symbol}")
             self._set_state(symbol, "FLAT")
             self._record_ntd_trade_result(campaign)
+            self._record_course_flat_handoff(campaign,result)
             return {
                 "state": "CLOSED",
                 "symbol": symbol,
@@ -3241,6 +3363,10 @@ class FuturesWilliamsRuntime:
 
         self._cleanup_campaign_protection(campaign)
 
+        recovered_course_reason=(campaign.tags.get("pending_exit_reason") if
+            campaign.tags.get("strategy_profile")==COURSE and
+            str(order.get("clientOrderId",""))==campaign.tags.get("pending_exit_client_id") and
+            campaign.tags.get("pending_exit_reason") in COURSE_BOOK_EXIT_REASONS else None)
         trade = self.db.open_trade(campaign.symbol)
         if trade is not None:
             entry = float(campaign.average_entry_price or trade.get("entry_price") or 0)
@@ -3260,7 +3386,7 @@ class FuturesWilliamsRuntime:
             reason = (
                 "STOP_FILLED"
                 if str(order.get("clientOrderId", "")).startswith("WILLF_STOP_")
-                else "CAMPAIGN_EXIT_FILLED"
+                else recovered_course_reason or "CAMPAIGN_EXIT_FILLED"
             )
             self.db.close_trade(
                 trade["id"],
@@ -3278,7 +3404,7 @@ class FuturesWilliamsRuntime:
         campaign.exit_reason = (
             "STOP_FILLED"
             if str(order.get("clientOrderId", "")).startswith("WILLF_STOP_")
-            else "CAMPAIGN_EXIT_FILLED"
+            else recovered_course_reason or "CAMPAIGN_EXIT_FILLED"
         )
         campaign.next_action = "WAIT"
         campaign.reconciliation_state = "CLEAN"
@@ -3287,6 +3413,7 @@ class FuturesWilliamsRuntime:
         self.db.state_delete(f"entry_client_order_id:{campaign.symbol}")
         self._set_state(campaign.symbol, "FLAT")
         self._record_ntd_trade_result(campaign)
+        self._record_course_flat_handoff(campaign,order)
         return True
 
     def _cleanup_campaign_protection(self, campaign):
@@ -3454,9 +3581,7 @@ class FuturesWilliamsRuntime:
                 if not correction_bounds_valid(proof):
                     raise RuntimeError("CORRECTION_PROOF_MISSING; retain exchange protection")
                 if not correction_price_allowed(proof,current_price):
-                    if profile==COURSE and strategy_market_close_allowed(profile):
-                        return self._exit_market(campaign,"CORRECTION_PARENT_PRICE_INVALIDATED")
-                    tags["tc2_correction_boundary_advisory"] = {
+                    tags["course_boundary_advisory" if profile==COURSE else "tc2_correction_boundary_advisory"] = {
                         "policy": "TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED", "mark_price": current_price,
                         "observed_at_ms": int(time.time()*1000), "market_close_authorized": False}
                     if hasattr(self, "db"):
@@ -3472,6 +3597,16 @@ class FuturesWilliamsRuntime:
                         if 0<reduction<campaign.position_qty:
                             tags["pending_course_stage"]=stage;self.db.save_campaign(campaign)
                             return self._exit_market(campaign,"COURSE_STAGE_TRIM",partial_quantity=reduction)
+                if plan and plan.get("stage") in {"W3","W5","A_ENTRY","A_REDUCE","C_ADD"}:
+                    try:terminal=self._course_exit_observation(campaign)
+                    except Exception as exc:terminal={"status":"BLOCKED","blocker":"COURSE_EXIT_SOURCE_UNAVAILABLE","error":type(exc).__name__}
+                    tags["course_terminal_admission"]=terminal;self.db.save_campaign(campaign)
+                    if terminal.get("status")=="OBSERVED_COURSE_SOURCE_RULE":
+                        try:return self._exit_market(campaign,terminal["reason"])
+                        except RuntimeError as rejection:
+                            if campaign.state in {CampaignState.EXIT_PENDING,CampaignState.EXIT_SIGNALLED}:raise
+                            tags["course_terminal_admission"]={"status":"BLOCKED","blocker":str(rejection)}
+                            self.db.save_campaign(campaign)
                 higher=closed_strategy_frame(fetch_klines(self.client,symbol,"6h",limit=80),"6h",
                     int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
                 airbag=course_airbag_stop("LONG" if campaign.side=="BUY" else "SHORT",wave_bars_from_dataframe(higher),tick)
@@ -3617,10 +3752,10 @@ class FuturesWilliamsRuntime:
                 s.execution_semantics,s.signal_bar_time_ms,s.trigger_price,
                 s.invalidation_price if s.invalidation_price>0 else None,s.expires_at_ms or now+FRAME_MS[interval])
                 for s in candidates.values()],wave_bars_from_dataframe(closed),mark,now,FRAME_MS[interval])
-        if profile==TC2 and assessment["uncertain"]:
+        if assessment["uncertain"]:
             # A same-bar trigger/invalidation or a gap cannot justify closing
             # a verified protected campaign. Keep broker STOP live.
-            campaign.tags["tc2_opposition_advisory_error"]="AMBIGUOUS_OR_MISSING_H1_HISTORY"
+            campaign.tags["tc2_opposition_advisory_error" if profile==TC2 else "source_opposition_advisory_error"]="AMBIGUOUS_OR_MISSING_H1_HISTORY"
             return None
         evidence=assessment["opposition"]
         if evidence is None:

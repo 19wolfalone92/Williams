@@ -110,6 +110,30 @@ rechecked before any cancellation and before POST; missing or changing proof
 keeps exchange protection. Existing submitted reductions still reconcile by
 their client id. These are numerical/proxy guards, not independent wave truth.
 
+Since 4.62, every automatic full Course exit uses a closed whitelist and fresh
+source verification before mutations and before POST. A generic correction
+range break is advisory, not a Course market-exit permission. Full W5/C
+terminal candidates require the pinned original count and a uniquely matched
+contained five-leg terminal subdivision, all causal and after entry. The four
+terminal volume/oscillator flags remain explicitly provisional/proxy evidence.
+Course PDF80-84 failed-count rules distinguish a young W3 reaching W1's length
+and retreating through W1 before 110% expansion, W3-of-W5 retreating through
+W1-of-W5, and the original motive extreme invalidating its separate correction.
+Current CONTRACT_PRICE proves these source boundaries; MARK remains risk and
+profit evidence. A current invalidation of an otherwise valid historical count
+does not erase its earlier confirmed pivots. Failure exits do not expire just
+because the old peak is more than five hours old; terminal proposal age is
+still an explicit project policy. Opposite/terminal profit-taking retains the
+positive mark after the project cost reserve.
+
+Only an exact signed FILLED exit, signed FLAT and clean old orders publish a
+durable Course motive-to-correction handoff. Partial exits, unknown replies
+without filled-order proof, and orphan orders cannot grant it. Recovery keeps
+the original Course close reason and can publish the same handoff once; it
+does not repeat the financial POST. Any later corrective owner must consume
+that handoff durably and still pass new source/risk/precision/protection gates.
+Publishing the handoff does not enable Course entries or place a reverse order.
+
 Course remains OBSERVE for new exposure. Transport-model tests do not certify
 all book figures, subjective chart angles or physical Android/Futures Demo
 acceptance; whole-book certification remains false.

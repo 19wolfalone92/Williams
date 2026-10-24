@@ -58,8 +58,9 @@ def test_correction_boundary_obeys_the_owning_strategy(monkeypatch, side, profil
         assert trails == []
         assert campaign.tags["tc2_correction_boundary_advisory"]["market_close_authorized"] is False
     else:
-        assert exits == ["CORRECTION_PARENT_PRICE_INVALIDATED"]
+        assert exits == []
         assert trails == []
+        assert campaign.tags["course_boundary_advisory"]["market_close_authorized"] is False
 
 
 @pytest.mark.parametrize("side", ["BUY", "SELL"])

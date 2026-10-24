@@ -760,6 +760,7 @@ internal class NativeFuturesCampaignCoordinator(
     var bookH1EntryVerifier:((EntryPlan)->Unit)? = null
     var bookNtdExitVerifier:((JSONObject,String)->Unit)? = null
     var bookCourseTrimVerifier:((JSONObject,String)->Unit)? = null
+    var bookCourseExitVerifier:((JSONObject,String)->Unit)? = null
     enum class Direction { LONG, SHORT }
     enum class EntryKind { STOP, TAKE_PROFIT, LIMIT, MARKET }
     enum class State {
@@ -2608,6 +2609,7 @@ internal class NativeFuturesCampaignCoordinator(
                     }
                 }
             }
+            recordCourseFlatHandoffs(persisted,adapter)
             saveIntents(persisted)
             externalProtectionObservationsJson=protectionObservations.toString()
             // Existing unknown orders block NEW risk, but must not freeze
@@ -3750,6 +3752,37 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     /** Exchange-confirmed reduce-only exit; it can never reverse the one-way position. */
+    private fun recordCourseFlatHandoffs(rows:JSONArray,adapter:BinanceUsdMFuturesTestnetAdapter) {
+        val all=(0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+        for(owner in all.filter { it.optString("intent_role","ENTRY")=="ENTRY" && it.optString("strategy_profile")==williamsCourseProfile &&
+            campaignLifecycleStatus(it)=="CLOSED_OR_STOPPED" && it.optJSONObject("edition_management")?.has("course_flat_handoff")!=true }) {
+            runCatching {
+                val id=owner.getString("client_id");val symbol=owner.getString("symbol")
+                val exit=all.lastOrNull { it.optString("intent_role")=="EXIT" && it.optString("entry_client_id")==id &&
+                    it.optString("symbol")==symbol && it.optString("reason")=="COURSE_W5_TERMINAL_CONFIRMED" &&
+                    !it.optBoolean("partial_reduction",false) && it.optString("exchange_status")=="EXIT_CONFIRMED" && it.optString("order_status")=="FILLED" }
+                    ?: return@runCatching
+                val order=adapter.queryOrder(symbol,exit.getString("client_id"))
+                val expected=exit.getString("quantity").toBigDecimal()
+                check(order.optString("symbol")==symbol && order.optString("clientOrderId")==exit.getString("client_id") &&
+                    order.optString("status")=="FILLED" && order.optString("reduceOnly")=="true" &&
+                    order.optString("side")== (if(owner.getString("direction")=="LONG") "SELL" else "BUY"))
+                check(expected.signum()>0 && order.optString("executedQty").toBigDecimalOrNull()?.compareTo(expected)==0 &&
+                    order.optString("origQty").toBigDecimalOrNull()?.compareTo(expected)==0)
+                val positions=adapter.positions()
+                check((0 until positions.length()).map { positions.getJSONObject(it) }.none {
+                    it.optString("symbol")==symbol && (it.optString("positionAmt").toBigDecimalOrNull() ?: error("Malformed flat evidence")).signum()!=0 })
+                check(adapter.openOrders(symbol).length()==0 && adapter.openAlgoOrders(symbol).length()==0)
+                val management=owner.optJSONObject("edition_management") ?: JSONObject()
+                val proof=williamsCourseClosedMotiveHandoff(id,owner.getString("direction"),management.optLong("course_origin_at"),
+                    exit.getString("reason"),clock(),true,true,true) ?: return@runCatching
+                management.put("course_flat_handoff",proof.put("exit_client_id",exit.getString("client_id")))
+                owner.put("edition_management",management).put("close_reason",exit.getString("reason"))
+                owner.remove("course_handoff_pending")
+            }.onFailure { owner.put("course_handoff_pending",true) }
+        }
+    }
+
     fun closePosition(
         symbol: String,
         direction: Direction,
@@ -3785,6 +3818,14 @@ internal class NativeFuturesCampaignCoordinator(
         val ntdBookExit=!riskEmergencyVerified && exitOwner?.optString("strategy_profile")==williamsNtdProfile &&
             reason in williamsNtdBookExitReasons
         val courseTrim=reason=="COURSE_STAGE_TRIM"
+        val courseBookExit=!riskEmergencyVerified && exitOwner?.optString("strategy_profile")==williamsCourseProfile &&
+            reason in williamsCourseBookExitReasons && !courseTrim
+        if(courseBookExit) {
+            val proof=runCatching { (bookCourseExitVerifier ?: error("COURSE_FINAL_EXIT_VERIFIER_REQUIRED"))(
+                JSONObject(exitOwner!!.toString()),reason) }
+            if(proof.isFailure) return@synchronized JSONObject().put("ok",false).put("safe_rejection",true)
+                .put("mutation_attempted",false).put("blocker",safeDiagnosticText(proof.exceptionOrNull()?.message.orEmpty()))
+        }
         if(courseTrim) {
             val proof=runCatching {
                 check(partialReduction && exitOwner?.optString("strategy_profile")==williamsCourseProfile) { "COURSE_TRIM_OWNER_OR_ROLE_UNVERIFIED" }
@@ -3984,6 +4025,12 @@ internal class NativeFuturesCampaignCoordinator(
                 if(proof.isFailure) return@synchronized JSONObject().put("ok",false).put("safe_rejection",true)
                     .put("mutation_attempted",false).put("blocker",safeDiagnosticText(proof.exceptionOrNull()?.message.orEmpty()))
             }
+            if(courseBookExit) {
+                val proof=runCatching { (bookCourseExitVerifier ?: error("COURSE_FINAL_EXIT_VERIFIER_REQUIRED"))(
+                    JSONObject(managedEntry!!.toString()),reason) }
+                if(proof.isFailure) return@synchronized JSONObject().put("ok",false).put("safe_rejection",true)
+                    .put("mutation_attempted",false).put("blocker",safeDiagnosticText(proof.exceptionOrNull()?.message.orEmpty()))
+            }
             if (emergencyWithoutStop) {
                 // Second read as close to POST as possible, because the
                 // previously missing STOP could have been replaced meanwhile.
@@ -4138,6 +4185,8 @@ internal class NativeFuturesCampaignCoordinator(
             if (orphanedStopRemains) {
                 throw IOException("A close-position protective stop remains after $symbol was confirmed flat")
             }
+            recordCourseFlatHandoffs(intents,adapter)
+            saveIntents(intents)
             // Closing one symbol must not label the whole account READY_FLAT
             // when other concurrent campaigns remain open. Refresh and verify their
             // position/stop ownership before declaring the coordinator entry-ready.
