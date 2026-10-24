@@ -1,4 +1,4 @@
-"""Frozen Binance H1 history is real data, not human-labeled Elliott truth."""
+"""15-asset frozen Binance H1 history is real data, not human-labeled Elliott truth."""
 from __future__ import annotations
 
 import json
@@ -10,7 +10,8 @@ import pytest
 from tools import replay_frozen_h1_five_symbol as frozen
 
 
-def test_all_five_frozen_exchange_histories_are_causal_and_checksum_tracked():
+def test_all_fifteen_frozen_exchange_histories_are_causal_and_checksum_tracked():
+    assert len(frozen.ASSUMED_TICKS_2026_10_25)==15
     hashes = set()
     for symbol in frozen.ASSUMED_TICKS_2026_10_25:
         candles, digest = frozen.load_sealed_h1(symbol)
@@ -59,10 +60,10 @@ def test_results_retain_unverified_status_even_with_positive_backtest(monkeypatc
                 "profits_certified":False,"execution_authority":False}}
     monkeypatch.setattr(frozen,"run_symbol_replay",mocked)
     r=frozen.run_all(tmp_path/"report")
-    assert len(tick_checks)==5 and tick_checks["XRPUSDT"]==0.0001
-    assert r["total_trades_not_portfolio"]==10
+    assert len(tick_checks)==15 and tick_checks["XRPUSDT"]==0.0001
+    assert r["total_trades_not_portfolio"]==30
     assert r["independent_expert_wave_annotations"]==0
     assert r["human_wave_accuracy"] is None
     assert not r["profits_certified"] and not r["book_fidelity_certified"]
     assert not r["execution_authority"] and not r["demo_device_certified"]
-    assert json.loads((tmp_path/"report"/"frozen_five_symbol_summary.json").read_text())["execution_authority"] is False
+    assert json.loads((tmp_path/"report"/"frozen_fifteen_symbol_summary.json").read_text())["execution_authority"] is False

@@ -1,6 +1,6 @@
-"""Reproduce 5-symbol Williams H1 trade quality on sealed Binance 2024 candles.
+"""Reproduce 15-symbol Williams H1 trade quality on sealed Binance 2024 candles.
 
-NO network, credentials, model training, or financial orders. The five 480-bar
+NO network, credentials, model training, or financial orders. The fifteen 480-bar
 sets are historical material already used during development, NOT a genuinely
 untouched out-of-sample set or human-labeled wave truth. Stop fills and costs
 are assumptions; current symbol ticks may differ from Nov-2024 tick filters.
@@ -29,6 +29,16 @@ ASSUMED_TICKS_2026_10_25 = {
     "BNBUSDT": 0.01,
     "SOLUSDT": 0.01,
     "XRPUSDT": 0.0001,
+    "DOGEUSDT": 0.000010,
+    "ADAUSDT": 0.00010,
+    "LINKUSDT": 0.001,
+    "AVAXUSDT": 0.0010,
+    "LTCUSDT": 0.01,
+    "TRXUSDT": 0.00001,
+    "DOTUSDT": 0.000100,
+    "UNIUSDT": 0.0010,
+    "BCHUSDT": 0.01,
+    "NEARUSDT": 0.0010,
 }
 SOURCE_DIR = ROOT / "app" / "src" / "test" / "resources"
 HOUR_MS = 3_600_000
@@ -101,14 +111,14 @@ def run_all(outdir: Path, window_bars: int = 180) -> dict:
             "quality": result["read_only_chronological_quality"],
         })
     summary = {
-        "schema": "WILLIAMS_FROZEN_FIVE_SYMBOL_H1_REPLAY_V1",
+        "schema": "WILLIAMS_FROZEN_FIFTEEN_SYMBOL_H1_REPLAY_V1",
         "source_period_utc": "[2024-11-09, 2024-11-29)",
-        "dataset": "5 x 480 public Binance USD-M genuine closed H1 bars",
+        "dataset": "15 x 480 public Binance USD-M genuine closed H1 bars",
         "symbols": list(ASSUMED_TICKS_2026_10_25),
         "replay_bars": EXPECTED_BARS,
         "method": "causal closed-H1 paper fill, strict symbol tick, chronological cost stress x2",
         "known_limitations": [
-            "Five 2024 assets / 20 days, not 15 assets or independent untouched holdout",
+            "Fifteen 2024 assets / 20 days; NOT untouched independent holdout",
             "Book rules are still unproven against independently human-labeled charts",
             "2026 symbol ticks applied to 2024 candles; historical tick-filter changes not checked",
             "Base-asset volume substitutes unavailable trade-count MFI, explicit proxy",
@@ -125,7 +135,7 @@ def run_all(outdir: Path, window_bars: int = 180) -> dict:
         "execution_authority": False,
         "results": reports,
     }
-    (outdir / "frozen_five_symbol_summary.json").write_text(
+    (outdir / "frozen_fifteen_symbol_summary.json").write_text(
         json.dumps(summary, indent=2, allow_nan=False, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )

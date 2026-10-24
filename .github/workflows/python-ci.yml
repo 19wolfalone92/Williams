@@ -64,16 +64,16 @@ jobs:
           set -o pipefail
           python -m pytest -q 2>&1 | tee pytest-output.txt
 
-      - name: Reproduce five sealed Binance H1 paper campaigns (NOT OOS or exchange fill)
+      - name: Reproduce fifteen sealed Binance H1 paper campaigns (NOT OOS or exchange fill)
         run: |
           mkdir -p build/frozen-h1-replay
           python tools/replay_frozen_h1_five_symbol.py --outdir build/frozen-h1-replay
 
-      - name: Upload five-symbol historical TC2 campaign and stress results
+      - name: Upload fifteen-symbol historical TC2 campaigns and stress results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: williams-frozen-five-h1-trades-and-stress
+          name: williams-frozen-fifteen-h1-trades-and-stress
           path: build/frozen-h1-replay/
           if-no-files-found: warn
           retention-days: 21
