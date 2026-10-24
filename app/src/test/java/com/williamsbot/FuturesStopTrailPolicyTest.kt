@@ -215,6 +215,24 @@ class FuturesStopTrailPolicyTest {
         }
     }
 
+    @Test fun invalidH1TimingCannotCauseEitherSideToReplaceAStop() {
+        val history=bars(
+            highs=listOf(110.0,109.0,108.0,107.0,106.0,105.0),
+            lows=listOf(99.0,98.0,97.0,96.0,95.0,94.0)
+        )
+        for(side in listOf("LONG","SHORT")) {
+            val old=if(side=="LONG") 80.0 else 120.0
+            val mark=if(side=="LONG") 130.0 else 70.0
+            assertNotNull(planWilliamsCampaignStop(side,old,100.0,null,mark,.1,1L,history))
+            val shifted=history.map {it.copy(openTimeMs=it.openTimeMs+900_000L)}
+            val negative=history.mapIndexed {i,b->if(i==0) b.copy(openTimeMs=-3_600_000L) else b}
+            for(invalid in listOf(shifted,negative)) {
+                assertNull(planWilliamsCampaignStop(side,old,100.0,null,mark,.1,1L,invalid))
+                assertNull(planFuturesStopTrail(side,old,100.0,old,mark,.1,1L,invalid))
+            }
+        }
+    }
+
     @Test fun tc2CampaignNeverTrailsOnlyBecauseOneRWasReachedLongOrShort() {
         // Neither series has a post-entry fractal, and its five-bar stop
         // would not tighten the existing exchange-confirmed protection.

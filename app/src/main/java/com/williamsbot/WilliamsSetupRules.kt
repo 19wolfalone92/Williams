@@ -24,7 +24,11 @@ internal fun selectWilliamsPendingFractal(
 ):WilliamsPendingFractal? {
     if (direction !in listOf("LONG","SHORT") || bars.size<5 || teeth.size!=bars.size ||
         !tick.isFinite() || tick<=0 || !teeth.last().isFinite() || teeth.last()<=0 ||
-        !validWilliamsEditionBars(bars)) return null
+        !validWilliamsEditionBars(bars) ||
+        // WM3 requires two consecutive actual closed H1 bars to the right.
+        // Missing hours and non-exchange-aligned timestamps are not t+2.
+        bars.any { it.t<0L || it.t%WILLIAMS_H1_MS!=0L } ||
+        bars.zipWithNext().any { (a,b) -> b.t-a.t!=WILLIAMS_H1_MS }) return null
     val long=direction=="LONG"
     fun extreme(i:Int)=if (long) bars[i].h else bars[i].l
     for (i in bars.lastIndex-2 downTo 2) {

@@ -99,6 +99,21 @@ class WilliamsMarketGeometryTest {
         assertNull(williamsBookFractalTeethBlocker("SHORT_FRACTAL","SHORT",144.9,144.95,.1))
         assertNotNull(williamsBookFractalTeethBlocker("SHORT_FRACTAL","SHORT",144.9,144.9,.1))
     }
+    @Test fun wm3CannotConfirmAcrossMissingOrNonAlignedHoursForEitherSide() {
+        val hour=3_600_000L
+        val raw=bars(listOf(101.0,102.0,105.0,103.0,102.0,103.0))
+        val teeth=listOf(106.0,106.0,106.0,106.0,106.0,104.0)
+        for(short in listOf(false,true)) {
+            val side=if(short) "SHORT" else "LONG"
+            val series=if(short) mirror(raw) else raw
+            val lines=if(short) teeth.map {250-it} else teeth
+            assertNotNull(selectWilliamsPendingFractal(side,series,lines,.1))
+            val gap=series.mapIndexed { i,b->if(i>=3) b.copy(t=b.t+hour) else b }
+            assertNull(selectWilliamsPendingFractal(side,gap,lines,.1))
+            assertNull(selectWilliamsPendingFractal(side,series.map {it.copy(t=it.t+60_000L)},lines,.1))
+        }
+    }
+
     @Test fun courseSignalLineSideIsIndependentOfLastAoColour() {
         val b=bars((0 until 47).map { 101+it*.2+5*kotlin.math.sin(it*.4) })
         assertEquals("DOWN",williamsCourseRhythm(b).second)

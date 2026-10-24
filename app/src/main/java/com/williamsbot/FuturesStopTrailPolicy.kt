@@ -41,7 +41,8 @@ internal fun planFuturesStopTrail(
     if (direction != "LONG" && direction != "SHORT") return null
     if (!oldStop.isFinite() || !markPrice.isFinite() || !tickSize.isFinite() ||
         oldStop <= 0.0 || markPrice <= 0.0 || tickSize <= 0.0) return null
-    if (bars.zipWithNext().any { (a,b) -> b.openTimeMs-a.openTimeMs != WILLIAMS_H1_MS }) return null
+    if (bars.any { it.openTimeMs<0L || it.openTimeMs%WILLIAMS_H1_MS!=0L } ||
+        bars.zipWithNext().any { (a,b) -> b.openTimeMs-a.openTimeMs != WILLIAMS_H1_MS }) return null
 
     fun floorTick(price: Double): Double = floor(price / tickSize + 1e-12) * tickSize
     fun ceilTick(price: Double): Double = ceil(price / tickSize - 1e-12) * tickSize
@@ -116,7 +117,8 @@ internal fun planWilliamsCampaignStop(
     if (openedObservedAtMs<=0L) return null
     if (direction !in listOf("LONG","SHORT") || window !in listOf(3,5) ||
         listOf(oldStop,markPrice,tickSize).any { !it.isFinite() || it <= 0 } ||
-        bars.any { !it.high.isFinite() || !it.low.isFinite() || it.low <= 0 || it.high < it.low } ||
+        bars.any { !it.high.isFinite() || !it.low.isFinite() || it.low <= 0 || it.high < it.low ||
+            it.openTimeMs<0L || it.openTimeMs%WILLIAMS_H1_MS!=0L } ||
         bars.zipWithNext().any { (a,b) -> b.openTimeMs-a.openTimeMs != WILLIAMS_H1_MS }) return null
     val proposals = mutableListOf<FuturesStopTrailProposal>()
     // Legacy signature retained for existing call sites. Break-even and its
