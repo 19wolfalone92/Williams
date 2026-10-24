@@ -203,6 +203,42 @@ def armed_runtime(monkeypatch, tmp_path, request):
         bot.db.conn.close()
 
 
+@pytest.mark.parametrize("side", ["BUY", "SELL"])
+def test_ntd_production_entry_is_observer_only_before_any_exchange_mutation(monkeypatch, tmp_path, side):
+    """The simulator above does not grant NTD new-risk permission in production."""
+    monkeypatch.setenv("WILLIAMS_DB_PATH", str(tmp_path / "observer-only.sqlite3"))
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("FUTURES_LEVERAGE", "2")
+    monkeypatch.setenv("FUTURES_SYMBOL_LEVERAGES", "")
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "NTD_FIVE_DIMENSIONS")
+    bot = FuturesWilliamsRuntime("test-key", "test-secret", testnet=True)
+    exchange = DemoExchangeModel()
+    monkeypatch.setattr(bot.client, "_request", exchange.request)
+    now = int(time.time() * 1000)
+    signal = SignalSpec.new(
+        symbol="BTCUSDT", side=side, signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY, timeframe="1h",
+        signal_bar_time_ms=now-7_200_000,
+        trigger_price=101 if side=="BUY" else 99,
+        protective_reference=95 if side=="BUY" else 105,
+        expires_at_ms=now+3_600_000,
+        strategy_profile="NTD_FIVE_DIMENSIONS",
+        setup_context={"ntd_initial":{"eligible":True,"sleep_at_ms":now-36_000_000}}
+    )
+    candidate = FuturesCandidate(
+        "BTCUSDT", "LONG" if side=="BUY" else "SHORT",
+        signal, (signal,), 0.01, 0.001, True, 90
+    )
+    try:
+        with pytest.raises(RuntimeError, match="WILLIAMS_SOURCE_OBSERVATION_ONLY"):
+            bot._arm_entry(candidate)
+        assert not [call for call in exchange.calls
+                    if call[0] in ("POST", "DELETE")]
+    finally:
+        bot.client.session.close()
+        bot.db.conn.close()
+
+
 @pytest.mark.parametrize("armed_runtime", ["BUY", "SELL"], indirect=True)
 @pytest.mark.parametrize("price", ["0", "NaN", None, "malformed"])
 def test_unknown_liquidation_protects_the_fill_without_automatic_flatten(armed_runtime, price):
