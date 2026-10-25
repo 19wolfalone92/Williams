@@ -430,6 +430,28 @@ def main() -> None:
         must(indicator_test, needle, "WilliamsIndicatorParityTest.kt")
 
     hierarchy_source = read("app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt")
+    must(hierarchy_source, 'williamsRequiredWaveFrames = listOf("1d", "4h", "1h", "15m")',
+         "Wave hierarchy must require all D1/H4/H1/M15 market degrees")
+    must(hierarchy_source, 'asOf - (closed.last().t + duration) < duration',
+         "Every wave passport must use latest genuinely closed bar")
+    must(runtime_source,'for (frame in (williamsRequiredWaveFrames + "6h").distinct())',
+         "Preserve 6h as independent context, not 4h parent")
+    must(runtime_source,'.put("wm1_ao_color_is_mandatory",false)',
+         "TC2 PDF125 AO expected colour cannot be invented as compulsory WM1 veto")
+    must_not(runtime_source,"if (wm1AoBlocker==null &&",
+        "WM1 must use price/angulation gate rather than a mandatory AO colour")
+    python_signals=read("williams_signals.py")
+    must_not(python_signals,'first_wise_man_ao_blocker(',
+         "TC2 PDF125 expected AO colour cannot veto Python WM1 signals")
+    wm1_tests=read("tests/test_williams_market_geometry.py")
+    must(wm1_tests,"test_tc2_first_wise_man_reversal_extractor_does_not_invent_mandatory_ao",
+         "Python TC2 WM1 contextual-AO tests")
+    must(read("app/src/test/java/com/williamsbot/WilliamsWaveHierarchyTest.kt"),
+         "allFourRequiredFramesRejectMissingLatestClosedBarAndIgnoreUnclosedFuture",
+         "D1/H4/H1/M15 no-lookahead freshness tests")
+    must(read("app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt"),
+         "tc2Wm1Pdf125AoColourIsExpectedButNotAnAdditionalBookEntryPrerequisite",
+         "Kotlin TC2 WM1 expected AO test")
     for needle in ("TIME_AND_PRICE_CONTAINMENT", "COMPETING_SENIOR_IMPULSE_UNRESOLVED",
                    "CORRECTION_HISTORY_INCOMPLETE", "MOMENTUM_FADE_BEFORE_PIVOT"):
         must(hierarchy_source, needle, "WilliamsWaveHierarchy.kt")
