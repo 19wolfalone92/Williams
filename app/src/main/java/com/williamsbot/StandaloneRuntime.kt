@@ -11357,6 +11357,13 @@ private class NativeEngine(
         val failedTests = checkedSummary.optInt("failed_test_count")
         val warningTests = checkedSummary.optInt("warning_test_count")
         val diagnosticOverall = if (consistencyFindings.isNotEmpty()) "FAIL" else checkedSummary.optString("overall")
+        // This is a forensic read-only picture, NOT an authorization source.
+        // The exchange coordinator can change state while JSON is built.
+        val gateReadyAtReport = !concurrentCoordinatorTransition && executionReady()
+        val gateReasonsAtReport = williamsDiagnosticGateReasons(
+            executionBlockers(), concurrentCoordinatorTransition, gateReadyAtReport
+        )
+        val exposureCountAtReport=statusSnapshot.optJSONArray("futures_positions")?.length() ?: 0
         return JSONObject()
             .put("runtime", "standalone")
             .put("created_at_ms", observedAtMs)
@@ -11393,8 +11400,10 @@ private class NativeEngine(
             .put("diagnostic_findings", JSONArray(consistencyFindings))
             .put("unresolved_diagnostic_checks", unresolvedChecks)
             .put("diagnostic_triage",williamsDiagnosticTriage(tests,
-                cockpitReadiness.optBoolean("new_entries_allowed") &&
-                consistencyFindings.isEmpty() && failedTests==0))
+                !concurrentCoordinatorTransition &&
+                    cockpitReadiness.optBoolean("new_entries_allowed") &&
+                    consistencyFindings.isEmpty() && failedTests==0,
+                livePositionCount=exposureCountAtReport))
             .put("diagnostic_summary", JSONObject()
                 .put("overall", diagnosticOverall)
                 .put("snapshot_non_atomic_coordinator_transition",concurrentCoordinatorTransition)
@@ -11406,7 +11415,8 @@ private class NativeEngine(
                 .put("warning_test_count", warningTests)
                 .put("not_verified_test_count", checkedSummary.optInt("not_verified_test_count"))
                 .put("passed_test_count", checkedSummary.optInt("passed_test_count"))
-                .put("execution_allowed", cockpitReadiness.optBoolean("new_entries_allowed") &&
+                .put("execution_allowed",!concurrentCoordinatorTransition &&
+                    cockpitReadiness.optBoolean("new_entries_allowed") &&
                     consistencyFindings.isEmpty() && failedTests == 0)
                 .put("top_level_runtime_state", statusSnapshot.optString("state", "UNKNOWN"))
                 .put("contract_runtime_state", statusSnapshot.optJSONObject("execution_state_contract")
@@ -11419,8 +11429,8 @@ private class NativeEngine(
                 .put("snapshot_non_atomic",concurrentCoordinatorTransition)
                 .put("new_entries_allowed", !concurrentCoordinatorTransition &&
                     cockpitReadiness.optBoolean("new_entries_allowed"))
-                .put("ready", !concurrentCoordinatorTransition && executionReady())
-                .put("reasons", JSONArray(executionBlockers()))
+                .put("ready",gateReadyAtReport)
+                .put("reasons",JSONArray(gateReasonsAtReport))
                 .put("degraded_channels", JSONArray().apply {
                     if (!marketSocketConnected) put("market_ws")
                     if (!userStreamConnected || userStreamSyncRequired) put("user_ws")
