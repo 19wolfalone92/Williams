@@ -14,9 +14,10 @@ internal val williamsWaveFrames = linkedMapOf(
     "8h" to 28_800_000L, "12h" to 43_200_000L, "1d" to 86_400_000L,
     "1w" to 604_800_000L
 )
-// Do not omit 4h: D1 -> H6 -> H4 -> H1 -> M15 must have distinct, independently sourced passports.
-// All labels remain competing research hypotheses; missing H4 fails the complete-chain observation.
-internal val williamsRequiredWaveFrames = listOf("1d", "6h", "4h", "1h", "15m")
+// Four nested scales required for the user's wave acceptance: D1 > H4 > H1 > M15.
+// H6 is independently sampled as an ADDITIONAL context, not inserted as a
+// mandatory parent of H4: 6 hours is not an integer multiple of 4 hours.
+internal val williamsRequiredWaveFrames = listOf("1d", "4h", "1h", "15m")
 internal data class WilliamsWaveBar(
     val t: Long, val o: Double, val h: Double, val l: Double, val c: Double, val v: Double = 0.0
 )
