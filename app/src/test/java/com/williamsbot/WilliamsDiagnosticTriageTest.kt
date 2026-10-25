@@ -46,6 +46,19 @@ class WilliamsDiagnosticTriageTest {
         assertFalse(t.getBoolean("book_100_percent_verified"))
     }
 
+    @Test fun exchangeStopFailureRemainsVisibleWhenManyStrategyFailuresExist() {
+        val checks=JSONArray()
+        repeat(20) { checks.put(check("A-BOOK-$it","strategy","FAIL")) }
+        checks.put(check("EXE-STOP-01","execution","FAIL"))
+        checks.put(check("RESTART","runtime","FAIL"))
+        val triage=williamsDiagnosticTriage(checks,false)
+        assertEquals(22,triage.getInt("issue_count"))
+        val top=triage.getJSONArray("priority_issues")
+        assertEquals("EXE-STOP-01",top.getJSONObject(0).getString("id"))
+        assertEquals("RESTART",top.getJSONObject(1).getString("id"))
+        assertTrue(triage.getBoolean("priority_issues_truncated"))
+    }
+
     @Test fun priorityListIsBoundedWithoutLosingFailureCount() {
         val tests=JSONArray()
         repeat(24) { tests.put(check("FAIL-$it","execution","FAIL")) }
