@@ -11280,19 +11280,31 @@ private class NativeEngine(
                 "old exchange orders still recovered, never silently cancelled."))
         val requiredWaves = CockpitDiagnostics.rows(chartReadingAudit)
             .filter { it.optString("interval") in setOf("1d","4h","1h","15m") }
-        val observedRequired = requiredWaves.count {
-            it.optString("state")=="OBSERVED" &&
-                it.optInt("closed_candle_count")>=40 &&
-                it.optLong("as_of_close_ms")>0
+        val requiredKeys = coreSymbols.flatMap { symbol ->
+            listOf("1d","4h","1h","15m").map { frame -> symbol to frame }
         }
+        val absentRequired=requiredKeys.filter { (symbol,frame) ->
+            requiredWaves.count {
+                it.optString("symbol")==symbol && it.optString("interval")==frame &&
+                    it.optString("state")=="OBSERVED" &&
+                    it.optInt("closed_candle_count")>=40 &&
+                    it.optLong("as_of_close_ms")>0
+            } != 1
+        }
+        val observedRequired=requiredKeys.size-absentRequired.size
+        val missingDescription=absentRequired.take(10)
+            .joinToString("; ") { (symbol,frame) -> "$symbol/$frame" }
+            .ifBlank { "none" } +
+            if(absentRequired.size>10) "; plus ${absentRequired.size-10}" else ""
         tests.put(JSONObject().put("id","WAVE-04").put("domain","strategy")
             .put("name","Собственные закрытые свечи D1/H4/H1/M15 для всех десяти пар")
             .put("severity", when {
-                requiredWaves.size != coreSymbols.size*4 -> "NOT_VERIFIED"
-                observedRequired == coreSymbols.size*4 -> "PASS"
+                requiredWaves.size != requiredKeys.size -> "NOT_VERIFIED"
+                absentRequired.isEmpty() -> "PASS"
                 else -> "WARNING"
-            }).put("detail","Closed H1/H4/D1/M15 observed frames: " +
-                "$observedRequired/${coreSymbols.size*4}; " +
+            }).put("detail","Closed causal frames: $observedRequired/${requiredKeys.size}; " +
+                "missing/underfilled: $missingDescription. " +
+                "M15 is optional CONTEXT for initial TC2 H1 entries, not an invented entry requirement; " +
                 "PASS proves data availability, not correct nested wave degree, book figures or accuracy."))
         val stopAuditResult = runCatching { auditStore.recentStopTrailDecisionEvents(20) }
         val auditRows = stopAuditResult.getOrNull()?.length() ?: 0
