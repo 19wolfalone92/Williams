@@ -223,12 +223,12 @@ def test_python_tc2_wm2_initial_signal_bar_stop_is_distinct_from_trailing(short)
     ("SHORT",1.0,float("inf"),"WM1_AO_UNVERIFIED"),
     ("LONG",None,1.0,"WM1_AO_UNVERIFIED"),
 ])
-def test_tc2_first_wise_man_ao_colour_must_oppose_prior_trend(side,now,previous,expected):
-    # TC2 ch9 Russian PDF pp.125, 131-132: momentum is still of old trend.
+def test_tc2_first_wise_man_ao_colour_is_expectation_diagnostic(side,now,previous,expected):
+    # TC2 Russian PDF125 says AO is expected to show old-trend colour, not an additional entry prerequisite.
     assert first_wise_man_ao_blocker(side,now,previous)==expected
 
 
-def test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao(monkeypatch):
+def test_tc2_first_wise_man_reversal_extractor_does_not_invent_mandatory_ao(monkeypatch):
     import williams_signals as signals
     monkeypatch.setattr(signals, "_angulation", lambda *args,**kwargs:(.3,True))
     ind=pd.DataFrame({
@@ -238,14 +238,14 @@ def test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao(monkeypatc
         "high":[100.,102.,104.,105.],
         "low":[98.,100.,101.,102.],
     })
-    assert signals._latest_reversal(ind,side="SHORT") is not None
-    assert signals._latest_reversal(ind,side="LONG") is None
-    ind.loc[2,"ao"]=1.0
-    assert signals._latest_reversal(ind,side="LONG") is not None
-    assert signals._latest_reversal(ind,side="SHORT") is None
-    ind.loc[2,"ao"]=float("nan")
-    assert signals._latest_reversal(ind,side="LONG") is None
-    assert signals._latest_reversal(ind,side="SHORT") is None
+    for ao_value in [3.0, 1.0, float("nan")]:
+        ind.loc[2,"ao"]=ao_value
+        assert signals._latest_reversal(ind,side="SHORT") is not None
+        assert signals._latest_reversal(ind,side="LONG") is not None
+    # Absence of an AO column must not erase an otherwise validated
+    # first-Wise-Man price/angle geometry.
+    assert signals._latest_reversal(ind.drop(columns=["ao"]),side="LONG") is not None
+    assert signals._latest_reversal(ind.drop(columns=["ao"]),side="SHORT") is not None
 
 
 
