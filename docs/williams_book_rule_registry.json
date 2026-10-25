@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-10-24",
+  "updated": "2026-10-25",
   "release": "4.64.0",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
@@ -243,9 +243,12 @@
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_market_geometry.py::test_tc2_first_wise_man_reversal_extractor_does_not_invent_mandatory_ao",
+        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2Wm1Pdf125AoColourIsExpectedButNotAnAdditionalBookEntryPrerequisite"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Review every text qualification before declaring normative completeness.",
+      "remaining_evidence": "TC2 PDF125 explicitly EXPECTS old-trend AO colour (red bullish reversal, green bearish), while price/mouth/angulation are compulsory. Python+Kotlin hard veto removed, AO preserved as directional diagnostic. Fully independent historic figures and human WM1 chart scoring still pending.",
       "can_place_orders_from_registry": false
     },
     {
