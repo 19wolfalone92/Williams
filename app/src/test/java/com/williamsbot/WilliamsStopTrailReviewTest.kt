@@ -87,6 +87,38 @@ class WilliamsStopTrailReviewTest {
         assertNull(outcome.proposal)
     }
 
+    @Test fun signedPositionQuantityScalesIndicativeWholeCampaignRiskForBothSides() {
+        for(side in listOf("LONG","SHORT")) {
+            val original = review(side)
+            assertNotNull(original.proposal)
+            val qty=if(side=="LONG") 0.025 else 1449.0
+            val outcome = reviewWilliamsTc2StopTightening(
+                side,if(side=="LONG")90.0 else 160.0,
+                if(side=="LONG")110.0 else 140.0,
+                if(side=="LONG")90.0 else 160.0,
+                if(side=="LONG")120.0 else 80.0,
+                0.01,174*hour,now,h1(side),h4(side),0.0035,campaignQuantity=qty)
+            assertNotNull(outcome.proposal)
+            val evidence=outcome.evidence
+            assertTrue(evidence.getBoolean("campaign_qty_exchange_verified"))
+            assertEquals(qty,evidence.getDouble("campaign_signed_exchange_quantity_abs"),1e-12)
+            assertEquals(evidence.getDouble("new_estimated_net_per_unit")*qty,
+                evidence.getDouble("new_estimated_net_campaign_usdt"),1e-9)
+            assertEquals(evidence.getDouble("incremental_risk_reduction_per_unit")*qty,
+                evidence.getDouble("incremental_stop_risk_reduction_campaign_usdt"),1e-9)
+            assertFalse(evidence.getBoolean("net_estimate_includes_historical_addition_fees"))
+            assertFalse(evidence.getBoolean("net_estimate_includes_future_fill_impact"))
+        }
+    }
+
+    @Test fun invalidQuantityNeverBecomesCertifiedCampaignEconomics() {
+        val outcome=reviewWilliamsTc2StopTightening(
+            "LONG",90.0,110.0,90.0,120.0,0.01,
+            174*hour,now,h1("LONG"),h4("LONG"),campaignQuantity=Double.NaN)
+        assertNull(outcome.proposal)
+        assertEquals("INVALID_EXCHANGE_CAMPAIGN_QUANTITY",outcome.blocker)
+    }
+
     @Test fun explicitEstimatedOutcomeIsNotMisrepresentedAsAssuredProfit() {
         val accepted=review("LONG")
         assertNotNull(accepted.proposal)
