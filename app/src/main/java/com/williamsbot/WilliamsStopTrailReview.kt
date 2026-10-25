@@ -23,6 +23,38 @@ internal data class WilliamsStopTrailReview(
     val evidence: JSONObject
 )
 
+/**
+ * Engineering veto, NOT a quotation from TC2: a freshly printed H1 extreme
+ * at the very end of a large adverse impulse has no right-hand swing proof.
+ * Tightening just beyond that extreme can place the exchange stop into
+ * continuing ordinary pullback. Old signed STOP remains untouched.
+ *
+ * Thresholds are conservative hypotheses to validate out of sample; they
+ * cannot establish forecast edge. Confirmed t+2 fractals remain a separate
+ * structurally justified exit-protection rule.
+ */
+internal data class WilliamsH1ShockVeto(
+    val block: Boolean, val freshCounterExtreme: Boolean,
+    val rangeOverMedian: Double, val closeLocation: Double
+)
+internal fun williamsH1CounterImpulseVeto(
+    direction:String, lastFive:List<WilliamsWaveBar>, lastTwelve:List<WilliamsWaveBar>
+):WilliamsH1ShockVeto {
+    require(direction in setOf("LONG","SHORT") && lastFive.size==5 && lastTwelve.size==12)
+    val recent=lastFive.last()
+    val previous=lastFive.dropLast(1)
+    val ranges=lastTwelve.map { it.h-it.l }.sorted()
+    val median=(ranges[5]+ranges[6])/2.0
+    val range=recent.h-recent.l
+    val closeLocation=if(range>0) ((recent.c-recent.l)/range).coerceIn(0.0,1.0) else 0.5
+    val freshCounterExtreme=if(direction=="LONG") recent.l<previous.minOf { it.l }
+        else recent.h>previous.maxOf { it.h }
+    val ratio=if(median>0) range/median else 0.0
+    return WilliamsH1ShockVeto(freshCounterExtreme && ratio>=1.5 &&
+        (if(direction=="LONG") closeLocation<=0.25 else closeLocation>=0.75),
+        freshCounterExtreme,ratio,closeLocation)
+}
+
 internal fun reviewWilliamsTc2StopTightening(
     direction: String, oldStop: Double, entry: Double, initialStop: Double?,
     mark: Double, tick: Double, openedAtMs: Long, asOfMs: Long,
@@ -121,12 +153,22 @@ internal fun reviewWilliamsTc2StopTightening(
     // not a textbook ATR rule; never claims to eliminate stop-outs.
     val ranges=last12H1.map { it.h-it.l }.sorted()
     val med=(ranges[5]+ranges[6])/2.0
-    val minDistance=max(2.0*tick, minOf(med*0.5, mark*0.0015))
+    // A fixed 0.15%-of-mark CAP previously shrank the H1 noise guard to
+    // almost nothing on highly volatile pairs. Use the observed closed-bar
+    // median itself with a two-tick floor, for all symbols.
+    val minDistance=max(2.0*tick,med*0.5)
     val distance=if(direction=="LONG") mark-candidate.stop else candidate.stop-mark
     audit.put("h1_median_closed_range",med).put("minimum_market_gap",minDistance)
         .put("candidate_mark_gap",distance)
     if(!med.isFinite() || med<=0.0 || distance<=minDistance)
         return refuse("CANDIDATE_STOP_INSIDE_H1_PRICE_NOISE")
+    val h1Shock=williamsH1CounterImpulseVeto(direction,lastFive,last12H1)
+    audit.put("h1_fresh_adverse_extreme",h1Shock.freshCounterExtreme)
+        .put("h1_last_bar_range_to_median",h1Shock.rangeOverMedian)
+        .put("h1_last_bar_close_location",h1Shock.closeLocation)
+        .put("h1_shock_veto_engineering_not_book_rule",true)
+    if(candidate.reason.startsWith("TC2_LAST_") && h1Shock.block)
+        return refuse("UNCONFIRMED_H1_COUNTER_IMPULSE_RETAIN_SIGNED_STOP")
 
     // Proper multi-TF wave genealogy is not yet independently validated.
     // Preserve the actual contemporaneous alternatives as read-only audit.
