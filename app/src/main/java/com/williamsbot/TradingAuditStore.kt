@@ -43,7 +43,10 @@ internal fun stopTrailDecisionAuditEvent(
     }
     if (phase == "EXCHANGE_RESPONSE_OK") {
         val proposedId=evidence.getString("proposed_binance_protection_client_id")
-        val proposedStop=evidence.getDouble("candidate_stop").toBigDecimal()
+        // Compare exact decimal strings submitted to Binance, not unrounded
+        // IEEE-754 proposal doubles (e.g. DOGE 0.07687000000000001).
+        val proposedStop=evidence.optString("submitted_stop_price")
+            .ifBlank { evidence.getDouble("candidate_stop").toString() }.toBigDecimal()
         val stop=exchangeOutcome?.opt("stop")
         val observedPrice=when(stop) {
             is JSONObject -> stop.optString("triggerPrice").ifBlank { stop.optString("stopPrice") }
