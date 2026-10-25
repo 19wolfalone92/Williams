@@ -373,12 +373,14 @@ internal object CockpitDiagnostics {
             ambiguousPending.isNotEmpty() -> "WARNING"
             stalePending.isNotEmpty() || coordinator.optBoolean("reconciliation_running") -> "NOT_VERIFIED"
             partiallyFilled.isNotEmpty() -> "WARNING"
+            !status.optBoolean("running") || status.optBoolean("paused") -> "WARNING"
             else -> "PASS"
         }, "Ожидающих входов: ${pending.size}; некорректных уровней: ${invalidEntries.size}; " +
             "сверка старше 60с/неизвестна: ${stalePending.size}; " +
             "неоднозначный статус: ${ambiguousPending.size}; частичных исполнений: ${partiallyFilled.size}. " +
             "PASS означает только свежую проверку состояния ОЖИДАЮЩЕЙ заявки; " +
             "это не исполненная позиция и не подтверждение защитного SL. " +
+            "Движок работает=${status.optBoolean("running")}; пауза=${status.optBoolean("paused")}. " +
             "При выключенном телефоне биржевая условная заявка может исполниться.")
         val partial = entries.filter { it.optString("order_status") == "PARTIALLY_FILLED" }
         check("EXE-02", "execution", "Частичное исполнение", when {
