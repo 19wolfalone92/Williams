@@ -116,4 +116,25 @@ class StopTrailDecisionAuditEventTest {
         assertNotEquals(stopTrailDeferredFingerprint("campaign",unavailable),
             stopTrailDeferredFingerprint("campaign",later))
     }
+
+    @Test fun signedStopIsMatchedAgainstActualSubmittedTickPriceNotFloatArtifacts() {
+        val facts=JSONObject().put("schema","WILLIAMS_TC2_STOP_REVIEW_V1")
+            .put("direction","LONG").put("decision","PROPOSE_TIGHTEN_ONLY")
+            .put("candidate_stop",0.07687000000000001)
+            .put("submitted_stop_price","0.07687")
+            .put("proposed_binance_protection_client_id","W2T_DOGE_REAL")
+        val proof=JSONObject().put("ok",true).put("stop",
+            JSONObject().put("clientAlgoId","W2T_DOGE_REAL")
+                .put("triggerPrice","0.07687").put("algoStatus","NEW"))
+        assertTrue(runCatching {
+            stopTrailDecisionAuditEvent("DOGEUSDT","LONG","campaign-doge",
+                "EXCHANGE_RESPONSE_OK",facts,proof,4444L)
+        }.isSuccess)
+        assertFalse(runCatching {
+            stopTrailDecisionAuditEvent("DOGEUSDT","LONG","campaign-doge",
+                "EXCHANGE_RESPONSE_OK",facts,
+                JSONObject(proof.toString()).put("stop",
+                    JSONObject(proof.getJSONObject("stop").toString()).put("triggerPrice","0.07686")),4444L)
+        }.isSuccess)
+    }
 }
