@@ -7053,6 +7053,38 @@ private class NativeEngine(
                 submitNow,submitH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })) {
                 "H1_BOOK_BREAKOUT_ALREADY_CONSUMED_BEFORE_SUBMISSION"
             }
+            // Regression from 2026-10-25 15:00:00 UTC: Binance can still
+            // return the PREVIOUS H1 forming/closed bar during the first
+            // milliseconds of a new hour. The final coordinator verifier
+            // correctly refuses this, but without a preflight the coordinator
+            // has already persisted an ENTRY_PENDING / SUBMISSION_UNKNOWN
+            // intent and then latches RECONCILE_REQUIRED even though NO
+            // exchange entry request was sent. Check the same raw current bar
+            // BEFORE creating an intent or changing exchange leverage.
+            // This veto is never permission to bypass the final H1 verifier.
+            if (!marketReentry) {
+                val rawH1Result=runCatching { futuresMarketData.klines(symbol,"1h",2) }
+                val rawH1=rawH1Result.getOrNull()
+                val recentBars=runCatching {
+                    (0 until (rawH1?.length() ?: 0)).map { idx ->
+                        val row=rawH1!!.getJSONArray(idx)
+                        WilliamsWaveBar(row.getLong(0),row.getDouble(1),row.getDouble(2),
+                            row.getDouble(3),row.getDouble(4),row.getDouble(5))
+                    }
+                }.getOrDefault(emptyList())
+                val gateAt=futuresMarketData.exchangeNowMs()
+                val rawBlocker=williamsBookH1ObservedBreakoutBlocker(direction.name,
+                    signal.signalBarTimeMs,trigger,gateAt,
+                    submitH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },recentBars)
+                if (rawBlocker!=null) {
+                    return@withCampaignMutation JSONObject()
+                        .put("accepted",false).put("safe_rejection",true)
+                        .put("mutation_attempted",false).put("order_mutation_attempted",false)
+                        .put("blocker",if(rawBlocker=="H1_CURRENT_BAR_OBSERVATION_UNVERIFIED")
+                            "H1_CURRENT_BAR_NOT_PUBLISHED_YET_DEFER_ENTRY" else rawBlocker)
+                        .put("raw_h1_fetch_error",rawH1Result.exceptionOrNull()?.javaClass?.simpleName ?: JSONObject.NULL)
+                }
+            }
             val submitH1Closed=submitH1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=submitNow }
             val submitTeeth=williamsBookH1ActivationTeeth(submitH1Closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },submitNow)
             check(williamsBookFractalTeethBlocker(signal.type,direction.name,trigger,submitTeeth,rules.tick)==null) {
