@@ -11400,7 +11400,7 @@ private class NativeEngine(
             .put("diagnostic_findings", JSONArray(consistencyFindings))
             .put("unresolved_diagnostic_checks", unresolvedChecks)
             .put("diagnostic_triage",williamsDiagnosticTriage(tests,
-                !concurrentCoordinatorTransition &&
+                gateReadyAtReport &&
                     cockpitReadiness.optBoolean("new_entries_allowed") &&
                     consistencyFindings.isEmpty() && failedTests==0,
                 livePositionCount=exposureCountAtReport))
@@ -11415,7 +11415,7 @@ private class NativeEngine(
                 .put("warning_test_count", warningTests)
                 .put("not_verified_test_count", checkedSummary.optInt("not_verified_test_count"))
                 .put("passed_test_count", checkedSummary.optInt("passed_test_count"))
-                .put("execution_allowed",!concurrentCoordinatorTransition &&
+                .put("execution_allowed",gateReadyAtReport &&
                     cockpitReadiness.optBoolean("new_entries_allowed") &&
                     consistencyFindings.isEmpty() && failedTests == 0)
                 .put("top_level_runtime_state", statusSnapshot.optString("state", "UNKNOWN"))
@@ -11427,7 +11427,7 @@ private class NativeEngine(
             .put("execution_gate", JSONObject()
                 .put("scope", "TECHNICAL_EXECUTION_DOOR_ONLY")
                 .put("snapshot_non_atomic",concurrentCoordinatorTransition)
-                .put("new_entries_allowed", !concurrentCoordinatorTransition &&
+                .put("new_entries_allowed", gateReadyAtReport &&
                     cockpitReadiness.optBoolean("new_entries_allowed"))
                 .put("ready",gateReadyAtReport)
                 .put("reasons",JSONArray(gateReasonsAtReport))
