@@ -594,6 +594,29 @@ def main() -> None:
     must(legacy_runtime, 'if (lossPct >= 0.03)', "StandaloneRuntime.kt")
     must(legacy_runtime, 'FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked', "StandaloneRuntime.kt")
 
+    # UI single-source diagnosis and forced-order retirement are safety
+    # contracts, not merely cosmetic requests. Preserve these through merges.
+    ui = read("app/src/main/java/com/williamsbot/MainActivity.kt")
+    must_not(ui,"TestnetForceTradingCard(","No manual forced order entry UI")
+    must_not(ui,"submitForcedTestnetEntry(","No UI forced entry submission")
+    must_not(ui,"onRunDiagnostics: () -> Unit","No second diagnostics action in Settings")
+    must(ui,"CockpitDiagnosticScreen(","Exactly one full diagnostics workflow")
+    must_not(runtime_source,"fun forceTestnetEntry(","Retire callable forced order mutation")
+    must_not(runtime_source,"fun testnetForceMode(","Retire callable override arming")
+    must(runtime_source,"OPERATOR_FORCED_TRADING_REMOVED","Old clients fail closed")
+    must(runtime_source,'putBoolean("operator_entries_paused", true)',
+         "Migration of persisted forced mode must pause automatic entries")
+    must(runtime_source,"williamsDiagnosticTriage(tests,",
+         "Runtime diagnoses must expose causal prioritized triage")
+    diagnostic_ui = read("app/src/main/java/com/williamsbot/CockpitScreens.kt")
+    must(diagnostic_ui,'Text("Что требует внимания"', "Diagnostic prioritized UX")
+    must(diagnostic_ui,"execution_allowed", "Triage visible source")
+    diagnostic_zip = read("app/src/main/java/com/williamsbot/DiagnosticsArchive.kt")
+    must(diagnostic_zip,'START_HERE_RU.txt',"Human-readable diagnosis ZIP")
+    must(diagnostic_zip,'diagnostic_triage.json',"Forensic triage JSON")
+    must(read("app/src/test/java/com/williamsbot/WilliamsDiagnosticTriageTest.kt"),
+         "failsBeforeWarningsAndDoesNotCertifyBooksOrTrading","Triage negative controls")
+
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
     for needle in (
         "BuildConfig.VERSION_NAME",
