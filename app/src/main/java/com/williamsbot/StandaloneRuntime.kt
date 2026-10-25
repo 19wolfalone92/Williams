@@ -6384,6 +6384,16 @@ private class NativeEngine(
                     feeAndSlippagePct=2.0*feeBufferPerSidePct+maxSlippagePct
                 )
                 val plan=review.proposal
+                val supervisionId="SUPERVISION:"+symbol+":"+record.optLong("approved_at_ms",0L)
+                // Append the complete decision before any optional Binance mutation.
+                // If SQLite is not durable, voluntary trailing must NOT proceed.
+                val decisionAuditId=if(plan!=null)
+                    auditStore.recordStopTrailDecision(symbol,direction.name,supervisionId,
+                        "PROPOSED_BEFORE_MUTATION",review.evidence)
+                    else runCatching {
+                        auditStore.recordStopTrailDecision(symbol,direction.name,supervisionId,
+                            "REVIEW_DEFERRED",review.evidence)
+                    }.getOrDefault(0L)
                 val awaitingFirstClose=bars.last().t+WILLIAMS_H1_MS<=record.optLong("approved_at_ms",0L)
                 futuresCampaignCoordinator.recordOperatorSupervisionObservation(symbol,
                     if(plan!=null) "STOP_PROPOSED" else if(awaitingFirstClose)
@@ -6403,13 +6413,24 @@ private class NativeEngine(
                         futuresCampaignCoordinator.trailOperatorSupervisedStop(
                             symbol,direction,fmtPrice(plan.stop,rules.tick),clientId)
                     }
+                    // The exchange response is evidence only when the coordinator
+                    // has verified it. Never retry an ambiguous mutation for audit.
+                    runCatching {
+                        auditStore.recordStopTrailDecision(symbol,direction.name,supervisionId,
+                            if(outcome.optBoolean("ok")) "EXCHANGE_RESPONSE_OK"
+                            else "EXCHANGE_NOT_CONFIRMED",review.evidence,outcome)
+                    }.onFailure {
+                        lastError="POST_STOP_AUDIT_FAILED "+symbol+": "+
+                            (it.message ?: it.javaClass.simpleName)
+                    }
                     check(outcome.optBoolean("ok")) {
                         outcome.optString("blocker","Operator stop replacement unresolved")
                     }
                     auditStore.recordCockpitEvent("OPERATOR_PROTECTION_TRAILED",
                         symbol,state="EXCHANGE_CONFIRMED",
-                        detail="TC2 H1/H4 stop evidence; new_stop="+plan.stop+"; "+review.evidence.toString().take(1600)+
-                            "; no book ownership claimed")
+                        detail="TC2 H1/H4 stop reviewed; new_stop="+plan.stop+
+                            "; decision_audit_id="+decisionAuditId+
+                            "; full source candles and Binance outcome in SQLite; no book ownership claimed")
                     futuresCampaignCoordinator.recordOperatorSupervisionObservation(
                         symbol,"TRAILED",plan.reason,bars.last().t+WILLIAMS_H1_MS,plan.stop)
                 }
@@ -6642,7 +6663,8 @@ private class NativeEngine(
                 h4Input=fetchCandles(symbol,"4h",50).map {
                     WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v)
                 },
-                feeAndSlippagePct=2.0*feeBufferPerSidePct+maxSlippagePct
+                feeAndSlippagePct=2.0*feeBufferPerSidePct+maxSlippagePct,
+                campaignQuantity=kotlin.math.abs(signedQty)
             ) else null
             val plan = if(profile!=williamsTc2Profile) editionStop?.takeIf {
                 if(dir=="LONG") it>oldStop && it<mark else it<oldStop && it>mark
@@ -6652,10 +6674,22 @@ private class NativeEngine(
                 runCatching { auditStore.recordCockpitEvent(
                     "TC2_STOP_REVIEW_DEFERRED",symbol= symbol,direction=dir,
                     state="EXISTING_BINANCE_STOP_RETAINED",
-                    detail=tc2Review.evidence.toString().take(1600)
+                    detail="blocker="+tc2Review.blocker+
+                        "; complete H1/H4 evidence stored as a structured stop decision"
                 ) }
+                runCatching {
+                    auditStore.recordStopTrailDecision(symbol,dir,intent.optString("client_id"),
+                        "REVIEW_DEFERRED",tc2Review.evidence)
+                }.onFailure { lastError="DEFERRED_STOP_AUDIT_FAILED "+symbol+": "+
+                    (it.message ?: it.javaClass.simpleName) }
             }
             if (plan != null) {
+                val decisionAuditId=if(tc2Review!=null) {
+                    // Fail closed when forensic decision write is unavailable:
+                    // no optional STOP swap without complete pre-mutation evidence.
+                    auditStore.recordStopTrailDecision(symbol,dir,intent.getString("client_id"),
+                        "PROPOSED_BEFORE_MUTATION",tc2Review.evidence)
+                } else 0L
                 // Distinct structural H1/fractal improvements require unique Binance
                 // algo IDs; a timestamp alone cannot identify replacements.
                 val clientId = ("W2T_" + symbol.take(8) + "_" +
@@ -6669,6 +6703,12 @@ private class NativeEngine(
                         symbol, direction, fmtPrice(plan.stop, rules.tick), clientId, reason = plan.reason
                     )
                 }
+                if(tc2Review!=null) runCatching {
+                    auditStore.recordStopTrailDecision(symbol,dir,intent.getString("client_id"),
+                        if(result.optBoolean("ok",false)) "EXCHANGE_RESPONSE_OK"
+                        else "EXCHANGE_NOT_CONFIRMED",tc2Review.evidence,result)
+                }.onFailure { lastError="POST_STOP_AUDIT_FAILED "+symbol+": "+
+                    (it.message ?: it.javaClass.simpleName) }
                 if (!result.optBoolean("ok", false)) {
                     throw IllegalStateException(result.optString("blocker", result.optString("error")))
                 }
@@ -6682,7 +6722,8 @@ private class NativeEngine(
                         "PROTECTION_TRAILED", symbol = symbol, direction = dir,
                         state = "OPEN_PROTECTED",
                         detail = "${plan.reason}; previous=$oldStop; new=${plan.stop}; mark=$mark; entry=$actualEntry; "+
-                            (tc2Review?.evidence?.toString()?.take(1600) ?: "non_TC2_management")
+                            if(tc2Review!=null) "decision_audit_id=$decisionAuditId; full evidence in SQLite"
+                            else "non_TC2_management"
                     )
                 }
             }
