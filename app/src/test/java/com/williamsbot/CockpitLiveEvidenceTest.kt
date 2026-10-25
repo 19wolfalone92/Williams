@@ -31,6 +31,25 @@ class CockpitLiveEvidenceTest {
         snapshotAtMs=snapshotAt,positionsSnapshotAtMs=positionsAt,
         positionsSnapshotOk=snapshotOk)
 
+    @Test fun diagnostics3PendingStopEntryIsNotYetPositionOrProtectiveStop() {
+        for ((symbol,entry,stop,qty) in listOf(
+            listOf("SOLUSDT","100.39","101.83","1.11"),
+            listOf("BTCUSDT","80123.0","80676.1","0.0024")
+        )) {
+            val pending=JSONObject().put("symbol",symbol).put("direction","SHORT")
+                .put("campaign_status","ENTRY_PENDING").put("order_status","NEW")
+                .put("quantity",qty).put("entry_price",entry)
+                .put("persisted_protective_stop",stop)
+                .put("protection_status","NOT_SUBMITTED").put("executed_qty","0")
+            assertFalse(cockpitEntryMayHaveFilled(pending))
+            assertFalse(cockpitSignedStopVerified(pending,status(
+                positions=emptyList(),reportedCount=0),now))
+            assertTrue(cockpitEntryMayHaveFilled(pending.put("executed_qty","0.0001")))
+            assertTrue(cockpitEntryMayHaveFilled(pending.put("order_status","PARTIALLY_FILLED")
+                .put("executed_qty","0")))
+        }
+    }
+
     @Test fun signedMissingStopNeverConfirmsTheOldPersistedJournal() {
         for(st in listOf(
             status(positions=listOf(position(null,"UNVERIFIED_OR_STALE"))),
