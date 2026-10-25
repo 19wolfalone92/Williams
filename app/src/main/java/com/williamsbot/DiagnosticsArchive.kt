@@ -217,6 +217,18 @@ object DiagnosticsArchive {
         File(context.filesDir, "$DIR/$LATEST")
             .takeIf { it.isFile && it.length() > 0L }
 
+    /** Distinguish a successfully stored CURRENT diagnostic from an older
+     * archive left behind after a failed write. Never silently export old data.
+     */
+    fun latestReportAtMs(context: Context): Long = runCatching {
+        val file=latest(context) ?: return@runCatching 0L
+        ZipFile(file).use { zip ->
+            val raw=readSmallZipEntry(zip,"archive_metadata.json")
+                ?: return@use 0L
+            org.json.JSONObject(raw).optLong("report_at_ms")
+        }
+    }.getOrDefault(0L)
+
     private fun renderTests(report: org.json.JSONObject, domain: String): String {
         val out = StringBuilder()
         out.append("Williams diagnostics • ").append(report.optString("created_at")).append('\n')
