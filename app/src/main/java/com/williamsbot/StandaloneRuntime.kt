@@ -8685,10 +8685,12 @@ private class NativeEngine(
         val reversalStart = max(2, candles.lastIndex - 20)
         for (i in candles.lastIndex downTo reversalStart) {
             val priorLow = candles[i - 1].l
-            val wm1AoBlocker=williamsFirstWiseManAoBlocker(
+            // TC2 PDF125 says AO red is EXPECTED on a bullish countertrend bar,
+            // not an extra compulsory signal condition. Keep the colour as
+            // auditable context; preserve reversal/angulation/price-trigger gates.
+            val wm1AoContext=williamsFirstWiseManAoBlocker(
                 "LONG",ao(candles,i),ao(candles,i-1))
-            if (wm1AoBlocker==null &&
-                validWilliamsReversalBar("LONG",waveBars[i],priorLow,
+            if (validWilliamsReversalBar("LONG",waveBars[i],priorLow,
                     listOf(jawS[i],teethS[i],lipsS[i]),angulationProof(i).score)) {
                 val trigger = candles[i].h + tick
                 if (triggerStillPending(i, trigger)) {
@@ -8713,8 +8715,10 @@ private class NativeEngine(
                             .put("wm1_ao_opposite_color_observed",
                                 ao(candles,i).isFinite() && ao(candles,i-1).isFinite() &&
                                 ao(candles,i)<ao(candles,i-1))
-                            .put("wm1_ao_qualifies_book_countertrend",true)
-                            .put("wm1_ao_color_is_mandatory",true)
+                            .put("wm1_ao_expected_countertrend_color_observed",wm1AoContext==null)
+                            .put("wm1_ao_context_status",wm1AoContext ?: "EXPECTED_COUNTERTREND_COLOUR")
+                            .put("wm1_ao_color_is_mandatory",false)
+                            .put("wm1_ao_rule_reference","TC2_PDF125_EXPECTED_NOT_REQUIRED")
                             .toString()
                     )
                 }
