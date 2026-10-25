@@ -269,6 +269,8 @@ class CockpitDiagnosticsTest {
             .put("executed_qty","0").put("last_reconciled_ms",now-1900)
         val observed=coordinator().put("pending_intent_details",JSONArray().put(sol).put(btc))
         assertEquals("PASS",severity("EXE-01",healthy(),observed))
+        assertEquals("WARNING",severity("EXE-01",healthy().put("running",false),observed))
+        assertEquals("WARNING",severity("EXE-01",healthy().put("paused",true),observed))
         assertEquals("NOT_VERIFIED",severity("EXE-03",healthy(),observed))
         assertEquals("NOT_VERIFIED",severity("EXE-04",healthy(),observed))
         assertEquals(2,CockpitDiagnostics.readiness(healthy(),observed,now).getInt("pending_orders"))
