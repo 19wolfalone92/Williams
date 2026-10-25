@@ -522,6 +522,7 @@ fun WilliamsApp(context: Context) {
     var diagnosticsMessage by remember { mutableStateOf("") }
     var diagnosticReport by remember { mutableStateOf<JSONObject?>(null) }
     var diagnosticsRunning by remember { mutableStateOf(false) }
+    var diagnosticsArchiveReady by remember { mutableStateOf(false) }
     var historicalTrade by rememberSaveable { mutableStateOf<Trade?>(null) }
     var requestedCloseSymbol by remember { mutableStateOf<String?>(null) }
     var requestedSupervisionSymbol by remember { mutableStateOf<String?>(null) }
@@ -935,17 +936,34 @@ fun WilliamsApp(context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 runCatching { api.post("/api/v1/ui/event", JSONObject().put("action", "DIAGNOSTICS").put("detail", "Run requested").toString()) }
-                val report = api.get("/api/v1/diagnostics?run=true")
-                DiagnosticsArchive.writeLatest(context, report)
+                val report=JSONObject(api.get("/api/v1/diagnostics?run=true"))
+                report.put("diagnostic_comparison",
+                    DiagnosticsArchive.compareWithLatest(context,report))
+                // Archiving failure is a separate error from successful
+                // READ-ONLY diagnostic capture; always display fresh findings.
+                val stored=runCatching {
+                    DiagnosticsArchive.writeLatest(context,report.toString())
+                }
                 withContext(Dispatchers.Main) {
-                    diagnosticReport = JSONObject(report)
-                    diagnosticsMessage = "Проверка завершена: " + diagnosticReport?.optJSONObject("diagnostic_summary")?.optString("overall")
-
+                    diagnosticReport=report
+                    diagnosticsArchiveReady=stored.isSuccess
+                    val label=williamsRuStatus(report.optJSONObject("diagnostic_summary")
+                        ?.optString("overall","NOT_VERIFIED") ?: "NOT_VERIFIED")
+                    diagnosticsMessage=if(stored.isSuccess) {
+                        "Проверка завершена: $label. Полный архив сохранён."
+                    } else {
+                        "Проверка завершена: $label, но архив НЕ СОХРАНЁН: " +
+                            safeDiagnosticText(stored.exceptionOrNull()?.message.orEmpty()) +
+                            ". Экспорт предыдущего архива отключён."
+                    }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
+                    diagnosticsArchiveReady=false
+                    diagnosticReport=null
                     diagnosticsMessage =
-                        e.message ?: "Не удалось выполнить диагностику"
+                        "Новая диагностика НЕ ПОЛУЧЕНА: " +
+                        safeDiagnosticText(e.message ?: "Неизвестная ошибка")
                 }
             } finally {
                 withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) { diagnosticsRunning = false }
@@ -960,6 +978,11 @@ fun WilliamsApp(context: Context) {
             if (uri == null) return@rememberLauncherForActivityResult
             scope.launch(Dispatchers.IO) {
                 try {
+                    val reportAt=diagnosticReport?.optLong("created_at_ms") ?: 0L
+                    require(diagnosticsArchiveReady && reportAt>0L &&
+                        DiagnosticsArchive.latestReportAtMs(context)==reportAt) {
+                        "Последний отчёт не сохранён. Экспорт старого ZIP заблокирован."
+                    }
                     val source = requireNotNull(DiagnosticsArchive.latest(context)) {
                         "Диагностика ещё не создана"
                     }
@@ -980,8 +1003,10 @@ fun WilliamsApp(context: Context) {
         }
 
     fun exportDiagnostics() {
-        if (DiagnosticsArchive.latest(context) == null) {
-            diagnosticsMessage = "Сначала запустите диагностику."
+        val reportAt=diagnosticReport?.optLong("created_at_ms") ?: 0L
+        if (!diagnosticsArchiveReady || reportAt<=0L ||
+            DiagnosticsArchive.latestReportAtMs(context)!=reportAt) {
+            diagnosticsMessage = "Нет сохранённого ZIP для текущей проверки. Запустите диагностику повторно."
             return
         }
         exportDiagnosticsLauncher.launch("Williams_Diagnostics.zip")
@@ -1171,7 +1196,8 @@ fun WilliamsApp(context: Context) {
             )
 
             4 -> CockpitDiagnosticScreen(padding, status, diagnosticReport, diagnosticsMessage,
-                onRun = ::runDiagnostics, onExport = ::exportDiagnostics, onSelfHeal = ::selfHeal, running = diagnosticsRunning)
+                onRun = ::runDiagnostics, onExport = ::exportDiagnostics, onSelfHeal = ::selfHeal,
+                running = diagnosticsRunning, archiveReady = diagnosticsArchiveReady)
 
             7 -> CockpitAnalysis(padding, status, candidates) {
                 selectedChartSymbol = it; historicalTrade = null; tab = 1
