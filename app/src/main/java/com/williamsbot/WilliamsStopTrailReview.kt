@@ -74,6 +74,25 @@ internal fun reviewWilliamsTc2StopTightening(
     val a=lastH4[0];val b=lastH4[1]
     val h4Adverse=if(direction=="LONG") b.l<a.l && b.c<a.c else b.h>a.h && b.c>a.c
     audit.put("h4_adverse_price_structure",h4Adverse)
+    // The last 12 completed H4 bars describe where current price sits within
+    // the *observed* H4 price range. This is a measured retracement proxy,
+    // NOT proof that Elliott W4 or an ABC correction has completed.
+    val h4Reference=h4.takeLast(12)
+    val high12=h4Reference.maxOf { it.h }
+    val low12=h4Reference.minOf { it.l }
+    val h4Range=high12-low12
+    val observedRetracement=if(h4Range>0) {
+        (if(direction=="LONG") (high12-b.c)/h4Range else (b.c-low12)/h4Range)
+            .coerceIn(0.0,1.0)
+    } else Double.NaN
+    audit.put("h4_12_bar_observed_range_high",high12)
+        .put("h4_12_bar_observed_range_low",low12)
+        .put("h4_price_retracement_fraction",
+            if(observedRetracement.isFinite()) observedRetracement else JSONObject.NULL)
+        .put("h4_retracement_is_confirmed_elliott_correction",false)
+    val h4Pivots=confirmedWilliamsWaveAnchors(h4,williamsWaveFrames.getValue("4h"))
+        .filter { it.knownAt<=asOfMs }.takeLast(3)
+    audit.put("h4_confirmed_fractal_pivots",JSONArray(h4Pivots.map { it.toJson() }))
     if(h4Adverse && candidate.reason.startsWith("TC2_LAST_"))
         return refuse("H4_CORRECTION_CAUTION_RETAIN_EXCHANGE_STOP")
 

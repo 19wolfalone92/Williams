@@ -41,6 +41,9 @@ class WilliamsStopTrailReviewTest {
             assertFalse(allowed.evidence.getBoolean("wave_hypotheses_can_authorize_orders"))
             assertEquals(5,allowed.evidence.getJSONArray("h1_last_five_closed").length())
             assertEquals(2,allowed.evidence.getJSONArray("h4_last_two_closed").length())
+            assertTrue(allowed.evidence.getDouble("h4_price_retracement_fraction") in 0.0..1.0)
+            assertFalse(allowed.evidence.getBoolean("h4_retracement_is_confirmed_elliott_correction"))
+            assertTrue(allowed.evidence.has("h4_confirmed_fractal_pivots"))
             assertTrue(allowed.evidence.getDouble("incremental_risk_reduction_per_unit")>=0)
         }
     }
