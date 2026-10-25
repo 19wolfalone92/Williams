@@ -170,6 +170,16 @@ internal fun CockpitReadiness(status: Status) {
                 "может ещё не быть выставлен. После любого исполнения " +
                 "защита должна быть подтверждена Binance.",
                 style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+            if(!status.running || status.paused ||
+                !r.optBoolean("position_management_ready") &&
+                    !r.optBoolean("stop_only_management_ready")) {
+                Text("⚠️ Возможны биржевые STOP-входы, даже когда приложение " +
+                    "остановлено или сопровождение недоступно. Это не значит, " +
+                    "что они уже исполнились. Проверь реальные открытые заявки " +
+                    "и позиции в Binance Demo. Не удаляй приложение и не " +
+                    "считай старый экран доказательством защиты.",
+                    style=MaterialTheme.typography.bodySmall,color=AppColors.red)
+            }
         }
         Text(russianExecutionBlocker(r.optString("new_entries_reason", "Ожидание первого снимка")), style = MaterialTheme.typography.bodySmall)
         Text(r.optString("utc_loss_reset_explanation", "Суточные ограничения уточняются по времени Binance UTC."),
