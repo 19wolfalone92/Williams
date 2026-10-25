@@ -91,6 +91,12 @@ class TradingForegroundService : Service() {
         RuntimeServiceState.lastWorkerLoopElapsedMs=0L
         RuntimeServiceState.confirmedAtMs = System.currentTimeMillis()
         RuntimeServiceState.refreshLease=leaseCallback
+        // This is an actual FGS creation, unlike repeated onStartCommand() calls.
+        // Record it separately so diagnostics never mistake duplicate STARTs
+        // for Android killing and restarting the process.
+        lifecycleWorker.execute {
+            RuntimeContinuityEvidence.event(applicationContext,"SERVICE_FOREGROUND_CREATED")
+        }
         guard.scheduleWithFixedDelay({
             runCatching {
                 RuntimeServiceState.lastGuardElapsedMs=SystemClock.elapsedRealtime()
@@ -129,11 +135,15 @@ class TradingForegroundService : Service() {
             // returns autoRunRequested=false WITHOUT accessing encrypted disk.
             // It CANNOT decide whether the user previously opted in.
             //
-            // Always initialize once on our lifecycle worker, where the
-            // Keystore-backed auto_run setting is actually read by autostart().
-            // When auto_run=false, no trading engine starts. START_STICKY with
-            // a null Intent must use the same authenticated recovery path.
-            requestRuntimeStart()
+            // A LIVE worker is already owned by this process. Repeated UI
+            // ACTION_START requests are not recovery events. Do not call
+            // NativeEngine.start()/autostart() again or race Binance reconciliation.
+            // A cold/default snapshot is NOT trusted as an opt-out: it MUST
+            // still enter the encrypted auto-run bootstrap on the worker thread.
+            val current=StandaloneRuntime.backgroundSnapshot()
+            if(!BackgroundRuntimePolicy.alreadySupervising(current)) requestRuntimeStart()
+            // An alive-but-stalled worker is deliberately not duplicated.
+            // Its independent heartbeat/execution gates still report the fault.
             return START_STICKY
         }
         stopping=true
