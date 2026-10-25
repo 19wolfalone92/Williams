@@ -6,6 +6,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CockpitDiagnosticsTest {
+    @Test fun historyForensicsDoesNotInventAvaxClosureOrDoubleCountTwoAuditSources() {
+        val original=JSONObject().put("symbol","AVAXUSDT").put("status","CLOSED_UNVERIFIED")
+            .put("trade_audit_source","FUTURES_CAMPAIGN_SNAPSHOT").put("pnl_complete",false)
+        val supervision=JSONObject().put("symbol","AVAXUSDT").put("status","CLOSED_UNVERIFIED")
+            .put("trade_audit_source","OPERATOR_APPROVED_STOP_ONLY").put("pnl_complete",false)
+        val s=healthy().put("trade_observations",JSONArray().put(original).put(supervision))
+        assertEquals("WARNING",severity("HIST-01",s))
+        val detail=check("HIST-01",s).optString("detail")
+        assertTrue(detail.contains("AVAXUSDT"))
+        assertTrue(detail.contains("Неподтверждённые записи закрытия: 2"))
+        s.put("trade_observations",JSONArray().put(JSONObject().put("symbol","AVAXUSDT")
+            .put("status","CLOSED_EXCHANGE_CONFIRMED").put("pnl_complete",true)))
+        assertEquals("PASS",severity("HIST-01",s))
+        s.remove("trade_observations")
+        assertEquals("NOT_VERIFIED",severity("HIST-01",s))
+    }
     @Test fun androidLifecycleEvidenceNeverTreatsStartAttemptsAsReboots() {
         val lifecycle=JSONObject()
             .put("service_start_attempt_count",15)
