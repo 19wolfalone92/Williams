@@ -17,6 +17,7 @@ class StopTrailDecisionAuditEventTest {
             .put("h1_candles", candles).put("old_stop", 99.0)
             .put("candidate_stop", 101.0)
             .put("wave_hypotheses_can_authorize_orders", false)
+            .put("proposed_binance_protection_client_id", "W2T_BTC_1234")
         assertTrue(evidence.toString().length > 1600)
         val exchange = JSONObject().put("ok", true)
             .put("client_id", "W2T_BTC_1234").put("confirmed_stop", "101.0")
@@ -32,6 +33,8 @@ class StopTrailDecisionAuditEventTest {
             .getDouble("candidate_stop"), 1e-9)
         assertEquals("W2T_BTC_1234", roundTrip.getJSONObject("exchange_outcome")
             .getString("client_id"))
+        assertEquals("W2T_BTC_1234", roundTrip.getJSONObject("decision_evidence")
+            .getString("proposed_binance_protection_client_id"))
         assertTrue(roundTrip.getBoolean("evidence_untruncated"))
     }
 
