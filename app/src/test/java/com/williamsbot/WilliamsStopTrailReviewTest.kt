@@ -43,6 +43,9 @@ class WilliamsStopTrailReviewTest {
             assertEquals(2,allowed.evidence.getJSONArray("h4_last_two_closed").length())
             assertEquals(12,allowed.evidence.getJSONArray("h1_last_twelve_closed").length())
             assertEquals(12,allowed.evidence.getJSONArray("h4_last_twelve_closed").length())
+            assertEquals(180,allowed.evidence.getJSONArray("h1_full_closed_source").length())
+            assertEquals(45,allowed.evidence.getJSONArray("h4_full_closed_source").length())
+            assertTrue(allowed.evidence.getBoolean("full_source_is_exclusively_closed_at_asof"))
             val h1Row=allowed.evidence.getJSONArray("h1_last_twelve_closed").getJSONObject(0)
             val h4Row=allowed.evidence.getJSONArray("h4_last_twelve_closed").getJSONObject(0)
             for(row in listOf(h1Row,h4Row)) {
