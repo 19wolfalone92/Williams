@@ -11,7 +11,8 @@ import org.json.JSONObject
  */
 internal fun williamsDiagnosticTriage(
     tests: JSONArray,
-    entriesAllowed: Boolean
+    entriesAllowed: Boolean,
+    livePositionCount: Int = 0
 ): JSONObject {
     val data = CockpitDiagnostics.rows(tests)
     val rank = mapOf("FAIL" to 0, "WARNING" to 1, "WARN" to 1,
@@ -68,8 +69,16 @@ internal fun williamsDiagnosticTriage(
             else -> 5
         }
     }
+    // A live position whose STOP is NOT_VERIFIED is more urgent than
+    // ordinary transport/UI warnings. Do not misclassify unknown as FAIL;
+    // elevate only its diagnostic visibility until signed exchange proof
+    // is refreshed. Never automatically place/cancel/replace orders here.
+    val criticalLiveProtection = setOf("EXE-03","EXE-04","EXE-08","RISK-01","RISK-04")
+    fun urgentLiveProof(row:JSONObject):Boolean =
+        livePositionCount>0 && row.optString("id") in criticalLiveProtection &&
+            row.optString("severity")=="NOT_VERIFIED"
     val sorted = issues.sortedWith(compareBy<JSONObject> {
-        rank[it.optString("severity")] ?: 3
+        if(urgentLiveProof(it)) -1 else rank[it.optString("severity")] ?: 3
     }.thenBy { impact(it) }.thenBy { it.optString("id") })
     val overall=when {
         data.isEmpty() -> "NOT_VERIFIED"
@@ -87,6 +96,8 @@ internal fun williamsDiagnosticTriage(
         .put("domains",domains)
         .put("priority_issues",JSONArray(sorted.take(12)))
         .put("priority_issues_truncated",sorted.size>12)
+        .put("live_position_count_at_snapshot",livePositionCount.coerceAtLeast(0))
+        .put("exchange_stop_proof_refresh_urgent",sorted.any(::urgentLiveProof))
         .put("new_entries_allowed_at_snapshot",entriesAllowed)
         .put("accuracy_certified",false)
         .put("book_100_percent_verified",false)
