@@ -238,6 +238,13 @@ def test_diagnostic_reports_nonatomic_state_change_and_missing_wave_frames_by_na
     assert '"15m").map { frame -> symbol to frame }' in runtime
     # An out-of-sync mixed-time report MUST NOT reopen the execution door.
     assert '!concurrentCoordinatorTransition && executionReady()' in runtime
+    assert 'williamsDiagnosticGateReasons(' in runtime
+    assert 'gateReadyAtReport &&' in runtime
+    assert '.put("execution_allowed",gateReadyAtReport &&' in runtime
+    assert '.put("new_entries_allowed", gateReadyAtReport &&' in runtime
+    unit=_read(ROOT / "app/src/test/java/com/williamsbot/WilliamsDiagnosticTriageTest.kt")
+    assert 'liveAvaxUnverifiedSignedStopOutranksUiWarningsButNeverConfirmedFailure' in unit
+    assert 'nonAtomicDiagnosticGateAlwaysExplainsBlockedAdmission' in unit
 
 
 def test_wave_diagnostic_distinguishes_ready_working_set_from_complete_archive():
