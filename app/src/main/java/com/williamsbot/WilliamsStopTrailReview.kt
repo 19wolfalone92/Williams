@@ -57,12 +57,28 @@ internal fun reviewWilliamsTc2StopTightening(
 
     val lastFive=h1.takeLast(5)
     val lastH4=h4.takeLast(2)
+    val last12H1=h1.takeLast(12)
+    val last12H4=h4.takeLast(12)
     fun waveBarJson(bar:WilliamsWaveBar)=JSONObject()
         .put("open_time_ms",bar.t).put("high",bar.h).put("low",bar.l).put("close",bar.c)
     audit.put("source_rule",candidate.reason).put("candidate_stop",candidate.stop)
         .put("source_fractal_at_ms",candidate.fractalAtMs ?: JSONObject.NULL)
         .put("h1_last_five_closed",JSONArray(lastFive.map(::waveBarJson)))
         .put("h4_last_two_closed",JSONArray(lastH4.map(::waveBarJson)))
+        // Required to reproduce BOTH noise-range and H4 range-depth filters.
+        // A five/two-bar trace alone could not audit those 12-bar calculations.
+        .put("h1_last_twelve_closed",JSONArray(last12H1.map(::waveBarJson)))
+        .put("h4_last_twelve_closed",JSONArray(last12H4.map(::waveBarJson)))
+    if(candidate.fractalAtMs!=null) {
+        val pivotIndex=h1.indexOfFirst { it.t==candidate.fractalAtMs }
+        if(pivotIndex>=0) {
+            audit.put("source_fractal_h1_context",
+                JSONArray(h1.subList((pivotIndex-12).coerceAtLeast(0),
+                    (pivotIndex+3).coerceAtMost(h1.size)).map(::waveBarJson)))
+                .put("source_fractal_last_right_bar_close_ms",
+                    h1[(pivotIndex+2).coerceAtMost(h1.lastIndex)].t+WILLIAMS_H1_MS)
+        }
+    }
     val afterEntry=lastFive.all { it.t>=openedAtMs }
     audit.put("five_full_h1_bars_after_entry",afterEntry)
     // A 5-bar window that contains pre-entry candles is not proof that the
@@ -80,7 +96,7 @@ internal fun reviewWilliamsTc2StopTightening(
     // The last 12 completed H4 bars describe where current price sits within
     // the *observed* H4 price range. This is a measured retracement proxy,
     // NOT proof that Elliott W4 or an ABC correction has completed.
-    val h4Reference=h4.takeLast(12)
+    val h4Reference=last12H4
     val high12=h4Reference.maxOf { it.h }
     val low12=h4Reference.minOf { it.l }
     val h4Range=high12-low12
@@ -102,7 +118,7 @@ internal fun reviewWilliamsTc2StopTightening(
     // Do not place a voluntary stop directly inside the typical range of
     // an H1 candle. This is an explicit, bounded ENGINEERING noise filter,
     // not a textbook ATR rule; never claims to eliminate stop-outs.
-    val ranges=h1.takeLast(12).map { it.h-it.l }.sorted()
+    val ranges=last12H1.map { it.h-it.l }.sorted()
     val med=(ranges[5]+ranges[6])/2.0
     val minDistance=max(2.0*tick, minOf(med*0.5, mark*0.0015))
     val distance=if(direction=="LONG") mark-candidate.stop else candidate.stop-mark
