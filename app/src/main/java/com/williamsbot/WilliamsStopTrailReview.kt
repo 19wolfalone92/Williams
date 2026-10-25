@@ -27,7 +27,8 @@ internal fun reviewWilliamsTc2StopTightening(
     direction: String, oldStop: Double, entry: Double, initialStop: Double?,
     mark: Double, tick: Double, openedAtMs: Long, asOfMs: Long,
     h1Input: List<WilliamsWaveBar>, h4Input: List<WilliamsWaveBar>,
-    feeAndSlippagePct: Double = 0.0035
+    feeAndSlippagePct: Double = 0.0035,
+    campaignQuantity: Double? = null
 ): WilliamsStopTrailReview {
     val audit = JSONObject().put("schema","WILLIAMS_TC2_STOP_REVIEW_V1")
         .put("as_of_ms",asOfMs).put("direction",direction)
@@ -41,6 +42,8 @@ internal fun reviewWilliamsTc2StopTightening(
         !listOf(oldStop,entry,mark,tick,feeAndSlippagePct).all { it.isFinite() } ||
         oldStop<=0.0 || entry<=0.0 || mark<=0.0 || tick<=0.0 ||
         feeAndSlippagePct<0.0 || feeAndSlippagePct>0.1) return refuse("INVALID_STOP_REVIEW_INPUT")
+    if(campaignQuantity!=null && (!campaignQuantity.isFinite() || campaignQuantity<=0.0))
+        return refuse("INVALID_EXCHANGE_CAMPAIGN_QUANTITY")
 
     // Both resolutions require genuine *closed* and recent exchange candles.
     // W4/H1 cannot be inferred from stale or still-forming H4 kline values.
@@ -128,7 +131,26 @@ internal fun reviewWilliamsTc2StopTightening(
     audit.put("old_estimated_net_per_unit",oldNetPerUnit)
         .put("new_estimated_net_per_unit",newNetPerUnit)
         .put("incremental_risk_reduction_per_unit",newNetPerUnit-oldNetPerUnit)
+        .put("estimated_fee_slippage_fraction_of_entry",feeAndSlippagePct)
         .put("net_estimate_includes_funding",false)
+        .put("net_estimate_includes_historical_addition_fees",false)
+        .put("net_estimate_includes_future_fill_impact",false)
+        .put("campaign_qty_exchange_verified",campaignQuantity != null)
+    if(campaignQuantity != null) {
+        // A single signed exchange position may aggregate fills and add-ons.
+        // Its volume-weighted exchange entry is used for indicative campaign
+        // PnL, never confused with independently verified fill-level net PnL.
+        audit.put("campaign_signed_exchange_quantity_abs",campaignQuantity)
+            .put("campaign_entry_price_basis","BINANCE_CURRENT_WEIGHTED_AVERAGE")
+            .put("old_estimated_net_campaign_usdt",oldNetPerUnit*campaignQuantity)
+            .put("new_estimated_net_campaign_usdt",newNetPerUnit*campaignQuantity)
+            .put("incremental_stop_risk_reduction_campaign_usdt",
+                (newNetPerUnit-oldNetPerUnit)*campaignQuantity)
+    } else {
+        audit.put("campaign_entry_price_basis","UNVERIFIED_SUPERVISION_SNAPSHOT")
+            .put("old_estimated_net_campaign_usdt",JSONObject.NULL)
+            .put("new_estimated_net_campaign_usdt",JSONObject.NULL)
+    }
     if(newNetPerUnit+1e-12<oldNetPerUnit)
         return refuse("STOP_MUST_NEVER_WIDEN_TOTAL_CAMPAIGN_RISK")
 
