@@ -4,6 +4,25 @@ import org.json.JSONObject
 import java.io.IOException
 import java.math.BigDecimal
 
+/**
+ * Retain a transient signed STOP replacement failure for forensics, but mark
+ * it RESOLVED only after the NEW STOP was actually signed and confirmed.
+ * A new campaign's success cannot rewrite an older unrelated failure.
+ */
+internal fun annotateNativeStopFailureResolution(
+    owner:JSONObject, replacement:JSONObject, confirmedId:String, atMs:Long
+) {
+    val failure=owner.optJSONObject("last_native_stop_failure") ?: return
+    val failureAt=failure.optLong("at_ms",0L)
+    val created=replacement.optLong("created_at_ms",0L)
+    if(replacement.optString("phase")!="COMPLETED" || confirmedId.isBlank() ||
+        atMs<=0L || created<=0L || failureAt<created || failureAt>atMs ||
+        failure.optString("resolution").isNotBlank()) return
+    failure.put("resolution","EXCHANGE_CONFIRMED_NEW_STOP_ACTIVE")
+        .put("resolution_at_ms",atMs)
+        .put("resolution_protection_client_id",confirmedId)
+}
+
 /** A native campaign must finish with close-all protection, including future
  * pyramid fills. A fixed-quantity reduce-only stop bridges the close-all swap.
  * Every POST is journaled BEFORE transport; recovery never replays an unknown POST.
@@ -126,6 +145,7 @@ internal class FuturesNativeStopReplacement(
             val finalStop = requireOpen(symbol, direction, newId, price, null)
             check(open(symbol).size == 1) { "Extra algo remains after native replacement" }
             tx.put("phase", "COMPLETED").put("resolved_at_ms", clock())
+            annotateNativeStopFailureResolution(owner,tx,newId,clock())
             owner.put("protection_client_id", newId).put("protective_stop", price)
                 .put("protection_status", "PROTECTED").put("trailing_at_ms", clock())
                 .put("last_native_stop_replacement", JSONObject(tx.toString()))
