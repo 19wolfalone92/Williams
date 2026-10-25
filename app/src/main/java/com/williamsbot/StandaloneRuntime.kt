@@ -1083,14 +1083,24 @@ internal fun reflectedTc2SetupContext(
             if (!proof.isNull(key) && proof.has(key)) proof.put(key, -proof.getDouble(key))
         }
     }
-    // SHORT uses a reflected price/AO sequence. Convert the book-context
-    // oscillator colour back to the actual exchange candles. TC2 ch9
-    // requires colour opposite the NEW position side for countertrend WM1.
-    if (signalType=="REVERSAL" && context.has("wm1_ao_color")) {
-        val color=context.optString("wm1_ao_color")
-        context.put("wm1_ao_color",when(color) {
-            "RED" -> "GREEN"; "GREEN" -> "RED"; else -> color
-        })
+    // SHORT uses a reflected price/AO sequence. Convert BOTH colour and
+    // its diagnostic reason back into actual exchange-candle coordinates.
+    // TC2 PDF125 EXPECTS, rather than requires, green on bearish WM1.
+    if (signalType=="REVERSAL") {
+        if (context.has("wm1_ao_color")) {
+            val color=context.optString("wm1_ao_color")
+            context.put("wm1_ao_color",when(color) {
+                "RED" -> "GREEN"; "GREEN" -> "RED"; else -> color
+            })
+        }
+        if (context.has("wm1_ao_context_status")) {
+            val status=context.optString("wm1_ao_context_status")
+            context.put("wm1_ao_context_status",when(status) {
+                "WM1_AO_NOT_RED" -> "WM1_AO_NOT_GREEN"
+                "WM1_AO_NOT_GREEN" -> "WM1_AO_NOT_RED"
+                else -> status
+            })
+        }
     }
     if (context.has("risk_stop_at_price") && !context.isNull("risk_stop_at_price")) {
         val originalStop = context.getDouble("risk_stop_at_price")
