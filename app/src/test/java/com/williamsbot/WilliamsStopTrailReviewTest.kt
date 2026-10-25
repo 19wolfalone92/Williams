@@ -135,6 +135,27 @@ class WilliamsStopTrailReviewTest {
      * diagnostics, last closed H1=05:00Z, BEFORE all three STOP replacements
      * and with NO later candles. Opens/volumes are unused by this pure guard.
      * These are regression cases, not independent out-of-sample validation. */
+    @Test fun actualTc2VoluntaryReviewDefersAdverseImpulseButNotRecoveredClose() {
+        val h1Long=h1("LONG")
+        val last=h1Long.last()
+        val adverse=h1Long.dropLast(1)+last.copy(h=111.0,l=104.9,c=105.1)
+        val refused=review("LONG",h1Bars=adverse)
+        assertEquals("UNCONFIRMED_H1_COUNTER_IMPULSE_RETAIN_SIGNED_STOP",refused.blocker)
+        assertNull(refused.proposal)
+        assertTrue(refused.evidence.getBoolean("h1_fresh_adverse_extreme"))
+        assertTrue(refused.evidence.getDouble("h1_last_bar_range_to_median")>=1.5)
+        assertTrue(refused.evidence.getBoolean("existing_exchange_stop_retained_if_blocked"))
+        val recovered=adverse.dropLast(1)+adverse.last().copy(c=110.0)
+        val approved=review("LONG",h1Bars=recovered)
+        assertNotNull(approved.proposal)
+        val mirror=adverse.map {
+            it.copy(o=250-it.o,h=250-it.l,l=250-it.h,c=250-it.c)
+        }
+        val refusedShort=review("SHORT",h1Bars=mirror)
+        assertEquals("UNCONFIRMED_H1_COUNTER_IMPULSE_RETAIN_SIGNED_STOP",refusedShort.blocker)
+        assertNull(refusedShort.proposal)
+    }
+
     @Test fun observedBtcSolDogeAdverseH1ImpulseIsNotPromotedToFreshStructuralStop() {
         val hlc=mapOf(
             "BTCUSDT" to listOf(
