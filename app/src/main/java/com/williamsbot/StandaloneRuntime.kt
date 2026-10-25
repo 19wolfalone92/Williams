@@ -6384,6 +6384,10 @@ private class NativeEngine(
                     feeAndSlippagePct=2.0*feeBufferPerSidePct+maxSlippagePct
                 )
                 val plan=review.proposal
+                val trailClientId=if(plan!=null) ("W2T_"+symbol.take(8)+"_"+
+                    System.nanoTime().toString(36).takeLast(14)).take(36) else null
+                if(trailClientId!=null)
+                    review.evidence.put("proposed_binance_protection_client_id",trailClientId)
                 val supervisionId="SUPERVISION:"+symbol+":"+record.optLong("approved_at_ms",0L)
                 // Append the complete decision before any optional Binance mutation.
                 // If SQLite is not durable, voluntary trailing must NOT proceed.
@@ -6403,8 +6407,7 @@ private class NativeEngine(
                         else review.blocker,
                     bars.last().t+WILLIAMS_H1_MS,plan?.stop)
                 if(plan!=null) {
-                    val clientId=("W2T_"+symbol.take(8)+"_"+
-                        System.nanoTime().toString(36).takeLast(14)).take(36)
+                    val clientId=trailClientId ?: error("MISSING_STOP_TRAIL_CLIENT_ID")
                     val outcome=withCampaignMutation(
                         symbol,"OPERATOR_EXISTING_STOP_ONLY_TRAIL",
                         allowPaused=true,allowStopped=true,allowKillLatched=true,
@@ -6684,6 +6687,12 @@ private class NativeEngine(
                     (it.message ?: it.javaClass.simpleName) }
             }
             if (plan != null) {
+                // Bind the forensic PREPARED receipt to the very same client ID
+                // the coordinator will persist before Binance network I/O.
+                val clientId = ("W2T_" + symbol.take(8) + "_" +
+                    System.nanoTime().toString(36).takeLast(14)).take(36)
+                tc2Review?.evidence?.put("proposed_binance_protection_client_id",clientId)
+                    ?.put("previous_binance_protection_client_id",intent.optString("protection_client_id"))
                 val decisionAuditId=if(tc2Review!=null) {
                     // Fail closed when forensic decision write is unavailable:
                     // no optional STOP swap without complete pre-mutation evidence.
@@ -6692,8 +6701,6 @@ private class NativeEngine(
                 } else 0L
                 // Distinct structural H1/fractal improvements require unique Binance
                 // algo IDs; a timestamp alone cannot identify replacements.
-                val clientId = ("W2T_" + symbol.take(8) + "_" +
-                    System.nanoTime().toString(36).takeLast(14)).take(36)
                 val result = withCampaignMutation(
                     symbol = symbol,
                     purpose = "WILLIAMS_STRUCTURAL_STOP_TRAIL",
