@@ -205,6 +205,30 @@ def test_android_manual_direction_override_is_removed_fail_closed_and_legacy_ord
     assert 'CockpitDiagnosticScreen(' in ui  # sole diagnostic workspace
 
 
+def test_h1_rollover_defers_entry_before_order_intent_and_leverage_change():
+    """Device 25 Oct 2026 15:00 UTC: recent Binance /klines still ended
+    with the prior hourly candle for a fraction of a second.
+
+    This must be a benign no-order deferral, NOT an orphaned
+    SUBMISSION_UNKNOWN campaign or a false claim of an accepted order.
+    """
+    runtime=_read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    unit=_read(ROOT / "app/src/test/java/com/williamsbot/WilliamsBookH1EntryPolicyTest.kt")
+    start=runtime.index('val submitH1=fetchCandles(symbol,"1h",220)')
+    mutation=runtime.index("futuresCampaignCoordinator.submitPendingEntry(plan)",start)
+    segment=runtime[start:mutation]
+    assert "val rawH1Result=runCatching" in segment
+    assert "williamsBookH1ObservedBreakoutBlocker(" in segment
+    assert 'H1_CURRENT_BAR_NOT_PUBLISHED_YET_DEFER_ENTRY' in segment
+    assert '.put("safe_rejection",true)' in segment
+    assert '.put("mutation_attempted",false)' in segment
+    assert '.put("order_mutation_attempted",false)' in segment
+    assert "topOfHourUnpublishedH1MustDeferWithoutInventingTriggerHistory" in unit
+    # Do not remove the second independent check inside the coordinator
+    # immediately before an actual Binance Futures STOP order POST.
+    assert "coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }" in runtime
+
+
 def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     market_data = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesMarketData.kt")
