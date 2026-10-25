@@ -6,12 +6,12 @@ import org.junit.Test
 class WilliamsStopTrailReviewTest {
     private val hour=3_600_000L
     private val now=180*hour
-    private fun h1(dir:String):List<WilliamsWaveBar>=(0 until 180).map { i ->
+    private fun h1(dir:String):List<WilliamsWaveBar> = (0 until 180).map { i ->
         val low=100.0+0.03*i
         val v=WilliamsWaveBar(i*hour,low+1.0,low+3.0,low,low+2.0,1.0)
         if(dir=="LONG") v else WilliamsWaveBar(v.t,250-v.o,250-v.l,250-v.h,250-v.c,1.0)
     }
-    private fun h4(dir:String):List<WilliamsWaveBar>=(0 until 45).map { i ->
+    private fun h4(dir:String):List<WilliamsWaveBar> = (0 until 45).map { i ->
         val low=95.0+0.2*i
         val v=WilliamsWaveBar(i*4*hour,low+1.0,low+5.0,low,low+3.0,2.0)
         if(dir=="LONG") v else WilliamsWaveBar(v.t,250-v.o,250-v.l,250-v.h,250-v.c,2.0)

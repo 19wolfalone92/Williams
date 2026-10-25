@@ -433,9 +433,16 @@ def main() -> None:
     for needle in ("TIME_AND_PRICE_CONTAINMENT", "COMPETING_SENIOR_IMPULSE_UNRESOLVED",
                    "CORRECTION_HISTORY_INCOMPLETE", "MOMENTUM_FADE_BEFORE_PIVOT"):
         must(hierarchy_source, needle, "WilliamsWaveHierarchy.kt")
-    for needle in ("planWilliamsCampaignStop(", "triggeredOpposingSignal(",
+    for needle in ("reviewWilliamsTc2StopTightening(", "triggeredOpposingSignal(",
                    "CORRECTION_PARENT_INVALIDATED", "williamsCorrectionPriceAllowed("):
         must(runtime_source, needle, "StandaloneRuntime.kt causal wave/management integration")
+    trail_review = read("app/src/main/java/com/williamsbot/WilliamsStopTrailReview.kt")
+    for needle in ("planWilliamsCampaignStop(", "FIVE_CLOSED_H1_BARS_AFTER_ENTRY_NOT_YET_AVAILABLE",
+                   "H4_CORRECTION_CAUTION_RETAIN_EXCHANGE_STOP", "CANDIDATE_STOP_INSIDE_H1_PRICE_NOISE",
+                   "wave_hypotheses_can_authorize_orders", "closedWilliamsWaveBars("):
+        must(trail_review,needle,"TC2 H1/H4 evidence for voluntary stop tightening")
+    must(runtime_source, "TC2_STOP_REVIEW_DEFERRED",
+         "Retain existing Binance STOP when H1/H4 evidence is insufficient")
     must(runtime_source,'exchangeClosed=k.optBoolean("x",false)',"StandaloneRuntime.kt final WS close proof")
     must(runtime_source,"val closed = closedNativeStrategyCandles(live)","StandaloneRuntime.kt closed-only strategy cache")
     must(runtime_source, "val freshSignals = candidate.campaignSignals.filter", "StandaloneRuntime.kt directional hypotheses")
