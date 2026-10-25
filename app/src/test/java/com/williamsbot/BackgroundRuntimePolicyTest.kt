@@ -52,6 +52,22 @@ class BackgroundRuntimePolicyTest {
         assertFalse(BackgroundRuntimePolicy.shouldRetry(current,false,0L,300_000L))
         assertTrue(BackgroundRuntimePolicy.keepCpu(current.copy(autoRunRequested=false),false,0L,300_000L))
     }
+    @Test fun rebootAutostartMustConfirmARealWorkerAfterEncryptedOptInRead() {
+        // The cold nonblocking snapshot is false because encrypted preferences
+        // cannot be read on Android's service/main thread. The service must
+        // BOOTSTRAP the secure runtime before consulting this guard.
+        assertTrue(BackgroundRuntimePolicy.autostartComplete(BackgroundRuntimeSnapshot()))
+        assertTrue(BackgroundRuntimePolicy.autostartComplete(
+            BackgroundRuntimeSnapshot(autoRunRequested=false,running=false,workerAlive=false)))
+        assertFalse(BackgroundRuntimePolicy.autostartComplete(
+            BackgroundRuntimeSnapshot(autoRunRequested=true,running=false,workerAlive=false)))
+        assertFalse(BackgroundRuntimePolicy.autostartComplete(
+            BackgroundRuntimeSnapshot(autoRunRequested=true,running=true,workerAlive=false)))
+        assertFalse(BackgroundRuntimePolicy.autostartComplete(
+            BackgroundRuntimeSnapshot(autoRunRequested=true,running=false,workerAlive=true)))
+        assertTrue(BackgroundRuntimePolicy.autostartComplete(
+            BackgroundRuntimeSnapshot(autoRunRequested=true,running=true,workerAlive=true)))
+    }
     @Test fun processExitCategoriesDistinguishCrashesAnrsMemoryAndUserStops() {
         assertEquals("CRASH",BackgroundRuntimePolicy.exitLabel(4))
         assertEquals("CRASH_NATIVE",BackgroundRuntimePolicy.exitLabel(5))

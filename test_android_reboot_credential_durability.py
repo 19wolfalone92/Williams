@@ -75,3 +75,23 @@ def test_app_variant_identity_is_visible_without_leaking_api_secrets():
     assert 'putString("api_key"' not in main
     assert 'putString("api_secret"' not in main
     assert "saved_to_encrypted_storage" in main
+
+
+def test_cold_sticky_service_initializes_secure_autorun_before_checking_snapshot():
+    """A null in-memory server cannot read persisted encrypted auto_run."""
+    service = source("TradingForegroundService.kt")
+    runtime = source("StandaloneRuntime.kt")
+    policy = source("BackgroundRuntimePolicy.kt")
+    assert 'server?.backgroundSnapshot() ?: BackgroundRuntimeSnapshot()' in runtime
+    start = service.split('override fun onStartCommand(', 1)[1].split('private fun requestRuntimeStart()', 1)[0]
+    # Android can recreate START_STICKY with a NULL intent after process death.
+    # The default snapshot is FALSE even if actual encrypted opt-in is TRUE.
+    assert 'if(action!=ACTION_STOP)' in start
+    assert 'requestRuntimeStart()' in start
+    assert 'StandaloneRuntime.backgroundSnapshot().autoRunRequested' not in start
+    recovery = service.split('private fun requestRuntimeStart()', 1)[1].split('override fun onTaskRemoved', 1)[0]
+    assert 'lifecycleWorker.execute' in recovery
+    assert 'StandaloneRuntime.autostart(applicationContext)' in recovery
+    assert 'BackgroundRuntimePolicy.autostartComplete(verified)' in recovery
+    assert 'OPTED_IN_MONITOR_NOT_RUNNING' in recovery
+    assert 'fun autostartComplete(snapshot:BackgroundRuntimeSnapshot)' in policy

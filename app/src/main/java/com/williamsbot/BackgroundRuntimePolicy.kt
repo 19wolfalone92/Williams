@@ -21,6 +21,11 @@ internal object BackgroundRuntimePolicy {
             snapshot.lastWorkerLoopElapsedMs>0L &&
             now>=snapshot.lastWorkerLoopElapsedMs &&
             now-snapshot.lastWorkerLoopElapsedMs>=MONITOR_STALE_MS
+    // Nonblocking cold-start snapshots cannot read encrypted opt-in until
+    // the service's lifecycle worker initializes the secure runtime.
+    // Once it does, a claimed successful auto-start must have a LIVE worker.
+    fun autostartComplete(snapshot:BackgroundRuntimeSnapshot):Boolean =
+        !snapshot.autoRunRequested || (snapshot.running && snapshot.workerAlive)
     fun shouldRetry(snapshot:BackgroundRuntimeSnapshot,inFlight:Boolean,nextAttemptAt:Long,now:Long):Boolean =
         snapshot.autoRunRequested && (!snapshot.running || !snapshot.workerAlive) && !inFlight && now>=nextAttemptAt
     fun retryDelay(failures:Int):Long=when {

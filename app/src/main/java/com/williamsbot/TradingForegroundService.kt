@@ -124,12 +124,16 @@ class TradingForegroundService : Service() {
     ): Int {
         val action = intent?.action
         if(action!=ACTION_STOP) {
-            // An Activity launch creates the foreground service before any
-            // user opt-in. Do not treat that as permission to start/retry
-            // the private-key trading engine. Sticky reboot auto-run is only
-            // recovered from its Keystore-backed persisted opt-in.
-            if(StandaloneRuntime.backgroundSnapshot().autoRunRequested)
-                requestRuntimeStart()
+            // CRITICAL cold-start invariant: StandaloneRuntime.server is null
+            // after process death/reboot. Its nonblocking snapshot deliberately
+            // returns autoRunRequested=false WITHOUT accessing encrypted disk.
+            // It CANNOT decide whether the user previously opted in.
+            //
+            // Always initialize once on our lifecycle worker, where the
+            // Keystore-backed auto_run setting is actually read by autostart().
+            // When auto_run=false, no trading engine starts. START_STICKY with
+            // a null Intent must use the same authenticated recovery path.
+            requestRuntimeStart()
             return START_STICKY
         }
         stopping=true
@@ -162,6 +166,12 @@ class TradingForegroundService : Service() {
                 runCatching {
                     StandaloneRuntime.start(applicationContext)
                     StandaloneRuntime.autostart(applicationContext)
+                    val verified=StandaloneRuntime.backgroundSnapshot()
+                    // Running Android FGS is NOT a running Futures monitor:
+                    // on opted-in boot, require proof of a live native worker.
+                    check(BackgroundRuntimePolicy.autostartComplete(verified)) {
+                        "OPTED_IN_MONITOR_NOT_RUNNING"
+                    }
                 }.onSuccess {
                     // Foreground notification is not proof the trading engine
                     // actually started. Clear only prior service startup errors.
