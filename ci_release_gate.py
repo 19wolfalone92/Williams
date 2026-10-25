@@ -441,6 +441,46 @@ def main() -> None:
                    "H4_CORRECTION_CAUTION_RETAIN_EXCHANGE_STOP", "CANDIDATE_STOP_INSIDE_H1_PRICE_NOISE",
                    "wave_hypotheses_can_authorize_orders", "closedWilliamsWaveBars("):
         must(trail_review,needle,"TC2 H1/H4 evidence for voluntary stop tightening")
+    # Real 25 Oct BTC/SOL/DOGE regressions: do not promote a fresh adverse
+    # last-H1 shock into a same-candle trailing STOP. Audit must remain durable.
+    for needle in (
+        "UNCONFIRMED_H1_COUNTER_IMPULSE_RETAIN_SIGNED_STOP",
+        "williamsH1CounterImpulseVeto(",
+        "val minDistance=max(2.0*tick,med*0.5)",
+        "h1_full_closed_source",
+        "h4_full_closed_source",
+        "full_source_is_exclusively_closed_at_asof",
+    ):
+        must(trail_review, needle, "TC2 causal H1 stop quality gate")
+    must_not(trail_review, "minOf(med*0.5, mark*0.0015)",
+             "Unsafe 0.15% cap on H1 noise guard")
+    for needle in (
+        "auditStore.recordStopTrailDecision(",
+        "\"PROPOSED_BEFORE_MUTATION\"",
+        "\"EXCHANGE_NOT_CONFIRMED\"",
+        "\"EXCHANGE_EXCEPTION_UNVERIFIED\"",
+        "\"submitted_stop_price\"",
+    ):
+        must(runtime_source, needle, "Durable TC2 stop preflight / signed outcome")
+    store = read("app/src/main/java/com/williamsbot/TradingAuditStore.kt")
+    for needle in (
+        "WILLIAMS_STOP_TRAIL_DECISION_V1",
+        "stopTrailDecisionAuditEvent(",
+        "stopTrailDeferredFingerprint(",
+        "recentStopTrailDecisionEvents(",
+        "stop.optString(\"clientAlgoId\")",
+    ):
+        must(store, needle, "Lossless signed stop audit contract")
+    archive = read("app/src/main/java/com/williamsbot/DiagnosticsArchive.kt")
+    must(archive, "stop_trail_decisions_full.json", "Complete TC2 diagnostic export")
+    test_case = read("app/src/test/java/com/williamsbot/WilliamsStopTrailReviewTest.kt")
+    must(test_case, "observedBtcSolDogeAdverseH1ImpulseIsNotPromotedToFreshStructuralStop",
+         "Signed BTC/SOL/DOGE causal H1 regression")
+    must(test_case, "actualTc2VoluntaryReviewDefersAdverseImpulseButNotRecoveredClose",
+         "End-to-end TC2 review shock guard")
+    must(read("app/src/test/java/com/williamsbot/StopTrailDecisionAuditEventTest.kt"),
+         "signedStopIsMatchedAgainstActualSubmittedTickPriceNotFloatArtifacts",
+         "Tick-exact signed Binance stop audit test")
     must(runtime_source, "TC2_STOP_REVIEW_DEFERRED",
          "Retain existing Binance STOP when H1/H4 evidence is insufficient")
     must(runtime_source,'exchangeClosed=k.optBoolean("x",false)',"StandaloneRuntime.kt final WS close proof")
