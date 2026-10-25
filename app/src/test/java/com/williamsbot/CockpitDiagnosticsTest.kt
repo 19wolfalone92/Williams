@@ -37,6 +37,65 @@ class CockpitDiagnosticsTest {
         CockpitDiagnostics.rows(CockpitDiagnostics.checks(s, c, JSONObject(), now)).single { it.optString("id") == id }
     private fun severity(id: String, s: JSONObject, c: JSONObject = coordinator()) = check(id, s, c).optString("severity")
 
+    @Test fun diagnostics30StopProofAgesWhileRestReconcilesWithoutInventingMissingStop() {
+        val p=JSONObject().put("symbol","SOLUSDT").put("direction","LONG")
+            .put("positionAmt",0.6).put("qty",0.6).put("stop",101.71)
+            .put("stop_verification_status","OWNED_STOP_SEEN")
+            .put("stop_confirmed_at_ms",now-32_000L)
+        val proof=JSONObject().put("symbol","SOLUSDT").put("direction","LONG")
+            .put("quantity","0.60").put("stop","101.71")
+            .put("stop_proof","OWNED_STOP_SEEN")
+            .put("protection_client_id","W2T_SOLUSDT_hc1got0t")
+            .put("observed_at_ms",now-30_000L)
+        val intent=entry().put("campaign_status","OPEN_PROTECTED")
+            .put("protection_status","PROTECTED")
+            .put("strategy_ownership_verified",true)
+            .put("protection_client_id_suffix","hc1got0t")
+            .put("last_reconciled_ms",now-30_000L)
+            .put("actual_risk_audit_status","PASS")
+            .put("actual_all_in_risk_pct",0.0004)
+            .put("actual_risk_audited_at_ms",now-30_000L)
+        val status=healthy().put("execution_enabled",false)
+            .put("futures_positions",JSONArray().put(p))
+        val exchange=coordinator().put("ready_for_new_entry",false)
+            .put("blocker","exchange_reconciliation_in_progress")
+            .put("reconciliation_running",true)
+            .put("pending_intent_details",JSONArray().put(intent))
+            .put("exchange_protection_observations",JSONArray().put(proof))
+        val readiness=CockpitDiagnostics.readiness(status,exchange,now)
+        assertEquals("NOT_VERIFIED",readiness.getString("protection_state"))
+        assertTrue(readiness.getBoolean("stop_proof_refresh_in_progress"))
+        assertEquals(1,readiness.getJSONArray("unprotected_positions").length())
+        assertFalse(readiness.getBoolean("position_management_ready"))
+        assertFalse(readiness.getBoolean("new_entries_allowed"))
+        assertEquals("NOT_VERIFIED",severity("EXE-03",status,exchange))
+        assertEquals("NOT_VERIFIED",severity("EXE-04",status,exchange))
+        assertEquals("NOT_VERIFIED",severity("RISK-01",status,exchange))
+
+        // An actually absent or mismatched exchange STOP is not excused by
+        // reconciliation. This is the critical difference from a 30s-old
+        // perfectly matching previously signed stop.
+        proof.put("quantity","0.59")
+        assertEquals("FAIL",severity("EXE-03",status,exchange))
+        assertEquals("FAIL",severity("RISK-01",status,exchange))
+        proof.put("quantity","0.60")
+        intent.put("protection_status","REPLACEMENT_PENDING_PROTECTED")
+        assertEquals("FAIL",severity("EXE-03",status,exchange))
+        intent.put("protection_status","PROTECTED")
+        exchange.put("reconciliation_running",false).put("blocker","")
+        assertEquals("FAIL",severity("EXE-04",status,exchange))
+        assertEquals("FAIL",CockpitDiagnostics.readiness(status,exchange,now)
+            .getString("protection_state"))
+
+        // Only a NEW exact Binance observation can change NOT_VERIFIED to
+        // PASS. Never backdate or silently extend the strict 15s proof TTL.
+        proof.put("observed_at_ms",now-2_000L)
+        p.put("stop_confirmed_at_ms",now-2_000L)
+        assertEquals("PASS",severity("EXE-03",status,exchange))
+        assertEquals("PASS",severity("EXE-04",status,exchange))
+        assertEquals("PASS",severity("RISK-01",status,exchange))
+    }
+
     @Test fun diagnostics27OrphanLinkMustBeExplainedBeforeGenericReconciliationProgress() {
         val order=JSONObject().put("symbol","LINKUSDT")
             .put("client_id","W2H_LINKUSDT_061dd0339b76781d06e92b")

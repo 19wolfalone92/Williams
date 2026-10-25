@@ -49,6 +49,8 @@ internal object CockpitDiagnostics {
         val unprotected = positions.filter { p ->
             !positionProtectionProven(p, coordinator, now)
         }
+        val protectionRefreshPending = unprotected.isNotEmpty() &&
+            unprotected.all { protectionAwaitingExchangeRefresh(it,coordinator,now) }
         val unmanaged=positions.filter { p ->
             intents.none { i -> matchesPosition(i,p) && protectionProven(i,now) } &&
                 !operatorManagementProven(p,coordinator,now)
@@ -107,6 +109,7 @@ internal object CockpitDiagnostics {
                 unprotected.isEmpty() && unmanaged.isEmpty())
             .put("positions_snapshot_fresh", snapshotFresh)
             .put("unprotected_positions", JSONArray(unprotected))
+            .put("stop_proof_refresh_in_progress",protectionRefreshPending)
             .put("unmanaged_positions",JSONArray(unmanaged))
             .put("pending_orders", intents.count { it.optString("campaign_status") in
                 setOf("ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "EXIT_PENDING") })
@@ -118,6 +121,7 @@ internal object CockpitDiagnostics {
             .put("protection_state", when {
                 !snapshotFresh -> "NOT_VERIFIED"
                 positions.isEmpty() -> "NO_OPEN_POSITIONS"
+                unprotected.isNotEmpty() && protectionRefreshPending -> "NOT_VERIFIED"
                 unprotected.isNotEmpty() -> "FAIL"
                 else -> "PASS"
             })
@@ -135,7 +139,9 @@ internal object CockpitDiagnostics {
             intent.optString("protection_client_id_suffix").isNotBlank() &&
             fresh(intent.optLong("last_reconciled_ms"), now, 120_000L)
 
-    private fun matchingProtectionObservation(position:JSONObject, coordinator:JSONObject, now:Long):JSONObject? {
+    private fun matchingProtectionObservation(
+        position:JSONObject, coordinator:JSONObject, now:Long, ttlMs:Long=POSITION_TTL_MS
+    ):JSONObject? {
         val quantity=position.optString("qty",position.optString("positionAmt"))
             .toBigDecimalOrNull()?.abs()?.takeIf { it.signum()>0 } ?: return null
         val stop=position.optString("stop").toBigDecimalOrNull()?.takeIf { it.signum()>0 } ?: return null
@@ -147,9 +153,23 @@ internal object CockpitDiagnostics {
                 o.optString("protection_client_id").isNotBlank() &&
                 o.optString("quantity").toBigDecimalOrNull()?.abs()?.compareTo(quantity)==0 &&
                 o.optString("stop").toBigDecimalOrNull()?.compareTo(stop)==0 &&
-                fresh(o.optLong("observed_at_ms"),now,POSITION_TTL_MS)
+                fresh(o.optLong("observed_at_ms"),now,ttlMs)
         }
     }
+
+    /** A stale *previous* signed STOP seen while REST is actively refreshing is
+     * unknown, not a proven absent stop. No trading or management permission
+     * is granted until strict 15-second independent exchange evidence returns.
+     * A missing/mismatched proof or any stopped reconciliation remains FAIL.
+     */
+    private fun protectionAwaitingExchangeRefresh(
+        position:JSONObject, coordinator:JSONObject, now:Long
+    ):Boolean =
+        coordinator.optBoolean("reconciliation_running") &&
+            coordinator.optString("blocker")=="exchange_reconciliation_in_progress" &&
+            position.optString("stop_verification_status") in
+                setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED","NATIVE_REPLACEMENT_PROTECTION_SEEN") &&
+            matchingProtectionObservation(position,coordinator,now,120_000L)!=null
 
     private fun positionProtectionProven(
         position:JSONObject,coordinator:JSONObject,now:Long
@@ -349,6 +369,8 @@ internal object CockpitDiagnostics {
         }, "Частично исполненных: ${partial.size}. Любая исполненная часть требует подтверждённой защиты.")
         val positions = rows(status.optJSONArray("futures_positions"))
         val unprotected = positions.filter { p -> !positionProtectionProven(p,coordinator,now) }
+        val exchangeStopRefreshPending=unprotected.isNotEmpty() &&
+            unprotected.all { protectionAwaitingExchangeRefresh(it,coordinator,now) }
         val filledUnprotected = entries.filter {
             (it.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
                 it.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) && !protectionProven(it, now)
@@ -367,13 +389,16 @@ internal object CockpitDiagnostics {
             explicitlyUnprotected -> "FAIL"
             !positionsFresh(status, now) -> "NOT_VERIFIED"
             filledUnprotected.isNotEmpty() -> "FAIL"
+            unprotected.isNotEmpty() && exchangeStopRefreshPending -> "NOT_VERIFIED"
             unprotected.isNotEmpty() -> "FAIL"
             positions.isEmpty() -> "NOT_VERIFIED"
             else -> "PASS"
         }
         check("EXE-03", "execution", "Защита исполненной позиции", protectionSeverity,
             "Открытых=${positions.size}; без свежего подтверждения=${unprotected.size}; " +
-                "исполненных кампаний без защиты=${filledUnprotected.size}.")
+                "исполненных кампаний без защиты=${filledUnprotected.size}; " +
+                "сверка свежего STOP Binance выполняется=$exchangeStopRefreshPending. " +
+                "NOT_VERIFIED не означает защищённость и не разрешает новую сделку.")
         check("EXE-04", "execution", "Подтверждение стопа Binance", protectionSeverity,
             "Проверяются свежая биржевая защита, символ, направление, количество и уровень SL. " +
                 "Принадлежность стратегии и разрешение сопровождения проверяются отдельно; цена стопа сама по себе не доказывает защиту.")
@@ -495,8 +520,9 @@ internal object CockpitDiagnostics {
         }, "Текущее состояние сверки; это не результат принудительного теста разрыва связи.")
         check("RISK-01", "risk", "Фактический риск позиции", when {
             !positionsFresh(status, now) || positions.isEmpty() -> "NOT_VERIFIED"
-            unprotected.isNotEmpty() -> "FAIL"
             positions.any { p -> entries.any { matchesPosition(it, p) && it.optString("actual_risk_audit_status") == "BLOCKED" } } -> "FAIL"
+            unprotected.isNotEmpty() && exchangeStopRefreshPending -> "NOT_VERIFIED"
+            unprotected.isNotEmpty() -> "FAIL"
             positions.any { p -> entries.none { matchesPosition(it, p) &&
                 it.optString("actual_risk_audit_status") in setOf("PASS", "PASS_RESERVATION_ADJUSTED") &&
                 it.optDouble("actual_all_in_risk_pct").let { risk -> risk.isFinite() && risk >= 0 && risk <= 0.0025 + 1e-9 } &&
