@@ -4720,6 +4720,8 @@ internal class NativeFuturesCampaignCoordinator(
             clearPendingOperatorReplacement(record)
             saveOperatorSupervisions(rows)
             JSONObject().put("ok",true).put("symbol",symbol).put("stop",next.toPlainString())
+                .put("protection_client_id",newClientId)
+                .put("exchange_proof","ONE_SIGNED_ACTIVE_MATCHING_STOP_ID_PRICE_SIDE_QTY")
         } catch(failure:Exception) {
             // Only the POST phase may establish a definite rejection. A failed
             // read/DELETE after an acknowledged POST cannot undo its acceptance.
