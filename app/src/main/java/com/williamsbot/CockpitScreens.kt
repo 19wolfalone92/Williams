@@ -503,9 +503,13 @@ internal fun CockpitTrades(
     onTradeChart: (Trade) -> Unit, active: @Composable () -> Unit, history: @Composable () -> Unit
 ) {
     var selected by remember { mutableIntStateOf(0) }
+    val pendingCount=status.futuresIntents.count {
+        it.optString("campaign_status") in setOf("ENTRY_PENDING","FILL_CONFIRMATION_PENDING","EXIT_PENDING")
+    }
     Column(Modifier.fillMaxSize().padding(padding)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("Активные", "Ожидающие", "История").forEachIndexed { index, title ->
+            listOf("Активные",if(pendingCount>0) "Ожидающие ($pendingCount)" else "Ожидающие","История")
+                .forEachIndexed { index, title ->
                 FilterChip(selected == index, { selected = index }, label = { Text(title, style = MaterialTheme.typography.labelSmall) })
             }
         }
