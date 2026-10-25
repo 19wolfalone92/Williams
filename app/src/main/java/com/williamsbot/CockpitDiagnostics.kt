@@ -354,13 +354,32 @@ internal object CockpitDiagnostics {
                     else -> true
                 }
         }
+        // Journal NEW means a conditional order, NOT a filled position or
+        // proof that an old exchange observation is still current. Diagnostic
+        // (3) legitimately had two confirmed pending STOP entries and FLAT
+        // signed positions. Only a FRESH completed reconciliation can label
+        // their pending order state as observed; partial fills are addressed
+        // separately by EXE-02 and never get a green pending-order badge.
+        val stalePending=pending.filter {
+            !fresh(it.optLong("last_reconciled_ms"),now,60_000L)
+        }
+        val ambiguousPending=pending.filter {
+            it.optString("order_status") !in setOf("NEW","WORKING","ACCEPTED","TRIGGERED","PARTIALLY_FILLED")
+        }
+        val partiallyFilled=pending.filter { it.optString("order_status")=="PARTIALLY_FILLED" }
         check("EXE-01", "execution", "Ожидающие входные заявки", when {
             pending.isEmpty() -> "NOT_VERIFIED"
             invalidEntries.isNotEmpty() -> "FAIL"
-            pending.any { it.optString("order_status") !in setOf("NEW", "WORKING", "ACCEPTED", "TRIGGERED", "PARTIALLY_FILLED") } -> "WARNING"
+            ambiguousPending.isNotEmpty() -> "WARNING"
+            stalePending.isNotEmpty() || coordinator.optBoolean("reconciliation_running") -> "NOT_VERIFIED"
+            partiallyFilled.isNotEmpty() -> "WARNING"
             else -> "PASS"
-        }, "Ожидающих входов: ${pending.size}; некорректных уровней: ${invalidEntries.size}. " +
-            "До исполнения отсутствие защитного ордера допустимо.")
+        }, "Ожидающих входов: ${pending.size}; некорректных уровней: ${invalidEntries.size}; " +
+            "сверка старше 60с/неизвестна: ${stalePending.size}; " +
+            "неоднозначный статус: ${ambiguousPending.size}; частичных исполнений: ${partiallyFilled.size}. " +
+            "PASS означает только свежую проверку состояния ОЖИДАЮЩЕЙ заявки; " +
+            "это не исполненная позиция и не подтверждение защитного SL. " +
+            "При выключенном телефоне биржевая условная заявка может исполниться.")
         val partial = entries.filter { it.optString("order_status") == "PARTIALLY_FILLED" }
         check("EXE-02", "execution", "Частичное исполнение", when {
             partial.isEmpty() -> "NOT_VERIFIED"
