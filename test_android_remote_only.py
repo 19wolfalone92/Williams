@@ -240,6 +240,17 @@ def test_diagnostic_reports_nonatomic_state_change_and_missing_wave_frames_by_na
     assert '!concurrentCoordinatorTransition && executionReady()' in runtime
 
 
+def test_wave_diagnostic_distinguishes_ready_working_set_from_complete_archive():
+    runtime=_read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert '"WAVE-ARCHIVE-01"' in runtime
+    assert 'persistent_history_complete_pairs' in runtime
+    assert 'persistent_history_total_pairs' in runtime
+    assert 'processed_h1_closes' in runtime
+    assert 'Scanner working-set readiness is NOT the same as an exhaustive ' in runtime
+    assert 'full replay cannot independently ' in runtime
+    assert 'WAVE-04' in runtime
+
+
 def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     market_data = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesMarketData.kt")
