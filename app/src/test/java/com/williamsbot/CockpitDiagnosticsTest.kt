@@ -32,6 +32,7 @@ class CockpitDiagnosticsTest {
         .put("direction", direction).put("role", "ENTRY").put("kind", "STOP")
         .put("entry_price", 100.0).put("persisted_protective_stop", if (direction == "LONG") 95.0 else 105.0)
         .put("order_status", "NEW").put("campaign_status", "ENTRY_PENDING")
+        .put("last_reconciled_ms",now - 1_000L)
         .put("protection_status", "NOT_SUBMITTED").put("actual_risk_audit_status", "UNKNOWN")
     private fun check(id: String, s: JSONObject, c: JSONObject = coordinator()) =
         CockpitDiagnostics.rows(CockpitDiagnostics.checks(s, c, JSONObject(), now)).single { it.optString("id") == id }
@@ -259,6 +260,29 @@ class CockpitDiagnosticsTest {
         assertFalse(r.getBoolean("new_entries_allowed"))
         assertTrue(r.getString("new_entries_reason").contains("исполнение"))
     }
+    @Test fun diagnostic3TwoUnfilledShortAlgosNeedFreshReconciliationNotPrematureSL() {
+        val sol=entry("SHORT").put("symbol","SOLUSDT")
+            .put("entry_price",100.39).put("persisted_protective_stop",101.83)
+            .put("executed_qty","0").put("last_reconciled_ms",now-2400)
+        val btc=entry("SHORT").put("symbol","BTCUSDT")
+            .put("entry_price",80123.0).put("persisted_protective_stop",80676.1)
+            .put("executed_qty","0").put("last_reconciled_ms",now-1900)
+        val observed=coordinator().put("pending_intent_details",JSONArray().put(sol).put(btc))
+        assertEquals("PASS",severity("EXE-01",healthy(),observed))
+        assertEquals("NOT_VERIFIED",severity("EXE-03",healthy(),observed))
+        assertEquals("NOT_VERIFIED",severity("EXE-04",healthy(),observed))
+        assertEquals(2,CockpitDiagnostics.readiness(healthy(),observed,now).getInt("pending_orders"))
+        sol.put("last_reconciled_ms",now-60_001L)
+        assertEquals("NOT_VERIFIED",severity("EXE-01",healthy(),observed))
+        sol.put("last_reconciled_ms",now-2400)
+        btc.put("order_status","SUBMISSION_UNKNOWN")
+        assertEquals("WARNING",severity("EXE-01",healthy(),observed))
+        btc.put("order_status","NEW")
+        sol.put("order_status","PARTIALLY_FILLED")
+        assertEquals("WARNING",severity("EXE-01",healthy(),observed))
+        assertEquals("FAIL",severity("EXE-02",healthy(),observed))
+    }
+
     @Test fun unfilledConditionalEntryIsValidWithoutPreSubmittedProtection() {
         val c = coordinator().put("pending_intent_details", JSONArray().put(entry()))
         assertEquals("PASS", severity("EXE-01", healthy(), c))
