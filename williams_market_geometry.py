@@ -10,8 +10,8 @@ from math import isfinite
 
 
 def first_wise_man_ao_blocker(side, ao_now, ao_before):
-    """TC2 ch9: countertrend WM1 requires falling AO for bullish reversal,
-    rising AO for bearish reversal; value versus zero does not determine color.
+    """TC2 PDF125 expects old-trend AO; PDF131 states absence of that
+    context means this is not a countertrend trade. Zero level is not colour.
     """
     if side not in {"LONG", "SHORT"}:
         return "WM1_AO_SIDE_INVALID"
