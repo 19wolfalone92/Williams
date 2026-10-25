@@ -109,6 +109,18 @@ object DiagnosticsArchive {
                     ?.optJSONArray("pending_intent_details")?.toString(2) ?: "[]")
             add(zip, "signal_decision_history.json",
                 report.opt("signal_decision_history")?.toString() ?: "null")
+            // Export full source candles, whole-campaign estimates and signed
+            // exchange responses; the 1600-char cockpit summary is NOT the source.
+            // Only the last 300 are packaged, the SQLite journal remains complete.
+            val stopTrailAudit = runCatching {
+                TradingAuditStore(context).use { it.recentStopTrailDecisionEvents(300) }
+            }.fold(
+                onSuccess = { it.toString(2) },
+                onFailure = { org.json.JSONObject()
+                    .put("status", "NOT_AVAILABLE")
+                    .put("reason", "STOP_AUDIT_SQLITE_READ_FAILED").toString(2) }
+            )
+            add(zip, "stop_trail_decisions_full.json", stopTrailAudit)
         }
         java.nio.file.Files.move(temporary.toPath(), output.toPath(),
             java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
