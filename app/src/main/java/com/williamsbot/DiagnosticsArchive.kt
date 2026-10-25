@@ -177,8 +177,17 @@ object DiagnosticsArchive {
             )
             add(zip, "stop_trail_decisions_full.json", stopTrailAudit)
         }
-        java.nio.file.Files.move(temporary.toPath(), output.toPath(),
-            java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+        // Some Android vendor file systems do not support ATOMIC_MOVE.
+        // The ZIP is fully closed before either rename is attempted. Do not
+        // turn an otherwise valid diagnostic into a silent export failure.
+        try {
+            java.nio.file.Files.move(temporary.toPath(), output.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            java.nio.file.Files.move(temporary.toPath(), output.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
         } finally { temporary.delete() }
         return output
     }
