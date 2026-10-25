@@ -11317,6 +11317,24 @@ private class NativeEngine(
             }).put("detail","SQLite stop-trail audit readable=${stopAuditResult.isSuccess}; " +
                 "recent_events=$auditRows; full source candles and signed outcomes are exported to ZIP; " +
                 "the absence of records alone does NOT prove a STOP was missing."))
+        // 2026-10-25 15:00:04 UTC: status was captured during a new H1
+        // pending submission, while final execution_gate observed a later
+        // no-order rejection. That produces apparent contradictions unless
+        // the report marks this as a concurrent (non-atomic) snapshot.
+        val coordinatorStateAtEnd=futuresCampaignCoordinator.state.name
+        val coordinatorStateAtStart=coordinatorSnapshot.optString("state","UNKNOWN")
+        val concurrentCoordinatorTransition=coordinatorStateAtStart!=coordinatorStateAtEnd
+        if(concurrentCoordinatorTransition) {
+            tests.put(JSONObject().put("id","DIAG-STATE-RACE")
+                .put("domain","runtime")
+                .put("name","Состояние Futures изменилось во время диагностики")
+                .put("severity","WARNING")
+                .put("detail","Coordinator at snapshot=$coordinatorStateAtStart; " +
+                    "at diagnostic end=$coordinatorStateAtEnd. " +
+                    "ENTRY_PENDING during a safe pre-submit rollover rejection is " +
+                    "NOT evidence of a confirmed Binance order. Obtain a new signed " +
+                    "snapshot; do not lift risk blocks from this mixed-time report."))
+        }
         val unresolvedChecks = JSONArray().apply {
             for (test in CockpitDiagnostics.rows(tests)) {
                 val severity = test.optString("severity")
@@ -11372,6 +11390,8 @@ private class NativeEngine(
                 consistencyFindings.isEmpty() && failedTests==0))
             .put("diagnostic_summary", JSONObject()
                 .put("overall", diagnosticOverall)
+                .put("snapshot_non_atomic_coordinator_transition",concurrentCoordinatorTransition)
+                .put("coordinator_state_at_diagnostic_end",coordinatorStateAtEnd)
                 .put("finding_count", consistencyFindings.size)
                 .put("unresolved_check_count", unresolvedChecks.length())
                 .put("finding_count_scope", "INTERNAL_CONTRACT_CONTRADICTIONS_ONLY")
@@ -11389,8 +11409,10 @@ private class NativeEngine(
             .put("diagnostic_contract_version", CockpitDiagnostics.VERSION)
             .put("execution_gate", JSONObject()
                 .put("scope", "TECHNICAL_EXECUTION_DOOR_ONLY")
-                .put("new_entries_allowed", cockpitReadiness.optBoolean("new_entries_allowed"))
-                .put("ready", executionReady())
+                .put("snapshot_non_atomic",concurrentCoordinatorTransition)
+                .put("new_entries_allowed", !concurrentCoordinatorTransition &&
+                    cockpitReadiness.optBoolean("new_entries_allowed"))
+                .put("ready", !concurrentCoordinatorTransition && executionReady())
                 .put("reasons", JSONArray(executionBlockers()))
                 .put("degraded_channels", JSONArray().apply {
                     if (!marketSocketConnected) put("market_ws")
