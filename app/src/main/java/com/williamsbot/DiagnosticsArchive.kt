@@ -76,6 +76,11 @@ object DiagnosticsArchive {
                 "ui.log",
                 renderTests(report, "ui")
             )
+            val triage = report.optJSONObject("diagnostic_triage")
+                ?: williamsDiagnosticTriage(report.optJSONArray("tests") ?: org.json.JSONArray(),
+                    report.optJSONObject("diagnostic_summary")?.optBoolean("execution_allowed") == true)
+            add(zip,"diagnostic_triage.json",triage.toString(2))
+            add(zip,"START_HERE_RU.txt",buildTriageOverview(triage))
             add(zip, "event_timeline.json", report.optJSONArray("event_timeline")?.toString(2) ?: "[]")
             add(zip, "android_background_health.json",report.optJSONObject("status")?.optJSONObject("android_runtime")?.toString(2) ?: "{}")
             add(zip, "last_incident.json", report.optJSONObject("last_incident")?.toString(2) ?: "{}")
@@ -126,6 +131,26 @@ object DiagnosticsArchive {
             java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
         } finally { temporary.delete() }
         return output
+    }
+
+    private fun buildTriageOverview(triage: org.json.JSONObject): String = buildString {
+        appendLine("WILLIAMS BOT — КРАТКАЯ ДИАГНОСТИКА")
+        appendLine("Итог компонентных проверок: ${triage.optString("overall")}")
+        appendLine("Ошибки: ${triage.optInt("failed_count")}, предупреждения: ${triage.optInt("warning_count")}, непроверено: ${triage.optInt("unverified_count")}")
+        appendLine("Новые входы разрешены по снимку: ${triage.optBoolean("new_entries_allowed_at_snapshot")}")
+        appendLine("ВАЖНО: успех тестов НЕ означает 100% точность, верность всем книгам или испытания Binance Demo.")
+        appendLine()
+        val priority=triage.optJSONArray("priority_issues") ?: org.json.JSONArray()
+        for (i in 0 until priority.length()) {
+            val issue=priority.optJSONObject(i) ?: continue
+            appendLine("${i+1}. ${issue.optString("severity")} | ${issue.optString("id")} | ${issue.optString("name")}")
+            appendLine("   ${issue.optString("next_action")}")
+            appendLine("   ${issue.optString("detail")}")
+        }
+        if (triage.optBoolean("priority_issues_truncated"))
+            appendLine("Ещё есть неразрешённые пункты. Полный список — unresolved_diagnostic_checks.json.")
+        appendLine("Для анализа STOP см. stop_trail_decisions_full.json, futures_exchange_stop_proofs.json.")
+        appendLine("Для анализа волн см. chart_reading_audit.json, signal_decision_history.json.")
     }
 
     fun latest(context: Context): File? =
