@@ -4,6 +4,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class BackgroundRuntimePolicyTest {
+    @Test fun repeatedForegroundServiceStartDoesNotBootstrapExistingWorker() {
+        val alive=BackgroundRuntimeSnapshot(autoRunRequested=true,running=true,workerAlive=true,
+            lastWorkerLoopElapsedMs=1_000L)
+        assertTrue(BackgroundRuntimePolicy.alreadySupervising(alive))
+        // An alive but wedged worker must be handled by liveness/execution fences,
+        // never by creating a second worker sharing the same exchange account.
+        assertTrue(BackgroundRuntimePolicy.monitorStale(alive,181_000L))
+        assertTrue(BackgroundRuntimePolicy.alreadySupervising(alive))
+        assertFalse(BackgroundRuntimePolicy.alreadySupervising(alive.copy(workerAlive=false)))
+        assertFalse(BackgroundRuntimePolicy.alreadySupervising(BackgroundRuntimeSnapshot()))
+        assertFalse(BackgroundRuntimePolicy.alreadySupervising(alive.copy(running=false)))
+    }
     @Test fun optedInMonitoringKeepsCpuDuringRecoveryAndAllTradingGateStates() {
         // Paused, kill-latched and reconciliation-blocked trading are deliberately
         // not inputs: none of them is permission to abandon position monitoring.
