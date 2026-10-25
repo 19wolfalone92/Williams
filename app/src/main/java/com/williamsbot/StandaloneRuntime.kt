@@ -11312,7 +11312,9 @@ private class NativeEngine(
             statusSnapshot.optJSONObject("historical_wave_replay")?.optJSONArray("items"))
         val replayed=waveReplayItems.count { it.optLong("processed_h1_closes")>0L }
         val syncStorageLow=statusSnapshot.optBoolean("persistent_history_storage_low")
-        val syncFailure=statusSnapshot.optString("persistent_history_last_error").orEmpty()
+        val syncFailure=statusSnapshot.opt("persistent_history_last_error")?.toString()
+            ?.takeUnless { it.equals("null",ignoreCase=true) || it.isBlank() }
+            ?: ""
         tests.put(JSONObject().put("id","WAVE-ARCHIVE-01").put("domain","strategy")
             .put("name","Исторический архив и причинное воспроизведение волн")
             .put("severity",when {
