@@ -94,4 +94,26 @@ class StopTrailDecisionAuditEventTest {
             "SOLUSDT","SHORT","SUPERVISION:SOLUSDT:1",
             "EXCHANGE_RESPONSE_OK",facts,JSONObject(ok.toString()).put("stop","95.1"),22L) }.isSuccess)
     }
+
+    @Test fun repeatedDecisionFingerprintChangesWithClosedBarsAndBlockers() {
+        fun audit(h1:Long, blocker:String):JSONObject {
+            val series=JSONArray().put(JSONObject().put("open_time_ms",h1))
+            return JSONObject().put("schema","WILLIAMS_TC2_STOP_REVIEW_V1")
+                .put("direction","LONG").put("decision","DEFER")
+                .put("as_of_ms",1230000L).put("blocker",blocker)
+                .put("source_rule","TC2_LAST_5_CLOSED_BARS")
+                .put("candidate_stop",98.0).put("old_stop",96.0)
+                .put("h1_last_twelve_closed",series)
+        }
+        val same=stopTrailDeferredFingerprint("campaign",audit(3600000L,"H4_CORRECTION"))
+        assertEquals(same,stopTrailDeferredFingerprint("campaign",audit(3600000L,"H4_CORRECTION")))
+        assertNotEquals(same,stopTrailDeferredFingerprint("campaign",audit(7200000L,"H4_CORRECTION")))
+        assertNotEquals(same,stopTrailDeferredFingerprint("campaign",audit(3600000L,"H1_NOISE")))
+        assertNotEquals(same,stopTrailDeferredFingerprint("another-campaign",audit(3600000L,"H4_CORRECTION")))
+        val unavailable=JSONObject().put("direction","LONG").put("blocker","CLOSED_H1_HISTORY_NOT_VERIFIED")
+            .put("as_of_ms",3_600_000L)
+        val later=JSONObject(unavailable.toString()).put("as_of_ms",7_200_000L)
+        assertNotEquals(stopTrailDeferredFingerprint("campaign",unavailable),
+            stopTrailDeferredFingerprint("campaign",later))
+    }
 }
