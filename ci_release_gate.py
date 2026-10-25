@@ -614,6 +614,20 @@ def main() -> None:
     diagnostic_zip = read("app/src/main/java/com/williamsbot/DiagnosticsArchive.kt")
     must(diagnostic_zip,'START_HERE_RU.txt',"Human-readable diagnosis ZIP")
     must(diagnostic_zip,'diagnostic_triage.json',"Forensic triage JSON")
+    must(diagnostic_zip,'diagnostic_comparison.json',"Cross-run comparison preserved")
+    must(diagnostic_zip,'archive_metadata.json',"ZIP freshness metadata")
+    must(diagnostic_zip,'AtomicMoveNotSupportedException',"Android-safe filesystem fallback")
+    must(ui,'DiagnosticsArchive.compareWithLatest(context,report)',
+         "Compare fresh diagnostic results against saved prior evidence")
+    must(ui,'DiagnosticsArchive.latestReportAtMs(context)==reportAt',
+         "Never export a previous snapshot after archive-write failure")
+    must(diagnostic_ui,'confirmRecovery=true',"Self-heal requires explicit operator confirmation")
+    must(diagnostic_ui,'snapshotFresh',"Stale diagnostic cannot show green execution readiness")
+    must(read("app/src/main/java/com/williamsbot/WilliamsDiagnosticComparison.kt"),
+         "no_longer_reported","Cross-run diagnostics cannot claim auto-repair")
+    must(read("app/src/test/java/com/williamsbot/WilliamsDiagnosticComparisonTest.kt"),
+         "unknownHistoryOrClockRollbackNeverPretendsToRepairChecks",
+         "Missing reports/clock rollback must never fabricate recovery")
     must(read("app/src/test/java/com/williamsbot/WilliamsDiagnosticTriageTest.kt"),
          "failsBeforeWarningsAndDoesNotCertifyBooksOrTrading","Triage negative controls")
 
