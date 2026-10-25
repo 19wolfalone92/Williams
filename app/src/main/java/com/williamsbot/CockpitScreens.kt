@@ -181,6 +181,28 @@ internal fun CockpitReadiness(status: Status) {
     }
 }
 
+/** Legible full-width metric cards on narrow Samsung screens and with large text. */
+@Composable
+private fun ResponsiveDashboardPair(
+    first: @Composable () -> Unit, second: @Composable () -> Unit
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val narrow=maxWidth < 420.dp ||
+            androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.25f
+        if(narrow) {
+            Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                first()
+                second()
+            }
+        } else {
+            Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                Box(Modifier.weight(1f)) { first() }
+                Box(Modifier.weight(1f)) { second() }
+            }
+        }
+    }
+}
+
 @Composable
 internal fun CockpitDashboard(
     padding: PaddingValues, status: Status, candidates: List<Candidate>, message: String,
@@ -190,32 +212,32 @@ internal fun CockpitDashboard(
         verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)) {
         item { CockpitReadiness(status) }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(Modifier.weight(1f)) { CockpitCard("Средства / USDT") {
+            ResponsiveDashboardPair(
+                first={ CockpitCard("Средства / USDT") {
                     Text(cockpitNumber(status.balance), style = MaterialTheme.typography.headlineSmall)
                     Text("Доступно • ${cockpitTime(status.accountSnapshotAtMs)}", style = MaterialTheme.typography.labelSmall, color = AppColors.textMuted)
-                } }
-                Box(Modifier.weight(1f)) { CockpitCard("Результат дня", AppColors.green) {
+                } },
+                second={ CockpitCard("Результат дня", AppColors.green) {
                     Text(if (status.accountSnapshotAtMs > 0L) cockpitNumber(status.dailyPnlUsdt) else "—", style = MaterialTheme.typography.headlineSmall)
                     Text("USDT • день UTC", style = MaterialTheme.typography.labelSmall, color = AppColors.textMuted)
                 } }
-            }
+            )
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(Modifier.weight(1f)) { CockpitCard("Открытые позиции") {
+            ResponsiveDashboardPair(
+                first={ CockpitCard("Открытые позиции") {
                     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
                     LaunchedEffect(Unit) { while(true) { kotlinx.coroutines.delay(1000); now=System.currentTimeMillis() } }
                     Text(cockpitKnownOpenPositionsLabel(status,now), style = MaterialTheme.typography.headlineSmall)
                     Text(cockpitKnownOpenPositionsDetail(status,now),
                         color = if(cockpitKnownOpenPositionsLabel(status,now)=="—") AppColors.amber else AppColors.textMuted,
                         style = MaterialTheme.typography.labelSmall)
-                } }
-                Box(Modifier.weight(1f)) { CockpitCard("Резерв риска", AppColors.amber) {
+                } },
+                second={ CockpitCard("Резерв риска", AppColors.amber) {
                     Text(cockpitNumber(status.reservedRiskPct * 100, 2) + "%", style = MaterialTheme.typography.headlineSmall)
                     Text("Лимит ${cockpitNumber(status.maxTotalRiskPct * 100)}%", style = MaterialTheme.typography.labelSmall, color = AppColors.textMuted)
                 } }
-            }
+            )
         }
         item { Text("Активность бота", style = MaterialTheme.typography.titleLarge) }
         items(status.futuresIntents.take(4)) { intent ->
