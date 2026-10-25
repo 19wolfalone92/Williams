@@ -174,6 +174,13 @@ internal fun reviewWilliamsTc2StopTightening(
     val brief="%s|H1=%d|H4=%d|H4C=%s|GAP=%.6f|NET=%.6f".format(Locale.US,
         candidate.reason,h1.last().t,h4.last().t,if(h4Adverse) "Y" else "N",
         distance,newNetPerUnit)
-    audit.put("decision","PROPOSE_TIGHTEN_ONLY").put("brief_reason",brief)
+    // Replaying the exact approved choice requires all closed inputs passed
+    // into both the post-entry/fractal detector and H1/H4 wave grammar.
+    // Persist the full causal window only for executable proposals; repeated
+    // routine deferrals keep their compact 12-bar diagnostic footprint.
+    audit.put("h1_full_closed_source",JSONArray(h1.map(::waveBarJson)))
+        .put("h4_full_closed_source",JSONArray(h4.map(::waveBarJson)))
+        .put("full_source_is_exclusively_closed_at_asof",true)
+        .put("decision","PROPOSE_TIGHTEN_ONLY").put("brief_reason",brief)
     return WilliamsStopTrailReview(candidate.copy(reason=brief), "",audit)
 }
