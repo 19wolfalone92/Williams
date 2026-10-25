@@ -539,7 +539,8 @@ internal fun CockpitDiagnosticScreen(
     onRun: () -> Unit,
     onExport: () -> Unit,
     onSelfHeal: () -> Unit,
-    running: Boolean = false
+    running: Boolean = false,
+    archiveReady: Boolean = false
 ) {
     // One dedicated diagnostics screen. Filtering never changes Runtime
     // or sends an exchange order; the exported ZIP retains all raw evidence.
@@ -567,10 +568,21 @@ internal fun CockpitDiagnosticScreen(
         else -> 3
     } }.thenBy { it.optString("id",it.optString("name")) })
     val summary = report?.optJSONObject("diagnostic_summary")
+    val reportAtMs=report?.optLong("created_at_ms") ?: 0L
+    var clockMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(reportAtMs) {
+        while(true) { kotlinx.coroutines.delay(30_000L); clockMs=System.currentTimeMillis() }
+    }
+    val reportAgeMs=if(reportAtMs in 1..clockMs) clockMs-reportAtMs else Long.MAX_VALUE
+    val snapshotFresh=reportAgeMs<=120_000L
+    val comparison=report?.optJSONObject("diagnostic_comparison")
     val overall = triage.optString("overall","NOT_VERIFIED")
-    val headlineColor = when(overall) {
-        "FAIL" -> AppColors.red; "WARNING" -> AppColors.amber
-        "PASS" -> AppColors.green; else -> AppColors.textMuted
+    val headlineColor = when {
+        overall=="FAIL" -> AppColors.red
+        !snapshotFresh -> AppColors.amber
+        overall=="WARNING" -> AppColors.amber
+        overall=="PASS" -> AppColors.green
+        else -> AppColors.textMuted
     }
     LazyColumn(
         Modifier.fillMaxSize().padding(padding).padding(horizontal = 14.dp),
@@ -592,9 +604,19 @@ internal fun CockpitDiagnosticScreen(
                     style=MaterialTheme.typography.bodyMedium)
                 Text("НЕ ПРОВЕРЕНО ${triage.optInt("unverified_count")}   •   ПРОЙДЕНО ${triage.optInt("passed_count")}",
                     style=MaterialTheme.typography.bodyMedium,color=AppColors.textMuted)
-                CockpitField("Снимок",cockpitTime(report?.optLong("created_at_ms") ?: 0L))
-                CockpitField("Новые входы по снимку",if(summary?.optBoolean("execution_allowed")==true)
-                    "Допуск заявлен; нужна биржевая сверка" else "Не подтверждены")
+                CockpitField("Снимок",cockpitTime(reportAtMs))
+                if(!snapshotFresh) Text(
+                    "⚠️ ДАННЫЕ ДИАГНОСТИКИ УСТАРЕЛИ или время устройства изменилось. " +
+                        "Запустите новую проверку; успешность старого снимка не доказывает готовность сейчас.",
+                    color=AppColors.amber,style=MaterialTheme.typography.bodySmall)
+                CockpitField("Новые входы по снимку",
+                    if(!snapshotFresh) "Неизвестны — снимок устарел"
+                    else if(summary?.optBoolean("execution_allowed")==true)
+                        "Допуск заявлен; нужна биржевая сверка"
+                    else "Не подтверждены")
+                CockpitField("ZIP последней проверки",
+                    if(archiveReady) "Сохранён для этого снимка"
+                    else "Не сохранён или ещё не проверен")
                 Text(triage.optString("status_note"),style=MaterialTheme.typography.bodySmall,
                     color=AppColors.textMuted)
             }
@@ -609,13 +631,13 @@ internal fun CockpitDiagnosticScreen(
                         else Text("Проверить всю систему")
                     }
                     if(compact) {
-                        OutlinedButton(onClick=onExport,enabled=!running && report!=null,
+                        OutlinedButton(onClick=onExport,enabled=!running && report!=null && archiveReady,
                             modifier=Modifier.fillMaxWidth()) { Text("Сохранить полный отчёт ZIP") }
                         OutlinedButton(onClick=onSelfHeal,enabled=!running,
                             modifier=Modifier.fillMaxWidth()) { Text("Сверить Binance и восстановить") }
                     } else {
                         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick=onExport,enabled=!running && report!=null,
+                            OutlinedButton(onClick=onExport,enabled=!running && report!=null && archiveReady,
                                 modifier=Modifier.weight(1f)) { Text("Экспорт ZIP") }
                             OutlinedButton(onClick=onSelfHeal,enabled=!running,
                                 modifier=Modifier.weight(1f)) { Text("Сверка / восстановление") }
@@ -655,6 +677,33 @@ internal fun CockpitDiagnosticScreen(
             }
         }
         item {
+            CockpitCard("Изменения после предыдущей диагностики") {
+                if(comparison?.optString("status")!="COMPARABLE") {
+                    Text("Пока нет двух сопоставимых сохранённых снимков. " +
+                        "Сравнение появится после следующей успешной проверки.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    CockpitField("Предыдущая проверка",cockpitTime(comparison.optLong("previous_at_ms")))
+                    CockpitField("Новые проблемы",comparison.optInt("new_count").toString(),
+                        if(comparison.optInt("new_count")>0) AppColors.red else AppColors.textMuted)
+                    CockpitField("Ухудшились",comparison.optInt("worsened_count").toString(),
+                        if(comparison.optInt("worsened_count")>0) AppColors.red else AppColors.textMuted)
+                    CockpitField("Менее серьёзны",comparison.optInt("less_severe_count").toString())
+                    CockpitField("Больше не видны",comparison.optInt("no_longer_reported_count").toString())
+                    val changes=CockpitDiagnostics.rows(comparison.optJSONArray("new_issues")) +
+                        CockpitDiagnostics.rows(comparison.optJSONArray("worsened"))
+                    if(changes.isNotEmpty()) {
+                        for (issue in changes.take(4)) {
+                            Text("• ${issue.optString("id")} — ${russianExecutionBlocker(issue.optString("name"))}",
+                                style=MaterialTheme.typography.bodySmall,color=AppColors.red)
+                        }
+                    }
+                    Text("«Не видны» не означает «исправлены»: сравнение фиксирует только различия отчётов.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
+            }
+        }
+        item {
             val android=report?.optJSONObject("status")?.optJSONObject("android_runtime")
             CockpitCard("Android · работа в фоне") {
                 if(android==null) {
@@ -667,8 +716,14 @@ internal fun CockpitDiagnosticScreen(
                         "Удерживается" else "Не удерживается / неизвестно")
                     CockpitField("Энергосбережение",if(android.optBoolean("battery_optimization_ignored"))
                         "Ограничение батареи снято" else "Нужна проверка разрешений Android")
-                    CockpitField("Пульс движка",if(android.optBoolean("runtime_worker_heartbeat_stale"))
-                        "Устарел — проверить фоновую работу" else "Нет явного признака устаревания")
+                    val workerAge=android.optLong("runtime_worker_heartbeat_age_ms",-1L)
+                    CockpitField("Пульс движка",when {
+                        workerAge<0L || android.optLong("runtime_worker_last_loop_elapsed_ms")<=0L ->
+                            "Нет подтверждённого heartbeat"
+                        android.optBoolean("runtime_worker_heartbeat_stale") ->
+                            "Устарел — проверить фоновую работу"
+                        else -> "Последняя активность ${workerAge/1000L} сек назад"
+                    })
                     val fail=android.optJSONObject("last_boot_startup_failure")?.optString("code").orEmpty()
                     if(fail.isNotBlank()) Text("Последний сбой запуска: ${safeDiagnosticText(fail)}",
                         color=AppColors.red,style=MaterialTheme.typography.bodySmall)
