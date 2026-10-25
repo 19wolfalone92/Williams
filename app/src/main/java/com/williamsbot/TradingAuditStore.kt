@@ -55,7 +55,7 @@ internal fun stopTrailDecisionAuditEvent(
         }.toBigDecimalOrNull()
         val observedId=when(stop) {
             is JSONObject -> stop.optString("clientAlgoId")
-            else -> proposedId // Operator-approved result is verified inside the coordinator.
+            else -> exchangeOutcome?.optString("protection_client_id").orEmpty()
         }
         require(observedPrice!=null && observedPrice.compareTo(proposedStop)==0 &&
             observedId==proposedId && (stop !is JSONObject ||
