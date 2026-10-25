@@ -22,6 +22,48 @@ internal fun stopTrailDecisionAuditEvent(
     require(phase in setOf("REVIEW_DEFERRED", "PROPOSED_BEFORE_MUTATION",
         "EXCHANGE_RESPONSE_OK", "EXCHANGE_NOT_CONFIRMED", "EXCHANGE_EXCEPTION_UNVERIFIED"))
     require(evidence.optString("schema") == "WILLIAMS_TC2_STOP_REVIEW_V1")
+    require(evidence.optString("direction") == direction)
+    if (phase == "REVIEW_DEFERRED")
+        require(evidence.optString("decision") == "DEFER" &&
+            evidence.optString("blocker").isNotBlank()) {
+            "Deferred audit must preserve its actual refusal reason"
+        }
+    if (phase == "PROPOSED_BEFORE_MUTATION" || phase == "EXCHANGE_RESPONSE_OK" ||
+        phase == "EXCHANGE_NOT_CONFIRMED" || phase == "EXCHANGE_EXCEPTION_UNVERIFIED") {
+        require(evidence.optString("decision") == "PROPOSE_TIGHTEN_ONLY" &&
+            evidence.optString("proposed_binance_protection_client_id").isNotBlank()) {
+            "Stop mutation audit requires a traceable actual proposal and client ID"
+        }
+    }
+    if (phase == "EXCHANGE_RESPONSE_OK" || phase == "EXCHANGE_NOT_CONFIRMED") {
+        require(exchangeOutcome != null && exchangeOutcome.optBoolean("ok") ==
+            (phase == "EXCHANGE_RESPONSE_OK")) {
+            "Exchange status must agree with the signed coordinator response"
+        }
+    }
+    if (phase == "EXCHANGE_RESPONSE_OK") {
+        val proposedId=evidence.getString("proposed_binance_protection_client_id")
+        val proposedStop=evidence.getDouble("candidate_stop").toBigDecimal()
+        val stop=exchangeOutcome?.opt("stop")
+        val observedPrice=when(stop) {
+            is JSONObject -> stop.optString("triggerPrice").ifBlank { stop.optString("stopPrice") }
+            is String, is Number -> stop.toString()
+            else -> ""
+        }.toBigDecimalOrNull()
+        val observedId=when(stop) {
+            is JSONObject -> stop.optString("clientAlgoId")
+            else -> proposedId // Operator-approved result is verified inside the coordinator.
+        }
+        require(observedPrice!=null && observedPrice.compareTo(proposedStop)==0 &&
+            observedId==proposedId && (stop !is JSONObject ||
+                stop.optString("algoStatus",stop.optString("status")) in setOf("NEW","WORKING","ACCEPTED"))) {
+            "An accepted receipt must reference the exact confirmed Binance stop ID and trigger"
+        }
+    }
+    if (phase == "EXCHANGE_EXCEPTION_UNVERIFIED")
+        require(exchangeOutcome?.optBoolean("retry_authorized",true)==false) {
+            "Unknown stop exchange outcome is never authorization to retry"
+        }
     return JSONObject().put("e", "WILLIAMS_STOP_TRAIL_DECISION_V1")
         .put("E", recordedAtMs).put("schema", "WILLIAMS_STOP_TRAIL_DECISION_V1")
         .put("symbol", symbol).put("direction", direction)
