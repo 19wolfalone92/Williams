@@ -583,6 +583,26 @@ internal object CockpitDiagnostics {
             "контроль=${android?.optLong("service_guard_age_ms",-1)} мс. Эти признаки не доказывают непрерывную работу с выключенным экраном.")
         check("AND-02", "runtime", "Восстановление после перезапуска", "NOT_VERIFIED",
             "Проверка требует фактического перезапуска процесса и сверки с Binance; наличие recovery-кода не считается PASS.")
+        val lifecycle=android?.optJSONObject("lifecycle_evidence")
+        check("AND-04", "runtime", "Остановки Android, перезапуски и запросы запуска", when {
+            lifecycle == null -> "NOT_VERIFIED"
+            lifecycle.optInt("abnormal_process_exit_count")>0 ||
+                lifecycle.optInt("service_autostart_failure_count")>0 ||
+                lifecycle.optInt("worker_heartbeat_stale_count")>0 -> "WARNING"
+            // Normal Android service destruction or a system exit without a
+            // known reason warrants review but is not proof of lost protection.
+            lifecycle.optInt("observed_process_exit_count")>0 ||
+                lifecycle.optInt("service_destroyed_count")>0 -> "WARNING"
+            else -> "NOT_VERIFIED"
+        }, "FGS создан: ${lifecycle?.optInt("foreground_service_created_count",-1)}; " +
+            "реальные завершения процесса из истории Android: ${lifecycle?.optInt("observed_process_exit_count",-1)}; " +
+            "аномальные завершения: ${lifecycle?.optInt("abnormal_process_exit_count",-1)}; " +
+            "уничтожения сервиса: ${lifecycle?.optInt("service_destroyed_count",-1)}; " +
+            "ошибки автозапуска: ${lifecycle?.optInt("service_autostart_failure_count",-1)}; " +
+            "зависания heartbeat: ${lifecycle?.optInt("worker_heartbeat_stale_count",-1)}; " +
+            "старые SERVICE_START_ATTEMPT: ${lifecycle?.optInt("service_start_attempt_count",-1)} " +
+            "(это НЕ перезапуски); статус истории ОС=${lifecycle?.optString("system_exit_history_status")}. " +
+            "Показана только сохранённая часть последних 24 часов; отсутствие событий НЕ доказывает 24-часовой фон.")
         check("AND-03", "ui", "Согласованность интерфейса", if (positionsFresh(status, now)) "PASS" else "WARNING",
             "Экраны используют общий снимок; at_ms=$now; позиции свежие=${positionsFresh(status, now)}; " +
                 "сканер=${status.optString("scanner_state")}; допуск новых входов=${ready.optBoolean("new_entries_allowed")}. " + ready.optString("new_entries_reason"))
