@@ -108,3 +108,18 @@ internal fun williamsDiagnosticTriage(
             else -> "Показаны первоочередные дефекты и неопределённости. Диагностика не снимает торговые блокировки."
         })
 }
+
+/**
+ * Presentational diagnostic only. A concurrent Futures reconciliation may
+ * make a sample say "ready=false" even when the earlier blocker list is empty.
+ * NEVER infer permissions or submit exchange mutations from these reasons.
+ */
+internal fun williamsDiagnosticGateReasons(
+    observedBlockers: List<String>,
+    snapshotNonAtomic: Boolean,
+    gateReady: Boolean
+): List<String> = buildList {
+    addAll(observedBlockers.filter { it.isNotBlank() }.distinct())
+    if(snapshotNonAtomic) add("DIAGNOSTIC_COORDINATOR_CHANGED_DURING_SNAPSHOT")
+    if(!gateReady && isEmpty()) add("EXECUTION_GATE_NOT_VERIFIED_RECHECK_SIGNED_EXCHANGE")
+}
