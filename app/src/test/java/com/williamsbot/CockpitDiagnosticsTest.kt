@@ -6,6 +6,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CockpitDiagnosticsTest {
+    @Test fun androidLifecycleEvidenceNeverTreatsStartAttemptsAsReboots() {
+        val lifecycle=JSONObject()
+            .put("service_start_attempt_count",15)
+            .put("observed_process_exit_count",0)
+            .put("foreground_service_created_count",1)
+        val android=JSONObject().put("lifecycle_evidence",lifecycle)
+        val status=healthy().put("android_runtime",android)
+        assertEquals("NOT_VERIFIED",severity("AND-04",status))
+        lifecycle.put("abnormal_process_exit_count",1)
+        assertEquals("WARNING",severity("AND-04",status))
+        lifecycle.put("abnormal_process_exit_count",0)
+        lifecycle.put("worker_heartbeat_stale_count",1)
+        assertEquals("WARNING",severity("AND-04",status))
+    }
     @Test fun currentAndroidFlagsCannotCertifyUninterruptedBackgroundOperation() {
         val s=healthy().put("android_runtime",JSONObject().put("foreground_service_active",true)
             .put("battery_optimization_ignored",true).put("background_restricted",false)
