@@ -15,8 +15,6 @@ internal fun williamsDiagnosticTriage(
     livePositionCount: Int = 0
 ): JSONObject {
     val data = CockpitDiagnostics.rows(tests)
-    val rank = mapOf("FAIL" to 0, "WARNING" to 1, "WARN" to 1,
-        "NOT_VERIFIED" to 2, "PASS" to 3)
     val counts = linkedMapOf("FAIL" to 0, "WARNING" to 0,
         "NOT_VERIFIED" to 0, "PASS" to 0)
     val issues = mutableListOf<JSONObject>()
@@ -77,8 +75,16 @@ internal fun williamsDiagnosticTriage(
     fun urgentLiveProof(row:JSONObject):Boolean =
         livePositionCount>0 && row.optString("id") in criticalLiveProtection &&
             row.optString("severity")=="NOT_VERIFIED"
+    // A confirmed FAIL always leads. Unknown live STOP evidence outranks
+    // routine WARNING (UI/transport), but not a confirmed critical failure.
     val sorted = issues.sortedWith(compareBy<JSONObject> {
-        if(urgentLiveProof(it)) -1 else rank[it.optString("severity")] ?: 3
+        when {
+            it.optString("severity")=="FAIL" -> 0
+            urgentLiveProof(it) -> 1
+            it.optString("severity")=="WARNING" -> 2
+            it.optString("severity")=="NOT_VERIFIED" -> 3
+            else -> 4
+        }
     }.thenBy { impact(it) }.thenBy { it.optString("id") })
     val overall=when {
         data.isEmpty() -> "NOT_VERIFIED"
