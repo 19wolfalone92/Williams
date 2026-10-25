@@ -87,6 +87,8 @@ internal data class WilliamsWaveHierarchy(
         }
         return analysisFrames.isNotEmpty() && scenarios.any { it.frame==analysisFrames.first() && path(it.id,0) }
     }
+    /** Cheap causal chain proof; do not serialize all wave hypotheses for entry gates. */
+    fun hasRequiredContainedChain():Boolean = containedChain()
     fun toJson(): JSONObject = JSONObject().put("schema_version", 1).put("as_of", asOf)
         .put("wave_labels", "HYPOTHESES_NOT_CERTAINTY").put("chain", JSONArray(analysisFrames))
         .put("scenarios", JSONArray(scenarios.map { it.toJson() }))
@@ -483,7 +485,7 @@ internal fun williamsCorrectionEntryContext(
     // Empty counts are possible only in unit-constructed semantic scenarios
     // which test the inner correction rule without a market-data scanner.
     if (report.frameCandleCounts.isNotEmpty() &&
-        !report.toJson().optBoolean("contained_chain_observed",false))
+        !report.hasRequiredContainedChain())
         return WilliamsCorrectionContext(reason="CORRECTION_REQUIRED_FOUR_DEGREE_CHAIN_UNPROVEN")
     if (signalAt <= 0 || signalAt + 3_600_000L > report.asOf || report.asOf-signalAt > 18_000_000L)
         return WilliamsCorrectionContext(reason="CORRECTION_H1_SIGNAL_NOT_CLOSED_OR_FRESH")
