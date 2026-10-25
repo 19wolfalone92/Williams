@@ -242,13 +242,19 @@ def test_diagnostic_reports_nonatomic_state_change_and_missing_wave_frames_by_na
 
 def test_wave_diagnostic_distinguishes_ready_working_set_from_complete_archive():
     runtime=_read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    evidence=_read(ANDROID / "java/com/williamsbot/WilliamsDurableHistoryEvidence.kt")
+    unit=_read(ROOT / "app/src/test/java/com/williamsbot/WilliamsDurableHistoryEvidenceTest.kt")
     assert '"WAVE-ARCHIVE-01"' in runtime
-    assert 'persistent_history_complete_pairs' in runtime
-    assert 'persistent_history_total_pairs' in runtime
-    assert 'processed_h1_closes' in runtime
-    assert 'Scanner working-set readiness is NOT the same as an exhaustive ' in runtime
-    assert 'full replay cannot independently ' in runtime
-    assert 'WAVE-04' in runtime
+    assert 'williamsDurableHistoryEvidence(' in runtime
+    assert '"durable_history_evidence"' in runtime
+    assert 'persistent_history_complete_pairs' in evidence
+    assert 'persistent_history_total_pairs' in evidence
+    assert 'processed_h1_closes' in evidence
+    assert 'full_history_complete' in evidence
+    assert 'worker_counter_can_lag' in evidence
+    assert 'book_wave_accuracy_certified' in evidence
+    assert 'completedSqliteRowsMustNotBeUndercountedByWorkerPassCounter' in unit
+    assert '"WAVE-04"' in runtime
 
 
 def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
