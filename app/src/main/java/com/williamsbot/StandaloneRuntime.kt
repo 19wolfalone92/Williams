@@ -11247,6 +11247,44 @@ private class NativeEngine(
                 }
             }
         }
+        // Operator-direction overrides were removed. A stale pre-upgrade
+        // persisted flag must be reported as a safety defect, not a "mode".
+        val removedModePersisted =
+            prefs.getBoolean("force_testnet_mode",false) ||
+            executionStore.readState("futures_testnet_force_mode") == "true"
+        tests.put(JSONObject().put("id","SAF-LEGACY-01").put("domain","execution")
+            .put("name","Отключён удалённый режим принудительных входов")
+            .put("severity",if(!forceTestnetMode && !removedModePersisted) "PASS" else "FAIL")
+            .put("detail","Legacy forced-entry override inaccessible in API; " +
+                "prefs_or_db_flag_present=$removedModePersisted; runtime_override_active=$forceTestnetMode; " +
+                "old exchange orders still recovered, never silently cancelled."))
+        val requiredWaves = CockpitDiagnostics.rows(chartReadingAudit)
+            .filter { it.optString("interval") in setOf("1d","4h","1h","15m") }
+        val observedRequired = requiredWaves.count {
+            it.optString("state")=="OBSERVED" &&
+                it.optInt("closed_candle_count")>=40 &&
+                it.optLong("as_of_close_ms")>0
+        }
+        tests.put(JSONObject().put("id","WAVE-04").put("domain","strategy")
+            .put("name","Собственные закрытые свечи D1/H4/H1/M15 для всех десяти пар")
+            .put("severity", when {
+                requiredWaves.size != coreSymbols.size*4 -> "NOT_VERIFIED"
+                observedRequired == coreSymbols.size*4 -> "PASS"
+                else -> "WARNING"
+            }).put("detail","Closed H1/H4/D1/M15 observed frames: " +
+                "$observedRequired/${coreSymbols.size*4}; " +
+                "PASS proves data availability, not correct nested wave degree, book figures or accuracy."))
+        val stopAuditResult = runCatching { auditStore.recentStopTrailDecisionEvents(20) }
+        val auditRows = stopAuditResult.getOrNull()?.length() ?: 0
+        tests.put(JSONObject().put("id","EXE-SL-AUDIT").put("domain","execution")
+            .put("name","Долговременный журнал решений по переносу SL")
+            .put("severity",when {
+                stopAuditResult.isFailure -> "FAIL"
+                auditRows==0 -> "NOT_VERIFIED"
+                else -> "PASS"
+            }).put("detail","SQLite stop-trail audit readable=${stopAuditResult.isSuccess}; " +
+                "recent_events=$auditRows; full source candles and signed outcomes are exported to ZIP; " +
+                "the absence of records alone does NOT prove a STOP was missing."))
         val checkedSummary = CockpitDiagnostics.summary(tests)
         val failedTests = checkedSummary.optInt("failed_test_count")
         val warningTests = checkedSummary.optInt("warning_test_count")
@@ -11285,6 +11323,9 @@ private class NativeEngine(
             .put("self_tests", tests)
             .put("diagnostic_findings", JSONArray(consistencyFindings))
             .put("unresolved_diagnostic_checks", unresolvedChecks)
+            .put("diagnostic_triage",williamsDiagnosticTriage(tests,
+                cockpitReadiness.optBoolean("new_entries_allowed") &&
+                consistencyFindings.isEmpty() && failedTests==0))
             .put("diagnostic_summary", JSONObject()
                 .put("overall", diagnosticOverall)
                 .put("finding_count", consistencyFindings.size)
