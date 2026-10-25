@@ -65,6 +65,7 @@ object AndroidRuntimeHealth {
         val usage = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
         val ignoring = pm.isIgnoringBatteryOptimizations(context.packageName)
+        val continuity=RuntimeContinuityEvidence.snapshot(context)
 
         val result = JSONObject()
             .put("application_id", context.packageName)
@@ -84,7 +85,9 @@ object AndroidRuntimeHealth {
             .put("service_guard_age_ms",if(RuntimeServiceState.lastGuardElapsedMs>0)
                 android.os.SystemClock.elapsedRealtime()-RuntimeServiceState.lastGuardElapsedMs else JSONObject.NULL)
             .put("service_last_recovery_attempt_at_ms",RuntimeServiceState.lastRecoveryAttemptMs)
-            .put("continuity",RuntimeContinuityEvidence.snapshot(context))
+            .put("continuity",continuity)
+            .put("lifecycle_evidence",RuntimeServiceLifecycleAssessment.summarize(
+                continuity,System.currentTimeMillis()))
             .put("last_boot_startup_failure", RuntimeStartupEvidence.snapshot(context))
             .put("battery_optimization_ignored", ignoring)
             .put("power_save_mode", pm.isPowerSaveMode)
