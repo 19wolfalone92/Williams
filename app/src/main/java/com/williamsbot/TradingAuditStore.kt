@@ -8,6 +8,32 @@ import org.json.JSONObject
 import org.json.JSONArray
 
 /**
+ * Full, machine-readable TC2 decision event. Keep it OUTSIDE the bounded
+ * COCKPIT_* projection: lossless forensic evidence must survive UI rotation.
+ * A pre-mutation receipt is mandatory for discretionary STOP tightening.
+ */
+internal fun stopTrailDecisionAuditEvent(
+    symbol: String, direction: String, campaignId: String, phase: String,
+    evidence: JSONObject, exchangeOutcome: JSONObject? = null,
+    recordedAtMs: Long = System.currentTimeMillis()
+): JSONObject {
+    require(symbol.isNotBlank() && campaignId.isNotBlank() && recordedAtMs > 0L)
+    require(direction == "LONG" || direction == "SHORT")
+    require(phase in setOf("REVIEW_DEFERRED", "PROPOSED_BEFORE_MUTATION",
+        "EXCHANGE_RESPONSE_OK", "EXCHANGE_NOT_CONFIRMED", "EXCHANGE_EXCEPTION_UNVERIFIED"))
+    require(evidence.optString("schema") == "WILLIAMS_TC2_STOP_REVIEW_V1")
+    return JSONObject().put("e", "WILLIAMS_STOP_TRAIL_DECISION_V1")
+        .put("E", recordedAtMs).put("schema", "WILLIAMS_STOP_TRAIL_DECISION_V1")
+        .put("symbol", symbol).put("direction", direction)
+        .put("campaign_id", campaignId).put("phase", phase)
+        .put("source_revision", BuildConfig.SOURCE_REVISION)
+        .put("app_version", BuildConfig.VERSION_NAME)
+        .put("evidence_untruncated", true)
+        .put("decision_evidence", JSONObject(evidence.toString()))
+        .put("exchange_outcome", exchangeOutcome?.let { JSONObject(it.toString()) } ?: JSONObject.NULL)
+}
+
+/**
  * Persistent exchange/order/execution/state audit trail.
  *
  * The raw event JSON is kept so a later reconciliation can reconstruct what
@@ -62,6 +88,42 @@ class TradingAuditStore(context: Context) :
             .put("detail", safeDiagnosticText(detail))
         recordRawEvent(event, requireDurable = true)
         writableDatabase.execSQL("DELETE FROM events WHERE event_type LIKE 'COCKPIT_%' AND id NOT IN (SELECT id FROM events WHERE event_type LIKE 'COCKPIT_%' ORDER BY id DESC LIMIT 1000)")
+    }
+
+    /** The events table retains every non-COCKPIT decision, with no 1600-char
+     * truncation, no bounded UI eviction and no silent failed inserts. */
+    @Synchronized
+    fun recordStopTrailDecision(
+        symbol: String, direction: String, campaignId: String, phase: String,
+        evidence: JSONObject, exchangeOutcome: JSONObject? = null
+    ): Long {
+        val event = stopTrailDecisionAuditEvent(
+            symbol, direction, campaignId, phase, evidence, exchangeOutcome)
+        val row = ContentValues().apply {
+            put("event_type", event.getString("e"))
+            put("event_time", event.getLong("E"))
+            put("received_at", System.currentTimeMillis())
+            put("raw_json", event.toString())
+        }
+        return writableDatabase.insertOrThrow("events", null, row)
+    }
+
+    /** Read a campaign's full chronological decision chain from durable SQLite,
+     * not the capped recentCockpitEvents projection. */
+    @Synchronized
+    fun recentStopTrailDecisions(campaignId: String, limit: Int = 100): JSONArray {
+        require(campaignId.isNotBlank())
+        val results = JSONArray()
+        readableDatabase.query("events", arrayOf("id", "raw_json"),
+            "event_type = ?", arrayOf("WILLIAMS_STOP_TRAIL_DECISION_V1"),
+            null, null, "id DESC").use { cursor ->
+            while (cursor.moveToNext() && results.length() < limit.coerceIn(1, 2000)) {
+                val row = JSONObject(cursor.getString(1))
+                if (row.optString("campaign_id") == campaignId)
+                    results.put(row.put("audit_event_id", cursor.getLong(0)))
+            }
+        }
+        return results
     }
 
     @Synchronized
