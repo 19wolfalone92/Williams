@@ -9548,7 +9548,9 @@ private class NativeEngine(
         val cutoff = now / 900_000L * 900_000L
         waveHierarchyCache[symbol]?.takeIf { it.asOf == cutoff && !refresh }?.let { return it }
         val frames = linkedMapOf<String, List<WilliamsWaveBar>>()
-        for (frame in williamsRequiredWaveFrames) {
+        // H6 is additional stand-alone market context; it cannot form a
+        // geometrically nested H6 -> H4 parent due the 6h/4h bar alignment.
+        for (frame in (williamsRequiredWaveFrames + "6h").distinct()) {
             frames[frame] = runCatching { fetchCandles(symbol, frame, 240) }
                 .getOrDefault(emptyList()).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
         }
