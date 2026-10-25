@@ -6386,8 +6386,10 @@ private class NativeEngine(
                 val plan=review.proposal
                 val trailClientId=if(plan!=null) ("W2T_"+symbol.take(8)+"_"+
                     System.nanoTime().toString(36).takeLast(14)).take(36) else null
+                val submittedStop=plan?.let { fmtPrice(it.stop,rules.tick) }
                 if(trailClientId!=null)
                     review.evidence.put("proposed_binance_protection_client_id",trailClientId)
+                        .put("submitted_stop_price",submittedStop)
                 val supervisionId="SUPERVISION:"+symbol+":"+record.optLong("approved_at_ms",0L)
                 // Append the complete decision before any optional Binance mutation.
                 // If SQLite is not durable, voluntary trailing must NOT proceed.
@@ -6415,7 +6417,7 @@ private class NativeEngine(
                             allowReconcileRequired=true,waitForDoorMs=15_000L
                         ) {
                             futuresCampaignCoordinator.trailOperatorSupervisedStop(
-                                symbol,direction,fmtPrice(plan.stop,rules.tick),clientId)
+                                symbol,direction,submittedStop ?: error("NO_SUBMITTED_STOP"),clientId)
                         }
                     } catch(failure:Exception) {
                         runCatching {
@@ -6701,8 +6703,10 @@ private class NativeEngine(
                 // the coordinator will persist before Binance network I/O.
                 val clientId = ("W2T_" + symbol.take(8) + "_" +
                     System.nanoTime().toString(36).takeLast(14)).take(36)
+                val submittedStop=fmtPrice(plan.stop,rules.tick)
                 tc2Review?.evidence?.put("proposed_binance_protection_client_id",clientId)
                     ?.put("previous_binance_protection_client_id",intent.optString("protection_client_id"))
+                    ?.put("submitted_stop_price",submittedStop)
                 val decisionAuditId=if(tc2Review!=null) {
                     // Fail closed when forensic decision write is unavailable:
                     // no optional STOP swap without complete pre-mutation evidence.
@@ -6718,7 +6722,7 @@ private class NativeEngine(
                         allowPaused = true, allowReconcileRequired = riskOnly
                     ) {
                         futuresCampaignCoordinator.trailProtectiveStop(
-                            symbol, direction, fmtPrice(plan.stop, rules.tick), clientId, reason = plan.reason
+                            symbol, direction, submittedStop, clientId, reason = plan.reason
                         )
                     }
                 } catch(failure:Exception) {
