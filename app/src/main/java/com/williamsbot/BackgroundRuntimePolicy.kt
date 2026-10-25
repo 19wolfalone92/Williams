@@ -24,6 +24,12 @@ internal object BackgroundRuntimePolicy {
     // Nonblocking cold-start snapshots cannot read encrypted opt-in until
     // the service's lifecycle worker initializes the secure runtime.
     // Once it does, a claimed successful auto-start must have a LIVE worker.
+    // A live worker is owned by the process, not by each Activity/FGS START
+    // request. An alive-but-stalled worker MUST NOT be started twice; its
+    // liveness failure is handled by the independent execution gate.
+    fun alreadySupervising(snapshot:BackgroundRuntimeSnapshot):Boolean =
+        snapshot.running && snapshot.workerAlive
+
     fun autostartComplete(snapshot:BackgroundRuntimeSnapshot):Boolean =
         !snapshot.autoRunRequested || (snapshot.running && snapshot.workerAlive)
     fun shouldRetry(snapshot:BackgroundRuntimeSnapshot,inFlight:Boolean,nextAttemptAt:Long,now:Long):Boolean =
