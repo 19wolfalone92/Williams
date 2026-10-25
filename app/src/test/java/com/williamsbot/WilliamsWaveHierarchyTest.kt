@@ -320,6 +320,24 @@ class WilliamsWaveHierarchyTest {
         assertEquals(105.1,plan!!.stop,1e-8)
         assertNull(planWilliamsCampaignStop("LONG",99.0,100.0,90.0,104.0,.1,1,long))
     }
+    @Test fun allFourRequiredFramesRejectMissingLatestClosedBarAndIgnoreUnclosedFuture() {
+        for (frame in williamsRequiredWaveFrames) {
+            val duration=williamsWaveFrames.getValue(frame)
+            val bars=(0 until 45).map { i ->
+                WilliamsWaveBar(i*duration,100.0,101.0,99.0,100.0,50.0)
+            }
+            assertEquals(frame,45,closedWilliamsWaveBars(bars,frame,45*duration).size)
+            val forming=bars+WilliamsWaveBar(45*duration,100.0,900.0,1.0,100.0,300.0)
+            assertEquals(frame,45,closedWilliamsWaveBars(forming,frame,
+                45*duration+duration/2).size)
+            val stale=runCatching {
+                closedWilliamsWaveBars(bars,frame,46*duration)
+            }.exceptionOrNull()
+            assertNotNull("$frame missing a completely closed candle must be stale",stale)
+            assertEquals("STALE_CLOSED_HISTORY",stale!!.message)
+        }
+    }
+
     @Test fun defaultLiveWaveHierarchyCannotSilentlyOmitH4() {
         // The formal four-degree chain is D1/H4/H1/M15; H6 remains
         // separately analyzed without pretending its bars nest inside H4.
