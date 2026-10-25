@@ -477,6 +477,14 @@ internal fun williamsCorrectionEntryContext(
         return WilliamsCorrectionContext(reason="CORRECTION_REQUIRES_H1_WISE_MAN")
     if (report.frameErrors.isNotEmpty())
         return WilliamsCorrectionContext(reason="CORRECTION_HISTORY_INCOMPLETE")
+    // The real scanner supplies frameCandleCounts for each genuinely sourced
+    // degree. H6-only ancestry is not proof of the requested D1/H4/H1/M15
+    // hierarchy: there must also be a complete four-degree price/time path.
+    // Empty counts are possible only in unit-constructed semantic scenarios
+    // which test the inner correction rule without a market-data scanner.
+    if (report.frameCandleCounts.isNotEmpty() &&
+        !report.toJson().optBoolean("contained_chain_observed",false))
+        return WilliamsCorrectionContext(reason="CORRECTION_REQUIRED_FOUR_DEGREE_CHAIN_UNPROVEN")
     if (signalAt <= 0 || signalAt + 3_600_000L > report.asOf || report.asOf-signalAt > 18_000_000L)
         return WilliamsCorrectionContext(reason="CORRECTION_H1_SIGNAL_NOT_CLOSED_OR_FRESH")
     val approvals=linkedMapOf<String,WilliamsCorrectionContext>()
