@@ -958,12 +958,19 @@ fun WilliamsApp(context: Context) {
                     }
                 }
             } catch (e: Exception) {
+                // Preserve last fully captured report when a NEW check fails.
+                // Never paint the old report as fresh: the UI enforces
+                // capture-age limits, and export requires the exact ZIP stamp.
+                val archivedAt=DiagnosticsArchive.latestReportAtMs(context)
                 withContext(Dispatchers.Main) {
-                    diagnosticsArchiveReady=false
-                    diagnosticReport=null
-                    diagnosticsMessage =
-                        "Новая диагностика НЕ ПОЛУЧЕНА: " +
-                        safeDiagnosticText(e.message ?: "Неизвестная ошибка")
+                    val previousAt=diagnosticReport?.optLong("created_at_ms") ?: 0L
+                    diagnosticsArchiveReady=previousAt>0L && archivedAt==previousAt
+                    diagnosticsMessage = "НОВАЯ ПРОВЕРКА НЕ ВЫПОЛНЕНА: " +
+                        safeDiagnosticText(e.message ?: "Неизвестная ошибка") +
+                        if(previousAt>0L) {
+                            ". Показан предыдущий снимок от ${cockpitTime(previousAt)} — " +
+                                "его результаты НЕ подтверждают текущее состояние."
+                        } else ". Нет предыдущих результатов."
                 }
             } finally {
                 withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) { diagnosticsRunning = false }
