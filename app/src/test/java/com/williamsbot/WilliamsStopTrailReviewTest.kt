@@ -131,6 +131,58 @@ class WilliamsStopTrailReviewTest {
         assertEquals("INVALID_EXCHANGE_CAMPAIGN_QUANTITY",outcome.blocker)
     }
 
+    /** Real closed Binance H1 high/low/close from the user's 25 Oct 06:50Z
+     * diagnostics, last closed H1=05:00Z, BEFORE all three STOP replacements
+     * and with NO later candles. Opens/volumes are unused by this pure guard.
+     * These are regression cases, not independent out-of-sample validation. */
+    @Test fun observedBtcSolDogeAdverseH1ImpulseIsNotPromotedToFreshStructuralStop() {
+        val hlc=mapOf(
+            "BTCUSDT" to listOf(
+                Triple(80606.3,80220.3,80606.3),Triple(80606.8,80429.2,80488.1),
+                Triple(80590.2,80488.1,80489.3),Triple(80492.1,80313.0,80383.5),
+                Triple(80577.2,80381.9,80561.8),Triple(80873.0,80515.9,80860.0),
+                Triple(80874.3,80763.9,80838.0),Triple(80860.1,80761.4,80859.9),
+                Triple(81017.0,80784.6,80882.3),Triple(80995.4,80826.2,80826.2),
+                Triple(80922.6,80818.0,80904.5),Triple(80922.6,80524.9,80564.4)
+            ),
+            "SOLUSDT" to listOf(
+                Triple(101.32,100.42,101.27),Triple(101.33,101.01,101.12),
+                Triple(101.62,101.12,101.52),Triple(101.54,101.09,101.32),
+                Triple(101.68,101.32,101.56),Triple(102.5,101.53,102.33),
+                Triple(102.55,102.21,102.44),Triple(102.52,102.15,102.44),
+                Triple(102.59,102.27,102.4),Triple(102.67,102.32,102.38),
+                Triple(102.71,102.34,102.59),Triple(102.6,101.72,101.93)
+            ),
+            "DOGEUSDT" to listOf(
+                Triple(0.0772,0.07637,0.07707),Triple(0.07719,0.07694,0.07708),
+                Triple(0.07746,0.07708,0.07726),Triple(0.07726,0.07695,0.07709),
+                Triple(0.07738,0.07708,0.07732),Triple(0.07774,0.07717,0.07764),
+                Triple(0.07801,0.07755,0.07786),Triple(0.07797,0.07767,0.07784),
+                Triple(0.07797,0.0777,0.07771),Triple(0.07791,0.07765,0.07783),
+                Triple(0.07797,0.07779,0.07789),Triple(0.0779,0.07688,0.07706)
+            )
+        )
+        for((symbol,triples) in hlc) {
+            val observed=triples.mapIndexed { i,(high,low,close) ->
+                WilliamsWaveBar(1792864800000L+i*hour,close,high,low,close,1.0)
+            }
+            val result=williamsH1CounterImpulseVeto("LONG",observed.takeLast(5),observed)
+            assertTrue("$symbol 05:00 UTC H1 was a fresh unconfirmed adverse impulse",result.block)
+            assertTrue("$symbol missing new low",result.freshCounterExtreme)
+            assertTrue("$symbol not a volatility shock",result.rangeOverMedian>=1.5)
+            assertTrue("$symbol did not close in lower quartile",result.closeLocation<=0.25)
+            // Mirrored SHORT must be treated symmetrically, not as a LONG.
+            val mirrored=observed.map { b ->
+                b.copy(o=250-b.o,h=250-b.l,l=250-b.h,c=250-b.c)
+            }
+            assertTrue("$symbol mirrored SHORT",williamsH1CounterImpulseVeto(
+                "SHORT",mirrored.takeLast(5),mirrored).block)
+            val upClose=observed.dropLast(1)+observed.last().copy(c=observed.last().h)
+            assertFalse("$symbol favorable H1 close must not trigger this veto",
+                williamsH1CounterImpulseVeto("LONG",upClose.takeLast(5),upClose).block)
+        }
+    }
+
     @Test fun explicitEstimatedOutcomeIsNotMisrepresentedAsAssuredProfit() {
         val accepted=review("LONG")
         assertNotNull(accepted.proposal)
