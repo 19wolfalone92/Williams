@@ -3,12 +3,10 @@ package com.williamsbot
 import org.json.JSONObject
 import kotlin.math.abs
 
-/** TC2 PDF125: during the FIRST Wise Man we EXPECT AO to retain the
- * PRIOR trend colour (red for bullish, green for bearish countertrend).
- * The book says "we expect", not "the entry is invalid unless".
- * This named diagnostic returns the deviation code for context ONLY: do not
- * make it an extra mandatory gate beyond WM1 price, mouth and angulation.
- * Unavailable AO stays UNKNOWN, rather than inventing a colour.
+/** TC2 PDF125 EXPECTS old-trend AO colour on a reversal bar; PDF131
+ * clarifies that without it this is not a valid countertrend trade.
+ * The signal therefore needs the same-side AO context, divergent price bar
+ * and mouth-anchored angulation. Unavailable AO fails closed.
  */
 internal fun williamsFirstWiseManAoBlocker(side:String,aoNow:Double,aoBefore:Double):String? {
     if(side !in listOf("LONG","SHORT")) return "WM1_AO_SIDE_INVALID"
