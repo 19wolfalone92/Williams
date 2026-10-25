@@ -11306,31 +11306,12 @@ private class NativeEngine(
                 "missing/underfilled: $missingDescription. " +
                 "M15 is optional CONTEXT for initial TC2 H1 entries, not an invented entry requirement; " +
                 "PASS proves data availability, not correct nested wave degree, book figures or accuracy."))
-        val longHistoryTotal=statusSnapshot.optInt("persistent_history_total_pairs",0)
-        val longHistoryComplete=statusSnapshot.optInt("persistent_history_complete_pairs",0)
-        val waveReplayItems=CockpitDiagnostics.rows(
-            statusSnapshot.optJSONObject("historical_wave_replay")?.optJSONArray("items"))
-        val replayed=waveReplayItems.count { it.optLong("processed_h1_closes")>0L }
-        val syncStorageLow=statusSnapshot.optBoolean("persistent_history_storage_low")
-        val syncFailure=statusSnapshot.opt("persistent_history_last_error")?.toString()
-            ?.takeUnless { it.equals("null",ignoreCase=true) || it.isBlank() }
-            ?: ""
+        val historyEvidence=williamsDurableHistoryEvidence(
+            statusSnapshot,coreSymbols.toList(),durableBackfillFrames)
         tests.put(JSONObject().put("id","WAVE-ARCHIVE-01").put("domain","strategy")
             .put("name","Исторический архив и причинное воспроизведение волн")
-            .put("severity",when {
-                syncStorageLow || syncFailure.isNotBlank() -> "WARNING"
-                longHistoryTotal<=0 || longHistoryComplete !in 0..longHistoryTotal ->
-                    "NOT_VERIFIED"
-                longHistoryComplete<longHistoryTotal || replayed==0 ->
-                    "NOT_VERIFIED"
-                else -> "PASS"
-            })
-            .put("detail","Full historical frame pairs=$longHistoryComplete/$longHistoryTotal; " +
-                "H1 replay active symbols=$replayed/${waveReplayItems.size}; " +
-                "storage_low=$syncStorageLow; sync_error=${safeDiagnosticText(syncFailure).take(250)}. " +
-                "Scanner working-set readiness is NOT the same as an exhaustive " +
-                "durable market archive. Even full replay cannot independently " +
-                "certify correct Bill Williams wave labels or profitable trading."))
+            .put("severity",historyEvidence.getString("severity"))
+            .put("detail",historyEvidence.getString("detail")))
         val stopAuditResult = runCatching { auditStore.recentStopTrailDecisionEvents(20) }
         val auditRows = stopAuditResult.getOrNull()?.length() ?: 0
         tests.put(JSONObject().put("id","EXE-SL-AUDIT").put("domain","execution")
@@ -11388,6 +11369,7 @@ private class NativeEngine(
             .put("unified_strategy_evidence", unifiedEvidence)
             .put("scanner_snapshot", scannerEvidenceSnapshot)
             .put("chart_reading_audit", chartReadingAudit)
+            .put("durable_history_evidence",historyEvidence)
             .put("tc1_zero_point_audit", tc1ZeroPointAudit)
             .put("book_rule_coverage", bookRuleCoverage)
             .put("signal_decision_history",decisionTraceSnapshot(fullHistory=true))
