@@ -87,12 +87,18 @@ class StopTrailDecisionAuditEventTest {
             .put("candidate_stop",95.0)
             .put("proposed_binance_protection_client_id","W2T_SOL_OPERATOR")
         val ok=JSONObject().put("ok",true).put("stop","95.0")
+            .put("protection_client_id","W2T_SOL_OPERATOR")
+            .put("exchange_proof","ONE_SIGNED_ACTIVE_MATCHING_STOP_ID_PRICE_SIDE_QTY")
         assertTrue(runCatching { stopTrailDecisionAuditEvent(
             "SOLUSDT","SHORT","SUPERVISION:SOLUSDT:1",
             "EXCHANGE_RESPONSE_OK",facts,ok,22L) }.isSuccess)
         assertFalse(runCatching { stopTrailDecisionAuditEvent(
             "SOLUSDT","SHORT","SUPERVISION:SOLUSDT:1",
             "EXCHANGE_RESPONSE_OK",facts,JSONObject(ok.toString()).put("stop","95.1"),22L) }.isSuccess)
+        assertFalse(runCatching { stopTrailDecisionAuditEvent(
+            "SOLUSDT","SHORT","SUPERVISION:SOLUSDT:1",
+            "EXCHANGE_RESPONSE_OK",facts,
+            JSONObject(ok.toString()).put("protection_client_id","W2T_OTHER"),22L) }.isSuccess)
     }
 
     @Test fun repeatedDecisionFingerprintChangesWithClosedBarsAndBlockers() {
