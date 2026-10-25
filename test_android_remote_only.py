@@ -229,6 +229,17 @@ def test_h1_rollover_defers_entry_before_order_intent_and_leverage_change():
     assert "coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }" in runtime
 
 
+def test_diagnostic_reports_nonatomic_state_change_and_missing_wave_frames_by_name():
+    runtime=_read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert 'DIAG-STATE-RACE' in runtime
+    assert 'coordinatorStateAtStart!=coordinatorStateAtEnd' in runtime
+    assert '.put("snapshot_non_atomic",concurrentCoordinatorTransition)' in runtime
+    assert 'missing/underfilled: $missingDescription' in runtime
+    assert '"15m").map { frame -> symbol to frame }' in runtime
+    # An out-of-sync mixed-time report MUST NOT reopen the execution door.
+    assert '!concurrentCoordinatorTransition && executionReady()' in runtime
+
+
 def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     market_data = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesMarketData.kt")
