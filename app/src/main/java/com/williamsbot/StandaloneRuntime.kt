@@ -6408,13 +6408,23 @@ private class NativeEngine(
                     bars.last().t+WILLIAMS_H1_MS,plan?.stop)
                 if(plan!=null) {
                     val clientId=trailClientId ?: error("MISSING_STOP_TRAIL_CLIENT_ID")
-                    val outcome=withCampaignMutation(
-                        symbol,"OPERATOR_EXISTING_STOP_ONLY_TRAIL",
-                        allowPaused=true,allowStopped=true,allowKillLatched=true,
-                        allowReconcileRequired=true,waitForDoorMs=15_000L
-                    ) {
-                        futuresCampaignCoordinator.trailOperatorSupervisedStop(
-                            symbol,direction,fmtPrice(plan.stop,rules.tick),clientId)
+                    val outcome=try {
+                        withCampaignMutation(
+                            symbol,"OPERATOR_EXISTING_STOP_ONLY_TRAIL",
+                            allowPaused=true,allowStopped=true,allowKillLatched=true,
+                            allowReconcileRequired=true,waitForDoorMs=15_000L
+                        ) {
+                            futuresCampaignCoordinator.trailOperatorSupervisedStop(
+                                symbol,direction,fmtPrice(plan.stop,rules.tick),clientId)
+                        }
+                    } catch(failure:Exception) {
+                        runCatching {
+                            auditStore.recordStopTrailDecision(symbol,direction.name,supervisionId,
+                                "EXCHANGE_EXCEPTION_UNVERIFIED",review.evidence,
+                                JSONObject().put("error_type",failure.javaClass.simpleName)
+                                    .put("retry_authorized",false))
+                        }
+                        throw failure
                     }
                     // The exchange response is evidence only when the coordinator
                     // has verified it. Never retry an ambiguous mutation for audit.
@@ -6701,14 +6711,24 @@ private class NativeEngine(
                 } else 0L
                 // Distinct structural H1/fractal improvements require unique Binance
                 // algo IDs; a timestamp alone cannot identify replacements.
-                val result = withCampaignMutation(
-                    symbol = symbol,
-                    purpose = "WILLIAMS_STRUCTURAL_STOP_TRAIL",
-                    allowPaused = true, allowReconcileRequired = riskOnly
-                ) {
-                    futuresCampaignCoordinator.trailProtectiveStop(
-                        symbol, direction, fmtPrice(plan.stop, rules.tick), clientId, reason = plan.reason
-                    )
+                val result = try {
+                    withCampaignMutation(
+                        symbol = symbol,
+                        purpose = "WILLIAMS_STRUCTURAL_STOP_TRAIL",
+                        allowPaused = true, allowReconcileRequired = riskOnly
+                    ) {
+                        futuresCampaignCoordinator.trailProtectiveStop(
+                            symbol, direction, fmtPrice(plan.stop, rules.tick), clientId, reason = plan.reason
+                        )
+                    }
+                } catch(failure:Exception) {
+                    if(tc2Review!=null) runCatching {
+                        auditStore.recordStopTrailDecision(symbol,dir,intent.getString("client_id"),
+                            "EXCHANGE_EXCEPTION_UNVERIFIED",tc2Review.evidence,
+                            JSONObject().put("error_type",failure.javaClass.simpleName)
+                                .put("retry_authorized",false))
+                    }
+                    throw failure
                 }
                 if(tc2Review!=null) runCatching {
                     auditStore.recordStopTrailDecision(symbol,dir,intent.getString("client_id"),
