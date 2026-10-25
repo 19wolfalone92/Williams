@@ -162,6 +162,15 @@ internal fun CockpitReadiness(status: Status) {
             r.optBoolean("stop_only_management_ready") -> "Готово • только защитный SL"
             else -> "Требуется сверка"
         })
+        val awaiting=r.optInt("pending_orders",0)
+        if(awaiting>0) {
+            CockpitField("Ожидающие заявки на вход",awaiting.toString(),AppColors.amber)
+            Text("Ожидающая STOP-заявка — НЕ открытая позиция. " +
+                "До фактического исполнения входа отдельный защитный SL " +
+                "может ещё не быть выставлен. После любого исполнения " +
+                "защита должна быть подтверждена Binance.",
+                style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+        }
         Text(russianExecutionBlocker(r.optString("new_entries_reason", "Ожидание первого снимка")), style = MaterialTheme.typography.bodySmall)
         Text(r.optString("utc_loss_reset_explanation", "Суточные ограничения уточняются по времени Binance UTC."),
             style = MaterialTheme.typography.bodySmall, color = AppColors.amber)
@@ -354,6 +363,15 @@ internal fun cockpitBookSignalRu(raw:String):String=when {
     else -> russianExecutionBlocker(raw)
 }
 
+/** Displays uncertain/partial Futures fills as exposure requiring STOP evidence,
+ * never as an unfilled order just because the positions REST snapshot lags.
+ */
+internal fun cockpitEntryMayHaveFilled(intent:JSONObject):Boolean =
+    (intent.optString("confirmed_position_qty").toDoubleOrNull() ?: 0.0)>0.0 ||
+    (intent.optString("executed_qty").toDoubleOrNull() ?: 0.0)>0.0 ||
+    intent.optString("order_status") in setOf("FILLED","PARTIALLY_FILLED") ||
+    intent.optString("campaign_status") in setOf("POSITION_OPEN","OPEN_PROTECTED")
+
 @Composable
 internal fun CockpitIntentCard(intent: JSONObject, status:Status, onMarket: (String) -> Unit) {
     val symbol = intent.optString("symbol")
@@ -363,7 +381,9 @@ internal fun CockpitIntentCard(intent: JSONObject, status:Status, onMarket: (Str
     LaunchedEffect(symbol,intent.optString("client_id_suffix")) {
         while(true) { kotlinx.coroutines.delay(1000); now=System.currentTimeMillis() }
     }
-    val hasFilledExposure=intent.optString("confirmed_position_qty").toDoubleOrNull()?.let { it>0.0 }==true
+    val hasFilledExposure=cockpitEntryMayHaveFilled(intent)
+    val pendingUnfilled=intent.optString("campaign_status")=="ENTRY_PENDING" &&
+        !hasFilledExposure && intent.optString("order_status") in setOf("NEW","WORKING","ACCEPTED")
     val protected=cockpitSignedStopVerified(intent,status,now)
     CockpitCard("$symbol • $direction", if (direction == "SHORT") AppColors.red else AppColors.green) {
         Text(if(intent.optString("campaign_status")=="OPEN_PROTECTED" && !protected)
@@ -376,12 +396,17 @@ internal fun CockpitIntentCard(intent: JSONObject, status:Status, onMarket: (Str
         Text(cockpitBookSignalRu(intent.optString("signal_reason")).ifBlank {
             "Причина сигнала для этой кампании не записана"
         }, color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
-        CockpitField("Вход / стоп", formatChartPrice(intent.optDouble("entry_price")) + " / " +
-            formatChartPrice(intent.optDouble("persisted_protective_stop")))
+        CockpitField(if(pendingUnfilled) "План: вход / будущий SL" else "Вход / структурный SL",
+            formatChartPrice(intent.optDouble("entry_price")) + " / " +
+                formatChartPrice(intent.optDouble("persisted_protective_stop")))
+        if(pendingUnfilled) Text(
+            "Биржевой вход ожидает активации. Показанный SL — расчётный уровень, " +
+                "а не доказательство уже выставленной защитной заявки.",
+            style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
         CockpitLastStopMove(intent)
         CockpitField("Защита", when {
             protected -> "Подтверждена свежим снимком Binance"
-            hasFilledExposure -> "НЕ ПОДТВЕРЖДЕНА СЕЙЧАС • проверить Binance"
+            hasFilledExposure -> "ВОЗМОЖНОЕ ИСПОЛНЕНИЕ • проверить фактическую позицию и STOP"
             intent.optString("campaign_status")=="ENTRY_PENDING" &&
                 intent.optString("order_status")!="PARTIALLY_FILLED" -> "Ожидает исполнения входа"
             else -> "НЕ ПОДТВЕРЖДЕНА СЕЙЧАС"
