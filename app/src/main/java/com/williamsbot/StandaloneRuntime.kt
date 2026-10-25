@@ -11323,10 +11323,10 @@ private class NativeEngine(
             }).put("detail","SQLite stop-trail audit readable=${stopAuditResult.isSuccess}; " +
                 "recent_events=$auditRows; full source candles and signed outcomes are exported to ZIP; " +
                 "the absence of records alone does NOT prove a STOP was missing."))
-        // 2026-10-25 15:00:04 UTC: status was captured during a new H1
-        // pending submission, while final execution_gate observed a later
-        // no-order rejection. That produces apparent contradictions unless
-        // the report marks this as a concurrent (non-atomic) snapshot.
+        // Snapshot races occur during BOTH safe pre-submit H1 rejection and
+        // legitimate exchange-acknowledged pending STOP orders. Never guess
+        // whether an order exists from coordinator state alone. A mixed-time
+        // read remains fail-closed until the next signed reconciliation.
         val coordinatorStateAtEnd=futuresCampaignCoordinator.state.name
         val coordinatorStateAtStart=coordinatorSnapshot.optString("state","UNKNOWN")
         val concurrentCoordinatorTransition=coordinatorStateAtStart!=coordinatorStateAtEnd
@@ -11337,9 +11337,12 @@ private class NativeEngine(
                 .put("severity","WARNING")
                 .put("detail","Coordinator at snapshot=$coordinatorStateAtStart; " +
                     "at diagnostic end=$coordinatorStateAtEnd. " +
-                    "ENTRY_PENDING during a safe pre-submit rollover rejection is " +
-                    "NOT evidence of a confirmed Binance order. Obtain a new signed " +
-                    "snapshot; do not lift risk blocks from this mixed-time report."))
+                    "ENTRY_PENDING may represent actual Binance-accepted STOP " +
+                    "entry orders, a still-unconfirmed submission, or a transient " +
+                    "state before rejection; it does NOT prove a filled position. " +
+                    "Never assume exchange orders are absent or cancel them from " +
+                    "this diagnostic. Obtain fresh signed positions, conditional " +
+                    "orders and STOP proof before changing execution blocks."))
         }
         val unresolvedChecks = JSONArray().apply {
             for (test in CockpitDiagnostics.rows(tests)) {
