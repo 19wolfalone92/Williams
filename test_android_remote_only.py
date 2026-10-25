@@ -957,7 +957,14 @@ def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_cont
     assert 'adapterPreflight.contractPrice(symbol)' in coordinator
     assert 'decision.optString("trigger_price_basis")!="CONTRACT_PRICE"' in policy
     assert "futuresCampaignCoordinator.saveManagementState(" in manage
-    assert "planWilliamsCampaignStop(" in manage
+    # TC2 voluntary stop mutation must now use the H1/H4 audited wrapper.
+    assert "reviewWilliamsTc2StopTightening(" in manage
+    stop_review = _read(ANDROID / "java/com/williamsbot/WilliamsStopTrailReview.kt")
+    assert "planWilliamsCampaignStop(" in stop_review
+    assert "FIVE_CLOSED_H1_BARS_AFTER_ENTRY_NOT_YET_AVAILABLE" in stop_review
+    assert "H4_CORRECTION_CAUTION_RETAIN_EXCHANGE_STOP" in stop_review
+    assert "CANDIDATE_STOP_INSIDE_H1_PRICE_NOISE" in stop_review
+    assert "existing_exchange_stop_retained_if_blocked" in stop_review
     assert 'ownerProfile in williamsSourceProfiles' in policy
     assert 'williamsStrategyCanMarketClose(ownerProfile)' in policy
     assert "futuresCampaignCoordinator.trailProtectiveStop(" in manage
