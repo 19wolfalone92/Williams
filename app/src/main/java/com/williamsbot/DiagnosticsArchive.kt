@@ -5,6 +5,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import java.util.zip.ZipFile
 
 /**
  * Keeps the most recent sanitized diagnostics bundle on-device.
@@ -16,6 +17,45 @@ object DiagnosticsArchive {
     private const val DIR = "diagnostics"
     private const val LATEST = "Williams_Diagnostics_Latest.zip"
 
+    /** Read only bounded metadata from the previous ZIP. Never open the
+     * entire historical report or rely on its last-modified wall-clock time.
+     * An absent/corrupt previous archive is NOT proof of error resolution.
+     */
+    fun compareWithLatest(context: Context, current: org.json.JSONObject): org.json.JSONObject {
+        val latest = latest(context)
+        var prior: org.json.JSONArray? = null
+        var priorAt = 0L
+        if (latest != null) runCatching {
+            ZipFile(latest).use { archive ->
+                val metadata = readSmallZipEntry(archive,"archive_metadata.json")
+                val checks = readSmallZipEntry(archive,"unresolved_diagnostic_checks.json")
+                if(metadata != null && checks != null) {
+                    priorAt = org.json.JSONObject(metadata).optLong("report_at_ms")
+                    prior = org.json.JSONArray(checks)
+                }
+            }
+        }
+        return williamsDiagnosticComparison(prior,
+            current.optJSONArray("unresolved_diagnostic_checks"),
+            priorAt,current.optLong("created_at_ms"))
+    }
+
+    private fun readSmallZipEntry(archive: ZipFile, name: String): String? {
+        val entry = archive.getEntry(name) ?: return null
+        if (entry.size !in 1L..262_144L) return null
+        return archive.getInputStream(entry).use { input ->
+            val output=java.io.ByteArrayOutputStream()
+            val buffer=ByteArray(8192)
+            while(true) {
+                val n=input.read(buffer)
+                if(n<0) break
+                if(output.size()+n>262_144) return@use null
+                output.write(buffer,0,n)
+            }
+            output.toString(Charsets.UTF_8.name())
+        }
+    }
+
     @Synchronized
     fun writeLatest(context: Context, reportJson: String): File {
         val dir = File(context.filesDir, DIR).apply { mkdirs() }
@@ -25,6 +65,12 @@ object DiagnosticsArchive {
         ZipOutputStream(FileOutputStream(temporary)).use { zip ->
             val report = org.json.JSONObject(reportJson)
 
+            add(zip,"archive_metadata.json",
+                org.json.JSONObject()
+                    .put("schema","WILLIAMS_ARCHIVE_META_V1")
+                    .put("report_at_ms",report.optLong("created_at_ms"))
+                    .put("diagnostic_contract_version",report.optInt("diagnostic_contract_version"))
+                    .toString(2))
             add(zip, "diagnostic_report.json", report.toString(2))
             add(
                 zip,
@@ -80,7 +126,11 @@ object DiagnosticsArchive {
                 ?: williamsDiagnosticTriage(report.optJSONArray("tests") ?: org.json.JSONArray(),
                     report.optJSONObject("diagnostic_summary")?.optBoolean("execution_allowed") == true)
             add(zip,"diagnostic_triage.json",triage.toString(2))
-            add(zip,"START_HERE_RU.txt",buildTriageOverview(triage))
+            add(zip,"diagnostic_comparison.json",
+                report.optJSONObject("diagnostic_comparison")?.toString(2)
+                    ?: "{\\"status\\":\\"NOT_COMPARABLE\\"}")
+            add(zip,"START_HERE_RU.txt",buildTriageOverview(triage,
+                report.optJSONObject("diagnostic_comparison")))
             add(zip, "event_timeline.json", report.optJSONArray("event_timeline")?.toString(2) ?: "[]")
             add(zip, "android_background_health.json",report.optJSONObject("status")?.optJSONObject("android_runtime")?.toString(2) ?: "{}")
             add(zip, "last_incident.json", report.optJSONObject("last_incident")?.toString(2) ?: "{}")
@@ -133,7 +183,8 @@ object DiagnosticsArchive {
         return output
     }
 
-    private fun buildTriageOverview(triage: org.json.JSONObject): String = buildString {
+    private fun buildTriageOverview(triage: org.json.JSONObject,
+        comparison: org.json.JSONObject?): String = buildString {
         appendLine("WILLIAMS BOT — КРАТКАЯ ДИАГНОСТИКА")
         appendLine("Итог компонентных проверок: ${triage.optString("overall")}")
         appendLine("Ошибки: ${triage.optInt("failed_count")}, предупреждения: ${triage.optInt("warning_count")}, непроверено: ${triage.optInt("unverified_count")}")
@@ -149,6 +200,15 @@ object DiagnosticsArchive {
         }
         if (triage.optBoolean("priority_issues_truncated"))
             appendLine("Ещё есть неразрешённые пункты. Полный список — unresolved_diagnostic_checks.json.")
+        if(comparison?.optString("status")=="COMPARABLE") {
+            appendLine()
+            appendLine("ИЗМЕНЕНИЯ ПО СРАВНЕНИЮ С ПРЕДЫДУЩЕЙ ДИАГНОСТИКОЙ:")
+            appendLine("Новые проблемы: ${comparison.optInt("new_count")}; ухудшились: ${comparison.optInt("worsened_count")};")
+            appendLine("стали менее серьёзными: ${comparison.optInt("less_severe_count")}; не наблюдаются: ${comparison.optInt("no_longer_reported_count")}.")
+            appendLine("ВНИМАНИЕ: не наблюдаются ≠ доказанно исправлены.")
+        } else {
+            appendLine("Нет сопоставимого предыдущего диагностического снимка.")
+        }
         appendLine("Для анализа STOP см. stop_trail_decisions_full.json, futures_exchange_stop_proofs.json.")
         appendLine("Для анализа волн см. chart_reading_audit.json, signal_decision_history.json.")
     }
