@@ -1337,11 +1337,16 @@ private class StandaloneServer(private val context: Context) {
             method == "POST" && path == "/api/v1/control/resume" ->
                 x.resume().toString()
 
-            method == "POST" && path == "/api/v1/control/testnet-force-mode" ->
-                x.testnetForceMode(JSONObject(body)).toString()
-
-            method == "POST" && path == "/api/v1/control/testnet-force-entry" ->
-                x.forceTestnetEntry(JSONObject(body)).toString()
+            // Legacy endpoint remains recognisable to old installed UIs,
+            // but NEVER dispatches a trading mutation. Do not silently
+            // substitute an automatic order or weaken the execution gate.
+            method == "POST" && path in setOf(
+                "/api/v1/control/testnet-force-mode",
+                "/api/v1/control/testnet-force-entry"
+            ) -> JSONObject().put("accepted", false).put("enabled", false)
+                .put("error", "OPERATOR_FORCED_TRADING_REMOVED")
+                .put("message", "Ручные принудительные входы удалены. Обычные входы только по подтверждённым правилам Вильямса.")
+                .toString()
 
             method == "POST" &&
                 path == "/api/v1/control/recover" ->
@@ -1582,10 +1587,10 @@ private class NativeEngine(
     @Volatile
     private var paused = prefs.getBoolean("operator_entries_paused", false)
 
+    // Legacy forced-direction orders must still be RECOVERED from the
+    // exchange journal, but no new operator override can ever be armed.
     @Volatile
-    private var forceTestnetMode =
-        prefs.getBoolean("force_testnet_mode", false) ||
-            executionStore.readState("futures_testnet_force_mode") == "true"
+    private var forceTestnetMode = false
 
     @Volatile
     private var nativeManagementRunning = false
@@ -1730,6 +1735,29 @@ private class NativeEngine(
 
     init {
         loadPersistedState()
+        // Migrate installations left in legacy forced-direction mode.
+        // DO NOT silently resume automatic entries after removing the UI:
+        // pause, retain every existing position/STOP and require an explicit
+        // operator START/RESUME after exchange reconciliation.
+        if (prefs.getBoolean("force_testnet_mode", false) ||
+            executionStore.readState("futures_testnet_force_mode") == "true") {
+            paused = true
+            val preferencesCleared = prefs.edit()
+                .putBoolean("force_testnet_mode", false)
+                .putBoolean("operator_entries_paused", true)
+                .putBoolean("auto_run", false).commit()
+            val databaseCleared =
+                executionStore.writeState("futures_testnet_force_mode", "false")
+            if (!preferencesCleared || !databaseCleared) {
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+                lastError = "LEGACY_FORCED_MODE_MIGRATION_UNVERIFIED"
+            }
+            runCatching { auditStore.recordCockpitEvent(
+                "OPERATOR_DIRECTION_MODE_REMOVED", state="PAUSED",
+                detail="Old forced override disabled; existing Binance orders must be reconciled before restart."
+            ) }
+        }
         startRestDataProbe()
         restoreExecutionAccumulators()
         // SQLite is authoritative for the execution-door lease. SharedPreferences
@@ -3008,308 +3036,8 @@ private class NativeEngine(
         return result
     }
 
-    /**
-     * Testnet-only directional override. It does not bypass risk, reconciliation,
-     * account, freshness, session, exchange filters, or structural protection gates.
-     * Automatic signal entries are suspended while this mode is enabled so the
-     * explicitly chosen side cannot race an autonomous opposite-side entry.
-     */
-    @Synchronized
-    fun testnetForceMode(request: JSONObject): JSONObject {
-        require(baseUrl == "https://demo-fapi.binance.com") {
-            "Forced trading is available only on the pinned USD-M Futures Demo endpoint"
-        }
-        require(request.optBoolean("acknowledge", false)) {
-            "Explicit acknowledgement is required for the Testnet directional override"
-        }
-        val enabled = request.optBoolean("enabled", false)
-        if (!enabled) {
-            forceTestnetMode = false
-            val preferenceSaved = prefs.edit()
-                .putBoolean("force_testnet_mode", false)
-                .putBoolean("auto_run", false)
-                .commit()
-            val databaseSaved = executionStore.writeState("futures_testnet_force_mode", "false")
-            paused = true
-            lastError = if (preferenceSaved && databaseSaved) {
-                "TESTNET_FORCE_MODE_DISABLED: Runtime paused; daily-risk baseline retained"
-            } else {
-                "TESTNET_FORCE_MODE_DISABLE_PERSISTENCE_FAILED: Runtime paused; restart requires reconciliation"
-            }
-            if (!preferenceSaved || !databaseSaved) {
-                reconcileRequired = true
-                persistSafetyFlag("reconcile_required", true)
-            }
-            return JSONObject()
-                .put("enabled", false)
-                .put("demo_only", true)
-                .put("paused", true)
-                .put("daily_loss_limit_pct", 0.03)
-                .put("baseline_reset", false)
-                .put("message", lastError)
-        }
-
-        require(running) { "Start the Futures Demo Runtime before enabling the directional override" }
-        require(!killLatched && !reconcileRequired && !equityCircuitBreaker.isTripped()) {
-            "KILL_SWITCH_LATCHED, RECONCILE_REQUIRED, or equity circuit breaker prevents forced trading"
-        }
-        require(historyReady && marketDataFresh() && marketWebSocketFresh() &&
-            publicWebSocketFresh() && userStreamConnected && !userStreamSyncRequired
-        ) { "Fresh Futures history and synchronized market/public/user streams are required" }
-        require(restAccountReady && accountFundedForEntry()) {
-            "A valid funded Futures Demo account snapshot is required"
-        }
-        require(campaignCoordinatorReadyForEntry()) {
-            "Futures positions/orders/protection must be reconciled before enabling the override"
-        }
-
-        val previousError = lastError
-        val dailyRiskAllowed = runCatching { checkFuturesDailyLoss() }.getOrElse {
-            lastError = "FUTURES_DAILY_LOSS_CHECK_FAILED: " +
-                (it.message ?: it.javaClass.simpleName)
-            false
-        }
-        require(dailyRiskAllowed) {
-            lastError ?: "Daily Futures risk limit has not been verified; forced trading remains blocked"
-        }
-        val baselineOnlyPause = paused &&
-            previousError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true
-        require(!paused || baselineOnlyPause) {
-            "Runtime is paused for a reason other than the recoverable missing daily baseline; inspect Diagnostics first"
-        }
-        if (baselineOnlyPause) {
-            require(prefs.edit().putBoolean("auto_run", true).commit()) {
-                "Could not persist Runtime resume after daily-baseline reconstruction"
-            }
-            paused = false
-            lastError = null
-        }
-
-        require(executionGate.tryReserve(FUTURES_EXECUTION_DOOR_KEY)) {
-            "Futures Execution Door is busy; retry after the in-flight exchange operation is reconciled"
-        }
-        try {
-            require(executionReady()) {
-                "Testnet override cannot be armed: " + executionBlockers().joinToString(", ")
-            }
-            forceTestnetMode = true
-            val preferenceSaved = prefs.edit()
-                .putBoolean("force_testnet_mode", true)
-                .putBoolean("auto_run", true)
-                .commit()
-            val databaseSaved = executionStore.writeState("futures_testnet_force_mode", "true")
-            if (!preferenceSaved || !databaseSaved) {
-                forceTestnetMode = false
-                paused = true
-                prefs.edit().putBoolean("auto_run", false).putBoolean("force_testnet_mode", false).commit()
-                executionStore.writeState("futures_testnet_force_mode", "false")
-                lastError = "TESTNET_FORCE_MODE_PERSISTENCE_FAILED: forced entries remain disabled"
-                throw IllegalStateException(lastError)
-            }
-        } finally {
-            executionGate.release(FUTURES_EXECUTION_DOOR_KEY)
-        }
-        lastError = null
-        return JSONObject()
-            .put("enabled", true)
-            .put("demo_only", true)
-            .put("automatic_entries_suspended", true)
-            .put("daily_loss_limit_pct", 0.03)
-            .put("daily_baseline_source", "UTC_DAY_RECONCILED_FROM_FUTURES_INCOME")
-            .put("baseline_reset", false)
-            .put("message", "Testnet force mode armed; select LONG or SHORT for an H1 conditional entry. Mandatory risk/protection gates remain active.")
-    }
-
-    /**
-     * Submit one operator-directed conditional H1 breakout on Futures Demo.
-     * The direction may override the current strategy hypothesis, but never the
-     * account-wide Execution Door, daily-loss cap, exchange filters, or structural SL.
-     */
-    @Synchronized
-    fun forceTestnetEntry(request: JSONObject): JSONObject {
-        require(baseUrl == "https://demo-fapi.binance.com" && forceTestnetMode) {
-            "Enable the explicit Futures Demo force mode first"
-        }
-        require(request.optBoolean("acknowledge", false)) {
-            "Explicit acknowledgement is required before submitting the forced directional entry"
-        }
-        val symbol = request.optString("symbol").trim().uppercase(Locale.US)
-        require(symbol in coreSymbols) { "Symbol is outside the approved ten-contract Futures universe" }
-        val directionText = request.optString("direction").trim().uppercase(Locale.US)
-        val direction = when (directionText) {
-            "LONG" -> NativeFuturesCampaignCoordinator.Direction.LONG
-            "SHORT" -> NativeFuturesCampaignCoordinator.Direction.SHORT
-            else -> throw IllegalArgumentException("Direction must be LONG or SHORT")
-        }
-        require(executionReady()) {
-            "Forced entry blocked by the mandatory Execution Gate: " + executionBlockers().joinToString(", ")
-        }
-        require(checkFuturesDailyLoss()) {
-            lastError ?: "Daily Futures risk limit is unknown or breached"
-        }
-        require(executionReady()) {
-            "Forced entry blocked after daily-risk refresh: " + executionBlockers().joinToString(", ")
-        }
-
-        val book = futuresMarketData.topOfBook(symbol)
-        val liveSpreadPct = (book.second - book.first) / book.first
-        require(
-            book.first.isFinite() && book.first > 0.0 &&
-                book.second.isFinite() && book.second >= book.first &&
-                liveSpreadPct.isFinite() && liveSpreadPct in 0.0..maxSpreadPct
-        ) {
-            "FUTURES_ENTRY_SPREAD_BLOCKED: $symbol live spread=$liveSpreadPct"
-        }
-        val nowMs = futuresMarketData.exchangeNowMs()
-        require(entryTimePolicy.allows(nowMs)) {
-            "ENTRY_TIME_POLICY_BLOCKED: выбранное окно UTC закрыто"
-        }
-        val h1BarMs = frameSeconds("1h") * 1000L
-        val h1 = fetchCandles(symbol, "1h", 180)
-            .filter { it.t > 0L && it.t + h1BarMs <= nowMs }
-        require(h1.size >= 150) {
-            "Forced entry requires at least 150 closed H1 candles; found ${h1.size}"
-        }
-        val rules = symbolFilters(symbol)
-        val levels = forcedH1EntryLevels(
-            direction = direction.name,
-            highs = h1.takeLast(5).map { it.h },
-            lows = h1.takeLast(5).map { it.l },
-            tickSize = rules.tick
-        ) ?: throw IllegalStateException("Could not derive valid structural H1 trigger/stop for $symbol")
-        val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-            normalizeTriggerPrice(levels.triggerPrice, rules.tick)
-        } else {
-            normalizePrice(levels.triggerPrice, rules.tick)
-        }
-        val stop = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-            normalizePrice(levels.protectiveStop, rules.tick)
-        } else {
-            normalizeTriggerPrice(levels.protectiveStop, rules.tick)
-        }
-        val mark = futuresMarketData.markPrice(symbol)
-        val contractPrice = futuresMarketData.price(symbol)
-        require(
-            if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) contractPrice < trigger
-            else contractPrice > trigger
-        ) {
-            "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED: contract=$contractPrice, trigger=$trigger; no market-order substitution"
-        }
-        require(
-            if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) stop < trigger
-            else stop > trigger
-        ) { "Structural stop is on the wrong side of the forced H1 trigger" }
-
-        val account = futuresCampaignCoordinator.accountSnapshot()
-        val parsed = parseFuturesAccountSnapshot(account)
-            ?: throw IllegalStateException("Fresh authenticated USD-M Futures account snapshot is invalid")
-        require(updateCachedFuturesAccount(account) && futuresAccountFundedForEntry(parsed.availableUsdt, parsed.equityUsdt)) {
-            "Positive available USDT and equity are required for a forced entry"
-        }
-        val intents = futuresCampaignCoordinator.intentsSnapshot()
-        val riskUsed = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.sumOf { intent ->
-            if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
-                futuresCampaignReservedRisk(intent,intents)
-            } else 0.0
-        }
-        val riskPct = min(campaignInitialRiskPct, min(maxRiskPerTradePct, maxTotalRiskPct - riskUsed))
-        require(riskPct > 0.0) { "Aggregate Futures campaign risk budget is exhausted or unknown" }
-
-        val stopFraction = kotlin.math.abs(trigger - stop) / trigger
-        val effectiveLoss = stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct
-        require(stopFraction.isFinite() && stopFraction > 0.0 && effectiveLoss.isFinite()) {
-            "Forced-entry structural stop/risk calculation is invalid"
-        }
-        val entryLeverage = futuresLeverageSettings.forSymbol(symbol)
-        val notional = min(
-            parsed.equityUsdt * 0.25,
-            min(parsed.availableUsdt * entryLeverage * 0.95, parsed.equityUsdt * riskPct / effectiveLoss)
-        )
-        val marketLotEnabled = rules.marketStep.isFinite() && rules.marketStep > 0.0
-        val quantityStep = ExecutionMath.commonQuantityStep(rules.step, rules.marketStep)
-        val minQuantity = if (marketLotEnabled) max(rules.minQty, rules.marketMinQty) else rules.minQty
-        val maxQuantity = if (marketLotEnabled) min(rules.maxQty, rules.marketMaxQty) else rules.maxQty
-        val qty = floorStep(notional / trigger, quantityStep)
-        require(
-            qty.isFinite() && qty >= minQuantity && qty <= maxQuantity &&
-                ExecutionMath.isMultiple(qty, rules.step) &&
-                (!marketLotEnabled || ExecutionMath.isMultiple(qty, rules.marketStep)) &&
-                qty * trigger >= rules.minNotional &&
-                qty * trigger <= rules.maxNotional
-        ) {
-            "FUTURES_QUANTITY_FILTER_BLOCKED: forced quantity fails LOT_SIZE/MARKET_LOT_SIZE/notional filters"
-        }
-        val clientId = ("W2F_" + symbol.take(7) + "_" + direction.name.take(1) + "_" + nowMs.toString(36)).take(36)
-        val plan = NativeFuturesCampaignCoordinator.EntryPlan(
-            symbol = symbol,
-            direction = direction,
-            kind = NativeFuturesCampaignCoordinator.EntryKind.STOP,
-            quantity = fmtQty(qty, rules.decimals),
-            entryPrice = fmtPrice(trigger, rules.tick),
-            protectiveStop = fmtPrice(stop, rules.tick),
-            clientId = clientId,
-            riskPct = riskPct,
-            signalType = "OPERATOR_FORCED_DIRECTION",
-            leverage = entryLeverage,
-            signalReason = "Оператор выбрал направление Testnet; структурный H1 STOP"
-        )
-        val result = withCampaignMutation(
-            symbol = symbol,
-            purpose = "TESTNET_FORCED_DIRECTION_ENTRY"
-        ) {
-            require(forceTestnetMode && executionReady()) {
-                "Forced-mode state or mandatory Execution Gate changed before submission"
-            }
-            require(checkFuturesDailyLoss()) {
-                lastError ?: "Daily loss limit could not be verified at submission"
-            }
-            val submitMark = futuresMarketData.markPrice(symbol)
-            require(
-                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
-                else submitMark > trigger
-            ) { "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED at final preflight; no market-order substitution" }
-            futuresCampaignCoordinator.submitPendingEntry(plan)
-        }
-        if(!result.optBoolean("accepted",false)) rejectDecision(symbol,result.optString("blocker","EXECUTION_DOOR_REJECTED"))
-        runCatching { auditStore.recordCockpitEvent("ORDER_RESPONSE", symbol, direction.name,
-            if (result.optBoolean("accepted")) "ACCEPTED" else "UNCONFIRMED_OR_REJECTED", detail = result.optString("blocker", result.optString("error"))) }
-        lastOrder = result
-        if (!result.optBoolean("accepted", false)) {
-            lastError = result.optString("blocker", result.optString("error", "Forced conditional entry rejected"))
-            if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED) {
-                reconcileRequired = true
-                persistSafetyFlag("reconcile_required", true)
-                stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Forced Futures submission unresolved")
-            }
-        } else {
-            lastRestReconcileMs = 0L
-            stateMachine.force(
-                TradingState.ENTRY_PENDING,
-                "Operator-selected Futures Demo $direction conditional H1 entry submitted; awaiting exchange fill/reconciliation"
-            )
-        }
-        return JSONObject()
-            .put("accepted", result.optBoolean("accepted", false))
-            .put("safe_rejection", result.optBoolean("safe_rejection", false))
-            .put("demo_only", true)
-            .put("manual_direction_override", true)
-            .put("automatic_entries_suspended", true)
-            .put("symbol", symbol)
-            .put("direction", direction.name)
-            .put("entry_kind", "STOP")
-            .put("quantity", plan.quantity)
-            .put("trigger_price", plan.entryPrice)
-            .put("protective_stop", plan.protectiveStop)
-            .put("spread_pct", liveSpreadPct)
-            .put("risk_pct", riskPct)
-            .put("max_daily_loss_pct", 0.03)
-            .put("blocker", result.optString("blocker", JSONObject.NULL.toString()))
-            .put("message", if (result.optBoolean("accepted", false)) {
-                "Forced Testnet conditional entry accepted; exchange reconciliation and stop confirmation are still required"
-            } else {
-                result.optString("blocker", "Forced conditional entry rejected before execution")
-            })
-    }
+    // Manual forced trading removed. Old W2E_ / operator intents are
+    // deliberately still recognised during reconciliation/recovery.
 
     @Synchronized
     fun recover(): JSONObject {
