@@ -11235,18 +11235,6 @@ private class NativeEngine(
                 newerExchangeStopSymbols.joinToString().ifBlank { "none" } +
                 "; снимок позиции=" + positionDisplayAt +
                 "; NEVER infer current protection from a stale cached screen."))
-        val unresolvedChecks = JSONArray().apply {
-            for (test in CockpitDiagnostics.rows(tests)) {
-                val severity = test.optString("severity")
-                if (severity in setOf("FAIL", "WARNING", "WARN", "NOT_VERIFIED")) {
-                    put(JSONObject()
-                        .put("id", test.optString("id", test.optString("name")))
-                        .put("domain", test.optString("domain"))
-                        .put("severity", severity)
-                        .put("name", test.optString("name")))
-                }
-            }
-        }
         // Operator-direction overrides were removed. A stale pre-upgrade
         // persisted flag must be reported as a safety defect, not a "mode".
         val removedModePersisted =
@@ -11285,6 +11273,18 @@ private class NativeEngine(
             }).put("detail","SQLite stop-trail audit readable=${stopAuditResult.isSuccess}; " +
                 "recent_events=$auditRows; full source candles and signed outcomes are exported to ZIP; " +
                 "the absence of records alone does NOT prove a STOP was missing."))
+        val unresolvedChecks = JSONArray().apply {
+            for (test in CockpitDiagnostics.rows(tests)) {
+                val severity = test.optString("severity")
+                if (severity in setOf("FAIL", "WARNING", "WARN", "NOT_VERIFIED")) {
+                    put(JSONObject()
+                        .put("id", test.optString("id", test.optString("name")))
+                        .put("domain", test.optString("domain"))
+                        .put("severity", severity)
+                        .put("name", test.optString("name")))
+                }
+            }
+        }
         val checkedSummary = CockpitDiagnostics.summary(tests)
         val failedTests = checkedSummary.optInt("failed_test_count")
         val warningTests = checkedSummary.optInt("warning_test_count")
