@@ -234,21 +234,21 @@
       "id": "TC2.WM1.AO_CONTEXT",
       "book": "TC2",
       "pdf_pages": [
-        122,
-        137
+        125,
+        131
       ],
-      "rule": "AO colour on divergent bar is recorded as context; do not invent a mandatory same-bar all-indicator gate.",
+      "rule": "TC2 PDF125 expects prior-trend AO colour on a reversal bar. PDF131 clarifies that absent this AO context the setup is not a genuine countertrend trade: require red for bullish, green for bearish WM1; no AO value-vs-zero substitute.",
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
       ],
       "tests": [
-        "tests/test_williams_market_geometry.py::test_tc2_first_wise_man_reversal_extractor_does_not_invent_mandatory_ao",
-        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2Wm1Pdf125AoColourIsExpectedButNotAnAdditionalBookEntryPrerequisite"
+        "tests/test_williams_market_geometry.py::test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao",
+        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2Wm1Pdf125And131RequireOldTrendAoForCountertrendEntry"
       ],
       "fixtures": [],
-      "remaining_evidence": "TC2 PDF125 explicitly EXPECTS old-trend AO colour (red bullish reversal, green bearish), while price/mouth/angulation are compulsory. Python+Kotlin hard veto removed, AO preserved as directional diagnostic. Fully independent historic figures and human WM1 chart scoring still pending.",
+      "remaining_evidence": "Source pages PDF125 and PDF131 cross-checked: the former says AO colour is expected; the latter expressly disqualifies setups lacking the prior-trend momentum context. Python/Kotlin strict source gate restored. Full independent figure-labelled examples and ordinal WM1 accuracy remain unproved.",
       "can_place_orders_from_registry": false
     },
     {
