@@ -1226,6 +1226,7 @@ private fun MoreScreen(
     onConfig: () -> Unit,
     advanced: @Composable () -> Unit = {}
 ) {
+    var advancedExpanded by rememberSaveable { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -1266,7 +1267,16 @@ private fun MoreScreen(
                 onClick = onConfig
             )
         }
-        item { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { advanced() } }
+        item {
+            OutlinedButton(onClick={advancedExpanded=!advancedExpanded},
+                modifier=Modifier.fillMaxWidth()) {
+                Text(if(advancedExpanded) "Свернуть дополнительные параметры"
+                    else "Дополнительные параметры и управление риском")
+            }
+        }
+        if(advancedExpanded) item {
+            Column(verticalArrangement=Arrangement.spacedBy(12.dp)) { advanced() }
+        }
     }
 }
 
@@ -3266,9 +3276,11 @@ private fun SettingsScreen(
                     InfoRow("Риск на сделку", fmt(status.riskPerTrade * 100, 1) + "%")
                     InfoRow("Дневной лимит убытка", fmt(status.maxDailyLoss * 100, 1) + "%")
                     InfoRow("Ограничение количества сделок", "динамический")
-                    InfoRow("Ограничение после убытков", "2 подряд → пауза")
-                    InfoRow("Интервал сканирования", "10 секунд")
-                    InfoRow("Число волновых кандидатов", "8")
+                    InfoRow("Серия убытков", "${status.consecutiveLosses} подряд • защитное ограничение определяет Runtime")
+                    InfoRow("Интервал сканирования", "определяется движком")
+                    Text("Это состояние конфигурации, не команда разрешить торговлю. " +
+                        "Если новые входы ограничены, причина отображается на экране диагностики.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
                 }
             }
         }
