@@ -8695,12 +8695,13 @@ private class NativeEngine(
         val reversalStart = max(2, candles.lastIndex - 20)
         for (i in candles.lastIndex downTo reversalStart) {
             val priorLow = candles[i - 1].l
-            // TC2 PDF125 says AO red is EXPECTED on a bullish countertrend bar,
-            // not an extra compulsory signal condition. Keep the colour as
-            // auditable context; preserve reversal/angulation/price-trigger gates.
-            val wm1AoContext=williamsFirstWiseManAoBlocker(
+            // TC2 PDF125 expects prior-trend AO colour; PDF131 adds that
+            // without that momentum context this is NOT a countertrend trade.
+            // Conservative source-qualified WM1 gate remains mandatory.
+            val wm1AoBlocker=williamsFirstWiseManAoBlocker(
                 "LONG",ao(candles,i),ao(candles,i-1))
-            if (validWilliamsReversalBar("LONG",waveBars[i],priorLow,
+            if (wm1AoBlocker==null &&
+                validWilliamsReversalBar("LONG",waveBars[i],priorLow,
                     listOf(jawS[i],teethS[i],lipsS[i]),angulationProof(i).score)) {
                 val trigger = candles[i].h + tick
                 if (triggerStillPending(i, trigger)) {
@@ -8725,10 +8726,9 @@ private class NativeEngine(
                             .put("wm1_ao_opposite_color_observed",
                                 ao(candles,i).isFinite() && ao(candles,i-1).isFinite() &&
                                 ao(candles,i)<ao(candles,i-1))
-                            .put("wm1_ao_expected_countertrend_color_observed",wm1AoContext==null)
-                            .put("wm1_ao_context_status",wm1AoContext ?: "EXPECTED_COUNTERTREND_COLOUR")
-                            .put("wm1_ao_color_is_mandatory",false)
-                            .put("wm1_ao_rule_reference","TC2_PDF125_EXPECTED_NOT_REQUIRED")
+                            .put("wm1_ao_qualifies_book_countertrend",true)
+                            .put("wm1_ao_color_is_mandatory",true)
+                            .put("wm1_ao_rule_reference","TC2_PDF125_AND_131_COUNTERTREND_CONTEXT")
                             .toString()
                     )
                 }
