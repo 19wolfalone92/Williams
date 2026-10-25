@@ -5,6 +5,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
@@ -548,6 +549,7 @@ internal fun CockpitDiagnosticScreen(
     var domain by rememberSaveable { mutableStateOf("Все") }
     var engineering by rememberSaveable { mutableStateOf(false) }
     var rawJson by rememberSaveable { mutableStateOf(false) }
+    var confirmRecovery by rememberSaveable { mutableStateOf(false) }
     val tests = remember(report) { CockpitDiagnostics.rows(report?.optJSONArray("tests")) }
     val triage = remember(report) {
         report?.optJSONObject("diagnostic_triage")
@@ -633,13 +635,13 @@ internal fun CockpitDiagnosticScreen(
                     if(compact) {
                         OutlinedButton(onClick=onExport,enabled=!running && report!=null && archiveReady,
                             modifier=Modifier.fillMaxWidth()) { Text("Сохранить полный отчёт ZIP") }
-                        OutlinedButton(onClick=onSelfHeal,enabled=!running,
+                        OutlinedButton(onClick={confirmRecovery=true},enabled=!running,
                             modifier=Modifier.fillMaxWidth()) { Text("Сверить Binance и восстановить") }
                     } else {
                         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick=onExport,enabled=!running && report!=null && archiveReady,
                                 modifier=Modifier.weight(1f)) { Text("Экспорт ZIP") }
-                            OutlinedButton(onClick=onSelfHeal,enabled=!running,
+                            OutlinedButton(onClick={confirmRecovery=true},enabled=!running,
                                 modifier=Modifier.weight(1f)) { Text("Сверка / восстановление") }
                         }
                     }
@@ -785,7 +787,9 @@ internal fun CockpitDiagnosticScreen(
             Text(if(report==null) "Сначала выполните проверку." else
                 "Для выбранных фильтров проверок нет.",color=AppColors.textMuted)
         }
-        items(filtered,key={it.optString("id").ifBlank { it.optString("name") }}) { check ->
+        itemsIndexed(filtered,key={index,row ->
+            "${row.optString("domain")}:${row.optString("id").ifBlank { row.optString("name") }}:$index"
+        }) { _,check ->
             var expanded by rememberSaveable(check.optString("id",check.optString("name"))) { mutableStateOf(false) }
             val severity=check.optString("severity","NOT_VERIFIED")
             val accent=when(severity) {"FAIL" -> AppColors.red
@@ -835,4 +839,18 @@ internal fun CockpitDiagnosticScreen(
             }
         }
     }
+    if(confirmRecovery) AlertDialog(
+        onDismissRequest={confirmRecovery=false},
+        title={Text("Подтвердить восстановление Runtime?")},
+        text={Text("Восстановление может перезапустить движок и инициировать " +
+            "биржевую сверку. После успешной проверки автоматически разрешённые " +
+            "входы могут возобновиться, если нет других защитных блокировок. " +
+            "Аварийный KILL и неподтверждённые позиции не обходятся. " +
+            "Простая диагностика ордера не отправляет.")},
+        confirmButton={Button(onClick={
+            confirmRecovery=false
+            onSelfHeal()
+        }) {Text("ПОДТВЕРДИТЬ ВОССТАНОВЛЕНИЕ")}},
+        dismissButton={TextButton(onClick={confirmRecovery=false}) {Text("Отмена")}}
+    )
 }
