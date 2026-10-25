@@ -115,7 +115,11 @@ internal fun closedWilliamsWaveBars(bars: List<WilliamsWaveBar>, frame: String, 
             b.l <= minOf(b.o, b.c) && b.v >= 0) { "INVALID_OHLCV" }
         require(i == 0 || b.t - closed[i-1].t == duration) { "GAPPED_OR_UNORDERED_HISTORY" }
     }
-    require(asOf - (closed.last().t + duration) < duration * 2) { "STALE_CLOSED_HISTORY" }
+    // Never accept a missing entire closed bar as a valid wave observation.
+    // Example: at 12:15 H4 needs 08:00-12:00 H4 fully closed;
+    // the older 04:00-08:00 alone does NOT prove current H4 structure.
+    require(asOf >= closed.last().t + duration &&
+        asOf - (closed.last().t + duration) < duration) { "STALE_CLOSED_HISTORY" }
     return closed
 }
 
