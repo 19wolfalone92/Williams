@@ -75,6 +75,24 @@ internal fun stopTrailDecisionAuditEvent(
         .put("exchange_outcome", exchangeOutcome?.let { JSONObject(it.toString()) } ?: JSONObject.NULL)
 }
 
+/** Repeated deferrals on the same closed H1 candle are one market decision.
+ * A change in reason, candidate or established stop starts a new observation.
+ * Never deduplicate attempted/confirmed Binance mutations. */
+internal fun stopTrailDeferredFingerprint(campaignId:String, evidence:JSONObject):String {
+    val lastH1=evidence.optJSONArray("h1_last_twelve_closed")
+    val lastH4=evidence.optJSONArray("h4_last_twelve_closed")
+    fun lastClose(rows:JSONArray?):Long =
+        rows?.optJSONObject((rows.length()-1).coerceAtLeast(0))
+            ?.optLong("open_time_ms",0L) ?: 0L
+    val h1At=lastClose(lastH1)
+    val noClosedBarsBucket=if(h1At>0L) 0L else evidence.optLong("as_of_ms") / 3_600_000L
+    return listOf(campaignId,evidence.optString("direction"),
+        evidence.optString("blocker"),evidence.optString("source_rule"),
+        evidence.optString("old_stop"),evidence.optString("candidate_stop"),
+        h1At.toString(),lastClose(lastH4).toString(),noClosedBarsBucket.toString())
+        .joinToString("|")
+}
+
 /**
  * Persistent exchange/order/execution/state audit trail.
  *
@@ -85,6 +103,7 @@ class TradingAuditStore(context: Context) :
     SQLiteOpenHelper(context, "williams_trading_audit.db", null, 5) {
 
     private val lastCampaignObservations = mutableMapOf<String, String>()
+    private val lastDeferredStopTrailFingerprint = linkedMapOf<String, String>()
     // Reduce repeating successful reconciliation messages in a bounded UI
     // event window. Failures and recovery transitions are NEVER compacted.
     // All exchange/order/position snapshots remain durable in their own stores.
@@ -139,6 +158,14 @@ class TradingAuditStore(context: Context) :
         symbol: String, direction: String, campaignId: String, phase: String,
         evidence: JSONObject, exchangeOutcome: JSONObject? = null
     ): Long {
+        // Guard against constant background scans exhausting phone storage.
+        // The FIRST refusal and each new closed H1 / reason are still persisted.
+        val deferredKey=if(phase=="REVIEW_DEFERRED") "$symbol|$campaignId|$direction" else null
+        val deferredFingerprint=deferredKey?.let {
+            stopTrailDeferredFingerprint(campaignId,evidence)
+        }
+        if(deferredKey!=null && lastDeferredStopTrailFingerprint[deferredKey]==deferredFingerprint)
+            return 0L // Explicitly coalesced, never a fake successful insert ID.
         val event = stopTrailDecisionAuditEvent(
             symbol, direction, campaignId, phase, evidence, exchangeOutcome)
         val row = ContentValues().apply {
@@ -147,7 +174,14 @@ class TradingAuditStore(context: Context) :
             put("received_at", System.currentTimeMillis())
             put("raw_json", event.toString())
         }
-        return writableDatabase.insertOrThrow("events", null, row)
+        val eventId=writableDatabase.insertOrThrow("events", null, row)
+        if(deferredKey!=null && deferredFingerprint!=null) {
+            if(lastDeferredStopTrailFingerprint.size>=64 &&
+                !lastDeferredStopTrailFingerprint.containsKey(deferredKey))
+                lastDeferredStopTrailFingerprint.clear()
+            lastDeferredStopTrailFingerprint[deferredKey]=deferredFingerprint
+        }
+        return eventId
     }
 
     /** Read a campaign's full chronological decision chain from durable SQLite,
