@@ -128,7 +128,7 @@ object DiagnosticsArchive {
             add(zip,"diagnostic_triage.json",triage.toString(2))
             add(zip,"diagnostic_comparison.json",
                 report.optJSONObject("diagnostic_comparison")?.toString(2)
-                    ?: "{\\"status\\":\\"NOT_COMPARABLE\\"}")
+                    ?: org.json.JSONObject().put("status","NOT_COMPARABLE").toString())
             add(zip,"START_HERE_RU.txt",buildTriageOverview(triage,
                 report.optJSONObject("diagnostic_comparison")))
             add(zip, "event_timeline.json", report.optJSONArray("event_timeline")?.toString(2) ?: "[]")
