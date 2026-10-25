@@ -43,6 +43,13 @@ class WilliamsStopTrailReviewTest {
             assertEquals(2,allowed.evidence.getJSONArray("h4_last_two_closed").length())
             assertEquals(12,allowed.evidence.getJSONArray("h1_last_twelve_closed").length())
             assertEquals(12,allowed.evidence.getJSONArray("h4_last_twelve_closed").length())
+            val h1Row=allowed.evidence.getJSONArray("h1_last_twelve_closed").getJSONObject(0)
+            val h4Row=allowed.evidence.getJSONArray("h4_last_twelve_closed").getJSONObject(0)
+            for(row in listOf(h1Row,h4Row)) {
+                assertTrue(row.has("open_time_ms"))
+                for(field in listOf("open","high","low","close","volume"))
+                    assertTrue("Missing "+field,row.has(field))
+            }
             assertTrue(allowed.evidence.getDouble("h4_price_retracement_fraction") in 0.0..1.0)
             assertFalse(allowed.evidence.getBoolean("h4_retracement_is_confirmed_elliott_correction"))
             assertTrue(allowed.evidence.has("h4_confirmed_fractal_pivots"))
