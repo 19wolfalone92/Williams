@@ -52,9 +52,25 @@ internal fun williamsDiagnosticTriage(
                 .put("next_action",suggested)
         }
     }
+    // Prioritize immediate capital/exchange protection BEFORE strategy
+    // research whenever severity ties. A wave evidence gap must not push
+    // a failing STOP or reconciliation check out of the first 12 alerts.
+    fun impact(row:JSONObject):Int {
+        val d=row.optString("domain").lowercase()
+        val id=row.optString("id").uppercase()
+        return when {
+            d=="risk" || d=="execution" || id.startsWith("EXE-") ||
+                id.contains("STOP") || id.contains("PROTECTION") -> 0
+            d=="binance" -> 1
+            d=="database" || d=="runtime" -> 2
+            d=="websocket" -> 3
+            d=="strategy" || id.startsWith("WAVE") || id.startsWith("STR-") -> 4
+            else -> 5
+        }
+    }
     val sorted = issues.sortedWith(compareBy<JSONObject> {
         rank[it.optString("severity")] ?: 3
-    }.thenBy { it.optString("id") })
+    }.thenBy { impact(it) }.thenBy { it.optString("id") })
     val overall=when {
         data.isEmpty() -> "NOT_VERIFIED"
         counts.getValue("FAIL")>0 -> "FAIL"
