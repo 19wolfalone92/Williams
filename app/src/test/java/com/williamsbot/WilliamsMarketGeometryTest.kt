@@ -6,6 +6,29 @@ import org.junit.Test
 class WilliamsMarketGeometryTest {
     private fun bars(highs:List<Double>)=highs.mapIndexed { i,h -> WilliamsWaveBar((i+1)*3_600_000L,h-1,h,h-3,h-1,10.0) }
     private fun mirror(b:List<WilliamsWaveBar>)=b.map { it.copy(o=250-it.o,h=250-it.l,l=250-it.h,c=250-it.c) }
+    @Test fun tc2Wm1Pdf125AoColourIsExpectedButNotAnAdditionalBookEntryPrerequisite() {
+        // TC2 PDF125: AO red/green is "we expect", not a stated "only if"
+        // condition. The REQUIRED elements are the divergent price bar,
+        // absence of Alligator mouth penetration and increasing angulation.
+        val reversed=WilliamsWaveBar(3_600_000L,92.0,96.0,89.0,94.0,5.0)
+        assertTrue(validWilliamsReversalBar("LONG",reversed,90.0,
+            listOf(103.0,102.0,101.0),angulation=1.0))
+        assertEquals("WM1_AO_NOT_RED",williamsFirstWiseManAoBlocker("LONG",2.0,1.0))
+        val source=org.json.JSONObject()
+            .put("wm1_ao_color","GREEN")
+            .put("wm1_ao_context_status","WM1_AO_NOT_RED")
+            .put("wm1_ao_color_is_mandatory",false)
+        val short=org.json.JSONObject(reflectedTc2SetupContext("REVERSAL",source.toString(),250.0))
+        assertEquals("RED",short.getString("wm1_ao_color"))
+        assertEquals("WM1_AO_NOT_GREEN",short.getString("wm1_ao_context_status"))
+        assertFalse(short.getBoolean("wm1_ao_color_is_mandatory"))
+        val matching=org.json.JSONObject(reflectedTc2SetupContext("REVERSAL",
+            source.put("wm1_ao_color","RED")
+                .put("wm1_ao_context_status","EXPECTED_COUNTERTREND_COLOUR").toString(),250.0))
+        assertEquals("GREEN",matching.getString("wm1_ao_color"))
+        assertEquals("EXPECTED_COUNTERTREND_COLOUR",matching.getString("wm1_ao_context_status"))
+    }
+
     @Test fun tc2Wm1AoMustStillRunAgainstTheCountertrendEntryForBothSides() {
         assertNull(williamsFirstWiseManAoBlocker("LONG",-2.0,-1.5))
         assertNull(williamsFirstWiseManAoBlocker("LONG",3.0,3.5))
