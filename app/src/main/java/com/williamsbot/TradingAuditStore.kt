@@ -126,6 +126,21 @@ class TradingAuditStore(context: Context) :
         return results
     }
 
+    /** Export a bounded number of WHOLE recent events; SQLite itself remains
+     * authoritative and is not compacted by the diagnostics export limit. */
+    @Synchronized
+    fun recentStopTrailDecisionEvents(limit: Int = 300): JSONArray {
+        val result = JSONArray()
+        readableDatabase.query("events", arrayOf("id", "raw_json"),
+            "event_type = ?", arrayOf("WILLIAMS_STOP_TRAIL_DECISION_V1"),
+            null, null, "id DESC", limit.coerceIn(1, 2000).toString()).use { cursor ->
+            while (cursor.moveToNext())
+                result.put(JSONObject(cursor.getString(1))
+                    .put("audit_event_id", cursor.getLong(0)))
+        }
+        return result
+    }
+
     @Synchronized
     fun recordCampaignSnapshot(intents: JSONArray) {
         for (item in CockpitDiagnostics.rows(intents)) {
