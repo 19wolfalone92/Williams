@@ -436,22 +436,22 @@ def main() -> None:
          "Every wave passport must use latest genuinely closed bar")
     must(runtime_source,'for (frame in (williamsRequiredWaveFrames + "6h").distinct())',
          "Preserve 6h as independent context, not 4h parent")
-    must(runtime_source,'.put("wm1_ao_color_is_mandatory",false)',
-         "TC2 PDF125 AO expected colour cannot be invented as compulsory WM1 veto")
-    must_not(runtime_source,"if (wm1AoBlocker==null &&",
-        "WM1 must use price/angulation gate rather than a mandatory AO colour")
+    must(runtime_source,'.put("wm1_ao_color_is_mandatory",true)',
+         "TC2 PDF125 expects old-trend AO; PDF131 makes this a qualified countertrend signal")
+    must(runtime_source,"if (wm1AoBlocker==null &&",
+         "WM1 must retain prior-trend AO and price/angulation source gates")
     python_signals=read("williams_signals.py")
-    must_not(python_signals,'first_wise_man_ao_blocker(',
-         "TC2 PDF125 expected AO colour cannot veto Python WM1 signals")
+    must(python_signals,'first_wise_man_ao_blocker(',
+         "TC2 PDF131 AO countertrend qualification must match Kotlin/Python")
     wm1_tests=read("tests/test_williams_market_geometry.py")
-    must(wm1_tests,"test_tc2_first_wise_man_reversal_extractor_does_not_invent_mandatory_ao",
-         "Python TC2 WM1 contextual-AO tests")
+    must(wm1_tests,"test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao",
+         "Python TC2 WM1 source-qualified AO tests")
     must(read("app/src/test/java/com/williamsbot/WilliamsWaveHierarchyTest.kt"),
          "allFourRequiredFramesRejectMissingLatestClosedBarAndIgnoreUnclosedFuture",
          "D1/H4/H1/M15 no-lookahead freshness tests")
     must(read("app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt"),
-         "tc2Wm1Pdf125AoColourIsExpectedButNotAnAdditionalBookEntryPrerequisite",
-         "Kotlin TC2 WM1 expected AO test")
+         "tc2Wm1Pdf125And131RequireOldTrendAoForCountertrendEntry",
+         "Kotlin TC2 WM1 PDF131 source qualification")
     for needle in ("TIME_AND_PRICE_CONTAINMENT", "COMPETING_SENIOR_IMPULSE_UNRESOLVED",
                    "CORRECTION_HISTORY_INCOMPLETE", "MOMENTUM_FADE_BEFORE_PIVOT"):
         must(hierarchy_source, needle, "WilliamsWaveHierarchy.kt")
