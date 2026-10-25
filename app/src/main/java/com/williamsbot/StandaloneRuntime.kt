@@ -6369,24 +6369,28 @@ private class NativeEngine(
                 require(bars.size>=45) { "Need 45 H1 candles before supervised trailing" }
                 val rules=symbolFilters(symbol)
                 val mark=futuresMarketData.markPrice(symbol)
-                val plan=planWilliamsCampaignStop(
+                val review=reviewWilliamsTc2StopTightening(
                     direction=direction.name,
                     oldStop=record.getDouble("stop"),
-                    actualEntry=record.getDouble("entry_price"),
+                    entry=record.getDouble("entry_price"),
                     initialStop=record.optDouble("initial_stop",record.getDouble("stop")),
-                    markPrice=mark,
-                    tickSize=rules.tick,
-                    openedObservedAtMs=record.optLong("approved_at_ms",0L),
-                    bars=bars.map { FuturesTrailBar(it.t,it.h,it.l) },
-                    feeAllowance=2.0*feeBufferPerSidePct+maxSlippagePct
+                    mark=mark,tick=rules.tick,
+                    openedAtMs=record.optLong("approved_at_ms",0L),
+                    asOfMs=futuresMarketData.exchangeNowMs(),
+                    h1Input=bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
+                    h4Input=fetchCandles(symbol,"4h",50).map {
+                        WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v)
+                    },
+                    feeAndSlippagePct=2.0*feeBufferPerSidePct+maxSlippagePct
                 )
+                val plan=review.proposal
                 val awaitingFirstClose=bars.last().t+WILLIAMS_H1_MS<=record.optLong("approved_at_ms",0L)
                 futuresCampaignCoordinator.recordOperatorSupervisionObservation(symbol,
                     if(plan!=null) "STOP_PROPOSED" else if(awaitingFirstClose)
                         "WAITING_FOR_FIRST_CLOSED_H1" else "WAITING_FOR_STRUCTURE",
                     plan?.reason ?: if(awaitingFirstClose)
                         "No H1 candle has closed after operator approval; existing protection retained"
-                        else "No confirmed closed-H1 structure improves the current stop",
+                        else review.blocker,
                     bars.last().t+WILLIAMS_H1_MS,plan?.stop)
                 if(plan!=null) {
                     val clientId=("W2T_"+symbol.take(8)+"_"+
@@ -6404,7 +6408,8 @@ private class NativeEngine(
                     }
                     auditStore.recordCockpitEvent("OPERATOR_PROTECTION_TRAILED",
                         symbol,state="EXCHANGE_CONFIRMED",
-                        detail="TC2 H1 only; "+plan.reason+"; new_stop="+plan.stop+"; no book ownership claimed")
+                        detail="TC2 H1/H4 stop evidence; new_stop="+plan.stop+"; "+review.evidence.toString().take(1600)+
+                            "; no book ownership claimed")
                     futuresCampaignCoordinator.recordOperatorSupervisionObservation(
                         symbol,"TRAILED",plan.reason,bars.last().t+WILLIAMS_H1_MS,plan.stop)
                 }
@@ -6628,19 +6633,28 @@ private class NativeEngine(
             val originalStop = intent.optString("initial_protective_stop").toDoubleOrNull()
             val actualEntry = row.optString("entryPrice").toDoubleOrNull()
                 ?: throw IllegalStateException(symbol + " Binance entry price is missing for trailing")
+            val tc2Review = if(profile==williamsTc2Profile) reviewWilliamsTc2StopTightening(
+                direction=dir,oldStop=oldStop,entry=actualEntry,initialStop=originalStop,
+                mark=mark,tick=rules.tick,
+                openedAtMs=intent.optLong("position_open_observed_at_ms",0L),
+                asOfMs=futuresMarketData.exchangeNowMs(),
+                h1Input=bars,
+                h4Input=fetchCandles(symbol,"4h",50).map {
+                    WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v)
+                },
+                feeAndSlippagePct=2.0*feeBufferPerSidePct+maxSlippagePct
+            ) else null
             val plan = if(profile!=williamsTc2Profile) editionStop?.takeIf {
                 if(dir=="LONG") it>oldStop && it<mark else it<oldStop && it>mark
-            }?.let { FuturesStopTrailProposal(it,"${profile}_PROTECTION") } else planWilliamsCampaignStop(
-                direction = dir,
-                oldStop = oldStop,
-                actualEntry = actualEntry,
-                initialStop = originalStop,
-                markPrice = mark,
-                tickSize = rules.tick,
-                openedObservedAtMs = intent.optLong("position_open_observed_at_ms", 0L),
-                bars = candles.map { FuturesTrailBar(it.t, it.h, it.l) },
-                feeAllowance = 2.0 * feeBufferPerSidePct + maxSlippagePct
-            )
+            }?.let { FuturesStopTrailProposal(it,"${profile}_PROTECTION") } else tc2Review?.proposal
+            if(tc2Review!=null && plan==null &&
+                tc2Review.blocker !in setOf("NO_NEW_CONFIRMED_H1_PROTECTION_STRUCTURE")) {
+                runCatching { auditStore.recordCockpitEvent(
+                    "TC2_STOP_REVIEW_DEFERRED",symbol= symbol,direction=dir,
+                    state="EXISTING_BINANCE_STOP_RETAINED",
+                    detail=tc2Review.evidence.toString().take(1600)
+                ) }
+            }
             if (plan != null) {
                 // Distinct structural H1/fractal improvements require unique Binance
                 // algo IDs; a timestamp alone cannot identify replacements.
@@ -6667,7 +6681,8 @@ private class NativeEngine(
                     auditStore.recordCockpitEvent(
                         "PROTECTION_TRAILED", symbol = symbol, direction = dir,
                         state = "OPEN_PROTECTED",
-                        detail = "${plan.reason}; previous=$oldStop; new=${plan.stop}; mark=$mark; entry=$actualEntry"
+                        detail = "${plan.reason}; previous=$oldStop; new=${plan.stop}; mark=$mark; entry=$actualEntry; "+
+                            (tc2Review?.evidence?.toString()?.take(1600) ?: "non_TC2_management")
                     )
                 }
             }
