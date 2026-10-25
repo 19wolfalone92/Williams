@@ -321,16 +321,16 @@ class WilliamsWaveHierarchyTest {
         assertNull(planWilliamsCampaignStop("LONG",99.0,100.0,90.0,104.0,.1,1,long))
     }
     @Test fun defaultLiveWaveHierarchyCannotSilentlyOmitH4() {
-        // The trading passport has already required D1/H6/H4/H1/M15.
-        // The separate wave hierarchy must cover the same five frames.
-        assertEquals(listOf("1d","6h","4h","1h","15m"),williamsRequiredWaveFrames)
+        // The formal four-degree chain is D1/H4/H1/M15; H6 remains
+        // separately analyzed without pretending its bars nest inside H4.
+        assertEquals(listOf("1d","4h","1h","15m"),williamsRequiredWaveFrames)
         val fixture=fixtureCases().getJSONObject(0)
         val report=buildWilliamsWaveHierarchy(
             mapOf("1h" to fixtureBars(fixture)),fixture.getLong("as_of"))
-        assertTrue("H4 missing is never silently treated as a full five-frame chain",
+        assertTrue("H4 missing is never silently treated as a complete D1/H4/H1/M15 chain",
             report.frameErrors.containsKey("4h"))
         val json=report.toJson()
-        assertEquals(5,json.getJSONArray("chain").length())
+        assertEquals(4,json.getJSONArray("chain").length())
         assertFalse(json.getBoolean("contained_chain_observed"))
         assertFalse(json.getBoolean("can_place_orders"))
     }
