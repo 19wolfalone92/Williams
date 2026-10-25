@@ -603,10 +603,10 @@ internal object CockpitDiagnostics {
             "старые SERVICE_START_ATTEMPT: ${lifecycle?.optInt("service_start_attempt_count",-1)} " +
             "(это НЕ перезапуски); статус истории ОС=${lifecycle?.optString("system_exit_history_status")}. " +
             "Показана только сохранённая часть последних 24 часов; отсутствие событий НЕ доказывает 24-часовой фон.")
-        val historyRows=rows(status.optJSONArray("trade_observations"))
-        val unverifiedCloses=historyRows.filter { it.optString("status")=="CLOSED_UNVERIFIED" ||
+        val closedTradeRows=rows(status.optJSONArray("trade_observations"))
+        val unverifiedCloses=closedTradeRows.filter { it.optString("status")=="CLOSED_UNVERIFIED" ||
             it.optString("outcome")=="CLOSED_UNVERIFIED" }
-        val missingPnl=historyRows.filter { it.optString("status").startsWith("CLOSED") &&
+        val missingPnl=closedTradeRows.filter { it.optString("status").startsWith("CLOSED") &&
             !it.optBoolean("pnl_complete",false) }
         // Two audit rows can legitimately describe ONE exchange position (native
         // recovery plus operator stop supervision). Do not silently erase either
