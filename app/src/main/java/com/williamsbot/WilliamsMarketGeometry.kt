@@ -3,11 +3,12 @@ package com.williamsbot
 import org.json.JSONObject
 import kotlin.math.abs
 
-/** TC2 ch9, PDF pp.124-132: the FIRST Wise Man is a countertrend
- * divergent/reversal bar. AO must still be moving in the PRIOR direction
- * at that bar: red for bullish reversal, green for bearish reversal.
- * Treat unavailable AO as UNKNOWN, never substitute trend alignment.
- * The oscillator level relative to zero is NOT this color test.
+/** TC2 PDF125: during the FIRST Wise Man we EXPECT AO to retain the
+ * PRIOR trend colour (red for bullish, green for bearish countertrend).
+ * The book says "we expect", not "the entry is invalid unless".
+ * This named diagnostic returns the deviation code for context ONLY: do not
+ * make it an extra mandatory gate beyond WM1 price, mouth and angulation.
+ * Unavailable AO stays UNKNOWN, rather than inventing a colour.
  */
 internal fun williamsFirstWiseManAoBlocker(side:String,aoNow:Double,aoBefore:Double):String? {
     if(side !in listOf("LONG","SHORT")) return "WM1_AO_SIDE_INVALID"
