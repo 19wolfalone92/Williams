@@ -609,7 +609,7 @@ def main() -> None:
     must(runtime_source,"williamsDiagnosticTriage(tests,",
          "Runtime diagnoses must expose causal prioritized triage")
     diagnostic_ui = read("app/src/main/java/com/williamsbot/CockpitScreens.kt")
-    must(diagnostic_ui,'Text("Что требует внимания"', "Diagnostic prioritized UX")
+    must(diagnostic_ui,'CockpitCard("Что требует внимания"', "Diagnostic prioritized UX")
     must(diagnostic_ui,"execution_allowed", "Triage visible source")
     diagnostic_zip = read("app/src/main/java/com/williamsbot/DiagnosticsArchive.kt")
     must(diagnostic_zip,'START_HERE_RU.txt',"Human-readable diagnosis ZIP")
