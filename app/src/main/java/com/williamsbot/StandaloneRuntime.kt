@@ -8226,12 +8226,14 @@ private class NativeEngine(
 
     private fun normalizePrice(price: Double, tick: Double): Double {
         if (price <= 0.0 || tick <= 0.0) return price
-        return floor(price / tick + 1e-12) * tick
+        // On-grid decimal source values must not lose a whole tick because
+        // Double division produces N - 1 ulp (BTC/ETH SHORT WM3 incident).
+        return ExecutionMath.floorToStep(price, tick)
     }
 
     private fun normalizeTriggerPrice(price: Double, tick: Double): Double {
         if (price <= 0.0 || tick <= 0.0) return price
-        return ceil(price / tick - 1e-12) * tick
+        return ExecutionMath.ceilToStep(price, tick)
     }
 
     private fun symbolFilters(symbol: String): SymbolRules {
