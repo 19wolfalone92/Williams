@@ -414,10 +414,14 @@ internal object CockpitDiagnostics {
         check("EXE-13","execution","Актуальная Binance STOP-защита по каждой позиции",when {
             !positionsFresh(status,now) || coordinator.optJSONArray("exchange_protection_observations")==null -> "NOT_VERIFIED"
             signedPerSymbol.isEmpty() -> "NOT_VERIFIED"
+            signedPerSymbol.any { it.second in setOf(
+                "AMBIGUOUS_SIGNED_STOP_PROOFS",
+                "SIGNED_STOP_IDENTITY_OR_COVERAGE_MISMATCH"
+            ) } -> "FAIL"
             signedPerSymbol.all { it.second=="SIGNED_STOP_FRESH" } -> "PASS"
-            signedPerSymbol.any { it.second=="STALE_SIGNED_STOP_PROOF" } -> "NOT_VERIFIED"
-            coordinator.optBoolean("reconciliation_running") -> "NOT_VERIFIED"
-            else -> "FAIL"
+            // Staleness or absence of a signed proof is NOT an exchange-corroborated
+            // missing STOP; it cannot be upgraded to PASS nor asserted absent.
+            else -> "NOT_VERIFIED"
         }, "Только текущие подписанные Binance STOP (срок 15 секунд), без принятия strategy ownership: " +
             signedPerSymbol.joinToString("; ") { (symbol,state,age) ->
                 "$symbol=$state (${if(age>=0) age.toString()+"мс" else "время неизвестно"})"
