@@ -6089,6 +6089,7 @@ private class NativeEngine(
     private var lastOperatorSupervisionAttemptMs:Long=0L
     @Volatile private var autonomousOrphanAnalysisRunning=false
     @Volatile private var autonomousOrphanAnalysisStartedAtMs=0L
+    @Volatile private var autonomousRecoveredCandidateCursor=0
 
     /**
      * User-authorized on-device Demo recovery: analyse current signed Binance
@@ -6108,11 +6109,22 @@ private class NativeEngine(
         val now=System.currentTimeMillis()
         val signedPositions=futuresCampaignCoordinator.positionsSnapshot()
         val existing=futuresCampaignCoordinator.operatorSupervisionsSnapshot()
-        for(pos in CockpitDiagnostics.rows(signedPositions)
-            .filter { row -> CockpitDiagnostics.rows(existing).none {
-                it.optString("symbol")==row.optString("symbol") &&
-                    it.optString("state") in setOf("ACTIVE","REPLACEMENT_UNRESOLVED")
-            } }.take(2)) {
+        val candidates=CockpitDiagnostics.rows(signedPositions).filter { row ->
+            row.optString("symbol") in coreSymbols &&
+                CockpitDiagnostics.rows(existing).none {
+                    it.optString("symbol")==row.optString("symbol") &&
+                        it.optString("state") in setOf("ACTIVE","REPLACEMENT_UNRESOLVED")
+                }
+        }
+        if(candidates.isEmpty()) return
+        // Fair rotation: one malformed/no-history symbol must not starve the
+        // other orphan positions; bound signed GET and book reviews per sweep.
+        val offset=autonomousRecoveredCandidateCursor%candidates.size
+        val selected=(0 until minOf(2,candidates.size)).map {
+            candidates[(offset+it)%candidates.size]
+        }
+        autonomousRecoveredCandidateCursor=(offset+selected.size)%candidates.size
+        for(pos in selected) {
             val symbol=pos.optString("symbol")
             if(symbol !in coreSymbols ||
                 CockpitDiagnostics.rows(existing).any { it.optString("symbol")==symbol &&
