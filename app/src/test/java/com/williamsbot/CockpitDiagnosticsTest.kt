@@ -69,7 +69,9 @@ class CockpitDiagnosticsTest {
         // Positions can lag signed exchange STOPs. No green autonomous
         // management may be manufactured by a journal's PROTECTED flag.
         assertEquals("FAIL",severity("EXE-12",status,coordinator))
-        assertEquals("FAIL",severity("EXE-03",status,coordinator))
+        // No current signed positions: a reconstructed placeholder is unknown
+        // exposure, not proof of a filled Williams order lacking protection.
+        assertEquals("NOT_VERIFIED",severity("EXE-03",status,coordinator))
         val detail=check("EXE-12",status,coordinator).getString("detail")
         assertTrue(detail.contains("7"))
         assertTrue(detail.contains("LTCUSDT"))
@@ -81,6 +83,45 @@ class CockpitDiagnosticsTest {
         coordinator.put("reconciliation_running",true)
         assertEquals("NOT_VERIFIED",severity("EXE-12",status,coordinator))
     }
+
+    @Test fun diagnostic11StaleProtectedRecoveryRemainsRiskWarningWithoutForgingEntry() {
+        val p=JSONObject().put("symbol","BTCUSDT").put("direction","SHORT")
+            .put("positionAmt","-0.0035").put("qty","0.0035")
+            .put("stop","80433.4")
+            .put("stop_verification_status","EXTERNAL_PROTECTED")
+            .put("strategy_ownership_verified",false)
+        val signed=JSONObject().put("symbol","BTCUSDT").put("direction","SHORT")
+            .put("quantity","-0.0035").put("stop","80433.4")
+            .put("stop_proof","EXTERNAL_PROTECTED")
+            .put("protection_client_id","W2PS_BTCUSDT_D_76650f95")
+            .put("observed_at_ms",now-30_000L)
+        val unowned=JSONObject().put("symbol","BTCUSDT").put("role","ENTRY")
+            .put("direction","SHORT").put("order_status","FILLED")
+            .put("kind","RECOVERED_EXCHANGE_POSITION")
+            .put("campaign_status","POSITION_OPEN")
+            .put("strategy_ownership_verified",false)
+            // Diagnostics #11: local guessed level != externally signed STOP.
+            .put("persisted_protective_stop","80254.4")
+            .put("protection_status","UNRESOLVED_EXTRA_ORDER")
+        val c=coordinator().put("pending_intent_details",JSONArray().put(unowned))
+            .put("reconciliation_running",true)
+            .put("blocker","exchange_reconciliation_in_progress")
+            .put("exchange_protection_observations",JSONArray().put(signed))
+        val st=healthy().put("futures_positions",JSONArray().put(p))
+        assertEquals("NOT_VERIFIED",severity("EXE-03",st,c))
+        assertEquals("NOT_VERIFIED",severity("EXE-04",st,c))
+        assertTrue(check("EXE-03",st,c).getString("detail")
+            .contains("стратегических исполненных кампаний без защиты=0"))
+        assertTrue(check("EXE-03",st,c).getString("detail")
+            .contains("восстановленных без доказанного ENTRY=1"))
+        // But an old signed STOP is NOT active proof. Keep strict P0 alarm.
+        signed.put("observed_at_ms",now-220_000L)
+        assertEquals("FAIL",severity("EXE-03",st,c))
+        assertEquals("FAIL",severity("EXE-04",st,c))
+        assertEquals("NOT_VERIFIED",severity("EXE-13",st,c))
+        assertEquals("NOT_VERIFIED",severity("EXE-12",st,c))
+    }
+
     @Test fun missingClosedTradeEvidenceMustNotPassPnlHistoryCheck() {
         val status=healthy().put("trade_observations",JSONArray())
         assertEquals("NOT_VERIFIED",severity("HIST-01",status))
