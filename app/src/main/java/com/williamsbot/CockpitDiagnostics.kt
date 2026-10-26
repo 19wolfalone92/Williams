@@ -400,6 +400,30 @@ internal object CockpitDiagnostics {
         // plus PROTECTED journal is *not* independent evidence that Binance
         // rejected protection. Mark it NOT_VERIFIED, never PASS. Explicitly
         // unprotected filled exposure must still FAIL even before the next read.
+        // Diagnostics (8): Binance can report working full-position stops for
+        // recovered/orphan exposure while the original strategy-owned entry
+        // ledger is unavailable. A STOP reduces risk; it does NOT grant a right
+        // to trail, add, reverse, close or create a new position. Surface this
+        // as a separate management failure rather than mislabelling every
+        // emergency-protected position as a definitively missing stop.
+        val unownedRecoveredPositions = entries.filter { intent ->
+            intent.optString("kind") == "RECOVERED_EXCHANGE_POSITION" &&
+                !intent.optBoolean("strategy_ownership_verified", false) &&
+                intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED", "REPLACEMENT_UNRESOLVED")
+        }
+        check("EXE-12", "execution", "Восстановленные позиции без подтверждённого владельца стратегии", when {
+            unownedRecoveredPositions.isNotEmpty() -> "FAIL"
+            coordinator.optJSONArray("pending_intent_details") == null ||
+                !positionsFresh(status,now) || coordinator.optBoolean("reconciliation_running") -> "NOT_VERIFIED"
+            else -> "PASS"
+        }, "Позиции с биржевой экспозицией, но БЕЗ подтверждённого исходного ENTRY: " +
+            "${unownedRecoveredPositions.size}; символы=" +
+            unownedRecoveredPositions.map { it.optString("symbol") }.distinct()
+                .joinToString(", ").ifBlank { "нет" } +
+            ". Защитный STOP может существовать, но это не разрешение автоматического переноса SL. " +
+            "НЕ создавать повторный вход, не считать такие позиции управляемыми; " +
+            "требуется проверка точных исполнений/клиентских ID на Binance. " +
+            "Проверка диагностическая: ни одна биржевая заявка не изменяется.")
         val explicitlyUnprotected = entries.any { intent ->
             (intent.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
                 intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) &&
