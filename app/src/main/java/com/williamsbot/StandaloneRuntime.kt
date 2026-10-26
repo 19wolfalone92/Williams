@@ -1681,7 +1681,7 @@ private class NativeEngine(
     @Volatile private var lastUserStreamSyncAtMs = 0L
     // GET-only forensic data: never used by the Execution Door, position
     // ownership, STOP replacement, reconciliation or order admission.
-    @Volatile private var signedFillAuditJson = "{\\"state\\":\\"NOT_REQUESTED\\"}"
+    @Volatile private var signedFillAuditJson = """{"state":"NOT_REQUESTED"}"""
     @Volatile private var signedFillAuditRunning = false
     @Volatile private var signedFillAuditLastAttemptMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
