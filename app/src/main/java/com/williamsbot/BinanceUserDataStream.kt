@@ -14,6 +14,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Binance's migrated USD-M private stream takes multiple event filters separated by "/".
@@ -115,6 +116,10 @@ class BinanceUserDataStream(
         while (!stopping.get()) {
             val generation = connectionGeneration.incrementAndGet()
             val closed = CountDownLatch(1)
+            // Preserve the first actionable cause across the disconnect,
+            // close callback and finally-block. A generic "reconnecting"
+            // status must not erase a real TLS/REST/authentication error.
+            val reconnectCause = AtomicReference<String?>(null)
             val apiKey = apiKeyProvider().trim()
             if (apiKey.isBlank()) {
                 onConnection(false, "credentials_not_configured")
@@ -155,8 +160,10 @@ class BinanceUserDataStream(
                                 runCatching { onEvent(event) }
                                     .onFailure {
                                         connected = false
-                                        onConnection(false, "event_handler_failed: " +
-                                            (it.message ?: it.javaClass.simpleName))
+                                        val detail = "event_handler_failed: " +
+                                            (it.message ?: it.javaClass.simpleName)
+                                        reconnectCause.compareAndSet(null, detail)
+                                        onConnection(false, detail)
                                         // A failed account/order event means the local view can no
                                         // longer be trusted. Force the reconnect loop to reconnect
                                         // and let the caller complete REST reconciliation before
@@ -170,14 +177,17 @@ class BinanceUserDataStream(
                                 if (shouldReconnectFuturesUserStream(event)) {
                                     val reason = event.optString("e")
                                     connected = false
+                                    reconnectCause.compareAndSet(null, reason)
                                     onConnection(false, reason)
                                     webSocket.close(1000, "Futures private stream $reason; reconnect")
                                     closed.countDown()
                                 }
                             } else if (message.has("code") || message.has("error")) {
                                 connected = false
-                                onConnection(false, "Futures user stream error: " +
-                                    message.optString("msg", message.optString("error", "unknown")))
+                                val detail = "Futures user stream error: " +
+                                    message.optString("msg", message.optString("error", "unknown"))
+                                reconnectCause.compareAndSet(null, detail)
+                                onConnection(false, detail)
                                 closed.countDown()
                                 webSocket.close(1011, "exchange_error")
                             }
@@ -190,23 +200,29 @@ class BinanceUserDataStream(
                         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                             if (!acceptsCallback(generation)) return
                             connected = false
-                            onConnection(false, "closing: " + code + ": " +
-                                (reason.ifBlank { "none" }))
+                            val detail = "closing: " + code + ": " +
+                                (reason.ifBlank { "none" })
+                            reconnectCause.compareAndSet(null, detail)
+                            onConnection(false, detail)
                             webSocket.close(code, reason)
                         }
 
                         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                             if (!acceptsCallback(generation)) return
                             connected = false
-                            onConnection(false, "closed: " + code + ": " +
-                                (reason.ifBlank { "none" }))
+                            val detail = "closed: " + code + ": " +
+                                (reason.ifBlank { "none" })
+                            reconnectCause.compareAndSet(null, detail)
+                            onConnection(false, detail)
                             closed.countDown()
                         }
 
                         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                             if (!acceptsCallback(generation)) return
                             connected = false
-                            onConnection(false, t.message ?: t.javaClass.simpleName)
+                            val detail = t.message ?: t.javaClass.simpleName
+                            reconnectCause.compareAndSet(null, detail)
+                            onConnection(false, detail)
                             closed.countDown()
                         }
                     }
@@ -226,7 +242,9 @@ class BinanceUserDataStream(
                 break
             } catch (failure: Throwable) {
                 connected = false
-                onConnection(false, failure.message ?: failure.javaClass.simpleName)
+                val detail = failure.message ?: failure.javaClass.simpleName
+                reconnectCause.compareAndSet(null, detail)
+                onConnection(false, detail)
             } finally {
                 // Invalidate callbacks before closing. Old onClosed/onFailure events
                 // must not overwrite a later socket's readiness or deliver stale fills.
@@ -234,7 +252,8 @@ class BinanceUserDataStream(
                 socket?.close(1000, "Futures user stream reconnect")
                 socket = null
                 connected = false
-                if (!stopping.get()) onConnection(false, "reconnecting")
+                if (!stopping.get()) onConnection(false,
+                    reconnectCause.get() ?: "listen_key_rotation")
             }
 
             if (stopping.get()) break
