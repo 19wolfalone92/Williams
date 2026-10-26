@@ -96,7 +96,8 @@ internal fun buildWilliamsUnifiedEvidence(
         // A recovered exchange exposure is NOT an original Williams ENTRY:
         // its placeholder strategy_profile=UNKNOWN is expected, not a forged
         // TC2/NTD/Course signal. Preserve a separate unowned-risk finding.
-        val isRecoveredUnowned = owner?.optString("kind")=="RECOVERED_EXCHANGE_POSITION" &&
+        val isRecoveredUnowned = owner!=null &&
+            owner.optString("kind")=="RECOVERED_EXCHANGE_POSITION" &&
             !owner.optBoolean("strategy_ownership_verified",false)
         if(owner!=null) {
             if(isRecoveredUnowned) recoveredUnowned.add(symbol)
