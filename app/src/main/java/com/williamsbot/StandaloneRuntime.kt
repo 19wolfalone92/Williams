@@ -352,6 +352,18 @@ internal fun mayCommitUserStreamSync(
     currentGeneration: Long
 ): Boolean = connected && !reconciliationPending && attemptGeneration == currentGeneration
 
+/** 
+ * A burst of private Binance events must not spin forever inside the same
+ * reconciliation worker. After two complete signed snapshots, reschedule a
+ * new attempt on the normal worker tick and RETAIN sync_required=true.
+ * A bounded retry is never proof that new orders or STOPs are safe.
+ */
+internal fun privateStreamReconciliationMayRepeat(
+    pending:Boolean,
+    passes:Int,
+    maximumPasses:Int=2
+):Boolean = pending && passes>0 && maximumPasses>0 && passes<maximumPasses
+
 /** A completed signed account audit can expose a genuine risk/owner blocker.
  * Receiving that snapshot synchronizes DATA; it never grants order authority.
  * Transport/identity/partial-audit failures must retain the WS resync latch. */
@@ -7541,7 +7553,9 @@ private class NativeEngine(
         }
         Thread {
             try {
+                var reconciliationPasses=0
                 while (true) {
+                    reconciliationPasses++
                     val connectionGenerationForAttempt = synchronized(this) {
                         futuresStreamReconcilePending = false
                         userStreamConnectionGeneration
@@ -7562,7 +7576,18 @@ private class NativeEngine(
                     }
                     val repeat = synchronized(this) {
                         if (futuresStreamReconcilePending) {
-                            true
+                            // A concurrent fill/STOP update invalidates this
+                            // snapshot for the current live stream. Bound replay
+                            // to avoid a hot loop that starves periodic position
+                            // management and Android liveness checks.
+                            userStreamSyncRequired = true
+                            if(privateStreamReconciliationMayRepeat(true,reconciliationPasses)) {
+                                true
+                            } else {
+                                userStreamReconcileFailure =
+                                    "PRIVATE_STREAM_EVENTS_ARRIVED_DURING_SIGNED_SYNC; BOUNDED_RETRY_PENDING"
+                                false
+                            }
                         } else if (!mayCommitUserStreamSync(
                                 connected = userStreamConnected,
                                 reconciliationPending = futuresStreamReconcilePending,
