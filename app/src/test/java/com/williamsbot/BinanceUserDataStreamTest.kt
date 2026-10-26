@@ -80,6 +80,38 @@ class BinanceUserDataStreamTest {
     }
 
     @Test
+    fun closingHandshakeWithoutOnClosedStillReconnectsWithNewListenKey() {
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body("""{"listenKey":"test"}""".toResponseBody()).build()
+        }.build()
+        val stream = BinanceUserDataStream(
+            http, "wss://demo-fstream.binance.com/private/ws", { "test-key" },
+            { _, _ -> }, { },
+            { request, listener -> TestSocket(request).also { sessions.put(it to listener) } }
+        )
+        try {
+            stream.start()
+            val (oldSocket, oldListener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            oldListener.onOpen(oldSocket, socketResponse(oldSocket.request()))
+            assertTrue(stream.isConnected())
+            // Mobile peer initiated a close, but transport never delivers onClosed.
+            oldListener.onClosing(oldSocket, 1001, "server going away")
+            assertFalse(stream.isConnected())
+            val (newSocket, newListener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            newListener.onOpen(newSocket, socketResponse(newSocket.request()))
+            assertTrue(stream.isConnected())
+            // The old WebSocket cannot reset a later session.
+            oldListener.onClosed(oldSocket, 1001, "late old session close")
+            assertTrue(stream.isConnected())
+        } finally {
+            stream.stop()
+        }
+    }
+
+    @Test
     fun oldSocketCloseCannotInvalidateAReplacementSession() {
         val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
         val http = OkHttpClient.Builder().addInterceptor { chain ->
