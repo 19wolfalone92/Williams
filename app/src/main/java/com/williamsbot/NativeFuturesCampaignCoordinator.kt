@@ -1756,7 +1756,7 @@ internal class NativeFuturesCampaignCoordinator(
                 val approvedEntry=supervision?.optString("entry_price")?.toBigDecimalOrNull()
                 val supervisedProtection=supervision!=null &&
                     supervision.optString("state")=="ACTIVE" &&
-                    supervision.optString("mode")=="OPERATOR_APPROVED_STOP_ONLY" &&
+                    supervision.optString("mode") in setOf("OPERATOR_APPROVED_STOP_ONLY","AUTO_VERIFIED_STOP_ONLY") &&
                     !supervision.optBoolean("strategy_ownership_verified",false) &&
                     !supervision.optBoolean("market_close_authorized",true) &&
                     !supervision.optBoolean("add_on_authorized",true) &&
@@ -1789,7 +1789,7 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("strategy_ownership_verified",matchingIntent?.optBoolean(
                         "strategy_ownership_verified",false)==true)
                     .put("automatic_trailing_authorized",ownedProtection || supervisedProtection)
-                    .put("management_mode",if(supervisedProtection) "OPERATOR_APPROVED_STOP_ONLY"
+                    .put("management_mode",if(supervisedProtection) supervision?.optString("mode")
                         else if(ownedProtection) "STRATEGY_OWNED" else "OBSERVE_ONLY"))
                 if (matchingIntent == null && signedFullStops.isNotEmpty()) {
                     // A valid exchange stop is better than unprotected exposure.
@@ -4509,6 +4509,124 @@ internal class NativeFuturesCampaignCoordinator(
         saveOperatorSupervisions(rows)
     }
 
+    /**
+     * Recovery by independently signed evidence, NOT reconstruction of missing
+     * strategy ownership. This method does not submit/cancel an exchange order.
+     * Two matching signed observations separated by >=30 seconds are mandatory
+     * before enabling a tightly scoped H1/H4 STOP-only maintenance record.
+     *
+     * Caller must have validated closed H1/H4 candles and TC2 stop rules.
+     * Every eventual STOP replacement rechecks the exchange and holds its own
+     * durable Execution Door. Entries/add-ons/reversals/market-closes stay banned.
+     */
+    fun enrollAutonomousRecoveredStopOnly(
+        symbol:String, direction:String, observedQuantity:String,
+        observedEntry:String, observedStop:String
+    ):JSONObject = synchronized(lock) {
+        require(symbol in allowedSymbols && direction in setOf("LONG","SHORT")) {
+            "AUTONOMOUS_RECOVERY_SYMBOL_OR_DIRECTION_REJECTED"
+        }
+        val rejected=JSONObject().put("symbol",symbol)
+            .put("mode","AUTO_VERIFIED_STOP_ONLY")
+            .put("strategy_ownership_verified",false)
+            .put("exchange_mutation_attempted",false)
+        val current=operatorSupervisions()
+        val activeRows=(0 until current.length()).mapNotNull { current.optJSONObject(it) }
+            .filter { it.optString("symbol")==symbol && it.optString("state") in
+                setOf("ACTIVE","REPLACEMENT_UNRESOLVED") }
+        if(activeRows.isNotEmpty()) return@synchronized rejected.put("status","ALREADY_SUPERVISED")
+        val local=intents()
+        val latest=latestEntryIntentIndex(local,symbol)?.let { local.optJSONObject(it) }
+        // A historical LONG must never be mistaken for a current SHORT owner.
+        // The opposite/uncertain campaign needs separate forensic resolution.
+        if(latest?.optBoolean("strategy_ownership_verified",false)==true ||
+            latest!=null && latest.optString("direction")!=direction) {
+            return@synchronized rejected.put("status","CAMPAIGN_IDENTITY_CONFLICT")
+        }
+        val qty=observedQuantity.toBigDecimalOrNull()?.abs()?.stripTrailingZeros()
+        val entry=observedEntry.toBigDecimalOrNull()?.stripTrailingZeros()
+        val stop=observedStop.toBigDecimalOrNull()?.stripTrailingZeros()
+        if(qty==null || qty.signum()<=0 || entry==null || entry.signum()<=0 ||
+            stop==null || stop.signum()<=0) return@synchronized rejected.put("status","INVALID_POSITION_OR_STOP")
+        val adapter=adapterFactory()
+        adapter.requireOneWayMode()
+        val exchangeRows=adapter.positions()
+        val matching=(0 until exchangeRows.length()).mapNotNull { exchangeRows.optJSONObject(it) }
+            .filter { it.optString("symbol")==symbol &&
+                it.optString("positionAmt").toBigDecimalOrNull()?.signum()!=0 }
+        if(matching.size!=1) return@synchronized rejected.put("status","SIGNED_EXPOSURE_NOT_UNIQUE")
+        val p=matching.single()
+        val signed=p.optString("positionAmt").toBigDecimalOrNull()
+            ?: return@synchronized rejected.put("status","SIGNED_QUANTITY_INVALID")
+        val signedEntry=p.optString("entryPrice").toBigDecimalOrNull()
+            ?: return@synchronized rejected.put("status","SIGNED_ENTRY_INVALID")
+        if(p.optString("positionSide","BOTH")!="BOTH" ||
+            (signed.signum()>0)!=(direction=="LONG") ||
+            signed.abs().compareTo(qty)!=0 || signedEntry.compareTo(entry)!=0) {
+            return@synchronized rejected.put("status","SIGNED_EXPOSURE_CHANGED")
+        }
+        val mark=adapter.markPrice(symbol)
+        if(!mark.isFinite() || mark<=0.0) return@synchronized rejected.put("status","MARK_UNVERIFIED")
+        val algos=adapter.openAlgoOrders(symbol)
+        val verified=(0 until algos.length()).mapNotNull { algos.optJSONObject(it) }
+            .filter { isFullPositionFuturesStop(it,symbol,direction,qty,mark) }
+        if(algos.length()!=1 || verified.size!=1)
+            return@synchronized rejected.put("status","STOP_NOT_UNIQUE_AND_FULL_COVERAGE")
+        val protection=verified.single()
+        val signedStop=protection.optString("triggerPrice").ifBlank {
+            protection.optString("stopPrice")
+        }.toBigDecimalOrNull()
+        val stopId=protection.optString("clientAlgoId")
+        if(signedStop==null || signedStop.compareTo(stop)!=0 || stopId.isBlank() ||
+            protection.optString("algoId").toLongOrNull()?.let { it>0L }!=true)
+            return@synchronized rejected.put("status","EXACT_SIGNED_STOP_ID_OR_LEVEL_MISMATCH")
+        val standard=adapter.allOpenOrders()
+        if((0 until standard.length()).mapNotNull { standard.optJSONObject(it) }
+            .any { it.optString("symbol")==symbol })
+            return@synchronized rejected.put("status","OTHER_OPEN_EXCHANGE_ORDERS")
+        val identity=listOf(symbol,direction,qty.toPlainString(),entry.toPlainString(),
+            stop.toPlainString(),stopId,protection.optString("algoId")).joinToString("|")
+        val key="autonomous_stop_candidate_v1_$symbol"
+        val previous=runCatching {
+            executionStore.readState(key)?.takeIf { it.isNotBlank() }?.let { JSONObject(it) }
+        }.getOrNull()
+        val now=clock()
+        val seenAt=previous?.optLong("first_seen_at_ms",0L) ?: 0L
+        if(previous?.optString("identity")!=identity || seenAt<=0L ||
+            now<seenAt || now-seenAt>300_000L) {
+            check(executionStore.writeState(key,JSONObject().put("identity",identity)
+                .put("first_seen_at_ms",now).toString())) {
+                "Cannot durably persist pre-adoption signed proof"
+            }
+            return@synchronized rejected.put("status","WAIT_SECOND_SIGNED_SNAPSHOT")
+                .put("first_seen_at_ms",now)
+        }
+        if(now-seenAt<30_000L) return@synchronized rejected
+            .put("status","WAIT_30_SECONDS_FOR_INDEPENDENT_SIGNED_PROOF")
+        // All analysis happened BEFORE admission. Preserve the exact signed
+        // identity as a separate supervision, without manufacturing Williams ENTRY.
+        val row=JSONObject().put("symbol",symbol).put("direction",direction)
+            .put("quantity",qty.toPlainString()).put("entry_price",entry.toPlainString())
+            .put("stop",stop.toPlainString()).put("initial_stop",stop.toPlainString())
+            .put("protection_client_id",stopId).put("approved_at_ms",now)
+            .put("first_signed_observed_at_ms",seenAt).put("second_signed_observed_at_ms",now)
+            .put("state","ACTIVE").put("mode","AUTO_VERIFIED_STOP_ONLY")
+            .put("source","SIGNED_TWO_SNAPSHOTS_CLOSED_H1_H4_TC2_STOP_REVIEW")
+            .put("strategy_ownership_verified",false)
+            .put("market_close_authorized",false).put("add_on_authorized",false)
+            .put("reverse_authorized",false)
+        ensureSupervisionHistory(row)
+        current.put(row)
+        saveOperatorSupervisions(current)
+        check(executionStore.writeState(key,"")) {
+            "Supervision persisted, but candidate cleanup failed"
+        }
+        rejected.put("status","AUTONOMOUS_STOP_ONLY_ACTIVATED")
+            .put("signed_stop_id",stopId)
+            .put("first_signed_observed_at_ms",seenAt)
+            .put("second_signed_observed_at_ms",now)
+    }
+
     fun approveOperatorStopSupervision(
         symbol: String, quantity: String, entryPrice: String, stopPrice: String,
         confirmation: String
@@ -4615,6 +4733,9 @@ internal class NativeFuturesCampaignCoordinator(
             ?: error("No operator-approved supervision for $symbol")
         check(record.optString("state")=="ACTIVE" &&
             record.optString("direction")==direction.name &&
+            record.optString("mode") in setOf("OPERATOR_APPROVED_STOP_ONLY","AUTO_VERIFIED_STOP_ONLY") &&
+            !record.optBoolean("market_close_authorized",true) &&
+            !record.optBoolean("add_on_authorized",true) &&
             !record.optBoolean("strategy_ownership_verified",false)) {
             "Operator supervision is suspended or has invalid ownership flags"
         }
