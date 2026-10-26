@@ -33,10 +33,36 @@ def test_missing_and_gapped_evidence_never_fabricates_direction_or_authorization
     c=cases()[0];bars=[WaveBar(*r) for r in c['bars']]
     alternatives={'scenarios':[{'frame':'1h','status':'PROVISIONAL','active_label':'W5'},{'frame':'1h','status':'PROVISIONAL','active_label':'W3'}]}
     trace=build_decision_trace('BTCUSDT',UNIFIED,bars[:-2]+bars[-1:],c['now'],{},[],alternatives)
-    assert trace['wave_state']=='ALTERNATIVES'
+    # Bare old labels without an observed-at timestamp and confirmed pivot
+    # evidence cannot be promoted to current competing counts.
+    assert trace['wave_state']=='UNRESOLVED'
     assert trace['decision']['state']=='BLOCKED'
     assert 'CLOSED_H1_HISTORY_NOT_PROVEN' in trace['decision']['reasons']
     assert 'NO_VALID_INITIAL_FORMATION' in trace['decision']['reasons']
     empty=build_decision_trace('ETHUSDT',UNIFIED,[],c['now'],{},[],{})
     assert empty['wave_state']=='UNRESOLVED' and not empty['divergences'] and not empty['candles']
     assert 'H1_SNAPSHOT_STALE' in empty['decision']['reasons']
+
+
+
+def test_entry_context_catches_sleeping_fractal_without_inventing_trade_veto():
+    from williams_edition_rules import TC2
+    h=3_600_000
+    now=400*h
+    bars=[WaveBar(now-(80-i)*h,100.,100.5,99.5,100.,1000.) for i in range(80)]
+    signal=SignalSpec.new(symbol="BTCUSDT",side="SELL",signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY,timeframe="1h",signal_bar_time_ms=bars[-3].t,
+        trigger_price=99.49,protective_reference=100.51,strategy_profile=TC2)
+    report=build_decision_trace("BTCUSDT",TC2,bars,now,{},[signal],{"as_of":now})
+    context=report["entry_market_contexts"][0]
+    assert context["alligator_phase"]=="SLEEPING"
+    assert "SLEEPING_RANGE_POTENTIAL_BREAKOUT" in context["flags"]
+    assert "WAVE_STRUCTURE_UNRESOLVED" in context["flags"]
+    assert context["h1_reading_state"]=="OBSERVED"
+    assert context["source"]==TC2
+    assert not context["context_is_trade_veto"]
+    assert not context["can_place_orders"]
+    assert not context["probability_calibrated"]
+    assert report["wave_state"]=="UNRESOLVED"
+    assert build_decision_trace("BTCUSDT",TC2,bars+[WaveBar(now,1,1e9,.1,1,1e9)],
+        now,{},[signal],{"as_of":now})==report
