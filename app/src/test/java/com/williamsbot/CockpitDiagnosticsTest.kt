@@ -21,7 +21,7 @@ class CockpitDiagnosticsTest {
         // Positions can lag signed exchange STOPs. No green autonomous
         // management may be manufactured by a journal's PROTECTED flag.
         assertEquals("FAIL",severity("EXE-12",status,coordinator))
-        assertEquals("NOT_VERIFIED",severity("EXE-03",status,coordinator))
+        assertEquals("FAIL",severity("EXE-03",status,coordinator))
         val detail=check("EXE-12",status,coordinator).getString("detail")
         assertTrue(detail.contains("7"))
         assertTrue(detail.contains("LTCUSDT"))
@@ -50,7 +50,7 @@ class CockpitDiagnosticsTest {
         assertEquals("WARNING",severity("HIST-01",s))
         val detail=check("HIST-01",s).optString("detail")
         assertTrue(detail.contains("AVAXUSDT"))
-        assertTrue(detail.contains("Неподтверждённые записи закрытия: 2"))
+        assertTrue(detail.contains("неподтверждённых записей закрытия: 2"))
         s.put("trade_observations",JSONArray().put(JSONObject().put("symbol","AVAXUSDT")
             .put("status","CLOSED_EXCHANGE_CONFIRMED").put("pnl_complete",true)))
         assertEquals("PASS",severity("HIST-01",s))
