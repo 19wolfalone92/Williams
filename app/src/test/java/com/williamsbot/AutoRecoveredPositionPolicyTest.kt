@@ -5,6 +5,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AutoRecoveredPositionPolicyTest {
+    @Test fun autonomousStopManagementRequiresStableIndependentSignedSnapshots() {
+        val fingerprint="DOGE|SHORT|150|0.07643|0.07727|W2PS_A|1234"
+        val seen=JSONObject().put("identity",fingerprint)
+            .put("first_seen_at_ms",1_800_000_000_000L)
+        val start=1_800_000_000_000L
+        assertFalse(autonomousStopSecondSignedProofEligible(null,fingerprint,start+30_000L))
+        assertFalse(autonomousStopSecondSignedProofEligible(seen,fingerprint,start+29_999L))
+        assertTrue(autonomousStopSecondSignedProofEligible(seen,fingerprint,start+30_000L))
+        assertTrue(autonomousStopSecondSignedProofEligible(seen,fingerprint,start+300_000L))
+        assertFalse(autonomousStopSecondSignedProofEligible(seen,fingerprint,start+300_001L))
+        assertFalse(autonomousStopSecondSignedProofEligible(seen,
+            "DOGE|SHORT|150|0.07643|0.07727|W2PS_B|1234",start+40_000L))
+        assertFalse(autonomousStopSecondSignedProofEligible(seen,"",start+40_000L))
+        assertFalse(autonomousStopSecondSignedProofEligible(seen,fingerprint,start-10L))
+    }
     private val now=1_800_000_000_000L
     private fun position()=JSONObject().put("symbol","AVAXUSDT")
         .put("positionSide","BOTH").put("positionAmt","-20")
