@@ -696,6 +696,24 @@ internal object CockpitDiagnostics {
             "старые SERVICE_START_ATTEMPT: ${lifecycle?.optInt("service_start_attempt_count",-1)} " +
             "(это НЕ перезапуски); статус истории ОС=${lifecycle?.optString("system_exit_history_status")}. " +
             "Показана только сохранённая часть последних 24 часов; отсутствие событий НЕ доказывает 24-часовой фон.")
+        // Diagnostics (9): full Binance signed fills are an independent GET-only
+        // forensic source. An observed BNB BUY is not an automatic proof that
+        // the old SHORT campaign closed or that all commission/funding is known.
+        val fillAudit=status.optJSONObject("signed_exchange_fill_forensics")
+        val fillAuditRows=rows(fillAudit?.optJSONArray("symbols"))
+        val bnbFillAudit=fillAuditRows.singleOrNull { it.optString("symbol")=="BNBUSDT" }
+        val bnbFillStatus=bnbFillAudit?.optString("status") ?: "NOT_REQUESTED"
+        check("HIST-02","database","Подписанные исполнения Binance для закрытия BNB",when {
+            fillAudit?.optString("state")=="SIGNED_GET_FAILED" -> "WARNING"
+            bnbFillStatus=="SIGNED_TRADE_SHAPE_UNVERIFIED" -> "WARNING"
+            bnbFillStatus=="RECENT_SIGNED_FILLS_NO_CAMPAIGN_BINDING" -> "WARNING"
+            else -> "NOT_VERIFIED"
+        },"Состояние GET-only: ${fillAudit?.optString("state") ?: "NOT_REQUESTED"}; " +
+            "BNB: $bnbFillStatus; BUY qty=${bnbFillAudit?.optString("buy_qty")}; " +
+            "SELL qty=${bnbFillAudit?.optString("sell_qty")}; " +
+            "биржевые orderIds=${bnbFillAudit?.optInt("exchange_order_count")}; " +
+            "источник подписан, но запись закрытия BNB с доказанным исходным ENTRY пока НЕ получена. " +
+            "Это не разрешение нового входа и не подтверждение полного PnL.")
         val closedTradeRows=rows(status.optJSONArray("trade_observations"))
         val unverifiedCloses=closedTradeRows.filter { it.optString("status")=="CLOSED_UNVERIFIED" ||
             it.optString("outcome")=="CLOSED_UNVERIFIED" }
