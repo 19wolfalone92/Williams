@@ -8639,7 +8639,9 @@ private class NativeEngine(
             if (wm1AoBlocker==null &&
                 validWilliamsReversalBar("LONG",waveBars[i],priorLow,
                     listOf(jawS[i],teethS[i],lipsS[i]),angulationProof(i).score)) {
-                val trigger = candles[i].h + tick
+                val levels=exactTc2WiseManPriceBarLevels("LONG",waveBars[i],tick)
+                    ?: continue
+                val trigger=levels.trigger
                 if (triggerStillPending(i, trigger)) {
                     out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "REVERSAL", candles[i].t),
@@ -8647,9 +8649,9 @@ private class NativeEngine(
                         role = "ENTRY",
                         signalBarTimeMs = candles[i].t,
                         triggerPrice = trigger,
-                        protectivePrice = candles[i].l - tick,
+                        protectivePrice = levels.protective,
                         teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                        invalidationPrice = candles[i].l - tick,
+                        invalidationPrice = levels.protective,
                         reason = "WM1 bullish reversal with mouth-anchored angulation; waiting above signal-bar high",
                         setupContext = JSONObject()
                             .put("angulation",angulationProof(i).toJson())
@@ -8685,12 +8687,11 @@ private class NativeEngine(
         if (streak >= 3) {
             val signalIndex = candles.lastIndex - (streak - 3)
             if (signalIndex in 35..candles.lastIndex) {
-                val trigger = candles[signalIndex].h + tick
-                val structuralStop = williamsTc2SuperAoInitialStop(
-                    "LONG",waveBars,signalIndex,tick
-                )
-                if (structuralStop != null && structuralStop<trigger &&
-                    triggerStillPending(signalIndex, trigger)) {
+                val sourceLevel=exactTc2WiseManPriceBarLevels("LONG",waveBars[signalIndex],tick)
+                if (sourceLevel!=null && sourceLevel.protective<sourceLevel.trigger &&
+                    triggerStillPending(signalIndex,sourceLevel.trigger)) {
+                    val trigger=sourceLevel.trigger
+                    val structuralStop=sourceLevel.protective
                     out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[signalIndex].t),
                         type = "SUPER_AO",
@@ -8776,16 +8777,27 @@ private class NativeEngine(
                     proof.optLong("fractal_confirmation_time_ms", -1L), tick)
                     ?: return@mapNotNull null
             } else null
+            val sourceBarLevels=if(signal.type in setOf("REVERSAL","SUPER_AO")) {
+                // WM1: reversal price bar. WM2: the third directional AO bar.
+                // Both are identified by the original closed bar time.
+                val originalBar=sourceBars.singleOrNull { it.t==signal.signalBarTimeMs }
+                    ?: return@mapNotNull null
+                exactTc2WiseManPriceBarLevels("SHORT",originalBar,tick)
+                    ?: return@mapNotNull null
+            } else null
+            if(sourceFractal==null && sourceBarLevels==null)
+                return@mapNotNull null
+            val sourceTrigger=sourceFractal?.trigger ?: sourceBarLevels!!.trigger
+            val sourceStop=sourceFractal?.protective ?: sourceBarLevels!!.protective
             val reflectedTrigger = reflection - signal.triggerPrice
             val reflectedStop = reflection - signal.protectivePrice
-            // A disagreement greater than floating arithmetic noise is NOT
-            // evidence of a valid book price: fail closed, do not arm the order.
-            if (sourceFractal != null &&
-                (abs(reflectedTrigger - sourceFractal.trigger) > tick * .001 ||
-                 abs(reflectedStop - sourceFractal.protective) > tick * .001))
+            // Reflected prices are only consistency evidence; never the order
+            // price. Even WM1/WM2 may be one tick wrong after floating division.
+            if(abs(reflectedTrigger-sourceTrigger)>tick*.001 ||
+                abs(reflectedStop-sourceStop)>tick*.001)
                 return@mapNotNull null
-            val trigger = sourceFractal?.trigger ?: reflectedTrigger
-            val stop = sourceFractal?.protective ?: reflectedStop
+            val trigger=sourceTrigger
+            val stop=sourceStop
             // A short entry must trigger below current price and its protective stop
             // must be above entry. Invalid reflected levels are rejected, never guessed.
             val current = candles.last().c
@@ -8793,12 +8805,18 @@ private class NativeEngine(
                 trigger <= 0.0 || stop <= trigger || trigger >= current
             ) return@mapNotNull null
             val sourceContext = JSONObject(reflectedTc2SetupContext(signal.type, signal.setupContext, reflection))
-            if(sourceFractal!=null) sourceContext.put("short_price_source","ORIGINAL_EXCHANGE_OHLC")
+            sourceContext.put("short_price_source","ORIGINAL_EXCHANGE_OHLC")
+                .put("book_tick",tick)
+                .put("book_trigger_exact",trigger)
+                .put("book_protective_exact",stop)
+            if(sourceFractal!=null) sourceContext
                 .put("book_pivot_low",sourceFractal.pivotLow)
                 .put("book_stop_window_high",sourceFractal.stopWindowHigh)
-                .put("book_tick",tick)
-                .put("book_trigger_exact",sourceFractal.trigger)
-                .put("book_protective_exact",sourceFractal.protective)
+            if(sourceBarLevels!=null) sourceContext
+                .put("book_source_bar_high",sourceBarLevels.sourceHigh)
+                .put("book_source_bar_low",sourceBarLevels.sourceLow)
+                .put("book_source_bar_time_ms",signal.signalBarTimeMs)
+                .apply { if(has("risk_stop_at_price")) put("risk_stop_at_price",stop) }
             signal.copy(
                 signalId = campaignSignalId(
                     symbol, frame, "SHORT_" + signal.type, signal.formationAtMs
