@@ -605,8 +605,22 @@ internal object CockpitDiagnostics {
             else -> "NOT_VERIFIED"
         }, "Сервис=${android?.optBoolean("foreground_service_active")}; CPU=${android?.optBoolean("cpu_wake_lock_held")}; " +
             "контроль=${android?.optLong("service_guard_age_ms",-1)} мс. Эти признаки не доказывают непрерывную работу с выключенным экраном.")
-        check("AND-02", "runtime", "Восстановление после перезапуска", "NOT_VERIFIED",
-            "Проверка требует фактического перезапуска процесса и сверки с Binance; наличие recovery-кода не считается PASS.")
+        val bootWitness=if(android!=null)
+            AndroidRebootRecoveryEvidence.assess(android.optJSONObject("continuity") ?: JSONObject(),
+                android,status,now) else null
+        check("AND-02", "runtime", "Восстановление после перезагрузки Android", when {
+            bootWitness==null || !bootWitness.optBoolean("reboot_observed") -> "NOT_VERIFIED"
+            bootWitness.optBoolean("recovery_technical_proven") -> "PASS"
+            bootWitness.optLong("opt_in_verified_at_ms")<=0L -> "NOT_VERIFIED"
+            now-bootWitness.optLong("boot_at_ms")>120_000L -> "WARNING"
+            else -> "NOT_VERIFIED"
+        }, "Последняя наблюдаемая перезагрузка: ${bootWitness?.optLong("boot_at_ms")}; " +
+            "opt-in: ${bootWitness?.optLong("opt_in_verified_at_ms")}; " +
+            "FGS: ${bootWitness?.optLong("fgs_created_at_ms")}; " +
+            "worker: ${bootWitness?.optBoolean("worker_live_now")}; " +
+            "post-boot signed REST sync: ${bootWitness?.optBoolean("signed_sync_after_boot")}; " +
+            "код: ${bootWitness?.optString("status")}. PASS доказывает только последовательность boot->FGS->worker->signed sync, " +
+            "но НЕ непрерывный 24-часовой фон, полноту защиты STOP или готовность к новым входам.")
         val lifecycle=android?.optJSONObject("lifecycle_evidence")
         check("AND-04", "runtime", "Остановки Android, перезапуски и запросы запуска", when {
             lifecycle == null -> "NOT_VERIFIED"
