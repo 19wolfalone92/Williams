@@ -4739,6 +4739,16 @@ internal class NativeFuturesCampaignCoordinator(
             !record.optBoolean("strategy_ownership_verified",false)) {
             "Operator supervision is suspended or has invalid ownership flags"
         }
+        if(record.optString("mode")=="AUTO_VERIFIED_STOP_ONLY") {
+            val first=record.optLong("first_signed_observed_at_ms",0L)
+            val second=record.optLong("second_signed_observed_at_ms",0L)
+            check(record.optString("source")=="SIGNED_TWO_SNAPSHOTS_CLOSED_H1_H4_TC2_STOP_REVIEW" &&
+                first>0L && second>=first && second-first>=30_000L &&
+                record.optLong("approved_at_ms")>=second &&
+                !record.optBoolean("reverse_authorized",true)) {
+                "Autonomous STOP-only supervision lacks two durable signed proofs and book analysis"
+            }
+        }
         val oldPrice=record.optString("stop").toBigDecimalOrNull() ?: error("Missing protected stop")
         val next=proposedStop.toBigDecimalOrNull() ?: error("Malformed requested stop")
         require(next.signum()>0 && if(direction==Direction.LONG) next>oldPrice else next<oldPrice) {
