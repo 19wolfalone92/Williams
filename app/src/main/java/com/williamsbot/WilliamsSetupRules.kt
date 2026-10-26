@@ -90,3 +90,63 @@ internal fun williamsTc2SuperAoInitialStop(
     if(!price.isFinite() || price<=0) return null
     return price
 }
+
+
+/** The SHORT WM3 candidate is detected on mirrored OHLC, but executable
+ * prices must be derived from the ORIGINAL exchange candles. Floating-point
+ * reflection can shift a perfectly valid tick by ~1 ulp, and a later floor()
+ * then loses an entire tick (observed on BTCUSDT/ETHUSDT 2026-10-26).
+ *
+ * The mirrored series has NO price-setting authority. All inputs are known
+ * closed H1 source bars, including two confirmed right-hand fractal bars.
+ * TC2 ch.11: sell at the source pivot LOW minus exactly one exchange tick;
+ * protective stop is beyond the highest HIGH in the selector's 3-5-bar
+ * confirmation window (or the complete extended same-price plateau).
+ */
+internal data class Tc2ShortFractalSourceLevels(
+    val trigger: Double,
+    val protective: Double,
+    val pivotLow: Double,
+    val stopWindowHigh: Double
+)
+
+internal fun exactTc2ShortFractalLevels(
+    bars: List<WilliamsWaveBar>,
+    centerAtMs: Long,
+    groupStartAtMs: Long,
+    confirmationAtMs: Long,
+    tick: Double
+): Tc2ShortFractalSourceLevels? {
+    if (bars.size < 5 || !tick.isFinite() || tick <= 0.0 ||
+        centerAtMs < 0L || groupStartAtMs < 0L || confirmationAtMs < 0L) return null
+    fun uniqueIndex(at: Long): Int {
+        val matches = bars.indices.filter { bars[it].t == at }
+        return if (matches.size == 1) matches.single() else -1
+    }
+    val center = uniqueIndex(centerAtMs)
+    val groupStart = uniqueIndex(groupStartAtMs)
+    val confirmation = uniqueIndex(confirmationAtMs)
+    if (center < 2 || groupStart < 0 || groupStart > center ||
+        confirmation != center + 2 || confirmation !in bars.indices) return null
+    if (bars.take(confirmation + 1).zipWithNext().any { (a, b) -> b.t <= a.t }) return null
+    // Identical to selectWilliamsPendingFractal: preserve a long plateau
+    // when it stretches further left than the ordinary five-bar window.
+    val stopStart = minOf(groupStart, maxOf(0, confirmation - 4))
+    val window = bars.subList(stopStart, confirmation + 1)
+    if (window.any { !it.h.isFinite() || !it.l.isFinite() ||
+            it.h < it.l || it.l <= 0.0 }) return null
+    val pivot = bars[center].l
+    val highest = window.maxOf { it.h }
+    // If the original exchange prices are not on the tick grid, do NOT
+    // silently fabricate a nearby rule-compliant execution price.
+    if (!ExecutionMath.isMultiple(pivot, tick) ||
+        !ExecutionMath.isMultiple(highest, tick)) return null
+    val step = ExecutionMath.decimal(tick)
+    val trigger = ExecutionMath.decimal(pivot).subtract(step).toDouble()
+    val protective = ExecutionMath.decimal(highest).add(step).toDouble()
+    if (!trigger.isFinite() || !protective.isFinite() ||
+        trigger <= 0.0 || protective <= trigger ||
+        !ExecutionMath.isMultiple(trigger, tick) ||
+        !ExecutionMath.isMultiple(protective, tick)) return null
+    return Tc2ShortFractalSourceLevels(trigger, protective, pivot, highest)
+}
