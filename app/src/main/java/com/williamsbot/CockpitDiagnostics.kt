@@ -431,9 +431,19 @@ internal object CockpitDiagnostics {
 
         val exchangeStopRefreshPending=unprotected.isNotEmpty() &&
             unprotected.all { protectionAwaitingExchangeRefresh(it,coordinator,now) }
-        val filledUnprotected = entries.filter {
-            (it.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
-                it.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) && !protectionProven(it, now)
+        // Recovered Binance exposure is not proof of a filled Williams order.
+        // A placeholder entry can have a stale/different structural STOP in
+        // SQLite while Binance has already signed an external STOP. Do NOT
+        // call this a *definitively unprotected strategy campaign*. The signed
+        // live-position STOP check below remains authoritative and fail-closed.
+        fun isUnownedRecovery(intent:JSONObject):Boolean =
+            intent.optString("kind")=="RECOVERED_EXCHANGE_POSITION" &&
+                !intent.optBoolean("strategy_ownership_verified",false)
+        val filledUnprotected = entries.filter { intent ->
+            !isUnownedRecovery(intent) &&
+                (intent.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
+                    intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) &&
+                !protectionProven(intent, now)
         }
         // While a new exchange snapshot is loading, a persisted POSITION_OPEN
         // plus PROTECTED journal is *not* independent evidence that Binance
@@ -481,8 +491,9 @@ internal object CockpitDiagnostics {
             "требуется проверка точных исполнений/клиентских ID на Binance. " +
             "Проверка диагностическая: ни одна биржевая заявка не изменяется.")
         val explicitlyUnprotected = entries.any { intent ->
-            (intent.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
-                intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) &&
+            !isUnownedRecovery(intent) &&
+                (intent.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
+                    intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) &&
                 (intent.optString("protection_status") != "PROTECTED" ||
                     intent.optString("actual_risk_audit_status") == "BLOCKED")
         }
@@ -497,7 +508,8 @@ internal object CockpitDiagnostics {
         }
         check("EXE-03", "execution", "Защита исполненной позиции", protectionSeverity,
             "Открытых=${positions.size}; без свежего подтверждения=${unprotected.size}; " +
-                "исполненных кампаний без защиты=${filledUnprotected.size}; " +
+                "стратегических исполненных кампаний без защиты=${filledUnprotected.size}; " +
+                "восстановленных без доказанного ENTRY=${unownedRecoveredPositions.size}; " +
                 "сверка свежего STOP Binance выполняется=$exchangeStopRefreshPending. " +
                 "NOT_VERIFIED не означает защищённость и не разрешает новую сделку.")
         check("EXE-04", "execution", "Подтверждение стопа Binance", protectionSeverity,
