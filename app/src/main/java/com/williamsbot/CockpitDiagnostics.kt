@@ -390,6 +390,40 @@ internal object CockpitDiagnostics {
         }, "Частично исполненных: ${partial.size}. Любая исполненная часть требует подтверждённой защиты.")
         val positions = rows(status.optJSONArray("futures_positions"))
         val unprotected = positions.filter { p -> !positionProtectionProven(p,coordinator,now) }
+        val rawSignedStops=rows(coordinator.optJSONArray("exchange_protection_observations"))
+        val signedPerSymbol=positions.map { p ->
+            val symbol=p.optString("symbol")
+            val side=p.optString("direction")
+            val candidates=rawSignedStops.filter { it.optString("symbol")==symbol &&
+                it.optString("direction")==side }
+            val proof=candidates.singleOrNull()
+            val age=proof?.optLong("observed_at_ms",0L)?.let { at ->
+                if(at>0L && now>=at) now-at else -1L
+            } ?: -1L
+            val exact=matchingProtectionObservation(p,coordinator,now)
+            val assessment=when {
+                exact!=null -> "SIGNED_STOP_FRESH"
+                candidates.isEmpty() -> "SIGNED_STOP_NOT_OBSERVED"
+                proof==null -> "AMBIGUOUS_SIGNED_STOP_PROOFS"
+                age<0L -> "INVALID_SIGNED_STOP_TIME"
+                age>POSITION_TTL_MS -> "STALE_SIGNED_STOP_PROOF"
+                else -> "SIGNED_STOP_IDENTITY_OR_COVERAGE_MISMATCH"
+            }
+            Triple(symbol,assessment,age)
+        }
+        check("EXE-13","execution","Актуальная Binance STOP-защита по каждой позиции",when {
+            !positionsFresh(status,now) || coordinator.optJSONArray("exchange_protection_observations")==null -> "NOT_VERIFIED"
+            signedPerSymbol.isEmpty() -> "NOT_VERIFIED"
+            signedPerSymbol.all { it.second=="SIGNED_STOP_FRESH" } -> "PASS"
+            signedPerSymbol.any { it.second=="STALE_SIGNED_STOP_PROOF" } -> "NOT_VERIFIED"
+            coordinator.optBoolean("reconciliation_running") -> "NOT_VERIFIED"
+            else -> "FAIL"
+        }, "Только текущие подписанные Binance STOP (срок 15 секунд), без принятия strategy ownership: " +
+            signedPerSymbol.joinToString("; ") { (symbol,state,age) ->
+                "$symbol=$state (${if(age>=0) age.toString()+"мс" else "время неизвестно"})"
+            }.ifEmpty { "открытых позиций не наблюдается" } +
+            ". Устаревший или недоступный proof НЕ означает отмену стопа, но не разрешает перенос SL или новые входы.")
+
         val exchangeStopRefreshPending=unprotected.isNotEmpty() &&
             unprotected.all { protectionAwaitingExchangeRefresh(it,coordinator,now) }
         val filledUnprotected = entries.filter {
