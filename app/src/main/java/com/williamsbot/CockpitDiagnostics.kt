@@ -183,7 +183,8 @@ internal object CockpitDiagnostics {
     private fun operatorManagementProven(position:JSONObject,coordinator:JSONObject,now:Long):Boolean {
         val observation=matchingProtectionObservation(position,coordinator,now) ?: return false
         if(!observation.optBoolean("automatic_trailing_authorized") ||
-            observation.optString("management_mode")!="OPERATOR_APPROVED_STOP_ONLY") return false
+            observation.optString("management_mode") !in
+                setOf("OPERATOR_APPROVED_STOP_ONLY","AUTO_VERIFIED_STOP_ONLY")) return false
         return rows(coordinator.optJSONArray("operator_supervised_positions")).any { r ->
             r.optString("symbol")==position.optString("symbol") &&
                 r.optString("state")=="ACTIVE" &&
