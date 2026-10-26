@@ -8722,6 +8722,7 @@ private class NativeEngine(
                     .put("wise_man","WM3")
                     .put("signal_family","CONFIRMED_FRACTAL")
                     .put("fractal_center_time_ms",candles[fractal.center].t)
+                    .put("fractal_group_start_time_ms",candles[fractal.groupStart].t)
                     .put("fractal_confirmation_time_ms",candles[fractal.confirmation].t)
                     .put("teeth_filter_verified",true).toString(),
                 formationAtMs=candles[fractal.center].t)
@@ -8760,15 +8761,43 @@ private class NativeEngine(
                 v = candle.v
             )
         }
+        val sourceBars = candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
         return longCampaignSignals(symbol, reflected, frame, tick).mapNotNull { signal ->
-            val trigger = reflection - signal.triggerPrice
-            val stop = reflection - signal.protectivePrice
+            // Reflection determines the BOOK signal geometry only; the original
+            // Binance candle, not a reflected Double, determines monetary ticks.
+            val sourceFractal = if (signal.type == "FRACTAL") {
+                val proof = runCatching { JSONObject(signal.setupContext) }.getOrNull()
+                    ?: return@mapNotNull null
+                exactTc2ShortFractalLevels(sourceBars,
+                    proof.optLong("fractal_center_time_ms", -1L),
+                    proof.optLong("fractal_group_start_time_ms", -1L),
+                    proof.optLong("fractal_confirmation_time_ms", -1L), tick)
+                    ?: return@mapNotNull null
+            } else null
+            val reflectedTrigger = reflection - signal.triggerPrice
+            val reflectedStop = reflection - signal.protectivePrice
+            // A disagreement greater than floating arithmetic noise is NOT
+            // evidence of a valid book price: fail closed, do not arm the order.
+            if (sourceFractal != null &&
+                (abs(reflectedTrigger - sourceFractal.trigger) > tick * .001 ||
+                 abs(reflectedStop - sourceFractal.protective) > tick * .001))
+                return@mapNotNull null
+            val trigger = sourceFractal?.trigger ?: reflectedTrigger
+            val stop = sourceFractal?.protective ?: reflectedStop
             // A short entry must trigger below current price and its protective stop
             // must be above entry. Invalid reflected levels are rejected, never guessed.
             val current = candles.last().c
             if (!trigger.isFinite() || !stop.isFinite() ||
                 trigger <= 0.0 || stop <= trigger || trigger >= current
             ) return@mapNotNull null
+            val sourceContext = JSONObject(reflectedTc2SetupContext(
+                signal.type,signal.setupContext,reflection))
+            if(sourceFractal!=null) sourceContext.put("short_price_source","ORIGINAL_EXCHANGE_OHLC")
+                .put("book_pivot_low",sourceFractal.pivotLow)
+                .put("book_stop_window_high",sourceFractal.stopWindowHigh)
+                .put("book_tick",tick)
+                .put("book_trigger_exact",sourceFractal.trigger)
+                .put("book_protective_exact",sourceFractal.protective)
             signal.copy(
                 signalId = campaignSignalId(
                     symbol, frame, "SHORT_" + signal.type, signal.formationAtMs
@@ -8777,7 +8806,7 @@ private class NativeEngine(
                 triggerPrice = trigger,
                 protectivePrice = stop,
                 teethAtDetection = reflection-signal.teethAtDetection,
-                setupContext = reflectedTc2SetupContext(signal.type, signal.setupContext, reflection),
+                setupContext = sourceContext.toString(),
                 invalidationPrice = stop,
                 reason = signal.reason.replace("bullish","bearish").replace("above signal-bar high","below signal-bar low")
                     .replace("rising AO","falling AO").replace("above price bar","below price bar")
