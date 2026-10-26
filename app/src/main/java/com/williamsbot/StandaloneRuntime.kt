@@ -571,6 +571,18 @@ internal fun runtimeStartButtonEnabled(
 internal fun deferrableFuturesReconciliation(purpose: String): Boolean =
     purpose == "POSITION_MANAGEMENT_RECONCILIATION" || purpose == "USER_STREAM_RECONCILIATION"
 
+/** A private WS reconnect MUST eventually get an account-wide signed snapshot.
+ * Position management may run every 2.5s while orphaned exposure is present;
+ * a zero-timeout user-stream lock can then collide forever and show connected
+ * WebSocket with last_successful_rest_sync_ms=0. Wait on the dedicated WS worker
+ * for at most 15s, WITHOUT skipping the durable execution door. Maintenance
+ * ticks stay nonblocking and all mutation/entry gates remain unchanged. */
+internal fun futuresReconciliationLockBudgetMs(purpose:String,maximumWaitMs:Long):Long = when(purpose) {
+    "POSITION_MANAGEMENT_RECONCILIATION" -> 0L
+    "USER_STREAM_RECONCILIATION" -> minOf(15_000L,maximumWaitMs.coerceAtLeast(0L))
+    else -> maximumWaitMs.coerceAtLeast(0L)
+}
+
 /** Read-only last-known signed positions fallback. The caller MUST set
  * positions_snapshot_ok=false; these rows do not prove a current position,
  * a working STOP, available risk budget or that the account is flat.
@@ -1657,7 +1669,7 @@ private class NativeEngine(
     // position-management, recovery and self-heal callers. The durable Execution Door
     // serializes mutations, but without this lock concurrent reconciliation requests can
     // race their coordinator snapshots and incorrectly latch RECONCILE_REQUIRED.
-    private val futuresReconciliationLock = java.util.concurrent.locks.ReentrantLock()
+    private val futuresReconciliationLock = java.util.concurrent.locks.ReentrantLock(true)
     @Volatile private var futuresReconciliationRunning = false
     @Volatile private var futuresStreamReconcileRunning = false
     @Volatile private var futuresStreamReconcilePending = false
@@ -4565,14 +4577,14 @@ private class NativeEngine(
         // Bound lock acquisition so a stalled account-wide reconciliation cannot strand
         // queued private-stream work indefinitely. Unknown exchange state remains blocked.
         val waitStartedAtMs = System.currentTimeMillis()
-        // Periodic management and private-stream snapshot checks are deferrable:
-        // another authoritative reconciliation may already own the account lock.
-        // Never make a mere lock collision a fatal private-stream timeout.
+        // Periodic management stays opportunistic; a private-stream sync waits
+        // fairly for a bounded window to avoid starvation from fast maintenance.
+        // An overlap still cannot grant new trading authority or create two workers.
         // Kill, startup, and explicit operator recovery remain strict.
         val deferrable = deferrableFuturesReconciliation(purpose)
         val lockAcquired = try {
             futuresReconciliationLock.tryLock(
-                if (deferrable) 0L else waitForDoorMs.coerceAtLeast(0L),
+                futuresReconciliationLockBudgetMs(purpose,waitForDoorMs),
                 TimeUnit.MILLISECONDS
             )
         } catch (interrupted: InterruptedException) {
