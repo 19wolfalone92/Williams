@@ -6,6 +6,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CockpitDiagnosticsTest {
+    @Test fun perSymbolSignedProtectionNeverTurnsOldProofGreen() {
+        val p=JSONObject().put("symbol","DOGEUSDT").put("direction","SHORT")
+            .put("positionAmt","-100").put("qty","100").put("stop","0.07727")
+        val proof=JSONObject().put("symbol","DOGEUSDT").put("direction","SHORT")
+            .put("quantity","-100.0").put("stop","0.07727")
+            .put("stop_proof","EXTERNAL_PROTECTED").put("protection_client_id","W2PS_DOGE_test")
+            .put("observed_at_ms",now-1000)
+        val c=coordinator().put("exchange_protection_observations",JSONArray().put(proof))
+        val status=healthy().put("futures_positions",JSONArray().put(p))
+        assertEquals("PASS",severity("EXE-13",status,c))
+        proof.put("observed_at_ms",now-25_000)
+        assertEquals("NOT_VERIFIED",severity("EXE-13",status,c))
+        assertTrue(check("EXE-13",status,c).optString("detail")
+            .contains("DOGEUSDT=STALE_SIGNED_STOP_PROOF"))
+        proof.put("observed_at_ms",now-500).put("quantity","99")
+        assertEquals("FAIL",severity("EXE-13",status,c))
+        status.put("positions_snapshot_ok",false)
+        assertEquals("NOT_VERIFIED",severity("EXE-13",status,c))
+    }
     @Test fun diagnostic8RecoveredShortsWithStopsRemainUnownedAndBlocked() {
         val symbols=listOf("DOGEUSDT","BNBUSDT","BTCUSDT","AVAXUSDT","ADAUSDT","XRPUSDT","LTCUSDT")
         val intents=JSONArray()
