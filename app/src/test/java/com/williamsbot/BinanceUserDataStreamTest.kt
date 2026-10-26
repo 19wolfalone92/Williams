@@ -26,6 +26,31 @@ class BinanceUserDataStreamTest {
         override fun cancel() = Unit
     }
 
+
+    @Test
+    fun failingPrivateListenKeyPreservesRealNetworkErrorInReconnectingHealth() {
+        val disconnects = LinkedBlockingQueue<String>()
+        val http = OkHttpClient.Builder().addInterceptor {
+            throw java.io.IOException("demo-fapi private transport unreachable")
+        }.build()
+        val stream = BinanceUserDataStream(
+            http, "wss://demo-fstream.binance.com/private/ws", { "test-key" },
+            { connected, reason -> if (!connected && reason != null) disconnects.put(reason) },
+            { }
+        )
+        try {
+            stream.start()
+            val initialFailure = requireNotNull(disconnects.poll(5L, TimeUnit.SECONDS))
+            val reconnectStatus = requireNotNull(disconnects.poll(5L, TimeUnit.SECONDS))
+            assertTrue(initialFailure.contains("demo-fapi private transport unreachable"))
+            assertTrue(reconnectStatus.contains("demo-fapi private transport unreachable"))
+            assertFalse(reconnectStatus == "reconnecting")
+            assertFalse(stream.isConnected())
+        } finally {
+            stream.stop()
+        }
+    }
+
     @Test
     fun delayedCallbacksAfterStopCannotReconnectOrDeliverOldFills() {
         val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
