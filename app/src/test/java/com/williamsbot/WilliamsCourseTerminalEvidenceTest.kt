@@ -86,7 +86,7 @@ class WilliamsCourseTerminalEvidenceTest {
             .put(JSONObject().put("known_at",base+hour))
         val scenario=JSONObject().put("scenario_id","1h:synthetic:5")
             .put("frame","1h").put("status","PROVISIONAL")
-            .put("observed_at",base+2*hour).put("anchors",anchors)
+            .put("observed_at",base+3*hour).put("anchors",anchors)
             .put("label","W5").put("active_label","A")
             .put("active_direction","DOWN").put("direction","UP")
             .put("scale_bars",120).put("divergence",true)
