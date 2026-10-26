@@ -113,4 +113,37 @@ class WilliamsSetupRulesTest {
         assertNull(exactTc2ShortFractalLevels(bars,3*h,4*h,5*h,.1))
     }
 
+
+    @Test fun wm1Wm2SignalPriceBarUsesOriginalDecimalTicksInBothDirections() {
+        // TC2 Russian PDF 125 / 132 / 137 / 139:
+        // the bearish reversal and third bearish AO price bar both sell one
+        // tick below their own low, never a reflected-Double approximation.
+        val btc=WilliamsWaveBar(3_600_000L,79524.5,79524.8,79523.2,79524.7)
+        val buy=exactTc2WiseManPriceBarLevels("LONG",btc,.1)!!
+        val sell=exactTc2WiseManPriceBarLevels("SHORT",btc,.1)!!
+        assertEquals(79524.9,buy.trigger,0.0)
+        assertEquals(79523.1,buy.protective,0.0)
+        assertEquals(79523.1,sell.trigger,0.0)
+        assertEquals(79524.9,sell.protective,0.0)
+        for(v in listOf(buy.trigger,buy.protective,sell.trigger,sell.protective))
+            assertTrue(ExecutionMath.isMultiple(v,.1))
+        val eth=WilliamsWaveBar(7_200_000L,2295.0,2297.0,2294.31,2295.5)
+        assertEquals(2294.30,exactTc2WiseManPriceBarLevels("SHORT",eth,.01)!!.trigger,0.0)
+        assertEquals(2297.01,exactTc2WiseManPriceBarLevels("SHORT",eth,.01)!!.protective,0.0)
+        assertEquals(2297.01,exactTc2WiseManPriceBarLevels("LONG",eth,.01)!!.trigger,0.0)
+        assertEquals(2294.30,exactTc2WiseManPriceBarLevels("LONG",eth,.01)!!.protective,0.0)
+    }
+
+    @Test fun tc2SignalBarPriceProofFailsClosedOnOffGridOrInvalidCandle() {
+        val bar=WilliamsWaveBar(0L,100.0,101.0,99.0,100.5)
+        assertNotNull(exactTc2WiseManPriceBarLevels("SHORT",bar,.01))
+        assertNull(exactTc2WiseManPriceBarLevels("SHORT",bar.copy(l=99.005),.01))
+        assertNull(exactTc2WiseManPriceBarLevels("LONG",bar.copy(h=101.005),.01))
+        assertNull(exactTc2WiseManPriceBarLevels("LONG",bar.copy(o=102.0),.01))
+        assertNull(exactTc2WiseManPriceBarLevels("LONG",bar.copy(c=Double.NaN),.01))
+        assertNull(exactTc2WiseManPriceBarLevels("SHORT",bar.copy(t=-1L),.01))
+        assertNull(exactTc2WiseManPriceBarLevels("SHORT",bar,.0))
+        assertNull(exactTc2WiseManPriceBarLevels("INVALID",bar,.01))
+    }
+
 }
