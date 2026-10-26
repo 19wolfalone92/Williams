@@ -8688,11 +8688,11 @@ private class NativeEngine(
             val signalIndex = candles.lastIndex - (streak - 3)
             if (signalIndex in 35..candles.lastIndex) {
                 val sourceLevel=exactTc2WiseManPriceBarLevels("LONG",waveBars[signalIndex],tick)
-                if (sourceLevel!=null && sourceLevel.protective<sourceLevel.trigger &&
-                    triggerStillPending(signalIndex,sourceLevel.trigger)) {
+                if (sourceLevel!=null) {
                     val trigger=sourceLevel.trigger
                     val structuralStop=sourceLevel.protective
-                    out += CampaignSignalN(
+                    if (structuralStop<trigger && triggerStillPending(signalIndex, trigger)) {
+                        out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[signalIndex].t),
                         type = "SUPER_AO",
                         role = "ENTRY",
@@ -8705,7 +8705,8 @@ private class NativeEngine(
                         setupContext = JSONObject().put("initial_stop_rule","TC2_SUPER_AO_SIGNAL_BAR")
                             .put("initial_stop_window",1).put("third_ao_bar_at_ms",candles[signalIndex].t)
                             .put("risk_stop_at_price",structuralStop).toString()
-                    )
+                        )
+                    }
                 }
             }
         }
