@@ -8792,8 +8792,7 @@ private class NativeEngine(
             if (!trigger.isFinite() || !stop.isFinite() ||
                 trigger <= 0.0 || stop <= trigger || trigger >= current
             ) return@mapNotNull null
-            val sourceContext = JSONObject(reflectedTc2SetupContext(
-                signal.type, signal.setupContext, reflection))
+            val sourceContext = JSONObject(reflectedTc2SetupContext(signal.type, signal.setupContext, reflection))
             if(sourceFractal!=null) sourceContext.put("short_price_source","ORIGINAL_EXCHANGE_OHLC")
                 .put("book_pivot_low",sourceFractal.pivotLow)
                 .put("book_stop_window_high",sourceFractal.stopWindowHigh)
