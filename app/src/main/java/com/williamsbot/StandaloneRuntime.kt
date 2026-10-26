@@ -6088,12 +6088,106 @@ private class NativeEngine(
 
     private var lastOperatorSupervisionAttemptMs:Long=0L
 
+    /**
+     * User-authorized on-device Demo recovery: analyse current signed Binance
+     * exposure against closed H1/H4 and TC2 first, then require the coordinator
+     * to independently verify exact position/STOP twice >=30s apart.
+     * The result is STOP-ONLY supervision, NEVER strategy ownership.
+     *
+     * Review/admission may be deferred during bad data; existing Binance STOP
+     * is left unchanged. This method can never open/close/add/reverse trades.
+     */
+    private fun analyzeAndEnrollAutonomousRecoveredStops() {
+        if(!running || !userStreamConnected || userStreamSyncRequired ||
+            killLatched || !campaignEngineEnabled) return
+        val source=futuresCampaignCoordinator.status()
+        val signedProofs=CockpitDiagnostics.rows(source.optJSONArray("exchange_protection_observations"))
+        if(signedProofs.isEmpty()) return
+        val now=System.currentTimeMillis()
+        val signedPositions=futuresCampaignCoordinator.positionsSnapshot()
+        val existing=futuresCampaignCoordinator.operatorSupervisionsSnapshot()
+        for(pos in CockpitDiagnostics.rows(signedPositions)) {
+            val symbol=pos.optString("symbol")
+            if(symbol !in coreSymbols ||
+                CockpitDiagnostics.rows(existing).any { it.optString("symbol")==symbol &&
+                    it.optString("state") in setOf("ACTIVE","REPLACEMENT_UNRESOLVED") }) continue
+            val quantity=pos.optString("positionAmt").toBigDecimalOrNull() ?: continue
+            if(quantity.signum()==0) continue
+            val direction=if(quantity.signum()>0) "LONG" else "SHORT"
+            val proof=signedProofs.singleOrNull { it.optString("symbol")==symbol &&
+                it.optString("direction")==direction &&
+                it.optString("stop_proof")=="EXTERNAL_PROTECTED" &&
+                !it.optBoolean("strategy_ownership_verified",true) &&
+                it.optString("management_mode")=="OBSERVE_ONLY" } ?: continue
+            if(!CockpitDiagnostics.fresh(proof.optLong("observed_at_ms"),now,15_000L) ||
+                proof.optString("quantity").toBigDecimalOrNull()?.abs()
+                    ?.compareTo(quantity.abs())!=0) continue
+            val stop=proof.optString("stop").toDoubleOrNull() ?: continue
+            val entry=pos.optString("entryPrice").toDoubleOrNull() ?: continue
+            if(!stop.isFinite() || stop<=0.0 || !entry.isFinite() || entry<=0.0) continue
+            runCatching {
+                val h1=fetchCandles(symbol,"1h",180)
+                val h4=fetchCandles(symbol,"4h",80)
+                require(h1.size>=45 && h4.size>=45) {
+                    "Book wave/Alligator evidence requires 45 H1/H4 candles"
+                }
+                val h1Wave=h1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                val h4Wave=h4.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                val exchangeNow=futuresMarketData.exchangeNowMs()
+                require(williamsClosedH1HistoryBlocker(h1Wave,exchangeNow)==null) {
+                    "H1 closed-candle source not independently verified"
+                }
+                val mark=futuresMarketData.markPrice(symbol)
+                val tick=symbolFilters(symbol).tick
+                val review=reviewWilliamsTc2StopTightening(
+                    direction=direction,oldStop=stop,entry=entry,initialStop=stop,
+                    mark=mark,tick=tick,
+                    openedAtMs=now,asOfMs=exchangeNow,
+                    h1Input=h1Wave,h4Input=h4Wave,
+                    feeAndSlippagePct=2.0*feeBufferPerSidePct+maxSlippagePct
+                )
+                // All initial analysis, including a WAIT / no-proposal decision,
+                // must be durably auditable before optional future STOP trailing.
+                val evidence=review.evidence
+                    .put("autonomous_orphan_mode","AUTO_VERIFIED_STOP_ONLY")
+                    .put("strategy_ownership_verified",false)
+                    .put("no_add_close_reverse",true)
+                val evidenceId=auditStore.recordStopTrailDecision(
+                    symbol,direction,"AUTO_RECOVERY:"+symbol,
+                    "CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION",evidence)
+                check(evidenceId>0L) { "Book analysis audit not durable" }
+                val result=futuresCampaignCoordinator.enrollAutonomousRecoveredStopOnly(
+                    symbol,direction,quantity.abs().toPlainString(),
+                    pos.optString("entryPrice"),proof.optString("stop")
+                )
+                if(result.optString("status")=="AUTONOMOUS_STOP_ONLY_ACTIVATED") {
+                    auditStore.recordCockpitEvent("AUTO_RECOVERED_STOP_ONLY",symbol,direction,
+                        "TWO_SIGNED_PROOFS_H1_H4_ANALYZED",
+                        "SL retained; no new position, no market close, no strategy ownership; evidence="+evidenceId)
+                }
+            }.onFailure {
+                val detail="AUTONOMOUS_ORPHAN_ANALYSIS_BLOCKED "+symbol+": "+
+                    (it.message ?: it.javaClass.simpleName)
+                lastError=detail
+                runCatching { auditStore.recordCockpitEvent("AUTO_RECOVERY",symbol,direction,
+                    "NOT_AUTHORIZED",detail) }
+            }
+        }
+    }
+
     private fun runOperatorStopSupervisionIfDue() {
         val now=System.currentTimeMillis()
         if(lastOperatorSupervisionAttemptMs>0L &&
             now>=lastOperatorSupervisionAttemptMs && now-lastOperatorSupervisionAttemptMs<10_000L) return
-        if(futuresCampaignCoordinator.operatorSupervisionsSnapshot().length()==0) return
         lastOperatorSupervisionAttemptMs=now
+        // User elected autonomous stop-only management of discovered positions.
+        // The existing safety fence still disallows risk-increasing or market
+        // close actions on missing-owner positions.
+        runCatching { analyzeAndEnrollAutonomousRecoveredStops() }.onFailure {
+            lastError="AUTONOMOUS_RECOVERY_ANALYSIS_UNAVAILABLE: "+
+                (it.message ?: it.javaClass.simpleName)
+        }
+        if(futuresCampaignCoordinator.operatorSupervisionsSnapshot().length()==0) return
         // One failed maintenance observation must not erase the signed account
         // reconciliation result. Every mutation still acquires its own Door.
         runCatching { futuresCampaignCoordinator.refreshOperatorClosedTradeHistory() }
