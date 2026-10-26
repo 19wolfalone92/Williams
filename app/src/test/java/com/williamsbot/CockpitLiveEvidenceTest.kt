@@ -31,6 +31,26 @@ class CockpitLiveEvidenceTest {
         snapshotAtMs=snapshotAt,positionsSnapshotAtMs=positionsAt,
         positionsSnapshotOk=snapshotOk)
 
+    @Test fun recoveredStopOnlyDashboardMatchesConfirmedSupervisionButNeverClaimsOwnership() {
+        val proven=JSONObject().put("stop_proof","EXTERNAL_PROTECTED")
+            .put("automatic_trailing_authorized",true)
+            .put("strategy_ownership_verified",false)
+            .put("management_mode","AUTO_VERIFIED_STOP_ONLY")
+        assertTrue(williamsObservedStopCanTrail(proven))
+        assertTrue(williamsObservedStopCanTrail(JSONObject(proven.toString())
+            .put("management_mode","OPERATOR_APPROVED_STOP_ONLY")))
+        // An arbitrary external Binance STOP cannot become a trailing permission.
+        assertFalse(williamsObservedStopCanTrail(JSONObject(proven.toString())
+            .put("automatic_trailing_authorized",false)))
+        assertFalse(williamsObservedStopCanTrail(JSONObject(proven.toString())
+            .put("management_mode","OBSERVE_ONLY")))
+        assertFalse(williamsObservedStopCanTrail(JSONObject(proven.toString())
+            .put("strategy_ownership_verified",true)))
+        assertFalse(williamsObservedStopCanTrail(JSONObject(proven.toString())
+            .put("stop_proof","STOP_UNCONFIRMED")))
+        assertFalse(williamsObservedStopCanTrail(null))
+    }
+
     @Test fun diagnostics3PendingStopEntryIsNotYetPositionOrProtectiveStop() {
         for ((symbol,entry,stop,qty) in listOf(
             listOf("SOLUSDT","100.39","101.83","1.11"),
