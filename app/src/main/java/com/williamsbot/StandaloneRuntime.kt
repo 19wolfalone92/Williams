@@ -8716,20 +8716,35 @@ private class NativeEngine(
         // five-bar fractal first becomes knowable. Never backdate a decision.
         val fractal = selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)
         if (fractal != null) {
-            out += CampaignSignalN(
-                signalId=campaignSignalId(symbol,frame,"FRACTAL",candles[fractal.center].t),
-                type="FRACTAL",role="ENTRY",signalBarTimeMs=candles[fractal.confirmation].t,
-                triggerPrice=fractal.trigger,protectivePrice=fractal.protective,
-                teethAtDetection=fractal.currentTeeth,invalidationPrice=fractal.protective,
-                reason="WM3 eligible confirmed fractal outside Teeth; waiting for actual trigger",
-                setupContext=JSONObject()
-                    .put("wise_man","WM3")
-                    .put("signal_family","CONFIRMED_FRACTAL")
-                    .put("fractal_center_time_ms",candles[fractal.center].t)
-                    .put("fractal_group_start_time_ms",candles[fractal.groupStart].t)
-                    .put("fractal_confirmation_time_ms",candles[fractal.confirmation].t)
-                    .put("teeth_filter_verified",true).toString(),
-                formationAtMs=candles[fractal.center].t)
+            val exact=exactTc2LongFractalLevels(waveBars,
+                candles[fractal.center].t,candles[fractal.groupStart].t,
+                candles[fractal.confirmation].t,tick)
+            // A mirrored selection or binary rounding is not an authority
+            // for an exchange tick; refuse on an actual source disagreement.
+            if(exact!=null && abs(exact.trigger-fractal.trigger)<=tick*.001 &&
+                abs(exact.protective-fractal.protective)<=tick*.001 &&
+                triggerStillPending(fractal.center,exact.trigger)) {
+                out += CampaignSignalN(
+                    signalId=campaignSignalId(symbol,frame,"FRACTAL",candles[fractal.center].t),
+                    type="FRACTAL",role="ENTRY",signalBarTimeMs=candles[fractal.confirmation].t,
+                    triggerPrice=exact.trigger,protectivePrice=exact.protective,
+                    teethAtDetection=fractal.currentTeeth,invalidationPrice=exact.protective,
+                    reason="WM3 eligible confirmed fractal outside Teeth; waiting for actual trigger",
+                    setupContext=JSONObject()
+                        .put("wise_man","WM3")
+                        .put("signal_family","CONFIRMED_FRACTAL")
+                        .put("fractal_center_time_ms",candles[fractal.center].t)
+                        .put("fractal_group_start_time_ms",candles[fractal.groupStart].t)
+                        .put("fractal_confirmation_time_ms",candles[fractal.confirmation].t)
+                        .put("book_price_source","ORIGINAL_EXCHANGE_OHLC")
+                        .put("book_pivot_high",exact.pivotHigh)
+                        .put("book_stop_window_low",exact.stopWindowLow)
+                        .put("book_tick",tick)
+                        .put("book_trigger_exact",exact.trigger)
+                        .put("book_protective_exact",exact.protective)
+                        .put("teeth_filter_verified",true).toString(),
+                    formationAtMs=candles[fractal.center].t)
+            }
         }
 
         // Keep at most one signal per family, ordered by formation time. The
