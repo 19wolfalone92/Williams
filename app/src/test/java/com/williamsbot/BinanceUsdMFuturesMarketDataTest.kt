@@ -56,6 +56,45 @@ class BinanceUsdMFuturesMarketDataTest {
             BinanceUsdMFuturesMarketData().supportedIntervals)
     }
 
+
+    @Test
+    fun futuresExchangeClockRejectsWallClockJumpsEvenInsideThirtySecondCache() {
+        val wall = 1_800_000_000_000L
+        val mono = 90_000_000_000L
+        assertTrue(publicFuturesClockNeedsRefresh(0L, Long.MIN_VALUE, wall, mono))
+        assertTrue(!publicFuturesClockNeedsRefresh(wall, mono, wall + 29_999L, mono + 29_999_000_000L))
+        assertTrue(publicFuturesClockNeedsRefresh(wall, mono, wall + 30_000L, mono + 30_000_000_000L))
+        assertTrue(publicFuturesClockNeedsRefresh(wall, mono, wall - 100L, mono + 100_000_000L))
+        assertTrue(publicFuturesClockNeedsRefresh(wall, mono, wall + 5_000L, mono + 3_000_000_000L))
+        assertTrue(publicFuturesClockNeedsRefresh(wall, mono, wall + 500L, mono + 2_000_000_000L))
+        assertTrue(publicFuturesClockNeedsRefresh(wall, mono, wall + 10L, mono - 1L))
+    }
+
+    @Test
+    fun repeatedOfflineGetAttemptsPauseOnlyPublicMarketDataForShortCooldown() {
+        var attempts = 0
+        val offline = OkHttpClient.Builder().addInterceptor(Interceptor {
+            attempts++
+            throw java.io.IOException("Simulated unreachable Futures Demo public endpoint")
+        }).build()
+        val market = BinanceUsdMFuturesMarketData(offline)
+        try {
+            market.tickerPrices()
+            throw AssertionError("Offline public REST must not yield market data")
+        } catch (failure: java.io.IOException) {
+            assertTrue(failure.message.orEmpty().contains("4 safe GET attempts"))
+        }
+        assertEquals(4, attempts)
+        try {
+            market.klines("BTCUSDT", "1h", 10)
+            throw AssertionError("Offline market-data circuit cooldown must stay fail-closed")
+        } catch (failure: java.io.IOException) {
+            assertTrue(failure.message.orEmpty().contains("cooling down"))
+        }
+        // A second symbol/interval does NOT trigger another forty-second burst.
+        assertEquals(4, attempts)
+    }
+
     @Test
     fun closedCandleBoundaryUsesExchangeTimeAndNeverAdmitsTheFormingCandle() {
         val marketData = BinanceUsdMFuturesMarketData()
