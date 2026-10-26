@@ -56,6 +56,24 @@ internal fun normalizeFuturesPublicPath(path: String): String {
  * This class only reads the demo-fapi host. Signed account/order mutations are
  * owned by BinanceUsdMFuturesTestnetAdapter; Spot /api/v3 is never used here.
  */
+/**
+ * Server-time sample is valid only while monotonic uptime and wall time agree.
+ * Manual clock changes or wall-time rollback must never silently admit future
+ * candles. Uses a monotonic anchor rather than trusting wall-clock age alone.
+ */
+internal fun publicFuturesClockNeedsRefresh(
+    anchorWallMs: Long,
+    anchorMonotonicNs: Long,
+    wallNowMs: Long,
+    monotonicNowNs: Long
+): Boolean {
+    if (anchorWallMs <= 0L || anchorMonotonicNs == Long.MIN_VALUE ||
+        monotonicNowNs < anchorMonotonicNs || wallNowMs < anchorWallMs) return true
+    val elapsedMs = (monotonicNowNs - anchorMonotonicNs) / 1_000_000L
+    val wallElapsedMs = wallNowMs - anchorWallMs
+    return elapsedMs >= 30_000L || kotlin.math.abs(wallElapsedMs - elapsedMs) > 1_000L
+}
+
 internal class BinanceUsdMFuturesMarketData(
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -66,6 +84,10 @@ internal class BinanceUsdMFuturesMarketData(
     private val base = "https://demo-fapi.binance.com"
     @Volatile private var serverOffsetMs = 0L
     @Volatile private var lastServerSyncLocalMs = 0L
+    @Volatile private var lastServerSyncMonotonicNs = Long.MIN_VALUE
+    // Public market-data GETs only. Signed account, STOP and recovery transport
+    // use a separate adapter and are never suppressed by this cooldown.
+    @Volatile private var transportRetryNotBeforeNs = Long.MIN_VALUE
 
     /** Display/diagnostics must never block on clock I/O. This value cannot authorize a trade. */
     fun cachedExchangeNowMs(): Long = System.currentTimeMillis() + serverOffsetMs
@@ -73,23 +95,29 @@ internal class BinanceUsdMFuturesMarketData(
     fun clockSnapshot(): JSONObject {
         val now = System.currentTimeMillis()
         val at = lastServerSyncLocalMs
+        val fresh = !publicFuturesClockNeedsRefresh(
+            at, lastServerSyncMonotonicNs, now, System.nanoTime())
         return JSONObject().put("synced_at_ms", at).put("offset_ms", serverOffsetMs)
-            .put("fresh", at > 0L && now >= at && now - at <= 30_000L)
+            .put("fresh", fresh)
             .put("age_ms", if (at > 0L && now >= at) now - at else JSONObject.NULL)
     }
 
     /** Exchange clock is authoritative for candle closure and stale-cache decisions. */
     fun exchangeNowMs(): Long {
-        val localNow = System.currentTimeMillis()
-        if (localNow - lastServerSyncLocalMs > 30_000L) {
+        if (publicFuturesClockNeedsRefresh(
+                lastServerSyncLocalMs, lastServerSyncMonotonicNs,
+                System.currentTimeMillis(), System.nanoTime())) {
             synchronized(this) {
                 val before = System.currentTimeMillis()
-                if (before - lastServerSyncLocalMs > 30_000L) {
+                if (publicFuturesClockNeedsRefresh(
+                        lastServerSyncLocalMs, lastServerSyncMonotonicNs,
+                        before, System.nanoTime())) {
                     val remote = getObject("$base/fapi/v1/time").optLong("serverTime", 0L)
                     val after = System.currentTimeMillis()
                     if (remote <= 0L) throw IOException("USD-M Futures server time unavailable")
                     serverOffsetMs = remote - (before + (after - before) / 2L)
                     lastServerSyncLocalMs = after
+                    lastServerSyncMonotonicNs = System.nanoTime()
                 }
             }
         }
@@ -274,6 +302,12 @@ internal class BinanceUsdMFuturesMarketData(
     }
 
     private fun execute(url: String): String {
+        // After four failed connections, allow the network to recover instead
+        // of blocking every symbol/timeframe for another four 10-second attempts.
+        // A fresh retry is permitted after 10s and never grants entry readiness.
+        if (System.nanoTime() < transportRetryNotBeforeNs) {
+            throw IOException("USD-M Futures public GET transport cooling down after repeated network failures")
+        }
         val request = Request.Builder().url(url).header("Accept", "application/json").get().build()
         val retryDelaysMs = longArrayOf(250L, 500L, 1_000L)
         var lastTransportFailure: IOException? = null
@@ -283,11 +317,14 @@ internal class BinanceUsdMFuturesMarketData(
                 http.newCall(request).execute()
             } catch (failure: IOException) {
                 lastTransportFailure = failure
-                if (attempt >= retryDelaysMs.size) throw IOException(
-                    "USD-M Futures market data transport failed after ${attempt + 1} safe GET attempts: " +
-                        (failure.message ?: failure.javaClass.simpleName),
-                    failure
-                )
+                if (attempt >= retryDelaysMs.size) {
+                    transportRetryNotBeforeNs = System.nanoTime() + 10_000_000_000L
+                    throw IOException(
+                        "USD-M Futures market data transport failed after ${attempt + 1} safe GET attempts: " +
+                            (failure.message ?: failure.javaClass.simpleName),
+                        failure
+                    )
+                }
                 sleepBeforeSafeReadRetry(retryDelaysMs[attempt])
                 continue
             }
@@ -295,7 +332,10 @@ internal class BinanceUsdMFuturesMarketData(
                 rateGuard?.observe(it.headers, it.code)
                 val body = it.body?.string().orEmpty()
                 if (it.isSuccessful) {
-                    if (body.isNotBlank()) return body
+                    if (body.isNotBlank()) {
+                        transportRetryNotBeforeNs = Long.MIN_VALUE
+                        return body
+                    }
                     // Empty 200 response caused JSON "End of input at character 0",
                     // observed in DOGEUSDT scanner diagnostics. Retrying this safe
                     // public GET is allowed; an empty payload is NEVER valid H1 data.
