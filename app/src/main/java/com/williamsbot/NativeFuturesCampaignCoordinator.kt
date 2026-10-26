@@ -4601,8 +4601,8 @@ internal class NativeFuturesCampaignCoordinator(
             return@synchronized rejected.put("status","WAIT_SECOND_SIGNED_SNAPSHOT")
                 .put("first_seen_at_ms",now)
         }
-        if(now-seenAt<30_000L) return@synchronized rejected
-            .put("status","WAIT_30_SECONDS_FOR_INDEPENDENT_SIGNED_PROOF")
+        if(!autonomousStopSecondSignedProofEligible(previous,identity,now))
+            return@synchronized rejected.put("status","WAIT_30_SECONDS_FOR_INDEPENDENT_SIGNED_PROOF")
         // All analysis happened BEFORE admission. Preserve the exact signed
         // identity as a separate supervision, without manufacturing Williams ENTRY.
         val row=JSONObject().put("symbol",symbol).put("direction",direction)
