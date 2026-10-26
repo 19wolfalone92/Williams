@@ -186,3 +186,44 @@ internal fun exactTc2WiseManPriceBarLevels(
         return null
     return Tc2WiseManPriceBarLevels(trigger,protective,bar.h,bar.l)
 }
+
+/** TC2 chapter 11, book-native LONG WM3 prices from confirmed original
+ * exchange OHLC. Identical structural window/plateau to the selector.
+ * Never infer monetary prices from an indicator line or mirrored series.
+ */
+internal data class Tc2LongFractalSourceLevels(
+    val trigger:Double,val protective:Double,
+    val pivotHigh:Double,val stopWindowLow:Double
+)
+internal fun exactTc2LongFractalLevels(
+    bars:List<WilliamsWaveBar>,
+    centerAtMs:Long,groupStartAtMs:Long,confirmationAtMs:Long,tick:Double
+):Tc2LongFractalSourceLevels? {
+    if(bars.size<5 || !tick.isFinite() || tick<=0.0 ||
+        centerAtMs<0L || groupStartAtMs<0L || confirmationAtMs<0L) return null
+    fun index(at:Long):Int {
+        val matched=bars.indices.filter { bars[it].t==at }
+        return if(matched.size==1) matched.single() else -1
+    }
+    val center=index(centerAtMs)
+    val groupStart=index(groupStartAtMs)
+    val confirmation=index(confirmationAtMs)
+    if(center<2 || groupStart<0 || groupStart>center ||
+        confirmation!=center+2 || confirmation !in bars.indices ||
+        bars.take(confirmation+1).zipWithNext().any { (a,b)->b.t<=a.t }) return null
+    val first=minOf(groupStart,maxOf(0,confirmation-4))
+    val window=bars.subList(first,confirmation+1)
+    if(window.any { !it.h.isFinite() || !it.l.isFinite() ||
+        it.l<=0.0 || it.h<it.l }) return null
+    val pivot=bars[center].h
+    val lowest=window.minOf { it.l }
+    if(!ExecutionMath.isMultiple(pivot,tick) ||
+        !ExecutionMath.isMultiple(lowest,tick)) return null
+    val step=ExecutionMath.decimal(tick)
+    val entry=ExecutionMath.decimal(pivot).add(step).toDouble()
+    val stop=ExecutionMath.decimal(lowest).subtract(step).toDouble()
+    if(!entry.isFinite() || !stop.isFinite() || stop<=0.0 || stop>=entry ||
+        !ExecutionMath.isMultiple(entry,tick) ||
+        !ExecutionMath.isMultiple(stop,tick)) return null
+    return Tc2LongFractalSourceLevels(entry,stop,pivot,lowest)
+}
