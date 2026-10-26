@@ -37,3 +37,14 @@ internal fun autonomousRecoveredStopCandidateBlocker(
         return "SIGNED_STOP_IDENTITY_UNKNOWN"
     return null
 }
+
+/** First and second independent signed observations MUST bind the same exact
+ * account symbol, side, quantity, entry, STOP price and exchange stop IDs. */
+internal fun autonomousStopSecondSignedProofEligible(
+    candidate:JSONObject?, exactIdentity:String, nowMs:Long
+):Boolean {
+    if(candidate==null || exactIdentity.isBlank() ||
+        candidate.optString("identity")!=exactIdentity) return false
+    val first=candidate.optLong("first_seen_at_ms",0L)
+    return first>0L && nowMs>=first && nowMs-first in 30_000L..300_000L
+}
