@@ -48,21 +48,68 @@ internal fun buildWilliamsDecisionTrace(symbol:String,profile:String,input:List<
             .put("execution_role",if(williamsVerifiedNewRiskSource(source)) "LIVE" else "OBSERVE").put("can_place_orders",false)
             .put("evidence",JSONArray(evidence))
     })
+    val marketPhase=williamsMarketPhaseContext(hierarchy)
+    val h1Frames=marketPhase.optJSONArray("frames") ?: JSONArray()
+    val h1=(0 until h1Frames.length()).mapNotNull { h1Frames.optJSONObject(it) }
+        .singleOrNull { it.optString("frame")=="1h" } ?: JSONObject()
+    val reading=williamsMarketReading(bars,marketPhase,"1h",now)
     val scenarios=hierarchy.optJSONArray("scenarios") ?: JSONArray()
+    val phaseAsOf=hierarchy.optLong("as_of",0L)
     val active=(0 until scenarios.length()).mapNotNull { scenarios.optJSONObject(it) }.filter {
-        it.optString("frame")=="1h" && it.optString("status")=="PROVISIONAL" }
+        it.optString("frame")=="1h" && it.optString("status")=="PROVISIONAL" &&
+            phaseAsOf>0L && it.optLong("observed_at")==phaseAsOf }
+    val waveState=when(h1.optString("state")) {
+        "PHASE_CANDIDATE" -> "PROVISIONAL"
+        "ALTERNATIVES" -> "ALTERNATIVES"
+        else -> "UNRESOLVED"
+    }
+    // Context explains why a valid book setup appeared in a range or trend.
+    // It deliberately does not authorize a trade or impose invented gates.
+    val chartFresh=reading.optString("state")=="OBSERVED"
+    val alligator=if(chartFresh) reading.optJSONObject("alligator")?.optString("state","UNKNOWN") ?: "UNKNOWN" else "UNKNOWN"
+    val bias=if(chartFresh) reading.optString("observed_bias","UNKNOWN") else "UNKNOWN"
+    val aoDirection=if(chartFresh) reading.optString("ao_direction","UNKNOWN") else "UNKNOWN"
+    val contexts=JSONArray(rows.map { s ->
+        val side=s.optString("direction")
+        val flags=mutableListOf<String>()
+        if(!chartFresh) flags+="H1_READING_UNVERIFIED"
+        if(h1.optString("state")=="ALTERNATIVES") flags+="COMPETING_WAVE_COUNTS"
+        if(h1.optString("state") !in setOf("PHASE_CANDIDATE","ALTERNATIVES"))
+            flags+="WAVE_STRUCTURE_UNRESOLVED"
+        if(alligator=="SLEEPING") flags+="SLEEPING_RANGE_POTENTIAL_BREAKOUT"
+        if(alligator=="SATIATED") flags+="SATIATED_TREND_POTENTIAL_EXHAUSTION"
+        if((side=="LONG" && bias=="DOWN") || (side=="SHORT" && bias=="UP"))
+            flags+="OBSERVED_H1_BIAS_OPPOSES_ENTRY"
+        if((side=="LONG" && aoDirection=="DOWN") || (side=="SHORT" && aoDirection=="UP"))
+            flags+="AO_MOMENTUM_OPPOSES_ENTRY"
+        if(s.optLong("signal_bar_time_ms",0L)<=0L ||
+            s.optLong("signal_bar_time_ms") >= now)
+            flags+="SIGNAL_BAR_NOT_CAUSALLY_KNOWN"
+        JSONObject().put("signal_id",s.optString("signal_id"))
+            .put("source",s.optString("strategy_profile")).put("family",s.optString("family",s.optString("signal_type")))
+            .put("direction",side).put("signal_bar_time_ms",s.optLong("signal_bar_time_ms"))
+            .put("h1_reading_state",reading.optString("state"))
+            .put("observed_h1_close_ms",reading.optLong("as_of_close_ms",0L))
+            .put("alligator_phase",alligator).put("observed_bias",bias).put("ao_direction",aoDirection)
+            .put("wave_state",h1.optString("state","UNRESOLVED"))
+            .put("distinct_wave_structures",h1.optInt("distinct_structural_hypotheses"))
+            .put("flags",JSONArray(flags)).put("context_is_trade_veto",false)
+            .put("wave_degree_confirmed",false).put("probability_calibrated",false)
+            .put("can_place_orders",false).put("can_close",false)
+    })
     return JSONObject().put("schema","WILLIAMS_DECISION_TRACE_V1").put("engine","ANDROID").put("symbol",symbol)
         .put("execution_policy",williamsExecutionPolicySnapshot())
         .put("strategy_profile",profile).put("frame","1h").put("observed_at_ms",now)
         .put("as_of_close_ms",bars.lastOrNull()?.t?.plus(3_600_000L) ?: 0L).put("closed_bar_count",bars.size)
         .put("history_contiguous",contiguous).put("indicators",indicators).put("divergences",divergences)
-        .put("wave_state",if(active.size==1) "PROVISIONAL" else if(active.isEmpty()) "UNRESOLVED" else "ALTERNATIVES")
+        .put("wave_state",waveState)
         .put("wave_hypotheses",JSONArray(active)).put("books",books).put("signals",signals)
-        .put("market_phase",williamsMarketPhaseContext(hierarchy))
+        .put("entry_market_contexts",contexts)
+        .put("market_phase",marketPhase)
         // TC1 is a separate historical book profile. Its Zero Point five-sign
         // observations are NEVER an entry/exit gate for the pinned TC2 campaign.
         .put("tc1_zero_point_observation",williamsTc1ZeroPointObservations(bars,now))
-        .put("market_reading",williamsMarketReading(bars,williamsMarketPhaseContext(hierarchy)))
+        .put("market_reading",reading)
         .put("candles",JSONArray(bars.takeLast(150).map { JSONArray(listOf(it.t,it.o,it.h,it.l,it.c,it.v)) }))
         .put("decision",JSONObject().put("stage","CLOSED_BAR_ANALYSIS")
             .put("state",if(reasons.any { it!="OPPOSING_ENTRIES_BEFORE_CONTEXT" }) "BLOCKED" else if(reasons.isNotEmpty()) "CONTEXT_REQUIRED" else "CANDIDATE_REQUIRES_PREFLIGHT")
