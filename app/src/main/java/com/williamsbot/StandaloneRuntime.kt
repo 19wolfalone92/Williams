@@ -8590,7 +8590,10 @@ private class NativeEngine(
         symbol: String,
         candles: List<CandleN>,
         frame: String,
-        tick: Double
+        tick: Double,
+        // The SHORT scanner reuses mirrored geometry; reflected floating
+        // OHLC are not exchange grid prices and must not be grid-validated.
+        sourceExchangePrices: Boolean = true
     ): List<CampaignSignalN> {
         if (candles.size < 45 || tick <= 0.0) return emptyList()
 
@@ -8639,8 +8642,11 @@ private class NativeEngine(
             if (wm1AoBlocker==null &&
                 validWilliamsReversalBar("LONG",waveBars[i],priorLow,
                     listOf(jawS[i],teethS[i],lipsS[i]),angulationProof(i).score)) {
-                val levels=exactTc2WiseManPriceBarLevels("LONG",waveBars[i],tick)
-                    ?: continue
+                val levels=if(sourceExchangePrices)
+                    exactTc2WiseManPriceBarLevels("LONG",waveBars[i],tick)
+                    else Tc2WiseManPriceBarLevels(candles[i].h+tick,candles[i].l-tick,
+                        candles[i].h,candles[i].l)
+                if(levels==null) continue
                 val trigger=levels.trigger
                 if (triggerStillPending(i, trigger)) {
                     out += CampaignSignalN(
@@ -8687,7 +8693,10 @@ private class NativeEngine(
         if (streak >= 3) {
             val signalIndex = candles.lastIndex - (streak - 3)
             if (signalIndex in 35..candles.lastIndex) {
-                val sourceLevel=exactTc2WiseManPriceBarLevels("LONG",waveBars[signalIndex],tick)
+                val sourceLevel=if(sourceExchangePrices)
+                    exactTc2WiseManPriceBarLevels("LONG",waveBars[signalIndex],tick)
+                    else Tc2WiseManPriceBarLevels(candles[signalIndex].h+tick,
+                        candles[signalIndex].l-tick,candles[signalIndex].h,candles[signalIndex].l)
                 if (sourceLevel!=null) {
                     val trigger=sourceLevel.trigger
                     val structuralStop=sourceLevel.protective
@@ -8716,13 +8725,17 @@ private class NativeEngine(
         // five-bar fractal first becomes knowable. Never backdate a decision.
         val fractal = selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)
         if (fractal != null) {
-            val exact=exactTc2LongFractalLevels(waveBars,
-                candles[fractal.center].t,candles[fractal.groupStart].t,
-                candles[fractal.confirmation].t,tick)
+            val exact=if(sourceExchangePrices)
+                exactTc2LongFractalLevels(waveBars,
+                    candles[fractal.center].t,candles[fractal.groupStart].t,
+                    candles[fractal.confirmation].t,tick)
+                else Tc2LongFractalSourceLevels(fractal.trigger,fractal.protective,
+                    waveBars[fractal.center].h,waveBars[fractal.center].l)
             // A mirrored selection or binary rounding is not an authority
             // for an exchange tick; refuse on an actual source disagreement.
-            if(exact!=null && abs(exact.trigger-fractal.trigger)<=tick*.001 &&
-                abs(exact.protective-fractal.protective)<=tick*.001 &&
+            if(exact!=null &&
+                (!sourceExchangePrices || (abs(exact.trigger-fractal.trigger)<=tick*.001 &&
+                    abs(exact.protective-fractal.protective)<=tick*.001)) &&
                 triggerStillPending(fractal.center,exact.trigger)) {
                 out += CampaignSignalN(
                     signalId=campaignSignalId(symbol,frame,"FRACTAL",candles[fractal.center].t),
@@ -8736,13 +8749,15 @@ private class NativeEngine(
                         .put("fractal_center_time_ms",candles[fractal.center].t)
                         .put("fractal_group_start_time_ms",candles[fractal.groupStart].t)
                         .put("fractal_confirmation_time_ms",candles[fractal.confirmation].t)
-                        .put("book_price_source","ORIGINAL_EXCHANGE_OHLC")
-                        .put("book_pivot_high",exact.pivotHigh)
-                        .put("book_stop_window_low",exact.stopWindowLow)
-                        .put("book_tick",tick)
-                        .put("book_trigger_exact",exact.trigger)
-                        .put("book_protective_exact",exact.protective)
-                        .put("teeth_filter_verified",true).toString(),
+                        .put("teeth_filter_verified",true)
+                        .apply { if(sourceExchangePrices) {
+                            put("book_price_source","ORIGINAL_EXCHANGE_OHLC")
+                                .put("book_pivot_high",exact.pivotHigh)
+                                .put("book_stop_window_low",exact.stopWindowLow)
+                                .put("book_tick",tick)
+                                .put("book_trigger_exact",exact.trigger)
+                                .put("book_protective_exact",exact.protective)
+                        } }.toString(),
                     formationAtMs=candles[fractal.center].t)
             }
         }
@@ -8781,7 +8796,8 @@ private class NativeEngine(
             )
         }
         val sourceBars = candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
-        return longCampaignSignals(symbol, reflected, frame, tick).mapNotNull { signal ->
+        return longCampaignSignals(symbol, reflected, frame, tick,
+            sourceExchangePrices=false).mapNotNull { signal ->
             // Reflection determines the BOOK signal geometry only; the original
             // Binance candle, not a reflected Double, determines monetary ticks.
             val sourceFractal = if (signal.type == "FRACTAL") {
