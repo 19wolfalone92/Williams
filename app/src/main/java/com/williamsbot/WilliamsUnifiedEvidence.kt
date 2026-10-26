@@ -42,6 +42,7 @@ internal fun buildWilliamsUnifiedEvidence(
     var tc2Conflicts = 0
     var liveSourceConflicts = 0
     var activeCampaigns = 0
+    val recoveredUnowned = mutableListOf<String>()
     var observerProofComplete = true
     val visited = mutableSetOf<String>()
     val bySymbol = candidates.groupBy { it.optString("symbol") }
@@ -92,10 +93,18 @@ internal fun buildWilliamsUnifiedEvidence(
         if(pairOwners.size>1) errors.put("MULTIPLE_ACTIVE_CAMPAIGN_OWNERS:$symbol")
         val owner=pairOwners.singleOrNull()
         val ownerSource=owner?.optString("strategy_profile","UNKNOWN") ?: if(ownershipSnapshotPresent) "NONE" else "UNKNOWN"
+        // A recovered exchange exposure is NOT an original Williams ENTRY:
+        // its placeholder strategy_profile=UNKNOWN is expected, not a forged
+        // TC2/NTD/Course signal. Preserve a separate unowned-risk finding.
+        val isRecoveredUnowned = owner?.optString("kind")=="RECOVERED_EXCHANGE_POSITION" &&
+            !owner.optBoolean("strategy_ownership_verified",false)
         if(owner!=null) {
-            activeCampaigns++
-            if(ownerSource !in williamsSourceProfiles)
-                errors.put("UNKNOWN_PINNED_CAMPAIGN_SOURCE:$symbol")
+            if(isRecoveredUnowned) recoveredUnowned.add(symbol)
+            else {
+                activeCampaigns++
+                if(ownerSource !in williamsSourceProfiles)
+                    errors.put("UNKNOWN_PINNED_CAMPAIGN_SOURCE:$symbol")
+            }
         }
         for (signal in rawSignals) {
             total++
@@ -158,12 +167,14 @@ internal fun buildWilliamsUnifiedEvidence(
             .put("owner_signal_id",owner?.optString("signal_id") ?: JSONObject.NULL)
             .put("owner_campaign_state",owner?.optString("campaign_status") ?: JSONObject.NULL)
             .put("owner_strategy_binding_verified",owner?.optBoolean("strategy_ownership_verified") ?: false)
+            .put("owner_is_unowned_exchange_recovery",isRecoveredUnowned)
             .put("owner_protection_status",owner?.optString("protection_status") ?: JSONObject.NULL)
             .put("owner_last_reconciled_ms",owner?.optLong("last_reconciled_ms") ?: JSONObject.NULL)
             .put("owner_snapshot_state",when {
                 !ownershipSnapshotPresent -> "UNAVAILABLE"
                 pairOwners.size>1 -> "MULTIPLE_NONTERMINAL_ENTRIES"
                 owner==null -> "NO_NONTERMINAL_ENTRY_INTENT"
+                isRecoveredUnowned -> "RECOVERED_EXCHANGE_POSITION_UNATTRIBUTED"
                 else -> "PINNED_SOURCE_OBSERVED_NOT_LIVE_EXCHANGE_PROOF"
             })
             .put("other_strategies_can_trade_this_pair",false)
@@ -197,6 +208,8 @@ internal fun buildWilliamsUnifiedEvidence(
         .put("mode", selected)
         .put("execution_policy",williamsExecutionPolicySnapshot())
         .put("active_campaigns_in_snapshot",activeCampaigns)
+        .put("unattributed_recovered_positions",recoveredUnowned.size)
+        .put("unattributed_recovered_symbols",JSONArray(recoveredUnowned))
         .put("coordinator_snapshot_present",ownershipSnapshotPresent)
         .put("status", snapshot)
         .put("provenance", "CACHED_CLOSED_H1_SCANNER")
