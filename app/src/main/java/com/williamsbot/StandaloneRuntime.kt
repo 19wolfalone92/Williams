@@ -11145,8 +11145,13 @@ private class NativeEngine(
                 (signedFillAuditLastAttemptMs>0L && nowMs-signedFillAuditLastAttemptMs<60_000L)) return
             signedFillAuditRunning=true
             signedFillAuditLastAttemptMs=nowMs
-            signedFillAuditJson=JSONObject().put("state","SIGNED_GET_IN_PROGRESS")
-                .put("requested_at_ms",nowMs).toString()
+            // Preserve the last COMPLETED read-only snapshot across a refresh.
+            // Otherwise every user-requested diagnostic >60s apart would show
+            // only IN_PROGRESS and erase useful BNB closure evidence.
+            if(JSONObject(signedFillAuditJson).optString("state")=="NOT_REQUESTED") {
+                signedFillAuditJson=JSONObject().put("state","SIGNED_GET_IN_PROGRESS")
+                    .put("requested_at_ms",nowMs).toString()
+            }
         }
         Thread({
             val output=JSONObject().put("source","BINANCE_USDM_SIGNED_USER_TRADES_READ_ONLY")
@@ -11191,7 +11196,9 @@ private class NativeEngine(
         val statusSnapshot = status(fast = true)
             .put("strategy_audit", strategyDiagnosticEvidence())
             .put("trade_observations", JSONArray(CockpitDiagnostics.rows(trades()).take(20)))
-            .put("signed_exchange_fill_forensics",JSONObject(signedFillAuditJson))
+            .put("signed_exchange_fill_forensics",JSONObject(signedFillAuditJson)
+                .put("refresh_running",signedFillAuditRunning)
+                .put("latest_refresh_requested_at_ms",signedFillAuditLastAttemptMs))
         val coordinatorSnapshot = statusSnapshot.optJSONObject("futures_runtime") ?: JSONObject()
         val tests = diagnosticSelfTests(statusSnapshot, coordinatorSnapshot)
         val observedAtMs = System.currentTimeMillis()
