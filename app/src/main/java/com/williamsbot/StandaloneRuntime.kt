@@ -6087,6 +6087,8 @@ private class NativeEngine(
     }
 
     private var lastOperatorSupervisionAttemptMs:Long=0L
+    @Volatile private var autonomousOrphanAnalysisRunning=false
+    @Volatile private var autonomousOrphanAnalysisStartedAtMs=0L
 
     /**
      * User-authorized on-device Demo recovery: analyse current signed Binance
@@ -6106,7 +6108,11 @@ private class NativeEngine(
         val now=System.currentTimeMillis()
         val signedPositions=futuresCampaignCoordinator.positionsSnapshot()
         val existing=futuresCampaignCoordinator.operatorSupervisionsSnapshot()
-        for(pos in CockpitDiagnostics.rows(signedPositions)) {
+        for(pos in CockpitDiagnostics.rows(signedPositions)
+            .filter { row -> CockpitDiagnostics.rows(existing).none {
+                it.optString("symbol")==row.optString("symbol") &&
+                    it.optString("state") in setOf("ACTIVE","REPLACEMENT_UNRESOLVED")
+            } }.take(2)) {
             val symbol=pos.optString("symbol")
             if(symbol !in coreSymbols ||
                 CockpitDiagnostics.rows(existing).any { it.optString("symbol")==symbol &&
@@ -6171,18 +6177,39 @@ private class NativeEngine(
         }
     }
 
+    private fun scheduleAutonomousOrphanAnalysis() {
+        val now=System.currentTimeMillis()
+        if(!running || !userStreamConnected || userStreamSyncRequired ||
+            killLatched || !campaignEngineEnabled) return
+        synchronized(this) {
+            if(autonomousOrphanAnalysisRunning ||
+                now-autonomousOrphanAnalysisStartedAtMs<30_000L) return
+            autonomousOrphanAnalysisRunning=true
+            autonomousOrphanAnalysisStartedAtMs=now
+        }
+        // Signed reads + H1/H4 analysis MUST NOT execute while holding the
+        // account-wide futuresReconciliationLock; private-stream/fill/STOP
+        // reconciliation must remain available every few seconds.
+        Thread({
+            try {
+                analyzeAndEnrollAutonomousRecoveredStops()
+            } catch(failure:Exception) {
+                lastError="AUTONOMOUS_RECOVERY_ANALYSIS_UNAVAILABLE: "+
+                    (failure.message ?: failure.javaClass.simpleName)
+            } finally {
+                autonomousOrphanAnalysisRunning=false
+            }
+        },"williams-recovery-book-analysis").apply { isDaemon=true; start() }
+    }
+
     private fun runOperatorStopSupervisionIfDue() {
         val now=System.currentTimeMillis()
         if(lastOperatorSupervisionAttemptMs>0L &&
             now>=lastOperatorSupervisionAttemptMs && now-lastOperatorSupervisionAttemptMs<10_000L) return
         lastOperatorSupervisionAttemptMs=now
-        // User elected autonomous stop-only management of discovered positions.
-        // The existing safety fence still disallows risk-increasing or market
-        // close actions on missing-owner positions.
-        runCatching { analyzeAndEnrollAutonomousRecoveredStops() }.onFailure {
-            lastError="AUTONOMOUS_RECOVERY_ANALYSIS_UNAVAILABLE: "+
-                (it.message ?: it.javaClass.simpleName)
-        }
+        // Never block this signed reconciliation's account lock on H1/H4
+        // downloads or the independent two-snapshot adoption preflight.
+        scheduleAutonomousOrphanAnalysis()
         if(futuresCampaignCoordinator.operatorSupervisionsSnapshot().length()==0) return
         // One failed maintenance observation must not erase the signed account
         // reconciliation result. Every mutation still acquires its own Door.
