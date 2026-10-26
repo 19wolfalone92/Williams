@@ -157,6 +157,50 @@ class WilliamsUnifiedEvidenceTest {
         assertEquals(2,report.getJSONArray("by_symbol").getJSONObject(0).getInt("active_owner_count"))
     }
 
+
+    @Test fun diagnostic11RecoveredBtcShortIsNotInventedAsInvalidBookSignal() {
+        val signedRecovery=JSONArray().put(JSONObject()
+            .put("symbol","BTCUSDT").put("role","ENTRY")
+            .put("kind","RECOVERED_EXCHANGE_POSITION")
+            .put("direction","SHORT")
+            .put("strategy_profile","UNKNOWN")
+            .put("campaign_status","POSITION_OPEN")
+            .put("strategy_ownership_verified",false)
+            .put("order_status","FILLED"))
+        val status=status().put("futures_runtime",JSONObject()
+            .put("pending_intent_details",signedRecovery))
+        val report=buildWilliamsUnifiedEvidence(scanner(false),status,now)
+        assertEquals("SCAN_IN_PROGRESS",report.getString("status"))
+        assertEquals(0,report.getJSONArray("source_contract_errors").length())
+        assertEquals(0,report.getInt("active_campaigns_in_snapshot"))
+        assertEquals(1,report.getInt("unattributed_recovered_positions"))
+        assertEquals("BTCUSDT",report.getJSONArray("unattributed_recovered_symbols").getString(0))
+        val btc=report.getJSONArray("by_symbol").getJSONObject(0)
+        assertEquals("UNKNOWN",btc.getString("owner_strategy_profile"))
+        assertTrue(btc.getBoolean("owner_is_unowned_exchange_recovery"))
+        assertEquals("RECOVERED_EXCHANGE_POSITION_UNATTRIBUTED",btc.getString("owner_snapshot_state"))
+        assertTrue(btc.getBoolean("campaign_occupied"))
+        assertFalse(btc.getBoolean("other_strategies_can_trade_this_pair"))
+    }
+
+    @Test fun unsupportedOriginalWilliamsEntrySourceStillFailsContract() {
+        val forgedEntry=JSONArray().put(JSONObject()
+            .put("symbol","BTCUSDT").put("role","ENTRY")
+            .put("kind","STOP").put("direction","SHORT")
+            .put("strategy_profile","UNKNOWN")
+            .put("campaign_status","OPEN_PROTECTED")
+            .put("strategy_ownership_verified",true))
+        val report=buildWilliamsUnifiedEvidence(scanner(),status()
+            .put("futures_runtime",JSONObject()
+                .put("pending_intent_details",forgedEntry)),now)
+        assertEquals("INVALID_SNAPSHOT",report.getString("status"))
+        assertEquals(1,report.getJSONArray("source_contract_errors").length())
+        assertEquals("UNKNOWN_PINNED_CAMPAIGN_SOURCE:BTCUSDT",
+            report.getJSONArray("source_contract_errors").getString(0))
+        assertEquals(1,report.getInt("active_campaigns_in_snapshot"))
+        assertEquals(0,report.getInt("unattributed_recovered_positions"))
+    }
+
     @Test fun tc2FractalIsNotArbitrarilyLimitedToFiveHours() {
         val old = now - 9L * WILLIAMS_H1_MS
         val formation=signal("wm3",williamsTc2Profile,"FRACTAL")
