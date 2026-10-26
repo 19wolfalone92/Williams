@@ -205,6 +205,11 @@ class BinanceUserDataStream(
                             reconnectCause.compareAndSet(null, detail)
                             onConnection(false, detail)
                             webSocket.close(code, reason)
+                            // A peer may never deliver onClosed after onClosing
+                            // (mobile radio loss, stalled TCP close handshake).
+                            // Release this session NOW; reconnect will first
+                            // obtain a fresh listenKey and require signed REST sync.
+                            closed.countDown()
                         }
 
                         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
