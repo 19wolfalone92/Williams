@@ -449,15 +449,32 @@ internal object CockpitDiagnostics {
                 !intent.optBoolean("strategy_ownership_verified", false) &&
                 intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED", "REPLACEMENT_UNRESOLVED")
         }
+        // Diagnostics (9): all SIX exchange-protected SHORTs exist in the
+        // signed positions snapshot while pending_intent_details is EMPTY.
+        // The old EXE-12 counted only recovered local journal intents and
+        // misleadingly printed "0" even though every position explicitly
+        // says ownership_verified=false. Never turn a missing local journal
+        // into evidence that all exchange positions belong to Williams.
+        val unownedSignedPositions = positions.filter { position ->
+            position.has("strategy_ownership_verified") &&
+                !position.optBoolean("strategy_ownership_verified", false)
+        }
+        val unownedSymbols=(unownedRecoveredPositions.map { it.optString("symbol") } +
+            unownedSignedPositions.map { it.optString("symbol") })
+            .filter { it.isNotBlank() }.distinct()
+        val signedOwnershipObserved=positions.all { it.has("strategy_ownership_verified") }
         check("EXE-12", "execution", "Восстановленные позиции без подтверждённого владельца стратегии", when {
-            unownedRecoveredPositions.isNotEmpty() -> "FAIL"
+            !positionsFresh(status,now) || coordinator.optBoolean("reconciliation_running") ->
+                "NOT_VERIFIED"
+            unownedSymbols.isNotEmpty() -> "FAIL"
             coordinator.optJSONArray("pending_intent_details") == null ||
-                !positionsFresh(status,now) || coordinator.optBoolean("reconciliation_running") -> "NOT_VERIFIED"
+                status.optJSONArray("futures_positions") == null || !signedOwnershipObserved ->
+                "NOT_VERIFIED"
             else -> "PASS"
-        }, "Позиции с биржевой экспозицией, но БЕЗ подтверждённого исходного ENTRY: " +
-            "${unownedRecoveredPositions.size}; символы=" +
-            unownedRecoveredPositions.map { it.optString("symbol") }.distinct()
-                .joinToString(", ").ifBlank { "нет" } +
+        }, "Позиции без доказанного исходного ENTRY по последнему снимку: " +
+            "${unownedSymbols.size}; из signed positions=${unownedSignedPositions.size}; " +
+            "из восстановленных журналов=${unownedRecoveredPositions.size}; символы=" +
+            unownedSymbols.joinToString(", ").ifBlank { "нет" } +
             ". Защитный STOP может существовать, но это не разрешение автоматического переноса SL. " +
             "НЕ создавать повторный вход, не считать такие позиции управляемыми; " +
             "требуется проверка точных исполнений/клиентских ID на Binance. " +
