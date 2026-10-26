@@ -45,6 +45,13 @@ class TradingBootReceiver : BroadcastReceiver() {
     private fun resumeIfOptedIn(context:Context,action:String,withinDeadline:()->Boolean) {
 
         val appContext = context.applicationContext
+        // Device-local, secret-free milestones for physical reboot acceptance.
+        // They DO NOT prove the exchange position/STOP has been reconciled.
+        RuntimeContinuityEvidence.event(appContext, when(action) {
+            Intent.ACTION_BOOT_COMPLETED -> "BOOT_COMPLETED_OBSERVED"
+            Intent.ACTION_USER_UNLOCKED -> "BOOT_USER_UNLOCK_OBSERVED"
+            else -> "PACKAGE_REPLACED_OBSERVED"
+        })
         val unlocked=(appContext.getSystemService(Context.USER_SERVICE) as android.os.UserManager).isUserUnlocked
         if(!unlocked) {
             // Credential-encrypted Keystore keys cannot be read before first
@@ -75,7 +82,8 @@ class TradingBootReceiver : BroadcastReceiver() {
         }.getOrDefault(false)
 
         if (!autoRunEnabled || !withinDeadline()) return
-
+        RuntimeContinuityEvidence.event(appContext,"BOOT_OPT_IN_VERIFIED")
+        RuntimeContinuityEvidence.event(appContext,"BOOT_FGS_START_REQUESTED")
         runCatching {
             ContextCompat.startForegroundService(
                 appContext,
