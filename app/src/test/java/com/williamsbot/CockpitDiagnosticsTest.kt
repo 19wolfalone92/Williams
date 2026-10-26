@@ -33,6 +33,14 @@ class CockpitDiagnosticsTest {
         coordinator.put("reconciliation_running",true)
         assertEquals("NOT_VERIFIED",severity("EXE-12",status,coordinator))
     }
+    @Test fun missingClosedTradeEvidenceMustNotPassPnlHistoryCheck() {
+        val status=healthy().put("trade_observations",JSONArray())
+        assertEquals("NOT_VERIFIED",severity("HIST-01",status))
+        status.put("trade_observations",JSONArray().put(JSONObject()
+            .put("symbol","DOGEUSDT").put("status","OPEN_PROTECTED")
+            .put("pnl_complete",false)))
+        assertEquals("NOT_VERIFIED",severity("HIST-01",status))
+    }
     @Test fun historyForensicsDoesNotInventAvaxClosureOrDoubleCountTwoAuditSources() {
         val original=JSONObject().put("symbol","AVAXUSDT").put("status","CLOSED_UNVERIFIED")
             .put("trade_audit_source","FUTURES_CAMPAIGN_SNAPSHOT").put("pnl_complete",false)
