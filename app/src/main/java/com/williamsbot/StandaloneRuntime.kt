@@ -11396,11 +11396,16 @@ private class NativeEngine(
             .put("name", "Происхождение сигналов TC2 / NTD / Course")
             .put("severity", when {
                 badSourceEvidence > 0 -> "FAIL"
+                // A Binance-recovered position with unknown entry provenance
+                // must not masquerade as a malformed Williams book signal.
+                // Nor may its unknown source grant PASS on ownership.
+                unifiedEvidence.optInt("unattributed_recovered_positions") > 0 -> "NOT_VERIFIED"
                 fullSourceEvidence && unifiedEvidence.optInt("observed_signal_count") > 0 -> "PASS"
                 else -> "NOT_VERIFIED"
             }).put("detail", "Режим=${unifiedEvidence.optString("mode")}; " +
                 "статус=${unifiedEvidence.optString("status")}; " +
                 "достоверных источников=3; необработанных ошибок=$badSourceEvidence; " +
+                "неатрибутированных восстановленных позиций=${unifiedEvidence.optInt("unattributed_recovered_positions")}; " +
                 "сигналов=${unifiedEvidence.optInt("observed_signal_count")}. " +
                 "PASS подтверждает только происхождение сигналов в полном снимке сканера, не корректность книг."))
         val tc1Evidence = CockpitDiagnostics.rows(tc1ZeroPointAudit)
