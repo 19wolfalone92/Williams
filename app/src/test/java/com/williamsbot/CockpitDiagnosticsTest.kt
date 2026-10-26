@@ -6,6 +6,33 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CockpitDiagnosticsTest {
+    @Test fun diagnostic8RecoveredShortsWithStopsRemainUnownedAndBlocked() {
+        val symbols=listOf("DOGEUSDT","BNBUSDT","BTCUSDT","AVAXUSDT","ADAUSDT","XRPUSDT","LTCUSDT")
+        val intents=JSONArray()
+        for(symbol in symbols) {
+            intents.put(JSONObject().put("symbol",symbol).put("role","ENTRY")
+                .put("kind","RECOVERED_EXCHANGE_POSITION")
+                .put("order_status","FILLED").put("campaign_status","OPEN_PROTECTED")
+                .put("protection_status","PROTECTED")
+                .put("strategy_ownership_verified",false))
+        }
+        val coordinator=coordinator().put("pending_intent_details",intents)
+        val status=healthy()
+        // Positions can lag signed exchange STOPs. No green autonomous
+        // management may be manufactured by a journal's PROTECTED flag.
+        assertEquals("FAIL",severity("EXE-12",status,coordinator))
+        assertEquals("NOT_VERIFIED",severity("EXE-03",status,coordinator))
+        val detail=check("EXE-12",status,coordinator).getString("detail")
+        assertTrue(detail.contains("7"))
+        assertTrue(detail.contains("LTCUSDT"))
+        assertTrue(detail.contains("не разрешение"))
+        for(i in 0 until intents.length()) {
+            intents.getJSONObject(i).put("strategy_ownership_verified",true)
+        }
+        assertEquals("PASS",severity("EXE-12",status,coordinator))
+        coordinator.put("reconciliation_running",true)
+        assertEquals("NOT_VERIFIED",severity("EXE-12",status,coordinator))
+    }
     @Test fun historyForensicsDoesNotInventAvaxClosureOrDoubleCountTwoAuditSources() {
         val original=JSONObject().put("symbol","AVAXUSDT").put("status","CLOSED_UNVERIFIED")
             .put("trade_audit_source","FUTURES_CAMPAIGN_SNAPSHOT").put("pnl_complete",false)
