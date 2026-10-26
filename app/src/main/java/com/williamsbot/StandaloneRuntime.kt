@@ -7578,9 +7578,12 @@ private class NativeEngine(
                         allowKillLatched = true
                     )
                     if (result.optBoolean("deferred_to_active_reconciliation", false)) {
-                        // No REST proof was taken; never clear sync-required or
-                        // persist a fatal latch for a harmless overlap. The worker
-                        // retries after its normal throttled interval.
+                        // No signed REST proof was taken. Surface lock contention
+                        // to diagnostics, but do not call it a Binance auth error
+                        // or persist a new kill/reconcile latch. The normal
+                        // monitoring worker will retry after its bounded backoff.
+                        userStreamReconcileFailure =
+                            "PRIVATE_SIGNED_REST_SYNC_DEFERRED_ACCOUNT_LOCK; RETRY_PENDING"
                         break
                     }
                     check(futuresSignedSnapshotComplete(result)) {
