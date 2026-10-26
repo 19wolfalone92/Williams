@@ -6,6 +6,35 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CockpitDiagnosticsTest {
+    @Test fun diagnostic9SixOrphanShortsRemainVisibleWithNoLocalIntentJournal() {
+        val symbols=listOf("DOGEUSDT","BTCUSDT","AVAXUSDT","ADAUSDT","XRPUSDT","LTCUSDT")
+        val signed=JSONArray()
+        for(symbol in symbols) {
+            signed.put(JSONObject().put("symbol",symbol)
+                .put("direction","SHORT").put("positionAmt","-2")
+                .put("qty","2").put("stop","99")
+                .put("stop_verification_status","EXTERNAL_PROTECTED")
+                .put("strategy_ownership_verified",false))
+        }
+        // In the real archive the six positions are exchange-signed while
+        // the coordinator contains ZERO durable campaign entries.
+        val coordinator=coordinator().put("pending_intent_details",JSONArray())
+        val status=healthy().put("futures_positions",signed)
+            .put("positions_snapshot_at_ms",now-15_526L)
+            .put("positions_snapshot_ok",true)
+        assertEquals("NOT_VERIFIED",severity("EXE-12",status,coordinator))
+        val detail=check("EXE-12",status,coordinator).optString("detail")
+        assertTrue(detail.contains("6; из signed positions=6"))
+        assertTrue(detail.contains("LTCUSDT"))
+        status.put("positions_snapshot_at_ms",now-2_000L)
+        assertEquals("FAIL",severity("EXE-12",status,coordinator))
+        for(index in 0 until signed.length()) {
+            signed.getJSONObject(index).put("strategy_ownership_verified",true)
+        }
+        assertEquals("PASS",severity("EXE-12",status,coordinator))
+        signed.getJSONObject(0).remove("strategy_ownership_verified")
+        assertEquals("NOT_VERIFIED",severity("EXE-12",status,coordinator))
+    }
     @Test fun perSymbolSignedProtectionNeverTurnsOldProofGreen() {
         val p=JSONObject().put("symbol","DOGEUSDT").put("direction","SHORT")
             .put("positionAmt","-100").put("qty","100").put("stop","0.07727")
