@@ -150,3 +150,39 @@ internal fun exactTc2ShortFractalLevels(
         !ExecutionMath.isMultiple(protective, tick)) return null
     return Tc2ShortFractalSourceLevels(trigger, protective, pivot, highest)
 }
+
+/** TC2 chapters 9-10, Russian PDF pp.125,132,137,139.
+ * WM1 and WM2 set the stop-entry exactly one exchange tick beyond the
+ * signal price bar. The initial protective stop uses its opposite extreme.
+ * No reflected/derived Double price is allowed to determine that tick.
+ * This is source price evidence, NOT authorization to enter a position.
+ */
+internal data class Tc2WiseManPriceBarLevels(
+    val trigger: Double, val protective: Double,
+    val sourceHigh: Double, val sourceLow: Double
+)
+
+internal fun exactTc2WiseManPriceBarLevels(
+    direction: String,
+    bar: WilliamsWaveBar,
+    tick: Double
+): Tc2WiseManPriceBarLevels? {
+    if(direction !in setOf("LONG","SHORT") || !tick.isFinite() || tick<=0.0 ||
+        bar.t<0L || listOf(bar.o,bar.h,bar.l,bar.c).any { !it.isFinite() || it<=0.0 } ||
+        bar.l>minOf(bar.o,bar.c) || bar.h<maxOf(bar.o,bar.c) ||
+        !ExecutionMath.isMultiple(bar.h,tick) || !ExecutionMath.isMultiple(bar.l,tick))
+        return null
+    val step=ExecutionMath.decimal(tick)
+    val hi=ExecutionMath.decimal(bar.h)
+    val lo=ExecutionMath.decimal(bar.l)
+    val entry=if(direction=="LONG") hi.add(step) else lo.subtract(step)
+    val stop=if(direction=="LONG") lo.subtract(step) else hi.add(step)
+    val trigger=entry.toDouble()
+    val protective=stop.toDouble()
+    if(!trigger.isFinite() || !protective.isFinite() || trigger<=0.0 ||
+        protective<=0.0 || (direction=="LONG" && protective>=trigger) ||
+        (direction=="SHORT" && protective<=trigger) ||
+        !ExecutionMath.isMultiple(trigger,tick) || !ExecutionMath.isMultiple(protective,tick))
+        return null
+    return Tc2WiseManPriceBarLevels(trigger,protective,bar.h,bar.l)
+}
