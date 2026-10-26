@@ -76,4 +76,41 @@ class WilliamsSetupRulesTest {
         assertNull(williamsTc2SuperAoInitialStop("LONG",bars,4,.01))
     }
 
+
+    @Test fun shortFractalUsesActualExchangeLowAndExactlyOneTick() {
+        // Regression from diagnostics 2026-10-26: BTC 79524.8 -> 79524.7
+        // and ETH 2297.00 -> 2296.99, never an extra tick from reflection.
+        fun source(pivot:Double):List<WilliamsWaveBar> {
+            val lows=listOf(pivot+3,pivot+2,pivot,pivot+1,pivot+1.5,pivot+2)
+            return lows.mapIndexed { i,low ->
+                WilliamsWaveBar(i*3_600_000L,low+1,low+4,low,low+2)
+            }
+        }
+        val btc=exactTc2ShortFractalLevels(source(79524.8),2*3_600_000L,2*3_600_000L,4*3_600_000L,.1)!!
+        val eth=exactTc2ShortFractalLevels(source(2297.0),2*3_600_000L,2*3_600_000L,4*3_600_000L,.01)!!
+        assertEquals(79524.7,btc.trigger,0.0)
+        assertEquals(2296.99,eth.trigger,0.0)
+        assertEquals(79531.9,btc.protective,1e-9)
+        assertEquals(2304.01,eth.protective,1e-9)
+        assertTrue(ExecutionMath.isMultiple(btc.trigger,.1))
+        assertTrue(ExecutionMath.isMultiple(eth.trigger,.01))
+    }
+
+    @Test fun shortFractalStopHonoursPlateauAndNeverReadsFutureBars() {
+        val h=3_600_000L
+        val lows=listOf(108.0,105.0,100.0,100.0,104.0,105.0,106.0)
+        val bars=lows.mapIndexed { i,low ->
+            WilliamsWaveBar(i*h,low+2,low+10,low,low+3)
+        }.toMutableList()
+        val actual=exactTc2ShortFractalLevels(bars,3*h,2*h,5*h,.1)!!
+        assertEquals(99.9,actual.trigger,0.0)
+        assertEquals(115.1,actual.protective,1e-9) // five bars incl. plateau
+        bars[6]=bars[6].copy(h=99999.0)
+        assertEquals(actual,exactTc2ShortFractalLevels(bars,3*h,2*h,5*h,.1))
+        bars[3]=bars[3].copy(l=100.005)
+        assertNull(exactTc2ShortFractalLevels(bars,3*h,2*h,5*h,.1))
+        assertNull(exactTc2ShortFractalLevels(bars,3*h,2*h,4*h,.1))
+        assertNull(exactTc2ShortFractalLevels(bars,3*h,4*h,5*h,.1))
+    }
+
 }
