@@ -6114,14 +6114,10 @@ private class NativeEngine(
             val quantity=pos.optString("positionAmt").toBigDecimalOrNull() ?: continue
             if(quantity.signum()==0) continue
             val direction=if(quantity.signum()>0) "LONG" else "SHORT"
-            val proof=signedProofs.singleOrNull { it.optString("symbol")==symbol &&
-                it.optString("direction")==direction &&
-                it.optString("stop_proof")=="EXTERNAL_PROTECTED" &&
-                !it.optBoolean("strategy_ownership_verified",true) &&
-                it.optString("management_mode")=="OBSERVE_ONLY" } ?: continue
-            if(!CockpitDiagnostics.fresh(proof.optLong("observed_at_ms"),now,15_000L) ||
-                proof.optString("quantity").toBigDecimalOrNull()?.abs()
-                    ?.compareTo(quantity.abs())!=0) continue
+            val proof=signedProofs.singleOrNull {
+                it.optString("symbol")==symbol && it.optString("direction")==direction
+            } ?: continue
+            if(autonomousRecoveredStopCandidateBlocker(pos,proof,now)!=null) continue
             val stop=proof.optString("stop").toDoubleOrNull() ?: continue
             val entry=pos.optString("entryPrice").toDoubleOrNull() ?: continue
             if(!stop.isFinite() || stop<=0.0 || !entry.isFinite() || entry<=0.0) continue
