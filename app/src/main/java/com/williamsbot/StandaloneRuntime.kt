@@ -1679,6 +1679,11 @@ private class NativeEngine(
     @Volatile private var userStreamReconcileFailure: String? = null
     @Volatile private var lastUserEventMs = 0L
     @Volatile private var lastUserStreamSyncAtMs = 0L
+    // GET-only forensic data: never used by the Execution Door, position
+    // ownership, STOP replacement, reconciliation or order admission.
+    @Volatile private var signedFillAuditJson = "{\\"state\\":\\"NOT_REQUESTED\\"}"
+    @Volatile private var signedFillAuditRunning = false
+    @Volatile private var signedFillAuditLastAttemptMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
     @Volatile private var liveUsdtBalanceKnown = false
     @Volatile private var futuresAccountSnapshotUpdatedAtMs = 0L
@@ -11133,12 +11138,60 @@ private class NativeEngine(
         }
     }
 
+    private fun scheduleReadOnlySignedFillAudit() {
+        val nowMs=System.currentTimeMillis()
+        synchronized(this) {
+            if(signedFillAuditRunning ||
+                (signedFillAuditLastAttemptMs>0L && nowMs-signedFillAuditLastAttemptMs<60_000L)) return
+            signedFillAuditRunning=true
+            signedFillAuditLastAttemptMs=nowMs
+            signedFillAuditJson=JSONObject().put("state","SIGNED_GET_IN_PROGRESS")
+                .put("requested_at_ms",nowMs).toString()
+        }
+        Thread({
+            val output=JSONObject().put("source","BINANCE_USDM_SIGNED_USER_TRADES_READ_ONLY")
+                .put("report_generation_at_ms",nowMs)
+                .put("can_authorize_exchange_mutations",false)
+            try {
+                val live=runCatching { status(fast=true).optJSONArray("futures_positions") }.getOrNull()
+                val symbols=(listOf("BNBUSDT") +
+                    CockpitDiagnostics.rows(live).map { it.optString("symbol") })
+                    .filter { it.isNotBlank() }.distinct().take(8)
+                val audited=JSONArray()
+                val endMs=System.currentTimeMillis()
+                for(symbol in symbols) {
+                    val ageMs=if(symbol=="BNBUSDT") 7L*24L*60L*60L*1000L
+                        else 24L*60L*60L*1000L
+                    // Saturated exchange results are bisected by the existing
+                    // read-only loader. No ledger, STOP or trade is mutated.
+                    val trades=loadFuturesTradeRows(symbol,(endMs-ageMs).coerceAtLeast(0L),endMs)
+                    audited.put(FuturesSignedTradeForensics.summarize(symbol,trades,endMs)
+                        .put("window_start_ms",endMs-ageMs)
+                        .put("window_end_ms",endMs))
+                }
+                output.put("state","READ_COMPLETE_OR_EXPLICITLY_UNVERIFIED")
+                    .put("symbols",audited)
+            } catch(failure:Exception) {
+                output.put("state","SIGNED_GET_FAILED")
+                    .put("error",safeDiagnosticText(failure.message ?: failure.javaClass.simpleName))
+            } finally {
+                signedFillAuditJson=output.toString()
+                signedFillAuditRunning=false
+            }
+        },"williams-readonly-futures-fill-audit").apply { isDaemon=true; start() }
+    }
+
     fun diagnostics(): JSONObject {
+        // GET-only diagnostics run separately from the Android/UI thread and
+        // never block STOP maintenance or create a position owner. A later
+        // diagnostic export includes the completed snapshot.
+        scheduleReadOnlySignedFillAudit()
         // Capture each state source once so the report does not compare different
         // moments in time and manufacture contradictions from separate status reads.
         val statusSnapshot = status(fast = true)
             .put("strategy_audit", strategyDiagnosticEvidence())
             .put("trade_observations", JSONArray(CockpitDiagnostics.rows(trades()).take(20)))
+            .put("signed_exchange_fill_forensics",JSONObject(signedFillAuditJson))
         val coordinatorSnapshot = statusSnapshot.optJSONObject("futures_runtime") ?: JSONObject()
         val tests = diagnosticSelfTests(statusSnapshot, coordinatorSnapshot)
         val observedAtMs = System.currentTimeMillis()
