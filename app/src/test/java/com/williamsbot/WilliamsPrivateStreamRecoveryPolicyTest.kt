@@ -6,6 +6,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsPrivateStreamRecoveryPolicyTest {
+    @Test fun signedUserStreamSyncGetsFairBoundedAccountLockEvenUnderFrequentProtectionAudits() {
+        assertEquals(0L,futuresReconciliationLockBudgetMs("POSITION_MANAGEMENT_RECONCILIATION",50_000L))
+        assertEquals(15_000L,futuresReconciliationLockBudgetMs("USER_STREAM_RECONCILIATION",50_000L))
+        assertEquals(3_000L,futuresReconciliationLockBudgetMs("USER_STREAM_RECONCILIATION",3_000L))
+        assertEquals(0L,futuresReconciliationLockBudgetMs("USER_STREAM_RECONCILIATION",-1L))
+        assertEquals(50_000L,futuresReconciliationLockBudgetMs("STARTUP_RECONCILIATION",50_000L))
+        assertTrue(deferrableFuturesReconciliation("USER_STREAM_RECONCILIATION"))
+        assertTrue(deferrableFuturesReconciliation("POSITION_MANAGEMENT_RECONCILIATION"))
+        assertFalse(deferrableFuturesReconciliation("STARTUP_RECONCILIATION"))
+    }
     @Test fun signedAuditMayCompleteDataSyncButMustNotUnlockUnownedCampaign() {
         val riskBlocked=JSONObject()
             .put("ok",false)
