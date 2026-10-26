@@ -601,7 +601,7 @@ internal fun williamsObservedStopCanTrail(observation: JSONObject?): Boolean {
                 observation.optString("management_mode") == "STRATEGY_OWNED"
         "EXTERNAL_PROTECTED" ->
             !observation.optBoolean("strategy_ownership_verified",false) &&
-                observation.optString("management_mode") == "OPERATOR_APPROVED_STOP_ONLY"
+                observation.optString("management_mode") in setOf("OPERATOR_APPROVED_STOP_ONLY", "AUTO_VERIFIED_STOP_ONLY")
         else -> false
     }
 }
