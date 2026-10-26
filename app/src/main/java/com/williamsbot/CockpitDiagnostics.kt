@@ -630,8 +630,10 @@ internal object CockpitDiagnostics {
         val closedTradeRows=rows(status.optJSONArray("trade_observations"))
         val unverifiedCloses=closedTradeRows.filter { it.optString("status")=="CLOSED_UNVERIFIED" ||
             it.optString("outcome")=="CLOSED_UNVERIFIED" }
-        val missingPnl=closedTradeRows.filter { it.optString("status").startsWith("CLOSED") &&
-            !it.optBoolean("pnl_complete",false) }
+        val observedClosures=closedTradeRows.filter {
+            it.optString("status").startsWith("CLOSED") || it.optLong("closed_at_ms")>0L
+        }
+        val missingPnl=observedClosures.filter { !it.optBoolean("pnl_complete",false) }
         // Two audit rows can legitimately describe ONE exchange position (native
         // recovery plus operator stop supervision). Do not silently erase either
         // source, infer an exit price, or double-count them as two completed trades.
@@ -639,8 +641,10 @@ internal object CockpitDiagnostics {
         check("HIST-01", "database", "Восстановление закрытий, комиссий и PnL", when {
             !status.has("trade_observations") -> "NOT_VERIFIED"
             unverifiedCloses.isNotEmpty() || missingPnl.isNotEmpty() -> "WARNING"
+            observedClosures.isEmpty() -> "NOT_VERIFIED"
             else -> "PASS"
-        }, "Неподтверждённые записи закрытия: ${unverifiedCloses.size}; " +
+        }, "Подтверждённых записей закрытия в снимке: ${observedClosures.size}; " +
+            "неподтверждённых записей закрытия: ${unverifiedCloses.size}; " +
             "записи без полного PnL: ${missingPnl.size}; " +
             "уникальные пары с неподтверждённым закрытием: ${uncertainSymbols.joinToString(",").ifEmpty { "нет" }}. " +
             "Несколько источников одной позиции НЕ означают несколько сделок; " +
