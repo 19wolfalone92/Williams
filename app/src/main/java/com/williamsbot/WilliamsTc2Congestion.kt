@@ -129,7 +129,7 @@ internal fun williamsTc2CongestionEvidence(
     val insideComplex=structures.any { it.optBoolean("crosses_entry") }
     // H1 entry outside the actually observed complex structure is a distinct
     // possible breakout. The separate standard Wise-Man gates still apply.
-    val block=insideComplex && !breaksRange
+    val block=insideComplex
     val state=when {
         structures.isNotEmpty() -> "COMPLEX_CORRECTION_CANDIDATE"
         rangeObserved -> "ORDINARY_CONGESTION_OR_CORRECTION_NOT_COMPLEX"
@@ -139,7 +139,7 @@ internal fun williamsTc2CongestionEvidence(
         .put("reason_code",when {
             block -> WILLIAMS_TC2_CONGESTION_BLOCKER
             structures.isNotEmpty() && !insideComplex -> "ENTRY_OUTSIDE_COMPLEX_STRUCTURE"
-            structures.isNotEmpty() && breaksRange -> "STOP_BREAKOUT_OUTSIDE_24_H1_RANGE"
+            structures.isNotEmpty() && breaksRange -> "STOP_BREAKOUT_OUTSIDE_COMPLEX_STRUCTURE"
             rangeObserved -> "ONLY_CONGESTION_NOT_COMPLEX_NO_VETO"
             else -> "NO_COMPLEX_CORRECTION_PROOF"
         }).put("blocked",block).put("window_bars",window.size)
@@ -150,6 +150,7 @@ internal fun williamsTc2CongestionEvidence(
         .put("satiated_or_sleeping_last_8",nonTrending)
         .put("complex_structures",JSONArray(structures))
         .put("complex_structure_count",structures.size)
+        .put("complex_structure_blocks_only_when_inside",true)
         .put("simple_abc_is_allowed",true)
         .put("generic_wxy_unresolved_is_not_a_veto",true)
         .put("as_of_close_ms",closedBars.last().t+WILLIAMS_H1_MS)
