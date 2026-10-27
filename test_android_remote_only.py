@@ -769,7 +769,7 @@ def test_android_williams_stop_entries_reject_any_intervening_trigger_cross():
     assert "fun triggerStillPending(signalIndex: Int, trigger: Double): Boolean" in long_signals
     assert "for (later in signalIndex + 1..current)" in long_signals
     assert "if (candles[later].h >= trigger) return false" in long_signals
-    assert long_signals.count("triggerStillPending(") == 3  # helper + WM1 + WM2; WM3 has a pure tested selector
+    assert long_signals.count("triggerStillPending(") == 4  # helper + WM1 + WM2 + explicit WM3 causal recheck
     assert "if (triggerStillPending(i, trigger))" in long_signals
     assert "triggerStillPending(signalIndex, trigger))" in long_signals
     assert 'selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)' in long_signals
