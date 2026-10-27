@@ -225,6 +225,10 @@ private fun enrichWaveRhythm(h: WilliamsWaveScenario, frames: Map<String, List<W
     // W5 price target remains a visible PRICE-only observation even if W3
     // or W4 oscillator time cannot be uniquely resolved on real child bars.
     if (p.size >= 6) {
+        val extension = abs(p[3].price-p[0].price)
+        val t1 = p[4].price + sign * extension * .62
+        val t2 = p[4].price + sign * extension
+        h.targetZone = p[5].price in minOf(t1,t2)..maxOf(t1,t2)
     }
     val thirdIndex=uniquePriceIndex(p[3])
     val fourthIndex=if(p.size>=5) uniquePriceIndex(p[4]) else indexes.last()
@@ -264,10 +268,6 @@ private fun enrichWaveRhythm(h: WilliamsWaveScenario, frames: Map<String, List<W
         val third = peak(p[2].extremeAt, thirdEnd)
         val fifth = peak(p[4].extremeAt, minOf(stop, p[5].extremeAt + 5 * williamsWaveFrames.getValue(frame)))
         h.divergence = third != null && fifth != null && fifth > 0 && fifth < third && sign * (p[5].price-p[3].price) > 0
-        val extension = abs(p[3].price-p[0].price)
-        val t1 = p[4].price + sign * extension * .62
-        val t2 = p[4].price + sign * extension
-        h.targetZone = p[5].price in minOf(t1,t2)..maxOf(t1,t2)
     }
     if (h.w4Zero != "MINIMUM_ONLY") h.alternatives += "W3_EXTENSION_OR_WRONG_DEGREE"
 }
