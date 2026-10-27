@@ -80,3 +80,35 @@ private fun writeJsonEscapedString(value:String,writer:Writer) {
     if(from<value.length) writer.write(value,from,value.length-from)
     writer.write("\"")
 }
+
+/** UI JSON excerpt must never allocate the entire multi-megabyte diagnostic
+ * by calling JSONObject.toString(2) just to display its first 20,000 chars.
+ */
+internal fun diagnosticsJsonPreview(value:Any?,limit:Int=20_000):String {
+    require(limit in 1..100_000)
+    val out=StringBuilder(minOf(limit,1024))
+    class PreviewComplete:java.io.IOException()
+    val writer=object:Writer() {
+        private fun capture(value:String,off:Int,length:Int) {
+            if(length<=0) return
+            val take=minOf(length,(limit-out.length).coerceAtLeast(0))
+            if(take>0) out.append(value,off,off+take)
+            if(take<length) throw PreviewComplete()
+        }
+        override fun write(value:String,off:Int,length:Int) = capture(value,off,length)
+        override fun write(buffer:CharArray,off:Int,length:Int) {
+            if(length<=0) return
+            val take=minOf(length,(limit-out.length).coerceAtLeast(0))
+            if(take>0) out.append(buffer,off,take)
+            if(take<length) throw PreviewComplete()
+        }
+        override fun flush() {}
+        override fun close() {}
+    }
+    try {
+        writeDiagnosticsJsonStreaming(value,writer)
+    } catch (_:PreviewComplete) {
+        out.append("\n… [Фрагмент ограничен. Полный JSON — в ZIP]")
+    }
+    return out.toString()
+}
