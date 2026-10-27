@@ -5799,9 +5799,25 @@ private class NativeEngine(
                         if(!valid) h1ParentRejectionReason(symbol,parentId,"H1_BOOK_PARENT_INVALIDATED")
                         else {
                             val closed=h1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
-                            val teeth=williamsBookH1ActivationTeeth(closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)
-                            williamsBookFractalTeethBlocker(pending.optString("signal_type"),
-                                pending.optString("direction"),price,teeth,tick)
+                            val waveBars=closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                            // TC2 ch11 fig 11.7: an unfilled STOP can become a
+                            // late, unsuitable fractal as H1 enters congestion.
+                            // Revoke only clearly unfilled exchange-acknowledged
+                            // NEW/WORKING entries, not TRIGGERING, PARTIALLY_FILLED,
+                            // unknown, filled positions or protective STOPs.
+                            val orderState=exchangeOrderStatus(pending).uppercase(Locale.US)
+                            val correctionInvalidation=if(profile==williamsTc2Profile &&
+                                orderState in setOf("NEW","PENDING","WORKING","ACCEPTED"))
+                                williamsTc2CongestionEntryBlocker(profile,
+                                    pending.optString("signal_type"),pending.optString("direction"),
+                                    price,waveBars,now)
+                            else null
+                            if(correctionInvalidation!=null) correctionInvalidation
+                            else {
+                                val teeth=williamsBookH1ActivationTeeth(waveBars,now)
+                                williamsBookFractalTeethBlocker(pending.optString("signal_type"),
+                                    pending.optString("direction"),price,teeth,tick)
+                            }
                         }
                     }
                 }.getOrElse { failure ->
