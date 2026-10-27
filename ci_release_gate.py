@@ -737,7 +737,16 @@ def main() -> None:
     # as well as retaining the explicit manual dispatch option.
     testnet_workflow = read(".github/workflows/testnet-readonly.yml")
     must(testnet_workflow, "push:", ".github/workflows/testnet-readonly.yml")
-    must(testnet_workflow, "branches: [futures-williams-campaign]", ".github/workflows/testnet-readonly.yml")
+    # Retain the original permitted Futures campaign branch while allowing
+    # an isolated review branch to prove public Demo connectivity before merge.
+    # This gate verifies an actual branch token, not a brittle full YAML line.
+    demo_branch_line = re.search(r"(?m)^\\s*branches:\\s*\\[([^]\\n]+)\\]", testnet_workflow)
+    assert demo_branch_line, "Demo read-only workflow must declare explicit push branches"
+    demo_branches = {part.strip().strip("'\\\"") for part in demo_branch_line.group(1).split(",")}
+    assert "futures-williams-campaign" in demo_branches, (
+        "Authenticated Demo read-only workflow lost its canonical campaign branch"
+    )
+    must(testnet_workflow, "tools/verify_public_futures_demo.py", ".github/workflows/testnet-readonly.yml")
     must(testnet_workflow, "workflow_dispatch:", ".github/workflows/testnet-readonly.yml")
     must(testnet_workflow, "WILLIAMS_TESTNET_API_KEY", ".github/workflows/testnet-readonly.yml")
     must(testnet_workflow, "WILLIAMS_TESTNET_API_SECRET", ".github/workflows/testnet-readonly.yml")
