@@ -6687,6 +6687,11 @@ private class NativeEngine(
             (it.executionSemantics!="MARKET_ON_CLOSE" || williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,now,it.triggerPrice,mark)==null) &&
             children.none { child -> child.optString("client_id")==additionClientId(it) } }
             .minWithOrNull(compareBy<CampaignSignalN> { it.executionSemantics!="MARKET_ON_CLOSE" }.thenBy { it.signalBarTimeMs }) ?: return
+        // Existing campaign stays protected; only an attempted ADD_ON adds risk.
+        // TC2 ch11 fig.11.7 cautions against late trades in bounded correction.
+        williamsTc2CongestionEntryBlocker(profile,signal.type,direction,signal.triggerPrice,
+            candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)
+            ?.let { return rejectDecision(symbol,it+": new add-on withheld, protected owner unchanged") }
         val market=signal.executionSemantics=="MARKET_ON_CLOSE"
         if(market && (profile!=williamsNtdProfile || signal.type.removePrefix("SHORT_")!="ZONE_ADD_ON" ||
             williamsMarketOnCloseReason(signal.signalBarTimeMs,3_600_000L,now,signal.triggerPrice,mark)!=null)) return
@@ -6769,8 +6774,13 @@ private class NativeEngine(
             check(williamsProfileAllowsSource(williamsProfile,profile)) { "ADDITION_SOURCE_PROFILE_CHANGED_BEFORE_SUBMISSION" }
             check(entryTimePolicy.allows(submitNow)) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_ADDITION" }
             check(checkFuturesDailyLoss()) { "DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED_BEFORE_ADDITION: "+lastError }
-            val fresh=editionCampaignSignals(symbol,fetchCandles(symbol,"1h",220),"1h",rules.tick,profile)
+            val currentH1=fetchCandles(symbol,"1h",220)
+            val fresh=editionCampaignSignals(symbol,currentH1,"1h",rules.tick,profile)
             check(fresh.any { it.signalId==signal.signalId && it.triggerPrice==signal.triggerPrice }) { "Addition formation no longer valid" }
+            check(williamsTc2CongestionEntryBlocker(profile,signal.type,direction,signal.triggerPrice,
+                currentH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },submitNow)==null) {
+                WILLIAMS_TC2_CONGESTION_BLOCKER+": NEW ADDITION BLOCKED"
+            }
             if(!market) {
                 val current=futuresMarketData.price(symbol)
                 check(if(direction=="LONG") current<price else current>price) { "Addition trigger already consumed" }
