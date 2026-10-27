@@ -7,11 +7,11 @@ import kotlin.math.sin
 
 class WilliamsTc2CongestionTest {
     private val h=3_600_000L
-    private fun oscillating():List<WilliamsWaveBar>=(0 until 120).map { i ->
+    private fun oscillating():List<WilliamsWaveBar> =(0 until 120).map { i ->
         val c=740.0+1.6*sin(i*PI/3.0)
         WilliamsWaveBar((i+1)*h,c-.1,c+.4,c-.4,c,100.0)
     }
-    private fun trending():List<WilliamsWaveBar>=(0 until 120).map { i ->
+    private fun trending():List<WilliamsWaveBar> =(0 until 120).map { i ->
         val c=700.0+i*.7
         WilliamsWaveBar((i+1)*h,c-.1,c+.4,c-.4,c,100.0)
     }
