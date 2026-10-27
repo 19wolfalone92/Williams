@@ -116,9 +116,9 @@ object DiagnosticsArchive {
                 addJson(zip,"signal_decision_history.json",report.opt("signal_decision_history"))
                 // The latest 300 decisions are from SQLite, without creating
                 // a second giant JSON string or silently fabricating evidence.
-                val stops: Any=runCatching {
+                val stops: Any=try {
                     TradingAuditStore(context).use { it.recentStopTrailDecisionEvents(300) }
-                }.getOrElse {
+                } catch (_:Exception) {
                     org.json.JSONObject().put("status","NOT_AVAILABLE")
                         .put("reason","STOP_AUDIT_SQLITE_READ_FAILED")
                 }
