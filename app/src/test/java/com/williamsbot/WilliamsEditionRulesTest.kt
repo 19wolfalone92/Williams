@@ -194,6 +194,43 @@ class WilliamsEditionRulesTest {
         assertTrue(setups("SHORT",inverted,144.9,151.0,151.0).isEmpty())
     }
 
+    @Test fun fourBookExactOneTickSourcePricesAreDecimalAndRejectOffGrid() {
+        assertEquals(79524.7,williamsBookExactPriceTick(79524.8,.1,false)!!,0.0)
+        assertEquals(79524.9,williamsBookExactPriceTick(79524.8,.1,true)!!,0.0)
+        assertEquals(2296.99,williamsBookExactPriceTick(2297.0,.01,false)!!,0.0)
+        assertEquals(2297.01,williamsBookExactPriceTick(2297.0,.01,true)!!,0.0)
+        assertEquals(.2061,williamsBookExactPriceTick(.2060,.0001,true)!!,0.0)
+        assertNull(williamsBookExactPriceTick(99.005,.01,false))
+        assertNull(williamsBookExactPriceTick(Double.NaN,.01,true))
+        assertNull(williamsBookExactPriceTick(100.0,Double.NaN,false))
+    }
+
+    @Test fun courseSquatHistoricAdaH1PriceBarIsExactlyOneTickBothWays() {
+        // Frozen PUBLIC OHLCV only; ADAUSDT book observer in 27-Oct ZIP.
+        val series=listOf(
+            WilliamsWaveBar(3_600_000L,.2050,.2055,.2047,.2052,920578.0),
+            WilliamsWaveBar(7_200_000L,.2051,.2060,.2047,.2052,61576755.0)
+        )
+        val long= requireNotNull(williamsCourseSquatSetup("LONG",series,.0001))
+        val short=requireNotNull(williamsCourseSquatSetup("SHORT",series,.0001))
+        assertEquals(.2061,long.trigger,0.0)
+        assertEquals(.2046,long.stop,0.0)
+        assertEquals(.2046,short.trigger,0.0)
+        assertEquals(.2061,short.stop,0.0)
+        assertNull(williamsCourseSquatSetup("LONG",series,Double.NaN))
+    }
+
+    @Test fun ntdPdf63StrictZeroLineCrossExcludesZeroTouchLongAndShort() {
+        // NTD PDF p.63 Fig5-19: positive -> negative, not zero -> negative.
+        // Figure mirrors to LONG: negative -> positive, not zero -> positive.
+        val touch=List(45){-1.0}+listOf(-1.0,0.0,1.0)
+        val crossing=List(45){-1.0}+listOf(-1.0,-0.1,1.0)
+        for(side in listOf("LONG","SHORT")) {
+            assertFalse(editionAoSignals(touch,side).contains("AO_ZERO_LINE"))
+            assertTrue(editionAoSignals(crossing,side).contains("AO_ZERO_LINE"))
+        }
+    }
+
     @Test fun bothOutsideFractalsRemainVisibleWithoutInventingTheirIntrabarOrder() {
         val highs=listOf(10.0,11.0,15.0,11.0,10.0);val lows=listOf(8.0,7.0,3.0,7.0,8.0)
         val bars=highs.indices.map { i -> WilliamsWaveBar((i+1)*3_600_000L,(highs[i]+lows[i])/2,highs[i],lows[i],(highs[i]+lows[i])/2,100.0) }
