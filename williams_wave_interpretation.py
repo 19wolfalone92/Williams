@@ -56,7 +56,7 @@ def _causal(scenario, as_of):
         extreme, known, price = (anchor.get(k) for k in ("extreme_at", "known_at", "price"))
         kind = "LOW" if (i % 2 == 0) == (direction == "UP") else "HIGH"
         if (not all(_number(x) for x in (extreme, known, price)) or price <= 0 or extreme < 0
-                or anchor.get("kind") != kind or known < extreme+FRAME_MS[frame] or known > as_of
+                or anchor.get("kind") != kind or known < extreme+3*FRAME_MS[frame] or known > as_of
                 or i and extreme <= anchors[i-1]["extreme_at"]):
             return False
     low, high, invalidation = (scenario.get(k) for k in ("leg_low", "leg_high", "invalidation"))
