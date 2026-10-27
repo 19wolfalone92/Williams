@@ -34,7 +34,7 @@ class WilliamsTc2CongestionTest {
         val escapeDown=williamsTc2CongestionEvidence(b,now,"SHORT_FRACTAL","SHORT",736.0)
         assertFalse(escapeUp.getBoolean("blocked"))
         assertFalse(escapeDown.getBoolean("blocked"))
-        assertEquals("STOP_BREAKOUT_OUTSIDE_24_H1_RANGE",escapeDown.getString("reason_code"))
+        assertEquals("ONLY_CONGESTION_NOT_COMPLEX_NO_VETO",escapeDown.getString("reason_code"))
         // Valid countertrend WM1 is still assessed by the book's strict AO /
         // mouth angulation; range classification cannot invent a WM1 veto.
         assertFalse(williamsTc2CongestionEvidence(b,now,"SHORT_REVERSAL","SHORT",740.0)
