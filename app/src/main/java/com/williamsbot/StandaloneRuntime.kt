@@ -5808,7 +5808,13 @@ private class NativeEngine(
                             val correctionInvalidation=if(profile==williamsTc2Profile &&
                                 williamsTc2PendingCongestionRecheckEligible(
                                     pending.optString("intent_role","ENTRY"),
-                                    exchangeOrderStatus(pending),pending.optString("client_id")))
+                                    exchangeOrderStatus(pending),pending.optString("client_id"),
+                                    knownFill=pending.optLong("fill_observed_at_ms")>0L ||
+                                        listOf("executed_qty","actual_entry_executed_qty",
+                                            "confirmed_position_qty").any { key ->
+                                            pending.has(key) &&
+                                                pending.optString(key).toBigDecimalOrNull()?.signum()!=0
+                                        }))
                                 williamsTc2CongestionEntryBlocker(profile,
                                     pending.optString("signal_type"),pending.optString("direction"),
                                     price,waveBars,now)
