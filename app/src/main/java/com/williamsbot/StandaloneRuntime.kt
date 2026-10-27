@@ -6934,7 +6934,29 @@ private class NativeEngine(
         fun contextRank(signal: CampaignSignalN): Int = williamsBookInitialContextRank(
             signal.strategyProfile,signal.type,d1Bull,d1Bear,h4Bull,h4Bear,
             corrections[signal.signalId]?.allowed == true)
-        val allowedSignals = freshSignals.filter { contextRank(it)>0 }
+        // TC2 ch11 fig.11.7: g/h/j fractals inside corrective congestion are
+        // not permission to create NEW risk. Numerical evidence is explicitly
+        // PROJECT policy; never relabel as certain Elliott wave genealogy.
+        // Screen all possible H1 Wise Men BEFORE choosing the oldest signal.
+        val congestionBars=candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        val congestion=freshSignals.associate { signal ->
+            signal.signalId to williamsTc2CongestionEvidence(congestionBars,contextNow,
+                signal.type,campaignSignalDirection(signal.type).orEmpty(),signal.triggerPrice)
+        }
+        check(executionStore.writeState("decision_tc2_congestion_"+symbol,JSONObject()
+            .put("as_of",contextNow).put("policy",WILLIAMS_TC2_CONGESTION_POLICY)
+            .put("signals",JSONArray(freshSignals.map { signal ->
+                JSONObject().put("signal_id",signal.signalId)
+                    .put("report",congestion[signal.signalId])
+            })).toString())) { "TC2_CONGESTION_DECISION_NOT_DURABLE" }
+        val allowedSignals = freshSignals.filter { signal ->
+            contextRank(signal)>0 &&
+                (signal.strategyProfile!=williamsTc2Profile ||
+                    congestion[signal.signalId]?.optBoolean("blocked",false)!=true)
+        }
+        if(allowedSignals.isEmpty() && congestion.values.any { it.optBoolean("blocked",false) })
+            return rejectDecision(symbol,WILLIAMS_TC2_CONGESTION_BLOCKER+
+                ": new entry deferred; existing position STOP and management unchanged")
         // A pending re-anchor must never hide a contradictory confirmed
         // hypothesis from another enabled Williams edition.
         if(williamsProfile==williamsUnifiedProfile && williamsUnifiedDirectionsConflict(
@@ -9118,6 +9140,14 @@ private class NativeEngine(
             williamsBookSignalRoleAllowed(it.strategyProfile,it.type,it.role,plan.entryClientId,plan.reentryOwnerId) &&
             campaignSignalDirection(it.type)==plan.direction.name }
             ?: error(h1ParentRejectionReason(plan.symbol,plan.signalId,"H1_BOOK_PARENT_NO_LONGER_VALID"))
+        // Re-evaluate H1 congestion at the final Binance mutation fence.
+        // Applies only to new exposure (entries/additions), not owned STOPs
+        // or discretionary/protective exits.
+        check(williamsTc2CongestionEntryBlocker(plan.strategyProfile,plan.signalType,
+            plan.direction.name,plan.entryPrice.toDouble(),
+            candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)==null) {
+            WILLIAMS_TC2_CONGESTION_BLOCKER
+        }
         if(plan.executionSemantics=="MARKET_ON_CLOSE") {
             check(plan.strategyProfile==williamsNtdProfile && actual.executionSemantics=="MARKET_ON_CLOSE" &&
                 abs(actual.triggerPrice-plan.referenceClose)<=tick*.11) { "NTD_CLOSE_EVENT_CHANGED" }
