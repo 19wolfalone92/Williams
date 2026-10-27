@@ -740,7 +740,7 @@ def main() -> None:
     # Retain the original permitted Futures campaign branch while allowing
     # an isolated review branch to prove public Demo connectivity before merge.
     # This gate verifies an actual branch token, not a brittle full YAML line.
-    demo_branch_line = re.search(r"(?m)^\\s*branches:\\s*\\[([^]\\n]+)\\]", testnet_workflow)
+    demo_branch_line = re.search(r"(?m)^\s*branches:\s*\[([^]]+)\]", testnet_workflow)
     assert demo_branch_line, "Demo read-only workflow must declare explicit push branches"
     demo_branches = {part.strip().strip("'\\\"") for part in demo_branch_line.group(1).split(",")}
     assert "futures-williams-campaign" in demo_branches, (
