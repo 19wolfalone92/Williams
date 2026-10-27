@@ -55,4 +55,27 @@ class WilliamsTc2CongestionTest {
         assertFalse(williamsTc2CongestionEvidence(b,now,"SHORT_FRACTAL","SHORT",760.0)
             .getBoolean("can_change_stops"))
     }
+
+    @Test fun onlyVerifiedUntriggeredH1EntriesEligibleForCongestionCancellation() {
+        for(state in listOf("NEW","ACCEPTED","PENDING","WORKING","new")) {
+            assertTrue(williamsTc2PendingCongestionRecheckEligible(
+                "ENTRY",state,"W2H_BNBUSDT_test"))
+            assertTrue(williamsTc2PendingCongestionRecheckEligible(
+                "ADD_ON",state,"W2A_BNBUSDT_test"))
+        }
+        for(state in listOf("UNKNOWN","TRIGGERING","TRIGGERED","PARTIALLY_FILLED",
+            "FILLED","CANCELED","REJECTED","")) {
+            assertFalse(state,williamsTc2PendingCongestionRecheckEligible(
+                "ENTRY",state,"W2H_BNBUSDT_test"))
+            assertFalse(state,williamsTc2PendingCongestionRecheckEligible(
+                "ADD_ON",state,"W2A_BNBUSDT_test"))
+        }
+        assertFalse(williamsTc2PendingCongestionRecheckEligible(
+            "PROTECTIVE_STOP","NEW","W2H_BNBUSDT_test"))
+        assertFalse(williamsTc2PendingCongestionRecheckEligible(
+            "ENTRY","NEW","EXTERNAL_ORDER"))
+        assertFalse(williamsTc2PendingCongestionRecheckEligible(
+            "ENTRY","NEW","W2T_STOP_REPLACEMENT"))
+    }
+
 }
