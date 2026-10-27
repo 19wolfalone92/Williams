@@ -872,7 +872,7 @@ internal fun CockpitDiagnosticScreen(
                     Text(if(rawJson) "Свернуть JSON" else "Показать фрагмент JSON (полный в ZIP)")
                 }
                 if(rawJson) SelectionContainer {
-                    Text(report?.toString(2)?.take(20000) ?: "Нет снимка",
+                    Text(remember(report) { report?.let { diagnosticsJsonPreview(it) } ?: "Нет снимка" },
                         style=MaterialTheme.typography.labelSmall)
                 }
             }
