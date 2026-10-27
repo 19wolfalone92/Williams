@@ -2,7 +2,7 @@ name: Binance USD-M Futures Demo read-only gate
 
 on:
   push:
-    branches: [futures-williams-campaign]
+    branches: [futures-williams-campaign, fix/book-exact-short-wm3-ticks-20261026]
   workflow_dispatch:
     inputs:
       symbol:
@@ -42,6 +42,9 @@ jobs:
 
       - name: Validate repository release contract
         run: python3 ci_release_gate.py
+
+      - name: Probe real public USD-M Futures Demo clock, contracts and closed H1 on all 10 pairs
+        run: python3 tools/verify_public_futures_demo.py
 
       - name: Check optional CI Demo credentials
         id: check-ci-testnet-credentials
