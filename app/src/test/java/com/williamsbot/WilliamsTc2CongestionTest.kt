@@ -76,6 +76,10 @@ class WilliamsTc2CongestionTest {
             "ENTRY","NEW","EXTERNAL_ORDER"))
         assertFalse(williamsTc2PendingCongestionRecheckEligible(
             "ENTRY","NEW","W2T_STOP_REPLACEMENT"))
+        assertFalse(williamsTc2PendingCongestionRecheckEligible(
+            "ENTRY","NEW","W2H_BNBUSDT_test",knownFill=true))
+        assertFalse(williamsTc2PendingCongestionRecheckEligible(
+            "ADD_ON","WORKING","W2A_BNBUSDT_test",knownFill=true))
     }
 
     @Test fun frozenTenSymbolBinanceH1GeometryIsCausalAndTransparent() {
