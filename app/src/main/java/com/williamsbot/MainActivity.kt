@@ -942,7 +942,7 @@ fun WilliamsApp(context: Context) {
                 // Archiving failure is a separate error from successful
                 // READ-ONLY diagnostic capture; always display fresh findings.
                 val stored=runCatching {
-                    DiagnosticsArchive.writeLatest(context,report.toString())
+                    DiagnosticsArchive.writeLatest(context,report)
                 }
                 withContext(Dispatchers.Main) {
                     diagnosticReport=report
