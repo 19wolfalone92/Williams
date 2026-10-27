@@ -101,3 +101,17 @@ internal fun williamsTc2CongestionEntryBlocker(
     val report=williamsTc2CongestionEvidence(closedBars,nowMs,signalType,direction,trigger)
     if(report.optBoolean("blocked",false)) WILLIAMS_TC2_CONGESTION_BLOCKER else null
 }
+
+/**
+ * An H1 range reclassification is never proof that a Binance algo order has
+ * not already started filling. Request revocation only for exchange-known
+ * untriggered conditional entry states. The coordinator still must cancel,
+ * verify the terminal exchange response, and reconcile positions before any
+ * further new order. A position or its protective STOP is never a candidate.
+ */
+internal fun williamsTc2PendingCongestionRecheckEligible(
+    role:String,exchangeStatus:String,clientId:String
+):Boolean = role in setOf("ENTRY","ADD_ON") &&
+    (clientId.startsWith("W2H_") || clientId.startsWith("W2A_")) &&
+    exchangeStatus.uppercase(java.util.Locale.US) in
+        setOf("NEW","PENDING","WORKING","ACCEPTED")
