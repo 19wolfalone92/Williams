@@ -15,10 +15,27 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 import math
+from decimal import Decimal
 
 import pandas as pd
 
 from campaign_model import SignalRole, SignalSpec, SignalType
+
+
+def _source_exact_one_tick(extreme: float, tick: float, *, above: bool) -> float | None:
+    """Book source OHLC -> exactly one exchange tick, never float arithmetic.
+
+    NTD PDF63; TC2 PDF145-151. Off-grid prices and unknown tick fail closed.
+    This mathematical helper NEVER authorizes an exchange order.
+    """
+    try:
+        p, t = Decimal(str(extreme)), Decimal(str(tick))
+        if not p.is_finite() or not t.is_finite() or p <= 0 or t <= 0 or p % t:
+            return None
+        result = p + (t if above else -t)
+        return float(result) if result > 0 and result.is_finite() else None
+    except (TypeError, ValueError, ArithmeticError):
+        return None
 
 
 def _tick_buffer(tick_size: float, ticks: int = 1) -> float:
@@ -425,7 +442,12 @@ def extract_ntd_ao_signal_specs(
         return []
     current_i = len(ind) - 1
     current = ind.iloc[current_i]
-    tick = max(float(tick_size), 1e-12)
+    try:
+        tick = float(tick_size)
+    except (TypeError, ValueError, OverflowError):
+        return []
+    if not math.isfinite(tick) or tick <= 0:
+        return []
     current_time = _row_time_ms(current)
     high = float(current["high"])
     low = float(current["low"])
@@ -435,9 +457,9 @@ def extract_ntd_ao_signal_specs(
 
     is_long = direction == "LONG"
     order_side = "BUY" if is_long else "SELL"
-    trigger = high + tick if is_long else low - tick
+    trigger = _source_exact_one_tick(high if is_long else low, tick, above=is_long)
     protective = low if is_long else high
-    if trigger <= 0 or (is_long and close >= trigger) or (not is_long and close <= trigger):
+    if trigger is None or (is_long and close >= trigger) or (not is_long and close <= trigger):
         return []
 
     green = ind["ao_green"].fillna(False).astype(bool).to_numpy()
@@ -457,8 +479,8 @@ def extract_ntd_ao_signal_specs(
             # signal bar as the upswing/green bar. The first bar's colour is
             # not prescribed; its AO value only needs to exceed the middle bar.
             matches.append((SignalType.AO_SAUCER, "NTD AO Saucer above zero; BUY STOP above signal-bar high"))
-        # AO Zero-line Cross: a closed bar crosses from non-positive to positive.
-        if ao[-2] <= 0 < ao[-1]:
+        # NTD PDF63 fig5-19: strictly negative -> positive, not zero -> positive.
+        if ao[-2] < 0 < ao[-1]:
             matches.append((SignalType.AO_ZERO_LINE, "NTD AO crossed above zero; BUY STOP above crossing-bar high"))
         # AO Twin Peaks: two confirmed troughs below zero; second is higher,
         # no zero-line crossing between them, and current AO turns green.
@@ -488,7 +510,7 @@ def extract_ntd_ao_signal_specs(
             # Mirrored bearish Saucer: rising/green middle bar followed by
             # the falling/red signal bar; the first bar's colour is irrelevant.
             matches.append((SignalType.AO_SAUCER, "NTD AO Saucer below zero; SELL STOP below signal-bar low"))
-        if ao[-2] >= 0 > ao[-1]:
+        if ao[-2] > 0 > ao[-1]:
             matches.append((SignalType.AO_ZERO_LINE, "NTD AO crossed below zero; SELL STOP below crossing-bar low"))
         if red[-1]:
             peaks = [
