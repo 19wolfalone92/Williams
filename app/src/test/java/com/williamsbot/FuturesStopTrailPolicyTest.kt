@@ -302,4 +302,23 @@ class FuturesStopTrailPolicyTest {
         assertEquals("TC2_LAST_5_CLOSED_BARS",short?.reason)
         assertEquals(2297.01,short!!.stop,0.0)
     }
+
+    @Test fun tc2ConfirmedFractalTrailUsesExactSourceTickAfterTwoRightH1Closes() {
+        val longLows=listOf(79530.0,79529.0,79528.0,79524.8,79526.0,79527.0,79528.0)
+        val long=planFuturesStopTrail(
+            "LONG",79500.0,79510.0,79500.0,79550.0,.1,2*3_600_000L,
+            bars(longLows.map {it+5.0},longLows)
+        )
+        assertEquals("CONFIRMED_H1_FRACTAL",long?.reason)
+        assertEquals(79524.7,long!!.stop,0.0)
+        assertEquals(3*3_600_000L,long.fractalAtMs)
+        val shortHighs=listOf(2290.0,2291.0,2292.0,2297.0,2294.0,2293.0,2292.0)
+        val short=planFuturesStopTrail(
+            "SHORT",2305.0,2300.0,2305.0,2260.0,.01,2*3_600_000L,
+            bars(shortHighs,shortHighs.map {it-5.0})
+        )
+        assertEquals("CONFIRMED_H1_FRACTAL",short?.reason)
+        assertEquals(2297.01,short!!.stop,0.0)
+        assertEquals(3*3_600_000L,short.fractalAtMs)
+    }
 }
