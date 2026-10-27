@@ -1710,6 +1710,7 @@ private class NativeEngine(
     @Volatile private var restLastTickerPrice = 0.0
     @Volatile private var restProbeRunning = false
     private var restProbeThread: Thread? = null
+    private var exchangeClockProbeThread: Thread? = null
     @Volatile private var lastRestReconcileMs = 0L
     @Volatile private var lastReconciliationAttemptAtMs = 0L
     @Volatile private var lastReconciliationCompletedAtMs = 0L
@@ -10485,15 +10486,25 @@ private class NativeEngine(
     private fun startRestDataProbe() {
         if (restProbeRunning) return
         restProbeRunning = true
+        // The signed account probe below can block on REST. Never couple that
+        // latency to the 30-second Binance UTC-day clock safety gate. Only this
+        // independent read-only clock pulse refreshes the cached server sample;
+        // a failed /fapi/v1/time request still leaves all NEW entries blocked.
+        exchangeClockProbeThread = Thread {
+            while (restProbeRunning) {
+                runCatching { futuresMarketData.exchangeNowMs() }
+                try { Thread.sleep(5_000L) }
+                catch (_: InterruptedException) { break }
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-futures-exchange-clock-probe"
+            start()
+        }
         restProbeThread = Thread {
             var lastAccountProbe = 0L
             while (restProbeRunning) {
                 val started = System.currentTimeMillis()
-                // Keep authoritative exchange time fresh independently from
-                // scanning, account reconciliation and operator UI requests.
-                // This is read-only /fapi/v1/time. If the request fails, the
-                // existing 30-second execution clock gate remains fail-closed.
-                runCatching { futuresMarketData.exchangeNowMs() }
                 // Market and account health are independent. An account schema/auth
                 // error must not erase a successful public ticker snapshot.
                 try {
