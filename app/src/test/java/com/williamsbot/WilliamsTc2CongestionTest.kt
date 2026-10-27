@@ -106,6 +106,11 @@ class WilliamsTc2CongestionTest {
         val zigzagNames=detectWilliamsComplexWave(zigzag,"UP",16*h).map { it.pattern }
         assertTrue("ZIGZAG_ABC_CANDIDATE" in zigzagNames)
         assertEquals(0,williamsTc2RecentComplexPriceCandidates(zigzag,16*h).size)
+        val expandedFlat=anchors(listOf(100.0,120.0,110.0,145.0,125.0,155.0,
+            135.0,158.0,128.0))
+        assertTrue("EXPANDED_FLAT_ABC_CANDIDATE" in
+            detectWilliamsComplexWave(expandedFlat,"UP",16*h).map { it.pattern })
+        assertTrue(williamsTc2RecentComplexPriceCandidates(expandedFlat,16*h).isEmpty())
         val unresolved=anchors(listOf(100.0,120.0,110.0,145.0,125.0,155.0,
             135.0,143.0,120.0,132.0,116.0,125.0))
         val names=detectWilliamsComplexWave(unresolved,"UP",16*h).map { it.pattern }
