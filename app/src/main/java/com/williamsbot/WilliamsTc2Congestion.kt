@@ -110,8 +110,9 @@ internal fun williamsTc2CongestionEntryBlocker(
  * further new order. A position or its protective STOP is never a candidate.
  */
 internal fun williamsTc2PendingCongestionRecheckEligible(
-    role:String,exchangeStatus:String,clientId:String
-):Boolean = role in setOf("ENTRY","ADD_ON") &&
+    role:String,exchangeStatus:String,clientId:String,
+    knownFill:Boolean=false
+):Boolean = !knownFill && role in setOf("ENTRY","ADD_ON") &&
     (clientId.startsWith("W2H_") || clientId.startsWith("W2A_")) &&
     exchangeStatus.uppercase(java.util.Locale.US) in
         setOf("NEW","PENDING","WORKING","ACCEPTED")
