@@ -2,12 +2,26 @@ package com.williamsbot
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.math.BigDecimal
 import kotlin.math.abs
 
 internal const val williamsTc2Profile="TC2_THREE_WISE_MEN"
 internal const val williamsNtdProfile="NTD_FIVE_DIMENSIONS"
 internal const val williamsCourseProfile="COURSE_PROFITUNITY"
 internal const val williamsUnifiedProfile="WILLIAMS_UNIFIED"
+
+/** TC1/NTD/TC2/Course: decimal-exact single Binance tick beyond a SOURCE OHLC
+ * extremum. Never let binary Double addition shift a STOP/trigger by a tick.
+ * Off-grid market data cannot create executable book evidence; keep existing
+ * exchange protection instead of guessing a corrected price. */
+internal fun williamsBookExactPriceTick(extreme:Double,tick:Double,above:Boolean):Double? {
+    if(!extreme.isFinite() || extreme<=0.0 || !tick.isFinite() || tick<=0.0) return null
+    val p=BigDecimal.valueOf(extreme)
+    val step=BigDecimal.valueOf(tick)
+    if(p.remainder(step).signum()!=0) return null
+    return p.add(if(above) step else step.negate()).toDouble()
+        .takeIf { it.isFinite() && it>0.0 }
+}
 internal val williamsSourceProfiles=listOf(williamsTc2Profile,williamsNtdProfile,williamsCourseProfile)
 internal val williamsEditionProfiles=williamsSourceProfiles+williamsUnifiedProfile
 
@@ -193,8 +207,10 @@ internal fun williamsCourseSquatSetup(side:String,bars:List<WilliamsWaveBar>,tic
     if (side !in listOf("LONG","SHORT") || bars.size<2 || !validWilliamsEditionBars(bars) || !tick.isFinite() || tick<=0) return null
     val a=bars[bars.lastIndex-1];val b=bars.last()
     if (!(b.v>a.v && a.v>0 && (b.h-b.l)/b.v<(a.h-a.l)/a.v)) return null
-    val trigger=if (side=="LONG") b.h+tick else b.l-tick
-    val stop=if (side=="LONG") b.l-tick else b.h+tick
+    val trigger=williamsBookExactPriceTick(if(side=="LONG") b.h else b.l,
+        tick,above=side=="LONG") ?: return null
+    val stop=williamsBookExactPriceTick(if(side=="LONG") b.l else b.h,
+        tick,above=side=="SHORT") ?: return null
     if (minOf(trigger,stop)<=0) return null
     return WilliamsEditionSetup("COURSE_SQUAT",side,bars.lastIndex,trigger,stop,stop,JSONObject().put("volume_input","KLINE_VOLUME_PROXY"))
 }
@@ -270,7 +286,7 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
     lips:List<Double>,ao:List<Double>,ac:List<Double>,tick:Double,exitMode:Boolean=false,
     includePendingAo:Boolean=true):List<WilliamsEditionSetup> {
     val n=bars.size
-    if (side !in listOf("LONG","SHORT") || n<45 || !validWilliamsEditionBars(bars) || tick<=0 ||
+    if (side !in listOf("LONG","SHORT") || n<45 || !validWilliamsEditionBars(bars) || !tick.isFinite() || tick<=0 ||
         listOf(jaw,teeth,lips,ao,ac).any { it.size!=n }) return emptyList()
     val sign=if (side=="LONG") 1 else -1
     fun high(i:Int)=if (sign==1) bars[i].h else -bars[i].l
@@ -278,10 +294,12 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
     fun pending(i:Int,trigger:Double)=((i+1) until n).none { sign*(if (sign==1) bars[it].h else bars[it].l)>=sign*trigger }
     val out=mutableListOf<WilliamsEditionSetup>()
     fun add(kind:String,i:Int,role:String="ADD_ON",execution:String="STOP_ENTRY",reference:Double?=null) {
-        val trigger=reference ?: sign*(high(i)+tick)
-        if (trigger<=0 || (execution=="STOP_ENTRY" && !pending(i,trigger))) return
-        val stop=sign*(low(i)-tick)
-        if (stop<=0 || sign*(trigger-stop)<=0) return
+        val trigger=reference ?: williamsBookExactPriceTick(
+            if(sign==1) bars[i].h else bars[i].l,tick,above=sign==1) ?: return
+        if (!trigger.isFinite() || trigger<=0 || (execution=="STOP_ENTRY" && !pending(i,trigger))) return
+        val stop=williamsBookExactPriceTick(
+            if(sign==1) bars[i].l else bars[i].h,tick,above=sign!=1) ?: return
+        if (sign*(trigger-stop)<=0) return
         out+=WilliamsEditionSetup(kind,side,i,trigger,stop,role=role,executionSemantics=execution)
     }
     val fractalKind=if (sign==1) "HIGH" else "LOW"
@@ -289,13 +307,17 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
         f.kind==fractalKind &&
             // NTD ch4 / TC2 ch11: qualify the actual +1/-1 tick
             // BREAKOUT beyond red Teeth, not the earlier pivot price.
-            sign*(f.price+sign*tick-teeth.last())>0 &&
-            pending(f.confirmation,f.price+sign*tick)
+            (williamsBookExactPriceTick(f.price,tick,above=sign==1)?.let {
+                sign*(it-teeth.last())>0 && pending(f.confirmation,it)
+            } ?: false)
     }?.let { f ->
-        val stop=if(sign==1) bars.subList(f.groupStart,f.center+1).minOf { it.l }-tick
-            else bars.subList(f.groupStart,f.center+1).maxOf { it.h }+tick
+        val stop=williamsBookExactPriceTick(
+            if(sign==1) bars.subList(f.groupStart,f.center+1).minOf { it.l }
+            else bars.subList(f.groupStart,f.center+1).maxOf { it.h },
+            tick,above=sign!=1) ?: return@let
+        val trigger=williamsBookExactPriceTick(f.price,tick,above=sign==1) ?: return@let
         val initial=williamsNtdInitialContext(bars,jaw,teeth,lips,f.center,tick)
-        out+=WilliamsEditionSetup("FRACTAL",side,f.confirmation,f.price+sign*tick,stop,
+        out+=WilliamsEditionSetup("FRACTAL",side,f.confirmation,trigger,stop,
             role=if(exitMode || initial.optBoolean("eligible")) "ENTRY" else "ADD_ON",
             context=JSONObject().put("formation_index",f.center).put("ntd_initial",initial))
     }
@@ -310,7 +332,7 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
             first!=null && second!=null && a[first]<a[second] && a[i]>a[i-1] &&
                 (first..i).all { a[it].isFinite() && a[it]<0 } -> add("AO_TWIN_PEAKS",i)
             a[i-2]>0 && a[i-1]>0 && a[i]>0 && a[i-2]>a[i-1] && a[i]>a[i-1] -> add("AO_SAUCER",i)
-            a[i-1]<=0 && a[i]>0 -> add("AO_ZERO_LINE",i)
+            a[i-1]<0 && a[i]>0 -> add("AO_ZERO_LINE",i)
         }
     }
     // NTD PDF63-67: failure to break the signal bar on the very next
