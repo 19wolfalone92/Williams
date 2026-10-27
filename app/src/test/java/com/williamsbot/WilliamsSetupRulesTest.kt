@@ -146,4 +146,19 @@ class WilliamsSetupRulesTest {
         assertNull(exactTc2WiseManPriceBarLevels("INVALID",bar,.01))
     }
 
+    @Test fun longSourceFractalExactTick() {
+        val h=3_600_000L
+        val highs=listOf(101.0,102.0,105.0,103.0,102.0,101.0)
+        val bars=highs.mapIndexed { i,high ->
+            WilliamsWaveBar(i*h,high-2.0,high,high-4.0,high-1.0)
+        }
+        val found=exactTc2LongFractalLevels(bars,2*h,2*h,4*h,.1)!!
+        assertEquals(105.1,found.trigger,0.0)
+        assertEquals(96.9,found.protective,0.0)
+        assertNull(exactTc2LongFractalLevels(bars,2*h,2*h,3*h,.1))
+        assertNull(exactTc2LongFractalLevels(bars,2*h,3*h,4*h,.1))
+        val later=bars+WilliamsWaveBar(6*h,100.0,999.0,99.0,100.0)
+        assertEquals(found,exactTc2LongFractalLevels(later,2*h,2*h,4*h,.1))
+    }
+
 }
