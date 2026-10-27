@@ -103,15 +103,15 @@ class WilliamsTc2CongestionTest {
         }
         val zigzag=anchors(listOf(100.0,120.0,110.0,145.0,125.0,155.0,
             135.0,143.0,120.0))
-        val zigzagNames=detectWilliamsComplexWave(zigzag,"UP",40*h).map { it.pattern }
+        val zigzagNames=detectWilliamsComplexWave(zigzag,"UP",16*h).map { it.pattern }
         assertTrue("ZIGZAG_ABC_CANDIDATE" in zigzagNames)
-        assertEquals(0,williamsTc2RecentComplexPriceCandidates(zigzag,40*h).size)
+        assertEquals(0,williamsTc2RecentComplexPriceCandidates(zigzag,16*h).size)
         val unresolved=anchors(listOf(100.0,120.0,110.0,145.0,125.0,155.0,
             135.0,143.0,120.0,132.0,116.0,125.0))
-        val names=detectWilliamsComplexWave(unresolved,"UP",40*h).map { it.pattern }
+        val names=detectWilliamsComplexWave(unresolved,"UP",16*h).map { it.pattern }
         assertTrue("W_X_Y_COMBINATION_UNRESOLVED" in names)
         assertTrue("W_X_Y_X_Z_COMBINATION_UNRESOLVED" in names)
-        assertEquals(0,williamsTc2RecentComplexPriceCandidates(unresolved,40*h).size)
+        assertEquals(0,williamsTc2RecentComplexPriceCandidates(unresolved,16*h).size)
         val invalidTime=triangularBars().mapIndexed { i,b ->
             if(i==114) b.copy(t=b.t+40*h) else b
         }
