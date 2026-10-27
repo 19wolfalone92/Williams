@@ -9154,6 +9154,14 @@ private class NativeEngine(
             check(williamsBookFractalTeethBlocker(signal.type,plan.direction.name,signal.triggerPrice,teeth,tick)==null) {
                 "TC2_REVERSAL_FRACTAL_TEETH_INVALID"
             }
+            // A confirmed FLAT reversal is still NEW directional exposure.
+            // Existing position close/reconciliation was executed separately;
+            // this check cannot hold back the old protective exit.
+            check(williamsTc2CongestionEntryBlocker(williamsTc2Profile,signal.type,
+                plan.direction.name,signal.triggerPrice,
+                bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)==null) {
+                WILLIAMS_TC2_CONGESTION_BLOCKER+": REVERSAL_NEW_EXPOSURE"
+            }
             return
         }
         val target=plan.entryPrice.toDouble()
