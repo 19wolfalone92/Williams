@@ -1,7 +1,7 @@
 package com.williamsbot
 
 import org.json.JSONObject
-import kotlin.math.abs
+import org.json.JSONArray
 
 /**
  * TC2 chapter 11, figure 11.7 / Russian PDF page 151: Williams explicitly
@@ -9,15 +9,46 @@ import kotlin.math.abs
  * The author does NOT specify a numerical 24-bar congestion formula.
  *
  * This is a labelled PROJECT RISK POLICY, not an Elliott-wave certification.
- * It can withhold NEW WM2/WM3 exposure while an H1 stop trigger remains within
- * independently observed congestion. A real breakout beyond that range is
- * NOT vetoed. WM1 countertrend reversal geometry retains its own book gate.
+ * It withholds NEW TC2 exposure only when the chart has a RECENT, causally
+ * confirmed, structural COMPLEX-correction price grammar (triangle or
+ * constrained corrective combination) and entry remains inside its range.
+ * A mere sideways market, uncomplicated A-B-C, or W-X-Y_UNRESOLVED placeholder
+ * is NOT sufficient to block. A real breakout outside the structure passes.
+ * Every WM1/WM2/WM3 signal is evaluated on the same basis.
  *
  * Existing positions, stops, risk reductions and book exits are NEVER gated.
  * Closed and contiguous H1 only; no M15 confirmation and no future candles.
  */
-internal const val WILLIAMS_TC2_CONGESTION_POLICY="TC2_CORRECTIVE_CONGESTION_NEW_RISK_V1"
-internal const val WILLIAMS_TC2_CONGESTION_BLOCKER="TC2_CORRECTIVE_CONGESTION_INSIDE_H1_RANGE"
+internal const val WILLIAMS_TC2_CONGESTION_POLICY="TC2_COMPLEX_CORRECTIONS_ONLY_V2"
+internal const val WILLIAMS_TC2_CONGESTION_BLOCKER="TC2_COMPLEX_CORRECTION_PRICE_GRAMMAR_INSIDE_H1_RANGE"
+
+/** Only price grammars that actually distinguish a complex correction from
+ * ordinary A-B-C; the generic 8/12-anchor WXY_UNRESOLVED labels are excluded.
+ * All are provisional Elliott *candidates*, never unique wave counts.
+ */
+internal val WILLIAMS_TC2_COMPLEX_PATTERNS=setOf(
+    "CONTRACTING_TRIANGLE_ABCDE_CANDIDATE",
+    "EXPANDING_TRIANGLE_ABCDE_CANDIDATE",
+    "BARRIER_TRIANGLE_ABCDE_CANDIDATE",
+    "W_X_Y_ZIGZAG_COMBINATION_CANDIDATE",
+    "W_X_Y_X_Z_ZIGZAG_COMBINATION_CANDIDATE"
+)
+
+/** No signal veto from arbitrary flatness alone or from an old/incomplete
+ * W-X-Y label. Look only at confirmed, recent H1 fractal pivot geometry.
+ */
+internal fun williamsTc2RecentComplexPriceCandidates(
+    anchors:List<WilliamsWaveAnchor>,asOf:Long
+):List<WilliamsComplexEvidence> {
+    if(asOf<=0L || anchors.size<6 || anchors.any { it.knownAt>asOf || it.knownAt<it.extremeAt }) return emptyList()
+    val recentCutoff=asOf-12*WILLIAMS_H1_MS
+    return listOf("UP","DOWN").flatMap { side ->
+        detectWilliamsComplexWave(anchors,side,asOf)
+    }.filter { it.pattern in WILLIAMS_TC2_COMPLEX_PATTERNS &&
+        it.knownAt in recentCutoff..asOf && it.endAt<=asOf }
+        .distinctBy { listOf(it.pattern,it.startAt,it.endAt) }
+}
+
 
 internal fun williamsTc2CongestionEvidence(
     closedBars:List<WilliamsWaveBar>,nowMs:Long,
@@ -26,6 +57,7 @@ internal fun williamsTc2CongestionEvidence(
     val result=JSONObject().put("schema","WILLIAMS_TC2_CONGESTION_V1")
         .put("policy",WILLIAMS_TC2_CONGESTION_POLICY)
         .put("book_reference","TC2_CH11_FIG_11_7_PDF_151")
+        .put("complex_correction_grammar_reference","RESEARCH_ELLIOTT_COMPLEX_PRICE_GRAMMAR")
         .put("classification_is_provisional",true)
         .put("numerical_thresholds_are_engineering",true)
         .put("source","CLOSED_CONTIGUOUS_H1_CANDLES")
@@ -77,20 +109,49 @@ internal fun williamsTc2CongestionEvidence(
     val aoFlips=crossings(ao)
     val lastEight=phases.takeLast(8)
     val nonTrending=lastEight.count { it in setOf("SLEEPING","SATIATED") }
-    // More than one full oscillation, plus an intertwined/satiated Alligator,
-    // is evidence of two-sided congestion; not a "certain W-X-Y" diagnosis.
+    // These numerical range observations are only CONTEXT, not a veto.
+    // A triangle/combination needs its own confirmed multi-swing geometry.
+    // Unlike generic congestion, normal ABC zigzags/flats remain tradable.
     val rangeObserved=teethCrosses>=3 && aoFlips>=2 && nonTrending>=4
-    val block=rangeObserved && !breaksRange && family in setOf("SUPER_AO","FRACTAL")
-    return result.put("state",if(rangeObserved) "CONGESTION_CANDIDATE" else "NOT_CONFIRMED")
-        .put("reason_code",if(block) WILLIAMS_TC2_CONGESTION_BLOCKER else
-            if(breaksRange) "STOP_BREAKOUT_OUTSIDE_24_H1_RANGE" else
-            if(family=="REVERSAL") "WM1_HAS_INDEPENDENT_ANGULATION_GATE" else "CONGESTION_NOT_PROVEN")
-        .put("blocked",block).put("window_bars",window.size)
+    val confirmedPivots=confirmedWilliamsWaveAnchors(closedBars,WILLIAMS_H1_MS)
+    val structural=williamsTc2RecentComplexPriceCandidates(confirmedPivots,nowMs)
+    val structures=structural.mapNotNull { pattern ->
+        val involved=confirmedPivots.filter { it.extremeAt in pattern.startAt..pattern.endAt }
+        if(involved.size<6) null else {
+            val patternHigh=involved.maxOf { it.price }
+            val patternLow=involved.minOf { it.price }
+            JSONObject().put("pattern",pattern.pattern).put("known_at_ms",pattern.knownAt)
+                .put("start_at_ms",pattern.startAt).put("end_at_ms",pattern.endAt)
+                .put("range_high",patternHigh).put("range_low",patternLow)
+                .put("crosses_entry",trigger in patternLow..patternHigh)
+        }
+    }
+    val insideComplex=structures.any { it.optBoolean("crosses_entry") }
+    // H1 entry outside the actually observed complex structure is a distinct
+    // possible breakout. The separate standard Wise-Man gates still apply.
+    val block=insideComplex && !breaksRange
+    val state=when {
+        structures.isNotEmpty() -> "COMPLEX_CORRECTION_CANDIDATE"
+        rangeObserved -> "ORDINARY_CONGESTION_OR_CORRECTION_NOT_COMPLEX"
+        else -> "NO_COMPLEX_CORRECTION_EVIDENCE"
+    }
+    return result.put("state",state)
+        .put("reason_code",when {
+            block -> WILLIAMS_TC2_CONGESTION_BLOCKER
+            structures.isNotEmpty() && !insideComplex -> "ENTRY_OUTSIDE_COMPLEX_STRUCTURE"
+            structures.isNotEmpty() && breaksRange -> "STOP_BREAKOUT_OUTSIDE_24_H1_RANGE"
+            rangeObserved -> "ONLY_CONGESTION_NOT_COMPLEX_NO_VETO"
+            else -> "NO_COMPLEX_CORRECTION_PROOF"
+        }).put("blocked",block).put("window_bars",window.size)
         .put("range_high",highs).put("range_low",lows)
         .put("signal_type",family).put("direction",direction)
         .put("trigger",trigger).put("breakout_outside_range",breaksRange)
         .put("teeth_close_crossings",teethCrosses).put("ao_zero_crossings",aoFlips)
         .put("satiated_or_sleeping_last_8",nonTrending)
+        .put("complex_structures",JSONArray(structures))
+        .put("complex_structure_count",structures.size)
+        .put("simple_abc_is_allowed",true)
+        .put("generic_wxy_unresolved_is_not_a_veto",true)
         .put("as_of_close_ms",closedBars.last().t+WILLIAMS_H1_MS)
 }
 
