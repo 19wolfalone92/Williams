@@ -5805,9 +5805,10 @@ private class NativeEngine(
                             // Revoke only clearly unfilled exchange-acknowledged
                             // NEW/WORKING entries, not TRIGGERING, PARTIALLY_FILLED,
                             // unknown, filled positions or protective STOPs.
-                            val orderState=exchangeOrderStatus(pending).uppercase(Locale.US)
                             val correctionInvalidation=if(profile==williamsTc2Profile &&
-                                orderState in setOf("NEW","PENDING","WORKING","ACCEPTED"))
+                                williamsTc2PendingCongestionRecheckEligible(
+                                    pending.optString("intent_role","ENTRY"),
+                                    exchangeOrderStatus(pending),pending.optString("client_id")))
                                 williamsTc2CongestionEntryBlocker(profile,
                                     pending.optString("signal_type"),pending.optString("direction"),
                                     price,waveBars,now)
