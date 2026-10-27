@@ -268,4 +268,38 @@ class FuturesStopTrailPolicyTest {
         assertEquals("TC2_LAST_5_CLOSED_BARS",short?.reason)
         assertEquals(108.1,short!!.stop,1e-7)
     }
+
+    @Test fun tc2BookStopUsesExactlyOneDecimalTickWithoutFloatQuotient() {
+        // TC2 chapter 12 PDF pp.156,165: structural stops immediately
+        // beyond the source high/low; 27-Oct book/source parity regression.
+        assertEquals(79524.7, tc2ExactStructuralStop("LONG",79524.8,.1)!!,0.0)
+        assertEquals(79524.9, tc2ExactStructuralStop("SHORT",79524.8,.1)!!,0.0)
+        assertEquals(2296.99, tc2ExactStructuralStop("LONG",2297.0,.01)!!,0.0)
+        assertEquals(2297.01, tc2ExactStructuralStop("SHORT",2297.0,.01)!!,0.0)
+        assertEquals(.0135, tc2ExactStructuralStop("LONG",.0136,.0001)!!,0.0)
+        assertNull(tc2ExactStructuralStop("SHORT",99.005,.01))
+        assertNull(tc2ExactStructuralStop("LONG",Double.NaN,.01))
+        assertNull(tc2ExactStructuralStop("LONG",100.0,0.0))
+    }
+
+    @Test fun tc2FiveClosedBarTrailPreservesExactBookTickForLongAndShort() {
+        val longBars=bars(
+            highs=listOf(79533.0,79532.0,79531.0,79530.0,79529.0),
+            lows=listOf(79528.0,79527.0,79524.8,79526.0,79525.0)
+        )
+        val long=planWilliamsCampaignStop(
+            "LONG",79500.0,79510.0,79500.0,79550.0,.1,1L,longBars
+        )
+        assertEquals("TC2_LAST_5_CLOSED_BARS",long?.reason)
+        assertEquals(79524.7,long!!.stop,0.0)
+        val shortBars=bars(
+            highs=listOf(2290.0,2295.0,2297.0,2295.0,2294.0),
+            lows=listOf(2285.0,2290.0,2292.0,2290.0,2289.0)
+        )
+        val short=planWilliamsCampaignStop(
+            "SHORT",2305.0,2300.0,2305.0,2280.0,.01,1L,shortBars
+        )
+        assertEquals("TC2_LAST_5_CLOSED_BARS",short?.reason)
+        assertEquals(2297.01,short!!.stop,0.0)
+    }
 }
