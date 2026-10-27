@@ -294,6 +294,11 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
     h.third_momentum=(evaluate_third_momentum(bars,osc,indexes[0],third_index,fourth_index,
         h.direction,FRAME_MS[frame]) if third_index is not None and fourth_index is not None else
         third_momentum_unavailable("SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS"))
+    # The wrong 100-140 scale is a primary evidence failure, even if the
+    # precise price-extreme timestamp is also unknown. No wave-4 minimum.
+    if not 100 <= h.scale_bars <= 140:
+        h.w4_zero = "WRONG_SCALE"
+        return
     # If the parent candle's price extreme has several possible lower-frame
     # timestamps, assigning an AO bar to W3/W4 is only a guess. Keep W4
     # minimum evidence UNKNOWN, never upgrade an ambiguous genealogy.
