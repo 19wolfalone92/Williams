@@ -7442,7 +7442,26 @@ private class NativeEngine(
         candidates = JSONArray().apply {
             ranked.sortedWith(compareByDescending<BaseAnalysis> { it.campaignReady }
                 .thenByDescending { it.score }.thenBy { it.wave.exhaustionRisk }.thenBy { it.spreadPct })
-                .take(20).forEach { put(toJson(it)) }
+                .take(20).forEach { analysis ->
+                    val row=toJson(analysis)
+                    val h1=analysis.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                    // Every scanned Futures symbol receives the same read-only
+                    // regime diagnostics, including symbols without an entry.
+                    // This is NOT a claim about exchange-owned positions.
+                    val assessment=williamsTc2CongestionEvidence(h1,System.currentTimeMillis(),
+                        "FRACTAL","LONG",h1.lastOrNull()?.c ?: Double.NaN)
+                    row.put("h1_correction_regime",assessment.put("entry_relevant",false)
+                        .put("blocked",false))
+                    row.put("h1_correction_signal_checks",JSONArray(
+                        analysis.campaignSignals.filter { it.strategyProfile==williamsTc2Profile &&
+                            it.role=="ENTRY" }.map { signal ->
+                            JSONObject().put("signal_id",signal.signalId)
+                                .put("classification",williamsTc2CongestionEvidence(h1,
+                                    System.currentTimeMillis(),signal.type,
+                                    campaignSignalDirection(signal.type).orEmpty(),signal.triggerPrice))
+                        }))
+                    put(row)
+                }
         }
         lastSymbolsScanned = ranked.size
         lastScannerSymbolErrors = JSONObject().apply {
