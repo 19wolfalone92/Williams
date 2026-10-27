@@ -156,7 +156,10 @@ def closed_wave_bars(bars: Sequence[WaveBar], frame: str, as_of: int) -> list[Wa
             raise ValueError("INVALID_OHLCV")
         if i and b.t - closed[i - 1].t != duration:
             raise ValueError("GAPPED_OR_UNORDERED_HISTORY")
-    if as_of - (closed[-1].t + duration) >= duration * 2:
+    # The latest fully closed candle must be present. At a new H1/H4
+    # boundary an older close is *already* stale; never infer a wave from a
+    # silently missing whole period. Keep parity with Android's closed bars.
+    if as_of < closed[-1].t + duration or as_of - (closed[-1].t + duration) >= duration:
         raise ValueError("STALE_CLOSED_HISTORY")
     return closed
 
@@ -257,8 +260,14 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
     # length and a 140-bar screen window do not determine its wave degree.
     options = []
     for frame, bars in frames.items():
+        # The wave's proposed parent degree cannot borrow senior oscillators.
+        # TC1 pp.61-63 instead switches to a *finer real resolution* until
+        # the SAME price sequence occupies 100-140 genuine bars.
+        if FRAME_MS[frame] > FRAME_MS[h.frame]:
+            continue
         indexes = [i for i, b in enumerate(bars) if b.t >= start and b.t < stop]
-        if not indexes or indexes[0] < 33 or bars[0].t > start:
+        if (not indexes or indexes[0] < 33 or bars[0].t > start
+                or bars[indexes[0]].t - start >= FRAME_MS[frame]):
             continue
         count = len(indexes)
         options.append((not 100 <= count <= 140, abs(count - 120), frame, indexes))
@@ -285,6 +294,12 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
     h.third_momentum=(evaluate_third_momentum(bars,osc,indexes[0],third_index,fourth_index,
         h.direction,FRAME_MS[frame]) if third_index is not None and fourth_index is not None else
         third_momentum_unavailable("SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS"))
+    # If the parent candle's price extreme has several possible lower-frame
+    # timestamps, assigning an AO bar to W3/W4 is only a guess. Keep W4
+    # minimum evidence UNKNOWN, never upgrade an ambiguous genealogy.
+    if third_index is None or fourth_index is None:
+        h.w4_zero = "SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS"
+        return
 
     def peak(a, b):
         values = [sign * osc[i] for i in indexes
@@ -296,15 +311,24 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
     if len(p) >= 5:
         third_end = min(third_end, p[4].extreme_at)
     w3_indexes = [i for i in indexes if p[2].extreme_at <= bars[i].t <= third_end]
-    if not w3_indexes:
+    # No NaN skipping or arbitrary winner in a tied global W3 momentum peak.
+    # Otherwise a later AO value can turn an unknown degree into a false W4.
+    if not w3_indexes or any(not isfinite(osc[i]) for i in w3_indexes):
         h.w4_zero = "MISSING_W3_MOMENTUM"
         return
-    w3 = max(w3_indexes, key=lambda i: sign * osc[i])
+    third_peak = max(sign * osc[i] for i in w3_indexes)
+    winners = [i for i in w3_indexes if sign * osc[i] == third_peak]
+    if len(winners) != 1:
+        h.w4_zero = "AMBIGUOUS_W3_MOMENTUM_PEAK"
+        return
+    w3 = winners[0]
     end = p[4].extreme_at if len(p) >= 5 else stop
-    fourth_values = [sign * osc[i] for i in indexes
-                     if i > w3 and bars[i].t <= end and isfinite(osc[i])]
-    h.w4_zero = classify_fourth_ao(sign * osc[w3],
-                                  min(fourth_values) if fourth_values else float("nan"),
+    w4_indexes = [i for i in indexes if i > w3 and bars[i].t <= end]
+    if not w4_indexes or any(not isfinite(osc[i]) for i in w4_indexes):
+        h.w4_zero = "MISSING_W4_MOMENTUM"
+        return
+    fourth_values = [sign * osc[i] for i in w4_indexes]
+    h.w4_zero = classify_fourth_ao(third_peak, min(fourth_values),
                                   h.scale_bars)
     if len(p) >= 6:
         third = peak(p[2].extreme_at, third_end)
