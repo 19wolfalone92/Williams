@@ -259,7 +259,17 @@ object DiagnosticsArchive {
 
     private fun add(zip: ZipOutputStream, name: String, text: String) {
         zip.putNextEntry(ZipEntry(name))
-        zip.write(text.toByteArray(Charsets.UTF_8))
+        // UTF-8 encode in small chunks, never duplicate an entire large
+        // diagnostic log as one additional byte array under heap pressure.
+        val writer=java.io.BufferedWriter(
+            java.io.OutputStreamWriter(zip,Charsets.UTF_8),8192)
+        var offset=0
+        while(offset<text.length) {
+            val length=minOf(8192,text.length-offset)
+            writer.write(text,offset,length)
+            offset+=length
+        }
+        writer.flush() // DO NOT close: that would close the whole ZIP
         zip.closeEntry()
     }
 }
