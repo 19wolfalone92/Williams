@@ -289,6 +289,9 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
             and abs((b.h if anchor.kind=="HIGH" else b.l)-anchor.price)<=max(1e-9,anchor.price*1e-9)]
         return candidates[0] if len(candidates)==1 and FRAME_MS[frame]<=FRAME_MS[h.frame] else None
 
+    # Book W5 price-target geometry is independent of certainty about AO
+    # timestamps; keep it visible even if W3/W4 evidence must abstain.
+    if len(p) >= 6:
     third_index=unique_price_index(p[3])
     fourth_index=unique_price_index(p[4]) if len(p)>=5 else indexes[-1]
     h.third_momentum=(evaluate_third_momentum(bars,osc,indexes[0],third_index,fourth_index,
