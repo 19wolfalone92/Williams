@@ -124,6 +124,62 @@ def test_intermediate_h4_does_not_break_the_required_containment_chain():
     assert all(not e["wave_genealogy_confirmed"] for e in report.links)
 
 
+def test_one_missing_entire_closed_h1_is_stale_not_a_valid_wave_frame():
+    # After the next H1 boundary, accepting yesterday's wave as 'current'
+    # would diverge from Android and can select a false parent direction.
+    bars = rhythm_bars()
+    as_of = (len(bars) + 1) * HOUR
+    missing = build_wave_hierarchy({"1h": bars}, as_of)
+    assert missing.frame_errors["1h"] == "STALE_CLOSED_HISTORY"
+    assert not missing.scenarios
+    fresh = build_wave_hierarchy({"1h": bars}, len(bars) * HOUR)
+    assert fresh.scenarios
+    assert fresh.to_dict()["can_place_orders"] is False
+
+
+def test_h1_degree_never_borrows_senior_h4_to_force_100_140_bar_oscillator():
+    from math import sin
+    from williams_wave_hierarchy import _rhythm
+    hourly = [WaveBar((i+1)*HOUR, 100+20*sin(i/15),
+                      101+20*sin(i/15), 99+20*sin(i/15),
+                      100+20*sin(i/15),1) for i in range(620)]
+    h4 = [WaveBar(i*4*HOUR,100+30*sin(i/9),
+                  101+30*sin(i/9),99+30*sin(i/9),
+                  100+30*sin(i/9),1) for i in range(155)]
+    anchors = [
+        WaveAnchor("LOW",95.0,100,100*HOUR,103*HOUR),
+        WaveAnchor("HIGH",110.0,180,180*HOUR,183*HOUR),
+        WaveAnchor("LOW",100.0,260,260*HOUR,263*HOUR),
+        WaveAnchor("HIGH",130.0,420,420*HOUR,423*HOUR)
+    ]
+    scenario=WaveHypothesis("H1:CHILD","1h","UP","W3",anchors,600*HOUR,420*HOUR,
+                            95.,130.,100.)
+    _rhythm(scenario,{"1h":hourly,"4h":h4})
+    assert scenario.scale_frame=="1h"
+    assert scenario.scale_bars>140
+    assert scenario.w4_zero == "WRONG_SCALE"
+
+
+def test_w4_zero_never_certified_when_h4_extreme_has_ambiguous_h1_timestamp():
+    from williams_wave_hierarchy import _rhythm
+    h1=[WaveBar(i*HOUR,100.0,101.0,99.0,100.0,1) for i in range(200)]
+    h4=[WaveBar(i*4*HOUR,100.0,101.0,99.0,100.0,1) for i in range(50)]
+    anchors=[
+        WaveAnchor("LOW",99.0,10,40*HOUR,44*HOUR),
+        WaveAnchor("HIGH",101.0,14,56*HOUR,60*HOUR),
+        WaveAnchor("LOW",99.0,18,72*HOUR,76*HOUR),
+        WaveAnchor("HIGH",101.0,22,88*HOUR,92*HOUR),
+        WaveAnchor("LOW",99.0,26,104*HOUR,108*HOUR),
+    ]
+    h=WaveHypothesis("4h:AMBIGUOUS","4h","UP","W4",anchors,
+                     160*HOUR,104*HOUR,99.0,101.0,99.0)
+    _rhythm(h,{"4h":h4,"1h":h1})
+    assert h.scale_frame=="1h"
+    assert h.scale_bars==120
+    assert h.w4_zero=="SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS"
+    assert h.third_momentum["status"] != "CONFIRMED"
+
+
 @pytest.mark.parametrize("defect", ["gap","duplicate","nan","stale","bad_ohlc"])
 def test_unreliable_candle_history_does_not_create_a_wave_permission(defect):
     bars = rhythm_bars()
