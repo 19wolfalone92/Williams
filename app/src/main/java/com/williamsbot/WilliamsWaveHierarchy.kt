@@ -228,17 +228,29 @@ private fun enrichWaveRhythm(h: WilliamsWaveScenario, frames: Map<String, List<W
         evaluateWilliamsThirdMomentum(bars,osc,indexes.first(),thirdIndex,fourthIndex,h.direction,
             williamsWaveFrames.getValue(frame)).toJson()
     else williamsThirdMomentumUnavailable("SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS").toJson()
+    // A source high/low inside the parent bar can have multiple child-time
+    // matches. That is NOT a timestamped W3 or W4 oscillator peak.
+    if (thirdIndex==null || fourthIndex==null) {
+        h.w4Zero = "SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS"
+        return
+    }
     var thirdEnd = p[3].extremeAt + 5 * williamsWaveFrames.getValue(frame)
     if (p.size >= 5) thirdEnd = minOf(thirdEnd, p[4].extremeAt)
     val w3Indexes = indexes.filter { bars[it].t in p[2].extremeAt..thirdEnd }
-    if (w3Indexes.isEmpty()) { h.w4Zero = "MISSING_W3_MOMENTUM"; return }
-    val w3 = w3Indexes.maxBy { sign * osc[it] }
+    if (w3Indexes.isEmpty() || w3Indexes.any { !osc[it].isFinite() }) {
+        h.w4Zero = "MISSING_W3_MOMENTUM"; return
+    }
+    val thirdPeak = w3Indexes.maxOf { sign * osc[it] }
+    val winners = w3Indexes.filter { sign * osc[it] == thirdPeak }
+    if (winners.size!=1) { h.w4Zero = "AMBIGUOUS_W3_MOMENTUM_PEAK"; return }
+    val w3 = winners.single()
     val end = if (p.size >= 5) p[4].extremeAt else stop
-    val fourthValues = indexes.filter { it > w3 && bars[it].t <= end && osc[it].isFinite() }
-        .map { sign * osc[it] }
-    h.w4Zero = classifyWilliamsFourthAo(
-        sign * osc[w3], fourthValues.minOrNull() ?: Double.NaN, h.scaleBars
-    )
+    val w4Indexes = indexes.filter { it > w3 && bars[it].t <= end }
+    if (w4Indexes.isEmpty() || w4Indexes.any { !osc[it].isFinite() }) {
+        h.w4Zero = "MISSING_W4_MOMENTUM"; return
+    }
+    val fourthValues = w4Indexes.map { sign * osc[it] }
+    h.w4Zero = classifyWilliamsFourthAo(thirdPeak, fourthValues.min(), h.scaleBars)
     if (p.size >= 6) {
         fun peak(a: Long, b: Long): Double? = indexes.filter { bars[it].t in a..b && osc[it].isFinite() }
             .maxOfOrNull { sign * osc[it] }
