@@ -8699,8 +8699,12 @@ private class NativeEngine(
                         candles[signalIndex].l-tick,candles[signalIndex].h,candles[signalIndex].l)
                 if (sourceLevel!=null) {
                     val trigger=sourceLevel.trigger
-                    val structuralStop=sourceLevel.protective
-                    if (structuralStop<trigger && triggerStillPending(signalIndex, trigger)) {
+                    val structuralStop = williamsTc2SuperAoInitialStop(
+                        "LONG",waveBars,signalIndex,tick
+                    )
+                    if (structuralStop != null &&
+                        abs(structuralStop-sourceLevel.protective)<=tick*.001 &&
+                        structuralStop<trigger && triggerStillPending(signalIndex, trigger)) {
                         out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[signalIndex].t),
                         type = "SUPER_AO",
