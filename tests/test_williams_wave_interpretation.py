@@ -98,3 +98,17 @@ def test_serialized_chain_preserves_the_five_requested_analysis_frames():
     report=observed_market_context({},400*3_600_000)
     assert report['chain']==list(OBSERVED_MARKET_FRAMES)
     assert '4h' in report['chain']
+
+
+def test_wave_anchor_cannot_be_known_after_only_one_right_candle():
+    h=deepcopy(CONTRACT["cases"][0]["input"])
+    child=h["scenarios"][1]
+    pivot=child["anchors"][0]
+    pivot["known_at"]=pivot["extreme_at"]+2*3_600_000
+    observed=wave_interpretation(h)
+    assert child["scenario_id"] in observed["rejected_scenario_ids"]
+    scope=next(s for s in observed["scopes"]
+        if s["parent_frame"]=="4h" and s["child_frame"]=="1h")
+    assert scope["relation_count"]==0
+    assert scope["state"]=="UNRESOLVED"
+    assert not observed["can_place_orders"]
