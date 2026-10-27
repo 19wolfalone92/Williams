@@ -292,6 +292,10 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
     # Book W5 price-target geometry is independent of certainty about AO
     # timestamps; keep it visible even if W3/W4 evidence must abstain.
     if len(p) >= 6:
+        extension = abs(p[3].price - p[0].price)
+        target1 = p[4].price + sign * extension * .62
+        target2 = p[4].price + sign * extension
+        h.target_zone = min(target1, target2) <= p[5].price <= max(target1, target2)
     third_index=unique_price_index(p[3])
     fourth_index=unique_price_index(p[4]) if len(p)>=5 else indexes[-1]
     h.third_momentum=(evaluate_third_momentum(bars,osc,indexes[0],third_index,fourth_index,
@@ -343,10 +347,6 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
         fifth = peak(p[4].extreme_at, min(stop, p[5].extreme_at + 5 * FRAME_MS[frame]))
         h.divergence = bool(third is not None and fifth is not None and
                             0 < fifth < third and sign * (p[5].price - p[3].price) > 0)
-        extension = abs(p[3].price - p[0].price)
-        target1 = p[4].price + sign * extension * .62
-        target2 = p[4].price + sign * extension
-        h.target_zone = min(target1, target2) <= p[5].price <= max(target1, target2)
     if h.w4_zero != "MINIMUM_ONLY" and len(p) >= 4:
         h.alternatives.append("W3_EXTENSION_OR_WRONG_DEGREE")
 
