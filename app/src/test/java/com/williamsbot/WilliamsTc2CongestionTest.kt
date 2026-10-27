@@ -78,4 +78,52 @@ class WilliamsTc2CongestionTest {
             "ENTRY","NEW","W2T_STOP_REPLACEMENT"))
     }
 
+    @Test fun frozenTenSymbolBinanceH1GeometryIsCausalAndTransparent() {
+        // PUBLIC Binance Futures OHLC only, not the operator's signed Demo
+        // positions and not an independent Elliott-wave expert verdict.
+        val fixture=org.json.JSONObject(requireNotNull(javaClass.getResource(
+            "/williams_tc2_public_h1_congestion_20261027.json")).readText())
+        val end=fixture.getLong("last_closed_at_ms")
+        val raw=fixture.getJSONArray("symbols")
+        assertEquals(10,raw.length())
+        val classifications=linkedMapOf<String,String>()
+        for(i in 0 until raw.length()) {
+            val pair=raw.getJSONObject(i)
+            val symbol=pair.getString("symbol")
+            val candles=pair.getJSONArray("bars")
+            val bars=(0 until candles.length()).map { k ->
+                val a=candles.getJSONArray(k)
+                WilliamsWaveBar(a.getLong(0),a.getDouble(1),a.getDouble(2),
+                    a.getDouble(3),a.getDouble(4),a.getDouble(5))
+            }
+            assertEquals(symbol,150,bars.size)
+            assertEquals(symbol,end,bars.last().t+h)
+            assertTrue(symbol,bars.zipWithNext().all { (a,b)->b.t-a.t==h })
+            val last=bars.last().c
+            val v=williamsTc2CongestionEvidence(bars,end,"SHORT_FRACTAL","SHORT",last)
+            assertEquals(symbol,"CLOSED_CONTIGUOUS_H1_CANDLES",v.getString("source"))
+            assertTrue(symbol,v.getString("state") in
+                setOf("CONGESTION_CANDIDATE","NOT_CONFIRMED"))
+            assertFalse(symbol,v.getBoolean("can_place_orders"))
+            assertFalse(symbol,v.getBoolean("can_close"))
+            assertFalse(symbol,v.getBoolean("can_change_stops"))
+            classifications[symbol]=v.getString("state")
+            // Formation/future bars cannot leak into H1 confirmation.
+            assertEquals(symbol,"HISTORY_UNVERIFIED",
+                williamsTc2CongestionEvidence(
+                    bars+WilliamsWaveBar(end,1.0,999999.0,.1,1.0),
+                    end,"SHORT_FRACTAL","SHORT",last).getString("state"))
+            // Identical raw history must be deterministic regardless of scans.
+            assertEquals(symbol,v.toString(),
+                williamsTc2CongestionEvidence(bars,end,"SHORT_FRACTAL","SHORT",last).toString())
+        }
+        assertEquals(setOf("BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
+            "DOGEUSDT","ADAUSDT","LINKUSDT","AVAXUSDT","LTCUSDT"),
+            classifications.keys)
+        // Independent H1 review in this historical snapshot flagged at
+        // least BNB as bounded; this is a regression of project thresholds,
+        // never a claim that the remaining symbols had no correction.
+        assertEquals("CONGESTION_CANDIDATE",classifications["BNBUSDT"])
+    }
+
 }
