@@ -228,6 +228,9 @@ private fun enrichWaveRhythm(h: WilliamsWaveScenario, frames: Map<String, List<W
         evaluateWilliamsThirdMomentum(bars,osc,indexes.first(),thirdIndex,fourthIndex,h.direction,
             williamsWaveFrames.getValue(frame)).toJson()
     else williamsThirdMomentumUnavailable("SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS").toJson()
+    // Do not promote a smaller/greater 100-140 window into a W4 certificate.
+    // Wrong degree is decisive even when source extreme timing is ambiguous.
+    if(h.scaleBars !in 100..140) { h.w4Zero="WRONG_SCALE"; return }
     // A source high/low inside the parent bar can have multiple child-time
     // matches. That is NOT a timestamped W3 or W4 oscillator peak.
     if (thirdIndex==null || fourthIndex==null) {
