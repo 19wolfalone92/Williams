@@ -48,6 +48,7 @@ def test_h1_close_boundary_gap_and_price_geometry_fail_closed():
     assert probe.validate_closed_h1("BTCUSDT", data, int(data[-1][6])-1)["closed_bars"] == 2
     gap = candles()
     gap[2][0] += probe.HOUR_MS
+    gap[2][6] += probe.HOUR_MS
     with pytest.raises(ValueError, match="H1 history gap"):
         probe.validate_closed_h1("BTCUSDT", gap, int(data[-1][6])+1)
     incomplete = candles()
