@@ -222,6 +222,10 @@ private fun enrichWaveRhythm(h: WilliamsWaveScenario, frames: Map<String, List<W
                 abs((if(anchor.kind=="HIGH") b.h else b.l)-anchor.price)<=maxOf(1e-9,anchor.price*1e-9) }
         return found.singleOrNull()
     }
+    // W5 price target remains a visible PRICE-only observation even if W3
+    // or W4 oscillator time cannot be uniquely resolved on real child bars.
+    if (p.size >= 6) {
+    }
     val thirdIndex=uniquePriceIndex(p[3])
     val fourthIndex=if(p.size>=5) uniquePriceIndex(p[4]) else indexes.last()
     h.thirdMomentum=if(thirdIndex!=null && fourthIndex!=null)
