@@ -102,6 +102,47 @@ class WilliamsWaveHierarchyTest {
         assertTrue(scenario.scaleBars>140)
         assertEquals("WRONG_SCALE",scenario.w4Zero)
     }
+    @Test fun multipleRealH1PriceExtremeTimesCannotCertifyH4Wave4() {
+        // Same senior 4h high/low appears on several real H1 candles:
+        // assigning a unique price-to-AO lag is fundamentally ambiguous.
+        val h1=(0 until 200).map { i ->
+            WilliamsWaveBar(i*hour,100.0,101.0,99.0,100.0,1.0)
+        }
+        val h4=(0 until 50).map { i ->
+            WilliamsWaveBar(i*4*hour,100.0,101.0,99.0,100.0,1.0)
+        }
+        val anchors=listOf(
+            WilliamsWaveAnchor("LOW",99.0,10,40*hour,44*hour),
+            WilliamsWaveAnchor("HIGH",101.0,14,56*hour,60*hour),
+            WilliamsWaveAnchor("LOW",99.0,18,72*hour,76*hour),
+            WilliamsWaveAnchor("HIGH",101.0,22,88*hour,92*hour),
+            WilliamsWaveAnchor("LOW",99.0,26,104*hour,108*hour)
+        )
+        val scenario=WilliamsWaveScenario(
+            "4h:AMBIGUOUS","4h","UP","W4",anchors,160*hour,
+            104*hour,99.0,101.0,99.0)
+        val method=Class.forName("com.williamsbot.WilliamsWaveHierarchyKt")
+            .getDeclaredMethod("enrichWaveRhythm",WilliamsWaveScenario::class.java,Map::class.java)
+        method.isAccessible=true
+        method.invoke(null,scenario,mapOf("4h" to h4,"1h" to h1))
+        assertEquals("1h",scenario.scaleFrame)
+        assertEquals(120,scenario.scaleBars)
+        assertEquals("SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS",scenario.w4Zero)
+        assertNotEquals("CONFIRMED",scenario.thirdMomentum?.optString("status"))
+    }
+
+    @Test fun exactlyOneUnobservedClosedH1CannotSupplyAWaveScenario() {
+        val bars=(0 until 160).map { i ->
+            val p=100.0+20*kotlin.math.sin(i/15.0)
+            WilliamsWaveBar(i*hour,p,p+1,p-1,p,100.0)
+        }
+        val onTime=buildWilliamsWaveHierarchy(mapOf("1h" to bars),160*hour)
+        val stale=buildWilliamsWaveHierarchy(mapOf("1h" to bars),161*hour)
+        assertFalse(onTime.frameErrors.containsKey("1h"))
+        assertEquals("STALE_CLOSED_HISTORY",stale.frameErrors["1h"])
+        assertTrue(stale.scenarios.isEmpty())
+    }
+
     @Test fun fourthWaveOverlapRemainsResearchOnlyDiagonalAlternative() {
         val candles=(0 until 180).map { i ->
             WilliamsWaveBar(i*hour,130.0,131.0,129.0,130.0,1000.0)
