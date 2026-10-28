@@ -28,6 +28,21 @@
 - Вспомогательные NTD/Course OBSERVE сигналы и книжные *виртуальные* STOP не становятся автоматически торговыми заявками.
 - Никакой генерации «доказательства» Demo из синтетических JSON: `williams_demo_evidence_gate.py` честно возвращает только структурную проверку; физические signed receipts проверяются отдельно.
 
+## Новая независимая P0 проверка LONG и SHORT (без самообмана)
+
+Добавлена команда:
+
+`python tools/validate_device_demo_evidence.py --dual --input device_demo_both_directions.json --output dual_result.json`
+
+- Отдельные полные Android lifecycle для `LONG` и `SHORT` на **том же checksum APK**.
+- Один инструмент и один `campaign_id` на каждое отдельно проверяемое исполнение, согласованные `BUY/SELL` стороны.
+- Уникальные `exchange_order_id` и `order_id`, одинаковый действующий Binance STOP после reboot или доказанный цепочкой receipt cancel/replace.
+- Для **обоих** подтверждённая биржевая нулевая позиция; отдельный журнал `executed_qty`, `commission_usdt`, `realized_pnl_usdt`.
+- Поддельный или локально составленный JSON **никогда** не подтверждает подлинность Binance: даже успешный результат будет `STRUCTURAL_PASS_REQUIRES_INDEPENDENT_PHYSICAL_BINANCE_ATTESTATION`, `release_approved=false`.
+- Из файла выгрузки необходимо исключать API ключи, токены и иные секреты.
+
+Эта проверка является **дополнительным обязательным отрицательным фильтром**, а НЕ заменой физического Android / подписанных GET Binance / экстренного закрытия и суточной работы.
+
 ## Условие снятия HOLD
 
 Снять только после приёмки P0 на физическом Android и Binance Futures Demo, успешных CI последнего SHA и независимой верификации P1 стратегии. Ссылку на APK давать **только** тогда. До этого можно собирать внутренние отладочные артефакты, **не выдавая их за готовую Testnet APK**.
