@@ -12028,6 +12028,14 @@ private class NativeEngine(
     @Synchronized
     fun configureFuturesLeverage(payload: JSONObject): JSONObject {
         val next = FuturesLeverageSettings.fromJson(payload)
+        // Do not acknowledge settings the trading coordinator will refuse.
+        // Never silently clamp a previously stored 10x; expose it to the
+        // operator and keep existing 10x positions safely reconcilable.
+        require(next.defaultLeverage in 1..WILLIAMS_NEW_ENTRY_MAX_LEVERAGE &&
+            next.symbolLeverages.values.all { it in 1..WILLIAMS_NEW_ENTRY_MAX_LEVERAGE }) {
+            "Для новых входов Williams Futures Demo разрешено только плечо 1×–2×; " +
+            "измените настройки 10× перед возобновлением торговли"
+        }
         val profile=payload.optString("strategy_profile",williamsProfile)
         val nextTime=payload.optJSONObject("entry_time_policy")?.let { WilliamsEntryTimePolicy.fromJson(it) } ?: entryTimePolicy
         require(profile==williamsUnifiedProfile || williamsVerifiedNewRiskSource(profile)) {
