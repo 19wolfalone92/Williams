@@ -281,6 +281,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals("OWNED_STOP_SEEN", snapshot.observations.getJSONObject(0).getString("stop_proof"))
             assertTrue(coordinator.status().getBoolean("reconciliation_running"))
             assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+            assertEquals(0, coordinator.operatorSupervisionsSnapshot().length())
         } finally { release.countDown(); task.join(5_000L) }
         assertFalse(task.isAlive)
     }

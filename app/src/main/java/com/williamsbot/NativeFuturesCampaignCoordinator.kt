@@ -877,7 +877,9 @@ internal class NativeFuturesCampaignCoordinator(
             contractPrice = adapter::contractPrice,
             trustedObservations = JSONArray(externalProtectionObservationsJson),
             intents = intentsSnapshot(),
-            clock = clock
+            clock = clock,
+            supervisions = operatorSupervisions(),
+            readOpenOrders = adapter::allOpenOrders
         )
     }
     fun userTrades(symbol: String, startTime: Long, endTime: Long, limit: Int = 1000): JSONArray =
@@ -4472,9 +4474,10 @@ internal class NativeFuturesCampaignCoordinator(
         }
     }
 
-    fun operatorSupervisionsSnapshot(): JSONArray = synchronized(lock) {
-        JSONArray(operatorSupervisions().toString())
-    }
+    // Read only the atomically committed SQLite bytes, just like intentsSnapshot.
+    // Holding the mutation monitor here froze cockpit/trade-history reads for
+    // the duration of every account-wide signed network reconciliation.
+    fun operatorSupervisionsSnapshot(): JSONArray = JSONArray(operatorSupervisions().toString())
 
     /** GET-only closure backfill. Its evidence never grants trade ownership or
      * authorizes an exchange mutation. Unknown history remains visible as unknown. */

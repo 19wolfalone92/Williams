@@ -30,7 +30,9 @@ internal fun readFuturesProtectionDisplaySnapshot(
     trustedObservations: JSONArray,
     intents: JSONArray,
     clock: () -> Long,
-    ttlMs: Long = 15_000L
+    ttlMs: Long = 15_000L,
+    supervisions: JSONArray = JSONArray(),
+    readOpenOrders: (() -> JSONArray)? = null
 ): FuturesProtectionDisplaySnapshot {
     val startedAt = clock()
     check(startedAt > 0 && ttlMs > 0) { "Invalid signed display snapshot clock" }
@@ -56,6 +58,11 @@ internal fun readFuturesProtectionDisplaySnapshot(
     check(CockpitDiagnostics.rows(algos).size == algos.length()) {
         "Malformed signed open algo-order snapshot"
     }
+    val activeSupervisions = CockpitDiagnostics.rows(supervisions).filter { it.optString("state") == "ACTIVE" }
+    val standardOrders = if (activeSupervisions.isNotEmpty()) readOpenOrders?.invoke() else null
+    if (standardOrders != null) check(CockpitDiagnostics.rows(standardOrders).size == standardOrders.length()) {
+        "Malformed signed open standard-order snapshot"
+    }
     val afterRows = readPositions()
     val after = liveRows(afterRows)
     check(before.keys == after.keys && before.all { (symbol, old) ->
@@ -72,6 +79,8 @@ internal fun readFuturesProtectionDisplaySnapshot(
         var contract: Double? = null
         val stops = CockpitDiagnostics.rows(algos).filter { order ->
             if (order.optString("symbol") != symbol) return@filter false
+            if (!order.optString("closePosition").equals("true", true) &&
+                !order.optString("reduceOnly").equals("true", true)) return@filter false
             val reference = if (order.optString("workingType") == "CONTRACT_PRICE") {
                 contract ?: contractPrice(symbol).also { contract = it }
             } else mark
@@ -102,6 +111,24 @@ internal fun readFuturesProtectionDisplaySnapshot(
         val owned = owner != null && previous?.optString("stop_proof") == "OWNED_STOP_SEEN" &&
             previous.optBoolean("strategy_ownership_verified") &&
             previous.optString("management_mode") == "STRATEGY_OWNED"
+        val supervision = activeSupervisions.singleOrNull { record ->
+            record.optString("symbol") == symbol && record.optString("direction") == direction &&
+                record.optString("mode") in setOf("OPERATOR_APPROVED_STOP_ONLY", "AUTO_VERIFIED_STOP_ONLY") &&
+                !record.optBoolean("strategy_ownership_verified", true) &&
+                !record.optBoolean("market_close_authorized", true) && !record.optBoolean("add_on_authorized", true) &&
+                record.optString("quantity").toBigDecimalOrNull()?.compareTo(amount.abs()) == 0 &&
+                record.optString("entry_price").toBigDecimalOrNull()
+                    ?.compareTo(position.getString("entryPrice").toBigDecimal()) == 0 &&
+                id.isNotBlank() && record.optString("protection_client_id") == id && price != null &&
+                record.optString("stop").toBigDecimalOrNull()?.compareTo(price.toBigDecimal()) == 0
+        }
+        val supervised = !owned && supervision != null && previous != null &&
+            previous.optString("stop_proof") == "EXTERNAL_PROTECTED" &&
+            previous.optBoolean("automatic_trailing_authorized") &&
+            !previous.optBoolean("strategy_ownership_verified", true) &&
+            previous.optString("management_mode") == supervision.optString("mode") &&
+            CockpitDiagnostics.rows(algos).count { it.optString("symbol") == symbol } == 1 &&
+            standardOrders != null && CockpitDiagnostics.rows(standardOrders).none { it.optString("symbol") == symbol }
         observations.put(JSONObject().put("symbol", symbol).put("direction", direction)
             .put("quantity", amount.toPlainString()).put("observed_at_ms", startedAt)
             .put("stop_proof", when {
@@ -112,8 +139,9 @@ internal fun readFuturesProtectionDisplaySnapshot(
             }).put("stop", price ?: JSONObject.NULL)
             .put("protection_client_id", id.ifBlank { null } ?: JSONObject.NULL)
             .put("strategy_ownership_verified", owned)
-            .put("automatic_trailing_authorized", owned)
-            .put("management_mode", if (owned) "STRATEGY_OWNED" else "OBSERVE_ONLY")
+            .put("automatic_trailing_authorized", owned || supervised)
+            .put("management_mode", if (owned) "STRATEGY_OWNED"
+                else if (supervised) supervision!!.getString("mode") else "OBSERVE_ONLY")
             .put("scope", "SIGNED_GET_ONLY_DISPLAY_NOT_EXECUTION_AUTHORITY"))
     }
     check(CockpitDiagnostics.fresh(startedAt, clock(), ttlMs)) {

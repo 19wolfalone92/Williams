@@ -34,11 +34,14 @@ class FuturesProtectionDisplaySnapshotTest {
             .put("confirmed_position_qty", "0.21").put("actual_entry_price", "749.24")
         var contract = 754.38
         var contractReads = 0
+        var supervisions = JSONArray()
+        var standardOrders = JSONArray()
         fun read(): FuturesProtectionDisplaySnapshot = readFuturesProtectionDisplaySnapshot(
             readPositions = { positionReads++; JSONArray().put(JSONObject(position.toString())) },
             readOpenAlgos = { JSONArray(orders.toString()).also { afterOrders() } },
             contractPrice = { contractReads++; contract },
-            trustedObservations = JSONArray().put(proof), intents = JSONArray().put(owner), clock = { now }
+            trustedObservations = JSONArray().put(proof), intents = JSONArray().put(owner), clock = { now },
+            supervisions = supervisions, readOpenOrders = { standardOrders }
         )
     }
 
@@ -105,6 +108,33 @@ class FuturesProtectionDisplaySnapshotTest {
         f.contract = 740.0 // MARK is above the STOP, CONTRACT is already below it
         assertEquals("STOP_UNCONFIRMED", f.read().observations.getJSONObject(0).getString("stop_proof"))
         assertEquals(1, f.contractReads)
+    }
+
+    @Test fun previouslyApprovedStopOnlySupervisionRetainsItsLimitedModeWithoutOwnership() {
+        for (mode in listOf("OPERATOR_APPROVED_STOP_ONLY", "AUTO_VERIFIED_STOP_ONLY")) {
+            val f = Fixture()
+            f.owner.put("strategy_ownership_verified", false)
+            f.proof.put("stop_proof", "EXTERNAL_PROTECTED").put("strategy_ownership_verified", false)
+                .put("management_mode", mode)
+            val supervisor = JSONObject().put("symbol", "BNBUSDT").put("direction", "LONG")
+                .put("state", "ACTIVE").put("mode", mode).put("quantity", "0.21")
+                .put("entry_price", "749.24").put("stop", "742.67")
+                .put("protection_client_id", f.order.getString("clientAlgoId"))
+                .put("strategy_ownership_verified", false).put("market_close_authorized", false)
+                .put("add_on_authorized", false)
+            f.supervisions.put(supervisor)
+            val result = f.read().observations.getJSONObject(0)
+            assertEquals("EXTERNAL_PROTECTED", result.getString("stop_proof"))
+            assertEquals(mode, result.getString("management_mode"))
+            assertTrue(result.getBoolean("automatic_trailing_authorized"))
+            assertFalse(result.getBoolean("strategy_ownership_verified"))
+            // A new resting entry on the same symbol invalidates this limited proof.
+            f.standardOrders.put(JSONObject().put("symbol", "BNBUSDT"))
+            assertFalse(f.read().observations.getJSONObject(0).getBoolean("automatic_trailing_authorized"))
+            f.standardOrders = JSONArray()
+            supervisor.put("entry_price", "750")
+            assertFalse(f.read().observations.getJSONObject(0).getBoolean("automatic_trailing_authorized"))
+        }
     }
 
     @Test fun aFillReductionReversalOrChangedEntryDuringReadRejectsWholeGeneration() {
