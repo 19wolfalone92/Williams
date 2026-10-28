@@ -12,7 +12,7 @@ never presented as an author-certified formula.
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 import math
 from decimal import Decimal
@@ -36,6 +36,41 @@ def _source_exact_one_tick(extreme: float, tick: float, *, above: bool) -> float
         return float(result) if result > 0 and result.is_finite() else None
     except (TypeError, ValueError, ArithmeticError):
         return None
+
+
+def _ntd_blue_light(ind: pd.DataFrame, oscillator: list[float],
+                    signal_index: int, original_trigger: float,
+                    *, side: str, tick: float) -> tuple[float, int] | None:
+    """NTD PDF 64-66, 86-89: read-only stop improvement on unfilled bars.
+
+    Never infer intra-candle price sequence: if a historical bar could have
+    triggered the then-current stop, this formation is no longer pending.
+    A reversed/unchanged AO/AC colour cancels it, not a delayed resurrection.
+    """
+    buy = side == "LONG"
+    if (side not in {"LONG", "SHORT"} or ind is None
+            or signal_index < 0 or signal_index >= len(ind)
+            or len(ind) != len(oscillator) or not math.isfinite(original_trigger)
+            or original_trigger <= 0 or not math.isfinite(tick) or tick <= 0):
+        return None
+    trigger, source = original_trigger, signal_index
+    for index in range(signal_index + 1, len(ind)):
+        prev, now = oscillator[index - 1], oscillator[index]
+        if not (math.isfinite(prev) and math.isfinite(now)) or (
+                now <= prev if buy else now >= prev):
+            return None
+        bar = ind.iloc[index]
+        high, low = float(bar["high"]), float(bar["low"])
+        if not all(math.isfinite(x) for x in (high, low)) or high < low:
+            return None
+        if (high >= trigger if buy else low <= trigger):
+            return None
+        candidate = _source_exact_one_tick(high if buy else low, tick, above=buy)
+        if candidate is None:
+            return None
+        if candidate < trigger if buy else candidate > trigger:
+            trigger, source = candidate, index
+    return trigger, source
 
 
 def _tick_buffer(tick_size: float, ticks: int = 1) -> float:
@@ -423,6 +458,7 @@ def extract_ntd_ao_signal_specs(
     timeframe: str,
     tick_size: float,
     max_age_bars: int = 30,
+    include_pending_ao: bool = True,
 ) -> list[SignalSpec]:
     """Extract the three New Trading Dimensions AO entry formations.
 
@@ -538,6 +574,26 @@ def extract_ntd_ao_signal_specs(
         SignalType.AO_ZERO_LINE: 2,
     }
     if not matches:
+        if include_pending_ao:
+            # A historic AO formation remains its ORIGINAL signal ID; later
+            # favourable stop prices are research evidence, not a new signal.
+            for end in range(len(ind)-1, max(2, len(ind)-5), -1):
+                past = extract_ntd_ao_signal_specs(
+                    symbol, ind.iloc[:end], side=side, timeframe=timeframe,
+                    tick_size=tick, max_age_bars=max_age_bars, include_pending_ao=False)
+                for original in past:
+                    blue = _ntd_blue_light(
+                        ind, list(ao), original.source_candle_index,
+                        original.trigger_price, side=side, tick=tick)
+                    if blue is None:
+                        continue
+                    price, source_index = blue
+                    return [replace(original, trigger_price=price,
+                        setup_context={
+                            **dict(original.setup_context),
+                            "book_blue_light":"NTD_AO_SPECIAL_BLUE_LIGHT",
+                            "formation_index":original.source_candle_index,
+                            "level_source_index":source_index})]
         return []
     signal_type, reason = min(matches, key=lambda item: priority[item[0]])
     return [SignalSpec.new(
@@ -633,15 +689,24 @@ def extract_ntd_ac_signal_specs(
     signal_i, _ = candidates[0]
     row = ind.iloc[signal_i]
     current = ind.iloc[-1]
-    tick = max(float(tick_size), 1e-12)
+    try:
+        tick = float(tick_size)
+    except (TypeError, ValueError, OverflowError):
+        return []
+    if not math.isfinite(tick) or tick <= 0:
+        return []
     high = float(row["high"])
     low = float(row["low"])
     current_close = float(current["close"])
-    trigger = high + tick if is_long else low - tick
-    if trigger <= 0 or not _trigger_still_pending(
+    trigger = _source_exact_one_tick(high if is_long else low, tick, above=is_long)
+    if trigger is None or not _trigger_still_pending(
         ind, signal_i, side=order_side, trigger_price=trigger
     ):
         return []
+    blue = _ntd_blue_light(ind, list(ac), signal_i, trigger, side=direction, tick=tick)
+    if blue is None:
+        return []
+    trigger, level_source_index = blue
 
     signal_time = _row_time_ms(row)
     return [SignalSpec.new(
@@ -664,6 +729,9 @@ def extract_ntd_ac_signal_specs(
         ),
         source_candle_index=signal_i,
         expires_at_ms=_expiry(signal_time, timeframe, max_age_bars),
+        setup_context={"book_blue_light":"NTD_AC_SPECIAL_BLUE_LIGHT",
+                       "formation_index":signal_i,
+                       "level_source_index":level_source_index},
     )]
 
 
