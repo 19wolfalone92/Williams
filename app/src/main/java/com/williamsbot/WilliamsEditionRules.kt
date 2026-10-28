@@ -281,6 +281,43 @@ internal fun williamsMarketOnCloseReason(
     return null
 }
 
+/** NTD ch.5 PDF pp.64-66, ch.6 pp.86-89: "special blue light".
+ * A still-unfilled AO/AC stop may move to a MORE favourable subsequent
+ * closed price-bar level while the oscillator remains the SAME colour.
+ * Every intervening bar must be checked against the then-active stop BEFORE
+ * any replacement; a crossed order must not be resurrected from history.
+ *
+ * This is read-only SETUP evidence, NOT permission to amend a Binance order.
+ * The execution door must separately cancel/reconcile any existing order.
+ */
+internal data class WilliamsNtdBlueLight(val trigger:Double,val sourceIndex:Int)
+internal fun williamsNtdBlueLight(
+    side:String,bars:List<WilliamsWaveBar>,osc:List<Double>,
+    signalIndex:Int,originalTrigger:Double,tick:Double
+):WilliamsNtdBlueLight? {
+    if(side !in listOf("LONG","SHORT") || signalIndex !in bars.indices ||
+        bars.size!=osc.size || !originalTrigger.isFinite() || originalTrigger<=0.0 ||
+        !tick.isFinite() || tick<=0.0) return null
+    val buy=side=="LONG"
+    var trigger=originalTrigger
+    var sourceIndex=signalIndex
+    for(j in signalIndex+1 until bars.size) {
+        val b=bars[j]
+        if(!osc[j].isFinite() || !osc[j-1].isFinite() ||
+            (if(buy) osc[j]<=osc[j-1] else osc[j]>=osc[j-1])) return null
+        // Intrabar ordering is unknown: a historical trigger touch always
+        // wins over a close-time improvement. Never fabricate an unfilled order.
+        if(if(buy) b.h>=trigger else b.l<=trigger) return null
+        val candidate=williamsBookExactPriceTick(if(buy)b.h else b.l,tick,above=buy)
+            ?:return null
+        if(if(buy) candidate<trigger else candidate>trigger) {
+            trigger=candidate
+            sourceIndex=j
+        }
+    }
+    return WilliamsNtdBlueLight(trigger,sourceIndex)
+}
+
 /** Five independent NTD dimensions; only the external fractal initiates a cycle. */
 internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<Double>,teeth:List<Double>,
     lips:List<Double>,ao:List<Double>,ac:List<Double>,tick:Double,exitMode:Boolean=false,
@@ -343,8 +380,12 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
         val prior=williamsNtdSetups(side,bars.take(end),jaw.take(end),teeth.take(end),lips.take(end),
             ao.take(end),ac.take(end),tick,exitMode,includePendingAo=false)
         for(setup in prior.filter { it.kind in setOf("AO_SAUCER","AO_ZERO_LINE","AO_TWIN_PEAKS") }) {
-            if((setup.knownIndex+1 until n).all { j -> ao[j].isFinite() && ao[j-1].isFinite() &&
-                sign*(ao[j]-ao[j-1])>0 } && pending(setup.knownIndex,setup.trigger)) out+=setup
+            val blue=williamsNtdBlueLight(side,bars,ao,setup.knownIndex,setup.trigger,tick)
+                ?:continue
+            out+=setup.copy(trigger=blue.trigger,context=JSONObject(setup.context.toString())
+                .put("book_blue_light","NTD_AO_SPECIAL_BLUE_LIGHT")
+                .put("formation_index",setup.knownIndex)
+                .put("level_source_index",blue.sourceIndex))
         }
     }
     for (j in i downTo maxOf(1,n-10)) {
@@ -358,7 +399,18 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
         val crossed=c[j]>0 && c[j-1]<=0
         if ((run==needed || c[j]>0 && run in 2..3 && crossed) && start>0 && c[start]<c[start-1]) {
             val before=out.size;add("AC_SIGNAL",j)
-            if(out.size>before) break
+            if(out.size>before) {
+                val original=out.removeAt(out.lastIndex)
+                val blue=williamsNtdBlueLight(side,bars,ac,j,original.trigger,tick)
+                if(blue!=null) {
+                    out+=original.copy(trigger=blue.trigger,
+                        context=JSONObject(original.context.toString())
+                            .put("book_blue_light","NTD_AC_SPECIAL_BLUE_LIGHT")
+                            .put("formation_index",j)
+                            .put("level_source_index",blue.sourceIndex))
+                    break
+                }
+            }
         }
     }
     var zoneRun=0
