@@ -247,21 +247,32 @@ class NativeFuturesCoordinatorLifecycleTest {
     }
 
 
-    @Test fun productionBookDoorRejectsConfigured10xBeforeAnyExchangeEntryForBothDirections() {
-        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
-            val journal=Journal()
-            val exchange=Exchange(direction)
-            val coordinator=NativeFuturesCampaignCoordinator(journal) {exchange.adapter()}
-            val recovered=coordinator.reconcile()
-            assertTrue(recovered.toString(),recovered.optBoolean("ok"))
-            val rejected=coordinator.submitPendingEntry(plan(direction,10))
-            assertFalse(rejected.toString(),rejected.optBoolean("accepted"))
-            assertTrue(rejected.toString(),rejected.toString().contains(
-                "WILLIAMS_NEW_ENTRY_LEVERAGE_EXCEEDS_2X"))
-            assertEquals(0,exchange.posts("/fapi/v1/order"))
-            assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
-            // It is an admission fence, not an exchange mutation or forced
-            // leverage reset; existing exchange STOPs remain untouched.
+    @Test fun selectableTenXLeverageAllowsProtectedPositionWithVerifiedMarginForBothDirections() {
+        // 10x is a requested exchange parameter, NOT 10x risk: Binance
+        // bracket, structural stop and initial margin are checked by the
+        // production coordinator prior to every Futures order.
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator, exchange)=open(direction,10)
+            assertEquals(10,exchange.leverage)
+            assertTrue(coordinator.isManagedOpenPosition("BTCUSDT",direction))
+            assertTrue(coordinator.closePosition("BTCUSDT",direction,"1",
+                "W2X_10X_${direction.name}","MANUAL_EXIT").getBoolean("ok"))
+            assertEquals(0.0,exchange.quantity,0.0)
+        }
+    }
+
+    @Test fun unsafe125xInitialMarginAndInvalid126xAreRejectedBeforeBinanceOrder() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            for (leverage in listOf(125,126)) {
+                val exchange=Exchange(direction)
+                val coordinator=NativeFuturesCampaignCoordinator(Journal()) {exchange.adapter()}
+                assertTrue(coordinator.reconcile().getBoolean("ok"))
+                val rejected=coordinator.submitPendingEntry(plan(direction,leverage))
+                assertFalse(rejected.toString(),rejected.optBoolean("accepted"))
+                assertTrue(rejected.toString(),rejected.has("blocker"))
+                assertEquals(0,exchange.posts("/fapi/v1/order"))
+                assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+            }
         }
     }
 
@@ -1159,7 +1170,7 @@ class NativeFuturesCoordinatorLifecycleTest {
 
     @Test fun automaticAndForcedLongShortEntriesProtectTrailAndCloseAtSeveralLeverages() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.values()) {
-            for (prefix in listOf("W2E_", "W2F_")) for (leverage in listOf(1, 2)) {
+            for (prefix in listOf("W2E_", "W2F_")) for (leverage in listOf(1, 2, 5, 10)) {
                 val (coordinator, exchange) = open(direction, leverage, prefix)
                 assertTrue(coordinator.isManagedOpenPosition("BTCUSDT", direction))
                 val trailed = coordinator.trailProtectiveStop("BTCUSDT", direction,
