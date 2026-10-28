@@ -490,7 +490,7 @@ internal fun williamsNtdManagementPlan(side:String,bars:List<WilliamsWaveBar>,te
             // price an invalid continuation of this *book* campaign. We
             // cannot infer whether a real Binance order filled, so quarantine
             // this advisory trail and retain exchange-confirmed protection.
-            if(i>start && replayStop!=null &&
+            if((activationIndex<0 || i>replayStart) && replayStop!=null &&
                 (if(sign==1) bar.l<=replayStop else bar.h>=replayStop)) {
                 s.put("zone_historical_stop_touch_at_ms",bar.t)
                     .put("zone_book_evidence","HISTORICAL_BOOK_STOP_TOUCHED_RECONCILE_EXCHANGE")
