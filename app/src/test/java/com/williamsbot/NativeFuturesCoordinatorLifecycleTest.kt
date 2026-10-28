@@ -297,8 +297,10 @@ class NativeFuturesCoordinatorLifecycleTest {
             val oldExit = CockpitDiagnostics.rows(coordinator.intentsSnapshot()).single { it.optString("intent_role") == "EXIT" }
             val originalFlatAt = oldExit.getLong("confirmed_flat_at_ms")
             time += 10_000
+            exchange.mark = 100.0 // a fresh trigger must still be ahead of the market
             val next = plan(direction, prefix = "W2E_NEXT_")
-            assertTrue(coordinator.submitPendingEntry(next).getBoolean("accepted"))
+            val acceptedNext = coordinator.submitPendingEntry(next)
+            assertTrue(acceptedNext.toString(), acceptedNext.getBoolean("accepted"))
             exchange.fill(pendingClientId = next.clientId, childOrderId = "43")
             time += 1_000
             assertTrue(coordinator.reconcile().getBoolean("ok"))
