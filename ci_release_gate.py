@@ -754,6 +754,10 @@ def main() -> None:
     must(testnet_workflow, "inputs.symbol || 'BTCUSDT'", ".github/workflows/testnet-readonly.yml")
     must(testnet_workflow, "python test_testnet_release_gate.py --read-only", ".github/workflows/testnet-readonly.yml")
     must_not(testnet_workflow, "python test_testnet_release_gate.py --trade", ".github/workflows/testnet-readonly.yml")
+    must(testnet_workflow, "Fail explicit signed Demo acceptance when credentials are missing",
+         "Authenticated manual Testnet gate must not pass with unsigned data")
+    must(testnet_workflow, "github.event_name == 'workflow_dispatch'",
+         "Manual Testnet acceptance requires a separate fail-closed credentials check")
 
     for path in (".github/workflows/python-ci.yml", ".github/workflows/campaign-ci.yml"):
         workflow = read(path)
