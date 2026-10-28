@@ -777,6 +777,41 @@ def main() -> None:
     must(workflow, "futures_williams_runtime.py", ".github/workflows/python-ci.yml")
     must(workflow, "python -m py_compile", ".github/workflows/python-ci.yml")
 
+    # Hard safety conditions are part of every debug/release Android build.
+    # APK compilation is necessary, NEVER a substitute for signed device E2E.
+    leverage_src = read("app/src/main/java/com/williamsbot/FuturesLeveragePolicy.kt")
+    coordinator_src = read("app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    settings_src = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
+    ntd_src = read("app/src/main/java/com/williamsbot/WilliamsEditionRules.kt")
+    for token in (
+        "WILLIAMS_NEW_ENTRY_MAX_LEVERAGE = 2",
+    ):
+        must(leverage_src, token, "1-2x Williams Demo new-risk cap")
+    must(coordinator_src, "WILLIAMS_NEW_ENTRY_LEVERAGE_EXCEEDS_2X",
+         "Futures coordinator must refuse 10x BEFORE Binance entry")
+    must(settings_src, "new_entry_leverage_compliant",
+         "Android cockpit must disclose old 10x persisted setting")
+    must(settings_src, "new_entry_leverage_blocker",
+         "Android cockpit must state the actionable 10x blocker")
+    for token in (
+        "HISTORICAL_BOOK_STOP_TOUCHED_RECONCILE_EXCHANGE",
+        "NTD_H1_HISTORY_GAP",
+        "NTD_ZONE_HISTORY_WINDOW_UNVERIFIED",
+        "zone_book_last_checked_ohlcv",
+        "zone_book_stop_authorized_order",
+    ):
+        must(ntd_src, token, "NTD book-only STOP recovery evidence")
+    must(settings_src, "NTD_BOOK_EXIT_EVIDENCE_QUARANTINED",
+         "Historical book stop must NOT silently invent Binance fill")
+    book_tests = read("app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt")
+    must(book_tests, "ntdFiveZoneRollingHistoryRequiresDurableMatchingCheckpoint",
+         "NTD rolling historical checkpoint regression")
+    coord_tests = read("app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt")
+    must(coord_tests, "productionBookDoorRejectsConfigured10xBeforeAnyExchangeEntryForBothDirections",
+         "Native Futures 10x rejection regressions")
+    must(read("docs/WILLIAMS_TESTNET_APK_RELEASE_HOLD_2026-10-28_RU.md"),
+         "RELEASE HOLD", "physical Demo acceptance hold must be documented")
+
     print("WILLIAMS FUTURES RELEASE CONTRACT GATE: PASS")
 
 
