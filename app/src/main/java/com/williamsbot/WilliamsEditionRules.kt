@@ -296,7 +296,8 @@ internal fun williamsNtdBlueLight(
     signalIndex:Int,originalTrigger:Double,tick:Double
 ):WilliamsNtdBlueLight? {
     if(side !in listOf("LONG","SHORT") || signalIndex !in bars.indices ||
-        bars.size!=osc.size || !originalTrigger.isFinite() || originalTrigger<=0.0 ||
+        bars.size!=osc.size || !validWilliamsEditionBars(bars) ||
+        !originalTrigger.isFinite() || originalTrigger<=0.0 ||
         !tick.isFinite() || tick<=0.0) return null
     val buy=side=="LONG"
     var trigger=originalTrigger
