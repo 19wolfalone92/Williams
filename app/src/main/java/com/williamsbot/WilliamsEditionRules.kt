@@ -446,6 +446,7 @@ internal fun williamsNtdManagementPlan(side:String,bars:List<WilliamsWaveBar>,te
     if(s.optLong("zone_active_at",0L)>0L &&
         s.optLong("zone_active_at")+WILLIAMS_H1_MS<=openedAt) {
         for(key in listOf("zone_active_at","zone_book_stop","zone_book_stop_source_time_ms",
+            "zone_book_last_checked_at_ms","zone_book_last_checked_ohlcv",
             "zone_historical_stop_touch_at_ms","zone_book_evidence")) s.remove(key)
     }
     var run=0
