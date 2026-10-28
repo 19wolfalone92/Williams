@@ -164,6 +164,7 @@ def validate_demo_both_directions(payload: dict) -> dict:
         failures.append("INVALID_DUAL_SIDE_APK_SHA256")
     observed_orders = set()
     observed_stops = set()
+    observed_campaigns = set()
     sides = set()
     for i, run in enumerate(runs):
         if not isinstance(run, dict):
@@ -195,6 +196,18 @@ def validate_demo_both_directions(payload: dict) -> dict:
         expected_exit = "SELL" if side == "LONG" else "BUY"
         if entry.get("side") != expected_entry or first_stop.get("side") != expected_exit:
             failures.append(f"{side}_ENTRY_OR_STOP_DIRECTION_MISMATCH")
+        # A stop order can be active on the account yet protect the WRONG
+        # side. The original book campaign needs a structural level beyond
+        # its entry, independently of the stop after a profitable trail.
+        price = entry.get("avg_fill_price")
+        initial_stop = first_stop.get("stop_price")
+        if (not isinstance(price, (int, float)) or isinstance(price, bool)
+                or not isfinite(price) or price <= 0
+                or not isinstance(initial_stop, (int, float))
+                or isinstance(initial_stop, bool)
+                or not isfinite(initial_stop) or initial_stop <= 0
+                or (price <= initial_stop if side == "LONG" else price >= initial_stop)):
+            failures.append(f"{side}_INITIAL_STRUCTURAL_STOP_WRONG_SIDE")
         if restored_stop.get("side") != expected_exit:
             failures.append(f"{side}_RECOVERED_STOP_DIRECTION_MISMATCH")
         if not all(x.get("symbol") == entry.get("symbol") for x in (
@@ -244,6 +257,10 @@ def validate_demo_both_directions(payload: dict) -> dict:
         # A fresh post-recovery STOP must cover the persisted signed position,
         # and be reported to the same campaign, not a convenient unrelated fill.
         owner = entry.get("campaign_id")
+        if isinstance(owner, str) and owner.strip():
+            if owner in observed_campaigns:
+                failures.append("DUPLICATE_CAMPAIGN_OWNERSHIP_ACROSS_DIRECTIONS")
+            observed_campaigns.add(owner)
         if (not isinstance(owner, str) or not owner.strip()
                 or position.get("campaign_id") != owner
                 or first_stop.get("campaign_id") != owner
