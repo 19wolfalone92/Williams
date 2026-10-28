@@ -392,4 +392,46 @@ class WilliamsEditionRulesTest {
             assertEquals("TEETH_CLOSE_EXIT",plan(closedAcross).exitReason)
         }
     }
+
+    @Test fun ntdFiveZoneRollingHistoryRequiresDurableMatchingCheckpoint() {
+        val hour=3_600_000L
+        val lows=List(6){100.0}+listOf(102.0,103.0)+(8..14).map { it+96.0 }
+        val highs=(0..14).map { 110.0+it }
+        for(side in listOf("LONG","SHORT")) {
+            val mirror=side=="SHORT"
+            val original=(0..14).map { i ->
+                val p=(highs[i]+lows[i])/2
+                WilliamsWaveBar(i*hour,p,highs[i],lows[i],p,100.0)
+            }
+            val bars=if(mirror) original.map {it.copy(o=250-it.o,h=250-it.l,
+                l=250-it.h,c=250-it.c)} else original
+            val ao=bars.indices.map {i->
+                val v=if(i<6)i.toDouble() else 5.0-(i-5)*.5
+                if(mirror)-v else v
+            }
+            val line=List(bars.size){if(mirror)200.0 else 80.0}
+            fun plan(series:List<WilliamsWaveBar>,indexStart:Int,state:JSONObject)=
+                williamsNtdManagementPlan(side,series,line.subList(indexStart,indexStart+series.size),
+                    line.subList(indexStart,indexStart+series.size),
+                    ao.subList(indexStart,indexStart+series.size),
+                    ao.subList(indexStart,indexStart+series.size),.1,hour,state)
+            val durable=plan(bars.take(8),0,JSONObject())
+            assertEquals(if(mirror)147.1 else 102.9,durable.stop!!,0.0)
+            // The activation candle (index 5) is no longer inside the
+            // bounded REST history (6..14), but exact last-checked OHLCV is.
+            val resumed=plan(bars.drop(6),6,durable.state)
+            assertEquals(if(mirror)140.1 else 109.9,resumed.stop!!,0.0)
+            assertEquals("REPLAYED_FROM_DURABLE_CLOSED_BAR_CHECKPOINT",
+                resumed.state.getString("zone_book_evidence"))
+            assertEquals(14*hour,resumed.state.getLong("zone_book_last_checked_at_ms"))
+            val altered=bars.drop(6).toMutableList()
+            altered[1]=altered[1].copy(c=altered[1].c+.1)
+            val quarantined=plan(altered,6,durable.state)
+            assertNull(quarantined.stop)
+            assertEquals("NTD_ZONE_HISTORY_WINDOW_UNVERIFIED",
+                quarantined.state.getString("zone_book_evidence"))
+            // No broker STOP is moved by any of these observations.
+            assertFalse(resumed.state.getBoolean("zone_book_stop_authorized_order"))
+        }
+    }
 }
