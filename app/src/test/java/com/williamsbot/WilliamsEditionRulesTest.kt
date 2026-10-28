@@ -345,4 +345,24 @@ class WilliamsEditionRulesTest {
         assertNull(m.stop)
         assertFalse(m.state.has("zone_active_at"))
     }
+
+    @Test fun ntdPdf116TeethWickIsNotACloseOnlyExitForLongOrShort() {
+        val hour=3_600_000L
+        val base=(0..5).map {i->WilliamsWaveBar(i*hour,101.0,103.0,98.0,101.0,100.0)}
+        for(side in listOf("LONG","SHORT")) {
+            val mirror=side=="SHORT"
+            val bars=if(mirror) base.map { it.copy(o=200-it.o,h=200-it.l,
+                l=200-it.h,c=200-it.c) } else base
+            val alligator=List(6){100.0}
+            val ao=List(6){0.0};val ac=List(6){0.0}
+            fun plan(rows:List<WilliamsWaveBar>)=williamsNtdManagementPlan(
+                side,rows,alligator,alligator,ao,ac,.1,hour,JSONObject())
+            // The wick crosses Teeth but the closed price stays on the
+            // position's safe side: NTD chapter 9 says CLOSE ONLY.
+            assertEquals("",plan(bars).exitReason)
+            val last=bars.last()
+            val closedAcross=bars.dropLast(1)+last.copy(c=if(mirror)101.0 else 99.0)
+            assertEquals("TEETH_CLOSE_EXIT",plan(closedAcross).exitReason)
+        }
+    }
 }
