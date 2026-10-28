@@ -298,12 +298,15 @@ class NativeFuturesCoordinatorLifecycleTest {
             val originalFlatAt = oldExit.getLong("confirmed_flat_at_ms")
             time += 10_000
             exchange.mark = 100.0 // a fresh trigger must still be ahead of the market
-            val next = plan(direction, prefix = "W2E_NEXT_")
+            // Stable protection IDs include the entry ID suffix; a separate
+            // campaign must have its own suffix as real H1 intents do.
+            val next = plan(direction, prefix = "W2E_NEXT_").let { it.copy(clientId = it.clientId + "_NEXT") }
             val acceptedNext = coordinator.submitPendingEntry(next)
             assertTrue(acceptedNext.toString(), acceptedNext.getBoolean("accepted"))
             exchange.fill(pendingClientId = next.clientId, childOrderId = "43")
             time += 1_000
-            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val current = coordinator.reconcile()
+            assertTrue(current.toString(), current.getBoolean("ok"))
             val exit = CockpitDiagnostics.rows(coordinator.intentsSnapshot()).single { it.optString("intent_role") == "EXIT" }
             assertEquals("EXIT_CONFIRMED", exit.getString("exchange_status"))
             assertEquals(originalFlatAt, exit.getLong("confirmed_flat_at_ms"))
