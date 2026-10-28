@@ -62,3 +62,71 @@ def test_four_book_price_tick_source_math_rejects_offgrid_and_nan():
     assert _source_exact_one_tick(.2060,.0001,above=True)==.2061
     assert _source_exact_one_tick(99.005,.01,above=False) is None
     assert _source_exact_one_tick(float("nan"),.01,above=True) is None
+
+
+def _ntd_blue_light_frame(*, side="LONG"):
+    n=49
+    highs=[110.0]*n
+    lows=[100.0]*n
+    for i in range(46,n):
+        highs[i]=110-2*(i-45)
+        lows[i]=100+(i-45)
+    aos=[-1.0]*n
+    aos[45:]=[1.0,2.0,3.0,4.0]
+    acs=[-1.0]*n
+    acs[44:]=[-2.0,-1.0,1.0,2.0,3.0]
+    if side=="SHORT":
+        highs,lows=[200-x for x in lows],[200-x for x in highs]
+        aos=[-x for x in aos]
+        acs=[-x for x in acs]
+    return pd.DataFrame([{
+        "open_time_ms":(i+1)*HOUR,"open":(highs[i]+lows[i])/2,
+        "high":highs[i],"low":lows[i],"close":(highs[i]+lows[i])/2,
+        "ao":aos[i],"ac":acs[i],
+        "ao_green":aos[i]>aos[i-1] if i else False,
+        "ao_red":aos[i]<aos[i-1] if i else False,
+        "teeth_current":95.0,
+    } for i in range(n)])
+
+
+@pytest.mark.parametrize("side,expected", [("LONG",104.1),("SHORT",95.9)])
+def test_ntd_pdf64_66_ao_special_blue_light_reprices_without_new_signal(side,expected):
+    frame=_ntd_blue_light_frame(side=side)
+    specs=extract_ntd_ao_signal_specs(
+        "ETHUSDT",frame,side=side,timeframe="1h",tick_size=.1)
+    assert len(specs)==1
+    signal=specs[0]
+    assert "ZERO_LINE" in str(signal.signal_type)
+    assert signal.source_candle_index==45
+    assert signal.trigger_price==expected
+    assert signal.setup_context["level_source_index"]==48
+
+
+@pytest.mark.parametrize("side,expected", [("LONG",104.1),("SHORT",95.9)])
+def test_ntd_pdf86_ac_special_blue_light_tracks_unhit_original_formation(side,expected):
+    from williams_signals import extract_ntd_ac_signal_specs
+    frame=_ntd_blue_light_frame(side=side)
+    specs=extract_ntd_ac_signal_specs(
+        "ETHUSDT",frame,side=side,timeframe="1h",tick_size=.1)
+    assert len(specs)==1
+    signal=specs[0]
+    assert signal.source_candle_index==46
+    assert signal.trigger_price==expected
+    assert signal.setup_context["level_source_index"]==48
+
+
+@pytest.mark.parametrize("side",["LONG","SHORT"])
+def test_ntd_special_blue_light_never_revives_a_triggered_original_order(side):
+    from williams_signals import extract_ntd_ac_signal_specs
+    frame=_ntd_blue_light_frame(side=side)
+    # At candle 47, the improved stop from candle 46 is touched intrabar.
+    # No later close can present the same formation as still unfilled.
+    if side=="LONG":
+        frame.loc[47,"high"]=108.1
+    else:
+        frame.loc[47,"low"]=91.9
+    frame.loc[47,"close"]=(frame.loc[47,"high"]+frame.loc[47,"low"])/2
+    assert not extract_ntd_ao_signal_specs(
+        "ETHUSDT",frame,side=side,timeframe="1h",tick_size=.1)
+    assert not extract_ntd_ac_signal_specs(
+        "ETHUSDT",frame,side=side,timeframe="1h",tick_size=.1)
