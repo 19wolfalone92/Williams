@@ -787,16 +787,20 @@ def main() -> None:
     coordinator_src = read("app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     settings_src = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
     ntd_src = read("app/src/main/java/com/williamsbot/WilliamsEditionRules.kt")
-    for token in (
-        "WILLIAMS_NEW_ENTRY_MAX_LEVERAGE = 2",
-    ):
-        must(leverage_src, token, "1-2x Williams Demo new-risk cap")
-    must(coordinator_src, "WILLIAMS_NEW_ENTRY_LEVERAGE_EXCEEDS_2X",
-         "Futures coordinator must refuse 10x BEFORE Binance entry")
-    must(settings_src, "new_entry_leverage_compliant",
-         "Android cockpit must disclose old 10x persisted setting")
-    must(settings_src, "new_entry_leverage_blocker",
-         "Android cockpit must state the actionable 10x blocker")
+    must(leverage_src, "MAX_CONFIGURED_FUTURES_LEVERAGE = 125",
+         "Operator-selected Futures leverage must not be silently capped at 2x")
+    must(leverage_src, "futuresLeverageBlocker(",
+         "Exchange tiers and isolated stop margin must remain in force")
+    must(coordinator_src, "parseFuturesLeverage(plan.leverage)",
+         "Execution coordinator must reject invalid leverage")
+    must(coordinator_src, "futuresLeverageBlocker(",
+         "Execution coordinator must independently check signed Binance brackets")
+    must_not(coordinator_src, "WILLIAMS_NEW_ENTRY_LEVERAGE_EXCEEDS_2X",
+         "No unauthorized 2x strategy-only leverage cap")
+    must(settings_src, "new_entry_leverage_preflight",
+         "Android cockpit must explain exchange bracket and structural stop verification")
+    must(settings_src, "new_entry_leverage_cap_x",
+         "Android cockpit must display the actual configuration range")
     for token in (
         "HISTORICAL_BOOK_STOP_TOUCHED_RECONCILE_EXCHANGE",
         "NTD_H1_HISTORY_GAP",
@@ -811,8 +815,10 @@ def main() -> None:
     must(book_tests, "ntdFiveZoneRollingHistoryRequiresDurableMatchingCheckpoint",
          "NTD rolling historical checkpoint regression")
     coord_tests = read("app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt")
-    must(coord_tests, "productionBookDoorRejectsConfigured10xBeforeAnyExchangeEntryForBothDirections",
-         "Native Futures 10x rejection regressions")
+    must(coord_tests, "selectableTenXLeverageAllowsProtectedPositionWithVerifiedMarginForBothDirections",
+         "User-configured 10x must be available when Binance brackets and stop margin allow it")
+    must(coord_tests, "unsafe125xInitialMarginAndInvalid126xAreRejectedBeforeBinanceOrder",
+         "Even user-selected leverage must be rejected when exchange risk is unsafe")
     must(read("docs/WILLIAMS_TESTNET_APK_RELEASE_HOLD_2026-10-28_RU.md"),
          "RELEASE HOLD", "physical Demo acceptance hold must be documented")
     publish = read(".github/workflows/publish-demo-apk.yml")
