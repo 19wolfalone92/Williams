@@ -818,6 +818,24 @@ def main() -> None:
          "Only a successful main build may be considered for publication")
     must(publish, "github.event.workflow_run.head_branch == 'main'",
          "Never publish a review APK")
+    evidence = read("williams_demo_evidence_gate.py")
+    must(evidence, "def validate_demo_both_directions(",
+         "Real Android/Futures Demo release must require BOTH LONG and SHORT cycles")
+    for requirement in (
+        "LONG_AND_SHORT_BOTH_REQUIRED",
+        "POSITION_CAMPAIGN_OWNERSHIP_UNPROVED",
+        "STOP_REPLACEMENT_UNPROVED",
+        "TRADE_JOURNAL_MISSING",
+        "STRUCTURAL_PASS_REQUIRES_INDEPENDENT_PHYSICAL_BINANCE_ATTESTATION",
+        '"release_approved": False',
+    ):
+        must(evidence, requirement, "Dual direction contract cannot claim signed exchange authenticity")
+    tests = read("tests/test_williams_demo_dual_side_evidence.py")
+    for test in ("test_two_artificial_timelines_only_pass_structure_and_not_a_real_release",
+                 "test_only_long_is_not_full_book_trading_acceptance",
+                 "test_recovery_cannot_replace_protection_silently",
+                 "test_position_from_another_campaign_cannot_be_adopted"):
+        must(tests, test, "Dual Demo safety negatives")
 
     print("WILLIAMS FUTURES RELEASE CONTRACT GATE: PASS")
 
