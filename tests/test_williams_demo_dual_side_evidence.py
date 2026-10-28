@@ -101,3 +101,13 @@ def test_corrupted_stop_qty_environment_and_secret_remain_fail_closed():
     assert "LONG_CYCLE_INCOMPLETE" in err
     assert "SHORT_CYCLE_INCOMPLETE" in err
     assert "SHORT_DIFFERENT_BUILD_OR_EXCHANGE" in err
+
+
+def test_nested_journal_credentials_are_rejected_without_printing_them():
+    payload = sample()
+    payload["runs"][0]["journal"]["credentials"] = {
+        "api_secret": "MUST_NOT_BE_IN_EXPORTED_DIAGNOSTICS"
+    }
+    report = validate_demo_both_directions(payload)
+    assert "SECRET_FIELD_FOUND_IN_DIAGNOSTIC" in report["errors"]
+    assert "MUST_NOT_BE_IN_EXPORTED_DIAGNOSTICS" not in repr(report)
