@@ -55,7 +55,7 @@ internal fun FuturesLeverageSettingsCard(status: Status, onSave: (JSONObject) ->
             Text("Стратегия и плечо Futures", style = MaterialTheme.typography.titleMedium)
             Text("Общее плечо и отдельное для каждой пары • LONG и SHORT • ISOLATED",
                 style = MaterialTheme.typography.bodySmall)
-            Text("Плечо выбираешь сам: 1–125×, в том числе 5× и 10×. Доступность проверяется отдельно для каждой пары: Binance может ограничить плечо, а маржа и структурный STOP могут запретить рискованный вход. Плечо не увеличивает установленный риск на сделку.",
+            Text("Плечо выбираешь сам: 1–125×, в том числе 5× и 10×. Доступность проверяется отдельно для каждой пары: Binance может ограничить плечо, а маржа и структурный STOP могут запретить рискованный вход. Плечо не увеличивает расчётный бюджет убытка, но повышает риск ликвидации и проскальзывания.",
                 style = MaterialTheme.typography.bodySmall)
             Text("TC2 и NTD · независимые торговые системы",style=MaterialTheme.typography.titleSmall)
             Text("TC2 торгует по трём Мудрецам, NTD — по пяти измерениям. У каждого источника свои входы и сопровождение. Course анализирует H1 в режиме наблюдения.",
