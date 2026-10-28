@@ -460,12 +460,30 @@ internal fun williamsNtdManagementPlan(side:String,bars:List<WilliamsWaveBar>,te
         // stop path from the fifth coloured bar, not just the last candle.
         // The same proof must survive process loss or lost cached book state.
         val activation=s.optLong("zone_active_at")
-        val start=bars.indexOfFirst { it.t==activation }
-        if(start<0) return WilliamsNtdManagement(s.put(
-            "zone_book_evidence","NTD_ZONE_ACTIVATION_NOT_IN_CLOSED_HISTORY"))
+        val activationIndex=bars.indexOfFirst { it.t==activation }
         var replayStop:Double?=null
         var replaySource=activation
-        for(i in start until n) {
+        val replayStart=if(activationIndex>=0) activationIndex else {
+            // A campaign may legitimately last longer than the REST 220-H1
+            // rolling window. Resume from the LAST durable validated closed
+            // candle, but never from a naked old stop without source evidence.
+            val lastChecked=s.optLong("zone_book_last_checked_at_ms",0L)
+            val baseline=s.optDouble("zone_book_stop",Double.NaN)
+            val index=bars.indexOfFirst { it.t==lastChecked }
+            val bar=bars.getOrNull(index)
+            val fingerprint=bar?.let {
+                listOf(it.o,it.h,it.l,it.c,it.v).joinToString("|")
+            }
+            if(index<0 || fingerprint!=s.optString("zone_book_last_checked_ohlcv") ||
+                !baseline.isFinite() || baseline<=0.0 ||
+                williamsBookExactPriceTick(baseline,tick,above=true)==null)
+                return WilliamsNtdManagement(s.put(
+                    "zone_book_evidence","NTD_ZONE_HISTORY_WINDOW_UNVERIFIED"))
+            replayStop=baseline
+            replaySource=s.optLong("zone_book_stop_source_time_ms",lastChecked)
+            index+1
+        }
+        for(i in replayStart until n) {
             val bar=bars[i]
             // A STOP touched on an earlier candle makes any later profitable
             // price an invalid continuation of this *book* campaign. We
@@ -496,7 +514,12 @@ internal fun williamsNtdManagementPlan(side:String,bars:List<WilliamsWaveBar>,te
                 "zone_book_evidence","NTD_REPLAY_CONFLICTS_WITH_PERSISTED_STOP"))
         s.put("zone_book_stop",replayStop)
             .put("zone_book_stop_source_time_ms",replaySource)
-            .put("zone_book_evidence","REPLAYED_COMPLETE_CLOSED_H1_PATH")
+            .put("zone_book_last_checked_at_ms",bars.last().t)
+            .put("zone_book_last_checked_ohlcv",listOf(
+                bars.last().o,bars.last().h,bars.last().l,bars.last().c,bars.last().v
+            ).joinToString("|"))
+            .put("zone_book_evidence",if(activationIndex>=0)
+                "REPLAYED_COMPLETE_CLOSED_H1_PATH" else "REPLAYED_FROM_DURABLE_CLOSED_BAR_CHECKPOINT")
             .put("zone_book_rule","NTD_PDF117_119_FIVE_SAME_COLOUR_STICKY_CLOSED_BAR")
             .put("zone_book_stop_authorized_order",false)
         return WilliamsNtdManagement(s,stop=replayStop)
