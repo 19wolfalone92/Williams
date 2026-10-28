@@ -221,12 +221,12 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
-    private fun plan(direction: NativeFuturesCampaignCoordinator.Direction, leverage: Int = 5, prefix: String = "W2E_") =
+    private fun plan(direction: NativeFuturesCampaignCoordinator.Direction, leverage: Int = 2, prefix: String = "W2E_") =
         NativeFuturesCampaignCoordinator.EntryPlan("BTCUSDT", direction, NativeFuturesCampaignCoordinator.EntryKind.STOP,
             "1", if (direction.name == "LONG") "101" else "99", if (direction.name == "LONG") "95" else "105",
             "${prefix}BTC_${direction.name}_$leverage", 0.002, leverage = leverage)
 
-    private fun open(direction: NativeFuturesCampaignCoordinator.Direction, leverage: Int = 5, prefix: String = "W2E_",
+    private fun open(direction: NativeFuturesCampaignCoordinator.Direction, leverage: Int = 2, prefix: String = "W2E_",
         journal: Journal = Journal(), clock: () -> Long = System::currentTimeMillis):
         Pair<NativeFuturesCampaignCoordinator, Exchange> {
         val exchange = Exchange(direction)
@@ -246,6 +246,23 @@ class NativeFuturesCoordinatorLifecycleTest {
         return coordinator to exchange
     }
 
+
+    @Test fun productionBookDoorRejectsConfigured10xBeforeAnyExchangeEntryForBothDirections() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal=Journal()
+            val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(journal) {exchange.adapter()}
+            assertTrue(coordinator.reconcile().toString(),coordinator.reconcile().optBoolean("ok"))
+            val rejected=coordinator.submitPendingEntry(plan(direction,10))
+            assertFalse(rejected.toString(),rejected.optBoolean("accepted"))
+            assertTrue(rejected.toString(),rejected.toString().contains(
+                "WILLIAMS_NEW_ENTRY_LEVERAGE_EXCEEDS_2X"))
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
+            assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+            // It is an admission fence, not an exchange mutation or forced
+            // leverage reset; existing exchange STOPs remain untouched.
+        }
+    }
 
     @Test fun bookH1W2HStopsMustBePlacedAndConfirmedAfterBothLongAndShortFills() {
         // Production book H1 client IDs start with W2H_ (not W2E_).
