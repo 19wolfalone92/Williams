@@ -243,7 +243,8 @@ class WilliamsEditionRulesTest {
         val high=listOf(110.0,108.0,106.0,104.0)
         val lows=listOf(100.0,101.0,102.0,103.0)
         val bars=high.indices.map { i ->
-            WilliamsWaveBar((i+1)*WILLIAMS_H1_MS,105.0,high[i],lows[i],105.0,100.0)
+            WilliamsWaveBar((i+1)*WILLIAMS_H1_MS,(high[i]+lows[i])/2,high[i],lows[i],
+                (high[i]+lows[i])/2,100.0)
         }
         val rising=listOf(-1.0,1.0,2.0,3.0)
         val long=williamsNtdBlueLight("LONG",bars,rising,0,110.1,.1)
