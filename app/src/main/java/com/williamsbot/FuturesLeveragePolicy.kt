@@ -6,9 +6,10 @@ import kotlin.math.abs
 import kotlin.math.max
 
 internal const val MAX_CONFIGURED_FUTURES_LEVERAGE = 125
-// Separate safety cap for NEW Williams Demo exposure; configuration and
-// recovery of older exchange positions remain backward compatible.
-internal const val WILLIAMS_NEW_ENTRY_MAX_LEVERAGE = 2
+// Leverage is an operator-configured Futures parameter (1..125).
+// It is NOT a fixed strategy multiplier: authenticated Binance brackets,
+// calculated structural-stop risk, isolated margin and liquidation buffer
+// are checked by the execution coordinator immediately before new exposure.
 
 internal fun parseFuturesLeverage(value: Any?): Int {
     val text = value?.toString()?.trim().orEmpty()
