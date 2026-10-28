@@ -252,7 +252,8 @@ class NativeFuturesCoordinatorLifecycleTest {
             val journal=Journal()
             val exchange=Exchange(direction)
             val coordinator=NativeFuturesCampaignCoordinator(journal) {exchange.adapter()}
-            assertTrue(coordinator.reconcile().toString(),coordinator.reconcile().optBoolean("ok"))
+            val recovered=coordinator.reconcile()
+            assertTrue(recovered.toString(),recovered.optBoolean("ok"))
             val rejected=coordinator.submitPendingEntry(plan(direction,10))
             assertFalse(rejected.toString(),rejected.optBoolean("accepted"))
             assertTrue(rejected.toString(),rejected.toString().contains(
