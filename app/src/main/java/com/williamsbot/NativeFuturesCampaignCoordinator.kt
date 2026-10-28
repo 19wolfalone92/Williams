@@ -3037,14 +3037,13 @@ internal class NativeFuturesCampaignCoordinator(
                 "Futures execution blocked before order mutation: ${lastBlocker ?: state.name}"
             )
         }
-        // Williams Demo operating contract: no NEW leverage above 2x.
-        // Legacy 10x positions are still recovered and protected normally;
-        // this admission gate MUST NOT interfere with reduce-only exits or
-        // exchange reconciliation. Never silently change user settings.
-        if(plan.leverage !in 1..WILLIAMS_NEW_ENTRY_MAX_LEVERAGE)
-            return@synchronized safePreflightRejection(
-                "WILLIAMS_NEW_ENTRY_LEVERAGE_EXCEEDS_2X: configure 1x or 2x before new exposure"
-            )
+        // The trader's configured leverage is preserved (1..125).
+        // parseFuturesLeverage validates its range below. A NEW entry is
+        // nevertheless forbidden until authenticated exchange leverage tiers,
+        // structural stop + costs and isolated liquidation margin all pass
+        // futuresLeverageBlocker() immediately before exchange mutation.
+        // Existing positions and their protective/reduce-only exits are never
+        // blocked by a UI leverage preference.
         try {
             validatePlan(plan)
             parseFuturesLeverage(plan.leverage)
