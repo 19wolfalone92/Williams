@@ -10740,6 +10740,12 @@ private class NativeEngine(
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
+            .put("new_entry_leverage_cap_x",WILLIAMS_NEW_ENTRY_MAX_LEVERAGE)
+            .put("new_entry_leverage_compliant",futuresLeverageSettings.defaultLeverage<=WILLIAMS_NEW_ENTRY_MAX_LEVERAGE &&
+                futuresLeverageSettings.symbolLeverages.values.all { it<=WILLIAMS_NEW_ENTRY_MAX_LEVERAGE })
+            .put("new_entry_leverage_blocker",if(futuresLeverageSettings.defaultLeverage>WILLIAMS_NEW_ENTRY_MAX_LEVERAGE ||
+                futuresLeverageSettings.symbolLeverages.values.any { it>WILLIAMS_NEW_ENTRY_MAX_LEVERAGE })
+                "WILLIAMS_NEW_ENTRY_LEVERAGE_EXCEEDS_2X" else JSONObject.NULL)
             .put("futures_margin_type", "ISOLATED")
             .put("futures_force_one_way", true)
             .put("paused", paused)
@@ -12065,6 +12071,12 @@ private class NativeEngine(
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
+            .put("new_entry_leverage_cap_x",WILLIAMS_NEW_ENTRY_MAX_LEVERAGE)
+            .put("new_entry_leverage_compliant",futuresLeverageSettings.defaultLeverage<=WILLIAMS_NEW_ENTRY_MAX_LEVERAGE &&
+                futuresLeverageSettings.symbolLeverages.values.all { it<=WILLIAMS_NEW_ENTRY_MAX_LEVERAGE })
+            .put("new_entry_leverage_blocker",if(futuresLeverageSettings.defaultLeverage>WILLIAMS_NEW_ENTRY_MAX_LEVERAGE ||
+                futuresLeverageSettings.symbolLeverages.values.any { it>WILLIAMS_NEW_ENTRY_MAX_LEVERAGE })
+                "WILLIAMS_NEW_ENTRY_LEVERAGE_EXCEEDS_2X" else JSONObject.NULL)
             .put("futures_margin_type", "ISOLATED")
             .put("futures_force_one_way", true)
             .put("version", BuildConfig.VERSION_NAME)
