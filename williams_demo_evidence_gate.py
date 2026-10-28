@@ -165,6 +165,10 @@ def validate_demo_both_directions(payload: dict) -> dict:
     observed_orders = set()
     observed_stops = set()
     observed_campaigns = set()
+    approved_symbols = {
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+    }
     sides = set()
     for i, run in enumerate(runs):
         if not isinstance(run, dict):
@@ -188,6 +192,8 @@ def validate_demo_both_directions(payload: dict) -> dict:
             return next((x for x in events
                          if isinstance(x, dict) and x.get("type") == kind), {})
         entry = ev("ENTRY_FILL_REPORTED")
+        if entry.get("symbol") not in approved_symbols:
+            failures.append(f"{side}_OUTSIDE_APPROVED_FUTURES_UNIVERSE")
         first_stop = ev("STOP_ACK_REPORTED")
         restored_stop = ev("STOP_RECONFIRMED")
         position = ev("POSITION_RECONCILED")
