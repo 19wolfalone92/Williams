@@ -42,11 +42,14 @@ def test_reconciliation_retains_last_known_ui_rows_without_authorizing_stale_pos
     assert '.put("positions_snapshot_ok", futuresPositionsSnapshotOk)' in runtime
     # Unknown or stale positions MUST still block new trading; the read-only
     # cached display cannot serve as position, ownership or STOP proof.
-    snapshot = runtime.split("private fun futuresPositionSnapshot(): JSONArray {", 1)[1].split(
+    snapshot = runtime.split("private fun futuresPositionDisplaySnapshot(): FuturesPositionDisplayEnvelope {", 1)[1].split(
         "private fun sellFuturesPosition(", 1
     )[0]
-    assert 'optJSONArray("exchange_protection_observations")' in snapshot
+    assert "futuresCampaignCoordinator.protectionDisplaySnapshot()" in snapshot
+    assert "signedSnapshot.observations" in snapshot
     assert "signedProof.compareTo(signedLive)==0" in snapshot
+    assert "signedSnapshot.observedAtMs" in snapshot
+    assert "CockpitDiagnostics.POSITION_TTL_MS" in snapshot
     assert '"UNVERIFIED_OR_STALE"' in snapshot
 
 

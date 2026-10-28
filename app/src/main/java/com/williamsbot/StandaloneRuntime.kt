@@ -1691,7 +1691,7 @@ private class NativeEngine(
     @Volatile private var futuresAccountSnapshotLastAttemptMs = 0L
     @Volatile private var futuresAccountSnapshotRefreshError: String? = null
     // Publish bytes and their confirmation time together; a later refresh cannot relabel old rows as fresh.
-    @Volatile private var cachedFuturesPositionEnvelope: Pair<String, Long>? = null
+    @Volatile private var cachedFuturesPositionEnvelope: FuturesPositionDisplayEnvelope? = null
     // An in-flight display REST read must not republish a pre-mutation STOP
     // snapshot after an exchange-confirmed structural stop replacement.
     @Volatile private var futuresPositionSnapshotEpoch = 0L
@@ -5133,9 +5133,9 @@ private class NativeEngine(
     private fun fastFuturesPositionsSnapshot(): Triple<JSONArray, String?, Long> {
         val nowMs = System.currentTimeMillis()
         val envelope = cachedFuturesPositionEnvelope
-        val cachedAt = envelope?.second ?: 0L
+        val cachedAt = envelope?.observedAtMs ?: 0L
         if (envelope != null && CockpitDiagnostics.fresh(cachedAt, nowMs, 15_000L)) {
-            return Triple(JSONArray(envelope.first), null, cachedAt)
+            return Triple(JSONArray(envelope.positionsJson), futuresPositionSnapshotRefreshError, cachedAt)
         }
 
         val shouldRefresh = synchronized(this) {
@@ -5150,11 +5150,16 @@ private class NativeEngine(
             } else false
         }
         if (shouldRefresh) {
+            val generationAtStart = runtimeGeneration
+            val apiKeyAtStart = key()
+            val epochAtStart = futuresPositionSnapshotEpoch
             Thread {
                 try {
                     futuresPositionSnapshot()
                     futuresPositionSnapshotRefreshError = null
                 } catch (failure: Exception) {
+                    if (generationAtStart != runtimeGeneration || apiKeyAtStart != key() ||
+                        epochAtStart != futuresPositionSnapshotEpoch) return@Thread
                     val reason = failure.message ?: failure.javaClass.simpleName
                     futuresPositionSnapshotRefreshError = reason
                     reconcileRequired = true
@@ -5174,21 +5179,27 @@ private class NativeEngine(
         // In-flight refresh is not a verified FLAT. A previously signed row
         // remains visible as LAST KNOWN, but snapshot_ok stays false.
         return lastKnownFuturesPositionsForDisplay(
-            cachedFuturesPositionEnvelope, futuresPositionSnapshotRefreshError
+            cachedFuturesPositionEnvelope?.let { it.positionsJson to it.observedAtMs },
+            futuresPositionSnapshotRefreshError
         )
     }
 
-    private fun futuresPositionSnapshot(): JSONArray {
+    private fun futuresPositionSnapshot(): JSONArray =
+        JSONArray(futuresPositionDisplaySnapshot().positionsJson)
+
+    private fun futuresPositionDisplaySnapshot(): FuturesPositionDisplayEnvelope {
         val snapshotEpoch = futuresPositionSnapshotEpoch
+        val generationAtStart = runtimeGeneration
+        val apiKeyAtStart = key()
         val out = JSONArray()
-        if (key().isBlank() || secret().isBlank()) return out
-        val positions = futuresCampaignCoordinator.positionsSnapshot()
+        if (key().isBlank() || secret().isBlank()) return FuturesPositionDisplayEnvelope("[]",0L,"[]")
+        val signedSnapshot = futuresCampaignCoordinator.protectionDisplaySnapshot()
+        val positions = signedSnapshot.positions
         val intents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
         // The persisted campaign STOP is only a planned value. A refreshed
         // signed Binance protection observation is separate and authoritative
         // even when a 4.52 upgrade lost the original local campaign journal.
-        val observedStops = futuresCampaignCoordinator.status()
-            .optJSONArray("exchange_protection_observations") ?: JSONArray()
+        val observedStops = signedSnapshot.observations
         val snapshotAt = System.currentTimeMillis()
         for (i in 0 until positions.length()) {
             val row = positions.optJSONObject(i)
@@ -5222,8 +5233,7 @@ private class NativeEngine(
                 val signedLive=row.optString("positionAmt").toBigDecimalOrNull()
                 proof.optString("symbol")==symbol && proof.optString("direction")==direction &&
                     signedProof!=null && signedLive!=null && signedProof.compareTo(signedLive)==0 &&
-                    observedAt>0L && snapshotAt>=observedAt && snapshotAt-observedAt<=
-                        (if(proof.optString("stop_proof")=="NATIVE_REPLACEMENT_PROTECTION_SEEN") 15_000L else 60_000L) &&
+                    CockpitDiagnostics.fresh(observedAt,snapshotAt,CockpitDiagnostics.POSITION_TTL_MS) &&
                     proof.optString("stop_proof") in setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED",
                         "NATIVE_REPLACEMENT_PROTECTION_SEEN")
             }
@@ -5254,14 +5264,22 @@ private class NativeEngine(
                 .put("unrealized_pnl_usdt", pnl).put("margin_type", row.optString("marginType"))
                 .put("leverage", row.optString("leverage")).put("exchange_confirmed", true))
         }
-        val snapshotNow = System.currentTimeMillis()
+        check(CockpitDiagnostics.fresh(signedSnapshot.observedAtMs,System.currentTimeMillis(),
+            CockpitDiagnostics.POSITION_TTL_MS)) { "Signed Futures display snapshot expired during normalization" }
+        val envelope = FuturesPositionDisplayEnvelope(
+            out.toString(), signedSnapshot.observedAtMs, observedStops.toString())
         synchronized(this) {
-            if (futuresPositionSnapshotEpoch == snapshotEpoch) {
-                cachedFuturesPositionEnvelope = out.toString() to snapshotNow
-                futuresPositionSnapshotRefreshError = null
+            check(generationAtStart == runtimeGeneration && apiKeyAtStart == key()) {
+                "Credentials changed during signed Futures display refresh"
             }
+            check(futuresPositionSnapshotEpoch == snapshotEpoch) {
+                "Futures STOP changed during display refresh; newer exchange evidence is required"
+            }
+            if ((cachedFuturesPositionEnvelope?.observedAtMs ?: 0L) <= envelope.observedAtMs)
+                cachedFuturesPositionEnvelope = envelope
+            futuresPositionSnapshotRefreshError = null
         }
-        return out
+        return envelope
     }
 
     private fun sellFuturesPosition(symbolInput: String): JSONObject {
@@ -10643,7 +10661,11 @@ private class NativeEngine(
                 positionObservedAtMs = snapshotAt
                 snapshot
             } else {
-                runCatching { futuresPositionSnapshot().also { positionObservedAtMs = cachedFuturesPositionEnvelope?.second ?: 0L } }.getOrElse { failure ->
+                runCatching {
+                    val display = futuresPositionDisplaySnapshot()
+                    positionObservedAtMs = display.observedAtMs
+                    JSONArray(display.positionsJson)
+                }.getOrElse { failure ->
                     futuresPositionSnapshotError = failure.message ?: failure.javaClass.simpleName
                     reconcileRequired = true
                     persistSafetyFlag("reconcile_required", true)
@@ -10655,7 +10677,8 @@ private class NativeEngine(
         } else {
             JSONArray()
         }
-        val futuresPositionsSnapshotOk = credentialsConfigured && futuresPositionSnapshotError == null
+        val futuresPositionsSnapshotOk = credentialsConfigured && futuresPositionSnapshotError == null &&
+            CockpitDiagnostics.fresh(positionObservedAtMs,System.currentTimeMillis(),CockpitDiagnostics.POSITION_TTL_MS)
         val firstPosition = futuresPositions.optJSONObject(0)
         var livePnl = 0.0
         var totalEntryNotional = 0.0
@@ -10710,6 +10733,14 @@ private class NativeEngine(
         val reconciliationRunningBefore = futuresReconciliationRunning
         val futuresRuntimeStatus = runCatching { futuresCampaignCoordinator.status() }
             .getOrElse { JSONObject().put("state", "RECONCILE_REQUIRED").put("blocker", it.message ?: it.javaClass.simpleName) }
+        // Attach protection from the SAME immutable position display generation.
+        // The coordinator's execution state/proofs are never changed by UI GETs.
+        cachedFuturesPositionEnvelope?.takeIf {
+            it.observedAtMs == positionObservedAtMs && it.positionsJson == futuresPositions.toString()
+        }?.let { display ->
+            futuresRuntimeStatus.put("exchange_protection_observations",JSONArray(display.protectionJson))
+                .put("protection_observation_scope","SIGNED_GET_ONLY_DISPLAY_NOT_EXECUTION_AUTHORITY")
+        }
         val coordinatorReconciliationInProgress = futuresRuntimeStatus.optBoolean("reconciliation_running", false)
         val reconciliationObserved = coordinatorReconciliationInProgress ||
             reconciliationRunningBefore || futuresReconciliationRunning ||
@@ -11531,11 +11562,19 @@ private class NativeEngine(
         // never block STOP maintenance or create a position owner. A later
         // diagnostic export includes the completed snapshot.
         scheduleReadOnlySignedFillAudit()
+        // SQLite indicator/history reads and supervised-history locking can take
+        // longer than the strict 15s STOP TTL. Finish them BEFORE capturing the
+        // signed position/protection generation used by every report check.
+        val strategyEvidence = strategyDiagnosticEvidence()
+        val tradeEvidence = JSONArray(CockpitDiagnostics.rows(trades()).take(20))
+        runCatching { futuresPositionSnapshot() }.onFailure {
+            futuresPositionSnapshotRefreshError = it.message ?: it.javaClass.simpleName
+        }
         // Capture each state source once so the report does not compare different
         // moments in time and manufacture contradictions from separate status reads.
         val statusSnapshot = status(fast = true)
-            .put("strategy_audit", strategyDiagnosticEvidence())
-            .put("trade_observations", JSONArray(CockpitDiagnostics.rows(trades()).take(20)))
+            .put("strategy_audit", strategyEvidence)
+            .put("trade_observations", tradeEvidence)
             .put("signed_exchange_fill_forensics",JSONObject(signedFillAuditJson)
                 .put("refresh_running",signedFillAuditRunning)
                 .put("latest_refresh_requested_at_ms",signedFillAuditLastAttemptMs))

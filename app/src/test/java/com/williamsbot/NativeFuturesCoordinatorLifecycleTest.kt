@@ -186,14 +186,16 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("positionAmt", quantity.toString()).put("entryPrice", entry.toString())
                 .put("markPrice", mark.toString()).put("liquidationPrice", liquidation))
         }.let { positionSnapshotTransform?.invoke(it) ?: it }
-        fun fill(fraction: Double = 1.0, childClientId: String? = null) {
-            val pending = algos.values.single { it.optString("closePosition") != "true" }
+        fun fill(fraction: Double = 1.0, childClientId: String? = null,
+            pendingClientId: String? = null, childOrderId: String = "42") {
+            val pending = algos.values.single { it.optString("closePosition") != "true" &&
+                (pendingClientId == null || it.optString("clientAlgoId") == pendingClientId) }
             entry = pending.getString("triggerPrice").toDouble()
             quantity = pending.getString("quantity").toBigDecimal().multiply(fraction.toBigDecimal()).toDouble() *
                 if (pending.getString("side") == "BUY") 1.0 else -1.0
             mark = if (quantity > 0) 102.0 else 98.0
-            pending.put("algoStatus", "FINISHED").put("actualOrderId", "42")
-            orders["42"] = JSONObject().put("symbol", "BTCUSDT").put("orderId", "42")
+            pending.put("algoStatus", "FINISHED").put("actualOrderId", childOrderId)
+            orders[childOrderId] = JSONObject().put("symbol", "BTCUSDT").put("orderId", childOrderId)
                 .put("clientOrderId", childClientId ?: pending.getString("clientAlgoId"))
                 .put("status", if (fraction == 1.0) "FILLED" else "PARTIALLY_FILLED")
                 .put("origQty", pending.getString("quantity")).put("executedQty", kotlin.math.abs(quantity).toString())
@@ -244,6 +246,70 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertTrue(reconciled.toString(), reconciled.getBoolean("ok"))
         assertEquals("OPEN_PROTECTED", coordinator.state.name)
         return coordinator to exchange
+    }
+
+    @Test fun displayProtectionUsesSignedGetsWithoutChangingExecutionStateOrProofs() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator, exchange) = open(direction)
+            val state = coordinator.state
+            val executionProof = coordinator.status().getJSONArray("exchange_protection_observations").toString()
+            val before = exchange.requests.size
+            val snapshot = coordinator.protectionDisplaySnapshot()
+            assertEquals(1, snapshot.positions.length())
+            assertEquals("OWNED_STOP_SEEN", snapshot.observations.getJSONObject(0).getString("stop_proof"))
+            assertTrue(exchange.requests.drop(before).all { it.method == "GET" })
+            assertEquals(2, exchange.requests.drop(before).count { it.url.encodedPath == "/fapi/v3/positionRisk" })
+            assertEquals(state, coordinator.state)
+            assertEquals(executionProof, coordinator.status().getJSONArray("exchange_protection_observations").toString())
+        }
+    }
+
+    @Test fun displayProtectionCanRefreshWhileCampaignReconciliationWaitsOnNetwork() {
+        val (coordinator, exchange) = open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val entered = CountDownLatch(1); val release = CountDownLatch(1)
+        exchange.beforeRequest = { request, _ ->
+            if (Thread.currentThread().name == "test-slow-reconcile" &&
+                request.url.encodedPath == "/fapi/v3/account") {
+                entered.countDown(); check(release.await(10, TimeUnit.SECONDS))
+            }
+        }
+        val task = Thread({ coordinator.reconcile() }, "test-slow-reconcile")
+        task.start()
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            val snapshot = coordinator.protectionDisplaySnapshot()
+            assertEquals("OWNED_STOP_SEEN", snapshot.observations.getJSONObject(0).getString("stop_proof"))
+            assertTrue(coordinator.status().getBoolean("reconciliation_running"))
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        } finally { release.countDown(); task.join(5_000L) }
+        assertFalse(task.isAlive)
+    }
+
+    @Test fun oldSignedFlatExitCannotBecomePendingWhenAnotherCampaignOpens() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            var time = System.currentTimeMillis() - 60_000L
+            val (coordinator, exchange) = open(direction, clock = { time })
+            time += 10_000
+            val closed = coordinator.closePosition("BTCUSDT", direction, "1", "W2X_OLD", "MANUAL_EXIT")
+            assertTrue(closed.toString(), closed.optBoolean("ok"))
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val oldExit = CockpitDiagnostics.rows(coordinator.intentsSnapshot()).single { it.optString("intent_role") == "EXIT" }
+            val originalFlatAt = oldExit.getLong("confirmed_flat_at_ms")
+            time += 10_000
+            val next = plan(direction, prefix = "W2E_NEXT_")
+            assertTrue(coordinator.submitPendingEntry(next).getBoolean("accepted"))
+            exchange.fill(pendingClientId = next.clientId, childOrderId = "43")
+            time += 1_000
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val exit = CockpitDiagnostics.rows(coordinator.intentsSnapshot()).single { it.optString("intent_role") == "EXIT" }
+            assertEquals("EXIT_CONFIRMED", exit.getString("exchange_status"))
+            assertEquals(originalFlatAt, exit.getLong("confirmed_flat_at_ms"))
+            assertTrue(exit.getBoolean("historical_flat_proof_preserved"))
+            assertEquals("OPEN_PROTECTED", coordinator.state.name)
+            assertTrue(CockpitDiagnostics.rows(coordinator.status().getJSONArray("pending_intent_details"))
+                .none { it.optString("role") == "EXIT" })
+            assertEquals(1, exchange.posts("/fapi/v1/order"))
+        }
     }
 
 

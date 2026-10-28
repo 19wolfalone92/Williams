@@ -868,6 +868,18 @@ internal class NativeFuturesCampaignCoordinator(
 
     fun accountSnapshot(): JSONObject = adapterFactory().account()
     fun positionsSnapshot(): JSONArray = adapterFactory().positions()
+    /** Display/diagnostic GETs do not wait for or publish execution reconciliation. */
+    fun protectionDisplaySnapshot(): FuturesProtectionDisplaySnapshot {
+        val adapter = adapterFactory()
+        return readFuturesProtectionDisplaySnapshot(
+            readPositions = adapter::positions,
+            readOpenAlgos = adapter::allOpenAlgoOrders,
+            contractPrice = adapter::contractPrice,
+            trustedObservations = JSONArray(externalProtectionObservationsJson),
+            intents = intentsSnapshot(),
+            clock = clock
+        )
+    }
     fun userTrades(symbol: String, startTime: Long, endTime: Long, limit: Int = 1000): JSONArray =
         adapterFactory().userTrades(symbol, startTime, endTime, limit)
     fun intentsSnapshot(): JSONArray = JSONArray(intents().toString())
@@ -1326,6 +1338,15 @@ internal class NativeFuturesCampaignCoordinator(
                     continue
                 }
                 if (role == "EXIT") {
+                    // A new BNB/LONG (or any later campaign) is not residual
+                    // exposure from an already filled, signed-flat old exit.
+                    // Preserve that exact historic proof; never advance its
+                    // flat timestamp or claim that the NEW position is flat.
+                    if (priorCampaignExitHasSignedFlatProof(intent,persisted,clock())) {
+                        intent.put("exchange_status","EXIT_CONFIRMED")
+                            .put("historical_flat_proof_preserved",true)
+                        continue
+                    }
                     val order = standardOrderOrNull(adapter, symbol, clientId)
                     if (order == null) {
                         val stillOpenStandard = (0 until allOpenOrders.length()).any { j ->
@@ -4335,6 +4356,9 @@ internal class NativeFuturesCampaignCoordinator(
             } else {
                 exchangeOrderStatus(item)
             }
+            // Terminal exits remain in the durable ledger/trade history, not
+            // in the dashboard's list/count of pending exchange intentions.
+            if (role == "EXIT" && orderStatus == "EXIT_CONFIRMED") continue
             pendingDetails.put(
                 JSONObject()
                     .put("symbol", item.optString("symbol"))
