@@ -65,6 +65,12 @@ jobs:
         env:
           TESTNET_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
 
-      - name: Report skipped authenticated gate
-        if: steps.check-ci-testnet-credentials.outputs.configured != 'true'
-        run: echo "::notice::No authenticated Futures Demo account check was performed in this workflow run."
+      - name: Report skipped authenticated gate on normal branch push
+        if: github.event_name != 'workflow_dispatch' && steps.check-ci-testnet-credentials.outputs.configured != 'true'
+        run: echo "::warning::No signed Binance Demo verification occurred; this is NOT a Testnet release acceptance."
+
+      - name: Fail explicit signed Demo acceptance when credentials are missing
+        if: github.event_name == 'workflow_dispatch' && steps.check-ci-testnet-credentials.outputs.configured != 'true'
+        run: |
+          echo "::error::Authenticated read-only Futures Demo evidence is REQUIRED for explicit acceptance."
+          exit 1
