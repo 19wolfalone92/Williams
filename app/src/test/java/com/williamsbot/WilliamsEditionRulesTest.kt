@@ -237,4 +237,59 @@ class WilliamsEditionRulesTest {
         assertEquals(setOf("HIGH","LOW"),confirmedWilliamsEditionFractals(bars).map { it.kind }.toSet())
         assertNull(williamsCourseHumpSetup("LONG",bars,.1))
     }
+
+    @Test fun ntdBlueLightCausalStopImprovesOnlyWhileUnfilledAndSameColour() {
+        // NTD PDF pp.64-66, 86-89. This does NOT amend a live exchange order.
+        val high=listOf(110.0,108.0,106.0,104.0)
+        val lows=listOf(100.0,101.0,102.0,103.0)
+        val bars=high.indices.map { i ->
+            WilliamsWaveBar((i+1)*WILLIAMS_H1_MS,105.0,high[i],lows[i],105.0,100.0)
+        }
+        val rising=listOf(-1.0,1.0,2.0,3.0)
+        val long=williamsNtdBlueLight("LONG",bars,rising,0,110.1,.1)
+        assertEquals(104.1,long?.trigger ?: 0.0,0.0)
+        assertEquals(3,long?.sourceIndex)
+        val shortBars=bars.map { it.copy(o=200-it.o,h=200-it.l,
+            l=200-it.h,c=200-it.c) }
+        val short=williamsNtdBlueLight("SHORT",shortBars,rising.map {-it},0,89.9,.1)
+        assertEquals(95.9,short?.trigger ?: 0.0,0.0)
+        assertEquals(3,short?.sourceIndex)
+        // After the first improvement to 108.1, the third bar touched 108.1:
+        // that order is historical, never revive it as a new 106.1 proposal.
+        val touched=bars.toMutableList();touched[2]=touched[2].copy(h=108.1)
+        assertNull(williamsNtdBlueLight("LONG",touched,rising,0,110.1,.1))
+        assertNull(williamsNtdBlueLight("LONG",bars,listOf(-1.0,1.0,.5,2.0),0,110.1,.1))
+        assertNull(williamsNtdBlueLight("LONG",bars,listOf(-1.0,1.0,1.0,2.0),0,110.1,.1))
+        assertNull(williamsNtdBlueLight("LONG",bars,rising,0,110.1,Double.NaN))
+    }
+
+    @Test fun ntdAoAndAcPersistOriginalFormationButImproveUnfilledPriceLevel() {
+        val n=49
+        val highs=MutableList(n){110.0}; val lows=MutableList(n){100.0}
+        for(i in 46 until n) { highs[i]=110.0-(i-45)*2.0; lows[i]=100.0+(i-45) }
+        val bars=(0 until n).map { i ->
+            val lo=lows[i];val hi=highs[i]
+            WilliamsWaveBar((i+1)*WILLIAMS_H1_MS,(hi+lo)/2,hi,lo,(hi+lo)/2,100.0)
+        }
+        val ao=MutableList(n){-1.0};ao[45]=1.0;ao[46]=2.0;ao[47]=3.0;ao[48]=4.0
+        val ac=MutableList(n){-1.0};ac[44]=-2.0;ac[45]=-1.0
+        ac[46]=1.0;ac[47]=2.0;ac[48]=3.0
+        val jaw=List(n){95.0};val teeth=List(n){95.0};val lips=List(n){95.0}
+        fun detect(side:String, bs:List<WilliamsWaveBar>, a:List<Double>, c:List<Double>) =
+            williamsNtdSetups(side,bs,jaw,teeth,lips,a,c,.1,exitMode=true)
+        val long=detect("LONG",bars,ao,ac)
+        val oldAo=long.single { it.kind=="AO_ZERO_LINE" && it.knownIndex==45 }
+        assertEquals(104.1,oldAo.trigger,0.0)
+        assertEquals(45,oldAo.context.getInt("formation_index"))
+        assertEquals(48,oldAo.context.getInt("level_source_index"))
+        val oldAc=long.single { it.kind=="AC_SIGNAL" && it.knownIndex==46 }
+        assertEquals(104.1,oldAc.trigger,0.0)
+        assertEquals(48,oldAc.context.getInt("level_source_index"))
+        val mirror=bars.map { it.copy(o=200-it.o,h=200-it.l,l=200-it.h,c=200-it.c) }
+        // Mirrored AO/AC is SHORT: precise symmetric lower sell STOP.
+        val short=detect("SHORT",mirror,ao.map {-it},ac.map {-it})
+        assertEquals(95.9,short.single { it.kind=="AO_ZERO_LINE" && it.knownIndex==45 }.trigger,0.0)
+        assertEquals(95.9,short.single { it.kind=="AC_SIGNAL" && it.knownIndex==46 }.trigger,0.0)
+    }
+
 }
