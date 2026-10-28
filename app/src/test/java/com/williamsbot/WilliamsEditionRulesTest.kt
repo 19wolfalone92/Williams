@@ -308,7 +308,12 @@ class WilliamsEditionRulesTest {
             val mirror=side=="SHORT"
             val bars=if(mirror) original.map {it.copy(o=250-it.o,h=250-it.l,
                 l=250-it.h,c=250-it.c)} else original
-            val ao=bars.indices.map { if(mirror) -it.toDouble() else it.toDouble() }
+            // Both oscillators CHANGE COLOUR after the fifth bar. The book
+            // profit stop remains armed and trails closed prices anyway.
+            val ao=bars.indices.map { i ->
+                val v=if(i<6) i.toDouble() else 5.0-(i-5)*.5
+                if(mirror) -v else v
+            }
             val ac=ao.map {it*.5}
             val line=List(bars.size){if(mirror) 200.0 else 80.0}
             fun plan(count:Int,state:JSONObject)=williamsNtdManagementPlan(
