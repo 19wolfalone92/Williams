@@ -113,3 +113,141 @@ def validate_demo_device_evidence(payload:dict)->dict:
         "warnings":["Offline JSON is not exchange attestation; check genuine device logs and Binance Demo order IDs.",
                     "For unprotected fills, use existing fail-closed emergency stop logic; never wait for wave indicators."],
         "checked_event_count":len(events)}
+
+
+def validate_demo_both_directions(payload: dict) -> dict:
+    """Audit two independently signed *claims* of LONG/SHORT Android Demo cycles.
+
+    This is deliberately NOT an exchange verifier. Offline content can be
+    forged, so even a structurally valid dual-side export cannot enable
+    orders or lift the physical-device RELEASE HOLD.
+
+    Required layout: {"environment": "BINANCE_USDM_FUTURES_DEMO",
+    "apk_sha256": "<64 hex>", "runs": [
+       {"direction": "LONG", "environment": ..., "apk_sha256": ...,
+        "origin": "PHYSICAL_ANDROID_EXPORT", "events": [...]},
+       {"direction": "SHORT", ...}]}
+    """
+    failures = []
+    checks = {}
+    if not isinstance(payload, dict):
+        return {"status": "CONTRACT_FAIL",
+                "errors": ["NO_DUAL_SIDE_DEVICE_EXPORT"],
+                "physical_device_verified": False,
+                "exchange_authenticity_verified": False,
+                "release_approved": False, "can_enable_live": False}
+    runs = payload.get("runs")
+    if not isinstance(runs, list) or len(runs) != 2:
+        failures.append("REQUIRE_EXACTLY_TWO_INDEPENDENT_DEMO_CYCLES")
+        runs = []
+    if payload.get("environment") != "BINANCE_USDM_FUTURES_DEMO":
+        failures.append("INVALID_DUAL_SIDE_DEMO_ENVIRONMENT")
+    apk = payload.get("apk_sha256")
+    if not isinstance(apk, str) or not HEX64.fullmatch(apk):
+        failures.append("INVALID_DUAL_SIDE_APK_SHA256")
+    observed_orders = set()
+    observed_stops = set()
+    sides = set()
+    for i, run in enumerate(runs):
+        if not isinstance(run, dict):
+            failures.append("MALFORMED_DEMO_CYCLE")
+            continue
+        side = run.get("direction")
+        if side not in ("LONG", "SHORT") or side in sides:
+            failures.append("DUPLICATE_OR_UNKNOWN_DEMO_DIRECTION")
+            continue
+        sides.add(side)
+        own = validate_demo_device_evidence(run)
+        checks[side] = own["status"]
+        if own["errors"]:
+            failures.append(f"{side}_CYCLE_INCOMPLETE")
+        if run.get("environment") != payload.get("environment") or run.get("apk_sha256") != apk:
+            failures.append(f"{side}_DIFFERENT_BUILD_OR_EXCHANGE")
+        events = run.get("events") or []
+        if not isinstance(events, list):
+            events = []
+        def ev(kind):
+            return next((x for x in events
+                         if isinstance(x, dict) and x.get("type") == kind), {})
+        entry = ev("ENTRY_FILL_REPORTED")
+        first_stop = ev("STOP_ACK_REPORTED")
+        restored_stop = ev("STOP_RECONFIRMED")
+        position = ev("POSITION_RECONCILED")
+        flat = ev("POSITION_FLAT")
+        expected_entry = "BUY" if side == "LONG" else "SELL"
+        expected_exit = "SELL" if side == "LONG" else "BUY"
+        if entry.get("side") != expected_entry or first_stop.get("side") != expected_exit:
+            failures.append(f"{side}_ENTRY_OR_STOP_DIRECTION_MISMATCH")
+        if restored_stop.get("side") != expected_exit:
+            failures.append(f"{side}_RECOVERED_STOP_DIRECTION_MISMATCH")
+        if not all(x.get("symbol") == entry.get("symbol") for x in (
+                first_stop, position, restored_stop, flat)):
+            failures.append(f"{side}_CROSS_SYMBOL_CAMPAIGN_MISMATCH")
+        entry_id = entry.get("exchange_order_id")
+        if not isinstance(entry_id, str) or not entry_id.strip() or entry_id in observed_orders:
+            failures.append("DUPLICATE_OR_UNKNOWN_DEMO_ENTRY_ORDER")
+        else:
+            observed_orders.add(entry_id)
+        stop_id = first_stop.get("order_id")
+        recovery_stop_id = restored_stop.get("order_id")
+        if not isinstance(stop_id, str) or not stop_id.strip() or stop_id in observed_stops:
+            failures.append("DUPLICATE_OR_UNKNOWN_DEMO_STOP_ORDER")
+        else:
+            observed_stops.add(stop_id)
+        if recovery_stop_id != stop_id:
+            # A STOP replacement is independently checkable only if the
+            # previous stop is explicitly identified; silent order substitution
+            # after reboot must never pass release evidence.
+            if (restored_stop.get("replaces_order_id") != stop_id
+                    or not restored_stop.get("replacement_receipt_id")):
+                failures.append(f"{side}_STOP_REPLACEMENT_UNPROVED")
+            if recovery_stop_id in observed_stops or not isinstance(recovery_stop_id, str):
+                failures.append(f"{side}_RECOVERY_STOP_ID_COLLISION")
+            else:
+                observed_stops.add(recovery_stop_id)
+        if entry_id == stop_id or entry_id == recovery_stop_id:
+            failures.append(f"{side}_ENTRY_AND_STOP_SAME_ORDER")
+        if (flat.get("exit_side") != expected_exit
+                or flat.get("source") != "SIGNED_DEMO_ACCOUNT_SNAPSHOT"
+                or flat.get("position_qty") != 0):
+            failures.append(f"{side}_POSITION_FLAT_NOT_SIGNED_OR_DIRECTION_MISSING")
+        journal = run.get("journal")
+        if not isinstance(journal, dict):
+            failures.append(f"{side}_TRADE_JOURNAL_MISSING")
+        else:
+            # Fees and PnL may be negative, but they must be present and
+            # finite, with genuine signed source claimed by the export.
+            for name in ("executed_qty", "commission_usdt", "realized_pnl_usdt"):
+                value = journal.get(name)
+                if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                        or not isfinite(value) or (name == "executed_qty" and value <= 0)):
+                    failures.append(f"{side}_JOURNAL_{name.upper()}_MISSING")
+            if journal.get("source") != "SIGNED_DEMO_TRADE_AND_INCOME_SNAPSHOT":
+                failures.append(f"{side}_JOURNAL_SOURCE_NOT_SIGNED")
+        # A fresh post-recovery STOP must cover the persisted signed position,
+        # and be reported to the same campaign, not a convenient unrelated fill.
+        owner = entry.get("campaign_id")
+        if (not isinstance(owner, str) or not owner.strip()
+                or position.get("campaign_id") != owner
+                or first_stop.get("campaign_id") != owner
+                or restored_stop.get("campaign_id") != owner):
+            failures.append(f"{side}_POSITION_CAMPAIGN_OWNERSHIP_UNPROVED")
+    if sides != {"LONG", "SHORT"}:
+        failures.append("LONG_AND_SHORT_BOTH_REQUIRED")
+    unique = sorted(set(failures))
+    return {
+        "schema": "WILLIAMS_DUAL_DIRECTION_DEMO_ACCEPTANCE_V1",
+        "status": "CONTRACT_FAIL" if unique else
+                  "STRUCTURAL_PASS_REQUIRES_INDEPENDENT_PHYSICAL_BINANCE_ATTESTATION",
+        "errors": unique,
+        "per_direction": checks,
+        "physical_device_verified": False,
+        "exchange_authenticity_verified": False,
+        "full_trade_lifecycle_certified": False,
+        "release_approved": False,
+        "can_enable_live": False,
+        "warnings": [
+            "Two synthetic JSON timelines do not prove any Binance execution.",
+            "Review physical device, genuine signed account/orders, and Android reboot on the same APK.",
+        ],
+    }
