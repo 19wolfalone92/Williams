@@ -129,3 +129,13 @@ def test_wrong_side_initial_stop_or_same_campaign_cannot_pass_dual_contract():
     assert "DUPLICATE_CAMPAIGN_OWNERSHIP_ACROSS_DIRECTIONS" in (
         validate_demo_both_directions(payload)["errors"]
     )
+
+
+def test_unapproved_futures_contract_never_counts_as_demo_acceptance():
+    payload = sample()
+    for event in payload["runs"][1]["events"]:
+        if event.get("symbol") == "BTCUSDT":
+            event["symbol"] = "FAKEUSDT"
+    assert "SHORT_OUTSIDE_APPROVED_FUTURES_UNIVERSE" in (
+        validate_demo_both_directions(payload)["errors"]
+    )
