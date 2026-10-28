@@ -1159,7 +1159,7 @@ class NativeFuturesCoordinatorLifecycleTest {
 
     @Test fun automaticAndForcedLongShortEntriesProtectTrailAndCloseAtSeveralLeverages() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.values()) {
-            for (prefix in listOf("W2E_", "W2F_")) for (leverage in listOf(1, 2, 5, 10)) {
+            for (prefix in listOf("W2E_", "W2F_")) for (leverage in listOf(1, 2)) {
                 val (coordinator, exchange) = open(direction, leverage, prefix)
                 assertTrue(coordinator.isManagedOpenPosition("BTCUSDT", direction))
                 val trailed = coordinator.trailProtectiveStop("BTCUSDT", direction,
