@@ -436,7 +436,18 @@ internal fun williamsNtdManagementPlan(side:String,bars:List<WilliamsWaveBar>,te
     if(side !in listOf("LONG","SHORT") || n<6 || !validWilliamsEditionBars(bars) ||
         !tick.isFinite() || tick<=0 || openedAt<=0 ||
         listOf(teeth,lips,ao,ac).any { it.size!=n }) return WilliamsNtdManagement(s)
+    // A missing candle must not become an invented fifth consecutive zone bar.
+    // The runtime checks this too, but the book planner is independently safe.
+    if(bars.zipWithNext().any { (a,b) -> b.t-a.t!=WILLIAMS_H1_MS })
+        return WilliamsNtdManagement(s.put("zone_book_evidence","NTD_H1_HISTORY_GAP"))
     if(bars.last().t+WILLIAMS_H1_MS<=openedAt) return WilliamsNtdManagement(s)
+    // A persisted exit state from an older position cannot arm a freshly
+    // opened campaign, even if a local journal was accidentally reused.
+    if(s.optLong("zone_active_at",0L)>0L &&
+        s.optLong("zone_active_at")+WILLIAMS_H1_MS<=openedAt) {
+        for(key in listOf("zone_active_at","zone_book_stop","zone_book_stop_source_time_ms",
+            "zone_historical_stop_touch_at_ms","zone_book_evidence")) s.remove(key)
+    }
     var run=0
     for(i in 1 until n) {
         if(bars[i].t+3_600_000L<=openedAt) continue
@@ -444,32 +455,51 @@ internal fun williamsNtdManagementPlan(side:String,bars:List<WilliamsWaveBar>,te
             sign*(ao[i]-ao[i-1])>0 && sign*(ac[i]-ac[i-1])>0) run+1 else 0
         if(run>=5 && s.optLong("zone_active_at",0L)<=0) s.put("zone_active_at",bars[i].t)
     }
-    if(s.optLong("zone_active_at",0L)>0) {
-        // NTD PDF 117-119, fig 9-5: the FIVE same-colour AO+AC bars
-        // activate a stop one tick beyond the LAST COMPLETED PRICE BAR.
-        // Thereafter the stop trails each newly closed price bar regardless
-        // of later AO/AC colours. It can TIGHTEN only; never loosen after a
-        // corrective bar or a runtime restart. The coordinator separately
-        // verifies the old Binance stop before any protective replacement.
-        val extreme=if(sign==1) bars.last().l else bars.last().h
-        val candidate=williamsBookExactPriceTick(extreme,tick,above=sign!=1)
-        val previous=s.optDouble("zone_book_stop",Double.NaN).takeIf {
-            it.isFinite() && it>0.0 && williamsBookExactPriceTick(it,tick,above=true)!=null
+    if(s.optLong("zone_active_at",0L)>0L) {
+        // NTD PDF 117-119, fig.9-5. Reconstruct the entire CLOSED-BAR
+        // stop path from the fifth coloured bar, not just the last candle.
+        // The same proof must survive process loss or lost cached book state.
+        val activation=s.optLong("zone_active_at")
+        val start=bars.indexOfFirst { it.t==activation }
+        if(start<0) return WilliamsNtdManagement(s.put(
+            "zone_book_evidence","NTD_ZONE_ACTIVATION_NOT_IN_CLOSED_HISTORY"))
+        var replayStop:Double?=null
+        var replaySource=activation
+        for(i in start until n) {
+            val bar=bars[i]
+            // A STOP touched on an earlier candle makes any later profitable
+            // price an invalid continuation of this *book* campaign. We
+            // cannot infer whether a real Binance order filled, so quarantine
+            // this advisory trail and retain exchange-confirmed protection.
+            if(i>start && replayStop!=null &&
+                (if(sign==1) bar.l<=replayStop else bar.h>=replayStop)) {
+                s.put("zone_historical_stop_touch_at_ms",bar.t)
+                    .put("zone_book_evidence","HISTORICAL_BOOK_STOP_TOUCHED_RECONCILE_EXCHANGE")
+                    .put("zone_book_stop_authorized_order",false)
+                return WilliamsNtdManagement(s)
+            }
+            val extreme=if(sign==1) bar.l else bar.h
+            val next=williamsBookExactPriceTick(extreme,tick,above=sign!=1)
+                ?:return WilliamsNtdManagement(s.put(
+                    "zone_book_evidence","NTD_BOOK_PRICE_OFF_EXCHANGE_TICK_GRID"))
+            if(replayStop==null || sign*(next-replayStop)>0) {
+                replayStop=next
+                replaySource=bar.t
+            }
         }
-        val stop=when {
-            candidate==null -> previous
-            previous==null -> candidate
-            sign==1 -> maxOf(candidate,previous)
-            else -> minOf(candidate,previous)
-        }
-        if(stop!=null) {
-            if(previous==null || stop!=previous)
-                s.put("zone_book_stop_source_time_ms",bars.last().t)
-            s.put("zone_book_stop",stop)
-                .put("zone_book_rule","NTD_PDF117_119_FIVE_SAME_COLOUR_STICKY_CLOSED_BAR")
-                .put("zone_book_stop_authorized_order",false)
-        }
-        return WilliamsNtdManagement(s,stop=stop)
+        // A contradictory persisted stop is not silently overwritten by a
+        // weaker replay. The account STOP remains the exchange authority.
+        val previous=s.optDouble("zone_book_stop",Double.NaN)
+        if(previous.isFinite() && previous>0 &&
+            sign*(replayStop!!-previous)<0)
+            return WilliamsNtdManagement(s.put(
+                "zone_book_evidence","NTD_REPLAY_CONFLICTS_WITH_PERSISTED_STOP"))
+        s.put("zone_book_stop",replayStop)
+            .put("zone_book_stop_source_time_ms",replaySource)
+            .put("zone_book_evidence","REPLAYED_COMPLETE_CLOSED_H1_PATH")
+            .put("zone_book_rule","NTD_PDF117_119_FIVE_SAME_COLOUR_STICKY_CLOSED_BAR")
+            .put("zone_book_stop_authorized_order",false)
+        return WilliamsNtdManagement(s,stop=replayStop)
     }
     val activated=s.optLong("lips_selected_at",0L);val useLips=activated>0 && activated<bars.last().t
     val line=if(useLips) lips.last() else teeth.last()
