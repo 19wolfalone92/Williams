@@ -298,7 +298,7 @@ class WilliamsEditionRulesTest {
         // Fixture for NTD 9-5: 5 same-colour AO+AC bars after entry,
         // and trailing under/above each following CLOSED price bar.
         val hour=3_600_000L
-        val lows=listOf(100.0,100.0,100.0,100.0,100.0,100.0,97.0,105.0)
+        val lows=listOf(100.0,100.0,100.0,100.0,100.0,100.0,102.0,103.0)
         val highs=listOf(110.0,111.0,112.0,113.0,114.0,115.0,118.0,119.0)
         val original=lows.indices.map {i->
             val price=(highs[i]+lows[i])/2
@@ -324,14 +324,41 @@ class WilliamsEditionRulesTest {
             assertTrue(five.state.optLong("zone_active_at",0L)>0)
             assertEquals(if(mirror)150.1 else 99.9,five.stop!!,0.0)
             assertEquals(5*hour,five.state.getLong("zone_book_stop_source_time_ms"))
-            val dip=plan(7,five.state)
-            // Bar 6 would LOOSEN the stop; all existing protection stays.
-            assertEquals(if(mirror)150.1 else 99.9,dip.stop!!,0.0)
-            assertEquals(5*hour,dip.state.getLong("zone_book_stop_source_time_ms"))
-            val improvement=plan(8,dip.state)
-            assertEquals(if(mirror)145.1 else 104.9,improvement.stop!!,0.0)
+            val advanced=plan(7,five.state)
+            assertEquals(if(mirror)148.1 else 101.9,advanced.stop!!,0.0)
+            val improvement=plan(8,advanced.state)
+            assertEquals(if(mirror)147.1 else 102.9,improvement.stop!!,0.0)
             assertEquals(7*hour,improvement.state.getLong("zone_book_stop_source_time_ms"))
             assertFalse(improvement.state.getBoolean("zone_book_stop_authorized_order"))
+            // Complete closed-H1 replay must rebuild the same proof when
+            // the process or local in-memory management state is lost.
+            val recovered=plan(8,JSONObject())
+            assertEquals(improvement.stop!!,recovered.stop!!,0.0)
+            assertEquals(improvement.state.getLong("zone_book_stop_source_time_ms"),
+                recovered.state.getLong("zone_book_stop_source_time_ms"))
+            assertEquals("REPLAYED_COMPLETE_CLOSED_H1_PATH",
+                recovered.state.getString("zone_book_evidence"))
+            // Historical trigger contact already invalidates the book-only
+            // continuation. Never manufacture a later trade/stop.
+            val touched=bars.toMutableList()
+            touched[6]=if(mirror) touched[6].copy(h=151.0)
+                else touched[6].copy(l=97.0)
+            val blocked=williamsNtdManagementPlan(side,touched,line, line,ao,ac,.1,hour,JSONObject())
+            assertNull(blocked.stop)
+            assertEquals("HISTORICAL_BOOK_STOP_TOUCHED_RECONCILE_EXCHANGE",
+                blocked.state.getString("zone_book_evidence"))
+            assertEquals(6*hour,blocked.state.getLong("zone_historical_stop_touch_at_ms"))
+            assertFalse(blocked.state.getBoolean("zone_book_stop_authorized_order"))
+            // A H1 gap cannot count as a continuous five-colour campaign.
+            val missing=bars.take(3)+bars.drop(4)
+            val missingPlan=williamsNtdManagementPlan(side,missing,
+                line.take(7),line.take(7),ao.take(7),ac.take(7),.1,hour,JSONObject())
+            assertNull(missingPlan.stop)
+            assertEquals("NTD_H1_HISTORY_GAP",missingPlan.state.getString("zone_book_evidence"))
+            // State from a prior closed campaign must not arm a new entry.
+            val reset=williamsNtdManagementPlan(side,bars,line,line,ao,ac,.1,6*hour,improvement.state)
+            assertNull(reset.stop)
+            assertFalse(reset.state.has("zone_active_at"))
         }
     }
 
