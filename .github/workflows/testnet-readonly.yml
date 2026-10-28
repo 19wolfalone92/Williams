@@ -2,7 +2,7 @@ name: Binance USD-M Futures Demo read-only gate
 
 on:
   push:
-    branches: [futures-williams-campaign, fix/book-exact-short-wm3-ticks-20261026, fix/ntd-no-phantom-position-book-exit-replay-20261028]
+    branches: [futures-williams-campaign, fix/book-exact-short-wm3-ticks-20261026, fix/ntd-no-phantom-position-book-exit-replay-20261028, test/testnet-public-market-smoke-20261028]
   workflow_dispatch:
     inputs:
       symbol:
