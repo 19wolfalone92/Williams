@@ -836,14 +836,17 @@ def test_scanner_diagnostic_does_not_pass_ready_at_zero_of_ten_or_stale_progress
     assert 'scannerState == "READY" || (scannerState == "RUNNING"' not in runtime
 
 
-def test_actions_testnet_gate_skips_when_ci_secrets_absent_without_claiming_test_passed():
+def test_actions_testnet_gate_distinguishes_push_warning_from_manual_signed_acceptance():
     workflow = _read(ROOT / ".github/workflows/testnet-readonly.yml")
     assert "id: check-ci-testnet-credentials" in workflow
     assert "configured=false" in workflow
     assert "Authenticated Futures Demo read-only gate skipped" in workflow
-    assert "No authenticated Futures Demo account check was performed" in workflow
+    assert "No signed Binance Demo verification occurred" in workflow
     assert "if: steps.check-ci-testnet-credentials.outputs.configured == 'true'" in workflow
-    assert "exit 1" not in workflow
+    assert "github.event_name != 'workflow_dispatch'" in workflow
+    assert "github.event_name == 'workflow_dispatch'" in workflow
+    assert "Fail explicit signed Demo acceptance when credentials are missing" in workflow
+    assert "exit 1" in workflow
 
 
 
