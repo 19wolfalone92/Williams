@@ -6433,6 +6433,27 @@ private class NativeEngine(
                     williamsAlligatorLine(candles,8,5).map { it ?: Double.NaN },
                     williamsAlligatorLine(candles,5,3).map { it ?: Double.NaN },aos,acs,rules.tick,openedAt,
                     intent.optJSONObject("edition_management") ?: JSONObject())
+                val oldBookEvidence=intent.optJSONObject("edition_management")
+                    ?.optString("zone_book_evidence").orEmpty()
+                val newBookEvidence=management.state.optString("zone_book_evidence")
+                if(newBookEvidence!=oldBookEvidence && newBookEvidence in setOf(
+                    "HISTORICAL_BOOK_STOP_TOUCHED_RECONCILE_EXCHANGE",
+                    "NTD_ZONE_HISTORY_WINDOW_UNVERIFIED",
+                    "NTD_REPLAY_CONFLICTS_WITH_PERSISTED_STOP",
+                    "NTD_BOOK_PRICE_OFF_EXCHANGE_TICK_GRID",
+                    "NTD_H1_HISTORY_GAP"
+                )) {
+                    // Historical OHLC may prove a BOOK stop *could* have
+                    // triggered, but it is NOT a signed Binance fill. Alert
+                    // instead of inventing a retrospective market exit.
+                    runCatching { auditStore.recordCockpitEvent(
+                        "NTD_BOOK_EXIT_EVIDENCE_QUARANTINED",symbol=symbol,direction=dir,
+                        state="EXISTING_BINANCE_STOP_RETAINED",
+                        detail="reason="+newBookEvidence+
+                            "; position and exchange order require signed reconciliation"
+                    ) }.onFailure { lastError="NTD_BOOK_EXIT_AUDIT_FAILED "+symbol+": "+
+                        (it.message ?: it.javaClass.simpleName) }
+                }
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management.state)
                 intent.put("edition_management",management.state)
                 editionExit=management.exitReason;editionStop=management.stop
