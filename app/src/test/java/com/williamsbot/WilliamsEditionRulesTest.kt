@@ -293,4 +293,51 @@ class WilliamsEditionRulesTest {
         assertEquals(95.9,short.single { it.kind=="AC_SIGNAL" && it.knownIndex==46 }.trigger,0.0)
     }
 
+
+    @Test fun ntdPdf117FiveSameColoursArmsStickyOneTickExitBothWays() {
+        // Fixture for NTD 9-5: 5 same-colour AO+AC bars after entry,
+        // and trailing under/above each following CLOSED price bar.
+        val hour=3_600_000L
+        val lows=listOf(100.0,100.0,100.0,100.0,100.0,100.0,97.0,105.0)
+        val highs=listOf(110.0,111.0,112.0,113.0,114.0,115.0,118.0,119.0)
+        val original=lows.indices.map {i->
+            val price=(highs[i]+lows[i])/2
+            WilliamsWaveBar(i*hour,price,highs[i],lows[i],price,100.0)
+        }
+        for(side in listOf("LONG","SHORT")) {
+            val mirror=side=="SHORT"
+            val bars=if(mirror) original.map {it.copy(o=250-it.o,h=250-it.l,
+                l=250-it.h,c=250-it.c)} else original
+            val ao=bars.indices.map { if(mirror) -it.toDouble() else it.toDouble() }
+            val ac=ao.map {it*.5}
+            val line=List(bars.size){if(mirror) 200.0 else 80.0}
+            fun plan(count:Int,state:JSONObject)=williamsNtdManagementPlan(
+                side,bars.take(count),line.take(count),line.take(count),
+                ao.take(count),ac.take(count),.1,hour,state)
+            assertNull(plan(5,JSONObject()).stop)
+            val five=plan(6,JSONObject())
+            assertTrue(five.state.optLong("zone_active_at",0L)>0)
+            assertEquals(if(mirror)150.1 else 99.9,five.stop!!,0.0)
+            assertEquals(5*hour,five.state.getLong("zone_book_stop_source_time_ms"))
+            val dip=plan(7,five.state)
+            // Bar 6 would LOOSEN the stop; all existing protection stays.
+            assertEquals(if(mirror)150.1 else 99.9,dip.stop!!,0.0)
+            assertEquals(5*hour,dip.state.getLong("zone_book_stop_source_time_ms"))
+            val improvement=plan(8,dip.state)
+            assertEquals(if(mirror)145.1 else 104.9,improvement.stop!!,0.0)
+            assertEquals(7*hour,improvement.state.getLong("zone_book_stop_source_time_ms"))
+            assertFalse(improvement.state.getBoolean("zone_book_stop_authorized_order"))
+        }
+    }
+
+    @Test fun ntdBookFiveColourStopCannotUseUnknownPriceTick() {
+        val hour=3_600_000L
+        val bars=(0..5).map {i->WilliamsWaveBar(i*hour,110.0,112.0,100.0,110.0,100.0)}
+        val ao=(0..5).map {it.toDouble()}
+        val lines=List(6){80.0}
+        val m=williamsNtdManagementPlan("LONG",bars,lines,lines,ao,ao,
+            Double.NaN,hour,JSONObject())
+        assertNull(m.stop)
+        assertFalse(m.state.has("zone_active_at"))
+    }
 }
