@@ -433,7 +433,8 @@ internal data class WilliamsNtdManagement(val state:JSONObject,val exitReason:St
 internal fun williamsNtdManagementPlan(side:String,bars:List<WilliamsWaveBar>,teeth:List<Double>,lips:List<Double>,
     ao:List<Double>,ac:List<Double>,tick:Double,openedAt:Long,state:JSONObject):WilliamsNtdManagement {
     val s=JSONObject(state.toString());val n=bars.size;val sign=if(side=="LONG") 1 else -1
-    if(side !in listOf("LONG","SHORT") || n<6 || !validWilliamsEditionBars(bars) || tick<=0 || openedAt<=0 ||
+    if(side !in listOf("LONG","SHORT") || n<6 || !validWilliamsEditionBars(bars) ||
+        !tick.isFinite() || tick<=0 || openedAt<=0 ||
         listOf(teeth,lips,ao,ac).any { it.size!=n }) return WilliamsNtdManagement(s)
     if(bars.last().t+WILLIAMS_H1_MS<=openedAt) return WilliamsNtdManagement(s)
     var run=0
@@ -443,7 +444,33 @@ internal fun williamsNtdManagementPlan(side:String,bars:List<WilliamsWaveBar>,te
             sign*(ao[i]-ao[i-1])>0 && sign*(ac[i]-ac[i-1])>0) run+1 else 0
         if(run>=5 && s.optLong("zone_active_at",0L)<=0) s.put("zone_active_at",bars[i].t)
     }
-    if(s.optLong("zone_active_at",0L)>0) return WilliamsNtdManagement(s,stop=if(sign==1) bars.last().l-tick else bars.last().h+tick)
+    if(s.optLong("zone_active_at",0L)>0) {
+        // NTD PDF 117-119, fig 9-5: the FIVE same-colour AO+AC bars
+        // activate a stop one tick beyond the LAST COMPLETED PRICE BAR.
+        // Thereafter the stop trails each newly closed price bar regardless
+        // of later AO/AC colours. It can TIGHTEN only; never loosen after a
+        // corrective bar or a runtime restart. The coordinator separately
+        // verifies the old Binance stop before any protective replacement.
+        val extreme=if(sign==1) bars.last().l else bars.last().h
+        val candidate=williamsBookExactPriceTick(extreme,tick,above=sign!=1)
+        val previous=s.optDouble("zone_book_stop",Double.NaN).takeIf {
+            it.isFinite() && it>0.0 && williamsBookExactPriceTick(it,tick,above=true)!=null
+        }
+        val stop=when {
+            candidate==null -> previous
+            previous==null -> candidate
+            sign==1 -> maxOf(candidate,previous)
+            else -> minOf(candidate,previous)
+        }
+        if(stop!=null) {
+            if(previous==null || stop!=previous)
+                s.put("zone_book_stop_source_time_ms",bars.last().t)
+            s.put("zone_book_stop",stop)
+                .put("zone_book_rule","NTD_PDF117_119_FIVE_SAME_COLOUR_STICKY_CLOSED_BAR")
+                .put("zone_book_stop_authorized_order",false)
+        }
+        return WilliamsNtdManagement(s,stop=stop)
+    }
     val activated=s.optLong("lips_selected_at",0L);val useLips=activated>0 && activated<bars.last().t
     val line=if(useLips) lips.last() else teeth.last()
     val reason=if(line.isFinite() && line>0 && sign*(bars.last().c-line)<0)
