@@ -115,6 +115,21 @@ def validate_demo_device_evidence(payload:dict)->dict:
         "checked_event_count":len(events)}
 
 
+def _has_sensitive_field(value, depth: int = 0) -> bool:
+    """Reject nested credential fields without ever logging their values."""
+    if depth > 32:
+        return True  # unbounded diagnostic nesting is not safe release proof
+    if isinstance(value, dict):
+        return any(
+            any(secret in str(key).lower() for secret in PROHIBITED)
+            or _has_sensitive_field(child, depth+1)
+            for key, child in value.items()
+        )
+    if isinstance(value, list):
+        return any(_has_sensitive_field(child, depth+1) for child in value)
+    return False
+
+
 def validate_demo_both_directions(payload: dict) -> dict:
     """Audit two independently signed *claims* of LONG/SHORT Android Demo cycles.
 
@@ -130,6 +145,8 @@ def validate_demo_both_directions(payload: dict) -> dict:
     """
     failures = []
     checks = {}
+    if _has_sensitive_field(payload):
+        failures.append("SECRET_FIELD_FOUND_IN_DIAGNOSTIC")
     if not isinstance(payload, dict):
         return {"status": "CONTRACT_FAIL",
                 "errors": ["NO_DUAL_SIDE_DEVICE_EXPORT"],
