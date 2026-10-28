@@ -321,7 +321,8 @@ data class Status(
     val accountSnapshotAtMs: Long = 0L,
     val futuresIntents: List<JSONObject> = emptyList(),
     val operatorSupervisions: List<JSONObject> = emptyList(),
-    val cockpitReadiness: JSONObject = JSONObject()
+    val cockpitReadiness: JSONObject = JSONObject(),
+    val exitReconciliationIntents: List<JSONObject> = emptyList()
 )
 
 data class Candle(
@@ -4149,7 +4150,14 @@ internal fun parseStatus(json: JSONObject): Status {
         positionsSnapshotOk = json.optBoolean("positions_snapshot_ok"),
         positionsSnapshotAtMs = json.optLong("positions_snapshot_at_ms"),
         accountSnapshotAtMs = json.optLong("account_snapshot_at_ms"),
-        futuresIntents = CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")?.optJSONArray("pending_intent_details")),
+        futuresIntents = CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")?.optJSONArray("pending_intent_details"))
+            .filterNot(::isTerminalFuturesExitIntent),
+        exitReconciliationIntents = CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")
+            ?.optJSONArray("exit_reconciliation_details")).ifEmpty {
+            // Older runtime payloads may still mix completed EXITs into activity.
+            CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")?.optJSONArray("pending_intent_details"))
+                .filter(::isTerminalFuturesExitIntent)
+        },
         operatorSupervisions = CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")?.optJSONArray("operator_supervised_positions")),
         cockpitReadiness = json.optJSONObject("cockpit_readiness") ?: JSONObject()
     )

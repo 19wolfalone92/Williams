@@ -4392,6 +4392,7 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("actual_entry_price", item.opt("actual_entry_price") ?: JSONObject.NULL)
                     .put("client_id_suffix", item.optString("client_id").takeLast(8))
                     .put("order_status", orderStatus)
+                    .put("exchange_order_status", item.optString("order_status"))
                     .put("campaign_status", lifecycle)
                     .put("created_at_ms", item.optLong("created_at_ms", 0L))
                     .put("last_reconciled_ms", item.optLong("last_reconciled_ms", 0L))
@@ -4429,6 +4430,7 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("risk_reservation_adjustment_reason", item.opt("risk_reservation_adjustment_reason") ?: JSONObject.NULL)
             )
         }
+        val presentation = separateFuturesIntentPresentation(pendingDetails)
         val readyForNewEntry = !reconciliationActive &&
             (0 until persisted.length()).none { persisted.getJSONObject(it).has("native_stop_replacement") } &&
             !hasUnresolvedTriggeringEntry(persisted) && (observedState == State.READY || observedState == State.OPEN_PROTECTED ||
@@ -4447,8 +4449,9 @@ internal class NativeFuturesCampaignCoordinator(
             .put("verified_external_stop_management_symbols",JSONArray(externalStopManagementSymbolsJson))
             .put("verified_external_stop_management_at_ms",externalStopManagementVerifiedAtMs)
             .put("operator_supervised_positions",operatorSupervisions())
-            .put("pending_intents", pendingDetails.length())
-            .put("pending_intent_details", pendingDetails)
+            .put("pending_intents", presentation.active.length())
+            .put("pending_intent_details", presentation.active)
+            .put("exit_reconciliation_details", presentation.exitReconciliation)
             .put("testnet_only", true)
             .put("position_sides", JSONArray().put("LONG").put("SHORT"))
     }

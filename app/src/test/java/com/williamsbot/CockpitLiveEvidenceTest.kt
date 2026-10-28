@@ -10,6 +10,15 @@ import org.junit.Test
  * status=UNVERIFIED_OR_STALE. Never show a green STOP or false FLAT.
  */
 class CockpitLiveEvidenceTest {
+    @Test fun completedExitCannotMasqueradeAsFilledEntryOrProtectedCampaign() {
+        for (order in listOf("EXIT_TERMINAL_POSITION_OPEN", "FILLED", "PARTIALLY_FILLED")) {
+            val exit = intent().put("role", "EXIT").put("order_status", order)
+                .put("executed_qty", "0.22").put("confirmed_position_qty", "0.22")
+            assertFalse(cockpitEntryMayHaveFilled(exit))
+            assertFalse(cockpitSignedStopVerified(exit, status(), now))
+            assertTrue(cockpitEntryMayHaveFilled(JSONObject(exit.toString()).put("role", "ENTRY")))
+        }
+    }
     private val now=1_792_708_039_846L
     private fun intent()=JSONObject()
         .put("symbol","SOLUSDT").put("direction","SHORT")

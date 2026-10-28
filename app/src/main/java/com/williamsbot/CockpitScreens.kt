@@ -260,10 +260,11 @@ internal fun CockpitDashboard(
             )
         }
         item { Text("Активность бота", style = MaterialTheme.typography.titleLarge) }
-        items(status.futuresIntents.take(4)) { intent ->
+        val activeIntents = status.futuresIntents.filterNot(::isTerminalFuturesExitIntent)
+        items(activeIntents.take(4)) { intent ->
             CockpitIntentCard(intent, status, onMarket)
         }
-        if (status.futuresIntents.isEmpty()) item {
+        if (activeIntents.isEmpty()) item {
             CockpitCard("Наблюдение за рынком") {
                 Text("Сканер: ${russianStatus(status.scannerState)} • ${status.scannerSymbols}/10 пар")
                 Text(candidates.firstOrNull()?.let { "${it.symbol}: ${russianExecutionBlocker(it.reason)}" }
@@ -289,7 +290,7 @@ internal fun CockpitDashboard(
 internal fun cockpitSignedStopVerified(
     intent:JSONObject,status:Status,now:Long
 ):Boolean {
-    if (!status.positionsSnapshotOk ||
+    if (futuresIntentRole(intent) != "ENTRY" || !status.positionsSnapshotOk ||
         !CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,now,CockpitDiagnostics.POSITION_TTL_MS) ||
         !CockpitDiagnostics.fresh(status.snapshotAtMs,now,30_000L) ||
         intent.optString("campaign_status")!="OPEN_PROTECTED" ||
@@ -377,14 +378,25 @@ internal fun cockpitBookSignalRu(raw:String):String=when {
  * never as an unfilled order just because the positions REST snapshot lags.
  */
 internal fun cockpitEntryMayHaveFilled(intent:JSONObject):Boolean =
+    futuresIntentRole(intent) in setOf("ENTRY", "ADD_ON") && (
     (intent.optString("confirmed_position_qty").toDoubleOrNull() ?: 0.0)>0.0 ||
     (intent.optString("executed_qty").toDoubleOrNull() ?: 0.0)>0.0 ||
     intent.optString("order_status") in setOf("FILLED","PARTIALLY_FILLED") ||
-    intent.optString("campaign_status") in setOf("POSITION_OPEN","OPEN_PROTECTED")
+    intent.optString("campaign_status") in setOf("POSITION_OPEN","OPEN_PROTECTED"))
 
 @Composable
 internal fun CockpitIntentCard(intent: JSONObject, status:Status, onMarket: (String) -> Unit) {
     val symbol = intent.optString("symbol")
+    if (futuresIntentRole(intent) == "EXIT") {
+        CockpitCard("$symbol • Выход из позиции", AppColors.amber) {
+            Text(futuresExitPresentationText(intent), style = MaterialTheme.typography.bodySmall)
+            CockpitField("Статус выхода", russianStatus(intent.optString("exchange_order_status")
+                .ifBlank { intent.optString("order_status") }))
+            CockpitField("Исполненное количество", intent.optString("executed_qty").ifBlank { "Не подтверждено" })
+            TextButton(onClick = { onMarket(symbol) }) { Text("Открыть график") }
+        }
+        return
+    }
     val direction = intent.optString("direction")
     var expanded by remember(symbol, intent.optString("client_id_suffix")) { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -448,7 +460,8 @@ internal fun CockpitAnalysis(padding: PaddingValues, status: Status, candidates:
         }
         items(APPROVED_FUTURES_SYMBOLS) { symbol ->
             val c = candidates.firstOrNull { it.symbol == symbol }
-            val active = status.futuresIntents.firstOrNull { it.optString("symbol") == symbol }
+            val active = status.futuresIntents.firstOrNull { it.optString("symbol") == symbol &&
+                futuresIntentRole(it) == "ENTRY" }
             val direction = c?.entrySignalType?.let { if (it.startsWith("SHORT")) "SHORT" else if (it.isNotBlank()) "LONG" else "—" } ?: "—"
             Card(Modifier.fillMaxWidth().clickable { selected = if (selected == symbol) null else symbol },
                 colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
@@ -514,7 +527,8 @@ internal fun CockpitTrades(
 ) {
     var selected by remember { mutableIntStateOf(0) }
     val pendingCount=status.futuresIntents.count {
-        it.optString("campaign_status") in setOf("ENTRY_PENDING","FILL_CONFIRMATION_PENDING","EXIT_PENDING")
+        !isTerminalFuturesExitIntent(it) && it.optString("campaign_status") in
+            setOf("ENTRY_PENDING","FILL_CONFIRMATION_PENDING","EXIT_PENDING")
     }
     Column(Modifier.fillMaxSize().padding(padding)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -528,11 +542,23 @@ internal fun CockpitTrades(
             when (selected) {
                 0 -> active()
                 1 -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    val pending = status.futuresIntents.filter { it.optString("campaign_status") in setOf("ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "EXIT_PENDING") }
+                    val pending = status.futuresIntents.filter { !isTerminalFuturesExitIntent(it) &&
+                        it.optString("campaign_status") in setOf("ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "EXIT_PENDING") }
                     if (pending.isEmpty()) item { Text("Ожидающих заявок в последнем снимке нет.", color = AppColors.textMuted) }
                     items(pending) { CockpitIntentCard(it, status, onMarket) }
                 }
                 else -> Column {
+                    if (status.exitReconciliationIntents.isNotEmpty()) {
+                        CockpitCard("Сверка истории закрытий", AppColors.amber) {
+                            Text("Эти завершённые заявки не считаются открытыми ордерами или позициями.",
+                                style = MaterialTheme.typography.bodySmall)
+                            status.exitReconciliationIntents.take(3).forEach { exit ->
+                                CockpitField(exit.optString("symbol"), futuresExitPresentationText(exit))
+                            }
+                            Text("Полные подтверждения сохранены в диагностике; результат закрытия и PnL требуют биржевых исполнений.",
+                                style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+                        }
+                    }
                     Box(Modifier.weight(1f)) { history() }
                 }
             }

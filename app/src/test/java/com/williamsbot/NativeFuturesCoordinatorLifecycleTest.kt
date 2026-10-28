@@ -18,6 +18,30 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Real coordinator + real signed transport; only persistence/network peers are modeled. */
 class NativeFuturesCoordinatorLifecycleTest {
+    @Test fun terminalBnbExitIsSeparatedWithoutChangingLedgerOrCallingBinance() {
+        val journal = Journal()
+        val exit = JSONObject().put("symbol", "BNBUSDT").put("direction", "SHORT")
+            .put("intent_role", "EXIT").put("client_id", "W2X_OLD_BNB")
+            .put("exchange_status", "EXIT_TERMINAL_POSITION_OPEN").put("order_status", "FILLED")
+            .put("quantity", "0.22").put("executed_qty", "0.22")
+        val entry = JSONObject().put("symbol", "XRPUSDT").put("direction", "SHORT")
+            .put("intent_role", "ENTRY").put("client_id", "W2H_XRP_CURRENT")
+            .put("campaign_status", "OPEN_PROTECTED").put("order_status", "NEW")
+        val original = JSONArray().put(exit).put(entry).toString()
+        journal.writeState("futures_campaign_intents_v2", original)
+        val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        val result = coordinator.status()
+        assertEquals(1, result.getInt("pending_intents"))
+        assertEquals("XRPUSDT", result.getJSONArray("pending_intent_details").getJSONObject(0).getString("symbol"))
+        val history = result.getJSONArray("exit_reconciliation_details").getJSONObject(0)
+        assertEquals("BNBUSDT", history.getString("symbol"))
+        assertEquals("FILLED", history.getString("exchange_order_status"))
+        assertEquals("EXIT_TERMINAL_POSITION_OPEN", history.getString("order_status"))
+        assertEquals(original, journal.readState("futures_campaign_intents_v2"))
+        assertFalse(result.getBoolean("ready_for_new_entry"))
+        assertTrue(exchange.requests.isEmpty())
+    }
     private class Journal : FuturesCampaignStateStore {
         private val values = mutableMapOf<String, String>()
         var rejectWrites = false

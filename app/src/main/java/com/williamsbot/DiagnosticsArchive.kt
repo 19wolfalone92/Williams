@@ -113,6 +113,9 @@ object DiagnosticsArchive {
                 addJson(zip,"futures_intent_stop_lifecycle.json",
                     report.optJSONObject("futures_campaign_coordinator")
                         ?.optJSONArray("pending_intent_details") ?: org.json.JSONArray())
+                addJson(zip,"futures_exit_reconciliation.json",
+                    report.optJSONObject("futures_campaign_coordinator")
+                        ?.optJSONArray("exit_reconciliation_details") ?: org.json.JSONArray())
                 addJson(zip,"signal_decision_history.json",report.opt("signal_decision_history"))
                 // The latest 300 decisions are from SQLite, without creating
                 // a second giant JSON string or silently fabricating evidence.

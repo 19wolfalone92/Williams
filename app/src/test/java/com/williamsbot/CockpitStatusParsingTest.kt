@@ -6,6 +6,23 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CockpitStatusParsingTest {
+    @Test fun terminalBnbExitIsHistoryInBothOldAndNewRuntimePayloads() {
+        val exit = JSONObject().put("symbol", "BNBUSDT").put("direction", "SHORT")
+            .put("role", "EXIT").put("order_status", "EXIT_TERMINAL_POSITION_OPEN")
+            .put("executed_qty", "0.22")
+        val xrp = JSONObject().put("symbol", "XRPUSDT").put("direction", "SHORT")
+            .put("role", "ENTRY").put("campaign_status", "OPEN_PROTECTED")
+        for (legacy in listOf(true, false)) {
+            val runtime = JSONObject().put("pending_intent_details",
+                if (legacy) JSONArray().put(exit).put(xrp) else JSONArray().put(xrp))
+            if (!legacy) runtime.put("exit_reconciliation_details", JSONArray().put(exit))
+            val status = parseStatus(JSONObject().put("futures_runtime", runtime))
+            assertEquals(1, status.futuresIntents.size)
+            assertEquals("XRPUSDT", status.futuresIntents.single().getString("symbol"))
+            assertEquals(1, status.exitReconciliationIntents.size)
+            assertEquals("BNBUSDT", status.exitReconciliationIntents.single().getString("symbol"))
+        }
+    }
     @Test fun scannerProgressAndUniverseComeFromCapturedRuntimeEnvelope() {
         val status = parseStatus(JSONObject().put("scanner_state", "READY_BLOCKED")
             .put("scanner_progress_symbols", 10).put("scanner_progress_total", 10)
