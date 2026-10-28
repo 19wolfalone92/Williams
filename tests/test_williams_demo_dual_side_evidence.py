@@ -1,8 +1,6 @@
 """Strict offline acceptance-contract tests. They are NOT live Binance proofs."""
-import copy
-
 from williams_demo_evidence_gate import validate_demo_both_directions
-from tests.test_williams_demo_evidence_gate import example
+from test_williams_demo_evidence_gate import example
 
 
 def sample():
