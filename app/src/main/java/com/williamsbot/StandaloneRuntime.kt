@@ -10740,12 +10740,11 @@ private class NativeEngine(
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
-            .put("new_entry_leverage_cap_x",WILLIAMS_NEW_ENTRY_MAX_LEVERAGE)
-            .put("new_entry_leverage_compliant",futuresLeverageSettings.defaultLeverage<=WILLIAMS_NEW_ENTRY_MAX_LEVERAGE &&
-                futuresLeverageSettings.symbolLeverages.values.all { it<=WILLIAMS_NEW_ENTRY_MAX_LEVERAGE })
-            .put("new_entry_leverage_blocker",if(futuresLeverageSettings.defaultLeverage>WILLIAMS_NEW_ENTRY_MAX_LEVERAGE ||
-                futuresLeverageSettings.symbolLeverages.values.any { it>WILLIAMS_NEW_ENTRY_MAX_LEVERAGE })
-                "WILLIAMS_NEW_ENTRY_LEVERAGE_EXCEEDS_2X" else JSONObject.NULL)
+            .put("new_entry_leverage_cap_x",MAX_CONFIGURED_FUTURES_LEVERAGE)
+            .put("new_entry_leverage_compliant",futuresLeverageSettings.defaultLeverage in 1..MAX_CONFIGURED_FUTURES_LEVERAGE &&
+                futuresLeverageSettings.symbolLeverages.values.all { it in 1..MAX_CONFIGURED_FUTURES_LEVERAGE })
+            .put("new_entry_leverage_blocker",JSONObject.NULL)
+            .put("new_entry_leverage_preflight","SIGNED_EXCHANGE_BRACKETS_AND_ISOLATED_STOP_BUFFER")
             .put("futures_margin_type", "ISOLATED")
             .put("futures_force_one_way", true)
             .put("paused", paused)
@@ -12034,14 +12033,10 @@ private class NativeEngine(
     @Synchronized
     fun configureFuturesLeverage(payload: JSONObject): JSONObject {
         val next = FuturesLeverageSettings.fromJson(payload)
-        // Do not acknowledge settings the trading coordinator will refuse.
-        // Never silently clamp a previously stored 10x; expose it to the
-        // operator and keep existing 10x positions safely reconcilable.
-        require(next.defaultLeverage in 1..WILLIAMS_NEW_ENTRY_MAX_LEVERAGE &&
-            next.symbolLeverages.values.all { it in 1..WILLIAMS_NEW_ENTRY_MAX_LEVERAGE }) {
-            "Для новых входов Williams Futures Demo разрешено только плечо 1×–2×; " +
-            "измените настройки 10× перед возобновлением торговли"
-        }
+        // Keep the operator's chosen leverage. FuturesLeverageSettings
+        // already validates the requested 1..125 range for all ten pairs.
+        // Binance brackets and the margin available BEFORE liquidation or
+        // the structural STOP are authoritative on every new order.
         val profile=payload.optString("strategy_profile",williamsProfile)
         val nextTime=payload.optJSONObject("entry_time_policy")?.let { WilliamsEntryTimePolicy.fromJson(it) } ?: entryTimePolicy
         require(profile==williamsUnifiedProfile || williamsVerifiedNewRiskSource(profile)) {
@@ -12071,12 +12066,11 @@ private class NativeEngine(
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
-            .put("new_entry_leverage_cap_x",WILLIAMS_NEW_ENTRY_MAX_LEVERAGE)
-            .put("new_entry_leverage_compliant",futuresLeverageSettings.defaultLeverage<=WILLIAMS_NEW_ENTRY_MAX_LEVERAGE &&
-                futuresLeverageSettings.symbolLeverages.values.all { it<=WILLIAMS_NEW_ENTRY_MAX_LEVERAGE })
-            .put("new_entry_leverage_blocker",if(futuresLeverageSettings.defaultLeverage>WILLIAMS_NEW_ENTRY_MAX_LEVERAGE ||
-                futuresLeverageSettings.symbolLeverages.values.any { it>WILLIAMS_NEW_ENTRY_MAX_LEVERAGE })
-                "WILLIAMS_NEW_ENTRY_LEVERAGE_EXCEEDS_2X" else JSONObject.NULL)
+            .put("new_entry_leverage_cap_x",MAX_CONFIGURED_FUTURES_LEVERAGE)
+            .put("new_entry_leverage_compliant",futuresLeverageSettings.defaultLeverage in 1..MAX_CONFIGURED_FUTURES_LEVERAGE &&
+                futuresLeverageSettings.symbolLeverages.values.all { it in 1..MAX_CONFIGURED_FUTURES_LEVERAGE })
+            .put("new_entry_leverage_blocker",JSONObject.NULL)
+            .put("new_entry_leverage_preflight","SIGNED_EXCHANGE_BRACKETS_AND_ISOLATED_STOP_BUFFER")
             .put("futures_margin_type", "ISOLATED")
             .put("futures_force_one_way", true)
             .put("version", BuildConfig.VERSION_NAME)
