@@ -811,6 +811,13 @@ def main() -> None:
          "Native Futures 10x rejection regressions")
     must(read("docs/WILLIAMS_TESTNET_APK_RELEASE_HOLD_2026-10-28_RU.md"),
          "RELEASE HOLD", "physical Demo acceptance hold must be documented")
+    publish = read(".github/workflows/publish-demo-apk.yml")
+    must(publish, "vars.WILLIAMS_DEMO_RELEASE_APPROVED == 'true'",
+         "Direct APK publication MUST remain disabled without explicit release approval")
+    must(publish, "github.event.workflow_run.conclusion == 'success'",
+         "Only a successful main build may be considered for publication")
+    must(publish, "github.event.workflow_run.head_branch == 'main'",
+         "Never publish a review APK")
 
     print("WILLIAMS FUTURES RELEASE CONTRACT GATE: PASS")
 
