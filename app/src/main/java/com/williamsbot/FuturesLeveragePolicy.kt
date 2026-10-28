@@ -6,6 +6,9 @@ import kotlin.math.abs
 import kotlin.math.max
 
 internal const val MAX_CONFIGURED_FUTURES_LEVERAGE = 125
+// Separate safety cap for NEW Williams Demo exposure; configuration and
+// recovery of older exchange positions remain backward compatible.
+internal const val WILLIAMS_NEW_ENTRY_MAX_LEVERAGE = 2
 
 internal fun parseFuturesLeverage(value: Any?): Int {
     val text = value?.toString()?.trim().orEmpty()
