@@ -22,9 +22,11 @@ def sample():
             if typ == "ENTRY_FILL_REPORTED":
                 e["exchange_order_id"] = prefix + "_ORDER_001"
                 e["side"] = "BUY" if side == "LONG" else "SELL"
+                e["avg_fill_price"] = 100.0
             if typ in ("STOP_ACK_REPORTED", "STOP_RECONFIRMED"):
                 e["order_id"] = prefix + "_STOP_001"
                 e["side"] = "SELL" if side == "LONG" else "BUY"
+                e["stop_price"] = 95.0 if side == "LONG" else 105.0
             if typ == "POSITION_FLAT":
                 e["symbol"] = "BTCUSDT"
                 e["position_qty"] = 0
@@ -111,3 +113,19 @@ def test_nested_journal_credentials_are_rejected_without_printing_them():
     report = validate_demo_both_directions(payload)
     assert "SECRET_FIELD_FOUND_IN_DIAGNOSTIC" in report["errors"]
     assert "MUST_NOT_BE_IN_EXPORTED_DIAGNOSTICS" not in repr(report)
+
+
+def test_wrong_side_initial_stop_or_same_campaign_cannot_pass_dual_contract():
+    payload = sample()
+    stop = next(e for e in payload["runs"][0]["events"]
+                if e["type"] == "STOP_ACK_REPORTED")
+    stop["stop_price"] = 105.0  # LONG cannot use stop above entry as initial risk
+    err = validate_demo_both_directions(payload)["errors"]
+    assert "LONG_INITIAL_STRUCTURAL_STOP_WRONG_SIDE" in err
+    payload = sample()
+    for e in payload["runs"][1]["events"]:
+        if "campaign_id" in e:
+            e["campaign_id"] = "CAMP_L"
+    assert "DUPLICATE_CAMPAIGN_OWNERSHIP_ACROSS_DIRECTIONS" in (
+        validate_demo_both_directions(payload)["errors"]
+    )
