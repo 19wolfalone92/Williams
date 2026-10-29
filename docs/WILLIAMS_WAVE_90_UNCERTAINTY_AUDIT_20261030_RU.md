@@ -107,3 +107,33 @@ H4/D1/M15 histories for the same dates, two blinded expert wave reviews,
 cross-degree pivot agreement and unknown-future stress tests are still
 necessary. A real 20-day H1 window does not by itself provide 40 complete
 D1 bars, so we never fabricate the missing degree.
+
+## Получение настоящей независимой оценки по всем 90 срезам
+
+В артефакте `williams-wave-90-blind-review-packet-no-model-labels`
+расположены 90 диаграмм, 90 отдельных CSV с **ровно 160 доступными на
+момент среза закрытыми H1-свечами**, пустой `blank_annotator_form.csv`
+и инструкции. В будущие свечи или метки модели заглядывать запрещено.
+Целостность CSV проверяется по SHA256 исходных числовых свечей из
+`blind_90_selection.json`; несовпадение отменяет формирование пакета.
+
+Два реально независимых эксперта заполняют **две отдельные** копии
+формы и замораживают их с UTC-временем до сравнения. После этого:
+
+```bash
+python tools/score_blind_human_wave_review.py \
+  --all-fifteen \
+  --reviewer-a reviewer_a_frozen.csv \
+  --reviewer-b reviewer_b_frozen.csv \
+  --output build/wave-90-expert-scoring.json
+```
+
+В скоринге согласие по этикетке отдельно от согласия по **степени,
+направлению и известным в момент среза экстремумам**. Совпадающий текст
+`MOTIVE_FIVE` при разных направленностях или pivot-временах теперь
+обязательно отправляется на независимое разрешение разногласия, а не
+превращается в консенсус. Коэффициент Cohen kappa остаётся метрикой
+совпадения классов, а не гарантией совпадения волновой генеалогии.
+Самостоятельно набранные reviewer IDs не являются подтверждением личностей
+экспертов, поэтому даже успешно заполненные формы по-прежнему
+`human_elliott_accuracy_certified=false` без внешней проверки.
