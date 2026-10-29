@@ -613,7 +613,40 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
             fail("A read-only clock sample with >3s RTT cannot authorize a signed POST")
         } catch (_: FuturesClockSyncException) { }
         assertEquals(0, mutationPosts)
-        assertEquals("Rejected write must not secretly refresh the clock and retry", 1, clockGets)
+        assertEquals("Only an independent unsigned clock re-probe is permitted before a blocked write", 2, clockGets)
+    }
+
+    @Test fun slowReadOnlyClockMayBeReplacedByFastClockBeforeFinancialWrite() {
+        var probes=0
+        var posts=0
+        val client=OkHttpClient.Builder().addInterceptor { chain ->
+            val r=chain.request()
+            val response=when (r.url.encodedPath) {
+                "/fapi/v1/time" -> {
+                    probes++
+                    if (probes==1) Thread.sleep(3_200L)
+                    """{"serverTime":${System.currentTimeMillis()}}"""
+                }
+                "/fapi/v3/account" -> "{}"
+                "/fapi/v1/leverage" -> {
+                    posts++
+                    val params=formParams(r)
+                    assertTrue(params["timestamp"]?.toLongOrNull()!=null)
+                    assertEquals("10",params["leverage"])
+                    """{"symbol":"BTCUSDT","leverage":10,"maxNotionalValue":"1000000"}"""
+                }
+                else -> throw AssertionError("Unexpected exchange endpoint: ${r.url}")
+            }
+            Response.Builder().request(r).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(response.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val adapter=BinanceUsdMFuturesTestnetAdapter("key","secret",client)
+        adapter.account()
+        assertEquals(1,probes)
+        assertEquals(10,adapter.setLeverage("BTCUSDT",10).getInt("leverage"))
+        assertEquals(2,probes)
+        assertEquals("Only one signed financial request is permitted after the verified fast probe",1,posts)
     }
 
     @Test fun independentClockSampleValidationRejectsDeviceSuspendAndSlowGet() {
