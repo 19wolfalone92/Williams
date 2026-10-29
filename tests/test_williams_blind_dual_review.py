@@ -10,10 +10,10 @@ spec=importlib.util.spec_from_file_location("dual_wave_review",FILE)
 dual=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dual)
 
-def filled_csv(tmp_path,reviewer,*,alter=None):
+def filled_csv(tmp_path,reviewer,*,alter=None,all_fifteen=False):
     original=ROOT/"app/src/test/resources"
     rows=[]
-    for (symbol,frame,as_of),(source,prefix,window) in sorted(dual.selected_prefixes().items()):
+    for (symbol,frame,as_of),(source,prefix,window) in sorted(dual.selected_prefixes(all_fifteen=all_fifteen).items()):
         row={"symbol":symbol,"frame":frame,"as_of":as_of,
           "prefix_sha256":prefix,"source_window_sha256":window,
           "reviewer_id":reviewer,"expert_label":"NO_VALID_COUNT","degree":"UNDETERMINED",
@@ -75,3 +75,17 @@ def test_conflicting_labels_are_not_merged_as_independent_truth(tmp_path):
     assert got["consensus_cases"]==24
     assert all(x["consensus_label"] is None for x in got["cases"] if x["symbol"]=="BTCUSDT")
     assert got["human_elliott_accuracy_certified"] is False
+
+
+def test_dual_rater_90_frozen_cases_have_no_synthetic_human_certification(tmp_path):
+    a=filled_csv(tmp_path,"reviewer_a",all_fifteen=True)
+    b=filled_csv(tmp_path,"reviewer_b",all_fifteen=True)
+    result=dual.compare_reviews(a,b,compared_at=TIME,all_fifteen=True)
+    assert result["schema"]=="WILLIAMS_BLIND_90_TWO_REVIEWERS_V1"
+    assert result["total_cases"]==90 and result["agreement_count"]==90
+    assert result["abstained_consensus"]+result["classified_consensus"]==90
+    assert result["reviewer_identity_and_independence_verified"] is False
+    assert result["human_elliott_accuracy_certified"] is False
+    assert not result["can_place_orders"] and not result["can_close"]
+    with pytest.raises(ValueError,match="EXPECTED_ALL_FROZEN_ANNOTATIONS"):
+        dual.compare_reviews(a,b,compared_at=TIME)
