@@ -109,21 +109,36 @@ def compare_reviews(first:Path,second:Path,*, compared_at:int|None=None,all_fift
     ida,a,sha_a=load_blind_reviewer_csv(first,source,timestamp)
     idb,b,sha_b=load_blind_reviewer_csv(second,source,timestamp)
     if ida==idb or sha_a==sha_b:raise ValueError("TWO_DISTINCT_REVIEWERS_REQUIRED")
-    confusion=Counter();agree=0;consensus={};disputes=[]
+    confusion=Counter();agree=0;label_only_agree=0;consensus={};disputes=[]
     for key in sorted(source):
         x,y=a[key],b[key]
         confusion[(x["label"],y["label"])]+=1
-        if x["label"]==y["label"]:
+        same_label=x["label"]==y["label"]
+        if same_label:
+            label_only_agree+=1
+        # Both reviewers saying 'W5' is not wave-count consensus if one
+        # identifies a bullish H1 count and the other a bearish H4 count, or
+        # if their confirmed pivots differ. NO_VALID_COUNT is a separate
+        # agreement on absence of a uniquely justified count, not a wave.
+        same_structure=(same_label and (x["label"]=="NO_VALID_COUNT" or (
+            x["degree"]==y["degree"] and x["direction"]==y["direction"]
+            and x["pivot_times_utc"]==y["pivot_times_utc"])))
+        if same_structure:
             agree+=1;consensus[key]=x["label"]
         else:
             disputes.append({"symbol":key[0],"frame":key[1],"as_of":key[2],
                 "first":x["label"],"second":y["label"],
-                "reason":"INDEPENDENT_EXPERT_ADJUDICATION_REQUIRED"})
+                "first_degree":x["degree"],"second_degree":y["degree"],
+                "first_direction":x["direction"],"second_direction":y["direction"],
+                "reason":("SAME_LABEL_DIFFERENT_DEGREE_DIRECTION_OR_PIVOTS"
+                          if same_label else "INDEPENDENT_EXPERT_ADJUDICATION_REQUIRED")})
     by_a=Counter(x["label"] for x in a.values())
     by_b=Counter(x["label"] for x in b.values())
     n=len(source)
     expected_chance=sum(by_a[z]*by_b[z] for z in LABELS)/(n*n)
-    observed=agree/n
+    # Cohen's kappa is a LABEL-only statistic, not proof of the same
+    # wave count. Full structural agreement is a stricter separate metric.
+    observed=label_only_agree/n
     kappa=(observed-expected_chance)/(1-expected_chance) if expected_chance<1 else None
     # ONLY after both forms are frozen / validated: perform production inference.
     matched=0;classified=0;abstained=0;scored=Counter();rows=[]
@@ -145,6 +160,9 @@ def compare_reviews(first:Path,second:Path,*, compared_at:int|None=None,all_fift
         "total_cases":n,"reviewer_ids":[ida,idb],
         "review_csv_sha256":[sha_a,sha_b],
         "agreement_count":agree,"disagreement_count":n-agree,
+        "label_only_agreement_count":label_only_agree,
+        "label_only_inter_rater_agreement":observed,
+        "structural_count_agreement":agree/n,
         "inter_rater_agreement":observed,"cohen_kappa":kappa,
         "consensus_cases":len(consensus),"consensus_conflicts":disputes,
         "classified_consensus":classified,"abstained_consensus":abstained,
