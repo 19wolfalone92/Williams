@@ -11551,20 +11551,36 @@ private class NativeEngine(
             try {
                 val live=runCatching { status(fast=true).optJSONArray("futures_positions") }.getOrNull()
                 val symbols=FuturesSignedTradeForensics.auditSymbols(
-                    CockpitDiagnostics.rows(live).map { it.optString("symbol") } +
-                        coreSymbols,limit=10)
+                    CockpitDiagnostics.rows(live).map { it.optString("symbol") },limit=8)
                 val audited=JSONArray()
                 val endMs=System.currentTimeMillis()
                 val sevenDaysMs=7L*24L*60L*60L*1000L
                 val incomeStart=(endMs-sevenDaysMs).coerceAtLeast(0L)
                 // One signed GET-only history sweep for all symbols. A failed or
                 // saturated income read stays unknown; never call unknown funding zero.
-                val incomeResult=runCatching {
-                    val rows=futuresCampaignCoordinator.incomeHistory(incomeStart,endMs)
-                    (0 until rows.length()).map { rows.getJSONObject(it) }
-                }
+                // Income pagination may require dozens of signed GETs. It is
+                // forensic P1 work and must not contend with active P0
+                // protection, pending fills or an in-flight reconciliation.
+                val safetyPriority = futuresReconciliationRunning ||
+                    futuresStreamReconcileRunning || nativeManagementRunning ||
+                    futuresCampaignCoordinator.state in setOf(
+                        NativeFuturesCampaignCoordinator.State.ENTRY_PENDING,
+                        NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED,
+                        NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
+                        NativeFuturesCampaignCoordinator.State.EXIT_PENDING)
+                val incomeResult = if(safetyPriority)
+                    runCatching<List<JSONObject>> {
+                        throw IllegalStateException("Funding history deferred while active Futures safety work has priority")
+                    } else runCatching {
+                        val rows=futuresCampaignCoordinator.incomeHistory(incomeStart,endMs)
+                        (0 until rows.length()).map { rows.getJSONObject(it) }
+                    }
                 val incomeRows=incomeResult.getOrNull()
-                output.put("funding_read",if(incomeRows==null) "INCOMPLETE" else "SIGNED_GET_COMPLETE")
+                output.put("funding_read",when {
+                    safetyPriority -> "DEFERRED_ACTIVE_POSITION_PRIORITY"
+                    incomeRows==null -> "INCOMPLETE"
+                    else -> "SIGNED_GET_COMPLETE"
+                })
                 incomeResult.exceptionOrNull()?.let {
                     output.put("funding_error",safeDiagnosticText(it.message ?: it.javaClass.simpleName))
                 }
