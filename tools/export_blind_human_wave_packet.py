@@ -10,8 +10,9 @@ FIELDS=["symbol","frame","as_of","prefix_sha256","source_window_sha256",
         "alternative_count","confidence_0_1","reason_ru","review_frozen_at_utc"]
 def export_packet(blind_source:Path,chart_dir:Path,output:Path):
     source=json.loads(blind_source.read_text(encoding="utf-8"))
-    rows=source["cases"]
-    assert len(rows)==30 and len({(r["symbol"],r["as_of"]) for r in rows})==30
+    rows=source.get("cases",source.get("snapshots",[]))
+    if len(rows) not in (30,90) or len({(r["symbol"],r["as_of"]) for r in rows})!=len(rows):
+        raise ValueError("INVALID_BLIND_CASE_SELECTION")
     output.mkdir(parents=True,exist_ok=True)
     dest=output/"charts";dest.mkdir(exist_ok=True)
     with (output/"blank_annotator_form.csv").open("w",newline="",encoding="utf-8") as fh:
@@ -26,7 +27,7 @@ def export_packet(blind_source:Path,chart_dir:Path,output:Path):
                       "alternative_count","confidence_0_1","reason_ru","review_frozen_at_utc"):
                 d[k]=""
             writer.writerow(d)
-    guide="""# BLINDED Elliott-wave review — 30 fixed H1 historical windows
+    guide=f"""# BLINDED Elliott-wave review — {len(rows)} fixed H1 historical windows
 
 These are **real closed** Binance USD-M Futures price series; the time at
 top of each chart is the last information available to the reviewer.
@@ -45,7 +46,7 @@ This packet is intentionally devoid of model outputs and proxy reference labels.
 Automated proxy annotations have NOT been accepted as independent human expertise.
 """
     (output/"INSTRUCTIONS_FOR_INDEPENDENT_ANNOTATOR.md").write_text(guide,encoding="utf-8")
-    checklist={"schema":"WILLIAMS_30_REAL_BLIND_H1_PACKET",
+    checklist={"schema":f"WILLIAMS_{len(rows)}_REAL_BLIND_H1_PACKET",
       "closed_market_data":"BINANCE_USDM_FUTURES_PUBLIC_H1",
       "cases":len(rows),"labels_in_packet":0,"includes_model_outputs":False,
       "expert_review_completed":False}
