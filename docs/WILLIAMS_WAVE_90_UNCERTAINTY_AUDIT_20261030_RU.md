@@ -78,3 +78,32 @@ Demo profitability and exchange safety tests.
 **Sources:** TC1 chapter 7 and Course PDF59–60 wave checklists as already
 tracked in this repository; additional swing geometry remains an engineering
 approximation, not an independently transcribed book chart.
+
+## Extended H4 research (same frozen 90 cutoffs)
+
+The additional `tools/wave_h4_causal_research.py` observes exactly four
+consecutive already-closed UTC H1 candles for each **research-only**
+reconstructed H4. It refuses missing/duplicated source hours and never pads
+an incomplete H4. Source provenance is explicitly
+`UTC_H4_EXACTLY_FOUR_FROZEN_BINANCE_CLOSED_H1_NOT_NATIVE_H4`;
+this is **not** an independent Binance H4 feed.
+
+On the 15×6 frozen cases, the GitHub audit observed **74** price-containment
+H4→H1 parent-child links across **43** of the 90 snapshots, without adding
+order authority. These are structural alternative links, **not** 43 proven
+wave counts, confirmed directional forecasts or certified Elliott degrees.
+The 160-H1/extended-H1 classifier still reported 4 provisional W5
+hypotheses and 86 abstentions, regardless of this contextual observation.
+
+The GitHub Actions `Read-only 90 H1 wave uncertainty audit` additionally
+exports **90 blind charts**: closed-candle OHLC, AO 5/34 and volume, plus the
+SHA-pinned input manifest. Its **separate** reviewer artifact does not
+contain model/proxy labels; the internal staging output is intentionally not
+uploaded to blind reviewers. Independent experts can therefore evaluate
+the same historical prefixes without knowing the algorithm's answers.
+
+For a definitive scientific improvement, full independently downloaded
+H4/D1/M15 histories for the same dates, two blinded expert wave reviews,
+cross-degree pivot agreement and unknown-future stress tests are still
+necessary. A real 20-day H1 window does not by itself provide 40 complete
+D1 bars, so we never fabricate the missing degree.
