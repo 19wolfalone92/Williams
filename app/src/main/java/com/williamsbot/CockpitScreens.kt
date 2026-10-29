@@ -406,15 +406,18 @@ internal fun CockpitIntentCard(intent: JSONObject, status:Status, onMarket: (Str
     val hasFilledExposure=cockpitEntryMayHaveFilled(intent)
     val pendingUnfilled=intent.optString("campaign_status")=="ENTRY_PENDING" &&
         !hasFilledExposure && intent.optString("order_status") in setOf("NEW","WORKING","ACCEPTED")
+    val stalePendingReceipt = pendingUnfilled && !futuresPendingEntryReceiptFresh(intent, now)
     val protected=cockpitSignedStopVerified(intent,status,now)
     CockpitCard("$symbol • $direction", if (direction == "SHORT") AppColors.red else AppColors.green) {
-        Text(if(intent.optString("campaign_status")=="OPEN_PROTECTED" && !protected)
-            "Позиция учтена • защита сейчас не подтверждена"
+        Text(if (stalePendingReceipt) "Локальная заявка • свежий статус Binance не подтверждён"
+            else if(intent.optString("campaign_status")=="OPEN_PROTECTED" && !protected)
+                "Позиция учтена • защита сейчас не подтверждена"
             else russianStatus(intent.optString("campaign_status")), fontWeight = FontWeight.SemiBold,
             color=if(hasFilledExposure && !protected) AppColors.amber else MaterialTheme.colorScheme.onSurface)
         CockpitField(if(hasFilledExposure) "Исходная заявка Binance" else "Binance",
             intent.optString("order_status","не подтверждено") +
-            if(hasFilledExposure) " • исполнение позиции учтено отдельно" else "")
+            if(hasFilledExposure) " • исполнение позиции учтено отдельно"
+            else if (stalePendingReceipt) " • УСТАРЕВШЕЕ ПОДТВЕРЖДЕНИЕ" else "")
         Text(cockpitBookSignalRu(intent.optString("signal_reason")).ifBlank {
             "Причина сигнала для этой кампании не записана"
         }, color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
@@ -422,13 +425,20 @@ internal fun CockpitIntentCard(intent: JSONObject, status:Status, onMarket: (Str
             formatChartPrice(intent.optDouble("entry_price")) + " / " +
                 formatChartPrice(intent.optDouble("persisted_protective_stop")))
         if(pendingUnfilled) Text(
-            "Биржевой вход ожидает активации. Показанный SL — расчётный уровень, " +
-                "а не доказательство уже выставленной защитной заявки.",
-            style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+            if (stalePendingReceipt)
+                "Последняя сверка этой заявки устарела. Запись сохранена локально, " +
+                    "но существование ордера на Binance сейчас НЕ ПОДТВЕРЖДЕНО. " +
+                    "До сверки по биржевому ID нельзя удалять или повторять заявку."
+            else
+                "Биржевой вход ожидает активации. Показанный SL — расчётный уровень, " +
+                    "а не доказательство уже выставленной защитной заявки.",
+            style=MaterialTheme.typography.bodySmall,
+            color=if(stalePendingReceipt) AppColors.amber else AppColors.textMuted)
         CockpitLastStopMove(intent)
         CockpitField("Защита", when {
             protected -> "Подтверждена свежим снимком Binance"
             hasFilledExposure -> "ВОЗМОЖНОЕ ИСПОЛНЕНИЕ • проверить фактическую позицию и STOP"
+            stalePendingReceipt -> "Ордер Binance НЕ ПОДТВЕРЖДЁН свежей сверкой"
             intent.optString("campaign_status")=="ENTRY_PENDING" &&
                 intent.optString("order_status")!="PARTIALLY_FILLED" -> "Ожидает исполнения входа"
             else -> "НЕ ПОДТВЕРЖДЕНА СЕЙЧАС"

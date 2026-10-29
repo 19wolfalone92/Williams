@@ -13,6 +13,9 @@ import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
+/** A rejected or exhausted exchange clock calibration is NOT a retryable signed GET. */
+internal class FuturesClockSyncException(detail: String, cause: Throwable? = null) : IOException(detail, cause)
+
 internal class FuturesHttpException(
     val statusCode: Int,
     val exchangeCode: Int?,
@@ -120,28 +123,59 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     }
 
     fun serverTime(): JSONObject = synchronized(clockLock) {
-        // A single clock lock prevents N overlapping signed reads/mutations
-        // racing to overwrite each other's skew corrections.
+        // A GET /time probe must measure only its own network trip. Neither
+        // rate-limit waiting nor retry/backoff for earlier GETs may contribute
+        // to the sample RTT used for signing financial requests.
+        // Two bounded, independent read-only samples; no speculative mutation.
         timeSynced = false
-        val beforeMono = System.nanoTime()
-        val beforeWall = System.currentTimeMillis()
-        val response = request("GET", "/fapi/v1/time", emptyMap(), signed = false)
-        val afterMono = System.nanoTime()
-        val afterWall = System.currentTimeMillis()
-        val durationNs = afterMono-beforeMono
-        val roundTripMs = durationNs/1_000_000L
-        val exchangeTime = response.optLong("serverTime", 0L)
-        // Very delayed network samples cannot safely calibrate a 5s order
-        // recvWindow; prefer a blocked mutation to using guessed exchange time.
-        if (exchangeTime <= 0L || roundTripMs !in 0L..3_000L ||
-            kotlin.math.abs((afterWall-beforeWall)-roundTripMs)>1_000L) {
-            throw IOException("Futures server time sample is invalid, delayed, or device clock changed")
+        var lastFailure: IOException? = null
+        repeat(2) { attempt ->
+            var sentMonoNs = 0L
+            var sentWallMs = 0L
+            val raw = try {
+                requestRawOnce("GET", "/fapi/v1/time", emptyMap(), signed = false) {
+                    sentMonoNs = System.nanoTime()
+                    sentWallMs = System.currentTimeMillis()
+                }
+            } catch (failure: IOException) {
+                // Explicit exchange rejection is preserved for callers and
+                // must not be disguised as a transport-clock outage.
+                if (failure is FuturesHttpException &&
+                    !isRetryableSafeReadFailure(failure.message.orEmpty())) throw failure
+                if (attempt == 1 || !isRetryableSafeReadFailure(failure.message.orEmpty())) {
+                    throw FuturesClockSyncException(
+                        "Futures server clock probe failed; signed request blocked", failure
+                    )
+                }
+                lastFailure = failure
+                return@repeat
+            }
+            val receivedMonoNs = System.nanoTime()
+            val receivedWallMs = System.currentTimeMillis()
+            val durationNs = receivedMonoNs - sentMonoNs
+            val roundTripMs = durationNs / 1_000_000L
+            val wallElapsedMs = receivedWallMs - sentWallMs
+            val response = runCatching { JSONObject(raw) }.getOrNull()
+            val exchangeTime = response?.optLong("serverTime", 0L) ?: 0L
+            // A rejected sample NEVER establishes a new timestamp anchor.
+            if (sentMonoNs > 0L && exchangeTime > 0L &&
+                roundTripMs in 0L..3_000L &&
+                kotlin.math.abs(wallElapsedMs - roundTripMs) <= 1_000L) {
+                serverAnchorMs = exchangeTime
+                anchorMonoNs = sentMonoNs + durationNs / 2L
+                anchorWallMs = sentWallMs + wallElapsedMs / 2L
+                timeSynced = true
+                return@synchronized response!!
+            }
+            lastFailure = IOException(
+                "Futures server time sample is invalid, delayed, or device clock changed " +
+                    "(probe=${attempt + 1}, network_rtt_ms=$roundTripMs)"
+            )
         }
-        serverAnchorMs = exchangeTime
-        anchorMonoNs = beforeMono + durationNs/2L
-        anchorWallMs = beforeWall+(afterWall-beforeWall)/2L
-        timeSynced = true
-        response
+        throw FuturesClockSyncException(
+            "Futures server clock could not be verified after bounded independent GET probes",
+            lastFailure
+        )
     }
 
     fun exchangeInfo(): JSONObject =
@@ -720,6 +754,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                 // never retry POST/DELETE on timeout or 5xx because exchange execution may
                 // be ambiguous. 418/429 and all other 4xx are surfaced immediately.
                 if (method.equals("GET", ignoreCase = true) &&
+                    error !is FuturesClockSyncException &&
                     safeReadAttempt < safeReadDelaysMs.size &&
                     isRetryableSafeReadFailure(message)
                 ) {
@@ -751,7 +786,8 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         method: String,
         path: String,
         params: Map<String, String>,
-        signed: Boolean
+        signed: Boolean,
+        beforeNetwork: (() -> Unit)? = null
     ): String {
         require(path.matches(Regex("/fapi/v[1-3]/[A-Za-z0-9]+(?:/[A-Za-z0-9]+)*"))) {
             "Only canonical USD-M Futures endpoints are allowed"
@@ -792,6 +828,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             "DELETE" -> builder.delete(body)
             else -> throw IllegalArgumentException("Unsupported HTTP method")
         }
+        beforeNetwork?.invoke()
         http.newCall(builder.build()).execute().use { response ->
             rateGuard?.observe(response.headers, response.code, isOrder = orderMutation)
             val text = response.body?.string().orEmpty()

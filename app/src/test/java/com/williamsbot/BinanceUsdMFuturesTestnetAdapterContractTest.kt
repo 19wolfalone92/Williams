@@ -549,4 +549,89 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals(2,posts)
         assertEquals(2,syncs)
     }
+
+    @Test fun invalidClockProbeIsRetriedAsIndependentReadBeforeAnySignedAccountGet() {
+        var timeCalls = 0
+        var accountCalls = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            val body = if (request.url.encodedPath == "/fapi/v1/time") {
+                timeCalls++
+                if (timeCalls == 1) """{"serverTime":0}"""
+                else """{"serverTime":${System.currentTimeMillis()}}"""
+            } else {
+                accountCalls++
+                assertTrue("Only a signed GET can follow a verified clock probe",
+                    request.url.queryParameter("timestamp") != null)
+                "{}"
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        BinanceUsdMFuturesTestnetAdapter("key", "secret", client).account()
+        assertEquals(2, timeCalls)
+        assertEquals(1, accountCalls)
+    }
+
+    @Test fun slowClockResponseCannotContaminateNextIndependentSample() {
+        var timeCalls = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            if (request.url.encodedPath == "/fapi/v1/time") {
+                timeCalls++
+                if (timeCalls == 1) Thread.sleep(3_100L)
+            }
+            val response = """{"serverTime":${System.currentTimeMillis()}}"""
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(response.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val adapter = BinanceUsdMFuturesTestnetAdapter("key", "secret", client)
+        assertTrue(adapter.serverTime().getLong("serverTime") > 0L)
+        assertEquals("The slow first GET must not be used for signing", 2, timeCalls)
+    }
+
+    @Test fun twoInvalidTimeSamplesFailClosedWithoutAnySignedRequest() {
+        var timeCalls = 0
+        var signedCalls = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            if (request.url.encodedPath == "/fapi/v1/time") timeCalls++
+            else signedCalls++
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body("""{"serverTime":0}""".toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            BinanceUsdMFuturesTestnetAdapter("key", "secret", client).account()
+            fail("Unverified exchange clock must never authorize signed requests")
+        } catch (_: java.io.IOException) { }
+        assertEquals(2, timeCalls)
+        assertEquals(0, signedCalls)
+    }
+
+
+    @Test fun clockTransportFailureDoesNotCascadeIntoRepeatedSignedGetRetries() {
+        var probes = 0
+        var signedCalls = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            if (request.url.encodedPath == "/fapi/v1/time") {
+                probes++
+                throw java.io.IOException("Injected network outage on read-only clock probe")
+            }
+            signedCalls++
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body("{}".toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            BinanceUsdMFuturesTestnetAdapter("key", "secret", client).account()
+            fail("Signing must fail when both clock probes cannot reach Binance")
+        } catch (_: FuturesClockSyncException) { }
+        assertEquals("An outer signed GET must not cause 8 nested time probes", 2, probes)
+        assertEquals(0, signedCalls)
+    }
+
 }

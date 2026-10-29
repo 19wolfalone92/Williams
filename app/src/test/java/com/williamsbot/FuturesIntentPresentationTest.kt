@@ -59,4 +59,20 @@ class FuturesIntentPresentationTest {
         assertFalse(exit.has("strategy_ownership_verified"))
         assertEquals("ENTRY", futuresIntentRole(JSONObject()))
     }
+
+    @Test fun oldNewAdaIntentIsNotAConfirmedLiveBinanceOrder() {
+        val now = 1_793_258_185_000L
+        val ada = JSONObject().put("symbol", "ADAUSDT")
+            .put("role", "ENTRY").put("campaign_status", "ENTRY_PENDING")
+            .put("order_status", "NEW").put("last_reconciled_ms", now - 282_621L)
+        assertFalse(futuresPendingEntryReceiptFresh(ada, now))
+        assertTrue("A stale record must be retained, not destroyed or canceled",
+            separateFuturesIntentPresentation(JSONArray().put(ada)).active.length() == 1)
+        assertEquals("NEW", ada.getString("order_status"))
+        assertTrue(futuresPendingEntryReceiptFresh(ada.put("last_reconciled_ms", now - 1_000L), now))
+        assertFalse(futuresPendingEntryReceiptFresh(ada.put("last_reconciled_ms", now + 1_000L), now))
+        assertFalse(futuresPendingEntryReceiptFresh(ada.put("last_reconciled_ms", 0L), now))
+        assertFalse(futuresPendingEntryReceiptFresh(ada.put("order_status", "SUBMISSION_UNKNOWN"), now))
+    }
+
 }
