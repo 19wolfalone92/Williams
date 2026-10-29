@@ -11550,23 +11550,42 @@ private class NativeEngine(
                 .put("can_authorize_exchange_mutations",false)
             try {
                 val live=runCatching { status(fast=true).optJSONArray("futures_positions") }.getOrNull()
-                val symbols=(listOf("BNBUSDT") +
-                    CockpitDiagnostics.rows(live).map { it.optString("symbol") })
-                    .filter { it.isNotBlank() }.distinct().take(8)
+                val symbols=FuturesSignedTradeForensics.auditSymbols(
+                    CockpitDiagnostics.rows(live).map { it.optString("symbol") } +
+                        coreSymbols,limit=10)
                 val audited=JSONArray()
                 val endMs=System.currentTimeMillis()
+                val sevenDaysMs=7L*24L*60L*60L*1000L
+                val incomeStart=(endMs-sevenDaysMs).coerceAtLeast(0L)
+                // One signed GET-only history sweep for all symbols. A failed or
+                // saturated income read stays unknown; never call unknown funding zero.
+                val incomeResult=runCatching {
+                    val rows=futuresCampaignCoordinator.incomeHistory(incomeStart,endMs)
+                    (0 until rows.length()).map { rows.getJSONObject(it) }
+                }
+                val incomeRows=incomeResult.getOrNull()
+                output.put("funding_read",if(incomeRows==null) "INCOMPLETE" else "SIGNED_GET_COMPLETE")
+                incomeResult.exceptionOrNull()?.let {
+                    output.put("funding_error",safeDiagnosticText(it.message ?: it.javaClass.simpleName))
+                }
                 for(symbol in symbols) {
-                    val ageMs=if(symbol=="BNBUSDT") 7L*24L*60L*60L*1000L
+                    val ageMs=if(symbol in setOf("BNBUSDT","LTCUSDT")) sevenDaysMs
                         else 24L*60L*60L*1000L
-                    // Saturated exchange results are bisected by the existing
-                    // read-only loader. No ledger, STOP or trade is mutated.
-                    val trades=loadFuturesTradeRows(symbol,(endMs-ageMs).coerceAtLeast(0L),endMs)
+                    // Never let one failing symbol erase independent signed
+                    // forensics of BNB/LTC or other contracts.
+                    val fromMs=(endMs-ageMs).coerceAtLeast(0L)
+                    val trades=runCatching {
+                        loadFuturesTradeRows(symbol,fromMs,endMs)
+                    }.getOrNull()
                     audited.put(FuturesSignedTradeForensics.summarize(symbol,trades,endMs)
-                        .put("window_start_ms",endMs-ageMs)
-                        .put("window_end_ms",endMs))
+                        .put("window_start_ms",fromMs)
+                        .put("window_end_ms",endMs)
+                        .put("funding_evidence",FuturesSignedTradeForensics.summarizeFunding(
+                            symbol,incomeRows,incomeStart,endMs)))
                 }
                 output.put("state","READ_COMPLETE_OR_EXPLICITLY_UNVERIFIED")
                     .put("symbols",audited)
+                    .put("full_campaign_pnl_verified",false)
             } catch(failure:Exception) {
                 output.put("state","SIGNED_GET_FAILED")
                     .put("error",safeDiagnosticText(failure.message ?: failure.javaClass.simpleName))
