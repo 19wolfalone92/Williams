@@ -36,8 +36,10 @@ jobs:
           python tools/export_blind_human_wave_packet.py \
             --source build/wave-90-uncertainty/blind_90_selection.json \
             --charts build/wave-90-chart-staging \
-            --output build/wave-90-blind-review
+            --output build/wave-90-blind-review \
+            --include-closed-ohlc
           test "$(find build/wave-90-blind-review/charts -name '*.png' | wc -l)" -eq 90
+          test "$(find build/wave-90-blind-review/closed_ohlc_h1 -name '*.csv' | wc -l)" -eq 90
           test "$(wc -l < build/wave-90-blind-review/blank_annotator_form.csv)" -eq 91
       - name: Upload unlabeled visual review packet only
         if: success()
