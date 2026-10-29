@@ -588,7 +588,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
                 }
                 "/fapi/v3/account" -> {
                     accountGets++
-                    assertNotNull(request.url.queryParameter("timestamp"))
+                    assertTrue(request.url.queryParameter("timestamp") != null)
                     "{}"
                 }
                 else -> {
