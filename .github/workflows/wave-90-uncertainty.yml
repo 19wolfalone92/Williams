@@ -1,0 +1,35 @@
+name: Read-only 90 H1 wave uncertainty audit
+
+on:
+  pull_request:
+    paths:
+      - 'tools/audit_wave_90_uncertainty.py'
+      - 'tools/benchmark_blind_30_h1_wave_cases.py'
+      - 'williams_wave_hierarchy.py'
+      - 'williams_wave_subdivisions.py'
+      - 'app/src/test/resources/blind_wave_20241109_29_*.json'
+      - '.github/workflows/wave-90-uncertainty.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wave-90-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run read-only exact 15 x 6 blind wave audit
+        run: python tools/audit_wave_90_uncertainty.py --output build/wave-90-uncertainty
+      - name: Upload blinded inputs and separate model evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: williams-wave-90-uncertainty-no-human-truth
+          path: build/wave-90-uncertainty/
+          if-no-files-found: error
+          retention-days: 30
