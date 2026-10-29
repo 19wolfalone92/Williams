@@ -11,7 +11,7 @@ internal data class WilliamsSubdivisionProof(val status:String,val expected:List
 }
 internal fun proveWilliamsWaveSubdivisions(parent:List<WilliamsWaveAnchor>,children:List<WilliamsWaveAnchor>,
     expected:List<Int>,parentDuration:Long,asOf:Long,allowFlatCorrections:Boolean=true):WilliamsSubdivisionProof {
-    fun unresolved(reason:String,observed:List<Int> = emptyList(),known:Long=0L)=WilliamsSubdivisionProof("UNRESOLVED",expected,observed,known,reason)
+    fun unresolved(reason:String,observed:List<Int> = emptyList(),known:Long=0L,patterns:List<String> = emptyList())=WilliamsSubdivisionProof("UNRESOLVED",expected,observed,known,reason,patterns)
     if(parent.size!=expected.size+1 || parentDuration<=0 || expected.any { it !in listOf(3,5) }) return unresolved("INVALID_SUBDIVISION_CONTRACT")
     if(parent.isEmpty() || parent.any { it.knownAt>asOf }) return unresolved("PARENT_NOT_CONFIRMED")
     val known=children.filter { it.knownAt<=asOf }
