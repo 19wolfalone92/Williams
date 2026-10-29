@@ -18,7 +18,7 @@ NO_TRADE = {"can_place_orders": False, "can_close": False, "can_reverse": False}
 
 
 def complete_h4_from_closed_h1(rows, as_of: int) -> list[WaveBar]:
-    if not isinstance(as_of, int) or as_of < H4:
+    if not isinstance(as_of, int) or as_of < 0:
         raise ValueError("INVALID_H4_CUTOFF")
     closed = []
     for row in rows:
