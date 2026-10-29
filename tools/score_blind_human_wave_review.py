@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Score TWO independently submitted blind 30-chart reviews without faking experts.
+"""Score TWO independently submitted blind 30/90-chart reviews without faking experts.
 
 Input is the exact blank_annotator_form.csv schema in the published charts-only
 packet. Existing model/proxy outputs are NOT opened until BOTH forms pass
@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from tools.benchmark_blind_30_h1_wave_cases import SYMBOLS,DATES,digest,load_source,model_label
+from tools.benchmark_blind_30_h1_wave_cases import SYMBOLS,ALL_15,DATES,digest,load_source,model_label
 from williams_wave_label_quality import LABELS
 
 FIELDS={"symbol","frame","as_of","prefix_sha256","source_window_sha256",
@@ -32,16 +32,16 @@ def iso_to_ms(value:str)->int:
     except (ValueError,TypeError,AttributeError,OverflowError) as e:
         raise ValueError("INVALID_UTC_TIMESTAMP") from e
 
-def selected_prefixes():
+def selected_prefixes(*,all_fifteen:bool=False):
     out={}
-    for symbol in SYMBOLS:
+    for symbol in (ALL_15 if all_fifteen else SYMBOLS):
         source,source_hash=load_source(symbol)
         for dt in DATES:
             as_of=iso_to_ms(dt)
             prefix=[r for r in source if r[0]+3600000<=as_of][-160:]
             if len(prefix)!=160:raise ValueError("SOURCE_CLOSED_PREFIX_TOO_SHORT")
             out[(symbol,"1h",as_of)]=(prefix,digest(prefix),source_hash)
-    assert len(out)==30
+    assert len(out)==(90 if all_fifteen else 30)
     return out
 
 def load_blind_reviewer_csv(path:Path,expected:dict,compared_at:int):
@@ -50,7 +50,7 @@ def load_blind_reviewer_csv(path:Path,expected:dict,compared_at:int):
         if not reader.fieldnames or set(reader.fieldnames)!=FIELDS:
             raise ValueError("REVIEW_CSV_SCHEMA_MISMATCH")
         rows=list(reader)
-    if len(rows)!=30:raise ValueError("EXPECTED_EXACTLY_30_FROZEN_ANNOTATIONS")
+    if len(rows)!=len(expected):raise ValueError("EXPECTED_ALL_FROZEN_ANNOTATIONS")
     output={}
     ids=set()
     for line,row in enumerate(rows,2):
@@ -99,13 +99,13 @@ def load_blind_reviewer_csv(path:Path,expected:dict,compared_at:int):
                 "reviewer_id":rid,"frozen_at":frozen}
         except (ValueError,KeyError,TypeError) as e:
             raise ValueError(f"INVALID_BLIND_FORM_ROW_{line}:{e}") from e
-    if len(output)!=30 or len(ids)!=1:
-        raise ValueError("REVIEWER_NOT_UNIQUE_ACROSS_30_OR_CASE_MISSING")
+    if len(output)!=len(expected) or len(ids)!=1:
+        raise ValueError("REVIEWER_NOT_UNIQUE_OR_CASE_MISSING")
     return next(iter(ids)),output,hashlib.sha256(path.read_bytes()).hexdigest()
 
-def compare_reviews(first:Path,second:Path,*, compared_at:int|None=None):
+def compare_reviews(first:Path,second:Path,*, compared_at:int|None=None,all_fifteen:bool=False):
     timestamp=compared_at if compared_at is not None else int(datetime.now(timezone.utc).timestamp()*1000)
-    source=selected_prefixes()
+    source=selected_prefixes(all_fifteen=all_fifteen)
     ida,a,sha_a=load_blind_reviewer_csv(first,source,timestamp)
     idb,b,sha_b=load_blind_reviewer_csv(second,source,timestamp)
     if ida==idb or sha_a==sha_b:raise ValueError("TWO_DISTINCT_REVIEWERS_REQUIRED")
@@ -121,8 +121,9 @@ def compare_reviews(first:Path,second:Path,*, compared_at:int|None=None):
                 "reason":"INDEPENDENT_EXPERT_ADJUDICATION_REQUIRED"})
     by_a=Counter(x["label"] for x in a.values())
     by_b=Counter(x["label"] for x in b.values())
-    expected_chance=sum(by_a[z]*by_b[z] for z in LABELS)/(30*30)
-    observed=agree/30
+    n=len(source)
+    expected_chance=sum(by_a[z]*by_b[z] for z in LABELS)/(n*n)
+    observed=agree/n
     kappa=(observed-expected_chance)/(1-expected_chance) if expected_chance<1 else None
     # ONLY after both forms are frozen / validated: perform production inference.
     matched=0;classified=0;abstained=0;scored=Counter();rows=[]
@@ -139,11 +140,11 @@ def compare_reviews(first:Path,second:Path,*, compared_at:int|None=None):
              "consensus_label":ref,"first":a[key]["label"],"second":b[key]["label"],
              "prediction":label,"prediction_evidence":evidence,
              "can_place_orders":False})
-    return {"schema":"WILLIAMS_BLIND_30_TWO_REVIEWERS_V1",
+    return {"schema":f"WILLIAMS_BLIND_{n}_TWO_REVIEWERS_V1",
         "status":"EXPLORATORY_TWO_SELF_DECLARED_REVIEWERS_NOT_ATTESTED",
-        "total_cases":30,"reviewer_ids":[ida,idb],
+        "total_cases":n,"reviewer_ids":[ida,idb],
         "review_csv_sha256":[sha_a,sha_b],
-        "agreement_count":agree,"disagreement_count":30-agree,
+        "agreement_count":agree,"disagreement_count":n-agree,
         "inter_rater_agreement":observed,"cohen_kappa":kappa,
         "consensus_cases":len(consensus),"consensus_conflicts":disputes,
         "classified_consensus":classified,"abstained_consensus":abstained,
@@ -163,8 +164,9 @@ def main():
     p.add_argument("--reviewer-a",required=True,type=Path)
     p.add_argument("--reviewer-b",required=True,type=Path)
     p.add_argument("--output",required=True,type=Path)
+    p.add_argument("--all-fifteen",action="store_true",help="90 frozen blind charts on 15 USD-M pairs")
     args=p.parse_args()
-    try:result=compare_reviews(args.reviewer_a,args.reviewer_b)
+    try:result=compare_reviews(args.reviewer_a,args.reviewer_b,all_fifteen=args.all_fifteen)
     except (ValueError,OSError) as e:
         print(f"FAIL_CLOSED_TWO_REVIEWER_CONTRACT:{e}",file=sys.stderr)
         return 2
