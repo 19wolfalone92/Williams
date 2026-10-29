@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import json
 from pathlib import Path
 import sys
@@ -19,18 +19,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tools.benchmark_blind_30_h1_wave_cases import (  # noqa: E402
-    SYMBOLS, digest, load_source, model_label,
+    ALL_15, DATES, digest, load_source, model_label,
 )
 from williams_wave_hierarchy import (  # noqa: E402
     WaveBar, build_wave_hierarchy,
 )
 
 HOUR = 3_600_000
-# Selection established from calendar times, not model output or hindsight.
-# All 90 slices have 160 genuine closed H1 candles in the frozen five symbols.
-CUTOFFS = tuple(datetime(2024, 11, 17, 12, tzinfo=timezone.utc)
-                + timedelta(hours=16 * i) for i in range(18))
-HUMAN_LABELS = {"MOTIVE_FIVE", "CORRECTION_ABC", "COMPLEX_CORRECTION", "NO_VALID_COUNT"}
+# Exact pre-existing 15-pair x 6-date benchmark selection. Do not create
+# a different 90 and incorrectly compare it to the 4.64.5 release count.
+SYMBOLS = ALL_15
+CUTOFFS = tuple(datetime.fromisoformat(t) for t in DATES)
 
 
 def phase_evidence(prefix, as_of):
