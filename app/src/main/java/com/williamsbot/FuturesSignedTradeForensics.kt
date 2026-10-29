@@ -10,6 +10,61 @@ import java.math.BigDecimal
  * campaign when the original durable ENTRY/client order provenance is missing.
  */
 internal object FuturesSignedTradeForensics {
+    /**
+     * Retain both BNB and LTC even when they are FLAT: the unresolved histories
+     * disappear from live position snapshots. Never treat this read-only
+     * selection as campaign ownership or a permission to submit an order.
+     */
+    fun auditSymbols(liveSymbols: List<String>, limit: Int = 8): List<String> {
+        require(limit in 2..10)
+        return (listOf("BNBUSDT", "LTCUSDT") + liveSymbols)
+            .filter { it in BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS }
+            .distinct().take(limit)
+    }
+
+    /** Funding is account-wide signed income evidence, NOT an attributed trade.
+     * No campaign-level net PnL is certified until signed fills, the position's
+     * exact time interval and ownership have all been bound independently.
+     */
+    fun summarizeFunding(
+        symbol: String,
+        allIncome: List<JSONObject>?,
+        windowStartMs: Long,
+        windowEndMs: Long
+    ): JSONObject {
+        val out = JSONObject().put("symbol",symbol)
+            .put("source","BINANCE_USDM_SIGNED_INCOME_GET_ONLY")
+            .put("full_campaign_pnl_verified",false)
+            .put("can_submit_order",false)
+            .put("can_change_stop",false)
+        if (allIncome == null || windowStartMs <= 0L || windowEndMs < windowStartMs)
+            return out.put("status","SIGNED_FUNDING_READ_INCOMPLETE")
+                .put("funding_usdt",JSONObject.NULL)
+        var total = BigDecimal.ZERO
+        var count = 0
+        val seen = HashSet<String>()
+        for (row in allIncome) {
+            if (row.optString("incomeType") != "FUNDING_FEE" || row.optString("symbol") != symbol)
+                continue
+            val at = row.optLong("time", -1L)
+            val currency = row.optString("asset")
+            val amount = row.optString("income").toBigDecimalOrNull()
+            val transaction = row.optString("tranId")
+            if (at !in windowStartMs..windowEndMs || currency != "USDT" ||
+                amount == null || transaction.isBlank() ||
+                !seen.add(transaction + ":" + at.toString())) {
+                return out.put("status","SIGNED_FUNDING_SHAPE_UNVERIFIED")
+                    .put("funding_usdt",JSONObject.NULL)
+            }
+            total += amount
+            count++
+        }
+        return out.put("status","WINDOW_FUNDING_OBSERVED_NOT_CAMPAIGN_BOUND")
+            .put("window_start_ms",windowStartMs)
+            .put("window_end_ms",windowEndMs)
+            .put("funding_events",count)
+            .put("funding_usdt",total.stripTrailingZeros().toPlainString())
+    }
     fun summarize(symbol: String, signedFills: List<JSONObject>?, nowMs: Long): JSONObject {
         val out = JSONObject().put("symbol", symbol)
             .put("source", "SIGNED_BINANCE_USDM_USER_TRADES_GET_ONLY")
