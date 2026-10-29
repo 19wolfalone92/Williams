@@ -124,10 +124,15 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             "Binance Futures server time is not confirmed; signed request blocked"
         }
         if (!readOnly && lastClockProbeRttMs > 3_000L) {
-            // Do NOT bypass the 5s mutation window using an 8s read-only clock sample.
-            throw FuturesClockSyncException(
-                "Clock sample RTT $lastClockProbeRttMs ms exceeds 3000 ms mutation safety limit; financial write blocked"
-            )
+            // A slow read-only sample cannot sign a financial write. Retry ONLY
+            // the unsigned GET /time preflight; a newly fast sample permits the
+            // mutation, but failed/slow probes NEVER retry POST/DELETE.
+            serverTime()
+            if (lastClockProbeRttMs > 3_000L) {
+                throw FuturesClockSyncException(
+                    "Clock sample RTT $lastClockProbeRttMs ms exceeds 3000 ms mutation safety limit; financial write blocked"
+                )
+            }
         }
         val age = (System.nanoTime()-anchorMonoNs)/1_000_000L
         check(age in 0L..30_000L) { "Signed Futures timestamp is stale; request blocked" }
