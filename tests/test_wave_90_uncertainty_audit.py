@@ -66,8 +66,11 @@ def test_failed_later_subdivision_retains_only_previous_causal_evidence():
         assert full.status == "PRICE_SUBDIVISIONS_CONFIRMED"
         assert len(full.leg_patterns) == 3
         # W5 fails its own price geometry; W1 and W2 remain observed facts.
-        damaged = children[:-1] + [replace(children[-1],
-                           price=(199 if mirror else 101))]
+        # Change an INTERIOR W5 pivot: parent/child endpoint matching must
+        # still succeed, while W5 impulse geometry independently fails.
+        damaged = (children[:11] +
+                   [replace(children[11], price=(160 if mirror else 140))] +
+                   children[12:])
         partial = prove_wave_subdivisions(parents, damaged, (5, 3, 5),
                                          parent_duration=6 * h, as_of=80 * h)
         assert partial.status == "UNRESOLVED"
