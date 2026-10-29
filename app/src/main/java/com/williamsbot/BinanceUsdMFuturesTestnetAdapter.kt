@@ -13,6 +13,9 @@ import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
+/** A rejected or exhausted exchange clock calibration is NOT a retryable signed GET. */
+internal class FuturesClockSyncException(detail: String, cause: Throwable? = null) : IOException(detail, cause)
+
 internal class FuturesHttpException(
     val statusCode: Int,
     val exchangeCode: Int?,
@@ -136,7 +139,9 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                 }
             } catch (failure: IOException) {
                 if (attempt == 1 || !isRetryableSafeReadFailure(failure.message.orEmpty())) {
-                    throw failure
+                    throw FuturesClockSyncException(
+                        "Futures server clock probe failed; signed request blocked", failure
+                    )
                 }
                 lastFailure = failure
                 return@repeat
@@ -163,7 +168,10 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                     "(probe=${attempt + 1}, network_rtt_ms=$roundTripMs)"
             )
         }
-        throw lastFailure ?: IOException("Futures server clock could not be verified")
+        throw FuturesClockSyncException(
+            "Futures server clock could not be verified after bounded independent GET probes",
+            lastFailure
+        )
     }
 
     fun exchangeInfo(): JSONObject =
@@ -742,6 +750,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                 // never retry POST/DELETE on timeout or 5xx because exchange execution may
                 // be ambiguous. 418/429 and all other 4xx are surfaced immediately.
                 if (method.equals("GET", ignoreCase = true) &&
+                    error !is FuturesClockSyncException &&
                     safeReadAttempt < safeReadDelaysMs.size &&
                     isRetryableSafeReadFailure(message)
                 ) {
