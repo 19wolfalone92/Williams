@@ -29,12 +29,14 @@ python tools/audit_wave_90_uncertainty.py --output artifacts/wave_90
 pytest -q tests/test_wave_90_uncertainty_audit.py
 ```
 
-Inputs: five frozen real Binance USDT-M H1 historical samples already in the
-repo (BTC, ETH, BNB, SOL, XRP); 18 **preselected calendar cutoffs** per
-instrument; 160 strictly closed, contiguous H1 candles per cutoff. This is
-a **new frozen sample**; the 86/90 number in the 4.64.5 release report
-comes from a different earlier audit, so the two must **not** be compared as a
-before/after improvement without identical snapshots.
+Inputs: the **same frozen 15-asset × 6-date benchmark selection** used
+for the 4.64.5 report: BTC, ETH, BNB, SOL, XRP, DOGE, ADA, LINK, AVAX,
+LTC, TRX, DOT, UNI, BCH and NEAR. Each sample has 160 strictly closed,
+contiguous H1 candles, with the six UTC cutoffs from 18 to 28 November
+2024. This audit reports the same classifier's abstentions and newly exposed
+causal structural evidence. Equal sample selection permits comparison of the
+raw label counts, but newly added descriptive phase tags are **not** additional
+expert wave classifications.
 
 Outputs:
 
