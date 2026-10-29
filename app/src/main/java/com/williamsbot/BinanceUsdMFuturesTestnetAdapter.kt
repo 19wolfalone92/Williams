@@ -65,6 +65,16 @@ internal fun validateFuturesPositionSnapshot(rows: JSONArray): JSONArray {
  * whenever the Android wall clock and elapsed time diverge (sleep/manual clock
  * adjustments). Neither a cached offset nor a wide recvWindow authorizes trades.
  */
+/** 8s network RTT is tolerable only for signed read-only recovery with a 10s recvWindow.
+ * Order-changing operations still require a <=3s clock sample and a 5s recvWindow.
+ * A wall/monotonic drift, missing exchange time or slow (>8s) response is untrusted.
+ */
+internal fun futuresClockProbeUsableForSignedRead(
+    sentMonoNs: Long, roundTripMs: Long, wallElapsedMs: Long, exchangeTimeMs: Long
+): Boolean = sentMonoNs > 0L && exchangeTimeMs > 0L &&
+    roundTripMs in 0L..8_000L &&
+    kotlin.math.abs(wallElapsedMs - roundTripMs) <= 1_000L
+
 internal fun futuresClockSyncNeeded(
     synchronized: Boolean, anchorWallMs: Long, anchorMonoNs: Long,
     wallNowMs: Long, monoNowNs: Long
@@ -102,8 +112,9 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     @Volatile private var serverAnchorMs: Long = 0L
     @Volatile private var anchorMonoNs: Long = 0L
     @Volatile private var anchorWallMs: Long = 0L
+    @Volatile private var lastClockProbeRttMs: Long = Long.MAX_VALUE
 
-    private fun ensureFreshServerClock(): Long = synchronized(clockLock) {
+    private fun ensureFreshServerClock(readOnly: Boolean): Long = synchronized(clockLock) {
         val wall = System.currentTimeMillis()
         val mono = System.nanoTime()
         if (futuresClockSyncNeeded(timeSynced,anchorWallMs,anchorMonoNs,wall,mono)) {
@@ -111,6 +122,12 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         }
         check(timeSynced && anchorMonoNs > 0L) {
             "Binance Futures server time is not confirmed; signed request blocked"
+        }
+        if (!readOnly && lastClockProbeRttMs > 3_000L) {
+            // Do NOT bypass the 5s mutation window using an 8s read-only clock sample.
+            throw FuturesClockSyncException(
+                "Clock sample RTT $lastClockProbeRttMs ms exceeds 3000 ms mutation safety limit; financial write blocked"
+            )
         }
         val age = (System.nanoTime()-anchorMonoNs)/1_000_000L
         check(age in 0L..30_000L) { "Signed Futures timestamp is stale; request blocked" }
@@ -128,6 +145,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         // to the sample RTT used for signing financial requests.
         // Two bounded, independent read-only samples; no speculative mutation.
         timeSynced = false
+        lastClockProbeRttMs = Long.MAX_VALUE
         var lastFailure: IOException? = null
         repeat(2) { attempt ->
             var sentMonoNs = 0L
@@ -158,22 +176,24 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             val response = runCatching { JSONObject(raw) }.getOrNull()
             val exchangeTime = response?.optLong("serverTime", 0L) ?: 0L
             // A rejected sample NEVER establishes a new timestamp anchor.
-            if (sentMonoNs > 0L && exchangeTime > 0L &&
-                roundTripMs in 0L..3_000L &&
-                kotlin.math.abs(wallElapsedMs - roundTripMs) <= 1_000L) {
+            if (futuresClockProbeUsableForSignedRead(
+                    sentMonoNs, roundTripMs, wallElapsedMs, exchangeTime
+                )) {
                 serverAnchorMs = exchangeTime
                 anchorMonoNs = sentMonoNs + durationNs / 2L
                 anchorWallMs = sentWallMs + wallElapsedMs / 2L
+                lastClockProbeRttMs = roundTripMs
                 timeSynced = true
                 return@synchronized response!!
             }
             lastFailure = IOException(
                 "Futures server time sample is invalid, delayed, or device clock changed " +
-                    "(probe=${attempt + 1}, network_rtt_ms=$roundTripMs)"
+                    "(probe=${attempt + 1}, network_rtt_ms=$roundTripMs, wall_elapsed_ms=$wallElapsedMs)"
             )
         }
         throw FuturesClockSyncException(
-            "Futures server clock could not be verified after bounded independent GET probes",
+            "Futures server clock could not be verified after bounded independent GET probes: " +
+                (lastFailure?.message ?: "no valid sample"),
             lastFailure
         )
     }
@@ -804,7 +824,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         rateGuard?.beforeRequest(isOrder = orderMutation)
         val all = LinkedHashMap(params)
         if (signed) {
-            all["timestamp"] = ensureFreshServerClock().toString()
+            all["timestamp"] = ensureFreshServerClock(readOnly = method == "GET").toString()
             // Reads may tolerate RTT jitter; financial mutations retain the
             // strict 5s exchange rejection window and never retry ambiguously.
             all["recvWindow"] = if (method == "GET") "10000" else "5000"
