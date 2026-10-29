@@ -574,13 +574,59 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals(1, accountCalls)
     }
 
+    @Test fun boundedSlowClockAllowsSignedRecoveryReadsButNeverMutation() {
+        var clockGets = 0
+        var accountGets = 0
+        var mutationPosts = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            val body = when (request.url.encodedPath) {
+                "/fapi/v1/time" -> {
+                    clockGets++
+                    Thread.sleep(3_200L)
+                    """{"serverTime":${System.currentTimeMillis()}}"""
+                }
+                "/fapi/v3/account" -> {
+                    accountGets++
+                    assertNotNull(request.url.queryParameter("timestamp"))
+                    "{}"
+                }
+                else -> {
+                    mutationPosts++
+                    "{}"
+                }
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val adapter = BinanceUsdMFuturesTestnetAdapter("key", "secret", client)
+        adapter.account()
+        assertEquals(1, clockGets)
+        assertEquals(1, accountGets)
+        try {
+            adapter.setLeverage("BTCUSDT", 10)
+            fail("A read-only clock sample with >3s RTT cannot authorize a signed POST")
+        } catch (_: FuturesClockSyncException) { }
+        assertEquals(0, mutationPosts)
+        assertEquals("Rejected write must not secretly refresh the clock and retry", 1, clockGets)
+    }
+
+    @Test fun independentClockSampleValidationRejectsDeviceSuspendAndSlowGet() {
+        assertTrue(futuresClockProbeUsableForSignedRead(1L, 4_000L, 4_000L, 1_800_000_000_000L))
+        assertTrue(!futuresClockProbeUsableForSignedRead(1L, 8_001L, 8_001L, 1_800_000_000_000L))
+        assertTrue(!futuresClockProbeUsableForSignedRead(1L, 4_000L, 6_100L, 1_800_000_000_000L))
+        assertTrue(!futuresClockProbeUsableForSignedRead(0L, 2_000L, 2_000L, 1_800_000_000_000L))
+        assertTrue(!futuresClockProbeUsableForSignedRead(1L, 2_000L, 2_000L, 0L))
+    }
+
     @Test fun slowClockResponseCannotContaminateNextIndependentSample() {
         var timeCalls = 0
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
             if (request.url.encodedPath == "/fapi/v1/time") {
                 timeCalls++
-                if (timeCalls == 1) Thread.sleep(3_100L)
+                if (timeCalls == 1) Thread.sleep(8_100L)
             }
             val response = """{"serverTime":${System.currentTimeMillis()}}"""
             Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
