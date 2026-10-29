@@ -79,7 +79,7 @@ def h4_research_context(rows, as_of):
         "h4_candidate_labels": sorted({s.label for s in states
                                        if s.status != "INVALIDATED"}),
         "nested_h4_h1_links": len(report.links),
-        "h4_w4_cross_observed": sum(s.w4_zero == "ZERO_CROSSED_MINIMUM"
+        "h4_w4_cross_observed": sum(s.w4_zero == "MINIMUM_ONLY"
                                      for s in states),
         "highest_h4_pivot_known_at": max(
             (s.anchors[-1].known_at for s in states), default=0),
