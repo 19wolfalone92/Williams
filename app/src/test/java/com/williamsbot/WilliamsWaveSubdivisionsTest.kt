@@ -19,6 +19,15 @@ class WilliamsWaveSubdivisionsTest {
             assertEquals("UNRESOLVED",proveWilliamsWaveSubdivisions(parent,children,listOf(5,3,5),6*h,60*h).status)
             assertEquals("UNRESOLVED",proveWilliamsWaveSubdivisions(parent,children.dropLast(1),listOf(5,3,5),6*h,80*h).status)
             assertEquals(proof,proveWilliamsWaveSubdivisions(parent,children+children.last().copy(price=Double.NaN,extremeAt=81*h,knownAt=84*h),listOf(5,3,5),6*h,80*h))
+            // The last fifth-leg geometry fails; verified earlier legs must
+            // remain visible without promoting the complete count.
+            val damaged=children.dropLast(1)+children.last().copy(price=if(mirror) 199.0 else 101.0)
+            val partial=proveWilliamsWaveSubdivisions(parent,damaged,listOf(5,3,5),6*h,80*h)
+            assertEquals("UNRESOLVED",partial.status)
+            assertEquals("INTERNAL_IMPULSE_GEOMETRY_FAILED",partial.reason)
+            assertEquals(listOf(5,3,5),partial.observed)
+            assertEquals(proof.legPatterns.take(2),partial.legPatterns)
+
         }
     }
 }
