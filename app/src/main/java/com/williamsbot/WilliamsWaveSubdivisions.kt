@@ -36,20 +36,20 @@ internal fun proveWilliamsWaveSubdivisions(parent:List<WilliamsWaveAnchor>,child
         val sub=known.subList(endpoints[i],endpoints[i+1]+1);val sign=if(sub.first().kind=="LOW") 1 else -1
         val p=sub.map { sign*it.price }
         lastKnown=maxOf(lastKnown,sub.maxOf { it.knownAt })
-        if(observed[i]!=expected[i]) return unresolved("SUBDIVISION_COUNT_FAILED",observed,lastKnown,shapes
+        if(observed[i]!=expected[i]) return unresolved("SUBDIVISION_COUNT_FAILED",observed,lastKnown,shapes)
         if(expected[i]==5) {
             val lengths=listOf(p[1]-p[0],p[3]-p[2],p[5]-p[4])
             if(!(p[0]<p[2] && p[2]<p[1] && p[1]<p[4] && p[4]<p[3] && p[5]>p[4]) || lengths[1]<minOf(lengths[0],lengths[2]))
-                return unresolved("INTERNAL_IMPULSE_GEOMETRY_FAILED",observed,lastKnown,shapes
+                return unresolved("INTERNAL_IMPULSE_GEOMETRY_FAILED",observed,lastKnown,shapes)
             shapes+=if(p[5]>p[3]) "IMPULSE_PRICE_SKELETON" else "TRUNCATED_IMPULSE_PRICE_SKELETON"
         } else {
-            if(!(p[1]>p[0] && p[2]<p[1] && p[3]>maxOf(p[0],p[2]))) return unresolved("INTERNAL_ABC_GEOMETRY_FAILED",observed,lastKnown,shapes
+            if(!(p[1]>p[0] && p[2]<p[1] && p[3]>maxOf(p[0],p[2]))) return unresolved("INTERNAL_ABC_GEOMETRY_FAILED",observed,lastKnown,shapes)
             val shape=if(p[2]<p[0]) {
                 if(p[3]>p[1]) "EXPANDED_FLAT_PRICE_SKELETON" else "RUNNING_FLAT_PRICE_SKELETON"
             } else if(p[3]>=p[1]) {
                 if(p[2]==p[0]) "REGULAR_FLAT_PRICE_SKELETON" else "ZIGZAG_PRICE_SKELETON"
-            } else return unresolved("INTERNAL_ABC_GEOMETRY_FAILED",observed,lastKnown,shapes
-            if(!allowFlatCorrections && shape!="ZIGZAG_PRICE_SKELETON") return unresolved("DIAGONAL_REQUIRES_ZIGZAG_SUBWAVES",observed,lastKnown,shapes
+            } else return unresolved("INTERNAL_ABC_GEOMETRY_FAILED",observed,lastKnown,shapes)
+            if(!allowFlatCorrections && shape!="ZIGZAG_PRICE_SKELETON") return unresolved("DIAGONAL_REQUIRES_ZIGZAG_SUBWAVES",observed,lastKnown,shapes)
             shapes+=shape
         }
     }
